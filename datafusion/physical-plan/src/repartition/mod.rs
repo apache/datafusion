@@ -920,7 +920,7 @@ mod tests {
     async fn one_to_many_round_robin() -> Result<()> {
         // define input partitions
         let schema = test_schema();
-        let partition = create_vec_batches(&schema, 50);
+        let partition = create_vec_batches(50);
         let partitions = vec![partition];
 
         // repartition from 1 input to 4 output
@@ -940,7 +940,7 @@ mod tests {
     async fn many_to_one_round_robin() -> Result<()> {
         // define input partitions
         let schema = test_schema();
-        let partition = create_vec_batches(&schema, 50);
+        let partition = create_vec_batches(50);
         let partitions = vec![partition.clone(), partition.clone(), partition.clone()];
 
         // repartition from 3 input to 1 output
@@ -957,7 +957,7 @@ mod tests {
     async fn many_to_many_round_robin() -> Result<()> {
         // define input partitions
         let schema = test_schema();
-        let partition = create_vec_batches(&schema, 50);
+        let partition = create_vec_batches(50);
         let partitions = vec![partition.clone(), partition.clone(), partition.clone()];
 
         // repartition from 3 input to 5 output
@@ -978,7 +978,7 @@ mod tests {
     async fn many_to_many_hash_partition() -> Result<()> {
         // define input partitions
         let schema = test_schema();
-        let partition = create_vec_batches(&schema, 50);
+        let partition = create_vec_batches(50);
         let partitions = vec![partition.clone(), partition.clone(), partition.clone()];
 
         let output_partitions = repartition(
@@ -1033,7 +1033,7 @@ mod tests {
             tokio::spawn(async move {
                 // define input partitions
                 let schema = test_schema();
-                let partition = create_vec_batches(&schema, 50);
+                let partition = create_vec_batches(50);
                 let partitions =
                     vec![partition.clone(), partition.clone(), partition.clone()];
 
@@ -1367,7 +1367,7 @@ mod tests {
     async fn oom() -> Result<()> {
         // define input partitions
         let schema = test_schema();
-        let partition = create_vec_batches(&schema, 50);
+        let partition = create_vec_batches(50);
         let input_partitions = vec![partition];
         let partitioning = Partitioning::RoundRobinBatch(4);
 
@@ -1400,15 +1400,16 @@ mod tests {
     }
 
     /// Create vector batches
-    fn create_vec_batches(schema: &Schema, n: usize) -> Vec<RecordBatch> {
-        let batch = create_batch(schema);
+    fn create_vec_batches(n: usize) -> Vec<RecordBatch> {
+        let batch = create_batch();
         (0..n).map(|_| batch.clone()).collect()
     }
 
     /// Create batch
-    fn create_batch(schema: &Schema) -> RecordBatch {
+    fn create_batch() -> RecordBatch {
+        let schema = test_schema();
         RecordBatch::try_new(
-            Arc::new(schema.clone()),
+            schema,
             vec![Arc::new(UInt32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8]))],
         )
         .unwrap()
