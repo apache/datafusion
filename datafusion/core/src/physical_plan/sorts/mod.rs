@@ -17,6 +17,7 @@
 
 //! Sort functionalities
 
+mod batch_cursor;
 mod builder;
 mod cascade;
 mod cursor;

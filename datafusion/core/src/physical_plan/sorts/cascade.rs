@@ -3,11 +3,13 @@ use crate::physical_plan::sorts::builder::SortOrder;
 use crate::physical_plan::sorts::cursor::Cursor;
 use crate::physical_plan::sorts::merge::SortPreservingMergeStream;
 use crate::physical_plan::sorts::stream::{
-    BatchCursorStream, BatchId, BatchTrackingStream, MergeStream, OffsetCursorStream,
+    BatchCursorStream, BatchTrackingStream, MergeStream, OffsetCursorStream,
     YieldedCursorStream,
 };
 use crate::physical_plan::stream::ReceiverStream;
 use crate::physical_plan::RecordBatchStream;
+
+use super::batch_cursor::BatchId;
 
 use arrow::compute::interleave;
 use arrow::datatypes::SchemaRef;
@@ -125,7 +127,7 @@ impl<C: Cursor + Unpin + Send + 'static> SortPreservingCascadeStream<C> {
         let mut sort_order_offset_adjusted = Vec::with_capacity(sort_order.len());
         let mut batch_idx: usize = 0;
 
-        for (batch_id, row_idx, offset) in sort_order.iter() {
+        for ((batch_id, offset), row_idx) in sort_order.iter() {
             let batch_idx = match batches_seen.get(batch_id) {
                 Some((batch_idx, _)) => *batch_idx,
                 None => {
@@ -217,7 +219,7 @@ impl<C: Cursor + Unpin + Send + 'static> RecordBatchStream
     }
 }
 
-fn spawn_buffered_merge<C: Send + Sync + 'static>(
+fn spawn_buffered_merge<C: Cursor + 'static>(
     mut input: MergeStream<C>,
     schema: SchemaRef,
     buffer: usize,

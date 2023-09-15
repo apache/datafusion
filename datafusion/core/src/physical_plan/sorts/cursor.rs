@@ -100,11 +100,17 @@ pub trait Cursor: Ord + Send + Sync {
     /// Returns true if there are no more rows in this cursor
     fn is_finished(&self) -> bool;
 
+    /// Returns true this cursor is midway completed
+    fn in_progress(&self) -> bool;
+
     /// Advance the cursor, returning the previous row index
     fn advance(&mut self) -> usize;
 
-    /// Go to reference row, returning the previous row index
-    fn seek(&mut self, row: usize) -> usize;
+    /// Current row index
+    fn current_idx(&self) -> usize;
+
+    /// Go to start row
+    fn reset(&mut self);
 
     /// Slice the cursor at a given row index, returning a new cursor
     ///
@@ -124,6 +130,11 @@ impl Cursor for RowCursor {
     }
 
     #[inline]
+    fn in_progress(&self) -> bool {
+        !self.is_finished() && self.cur_row > self.row_offset
+    }
+
+    #[inline]
     fn advance(&mut self) -> usize {
         let t = self.cur_row;
         self.cur_row += 1;
@@ -131,10 +142,13 @@ impl Cursor for RowCursor {
     }
 
     #[inline]
-    fn seek(&mut self, goto: usize) -> usize {
-        let previous = self.cur_row;
-        self.cur_row = goto + self.row_offset;
-        previous
+    fn current_idx(&self) -> usize {
+        self.cur_row - self.row_offset
+    }
+
+    #[inline]
+    fn reset(&mut self) {
+        self.cur_row = self.row_offset;
     }
 
     #[inline]
@@ -329,16 +343,22 @@ impl<T: FieldValues + Send + Sync> Cursor for FieldCursor<T> {
         self.offset == self.values.len()
     }
 
+    fn in_progress(&self) -> bool {
+        !self.is_finished() && self.offset > 0
+    }
+
     fn advance(&mut self) -> usize {
         let t = self.offset;
         self.offset += 1;
         t
     }
 
-    fn seek(&mut self, goto: usize) -> usize {
-        let previous = self.offset;
-        self.offset = goto;
-        previous
+    fn current_idx(&self) -> usize {
+        self.offset
+    }
+
+    fn reset(&mut self) {
+        self.offset = 0;
     }
 
     fn slice(&self, offset: usize, length: usize) -> Result<Self> {
@@ -516,38 +536,5 @@ mod tests {
         // 6 < -3
         b.advance();
         assert_eq!(a.cmp(&b), Ordering::Less);
-    }
-
-    #[test]
-    fn test_primitive_goto() {
-        let options = SortOptions {
-            descending: false,
-            nulls_first: true,
-        };
-
-        let buffer = ScalarBuffer::from(vec![1]);
-        let cmp = new_primitive(options, buffer, 0);
-
-        let buffer = ScalarBuffer::from(vec![0, 1, 2]);
-        let mut cursor = new_primitive(options, buffer, 0);
-
-        // comparisons as advance
-        assert_eq!(cursor.cmp(&cmp), Ordering::Less);
-        cursor.advance();
-        assert_eq!(cursor.cmp(&cmp), Ordering::Equal);
-        cursor.advance();
-        assert_eq!(cursor.cmp(&cmp), Ordering::Greater);
-
-        // goto
-        cursor.seek(1);
-        assert_eq!(cursor.cmp(&cmp), Ordering::Equal);
-        cursor.seek(0);
-        assert_eq!(cursor.cmp(&cmp), Ordering::Less);
-        cursor.seek(2);
-        assert_eq!(cursor.cmp(&cmp), Ordering::Greater);
-
-        // goto returns previous row_idx
-        let prev = cursor.seek(0);
-        assert_eq!(prev, 2);
     }
 }
