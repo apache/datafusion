@@ -23,14 +23,15 @@ use arrow_array::types::ByteArrayType;
 use arrow_array::{Array, ArrowPrimitiveType, GenericByteArray, PrimitiveArray};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
-use std::cmp::Ordering;
+use std::{cmp::Ordering, sync::Arc};
 
 /// A [`Cursor`] for [`Rows`]
 pub struct RowCursor {
     cur_row: usize,
-    num_rows: usize,
+    row_offset: usize,
+    row_limit: usize, // exclusive [offset..limit]
 
-    rows: Rows,
+    rows: Arc<Rows>,
 
     /// Tracks for the memory used by in the `Rows` of this
     /// cursor. Freed on drop
@@ -42,7 +43,7 @@ impl std::fmt::Debug for RowCursor {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.debug_struct("SortKeyCursor")
             .field("cur_row", &self.cur_row)
-            .field("num_rows", &self.num_rows)
+            .field("num_rows", &self.num_rows())
             .finish()
     }
 }
@@ -61,8 +62,9 @@ impl RowCursor {
         );
         Self {
             cur_row: 0,
-            num_rows: rows.num_rows(),
-            rows,
+            row_offset: 0,
+            row_limit: rows.num_rows(),
+            rows: Arc::new(rows),
             reservation,
         }
     }
@@ -107,27 +109,38 @@ pub trait Cursor: Ord {
     fn slice(&self, offset: usize, length: usize) -> Result<Self>
     where
         Self: Sized;
+
+    /// Returns the number of rows in this cursor
+    fn num_rows(&self) -> usize;
 }
 
 impl Cursor for RowCursor {
     #[inline]
     fn is_finished(&self) -> bool {
-        self.num_rows == self.cur_row
+        self.cur_row >= self.row_limit
     }
 
     #[inline]
     fn advance(&mut self) -> usize {
         let t = self.cur_row;
         self.cur_row += 1;
-        t
+        t - self.row_offset
     }
 
     #[inline]
     fn slice(&self, offset: usize, length: usize) -> Result<Self> {
-        let rows = self.rows.slice(offset, length);
-        let mut reservation = self.reservation.new_empty();
-        reservation.try_grow(rows.size())?;
-        Ok(Self::new(rows, reservation))
+        Ok(Self {
+            cur_row: self.row_offset + offset,
+            row_offset: self.row_offset + offset,
+            row_limit: self.row_offset + offset + length,
+            rows: self.rows.clone(),
+            reservation: self.reservation.new_empty(), // Arc cloning of Rows is cheap
+        })
+    }
+
+    #[inline]
+    fn num_rows(&self) -> usize {
+        self.row_limit - self.row_offset
     }
 }
 
@@ -326,6 +339,10 @@ impl<T: FieldValues> Cursor for FieldCursor<T> {
             null_threshold: *null_threshold,
             options: *options,
         })
+    }
+
+    fn num_rows(&self) -> usize {
+        self.values.len()
     }
 }
 
