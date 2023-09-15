@@ -24,6 +24,7 @@ use crate::{
     object_store::{DefaultObjectStoreRegistry, ObjectStoreRegistry},
 };
 
+use crate::cache::cache_manager::{CacheManager, CacheManagerConfig};
 use datafusion_common::{DataFusionError, Result};
 use object_store::ObjectStore;
 use std::fmt::{Debug, Formatter};
@@ -46,6 +47,8 @@ pub struct RuntimeEnv {
     pub memory_pool: Arc<dyn MemoryPool>,
     /// Manage temporary files during query execution
     pub disk_manager: Arc<DiskManager>,
+    /// Manage temporary cache during query execution
+    pub cache_manager: Arc<CacheManager>,
     /// Object Store Registry
     pub object_store_registry: Arc<dyn ObjectStoreRegistry>,
 }
@@ -62,6 +65,7 @@ impl RuntimeEnv {
         let RuntimeConfig {
             memory_pool,
             disk_manager,
+            cache_manager,
             object_store_registry,
         } = config;
 
@@ -71,6 +75,7 @@ impl RuntimeEnv {
         Ok(Self {
             memory_pool,
             disk_manager: DiskManager::try_new(disk_manager)?,
+            cache_manager: CacheManager::try_new(&cache_manager)?,
             object_store_registry,
         })
     }
@@ -116,6 +121,8 @@ pub struct RuntimeConfig {
     ///
     /// Defaults to using an [`UnboundedMemoryPool`] if `None`
     pub memory_pool: Option<Arc<dyn MemoryPool>>,
+    /// CacheManager to manage cache data
+    pub cache_manager: CacheManagerConfig,
     /// ObjectStoreRegistry to get object store based on url
     pub object_store_registry: Arc<dyn ObjectStoreRegistry>,
 }
@@ -132,6 +139,7 @@ impl RuntimeConfig {
         Self {
             disk_manager: Default::default(),
             memory_pool: Default::default(),
+            cache_manager: Default::default(),
             object_store_registry: Arc::new(DefaultObjectStoreRegistry::default()),
         }
     }
@@ -145,6 +153,12 @@ impl RuntimeConfig {
     /// Customize memory policy
     pub fn with_memory_pool(mut self, memory_pool: Arc<dyn MemoryPool>) -> Self {
         self.memory_pool = Some(memory_pool);
+        self
+    }
+
+    /// Customize cache policy
+    pub fn with_cache_manager(mut self, cache_manager: CacheManagerConfig) -> Self {
+        self.cache_manager = cache_manager;
         self
     }
 

@@ -21,7 +21,7 @@ use object_store::path::Path;
 use object_store::ObjectMeta;
 use std::sync::Arc;
 
-pub type FileStaticCache = Arc<dyn CacheAccessor<Path, Statistics, Extra=ObjectMeta>>;
+pub type FileStaticCache = Arc<dyn CacheAccessor<Path, Statistics, Extra = ObjectMeta>>;
 
 #[derive(Default)]
 pub struct CacheManager {
@@ -37,7 +37,7 @@ impl CacheManager {
         Ok(Arc::new(manager))
     }
 
-    pub fn get_table_statistic_cache(&self) -> Option<FileStaticCache> {
+    pub fn get_file_statistic_cache(&self) -> Option<FileStaticCache> {
         self.file_statistic_cache.clone()
     }
 }

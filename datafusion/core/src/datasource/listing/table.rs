@@ -31,7 +31,6 @@ use datafusion_optimizer::utils::conjunction;
 use datafusion_physical_expr::{create_physical_expr, LexOrdering, PhysicalSortExpr};
 use futures::{future, stream, StreamExt, TryStreamExt};
 
-
 use crate::datasource::physical_plan::{FileScanConfig, FileSinkConfig};
 use crate::datasource::{
     file_format::{
@@ -847,7 +846,7 @@ impl TableProvider for ListingTable {
             &self.options.file_extension,
             &self.options.table_partition_cols,
         )
-            .await?;
+        .await?;
 
         let file_groups = file_list_stream.try_collect::<Vec<_>>().await?;
         let writer_mode;
@@ -933,7 +932,7 @@ impl ListingTable {
                 &self.options.table_partition_cols,
             )
         }))
-            .await?;
+        .await?;
 
         let file_list = stream::iter(file_list).flatten();
 
@@ -1009,10 +1008,12 @@ mod tests {
     };
     use arrow::datatypes::{DataType, Schema};
     use arrow::record_batch::RecordBatch;
-    use chrono::DateTime;
     use datafusion_common::assert_contains;
     use datafusion_common::GetExt;
+    use datafusion_execution::cache::cache_manager::CacheManagerConfig;
+    use datafusion_execution::cache::cache_unit;
     use datafusion_execution::cache::cache_unit::FileStatisticsCache;
+    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion_expr::LogicalPlanBuilder;
     use rstest::*;
     use std::collections::HashMap;
@@ -1089,6 +1090,95 @@ mod tests {
         assert_eq!(exec.statistics().total_byte_size, Some(671));
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn load_table_stats_with_session_level_cache() -> Result<()> {
+        let testdata = crate::test_util::parquet_test_data();
+        let filename = format!("{}/{}", testdata, "alltypes_plain.parquet");
+        let table_path = ListingTableUrl::parse(filename).unwrap();
+
+        let (cache1, state1) = get_cache_runtime_state();
+
+        // Create a separate FileStatisticsCache
+        let (cache2, state2) = get_cache_runtime_state();
+
+        let opt = ListingOptions::new(Arc::new(ParquetFormat::default()));
+
+        let table1 = get_listing_with_cache(&table_path, cache1, &state1, &opt).await;
+        let table2 = get_listing_with_cache(&table_path, cache2, &state2, &opt).await;
+
+        //Session 1 first time list files
+        assert_eq!(get_cache_size(&state1), 0);
+        let exec1 = table1.scan(&state1, None, &[], None).await?;
+
+        assert_eq!(exec1.statistics().num_rows, Some(8));
+        assert_eq!(exec1.statistics().total_byte_size, Some(671));
+        assert_eq!(get_cache_size(&state1), 1);
+
+        //Session 2 first time list files
+        //check session 1 cache result not show in session 2
+        assert_eq!(
+            state2
+                .runtime_env()
+                .cache_manager
+                .get_file_statistic_cache()
+                .unwrap()
+                .len(),
+            0
+        );
+        let exec2 = table2.scan(&state2, None, &[], None).await?;
+        assert_eq!(exec2.statistics().num_rows, Some(8));
+        assert_eq!(exec2.statistics().total_byte_size, Some(671));
+        assert_eq!(get_cache_size(&state2), 1);
+
+        //Session 1 second time list files
+        //check session 1 cache result not show in session 2
+        assert_eq!(get_cache_size(&state1), 1);
+        let exec3 = table1.scan(&state1, None, &[], None).await?;
+        assert_eq!(exec3.statistics().num_rows, Some(8));
+        assert_eq!(exec3.statistics().total_byte_size, Some(671));
+        // List same file no increase
+        assert_eq!(get_cache_size(&state1), 1);
+
+        Ok(())
+    }
+
+    async fn get_listing_with_cache(
+        table_path: &ListingTableUrl,
+        cache1: Arc<FileStatisticsCache>,
+        state1: &SessionState,
+        opt: &ListingOptions,
+    ) -> ListingTable {
+        let schema = opt.infer_schema(&state1, &table_path).await.unwrap();
+        let config1 = ListingTableConfig::new(table_path.clone())
+            .with_listing_options(opt.clone())
+            .with_schema(schema);
+        let table1 = ListingTable::try_new_with_cache(config1, cache1).unwrap();
+        table1
+    }
+
+    fn get_cache_runtime_state() -> (Arc<FileStatisticsCache>, SessionState) {
+        let cache_config = CacheManagerConfig::default();
+        let cache1 = Arc::new(cache_unit::FileStatisticsCache::default());
+        let cache_config =
+            cache_config.enable_table_files_statistics_cache(cache1.clone());
+        let rt = Arc::new(
+            RuntimeEnv::new(RuntimeConfig::new().with_cache_manager(cache_config))
+                .unwrap(),
+        );
+        let state = SessionContext::with_config_rt(SessionConfig::default(), rt).state();
+
+        (cache1, state)
+    }
+
+    fn get_cache_size(state1: &SessionState) -> usize {
+        state1
+            .runtime_env()
+            .cache_manager
+            .get_file_statistic_cache()
+            .unwrap()
+            .len()
     }
 
     #[tokio::test]
@@ -1359,7 +1449,7 @@ mod tests {
             12,
             5,
         )
-            .await?;
+        .await?;
 
         // as many expected partitions as files
         assert_list_files_for_scan_grouping(
@@ -1373,7 +1463,7 @@ mod tests {
             4,
             4,
         )
-            .await?;
+        .await?;
 
         // more files as expected partitions
         assert_list_files_for_scan_grouping(
@@ -1388,7 +1478,7 @@ mod tests {
             2,
             2,
         )
-            .await?;
+        .await?;
 
         // no files => no groups
         assert_list_files_for_scan_grouping(&[], "test:///bucket/key-prefix/", 2, 0)
@@ -1405,7 +1495,7 @@ mod tests {
             10,
             2,
         )
-            .await?;
+        .await?;
         Ok(())
     }
 
@@ -1425,7 +1515,7 @@ mod tests {
             12,
             5,
         )
-            .await?;
+        .await?;
 
         // as many expected partitions as files
         assert_list_files_for_multi_paths(
@@ -1441,7 +1531,7 @@ mod tests {
             5,
             5,
         )
-            .await?;
+        .await?;
 
         // more files as expected partitions
         assert_list_files_for_multi_paths(
@@ -1457,7 +1547,7 @@ mod tests {
             2,
             2,
         )
-            .await?;
+        .await?;
 
         // no files => no groups
         assert_list_files_for_multi_paths(&[], &["test:///bucket/key1/"], 2, 0).await?;
@@ -1476,7 +1566,7 @@ mod tests {
             2,
             1,
         )
-            .await?;
+        .await?;
         Ok(())
     }
 
@@ -1571,7 +1661,7 @@ mod tests {
             FileCompressionType::UNCOMPRESSED,
             None,
         )
-            .await?;
+        .await?;
         Ok(())
     }
 
@@ -1582,7 +1672,7 @@ mod tests {
             FileCompressionType::UNCOMPRESSED,
             None,
         )
-            .await?;
+        .await?;
         Ok(())
     }
 
@@ -1593,7 +1683,7 @@ mod tests {
             FileCompressionType::UNCOMPRESSED,
             None,
         )
-            .await?;
+        .await?;
         Ok(())
     }
 
@@ -1604,7 +1694,7 @@ mod tests {
             FileCompressionType::UNCOMPRESSED,
             None,
         )
-            .await?;
+        .await?;
         Ok(())
     }
 
@@ -1615,7 +1705,7 @@ mod tests {
             FileCompressionType::UNCOMPRESSED,
             None,
         )
-            .await?;
+        .await?;
         Ok(())
     }
 
@@ -1627,7 +1717,7 @@ mod tests {
             "OPTIONS (insert_mode 'append_new_files')",
             None,
         )
-            .await?;
+        .await?;
         Ok(())
     }
 
@@ -1640,7 +1730,7 @@ mod tests {
             OPTIONS (insert_mode 'append_new_files')",
             None,
         )
-            .await?;
+        .await?;
         Ok(())
     }
 
@@ -1652,7 +1742,7 @@ mod tests {
             "OPTIONS (insert_mode 'append_new_files')",
             None,
         )
-            .await?;
+        .await?;
         Ok(())
     }
 
@@ -1664,7 +1754,7 @@ mod tests {
             "",
             None,
         )
-            .await?;
+        .await?;
         Ok(())
     }
 
@@ -1733,7 +1823,7 @@ mod tests {
             "",
             Some(config_map),
         )
-            .await?;
+        .await?;
         Ok(())
     }
 
@@ -1805,12 +1895,13 @@ mod tests {
             FileCompressionType::UNCOMPRESSED,
             Some(config_map),
         )
-            .await?;
+        .await?;
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_insert_into_append_new_parquet_files_invalid_session_fails() -> Result<()> {
+    async fn test_insert_into_append_new_parquet_files_invalid_session_fails(
+    ) -> Result<()> {
         let mut config_map: HashMap<String, String> = HashMap::new();
         config_map.insert(
             "datafusion.execution.parquet.compression".into(),
@@ -1821,8 +1912,8 @@ mod tests {
             FileCompressionType::UNCOMPRESSED,
             Some(config_map),
         )
-            .await
-            .expect_err("Example should fail!");
+        .await
+        .expect_err("Example should fail!");
         assert_eq!(e.strip_backtrace(), "Invalid or Unsupported Configuration: zstd compression requires specifying a level such as zstd(4)");
 
         Ok(())
@@ -1835,7 +1926,7 @@ mod tests {
             FileCompressionType::UNCOMPRESSED,
             None,
         )
-            .await;
+        .await;
         let _err =
             maybe_err.expect_err("Appending to existing parquet file did not fail!");
         Ok(())
