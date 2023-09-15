@@ -20,6 +20,7 @@ use ahash::RandomState;
 use arrow::array::BooleanBufferBuilder;
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::i256;
+use arrow::record_batch::RecordBatch;
 use arrow_array::cast::AsArray;
 use arrow_array::{ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, PrimitiveArray};
 use arrow_schema::DataType;
@@ -31,20 +32,20 @@ use hashbrown::raw::RawTable;
 use std::sync::Arc;
 
 /// A trait to allow hashing of floating point numbers
-trait HashValue {
-    fn hash(self, state: &RandomState) -> u64;
+pub(crate) trait HashValue {
+    fn hash(&self, state: &RandomState) -> u64;
 }
 
 macro_rules! hash_integer {
     ($($t:ty),+) => {
         $(impl HashValue for $t {
             #[cfg(not(feature = "force_hash_collisions"))]
-            fn hash(self, state: &RandomState) -> u64 {
+            fn hash(&self, state: &RandomState) -> u64 {
                 state.hash_one(self)
             }
 
             #[cfg(feature = "force_hash_collisions")]
-            fn hash(self, _state: &RandomState) -> u64 {
+            fn hash(&self, _state: &RandomState) -> u64 {
                 0
             }
         })+
@@ -57,12 +58,12 @@ macro_rules! hash_float {
     ($($t:ty),+) => {
         $(impl HashValue for $t {
             #[cfg(not(feature = "force_hash_collisions"))]
-            fn hash(self, state: &RandomState) -> u64 {
+            fn hash(&self, state: &RandomState) -> u64 {
                 state.hash_one(self.to_bits())
             }
 
             #[cfg(feature = "force_hash_collisions")]
-            fn hash(self, _state: &RandomState) -> u64 {
+            fn hash(&self, _state: &RandomState) -> u64 {
                 0
             }
         })+
@@ -205,5 +206,13 @@ where
             }
         };
         Ok(vec![Arc::new(array.with_data_type(self.data_type.clone()))])
+    }
+
+    fn clear_shrink(&mut self, batch: &RecordBatch) {
+        let count = batch.num_rows();
+        self.values.clear();
+        self.values.shrink_to(count);
+        self.map.clear();
+        self.map.shrink_to(count, |_| 0); // hasher does not matter since the map is cleared
     }
 }

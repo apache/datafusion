@@ -36,6 +36,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::ipc::reader::FileReader;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{exec_err, plan_err, DataFusionError, Result};
+use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::{
     human_readable_size, MemoryConsumer, MemoryReservation,
 };
@@ -51,7 +52,6 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tempfile::NamedTempFile;
 use tokio::sync::mpsc::Sender;
 use tokio::task;
 
@@ -202,7 +202,7 @@ struct ExternalSorter {
     in_mem_batches_sorted: bool,
     /// If data has previously been spilled, the locations of the
     /// spill files (in Arrow IPC format)
-    spills: Vec<NamedTempFile>,
+    spills: Vec<RefCountedTempFile>,
     /// Sort expressions
     expr: Arc<[PhysicalSortExpr]>,
     /// Runtime metrics
@@ -574,7 +574,7 @@ impl Debug for ExternalSorter {
     }
 }
 
-fn sort_batch(
+pub(crate) fn sort_batch(
     batch: &RecordBatch,
     expressions: &[PhysicalSortExpr],
     fetch: Option<usize>,
@@ -608,8 +608,8 @@ async fn spill_sorted_batches(
     }
 }
 
-fn read_spill_as_stream(
-    path: NamedTempFile,
+pub(crate) fn read_spill_as_stream(
+    path: RefCountedTempFile,
     schema: SchemaRef,
 ) -> Result<SendableRecordBatchStream> {
     let mut builder = ReceiverStream::builder(schema, 2);

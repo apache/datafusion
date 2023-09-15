@@ -36,7 +36,7 @@ use datafusion_expr::Accumulator;
 use datafusion_physical_expr::{
     equivalence::project_equivalence_properties,
     expressions::Column,
-    normalize_out_expr_with_columns_map, reverse_order_bys,
+    normalize_out_expr_with_columns_map, physical_exprs_contains, reverse_order_bys,
     utils::{convert_to_expr, get_indices_of_matching_exprs},
     AggregateExpr, LexOrdering, LexOrderingReq, OrderingEquivalenceProperties,
     PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
@@ -50,10 +50,14 @@ mod group_values;
 mod no_grouping;
 mod order;
 mod row_hash;
+mod topk;
+mod topk_stream;
 
+use crate::physical_plan::aggregates::topk_stream::GroupedTopKAggregateStream;
 pub use datafusion_expr::AggregateFunction;
 use datafusion_physical_expr::aggregate::is_order_sensitive;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
+use datafusion_physical_expr::expressions::{Max, Min};
 use datafusion_physical_expr::utils::{
     get_finer_ordering, ordering_satisfy_requirement_concrete,
 };
@@ -90,7 +94,7 @@ impl AggregateMode {
     /// Checks whether this aggregation step describes a "first stage" calculation.
     /// In other words, its input is not another aggregation result and the
     /// `merge_batch` method will not be called for these modes.
-    fn is_first_stage(&self) -> bool {
+    pub fn is_first_stage(&self) -> bool {
         match self {
             AggregateMode::Partial
             | AggregateMode::Single
@@ -206,6 +210,11 @@ impl PhysicalGroupBy {
     pub fn is_empty(&self) -> bool {
         self.expr.is_empty()
     }
+
+    /// Check whether grouping set is single group
+    pub fn is_single(&self) -> bool {
+        self.null_expr.is_empty()
+    }
 }
 
 impl PartialEq for PhysicalGroupBy {
@@ -228,14 +237,16 @@ impl PartialEq for PhysicalGroupBy {
 
 enum StreamType {
     AggregateStream(AggregateStream),
-    GroupedHashAggregateStream(GroupedHashAggregateStream),
+    GroupedHash(GroupedHashAggregateStream),
+    GroupedPriorityQueue(GroupedTopKAggregateStream),
 }
 
 impl From<StreamType> for SendableRecordBatchStream {
     fn from(stream: StreamType) -> Self {
         match stream {
             StreamType::AggregateStream(stream) => Box::pin(stream),
-            StreamType::GroupedHashAggregateStream(stream) => Box::pin(stream),
+            StreamType::GroupedHash(stream) => Box::pin(stream),
+            StreamType::GroupedPriorityQueue(stream) => Box::pin(stream),
         }
     }
 }
@@ -265,6 +276,8 @@ pub struct AggregateExec {
     pub(crate) filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
     /// (ORDER BY clause) expression for each aggregate expression
     pub(crate) order_by_expr: Vec<Option<LexOrdering>>,
+    /// Set if the output of this aggregation is truncated by a upstream sort/limit clause
+    pub(crate) limit: Option<usize>,
     /// Input plan, could be a partial aggregate or the input to the aggregate
     pub(crate) input: Arc<dyn ExecutionPlan>,
     /// Schema after the aggregate is applied
@@ -291,7 +304,7 @@ fn get_working_mode(
     input: &Arc<dyn ExecutionPlan>,
     group_by: &PhysicalGroupBy,
 ) -> Option<(GroupByOrderMode, Vec<usize>)> {
-    if group_by.groups.len() > 1 {
+    if !group_by.is_single() {
         // We do not currently support streaming execution if we have more
         // than one group (e.g. we have grouping sets).
         return None;
@@ -567,6 +580,27 @@ fn calc_required_input_ordering(
     Ok((!required_input_ordering.is_empty()).then_some(required_input_ordering))
 }
 
+/// Check whether group by expression contains all of the expression inside `requirement`
+// As an example Group By (c,b,a) contains all of the expressions in the `requirement`: (a ASC, b DESC)
+fn group_by_contains_all_requirements(
+    group_by: &PhysicalGroupBy,
+    requirement: &LexOrdering,
+) -> bool {
+    let physical_exprs = group_by
+        .expr()
+        .iter()
+        .map(|(expr, _alias)| expr.clone())
+        .collect::<Vec<_>>();
+    // When we have multiple groups (grouping set)
+    // since group by may be calculated on the subset of the group_by.expr()
+    // it is not guaranteed to have all of the requirements among group by expressions.
+    // Hence do the analysis: whether group by contains all requirements in the single group case.
+    group_by.is_single()
+        && requirement
+            .iter()
+            .all(|req| physical_exprs_contains(&physical_exprs, &req.expr))
+}
+
 impl AggregateExec {
     /// Create a new hash aggregate execution plan
     pub fn try_new(
@@ -593,16 +627,22 @@ impl AggregateExec {
             .iter()
             .zip(order_by_expr)
             .map(|(aggr_expr, fn_reqs)| {
-                // If the aggregation function is order-sensitive and we are
-                // performing a "first stage" calculation, keep the ordering
-                // requirement as is; otherwise ignore the ordering requirement.
+                // If
+                // - aggregation function is order-sensitive and
+                // - aggregation is performing a "first stage" calculation, and
+                // - at least one of the aggregate function requirement is not inside group by expression
+                // keep the ordering requirement as is; otherwise ignore the ordering requirement.
                 // In non-first stage modes, we accumulate data (using `merge_batch`)
                 // from different partitions (i.e. merge partial results). During
                 // this merge, we consider the ordering of each partial result.
                 // Hence, we do not need to use the ordering requirement in such
                 // modes as long as partial results are generated with the
                 // correct ordering.
-                fn_reqs.filter(|_| is_order_sensitive(aggr_expr) && mode.is_first_stage())
+                fn_reqs.filter(|req| {
+                    is_order_sensitive(aggr_expr)
+                        && mode.is_first_stage()
+                        && !group_by_contains_all_requirements(&group_by, req)
+                })
             })
             .collect::<Vec<_>>();
         let mut aggregator_reverse_reqs = None;
@@ -669,6 +709,7 @@ impl AggregateExec {
             metrics: ExecutionPlanMetricsSet::new(),
             aggregation_ordering,
             required_input_ordering,
+            limit: None,
         })
     }
 
@@ -717,14 +758,35 @@ impl AggregateExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<StreamType> {
+        // no group by at all
         if self.group_by.expr.is_empty() {
-            Ok(StreamType::AggregateStream(AggregateStream::new(
+            return Ok(StreamType::AggregateStream(AggregateStream::new(
                 self, context, partition,
-            )?))
+            )?));
+        }
+
+        // grouping by an expression that has a sort/limit upstream
+        if let Some(limit) = self.limit {
+            return Ok(StreamType::GroupedPriorityQueue(
+                GroupedTopKAggregateStream::new(self, context, partition, limit)?,
+            ));
+        }
+
+        // grouping by something else and we need to just materialize all results
+        Ok(StreamType::GroupedHash(GroupedHashAggregateStream::new(
+            self, context, partition,
+        )?))
+    }
+
+    /// Finds the DataType and SortDirection for this Aggregate, if there is one
+    pub fn get_minmax_desc(&self) -> Option<(Field, bool)> {
+        let agg_expr = self.aggr_expr.as_slice().first()?;
+        if let Some(max) = agg_expr.as_any().downcast_ref::<Max>() {
+            Some((max.field().ok()?, true))
+        } else if let Some(min) = agg_expr.as_any().downcast_ref::<Min>() {
+            Some((min.field().ok()?, false))
         } else {
-            Ok(StreamType::GroupedHashAggregateStream(
-                GroupedHashAggregateStream::new(self, context, partition)?,
-            ))
+            None
         }
     }
 }
@@ -738,7 +800,7 @@ impl DisplayAs for AggregateExec {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "AggregateExec: mode={:?}", self.mode)?;
-                let g: Vec<String> = if self.group_by.groups.len() == 1 {
+                let g: Vec<String> = if self.group_by.is_single() {
                     self.group_by
                         .expr
                         .iter()
@@ -793,6 +855,9 @@ impl DisplayAs for AggregateExec {
                     .map(|agg| agg.name().to_string())
                     .collect();
                 write!(f, ", aggr=[{}]", a.join(", "))?;
+                if let Some(limit) = self.limit {
+                    write!(f, ", lim=[{limit}]")?;
+                }
 
                 if let Some(aggregation_ordering) = &self.aggregation_ordering {
                     write!(f, ", ordering_mode={:?}", aggregation_ordering.mode)?;
@@ -900,7 +965,7 @@ impl ExecutionPlan for AggregateExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(AggregateExec::try_new(
+        let mut me = AggregateExec::try_new(
             self.mode,
             self.group_by.clone(),
             self.aggr_expr.clone(),
@@ -908,7 +973,9 @@ impl ExecutionPlan for AggregateExec {
             self.order_by_expr.clone(),
             children[0].clone(),
             self.input_schema.clone(),
-        )?))
+        )?;
+        me.limit = self.limit;
+        Ok(Arc::new(me))
     }
 
     fn execute(
@@ -1115,7 +1182,7 @@ fn evaluate(
 }
 
 /// Evaluates expressions against a record batch.
-fn evaluate_many(
+pub(crate) fn evaluate_many(
     expr: &[Vec<Arc<dyn PhysicalExpr>>],
     batch: &RecordBatch,
 ) -> Result<Vec<Vec<ArrayRef>>> {
@@ -1138,7 +1205,17 @@ fn evaluate_optional(
         .collect::<Result<Vec<_>>>()
 }
 
-fn evaluate_group_by(
+/// Evaluate a group by expression against a `RecordBatch`
+///
+/// Arguments:
+/// `group_by`: the expression to evaluate
+/// `batch`: the `RecordBatch` to evaluate against
+///
+/// Returns: A Vec of Vecs of Array of results
+/// The outer Vect appears to be for grouping sets
+/// The inner Vect contains the results per expression
+/// The inner-inner Array contains the results per row
+pub(crate) fn evaluate_group_by(
     group_by: &PhysicalGroupBy,
     batch: &RecordBatch,
 ) -> Result<Vec<Vec<ArrayRef>>> {
@@ -1219,6 +1296,7 @@ mod tests {
     use std::sync::Arc;
     use std::task::{Context, Poll};
 
+    use datafusion_execution::config::SessionConfig;
     use futures::{FutureExt, Stream};
 
     // Generate a schema which consists of 5 columns (a, b, c, d, e)
@@ -1389,7 +1467,22 @@ mod tests {
         )
     }
 
-    async fn check_grouping_sets(input: Arc<dyn ExecutionPlan>) -> Result<()> {
+    fn new_spill_ctx(batch_size: usize, max_memory: usize) -> Arc<TaskContext> {
+        let session_config = SessionConfig::new().with_batch_size(batch_size);
+        let runtime = Arc::new(
+            RuntimeEnv::new(RuntimeConfig::default().with_memory_limit(max_memory, 1.0))
+                .unwrap(),
+        );
+        let task_ctx = TaskContext::default()
+            .with_session_config(session_config)
+            .with_runtime(runtime);
+        Arc::new(task_ctx)
+    }
+
+    async fn check_grouping_sets(
+        input: Arc<dyn ExecutionPlan>,
+        spill: bool,
+    ) -> Result<()> {
         let input_schema = input.schema();
 
         let grouping_set = PhysicalGroupBy {
@@ -1414,7 +1507,11 @@ mod tests {
             DataType::Int64,
         ))];
 
-        let task_ctx = Arc::new(TaskContext::default());
+        let task_ctx = if spill {
+            new_spill_ctx(4, 1000)
+        } else {
+            Arc::new(TaskContext::default())
+        };
 
         let partial_aggregate = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
@@ -1429,24 +1526,53 @@ mod tests {
         let result =
             common::collect(partial_aggregate.execute(0, task_ctx.clone())?).await?;
 
-        let expected = vec![
-            "+---+-----+-----------------+",
-            "| a | b   | COUNT(1)[count] |",
-            "+---+-----+-----------------+",
-            "|   | 1.0 | 2               |",
-            "|   | 2.0 | 2               |",
-            "|   | 3.0 | 2               |",
-            "|   | 4.0 | 2               |",
-            "| 2 |     | 2               |",
-            "| 2 | 1.0 | 2               |",
-            "| 3 |     | 3               |",
-            "| 3 | 2.0 | 2               |",
-            "| 3 | 3.0 | 1               |",
-            "| 4 |     | 3               |",
-            "| 4 | 3.0 | 1               |",
-            "| 4 | 4.0 | 2               |",
-            "+---+-----+-----------------+",
-        ];
+        let expected = if spill {
+            vec![
+                "+---+-----+-----------------+",
+                "| a | b   | COUNT(1)[count] |",
+                "+---+-----+-----------------+",
+                "|   | 1.0 | 1               |",
+                "|   | 1.0 | 1               |",
+                "|   | 2.0 | 1               |",
+                "|   | 2.0 | 1               |",
+                "|   | 3.0 | 1               |",
+                "|   | 3.0 | 1               |",
+                "|   | 4.0 | 1               |",
+                "|   | 4.0 | 1               |",
+                "| 2 |     | 1               |",
+                "| 2 |     | 1               |",
+                "| 2 | 1.0 | 1               |",
+                "| 2 | 1.0 | 1               |",
+                "| 3 |     | 1               |",
+                "| 3 |     | 2               |",
+                "| 3 | 2.0 | 2               |",
+                "| 3 | 3.0 | 1               |",
+                "| 4 |     | 1               |",
+                "| 4 |     | 2               |",
+                "| 4 | 3.0 | 1               |",
+                "| 4 | 4.0 | 2               |",
+                "+---+-----+-----------------+",
+            ]
+        } else {
+            vec![
+                "+---+-----+-----------------+",
+                "| a | b   | COUNT(1)[count] |",
+                "+---+-----+-----------------+",
+                "|   | 1.0 | 2               |",
+                "|   | 2.0 | 2               |",
+                "|   | 3.0 | 2               |",
+                "|   | 4.0 | 2               |",
+                "| 2 |     | 2               |",
+                "| 2 | 1.0 | 2               |",
+                "| 3 |     | 3               |",
+                "| 3 | 2.0 | 2               |",
+                "| 3 | 3.0 | 1               |",
+                "| 4 |     | 3               |",
+                "| 4 | 3.0 | 1               |",
+                "| 4 | 4.0 | 2               |",
+                "+---+-----+-----------------+",
+            ]
+        };
         assert_batches_sorted_eq!(expected, &result);
 
         let groups = partial_aggregate.group_expr().expr().to_vec();
@@ -1459,6 +1585,12 @@ mod tests {
             .collect::<Result<_>>()?;
 
         let final_grouping_set = PhysicalGroupBy::new_single(final_group);
+
+        let task_ctx = if spill {
+            new_spill_ctx(4, 3160)
+        } else {
+            task_ctx
+        };
 
         let merged_aggregate = Arc::new(AggregateExec::try_new(
             AggregateMode::Final,
@@ -1505,7 +1637,7 @@ mod tests {
     }
 
     /// build the aggregates on the data from some_data() and check the results
-    async fn check_aggregates(input: Arc<dyn ExecutionPlan>) -> Result<()> {
+    async fn check_aggregates(input: Arc<dyn ExecutionPlan>, spill: bool) -> Result<()> {
         let input_schema = input.schema();
 
         let grouping_set = PhysicalGroupBy {
@@ -1520,7 +1652,11 @@ mod tests {
             DataType::Float64,
         ))];
 
-        let task_ctx = Arc::new(TaskContext::default());
+        let task_ctx = if spill {
+            new_spill_ctx(2, 2144)
+        } else {
+            Arc::new(TaskContext::default())
+        };
 
         let partial_aggregate = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
@@ -1535,15 +1671,29 @@ mod tests {
         let result =
             common::collect(partial_aggregate.execute(0, task_ctx.clone())?).await?;
 
-        let expected = [
-            "+---+---------------+-------------+",
-            "| a | AVG(b)[count] | AVG(b)[sum] |",
-            "+---+---------------+-------------+",
-            "| 2 | 2             | 2.0         |",
-            "| 3 | 3             | 7.0         |",
-            "| 4 | 3             | 11.0        |",
-            "+---+---------------+-------------+",
-        ];
+        let expected = if spill {
+            vec![
+                "+---+---------------+-------------+",
+                "| a | AVG(b)[count] | AVG(b)[sum] |",
+                "+---+---------------+-------------+",
+                "| 2 | 1             | 1.0         |",
+                "| 2 | 1             | 1.0         |",
+                "| 3 | 1             | 2.0         |",
+                "| 3 | 2             | 5.0         |",
+                "| 4 | 3             | 11.0        |",
+                "+---+---------------+-------------+",
+            ]
+        } else {
+            vec![
+                "+---+---------------+-------------+",
+                "| a | AVG(b)[count] | AVG(b)[sum] |",
+                "+---+---------------+-------------+",
+                "| 2 | 2             | 2.0         |",
+                "| 3 | 3             | 7.0         |",
+                "| 4 | 3             | 11.0        |",
+                "+---+---------------+-------------+",
+            ]
+        };
         assert_batches_sorted_eq!(expected, &result);
 
         let merge = Arc::new(CoalescePartitionsExec::new(partial_aggregate));
@@ -1586,7 +1736,13 @@ mod tests {
 
         let metrics = merged_aggregate.metrics().unwrap();
         let output_rows = metrics.output_rows().unwrap();
-        assert_eq!(3, output_rows);
+        if spill {
+            // When spilling, the output rows metrics become partial output size + final output size
+            // This is because final aggregation starts while partial aggregation is still emitting
+            assert_eq!(8, output_rows);
+        } else {
+            assert_eq!(3, output_rows);
+        }
 
         Ok(())
     }
@@ -1707,7 +1863,7 @@ mod tests {
         let input: Arc<dyn ExecutionPlan> =
             Arc::new(TestYieldingExec { yield_first: false });
 
-        check_aggregates(input).await
+        check_aggregates(input, false).await
     }
 
     #[tokio::test]
@@ -1715,7 +1871,7 @@ mod tests {
         let input: Arc<dyn ExecutionPlan> =
             Arc::new(TestYieldingExec { yield_first: false });
 
-        check_grouping_sets(input).await
+        check_grouping_sets(input, false).await
     }
 
     #[tokio::test]
@@ -1723,7 +1879,7 @@ mod tests {
         let input: Arc<dyn ExecutionPlan> =
             Arc::new(TestYieldingExec { yield_first: true });
 
-        check_aggregates(input).await
+        check_aggregates(input, false).await
     }
 
     #[tokio::test]
@@ -1731,7 +1887,39 @@ mod tests {
         let input: Arc<dyn ExecutionPlan> =
             Arc::new(TestYieldingExec { yield_first: true });
 
-        check_grouping_sets(input).await
+        check_grouping_sets(input, false).await
+    }
+
+    #[tokio::test]
+    async fn aggregate_source_not_yielding_with_spill() -> Result<()> {
+        let input: Arc<dyn ExecutionPlan> =
+            Arc::new(TestYieldingExec { yield_first: false });
+
+        check_aggregates(input, true).await
+    }
+
+    #[tokio::test]
+    async fn aggregate_grouping_sets_source_not_yielding_with_spill() -> Result<()> {
+        let input: Arc<dyn ExecutionPlan> =
+            Arc::new(TestYieldingExec { yield_first: false });
+
+        check_grouping_sets(input, true).await
+    }
+
+    #[tokio::test]
+    async fn aggregate_source_with_yielding_with_spill() -> Result<()> {
+        let input: Arc<dyn ExecutionPlan> =
+            Arc::new(TestYieldingExec { yield_first: true });
+
+        check_aggregates(input, true).await
+    }
+
+    #[tokio::test]
+    async fn aggregate_grouping_sets_with_yielding_with_spill() -> Result<()> {
+        let input: Arc<dyn ExecutionPlan> =
+            Arc::new(TestYieldingExec { yield_first: true });
+
+        check_grouping_sets(input, true).await
     }
 
     #[tokio::test]
@@ -1798,10 +1986,10 @@ mod tests {
                     assert!(matches!(stream, StreamType::AggregateStream(_)));
                 }
                 1 => {
-                    assert!(matches!(stream, StreamType::GroupedHashAggregateStream(_)));
+                    assert!(matches!(stream, StreamType::GroupedHash(_)));
                 }
                 2 => {
-                    assert!(matches!(stream, StreamType::GroupedHashAggregateStream(_)));
+                    assert!(matches!(stream, StreamType::GroupedHash(_)));
                 }
                 _ => panic!("Unknown version: {version}"),
             }
@@ -1899,7 +2087,10 @@ mod tests {
     async fn run_first_last_multi_partitions() -> Result<()> {
         for use_coalesce_batches in [false, true] {
             for is_first_acc in [false, true] {
-                first_last_multi_partitions(use_coalesce_batches, is_first_acc).await?
+                for spill in [false, true] {
+                    first_last_multi_partitions(use_coalesce_batches, is_first_acc, spill)
+                        .await?
+                }
             }
         }
         Ok(())
@@ -1925,8 +2116,13 @@ mod tests {
     async fn first_last_multi_partitions(
         use_coalesce_batches: bool,
         is_first_acc: bool,
+        spill: bool,
     ) -> Result<()> {
-        let task_ctx = Arc::new(TaskContext::default());
+        let task_ctx = if spill {
+            new_spill_ctx(2, 2812)
+        } else {
+            Arc::new(TaskContext::default())
+        };
 
         let (schema, data) = some_data_v2();
         let partition1 = data[0].clone();

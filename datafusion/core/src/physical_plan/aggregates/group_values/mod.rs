@@ -15,12 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::record_batch::RecordBatch;
 use arrow_array::{downcast_primitive, ArrayRef};
 use arrow_schema::SchemaRef;
 use datafusion_common::Result;
 use datafusion_physical_expr::EmitTo;
 
-mod primitive;
+pub(crate) mod primitive;
 use primitive::GroupValuesPrimitive;
 
 mod row;
@@ -42,6 +43,9 @@ pub trait GroupValues: Send {
 
     /// Emits the group values
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>>;
+
+    /// Clear the contents and shrink the capacity to the size of the batch (free up memory usage)
+    fn clear_shrink(&mut self, batch: &RecordBatch);
 }
 
 pub fn new_group_values(schema: SchemaRef) -> Result<Box<dyn GroupValues>> {
