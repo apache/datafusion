@@ -849,12 +849,11 @@ impl TableProvider for ListingTable {
         .await?;
 
         let file_groups = file_list_stream.try_collect::<Vec<_>>().await?;
-        let writer_mode;
         //if we are writing a single output_partition to a table backed by a single file
         //we can append to that file. Otherwise, we can write new files into the directory
         //adding new files to the listing table in order to insert to the table.
         let input_partitions = input.output_partitioning().partition_count();
-        match self.options.insert_mode {
+        let writer_mode = match self.options.insert_mode {
             ListingTableInsertMode::AppendToFile => {
                 if input_partitions > file_groups.len() {
                     return Err(DataFusionError::Plan(format!(
@@ -862,19 +861,18 @@ impl TableProvider for ListingTable {
                         file_groups.len()
                     )));
                 }
-                writer_mode =
-                    crate::datasource::file_format::write::FileWriterMode::Append;
+
+                crate::datasource::file_format::write::FileWriterMode::Append
             }
             ListingTableInsertMode::AppendNewFiles => {
-                writer_mode =
-                    crate::datasource::file_format::write::FileWriterMode::PutMultipart
+                crate::datasource::file_format::write::FileWriterMode::PutMultipart
             }
             ListingTableInsertMode::Error => {
                 return plan_err!(
                     "Invalid plan attempting write to table with TableWriteMode::Error!"
                 );
             }
-        }
+        };
 
         let file_format = self.options().format.as_ref();
 
