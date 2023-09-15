@@ -539,6 +539,7 @@ mod tests {
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::Accumulator;
 
+    use arrow::compute::concat;
     use std::sync::Arc;
 
     #[test]
@@ -568,6 +569,74 @@ mod tests {
         assert_eq!(first_accumulator.evaluate()?, ScalarValue::Int64(Some(0)));
         // Last value comes from the last value of the last batch which is 12
         assert_eq!(last_accumulator.evaluate()?, ScalarValue::Int64(Some(12)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_first_last_state_after_merge() -> Result<()> {
+        let ranges: Vec<(i64, i64)> = vec![(0, 10), (1, 11), (2, 13)];
+        // create 3 ArrayRefs between each interval e.g from 0 to 9, 1 to 10, 2 to 12
+        let arrs = ranges
+            .into_iter()
+            .map(|(start, end)| {
+                Arc::new(Int64Array::from((start..end).collect::<Vec<_>>())) as ArrayRef
+            })
+            .collect::<Vec<_>>();
+
+        // FirstValueAccumulator
+        let mut first_accumulator =
+            FirstValueAccumulator::try_new(&DataType::Int64, &[], vec![])?;
+
+        first_accumulator.update_batch(&[arrs[0].clone()])?;
+        let state1 = first_accumulator.state()?;
+
+        let mut first_accumulator =
+            FirstValueAccumulator::try_new(&DataType::Int64, &[], vec![])?;
+        first_accumulator.update_batch(&[arrs[1].clone()])?;
+        let state2 = first_accumulator.state()?;
+
+        assert_eq!(state1.len(), state2.len());
+
+        let mut states = vec![];
+
+        for idx in 0..state1.len() {
+            states.push(concat(&[&state1[idx].to_array(), &state2[idx].to_array()])?);
+        }
+
+        let mut first_accumulator =
+            FirstValueAccumulator::try_new(&DataType::Int64, &[], vec![])?;
+        first_accumulator.merge_batch(&states)?;
+
+        let merged_state = first_accumulator.state()?;
+        assert_eq!(merged_state.len(), state1.len());
+
+        // LastValueAccumulator
+        let mut last_accumulator =
+            LastValueAccumulator::try_new(&DataType::Int64, &[], vec![])?;
+
+        last_accumulator.update_batch(&[arrs[0].clone()])?;
+        let state1 = last_accumulator.state()?;
+
+        let mut last_accumulator =
+            LastValueAccumulator::try_new(&DataType::Int64, &[], vec![])?;
+        last_accumulator.update_batch(&[arrs[1].clone()])?;
+        let state2 = last_accumulator.state()?;
+
+        assert_eq!(state1.len(), state2.len());
+
+        let mut states = vec![];
+
+        for idx in 0..state1.len() {
+            states.push(concat(&[&state1[idx].to_array(), &state2[idx].to_array()])?);
+        }
+
+        let mut last_accumulator =
+            LastValueAccumulator::try_new(&DataType::Int64, &[], vec![])?;
+        last_accumulator.merge_batch(&states)?;
+
+        let merged_state = last_accumulator.state()?;
+        assert_eq!(merged_state.len(), state1.len());
+
         Ok(())
     }
 }
