@@ -832,7 +832,7 @@ impl DataSink for ParquetSink {
 }
 
 /// This is the return type when joining subtasks which are serializing parquet files
-/// into memory buffers. The first part of the tuple is the parquet bytes and the 
+/// into memory buffers. The first part of the tuple is the parquet bytes and the
 /// second is how many rows were written into the file.
 type ParquetFileSerializedResult = Result<(Vec<u8>, usize), DataFusionError>;
 
