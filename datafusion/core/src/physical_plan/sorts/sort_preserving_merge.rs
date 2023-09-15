@@ -283,7 +283,7 @@ mod tests {
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::expressions::col;
     use crate::physical_plan::memory::MemoryExec;
-    use crate::physical_plan::metrics::MetricValue;
+    use crate::physical_plan::metrics::{MetricValue, Timestamp};
     use crate::physical_plan::sorts::sort::SortExec;
     use crate::physical_plan::stream::RecordBatchReceiverStream;
     use crate::physical_plan::{collect, common};
@@ -939,17 +939,21 @@ mod tests {
         metrics.iter().for_each(|m| match m.value() {
             MetricValue::StartTimestamp(ts) => {
                 saw_start = true;
-                assert!(ts.value().unwrap().timestamp_nanos() > 0);
+                assert!(nanos_from_timestamp(ts) > 0);
             }
             MetricValue::EndTimestamp(ts) => {
                 saw_end = true;
-                assert!(ts.value().unwrap().timestamp_nanos() > 0);
+                assert!(nanos_from_timestamp(ts) > 0);
             }
             _ => {}
         });
 
         assert!(saw_start);
         assert!(saw_end);
+    }
+
+    fn nanos_from_timestamp(ts: &Timestamp) -> i64 {
+        ts.value().unwrap().timestamp_nanos_opt().unwrap()
     }
 
     #[tokio::test]
