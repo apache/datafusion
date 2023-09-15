@@ -1077,6 +1077,7 @@ dependencies = [
  "log",
  "num_cpus",
  "object_store",
+ "once_cell",
  "parking_lot",
  "parquet",
  "percent-encoding",
