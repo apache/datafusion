@@ -18,6 +18,7 @@
 use super::*;
 use datafusion::config::ConfigOptions;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
+use datafusion::physical_plan::metrics::Timestamp;
 
 #[tokio::test]
 async fn explain_analyze_baseline_metrics() {
@@ -142,11 +143,11 @@ async fn explain_analyze_baseline_metrics() {
             metrics.iter().for_each(|m| match m.value() {
                 MetricValue::StartTimestamp(ts) => {
                     saw_start = true;
-                    assert!(ts.value().unwrap().timestamp_nanos() > 0);
+                    assert!(nanos_from_timestamp(ts) > 0);
                 }
                 MetricValue::EndTimestamp(ts) => {
                     saw_end = true;
-                    assert!(ts.value().unwrap().timestamp_nanos() > 0);
+                    assert!(nanos_from_timestamp(ts) > 0);
                 }
                 _ => {}
             });
@@ -161,7 +162,9 @@ async fn explain_analyze_baseline_metrics() {
     datafusion::physical_plan::accept(physical_plan.as_ref(), &mut TimeValidator {})
         .unwrap();
 }
-
+fn nanos_from_timestamp(ts: &Timestamp) -> i64 {
+    ts.value().unwrap().timestamp_nanos_opt().unwrap()
+}
 #[tokio::test]
 async fn csv_explain_plans() {
     // This test verify the look of each plan in its full cycle plan creation

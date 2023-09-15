@@ -430,11 +430,13 @@ impl MetricValue {
             Self::Time { time, .. } => time.value(),
             Self::StartTimestamp(timestamp) => timestamp
                 .value()
-                .map(|ts| ts.timestamp_nanos() as usize)
+                .and_then(|ts| ts.timestamp_nanos_opt())
+                .map(|nanos| nanos as usize)
                 .unwrap_or(0),
             Self::EndTimestamp(timestamp) => timestamp
                 .value()
-                .map(|ts| ts.timestamp_nanos() as usize)
+                .and_then(|ts| ts.timestamp_nanos_opt())
+                .map(|nanos| nanos as usize)
                 .unwrap_or(0),
         }
     }
