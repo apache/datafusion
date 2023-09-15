@@ -1012,9 +1012,9 @@ mod tests {
     use arrow::datatypes::{DataType, Schema};
     use arrow::record_batch::RecordBatch;
     use chrono::DateTime;
-    use datafusion_common::assert_contains;
     use datafusion_common::GetExt;
-    use datafusion_expr::LogicalPlanBuilder;
+    use datafusion_common::{assert_contains, ScalarValue};
+    use datafusion_expr::{BinaryExpr, LogicalPlanBuilder, Operator};
     use rstest::*;
     use std::collections::HashMap;
     use std::fs::File;
@@ -2081,7 +2081,9 @@ mod tests {
         // Create the initial context, schema, and batch.
         let session_ctx = match session_config_map {
             Some(cfg) => {
-                let config = SessionConfig::from_string_hash_map(cfg)?;
+                let mut config = SessionConfig::from_string_hash_map(cfg)?;
+                // Make target partition number fixed
+                config.options_mut().execution.target_partitions = 8;
                 SessionContext::with_config(config)
             }
             None => SessionContext::new(),
@@ -2093,6 +2095,12 @@ mod tests {
             DataType::Int32,
             false,
         )]));
+
+        let filter_predicate = Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(Expr::Column("column1".into())),
+            Operator::GtEq,
+            Box::new(Expr::Literal(ScalarValue::Int32(Some(0)))),
+        ));
 
         // Create a new batch of data to insert into the table
         let batch = RecordBatch::try_new(
@@ -2173,8 +2181,10 @@ mod tests {
         // Convert the source table into a provider so that it can be used in a query
         let source = provider_as_source(source_table);
         // Create a table scan logical plan to read from the source table
+        // Since logical plan contains filter increasing parallelism is helpful, hence in the final plan we
+        // will have 8 partitions.
         let scan_plan = LogicalPlanBuilder::scan("source", source, None)?
-            .repartition(Partitioning::Hash(vec![Expr::Column("column1".into())], 6))?
+            .filter(filter_predicate)?
             .build()?;
         // Create an insert plan to insert the source data into the initial table
         let insert_into_table =
@@ -2184,7 +2194,6 @@ mod tests {
             .state()
             .create_physical_plan(&insert_into_table)
             .await?;
-
         // Execute the physical plan and collect the results
         let res = collect(plan, session_ctx.task_ctx()).await?;
         // Insert returns the number of rows written, in our case this would be 6.
@@ -2216,9 +2225,9 @@ mod tests {
         // Assert that the batches read from the file match the expected result.
         assert_batches_eq!(expected, &batches);
 
-        // Assert that 6 files were added to the table
+        // Assert that 8 files were added to the table (by default target partition number is 8)
         let num_files = tmp_dir.path().read_dir()?.count();
-        assert_eq!(num_files, 6);
+        assert_eq!(num_files, 8);
 
         // Create a physical plan from the insert plan
         let plan = session_ctx
@@ -2259,9 +2268,9 @@ mod tests {
         // Assert that the batches read from the file after the second append match the expected result.
         assert_batches_eq!(expected, &batches);
 
-        // Assert that another 6 files were added to the table
+        // Assert that another 8 files were added to the table
         let num_files = tmp_dir.path().read_dir()?.count();
-        assert_eq!(num_files, 12);
+        assert_eq!(num_files, 16);
 
         // Return Ok if the function
         Ok(())
