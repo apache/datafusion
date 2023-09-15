@@ -161,7 +161,7 @@ impl ExecutionPlan for UnnestExec {
     }
 
     fn statistics(&self) -> Statistics {
-        Default::default()
+        Statistics::new_with_unbounded_columns(self.schema())
     }
 }
 

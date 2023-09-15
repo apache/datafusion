@@ -260,9 +260,9 @@ impl ExecutionPlan for CrossJoinExec {
     fn statistics(&self) -> Statistics {
         stats_cartesian_product(
             self.left.statistics(),
-            self.left.schema().fields().len(),
+            self.left.schema(),
             self.right.statistics(),
-            self.right.schema().fields().len(),
+            self.right.schema(),
         )
     }
 }
@@ -270,9 +270,9 @@ impl ExecutionPlan for CrossJoinExec {
 /// [left/right]_col_count are required in case the column statistics are None
 fn stats_cartesian_product(
     left_stats: Statistics,
-    left_col_count: usize,
+    left_schema: SchemaRef,
     right_stats: Statistics,
-    right_col_count: usize,
+    right_schema: SchemaRef,
 ) -> Statistics {
     let left_row_count = left_stats.num_rows;
     let right_row_count = right_stats.num_rows;
@@ -289,19 +289,37 @@ fn stats_cartesian_product(
         .zip(right_stats.total_byte_size)
         .map(|(a, b)| 2 * a * b);
 
+    let left_col_count = left_schema.fields().len();
+    let right_col_count = right_schema.fields().len();
     // calculate column stats
     let column_statistics =
         // complete the column statistics if they are missing only on one side
         match (left_stats.column_statistics, right_stats.column_statistics) {
-            (None, None) => None,
-            (None, Some(right_col_stat)) => Some((
-                vec![ColumnStatistics::default(); left_col_count],
-                right_col_stat,
-            )),
-            (Some(left_col_stat), None) => Some((
-                left_col_stat,
-                vec![ColumnStatistics::default(); right_col_count],
-            )),
+            (None, None) => {
+                let mut left_stats= vec![];
+                            let mut right_stats= vec![];
+                for index in 0..left_col_count{
+                    left_stats.push(ColumnStatistics::new_with_unbounded_column(left_schema.field(index).data_type()));
+                }
+                for index in 0..right_col_count{
+                    right_stats.push(ColumnStatistics::new_with_unbounded_column(right_schema.field(index).data_type()));
+                }
+                Some((left_stats,right_stats))
+            },
+            (None, Some(right_col_stat)) => {
+                         let mut left_stats= vec![];
+                for index in 0..left_col_count{
+                    left_stats.push(ColumnStatistics::new_with_unbounded_column(left_schema.field(index).data_type()));
+                }
+                Some((left_stats, right_col_stat))
+                },
+            (Some(left_col_stat), None) => {
+                         let mut right_stats= vec![];
+                for index in 0..right_col_count{
+                    right_stats.push(ColumnStatistics::new_with_unbounded_column(right_schema.field(index).data_type()));
+                }
+                Some((left_col_stat, right_stats))
+                },
             (Some(left_col_stat), Some(right_col_stat)) => {
                 Some((left_col_stat, right_col_stat))
             }
@@ -461,6 +479,7 @@ mod tests {
     use crate::common::assert_contains;
     use crate::physical_plan::common;
     use crate::test::{build_table_scan_i32, columns};
+    use arrow_schema::{DataType, Field};
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 
     async fn join_collect(
@@ -516,7 +535,19 @@ mod tests {
             }]),
         };
 
-        let result = stats_cartesian_product(left, 3, right, 2);
+        let result = stats_cartesian_product(
+            left,
+            Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Int32, false),
+                Field::new("c", DataType::Int32, false),
+            ])),
+            right,
+            Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Int32, false),
+            ])),
+        );
 
         let expected = Statistics {
             is_exact: true,
@@ -583,7 +614,19 @@ mod tests {
             }]),
         };
 
-        let result = stats_cartesian_product(left, 3, right, 2);
+        let result = stats_cartesian_product(
+            left,
+            Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Int32, false),
+                Field::new("c", DataType::Int32, false),
+            ])),
+            right,
+            Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Int32, false),
+            ])),
+        );
 
         let expected = Statistics {
             is_exact: true,

@@ -860,8 +860,8 @@ mod tests {
                 FileScanConfig {
                     object_store_url: ObjectStoreUrl::local_filesystem(),
                     file_groups: vec![file_groups],
-                    file_schema,
-                    statistics: Statistics::default(),
+                    file_schema: file_schema.clone(),
+                    statistics: Statistics::new_with_unbounded_columns(file_schema),
                     projection,
                     limit: None,
                     table_partition_cols: vec![],
@@ -1517,8 +1517,8 @@ mod tests {
                 FileScanConfig {
                     object_store_url: ObjectStoreUrl::local_filesystem(),
                     file_groups,
-                    file_schema,
-                    statistics: Statistics::default(),
+                    file_schema: file_schema.clone(),
+                    statistics: Statistics::new_with_unbounded_columns(file_schema),
                     projection: None,
                     limit: None,
                     table_partition_cols: vec![],
@@ -1620,8 +1620,8 @@ mod tests {
             FileScanConfig {
                 object_store_url,
                 file_groups: vec![vec![partitioned_file]],
-                file_schema: schema,
-                statistics: Statistics::default(),
+                file_schema: schema.clone(),
+                statistics: Statistics::new_with_unbounded_columns(schema),
                 // file has 10 cols so index 12 should be month and 13 should be day
                 projection: Some(vec![0, 1, 2, 12, 13]),
                 limit: None,
@@ -1695,7 +1695,9 @@ mod tests {
                 object_store_url: ObjectStoreUrl::local_filesystem(),
                 file_groups: vec![vec![partitioned_file]],
                 file_schema: Arc::new(Schema::empty()),
-                statistics: Statistics::default(),
+                statistics: Statistics::new_with_unbounded_columns(Arc::new(
+                    Schema::empty(),
+                )),
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],

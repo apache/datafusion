@@ -599,7 +599,10 @@ mod tests_statistical {
             Statistics {
                 num_rows: Some(10),
                 total_byte_size: Some(100000),
-                ..Default::default()
+                column_statistics: Some(vec![
+                    ColumnStatistics::new_with_unbounded_column(&DataType::Int32),
+                ]),
+                is_exact: false,
             },
             Schema::new(vec![Field::new("big_col", DataType::Int32, false)]),
         ));
@@ -608,7 +611,10 @@ mod tests_statistical {
             Statistics {
                 num_rows: Some(100000),
                 total_byte_size: Some(10),
-                ..Default::default()
+                column_statistics: Some(vec![
+                    ColumnStatistics::new_with_unbounded_column(&DataType::Int32),
+                ]),
+                is_exact: false,
             },
             Schema::new(vec![Field::new("small_col", DataType::Int32, false)]),
         ));
@@ -650,7 +656,8 @@ mod tests_statistical {
                     Some(50_000),
                     Some(50_000),
                 ),
-                ..Default::default()
+                total_byte_size: None,
+                is_exact: false,
             },
             Schema::new(vec![Field::new("big_col", DataType::Int32, false)]),
         ));
@@ -663,7 +670,8 @@ mod tests_statistical {
                     Some(5000),
                     Some(1000),
                 ),
-                ..Default::default()
+                total_byte_size: None,
+                is_exact: false,
             },
             Schema::new(vec![Field::new("medium_col", DataType::Int32, false)]),
         ));
@@ -676,7 +684,8 @@ mod tests_statistical {
                     Some(100_000),
                     Some(1000),
                 ),
-                ..Default::default()
+                total_byte_size: None,
+                is_exact: false,
             },
             Schema::new(vec![Field::new("small_col", DataType::Int32, false)]),
         ));
@@ -975,7 +984,10 @@ mod tests_statistical {
             Statistics {
                 num_rows: Some(10000000),
                 total_byte_size: Some(10000000),
-                ..Default::default()
+                column_statistics: Some(vec![
+                    ColumnStatistics::new_with_unbounded_column(&DataType::Int32),
+                ]),
+                is_exact: false,
             },
             Schema::new(vec![Field::new("big_col", DataType::Int32, false)]),
         ));
@@ -984,7 +996,10 @@ mod tests_statistical {
             Statistics {
                 num_rows: Some(10),
                 total_byte_size: Some(10),
-                ..Default::default()
+                column_statistics: Some(vec![
+                    ColumnStatistics::new_with_unbounded_column(&DataType::Int32),
+                ]),
+                is_exact: false,
             },
             Schema::new(vec![Field::new("small_col", DataType::Int32, false)]),
         ));
@@ -993,7 +1008,10 @@ mod tests_statistical {
             Statistics {
                 num_rows: None,
                 total_byte_size: None,
-                ..Default::default()
+                column_statistics: Some(vec![
+                    ColumnStatistics::new_with_unbounded_column(&DataType::Int32),
+                ]),
+                is_exact: false,
             },
             Schema::new(vec![Field::new("empty_col", DataType::Int32, false)]),
         ));
@@ -1053,7 +1071,10 @@ mod tests_statistical {
             Statistics {
                 num_rows: Some(10000000),
                 total_byte_size: Some(10000000),
-                ..Default::default()
+                column_statistics: Some(vec![
+                    ColumnStatistics::new_with_unbounded_column(&DataType::Int32),
+                ]),
+                is_exact: false,
             },
             Schema::new(vec![Field::new("big_col1", DataType::Int32, false)]),
         ));
@@ -1062,7 +1083,10 @@ mod tests_statistical {
             Statistics {
                 num_rows: Some(20000000),
                 total_byte_size: Some(20000000),
-                ..Default::default()
+                column_statistics: Some(vec![
+                    ColumnStatistics::new_with_unbounded_column(&DataType::Int32),
+                ]),
+                is_exact: false,
             },
             Schema::new(vec![Field::new("big_col2", DataType::Int32, false)]),
         ));
@@ -1071,7 +1095,10 @@ mod tests_statistical {
             Statistics {
                 num_rows: None,
                 total_byte_size: None,
-                ..Default::default()
+                column_statistics: Some(vec![
+                    ColumnStatistics::new_with_unbounded_column(&DataType::Int32),
+                ]),
+                is_exact: false,
             },
             Schema::new(vec![Field::new("empty_col", DataType::Int32, false)]),
         ));
@@ -1173,34 +1200,54 @@ mod tests_statistical {
 
 #[cfg(test)]
 mod util_tests {
+    use arrow_schema::{DataType, Field, Schema};
+    use datafusion_common::ScalarValue;
     use datafusion_expr::Operator;
-    use datafusion_physical_expr::expressions::{BinaryExpr, Column, NegativeExpr};
+    use datafusion_physical_expr::expressions::{
+        BinaryExpr, Column, Literal, NegativeExpr,
+    };
     use datafusion_physical_expr::intervals::utils::check_support;
     use datafusion_physical_expr::PhysicalExpr;
     use std::sync::Arc;
 
     #[test]
     fn check_expr_supported() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, false),
+        ]));
         let supported_expr = Arc::new(BinaryExpr::new(
             Arc::new(Column::new("a", 0)),
             Operator::Plus,
             Arc::new(Column::new("a", 0)),
         )) as Arc<dyn PhysicalExpr>;
-        assert!(check_support(&supported_expr));
+        assert!(check_support(&supported_expr, schema.clone()));
         let supported_expr_2 = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
-        assert!(check_support(&supported_expr_2));
+        assert!(check_support(&supported_expr_2, schema.clone()));
         let unsupported_expr = Arc::new(BinaryExpr::new(
             Arc::new(Column::new("a", 0)),
             Operator::Or,
             Arc::new(Column::new("a", 0)),
         )) as Arc<dyn PhysicalExpr>;
-        assert!(!check_support(&unsupported_expr));
+        assert!(!check_support(&unsupported_expr, schema.clone()));
         let unsupported_expr_2 = Arc::new(BinaryExpr::new(
             Arc::new(Column::new("a", 0)),
             Operator::Or,
             Arc::new(NegativeExpr::new(Arc::new(Column::new("a", 0)))),
         )) as Arc<dyn PhysicalExpr>;
-        assert!(!check_support(&unsupported_expr_2));
+        assert!(!check_support(&unsupported_expr_2, schema.clone()));
+        let unsupported_expr_3 = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("b", 1)),
+            Operator::Eq,
+            Arc::new(Literal::new(ScalarValue::Int16(Some(-1)))),
+        )) as Arc<dyn PhysicalExpr>;
+        assert!(!check_support(&unsupported_expr_3, schema.clone()));
+        let unsupported_expr_4 = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("c", 2)),
+            Operator::Eq,
+            Arc::new(Literal::new(ScalarValue::Int16(Some(-1)))),
+        )) as Arc<dyn PhysicalExpr>;
+        assert!(!check_support(&unsupported_expr_4, schema.clone()));
     }
 }
 

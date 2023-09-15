@@ -1545,7 +1545,7 @@ mod tests {
             num_rows,
             column_statistics: column_stats,
             is_exact,
-            ..Default::default()
+            total_byte_size: None,
         }
     }
 

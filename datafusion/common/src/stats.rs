@@ -26,7 +26,7 @@ use crate::ScalarValue;
 /// Fields are optional and can be inexact because the sources
 /// sometimes provide approximate estimates for performance reasons
 /// and the transformations output are not always predictable.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Statistics {
     /// The number of table rows
     pub num_rows: Option<usize>,

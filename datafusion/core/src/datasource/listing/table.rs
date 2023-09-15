@@ -941,7 +941,10 @@ impl ListingTable {
         let store = if let Some(url) = self.table_paths.get(0) {
             ctx.runtime_env().object_store(url)?
         } else {
-            return Ok((vec![], Statistics::default()));
+            return Ok((
+                vec![],
+                Statistics::new_with_unbounded_columns(self.file_schema.clone()),
+            ));
         };
         // list files (with partitions)
         let file_list = future::try_join_all(self.table_paths.iter().map(|table_path| {
@@ -980,7 +983,7 @@ impl ListingTable {
                     }
                 }
             } else {
-                Statistics::default()
+                Statistics::new_with_unbounded_columns(self.file_schema.clone())
             };
             Ok((part_file, statistics)) as Result<(PartitionedFile, Statistics)>
         });
@@ -1582,7 +1585,10 @@ mod tests {
         let cache = StatisticsCache::default();
         assert!(cache.get(&meta).is_none());
 
-        cache.save(meta.clone(), Statistics::default());
+        cache.save(
+            meta.clone(),
+            Statistics::new_with_unbounded_columns(Arc::new(Schema::empty())),
+        );
         assert!(cache.get(&meta).is_some());
 
         // file size changed

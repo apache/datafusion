@@ -17,6 +17,7 @@
 
 use std::{sync::Arc, vec};
 
+use datafusion::common::Statistics;
 use datafusion::{
     assert_batches_eq,
     datasource::{
@@ -60,7 +61,7 @@ async fn main() -> Result<()> {
         object_store_url: ObjectStoreUrl::local_filesystem(),
         file_schema: schema.clone(),
         file_groups: vec![vec![PartitionedFile::new(path.display().to_string(), 10)]],
-        statistics: Default::default(),
+        statistics: Statistics::new_with_unbounded_columns(schema.clone()),
         projection: Some(vec![12, 0]),
         limit: Some(5),
         table_partition_cols: vec![],

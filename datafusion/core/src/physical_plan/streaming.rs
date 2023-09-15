@@ -186,6 +186,6 @@ impl ExecutionPlan for StreamingTableExec {
     }
 
     fn statistics(&self) -> Statistics {
-        Default::default()
+        Statistics::new_with_unbounded_columns(self.schema())
     }
 }

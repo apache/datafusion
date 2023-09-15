@@ -897,7 +897,7 @@ mod tests {
                     "file_path".to_string(),
                     100,
                 )]],
-                statistics: Statistics::default(),
+                statistics: Statistics::new_with_unbounded_columns(schema.clone()),
                 projection: Some(projection),
                 limit: None,
                 table_partition_cols: vec![],

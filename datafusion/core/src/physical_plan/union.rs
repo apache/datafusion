@@ -269,7 +269,7 @@ impl ExecutionPlan for UnionExec {
             .iter()
             .map(|ep| ep.statistics())
             .reduce(stats_union)
-            .unwrap_or_default()
+            .unwrap_or(Statistics::new_with_unbounded_columns(self.schema()))
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
@@ -443,7 +443,7 @@ impl ExecutionPlan for InterleaveExec {
             .iter()
             .map(|ep| ep.statistics())
             .reduce(stats_union)
-            .unwrap_or_default()
+            .unwrap_or(Statistics::new_with_unbounded_columns(self.schema()))
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {

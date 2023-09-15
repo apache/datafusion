@@ -33,7 +33,7 @@ use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream, Statistics}
 use arrow::array::ArrayRef;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{internal_err, ColumnStatistics, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::OrderingEquivalenceProperties;
 
@@ -201,6 +201,12 @@ impl ExecutionPlan for GlobalLimitExec {
                 }
             })
             .unwrap_or(usize::MAX);
+        let col_stats = self
+            .schema()
+            .fields()
+            .iter()
+            .map(|field| ColumnStatistics::new_with_unbounded_column(field.data_type()))
+            .collect::<Vec<_>>();
         match input_stats {
             Statistics {
                 num_rows: Some(nr), ..
@@ -210,7 +216,8 @@ impl ExecutionPlan for GlobalLimitExec {
                     Statistics {
                         num_rows: Some(0),
                         is_exact: input_stats.is_exact,
-                        ..Default::default()
+                        column_statistics: Some(col_stats),
+                        total_byte_size: None,
                     }
                 } else if nr <= max_row_num {
                     // if the input does not reach the "fetch" globally, return input stats
@@ -221,7 +228,8 @@ impl ExecutionPlan for GlobalLimitExec {
                     Statistics {
                         num_rows: Some(max_row_num),
                         is_exact: input_stats.is_exact,
-                        ..Default::default()
+                        column_statistics: Some(col_stats),
+                        total_byte_size: None,
                     }
                 }
             }
@@ -229,7 +237,8 @@ impl ExecutionPlan for GlobalLimitExec {
                 // the result output row number will always be no greater than the limit number
                 num_rows: Some(max_row_num),
                 is_exact: false,
-                ..Default::default()
+                column_statistics: Some(col_stats),
+                total_byte_size: None,
             },
         }
     }
@@ -355,6 +364,12 @@ impl ExecutionPlan for LocalLimitExec {
 
     fn statistics(&self) -> Statistics {
         let input_stats = self.input.statistics();
+        let col_stats = self
+            .schema()
+            .fields()
+            .iter()
+            .map(|field| ColumnStatistics::new_with_unbounded_column(field.data_type()))
+            .collect::<Vec<_>>();
         match input_stats {
             // if the input does not reach the limit globally, return input stats
             Statistics {
@@ -370,13 +385,15 @@ impl ExecutionPlan for LocalLimitExec {
                 // this is not actually exact, but will be when GlobalLimit is applied
                 // TODO stats: find a more explicit way to vehiculate this information
                 is_exact: input_stats.is_exact,
-                ..Default::default()
+                column_statistics: Some(col_stats),
+                total_byte_size: None,
             },
             _ => Statistics {
                 // the result output row number will always be no greater than the limit number
                 num_rows: Some(self.fetch * self.output_partitioning().partition_count()),
                 is_exact: false,
-                ..Default::default()
+                column_statistics: Some(col_stats),
+                total_byte_size: None,
             },
         }
     }

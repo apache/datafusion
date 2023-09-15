@@ -125,9 +125,8 @@ pub fn analyze(
         DataFusionError::Internal("No column exists at the input to filter".to_string())
     })?;
 
-    println!("start expr:{:?}", expr);
     let mut graph = ExprIntervalGraph::try_new(expr.clone())?;
-    println!("created graph");
+
     let columns: Vec<Arc<dyn PhysicalExpr>> = collect_columns(expr)
         .into_iter()
         .map(|c| Arc::new(c) as Arc<dyn PhysicalExpr>)
@@ -148,10 +147,7 @@ pub fn analyze(
                 })
             })
             .collect();
-
-    let res = graph.update_ranges(&mut target_indices_and_boundaries)?;
-    println!("update range done");
-    match res {
+    match graph.update_ranges(&mut target_indices_and_boundaries)? {
         PropagationResult::Success => Ok(shrink_boundaries(
             expr,
             graph,

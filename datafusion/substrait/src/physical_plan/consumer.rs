@@ -23,7 +23,7 @@ use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
 use datafusion::error::{DataFusionError, Result};
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::{ExecutionPlan, Statistics};
 use datafusion::prelude::SessionContext;
 use object_store::ObjectMeta;
 use std::collections::HashMap;
@@ -104,7 +104,9 @@ pub async fn from_substrait_rel(
                         object_store_url: ObjectStoreUrl::local_filesystem(),
                         file_schema: Arc::new(Schema::empty()),
                         file_groups,
-                        statistics: Default::default(),
+                        statistics: Statistics::new_with_unbounded_columns(Arc::new(
+                            Schema::empty(),
+                        )),
                         projection: None,
                         limit: None,
                         table_partition_cols: vec![],

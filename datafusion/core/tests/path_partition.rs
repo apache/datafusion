@@ -468,9 +468,24 @@ async fn parquet_statistics() -> Result<()> {
     // stats for the first col are read from the parquet file
     assert_eq!(stat_cols[0].null_count, Some(3));
     // TODO assert partition column (1,2,3) stats once implemented (#1186)
-    assert_eq!(stat_cols[1], ColumnStatistics::default());
-    assert_eq!(stat_cols[2], ColumnStatistics::default());
-    assert_eq!(stat_cols[3], ColumnStatistics::default());
+    assert_eq!(
+        stat_cols[1],
+        ColumnStatistics::new_with_unbounded_column(
+            physical_plan.schema().field(1).data_type()
+        ),
+    );
+    assert_eq!(
+        stat_cols[2],
+        ColumnStatistics::new_with_unbounded_column(
+            physical_plan.schema().field(2).data_type()
+        ),
+    );
+    assert_eq!(
+        stat_cols[3],
+        ColumnStatistics::new_with_unbounded_column(
+            physical_plan.schema().field(3).data_type()
+        ),
+    );
 
     //// WITH PROJECTION ////
     let dataframe = ctx.sql("SELECT mycol, day FROM t WHERE day='28'").await?;
@@ -485,7 +500,12 @@ async fn parquet_statistics() -> Result<()> {
     // stats for the first col are read from the parquet file
     assert_eq!(stat_cols[0].null_count, Some(1));
     // TODO assert partition column stats once implemented (#1186)
-    assert_eq!(stat_cols[1], ColumnStatistics::default());
+    assert_eq!(
+        stat_cols[1],
+        ColumnStatistics::new_with_unbounded_column(
+            physical_plan.schema().field(1).data_type()
+        ),
+    );
 
     Ok(())
 }

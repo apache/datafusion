@@ -521,6 +521,7 @@ mod tests {
     use arrow_schema::Schema;
     use datafusion_common::internal_err;
     use datafusion_common::DataFusionError;
+    use datafusion_common::Statistics;
 
     use super::*;
     use crate::datasource::file_format::write::BatchSerializer;
@@ -659,9 +660,9 @@ mod tests {
 
             let config = FileScanConfig {
                 object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
-                file_schema,
+                file_schema: file_schema.clone(),
                 file_groups: vec![file_group],
-                statistics: Default::default(),
+                statistics: Statistics::new_with_unbounded_columns(file_schema),
                 projection: None,
                 limit: self.limit,
                 table_partition_cols: vec![],

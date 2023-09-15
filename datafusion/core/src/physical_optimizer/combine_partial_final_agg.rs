@@ -263,7 +263,7 @@ mod tests {
                 object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
                 file_schema: schema.clone(),
                 file_groups: vec![vec![PartitionedFile::new("x".to_string(), 100)]],
-                statistics: Statistics::default(),
+                statistics: Statistics::new_with_unbounded_columns(schema.clone()),
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],

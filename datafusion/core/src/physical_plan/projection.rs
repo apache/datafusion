@@ -403,13 +403,16 @@ fn stats_projection(
         inner_exprs
             .clone()
             .into_iter()
-            .map(|e| {
+            .enumerate()
+            .map(|(index, e)| {
                 if let Some(col) = e.as_any().downcast_ref::<Column>() {
                     input_col_stats[col.index()].clone()
                 } else {
                     // TODO stats: estimate more statistics from expressions
                     // (expressions should compute their statistics themselves)
-                    ColumnStatistics::default()
+                    ColumnStatistics::new_with_unbounded_column(
+                        schema.field(index).data_type(),
+                    )
                 }
             })
             .collect()

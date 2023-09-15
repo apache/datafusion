@@ -271,6 +271,6 @@ impl ExecutionPlan for CustomExec {
     }
 
     fn statistics(&self) -> Statistics {
-        Statistics::default()
+        Statistics::new_with_unbounded_columns(self.schema())
     }
 }

@@ -35,6 +35,7 @@ use crate::physical_plan::filter::FilterExec;
 use crate::physical_plan::metrics::MetricsSet;
 use crate::physical_plan::ExecutionPlan;
 use crate::prelude::{Expr, SessionConfig};
+use datafusion_common::Statistics;
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use parquet::arrow::ArrowWriter;
@@ -147,7 +148,7 @@ impl TestParquetFile {
                 range: None,
                 extensions: None,
             }]],
-            statistics: Default::default(),
+            statistics: Statistics::new_with_unbounded_columns(self.schema.clone()),
             projection: None,
             limit: None,
             table_partition_cols: vec![],

@@ -30,7 +30,9 @@ use arrow::array::ArrayRef;
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::longest_consecutive_prefix;
-use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
+use datafusion_common::{
+    not_impl_err, plan_err, ColumnStatistics, DataFusionError, Result,
+};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Accumulator;
 use datafusion_physical_expr::{
@@ -992,6 +994,12 @@ impl ExecutionPlan for AggregateExec {
         // - case where we group by on a column for which with have the `distinct` stat
         // TODO stats: aggr expression:
         // - aggregations somtimes also preserve invariants such as min, max...
+        let column_statistics = self
+            .schema()
+            .fields()
+            .iter()
+            .map(|field| ColumnStatistics::new_with_unbounded_column(field.data_type()))
+            .collect::<Vec<_>>();
         match self.mode {
             AggregateMode::Final | AggregateMode::FinalPartitioned
                 if self.group_by.expr.is_empty() =>
@@ -999,14 +1007,16 @@ impl ExecutionPlan for AggregateExec {
                 Statistics {
                     num_rows: Some(1),
                     is_exact: true,
-                    ..Default::default()
+                    column_statistics: Some(column_statistics),
+                    total_byte_size: None,
                 }
             }
             _ => Statistics {
                 // the output row count is surely not larger than its input row count
                 num_rows: self.input.statistics().num_rows,
                 is_exact: false,
-                ..Default::default()
+                column_statistics: Some(column_statistics),
+                total_byte_size: None,
             },
         }
     }

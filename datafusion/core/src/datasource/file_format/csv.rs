@@ -235,10 +235,10 @@ impl FileFormat for CsvFormat {
         &self,
         _state: &SessionState,
         _store: &Arc<dyn ObjectStore>,
-        _table_schema: SchemaRef,
+        table_schema: SchemaRef,
         _object: &ObjectMeta,
     ) -> Result<Statistics> {
-        Ok(Statistics::default())
+        Ok(Statistics::new_with_unbounded_columns(table_schema))
     }
 
     async fn create_physical_plan(

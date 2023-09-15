@@ -189,9 +189,8 @@ impl ExecutionPlan for FilterExec {
     /// predicate's selectivity value can be determined for the incoming data.
     fn statistics(&self) -> Statistics {
         let predicate = self.predicate();
-        print_plan(&self.input);
-        println!("self.schema.fields:{:?}", self.schema().fields);
-        if check_support(predicate) {
+
+        if check_support(predicate, self.schema()) {
             let input_stats = self.input.statistics();
 
             if let Some(column_stats) = input_stats.column_statistics {
@@ -261,12 +260,6 @@ fn collect_new_statistics(
             },
         )
         .collect()
-}
-
-fn print_plan(plan: &Arc<dyn ExecutionPlan>) -> () {
-    let formatted = crate::physical_plan::displayable(plan.as_ref()).indent(true).to_string();
-    let actual: Vec<&str> = formatted.trim().lines().collect();
-    println!("{:#?}", actual);
 }
 
 /// The FilterExec streams wraps the input iterator and applies the predicate expression to
@@ -506,7 +499,7 @@ mod tests {
                     max_value: Some(ScalarValue::Int32(Some(100))),
                     ..Default::default()
                 }]),
-                ..Default::default()
+                is_exact: false,
             },
             schema.clone(),
         ));
@@ -547,7 +540,8 @@ mod tests {
                     max_value: Some(ScalarValue::Int32(Some(100))),
                     ..Default::default()
                 }]),
-                ..Default::default()
+                is_exact: false,
+                total_byte_size: None,
             },
             schema.clone(),
         ));
@@ -604,7 +598,8 @@ mod tests {
                         ..Default::default()
                     },
                 ]),
-                ..Default::default()
+                is_exact: false,
+                total_byte_size: None,
             },
             schema.clone(),
         ));
@@ -659,12 +654,7 @@ mod tests {
         //      a: min=???, max=??? (missing)
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let input = Arc::new(StatisticsExec::new(
-            Statistics {
-                column_statistics: Some(vec![ColumnStatistics {
-                    ..Default::default()
-                }]),
-                ..Default::default()
-            },
+            Statistics::new_with_unbounded_columns(Arc::new(schema.clone())),
             schema.clone(),
         ));
 
@@ -714,7 +704,7 @@ mod tests {
                         ..Default::default()
                     },
                 ]),
-                ..Default::default()
+                is_exact: false,
             },
             schema,
         ));
@@ -824,7 +814,7 @@ mod tests {
                         ..Default::default()
                     },
                 ]),
-                ..Default::default()
+                is_exact: false,
             },
             schema,
         ));
@@ -880,7 +870,7 @@ mod tests {
                         ..Default::default()
                     },
                 ]),
-                ..Default::default()
+                is_exact: false,
             },
             schema,
         ));
@@ -945,7 +935,7 @@ mod tests {
                         ..Default::default()
                     },
                 ]),
-                ..Default::default()
+                is_exact: false,
             },
             schema,
         ));

@@ -375,13 +375,12 @@ impl PhysicalExpr for BinaryExpr {
             //       changes accordingly.
             return Ok(vec![]);
         } else if self.op.is_comparison_operator() {
-            if interval == &Interval::CERTAINLY_FALSE || self.op == Operator::Eq {
+            if interval == &Interval::CERTAINLY_FALSE {
                 // TODO: We will handle strictly false clauses by negating
                 //       the comparison operator (e.g. GT to LE, LT to GE)
                 //       once open/closed intervals are supported.
                 return Ok(vec![]);
             }
-            println!("interval:{:?}", interval);
             // Propagate the comparison operator.
             propagate_comparison(&self.op, left_interval, right_interval)?
         } else {

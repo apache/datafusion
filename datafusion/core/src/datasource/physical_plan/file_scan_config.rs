@@ -135,17 +135,15 @@ impl FileScanConfig {
                 if let Some(file_cols_stats) = &self.statistics.column_statistics {
                     table_cols_stats.push(file_cols_stats[idx].clone())
                 } else {
-                    table_cols_stats.push(ColumnStatistics::new_with_unbounded_column(field.data_type()))
+                    table_cols_stats.push(ColumnStatistics::new_with_unbounded_column(
+                        field.data_type(),
+                    ))
                 }
             } else {
                 let partition_idx = idx - self.file_schema.fields().len();
                 let name = &self.table_partition_cols[partition_idx].0;
                 let dtype = &self.table_partition_cols[partition_idx].1;
-                table_fields.push(Field::new(
-                    name,
-                    dtype.to_owned(),
-                    false,
-                ));
+                table_fields.push(Field::new(name, dtype.to_owned(), false));
                 // TODO provide accurate stat for partition column (#1186)
                 table_cols_stats.push(ColumnStatistics::new_with_unbounded_column(dtype))
             }
@@ -511,7 +509,7 @@ mod tests {
         let conf = config_for_projection(
             Arc::clone(&file_schema),
             None,
-            Statistics::default(),
+            Statistics::new_with_unbounded_columns(file_schema.clone()),
             vec![(
                 "date".to_owned(),
                 wrap_partition_type_in_dict(DataType::Utf8),
@@ -559,7 +557,8 @@ mod tests {
                         })
                         .collect(),
                 ),
-                ..Default::default()
+                total_byte_size: None,
+                is_exact: false,
             },
             vec![(
                 "date".to_owned(),
@@ -619,7 +618,7 @@ mod tests {
                 file_batch.schema().fields().len(),
                 file_batch.schema().fields().len() + 2,
             ]),
-            Statistics::default(),
+            Statistics::new_with_unbounded_columns(file_batch.schema()),
             partition_cols.clone(),
         );
         let (proj_schema, ..) = conf.project();

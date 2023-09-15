@@ -146,7 +146,11 @@ pub fn compute_record_batch_statistics(
         None => (0..schema.fields().len()).collect(),
     };
 
-    let mut column_statistics = vec![ColumnStatistics::default(); projection.len()];
+    let mut column_statistics = schema
+        .fields()
+        .iter()
+        .map(|field| ColumnStatistics::new_with_unbounded_column(field.data_type()))
+        .collect::<Vec<_>>();
 
     for partition in batches.iter() {
         for batch in partition {

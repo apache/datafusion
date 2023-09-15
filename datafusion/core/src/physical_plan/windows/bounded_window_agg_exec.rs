@@ -341,9 +341,17 @@ impl ExecutionPlan for BoundedWindowAggExec {
         if let Some(input_col_stats) = input_stat.column_statistics {
             column_statistics.extend(input_col_stats);
         } else {
-            column_statistics.extend(vec![ColumnStatistics::default(); input_cols]);
+            for index in 0..input_cols {
+                column_statistics.push(ColumnStatistics::new_with_unbounded_column(
+                    self.schema().field(index).data_type(),
+                ))
+            }
         }
-        column_statistics.extend(vec![ColumnStatistics::default(); win_cols]);
+        for index in 0..win_cols {
+            column_statistics.push(ColumnStatistics::new_with_unbounded_column(
+                self.schema().field(index + input_cols).data_type(),
+            ))
+        }
         Statistics {
             is_exact: input_stat.is_exact,
             num_rows: input_stat.num_rows,

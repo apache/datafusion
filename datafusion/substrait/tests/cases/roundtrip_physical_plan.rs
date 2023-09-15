@@ -20,7 +20,7 @@ use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
 use datafusion::error::Result;
-use datafusion::physical_plan::{displayable, ExecutionPlan};
+use datafusion::physical_plan::{displayable, ExecutionPlan, Statistics};
 use datafusion::prelude::SessionContext;
 use datafusion_substrait::physical_plan::{consumer, producer};
 use std::collections::HashMap;
@@ -42,7 +42,7 @@ async fn parquet_exec() -> Result<()> {
                 123,
             )],
         ],
-        statistics: Default::default(),
+        statistics: Statistics::new_with_unbounded_columns(Arc::new(Schema::empty())),
         projection: None,
         limit: None,
         table_partition_cols: vec![],
