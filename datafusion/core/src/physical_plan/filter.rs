@@ -154,20 +154,19 @@ impl ExecutionPlan for FilterExec {
     }
 
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        let mut res = self.input.ordering_equivalence_properties();
         let stats = self.statistics();
-
         // Add the columns that have only one value (singleton) after filtering to constants.
-        if let Some(constants) = stats.column_statistics.map(|col_stats| {
-            collect_columns(self.predicate())
+        if let Some(col_stats) = stats.column_statistics {
+            let constants = collect_columns(self.predicate())
                 .into_iter()
                 .filter(|column| col_stats[column.index()].is_singleton())
                 .map(|column| Arc::new(column) as Arc<dyn PhysicalExpr>)
-                .collect::<Vec<_>>()
-        }) {
-            res.add_constants(constants);
+                .collect::<Vec<_>>();
+            let filter_oeq = self.input.ordering_equivalence_properties();
+            filter_oeq.with_constants(constants)
+        } else {
+            self.input.ordering_equivalence_properties()
         }
-        res
     }
 
     fn with_new_children(

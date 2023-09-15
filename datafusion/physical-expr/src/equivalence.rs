@@ -259,12 +259,13 @@ impl OrderingEquivalenceProperties {
     }
 
     /// Add physical expression that have constant value to the `self.constants`
-    pub fn add_constants(&mut self, constants: Vec<Arc<dyn PhysicalExpr>>) {
+    pub fn with_constants(mut self, constants: Vec<Arc<dyn PhysicalExpr>>) -> Self {
         constants.into_iter().for_each(|constant| {
             if !physical_exprs_contains(&self.constants, &constant) {
                 self.constants.push(constant);
             }
         });
+        self
     }
 
     pub fn schema(&self) -> SchemaRef {
