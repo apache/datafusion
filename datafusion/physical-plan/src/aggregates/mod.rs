@@ -1306,6 +1306,7 @@ mod tests {
     use std::sync::Arc;
     use std::task::{Context, Poll};
 
+    use datafusion_execution::config::SessionConfig;
     use futures::{FutureExt, Stream};
 
     // Generate a schema which consists of 5 columns (a, b, c, d, e)
@@ -1477,7 +1478,22 @@ mod tests {
         )
     }
 
-    async fn check_grouping_sets(input: Arc<dyn ExecutionPlan>) -> Result<()> {
+    fn new_spill_ctx(batch_size: usize, max_memory: usize) -> Arc<TaskContext> {
+        let session_config = SessionConfig::new().with_batch_size(batch_size);
+        let runtime = Arc::new(
+            RuntimeEnv::new(RuntimeConfig::default().with_memory_limit(max_memory, 1.0))
+                .unwrap(),
+        );
+        let task_ctx = TaskContext::default()
+            .with_session_config(session_config)
+            .with_runtime(runtime);
+        Arc::new(task_ctx)
+    }
+
+    async fn check_grouping_sets(
+        input: Arc<dyn ExecutionPlan>,
+        spill: bool,
+    ) -> Result<()> {
         let input_schema = input.schema();
 
         let grouping_set = PhysicalGroupBy {
@@ -1502,7 +1518,11 @@ mod tests {
             DataType::Int64,
         ))];
 
-        let task_ctx = Arc::new(TaskContext::default());
+        let task_ctx = if spill {
+            new_spill_ctx(4, 1000)
+        } else {
+            Arc::new(TaskContext::default())
+        };
 
         let partial_aggregate = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
@@ -1517,24 +1537,53 @@ mod tests {
         let result =
             common::collect(partial_aggregate.execute(0, task_ctx.clone())?).await?;
 
-        let expected = vec![
-            "+---+-----+-----------------+",
-            "| a | b   | COUNT(1)[count] |",
-            "+---+-----+-----------------+",
-            "|   | 1.0 | 2               |",
-            "|   | 2.0 | 2               |",
-            "|   | 3.0 | 2               |",
-            "|   | 4.0 | 2               |",
-            "| 2 |     | 2               |",
-            "| 2 | 1.0 | 2               |",
-            "| 3 |     | 3               |",
-            "| 3 | 2.0 | 2               |",
-            "| 3 | 3.0 | 1               |",
-            "| 4 |     | 3               |",
-            "| 4 | 3.0 | 1               |",
-            "| 4 | 4.0 | 2               |",
-            "+---+-----+-----------------+",
-        ];
+        let expected = if spill {
+            vec![
+                "+---+-----+-----------------+",
+                "| a | b   | COUNT(1)[count] |",
+                "+---+-----+-----------------+",
+                "|   | 1.0 | 1               |",
+                "|   | 1.0 | 1               |",
+                "|   | 2.0 | 1               |",
+                "|   | 2.0 | 1               |",
+                "|   | 3.0 | 1               |",
+                "|   | 3.0 | 1               |",
+                "|   | 4.0 | 1               |",
+                "|   | 4.0 | 1               |",
+                "| 2 |     | 1               |",
+                "| 2 |     | 1               |",
+                "| 2 | 1.0 | 1               |",
+                "| 2 | 1.0 | 1               |",
+                "| 3 |     | 1               |",
+                "| 3 |     | 2               |",
+                "| 3 | 2.0 | 2               |",
+                "| 3 | 3.0 | 1               |",
+                "| 4 |     | 1               |",
+                "| 4 |     | 2               |",
+                "| 4 | 3.0 | 1               |",
+                "| 4 | 4.0 | 2               |",
+                "+---+-----+-----------------+",
+            ]
+        } else {
+            vec![
+                "+---+-----+-----------------+",
+                "| a | b   | COUNT(1)[count] |",
+                "+---+-----+-----------------+",
+                "|   | 1.0 | 2               |",
+                "|   | 2.0 | 2               |",
+                "|   | 3.0 | 2               |",
+                "|   | 4.0 | 2               |",
+                "| 2 |     | 2               |",
+                "| 2 | 1.0 | 2               |",
+                "| 3 |     | 3               |",
+                "| 3 | 2.0 | 2               |",
+                "| 3 | 3.0 | 1               |",
+                "| 4 |     | 3               |",
+                "| 4 | 3.0 | 1               |",
+                "| 4 | 4.0 | 2               |",
+                "+---+-----+-----------------+",
+            ]
+        };
         assert_batches_sorted_eq!(expected, &result);
 
         let groups = partial_aggregate.group_expr().expr().to_vec();
@@ -1547,6 +1596,12 @@ mod tests {
             .collect::<Result<_>>()?;
 
         let final_grouping_set = PhysicalGroupBy::new_single(final_group);
+
+        let task_ctx = if spill {
+            new_spill_ctx(4, 3160)
+        } else {
+            task_ctx
+        };
 
         let merged_aggregate = Arc::new(AggregateExec::try_new(
             AggregateMode::Final,
@@ -1593,7 +1648,7 @@ mod tests {
     }
 
     /// build the aggregates on the data from some_data() and check the results
-    async fn check_aggregates(input: Arc<dyn ExecutionPlan>) -> Result<()> {
+    async fn check_aggregates(input: Arc<dyn ExecutionPlan>, spill: bool) -> Result<()> {
         let input_schema = input.schema();
 
         let grouping_set = PhysicalGroupBy {
@@ -1608,7 +1663,11 @@ mod tests {
             DataType::Float64,
         ))];
 
-        let task_ctx = Arc::new(TaskContext::default());
+        let task_ctx = if spill {
+            new_spill_ctx(2, 2144)
+        } else {
+            Arc::new(TaskContext::default())
+        };
 
         let partial_aggregate = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
@@ -1623,15 +1682,29 @@ mod tests {
         let result =
             common::collect(partial_aggregate.execute(0, task_ctx.clone())?).await?;
 
-        let expected = [
-            "+---+---------------+-------------+",
-            "| a | AVG(b)[count] | AVG(b)[sum] |",
-            "+---+---------------+-------------+",
-            "| 2 | 2             | 2.0         |",
-            "| 3 | 3             | 7.0         |",
-            "| 4 | 3             | 11.0        |",
-            "+---+---------------+-------------+",
-        ];
+        let expected = if spill {
+            vec![
+                "+---+---------------+-------------+",
+                "| a | AVG(b)[count] | AVG(b)[sum] |",
+                "+---+---------------+-------------+",
+                "| 2 | 1             | 1.0         |",
+                "| 2 | 1             | 1.0         |",
+                "| 3 | 1             | 2.0         |",
+                "| 3 | 2             | 5.0         |",
+                "| 4 | 3             | 11.0        |",
+                "+---+---------------+-------------+",
+            ]
+        } else {
+            vec![
+                "+---+---------------+-------------+",
+                "| a | AVG(b)[count] | AVG(b)[sum] |",
+                "+---+---------------+-------------+",
+                "| 2 | 2             | 2.0         |",
+                "| 3 | 3             | 7.0         |",
+                "| 4 | 3             | 11.0        |",
+                "+---+---------------+-------------+",
+            ]
+        };
         assert_batches_sorted_eq!(expected, &result);
 
         let merge = Arc::new(CoalescePartitionsExec::new(partial_aggregate));
@@ -1674,7 +1747,13 @@ mod tests {
 
         let metrics = merged_aggregate.metrics().unwrap();
         let output_rows = metrics.output_rows().unwrap();
-        assert_eq!(3, output_rows);
+        if spill {
+            // When spilling, the output rows metrics become partial output size + final output size
+            // This is because final aggregation starts while partial aggregation is still emitting
+            assert_eq!(8, output_rows);
+        } else {
+            assert_eq!(3, output_rows);
+        }
 
         Ok(())
     }
@@ -1795,7 +1874,7 @@ mod tests {
         let input: Arc<dyn ExecutionPlan> =
             Arc::new(TestYieldingExec { yield_first: false });
 
-        check_aggregates(input).await
+        check_aggregates(input, false).await
     }
 
     #[tokio::test]
@@ -1803,7 +1882,7 @@ mod tests {
         let input: Arc<dyn ExecutionPlan> =
             Arc::new(TestYieldingExec { yield_first: false });
 
-        check_grouping_sets(input).await
+        check_grouping_sets(input, false).await
     }
 
     #[tokio::test]
@@ -1811,7 +1890,7 @@ mod tests {
         let input: Arc<dyn ExecutionPlan> =
             Arc::new(TestYieldingExec { yield_first: true });
 
-        check_aggregates(input).await
+        check_aggregates(input, false).await
     }
 
     #[tokio::test]
@@ -1819,7 +1898,39 @@ mod tests {
         let input: Arc<dyn ExecutionPlan> =
             Arc::new(TestYieldingExec { yield_first: true });
 
-        check_grouping_sets(input).await
+        check_grouping_sets(input, false).await
+    }
+
+    #[tokio::test]
+    async fn aggregate_source_not_yielding_with_spill() -> Result<()> {
+        let input: Arc<dyn ExecutionPlan> =
+            Arc::new(TestYieldingExec { yield_first: false });
+
+        check_aggregates(input, true).await
+    }
+
+    #[tokio::test]
+    async fn aggregate_grouping_sets_source_not_yielding_with_spill() -> Result<()> {
+        let input: Arc<dyn ExecutionPlan> =
+            Arc::new(TestYieldingExec { yield_first: false });
+
+        check_grouping_sets(input, true).await
+    }
+
+    #[tokio::test]
+    async fn aggregate_source_with_yielding_with_spill() -> Result<()> {
+        let input: Arc<dyn ExecutionPlan> =
+            Arc::new(TestYieldingExec { yield_first: true });
+
+        check_aggregates(input, true).await
+    }
+
+    #[tokio::test]
+    async fn aggregate_grouping_sets_with_yielding_with_spill() -> Result<()> {
+        let input: Arc<dyn ExecutionPlan> =
+            Arc::new(TestYieldingExec { yield_first: true });
+
+        check_grouping_sets(input, true).await
     }
 
     #[tokio::test]
@@ -1987,7 +2098,10 @@ mod tests {
     async fn run_first_last_multi_partitions() -> Result<()> {
         for use_coalesce_batches in [false, true] {
             for is_first_acc in [false, true] {
-                first_last_multi_partitions(use_coalesce_batches, is_first_acc).await?
+                for spill in [false, true] {
+                    first_last_multi_partitions(use_coalesce_batches, is_first_acc, spill)
+                        .await?
+                }
             }
         }
         Ok(())
@@ -2013,8 +2127,13 @@ mod tests {
     async fn first_last_multi_partitions(
         use_coalesce_batches: bool,
         is_first_acc: bool,
+        spill: bool,
     ) -> Result<()> {
-        let task_ctx = Arc::new(TaskContext::default());
+        let task_ctx = if spill {
+            new_spill_ctx(2, 2812)
+        } else {
+            Arc::new(TaskContext::default())
+        };
 
         let (schema, data) = some_data_v2();
         let partition1 = data[0].clone();

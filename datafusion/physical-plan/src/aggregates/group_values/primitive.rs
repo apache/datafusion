@@ -20,6 +20,7 @@ use ahash::RandomState;
 use arrow::array::BooleanBufferBuilder;
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::i256;
+use arrow::record_batch::RecordBatch;
 use arrow_array::cast::AsArray;
 use arrow_array::{ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, PrimitiveArray};
 use arrow_schema::DataType;
@@ -205,5 +206,13 @@ where
             }
         };
         Ok(vec![Arc::new(array.with_data_type(self.data_type.clone()))])
+    }
+
+    fn clear_shrink(&mut self, batch: &RecordBatch) {
+        let count = batch.num_rows();
+        self.values.clear();
+        self.values.shrink_to(count);
+        self.map.clear();
+        self.map.shrink_to(count, |_| 0); // hasher does not matter since the map is cleared
     }
 }

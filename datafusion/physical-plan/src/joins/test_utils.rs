@@ -487,23 +487,16 @@ pub fn build_sides_record_batches(
 }
 
 pub fn create_memory_table(
-    left_batch: RecordBatch,
-    right_batch: RecordBatch,
+    left_partition: Vec<RecordBatch>,
+    right_partition: Vec<RecordBatch>,
     left_sorted: Vec<LexOrdering>,
     right_sorted: Vec<LexOrdering>,
-    batch_size: usize,
 ) -> Result<(Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>)> {
-    let left = MemoryExec::try_new(
-        &[split_record_batches(&left_batch, batch_size)?],
-        left_batch.schema(),
-        None,
-    )?
-    .with_sort_information(left_sorted);
-    let right = MemoryExec::try_new(
-        &[split_record_batches(&right_batch, batch_size)?],
-        right_batch.schema(),
-        None,
-    )?
-    .with_sort_information(right_sorted);
+    let left_schema = left_partition[0].schema();
+    let left = MemoryExec::try_new(&[left_partition], left_schema, None)?
+        .with_sort_information(left_sorted);
+    let right_schema = right_partition[0].schema();
+    let right = MemoryExec::try_new(&[right_partition], right_schema, None)?
+        .with_sort_information(right_sorted);
     Ok((Arc::new(left), Arc::new(right)))
 }

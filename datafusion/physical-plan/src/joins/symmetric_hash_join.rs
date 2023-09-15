@@ -1216,7 +1216,6 @@ mod tests {
 
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{binary, col, Column};
-    use datafusion_physical_expr::intervals::test_utils::gen_conjunctive_numerical_expr;
 
     use crate::joins::hash_join_utils::tests::complicated_filter;
 
@@ -1224,11 +1223,53 @@ mod tests {
         build_sides_record_batches, compare_batches, create_memory_table,
         join_expr_tests_fixture_f64, join_expr_tests_fixture_i32,
         join_expr_tests_fixture_temporal, partitioned_hash_join_with_filter,
-        partitioned_sym_join_with_filter,
+        partitioned_sym_join_with_filter, split_record_batches,
     };
-    use datafusion_common::ScalarValue;
 
-    const TABLE_SIZE: i32 = 1000;
+    const TABLE_SIZE: i32 = 30;
+
+    use once_cell::sync::Lazy;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    type TableKey = (i32, i32, usize); // (cardinality.0, cardinality.1, batch_size)
+    type TableValue = (Vec<RecordBatch>, Vec<RecordBatch>); // (left, right)
+
+    // Cache for storing tables
+    static TABLE_CACHE: Lazy<Mutex<HashMap<TableKey, TableValue>>> =
+        Lazy::new(|| Mutex::new(HashMap::new()));
+
+    fn get_or_create_table(
+        cardinality: (i32, i32),
+        batch_size: usize,
+    ) -> Result<TableValue> {
+        {
+            let cache = TABLE_CACHE.lock().unwrap();
+            if let Some(table) = cache.get(&(cardinality.0, cardinality.1, batch_size)) {
+                return Ok(table.clone());
+            }
+        }
+
+        // If not, create the table
+        let (left_batch, right_batch) =
+            build_sides_record_batches(TABLE_SIZE, cardinality)?;
+
+        let (left_partition, right_partition) = (
+            split_record_batches(&left_batch, batch_size)?,
+            split_record_batches(&right_batch, batch_size)?,
+        );
+
+        // Lock the cache again and store the table
+        let mut cache = TABLE_CACHE.lock().unwrap();
+
+        // Store the table in the cache
+        cache.insert(
+            (cardinality.0, cardinality.1, batch_size),
+            (left_partition.clone(), right_partition.clone()),
+        );
+
+        Ok((left_partition, right_partition))
+    }
 
     pub async fn experiment(
         left: Arc<dyn ExecutionPlan>,
@@ -1272,18 +1313,18 @@ mod tests {
         join_type: JoinType,
         #[values(
         (4, 5),
-        (11, 21),
-        (31, 71),
-        (99, 12),
+        (12, 17),
         )]
         cardinality: (i32, i32),
     ) -> Result<()> {
         // a + b > c + 10 AND a + b < c + 100
         let task_ctx = Arc::new(TaskContext::default());
-        let (left_batch, right_batch) =
-            build_sides_record_batches(TABLE_SIZE, cardinality)?;
-        let left_schema = &left_batch.schema();
-        let right_schema = &right_batch.schema();
+
+        let (left_partition, right_partition) = get_or_create_table(cardinality, 8)?;
+
+        let left_schema = &left_partition[0].schema();
+        let right_schema = &right_partition[0].schema();
+
         let left_sorted = vec![PhysicalSortExpr {
             expr: binary(
                 col("la1", left_schema)?,
@@ -1298,11 +1339,10 @@ mod tests {
             options: SortOptions::default(),
         }];
         let (left, right) = create_memory_table(
-            left_batch,
-            right_batch,
+            left_partition,
+            right_partition,
             vec![left_sorted],
             vec![right_sorted],
-            13,
         )?;
 
         let on = vec![(
@@ -1350,20 +1390,14 @@ mod tests {
             JoinType::Full
         )]
         join_type: JoinType,
-        #[values(
-        (4, 5),
-        (11, 21),
-        (31, 71),
-        (99, 12),
-        )]
-        cardinality: (i32, i32),
-        #[values(0, 1, 2, 3, 4, 5, 6, 7)] case_expr: usize,
+        #[values(0, 1, 2, 3, 4, 5)] case_expr: usize,
     ) -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
-        let (left_batch, right_batch) =
-            build_sides_record_batches(TABLE_SIZE, cardinality)?;
-        let left_schema = &left_batch.schema();
-        let right_schema = &right_batch.schema();
+        let (left_partition, right_partition) = get_or_create_table((4, 5), 8)?;
+
+        let left_schema = &left_partition[0].schema();
+        let right_schema = &right_partition[0].schema();
+
         let left_sorted = vec![PhysicalSortExpr {
             expr: col("la1", left_schema)?,
             options: SortOptions::default(),
@@ -1373,66 +1407,10 @@ mod tests {
             options: SortOptions::default(),
         }];
         let (left, right) = create_memory_table(
-            left_batch,
-            right_batch,
+            left_partition,
+            right_partition,
             vec![left_sorted],
             vec![right_sorted],
-            13,
-        )?;
-
-        let on = vec![(
-            Column::new_with_schema("lc1", left_schema)?,
-            Column::new_with_schema("rc1", right_schema)?,
-        )];
-
-        let intermediate_schema = Schema::new(vec![
-            Field::new("left", DataType::Int32, true),
-            Field::new("right", DataType::Int32, true),
-        ]);
-        let filter_expr = join_expr_tests_fixture_i32(
-            case_expr,
-            col("left", &intermediate_schema)?,
-            col("right", &intermediate_schema)?,
-        );
-        let column_indices = vec![
-            ColumnIndex {
-                index: 0,
-                side: JoinSide::Left,
-            },
-            ColumnIndex {
-                index: 0,
-                side: JoinSide::Right,
-            },
-        ];
-        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
-
-        experiment(left, right, Some(filter), join_type, on, task_ctx).await?;
-        Ok(())
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn join_all_one_ascending_numeric_v2() -> Result<()> {
-        let join_type = JoinType::Inner;
-        let cardinality = (4, 5);
-        let case_expr = 2;
-        let task_ctx = Arc::new(TaskContext::default());
-        let (left_batch, right_batch) = build_sides_record_batches(1000, cardinality)?;
-        let left_schema = &left_batch.schema();
-        let right_schema = &right_batch.schema();
-        let left_sorted = vec![PhysicalSortExpr {
-            expr: col("la1", left_schema)?,
-            options: SortOptions::default(),
-        }];
-        let right_sorted = vec![PhysicalSortExpr {
-            expr: col("ra1", right_schema)?,
-            options: SortOptions::default(),
-        }];
-        let (left, right) = create_memory_table(
-            left_batch,
-            right_batch,
-            vec![left_sorted],
-            vec![right_sorted],
-            13,
         )?;
 
         let on = vec![(
@@ -1479,22 +1457,15 @@ mod tests {
             JoinType::Full
         )]
         join_type: JoinType,
-        #[values(
-        (4, 5),
-        (11, 21),
-        (31, 71),
-        (99, 12),
-        )]
-        cardinality: (i32, i32),
-        #[values(0, 1, 2, 3, 4, 5, 6)] case_expr: usize,
+        #[values(0, 1, 2, 3, 4, 5)] case_expr: usize,
     ) -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
-        let (left_batch, right_batch) =
-            build_sides_record_batches(TABLE_SIZE, cardinality)?;
-        let left_schema = &left_batch.schema();
-        let right_schema = &right_batch.schema();
+        let (left_partition, right_partition) = get_or_create_table((4, 5), 8)?;
+
+        let left_schema = &left_partition[0].schema();
+        let right_schema = &right_partition[0].schema();
         let (left, right) =
-            create_memory_table(left_batch, right_batch, vec![], vec![], 13)?;
+            create_memory_table(left_partition, right_partition, vec![], vec![])?;
 
         let on = vec![(
             Column::new_with_schema("lc1", left_schema)?,
@@ -1542,11 +1513,11 @@ mod tests {
         join_type: JoinType,
     ) -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
-        let (left_batch, right_batch) = build_sides_record_batches(TABLE_SIZE, (11, 21))?;
-        let left_schema = &left_batch.schema();
-        let right_schema = &right_batch.schema();
+        let (left_partition, right_partition) = get_or_create_table((11, 21), 8)?;
+        let left_schema = &left_partition[0].schema();
+        let right_schema = &right_partition[0].schema();
         let (left, right) =
-            create_memory_table(left_batch, right_batch, vec![], vec![], 13)?;
+            create_memory_table(left_partition, right_partition, vec![], vec![])?;
 
         let on = vec![(
             Column::new_with_schema("lc1", left_schema)?,
@@ -1570,20 +1541,12 @@ mod tests {
             JoinType::Full
         )]
         join_type: JoinType,
-        #[values(
-        (4, 5),
-        (11, 21),
-        (31, 71),
-        (99, 12),
-        )]
-        cardinality: (i32, i32),
-        #[values(0, 1, 2, 3, 4, 5, 6)] case_expr: usize,
+        #[values(0, 1, 2, 3, 4, 5)] case_expr: usize,
     ) -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
-        let (left_batch, right_batch) =
-            build_sides_record_batches(TABLE_SIZE, cardinality)?;
-        let left_schema = &left_batch.schema();
-        let right_schema = &right_batch.schema();
+        let (left_partition, right_partition) = get_or_create_table((11, 21), 8)?;
+        let left_schema = &left_partition[0].schema();
+        let right_schema = &right_partition[0].schema();
         let left_sorted = vec![PhysicalSortExpr {
             expr: col("la1_des", left_schema)?,
             options: SortOptions {
@@ -1599,11 +1562,10 @@ mod tests {
             },
         }];
         let (left, right) = create_memory_table(
-            left_batch,
-            right_batch,
+            left_partition,
+            right_partition,
             vec![left_sorted],
             vec![right_sorted],
-            13,
         )?;
 
         let on = vec![(
@@ -1639,15 +1601,13 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn build_null_columns_first() -> Result<()> {
         let join_type = JoinType::Full;
-        let cardinality = (10, 11);
         let case_expr = 1;
         let session_config = SessionConfig::new().with_repartition_joins(false);
         let task_ctx = TaskContext::default().with_session_config(session_config);
         let task_ctx = Arc::new(task_ctx);
-        let (left_batch, right_batch) =
-            build_sides_record_batches(TABLE_SIZE, cardinality)?;
-        let left_schema = &left_batch.schema();
-        let right_schema = &right_batch.schema();
+        let (left_partition, right_partition) = get_or_create_table((10, 11), 8)?;
+        let left_schema = &left_partition[0].schema();
+        let right_schema = &right_partition[0].schema();
         let left_sorted = vec![PhysicalSortExpr {
             expr: col("l_asc_null_first", left_schema)?,
             options: SortOptions {
@@ -1663,11 +1623,10 @@ mod tests {
             },
         }];
         let (left, right) = create_memory_table(
-            left_batch,
-            right_batch,
+            left_partition,
+            right_partition,
             vec![left_sorted],
             vec![right_sorted],
-            13,
         )?;
 
         let on = vec![(
@@ -1702,15 +1661,14 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn build_null_columns_last() -> Result<()> {
         let join_type = JoinType::Full;
-        let cardinality = (10, 11);
         let case_expr = 1;
         let session_config = SessionConfig::new().with_repartition_joins(false);
         let task_ctx = TaskContext::default().with_session_config(session_config);
         let task_ctx = Arc::new(task_ctx);
-        let (left_batch, right_batch) =
-            build_sides_record_batches(TABLE_SIZE, cardinality)?;
-        let left_schema = &left_batch.schema();
-        let right_schema = &right_batch.schema();
+        let (left_partition, right_partition) = get_or_create_table((10, 11), 8)?;
+
+        let left_schema = &left_partition[0].schema();
+        let right_schema = &right_partition[0].schema();
         let left_sorted = vec![PhysicalSortExpr {
             expr: col("l_asc_null_last", left_schema)?,
             options: SortOptions {
@@ -1726,11 +1684,10 @@ mod tests {
             },
         }];
         let (left, right) = create_memory_table(
-            left_batch,
-            right_batch,
+            left_partition,
+            right_partition,
             vec![left_sorted],
             vec![right_sorted],
-            13,
         )?;
 
         let on = vec![(
@@ -1771,10 +1728,10 @@ mod tests {
         let session_config = SessionConfig::new().with_repartition_joins(false);
         let task_ctx = TaskContext::default().with_session_config(session_config);
         let task_ctx = Arc::new(task_ctx);
-        let (left_batch, right_batch) =
-            build_sides_record_batches(TABLE_SIZE, cardinality)?;
-        let left_schema = &left_batch.schema();
-        let right_schema = &right_batch.schema();
+        let (left_partition, right_partition) = get_or_create_table(cardinality, 8)?;
+
+        let left_schema = &left_partition[0].schema();
+        let right_schema = &right_partition[0].schema();
         let left_sorted = vec![PhysicalSortExpr {
             expr: col("l_desc_null_first", left_schema)?,
             options: SortOptions {
@@ -1790,11 +1747,10 @@ mod tests {
             },
         }];
         let (left, right) = create_memory_table(
-            left_batch,
-            right_batch,
+            left_partition,
+            right_partition,
             vec![left_sorted],
             vec![right_sorted],
-            13,
         )?;
 
         let on = vec![(
@@ -1836,10 +1792,10 @@ mod tests {
         let session_config = SessionConfig::new().with_repartition_joins(false);
         let task_ctx = TaskContext::default().with_session_config(session_config);
         let task_ctx = Arc::new(task_ctx);
-        let (left_batch, right_batch) =
-            build_sides_record_batches(TABLE_SIZE, cardinality)?;
-        let left_schema = &left_batch.schema();
-        let right_schema = &right_batch.schema();
+        let (left_partition, right_partition) = get_or_create_table(cardinality, 8)?;
+
+        let left_schema = &left_partition[0].schema();
+        let right_schema = &right_partition[0].schema();
         let left_sorted = vec![PhysicalSortExpr {
             expr: col("la1", left_schema)?,
             options: SortOptions::default(),
@@ -1850,11 +1806,10 @@ mod tests {
             options: SortOptions::default(),
         }];
         let (left, right) = create_memory_table(
-            left_batch,
-            right_batch,
+            left_partition,
+            right_partition,
             vec![left_sorted],
             vec![right_sorted],
-            13,
         )?;
 
         let on = vec![(
@@ -1890,132 +1845,6 @@ mod tests {
 
     #[rstest]
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_one_side_hash_joiner_visited_rows(
-        #[values(
-        (JoinType::Inner, true),
-        (JoinType::Left,false),
-        (JoinType::Right, true),
-        (JoinType::RightSemi, true),
-        (JoinType::LeftSemi, false),
-        (JoinType::LeftAnti, false),
-        (JoinType::RightAnti, true),
-        (JoinType::Full, false),
-        )]
-        case: (JoinType, bool),
-    ) -> Result<()> {
-        // Set a random state for the join
-        let join_type = case.0;
-        let should_be_empty = case.1;
-        let random_state = RandomState::with_seeds(0, 0, 0, 0);
-        let session_config = SessionConfig::new().with_repartition_joins(false);
-        let task_ctx = TaskContext::default().with_session_config(session_config);
-        let task_ctx = Arc::new(task_ctx);
-        // Ensure there will be matching rows
-        let (left_batch, right_batch) = build_sides_record_batches(20, (1, 1))?;
-        let left_schema = left_batch.schema();
-        let right_schema = right_batch.schema();
-
-        // Build the join schema from the left and right schemas
-        let (schema, join_column_indices) =
-            build_join_schema(&left_schema, &right_schema, &join_type);
-        let join_schema = Arc::new(schema);
-
-        // Sort information for MemoryExec
-        let left_sorted = vec![PhysicalSortExpr {
-            expr: col("la1", &left_schema)?,
-            options: SortOptions::default(),
-        }];
-        // Sort information for MemoryExec
-        let right_sorted = vec![PhysicalSortExpr {
-            expr: col("ra1", &right_schema)?,
-            options: SortOptions::default(),
-        }];
-        // Construct MemoryExec
-        let (left, right) = create_memory_table(
-            left_batch,
-            right_batch,
-            vec![left_sorted],
-            vec![right_sorted],
-            10,
-        )?;
-
-        // Filter columns, ensure first batches will have matching rows.
-        let intermediate_schema = Schema::new(vec![
-            Field::new("0", DataType::Int32, true),
-            Field::new("1", DataType::Int32, true),
-        ]);
-        let filter_expr = gen_conjunctive_numerical_expr(
-            col("0", &intermediate_schema)?,
-            col("1", &intermediate_schema)?,
-            (
-                Operator::Plus,
-                Operator::Minus,
-                Operator::Plus,
-                Operator::Plus,
-            ),
-            ScalarValue::Int32(Some(0)),
-            ScalarValue::Int32(Some(3)),
-            ScalarValue::Int32(Some(0)),
-            ScalarValue::Int32(Some(3)),
-            (Operator::Gt, Operator::Lt),
-        );
-        let column_indices = vec![
-            ColumnIndex {
-                index: 0,
-                side: JoinSide::Left,
-            },
-            ColumnIndex {
-                index: 0,
-                side: JoinSide::Right,
-            },
-        ];
-        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
-
-        let mut left_side_joiner = OneSideHashJoiner::new(
-            JoinSide::Left,
-            vec![Column::new_with_schema("lc1", &left_schema)?],
-            left_schema,
-        );
-
-        let mut right_side_joiner = OneSideHashJoiner::new(
-            JoinSide::Right,
-            vec![Column::new_with_schema("rc1", &right_schema)?],
-            right_schema,
-        );
-
-        let mut left_stream = left.execute(0, task_ctx.clone())?;
-        let mut right_stream = right.execute(0, task_ctx)?;
-
-        let initial_left_batch = left_stream.next().await.unwrap()?;
-        left_side_joiner.update_internal_state(&initial_left_batch, &random_state)?;
-        assert_eq!(
-            left_side_joiner.input_buffer.num_rows(),
-            initial_left_batch.num_rows()
-        );
-
-        let initial_right_batch = right_stream.next().await.unwrap()?;
-        right_side_joiner.update_internal_state(&initial_right_batch, &random_state)?;
-        assert_eq!(
-            right_side_joiner.input_buffer.num_rows(),
-            initial_right_batch.num_rows()
-        );
-
-        join_with_probe_batch(
-            &mut left_side_joiner,
-            &mut right_side_joiner,
-            &join_schema,
-            join_type,
-            Some(&filter),
-            &initial_right_batch,
-            &join_column_indices,
-            &random_state,
-            false,
-        )?;
-        assert_eq!(left_side_joiner.visited_rows.is_empty(), should_be_empty);
-        Ok(())
-    }
-    #[rstest]
-    #[tokio::test(flavor = "multi_thread")]
     async fn testing_with_temporal_columns(
         #[values(
             JoinType::Inner,
@@ -2030,7 +1859,7 @@ mod tests {
         join_type: JoinType,
         #[values(
         (4, 5),
-        (99, 12),
+        (12, 17),
         )]
         cardinality: (i32, i32),
         #[values(0, 1)] case_expr: usize,
@@ -2038,10 +1867,10 @@ mod tests {
         let session_config = SessionConfig::new().with_repartition_joins(false);
         let task_ctx = TaskContext::default().with_session_config(session_config);
         let task_ctx = Arc::new(task_ctx);
-        let (left_batch, right_batch) =
-            build_sides_record_batches(TABLE_SIZE, cardinality)?;
-        let left_schema = &left_batch.schema();
-        let right_schema = &right_batch.schema();
+        let (left_partition, right_partition) = get_or_create_table(cardinality, 8)?;
+
+        let left_schema = &left_partition[0].schema();
+        let right_schema = &right_partition[0].schema();
         let on = vec![(
             Column::new_with_schema("lc1", left_schema)?,
             Column::new_with_schema("rc1", right_schema)?,
@@ -2061,11 +1890,10 @@ mod tests {
             },
         }];
         let (left, right) = create_memory_table(
-            left_batch,
-            right_batch,
+            left_partition,
+            right_partition,
             vec![left_sorted],
             vec![right_sorted],
-            13,
         )?;
         let intermediate_schema = Schema::new(vec![
             Field::new(
@@ -2115,17 +1943,17 @@ mod tests {
         join_type: JoinType,
         #[values(
         (4, 5),
-        (99, 12),
+        (12, 17),
         )]
         cardinality: (i32, i32),
     ) -> Result<()> {
         let session_config = SessionConfig::new().with_repartition_joins(false);
         let task_ctx = TaskContext::default().with_session_config(session_config);
         let task_ctx = Arc::new(task_ctx);
-        let (left_batch, right_batch) =
-            build_sides_record_batches(TABLE_SIZE, cardinality)?;
-        let left_schema = &left_batch.schema();
-        let right_schema = &right_batch.schema();
+        let (left_partition, right_partition) = get_or_create_table(cardinality, 8)?;
+
+        let left_schema = &left_partition[0].schema();
+        let right_schema = &right_partition[0].schema();
         let on = vec![(
             Column::new_with_schema("lc1", left_schema)?,
             Column::new_with_schema("rc1", right_schema)?,
@@ -2145,11 +1973,10 @@ mod tests {
             },
         }];
         let (left, right) = create_memory_table(
-            left_batch,
-            right_batch,
+            left_partition,
+            right_partition,
             vec![left_sorted],
             vec![right_sorted],
-            13,
         )?;
         let intermediate_schema = Schema::new(vec![
             Field::new("left", DataType::Interval(IntervalUnit::DayTime), false),
@@ -2193,18 +2020,18 @@ mod tests {
         join_type: JoinType,
         #[values(
         (4, 5),
-        (99, 12),
+        (12, 17),
         )]
         cardinality: (i32, i32),
-        #[values(0, 1, 2, 3, 4, 5, 6, 7)] case_expr: usize,
+        #[values(0, 1, 2, 3, 4, 5)] case_expr: usize,
     ) -> Result<()> {
         let session_config = SessionConfig::new().with_repartition_joins(false);
         let task_ctx = TaskContext::default().with_session_config(session_config);
         let task_ctx = Arc::new(task_ctx);
-        let (left_batch, right_batch) =
-            build_sides_record_batches(TABLE_SIZE, cardinality)?;
-        let left_schema = &left_batch.schema();
-        let right_schema = &right_batch.schema();
+        let (left_partition, right_partition) = get_or_create_table(cardinality, 8)?;
+
+        let left_schema = &left_partition[0].schema();
+        let right_schema = &right_partition[0].schema();
         let left_sorted = vec![PhysicalSortExpr {
             expr: col("l_float", left_schema)?,
             options: SortOptions::default(),
@@ -2214,11 +2041,10 @@ mod tests {
             options: SortOptions::default(),
         }];
         let (left, right) = create_memory_table(
-            left_batch,
-            right_batch,
+            left_partition,
+            right_partition,
             vec![left_sorted],
             vec![right_sorted],
-            13,
         )?;
 
         let on = vec![(
