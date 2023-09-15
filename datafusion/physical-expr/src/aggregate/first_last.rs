@@ -579,7 +579,7 @@ mod tests {
         let arrs = ranges
             .into_iter()
             .map(|(start, end)| {
-                Arc::new((start..end).collect::<Int64Array>())) as ArrayRef
+                Arc::new((start..end).collect::<Int64Array>()) as ArrayRef
             })
             .collect::<Vec<_>>();
 
