@@ -27,6 +27,7 @@ use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::WindowFrame;
 use datafusion::physical_plan::aggregates::{create_aggregate_expr, AggregateMode};
 use datafusion::physical_plan::aggregates::{AggregateExec, PhysicalGroupBy};
+use datafusion::physical_plan::analyze::AnalyzeExec;
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::empty::EmptyExec;
@@ -778,6 +779,20 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     &join_type.into(),
                 )?))
             }
+            PhysicalPlanType::Analyze(analyze) => {
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan(
+                    &analyze.input,
+                    registry,
+                    runtime,
+                    extension_codec,
+                )?;
+                Ok(Arc::new(AnalyzeExec::new(
+                    analyze.verbose,
+                    analyze.show_statistics,
+                    input,
+                    Arc::new(analyze.schema.as_ref().unwrap().try_into()?),
+                )))
+            }
         }
     }
 
@@ -824,6 +839,21 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         expr_name,
                     },
                 ))),
+            })
+        } else if let Some(exec) = plan.downcast_ref::<AnalyzeExec>() {
+            let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
+                exec.input().to_owned(),
+                extension_codec,
+            )?;
+            Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::Analyze(
+                    protobuf::AnalyzeExecNode {
+                        verbose: exec.verbose(),
+                        show_statistics: exec.show_statistics(),
+                        input: Some(Box::new(input)),
+                        schema: Some(exec.schema().as_ref().try_into()?),
+                    },
+                )),
             })
         } else if let Some(exec) = plan.downcast_ref::<FilterExec>() {
             let input = protobuf::PhysicalPlanNode::try_from_physical_plan(

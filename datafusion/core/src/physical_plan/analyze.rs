@@ -62,6 +62,21 @@ impl AnalyzeExec {
             schema,
         }
     }
+
+    /// access to verbose
+    pub fn verbose(&self) -> bool {
+        self.verbose
+    }
+
+    /// access to show_statistics
+    pub fn show_statistics(&self) -> bool {
+        self.show_statistics
+    }
+
+    /// The input plan
+    pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.input
+    }
 }
 
 impl DisplayAs for AnalyzeExec {
