@@ -280,12 +280,12 @@ mod tests {
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::expressions::col;
     use crate::memory::MemoryExec;
-    use crate::metrics::MetricValue;
+    use crate::metrics::{MetricValue, Timestamp};
     use crate::sorts::sort::SortExec;
     use crate::stream::RecordBatchReceiverStream;
+    use crate::{collect, common};
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::{self, assert_is_pending, make_partition};
-    use crate::{collect, common};
     use arrow::array::{Int32Array, StringArray, TimestampNanosecondArray};
     use datafusion_common::assert_batches_eq;
 
@@ -893,17 +893,21 @@ mod tests {
         metrics.iter().for_each(|m| match m.value() {
             MetricValue::StartTimestamp(ts) => {
                 saw_start = true;
-                assert!(ts.value().unwrap().timestamp_nanos() > 0);
+                assert!(nanos_from_timestamp(ts) > 0);
             }
             MetricValue::EndTimestamp(ts) => {
                 saw_end = true;
-                assert!(ts.value().unwrap().timestamp_nanos() > 0);
+                assert!(nanos_from_timestamp(ts) > 0);
             }
             _ => {}
         });
 
         assert!(saw_start);
         assert!(saw_end);
+    }
+
+    fn nanos_from_timestamp(ts: &Timestamp) -> i64 {
+        ts.value().unwrap().timestamp_nanos_opt().unwrap()
     }
 
     #[tokio::test]
