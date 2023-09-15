@@ -24,15 +24,13 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
 use arrow_schema::Schema;
 use async_trait::async_trait;
-use dashmap::DashMap;
 use datafusion_common::FileTypeWriterOptions;
 use datafusion_common::{internal_err, plan_err, project_schema, SchemaExt, ToDFSchema};
 use datafusion_expr::expr::Sort;
 use datafusion_optimizer::utils::conjunction;
 use datafusion_physical_expr::{create_physical_expr, LexOrdering, PhysicalSortExpr};
 use futures::{future, stream, StreamExt, TryStreamExt};
-use object_store::path::Path;
-use object_store::ObjectMeta;
+
 
 use crate::datasource::physical_plan::{FileScanConfig, FileSinkConfig};
 use crate::datasource::{
@@ -53,6 +51,7 @@ use crate::{
     physical_plan::{empty::EmptyExec, ExecutionPlan, Statistics},
 };
 use datafusion_common::{FileCompressionType, FileType};
+use datafusion_execution::cache::cache_manager::FileStaticCache;
 
 use super::PartitionedFile;
 
@@ -232,6 +231,7 @@ impl FromStr for ListingTableInsertMode {
         }
     }
 }
+
 /// Options for creating a [`ListingTable`]
 #[derive(Clone, Debug)]
 pub struct ListingOptions {
@@ -510,39 +510,6 @@ impl ListingOptions {
     }
 }
 
-/// Collected statistics for files
-/// Cache is invalided when file size or last modification has changed
-#[derive(Default)]
-struct StatisticsCache {
-    statistics: DashMap<Path, (ObjectMeta, Statistics)>,
-}
-
-impl StatisticsCache {
-    /// Get `Statistics` for file location. Returns None if file has changed or not found.
-    fn get(&self, meta: &ObjectMeta) -> Option<Statistics> {
-        self.statistics
-            .get(&meta.location)
-            .map(|s| {
-                let (saved_meta, statistics) = s.value();
-                if saved_meta.size != meta.size
-                    || saved_meta.last_modified != meta.last_modified
-                {
-                    // file has changed
-                    None
-                } else {
-                    Some(statistics.clone())
-                }
-            })
-            .unwrap_or(None)
-    }
-
-    /// Save collected file statistics
-    fn save(&self, meta: ObjectMeta, statistics: Statistics) {
-        self.statistics
-            .insert(meta.location.clone(), (meta, statistics));
-    }
-}
-
 /// Reads data from one or more files via an
 /// [`ObjectStore`](object_store::ObjectStore). For example, from
 /// local files or objects from AWS S3. Implements [`TableProvider`],
@@ -616,7 +583,7 @@ pub struct ListingTable {
     table_schema: SchemaRef,
     options: ListingOptions,
     definition: Option<String>,
-    collected_statistics: StatisticsCache,
+    collected_statistics: Option<FileStaticCache>,
     infinite_source: bool,
 }
 
@@ -660,6 +627,20 @@ impl ListingTable {
         Ok(table)
     }
 
+    /// Create new [`ListingTable`] that lists the FS to get the files
+    /// to scan same as above.
+    ///
+    /// Takes a [`FileStaticCache`] from session context as cache input.
+    /// Avoid get parquet files statistics multiple times in same session.
+    pub fn try_new_with_cache(
+        config: ListingTableConfig,
+        cache: FileStaticCache,
+    ) -> Result<Self> {
+        let mut list_table = Self::try_new(config)?;
+        list_table.collected_statistics = Some(cache);
+        Ok(list_table)
+    }
+
     /// Specify the SQL definition for this table, if any
     pub fn with_definition(mut self, defintion: Option<String>) -> Self {
         self.definition = defintion;
@@ -683,27 +664,26 @@ impl ListingTable {
         for exprs in &self.options.file_sort_order {
             // Construct PhsyicalSortExpr objects from Expr objects:
             let sort_exprs = exprs
-            .iter()
-            .map(|expr| {
-                if let Expr::Sort(Sort { expr, asc, nulls_first }) = expr {
-                    if let Expr::Column(col) = expr.as_ref() {
-                        let expr = physical_plan::expressions::col(&col.name, self.table_schema.as_ref())?;
-                        Ok(PhysicalSortExpr {
-                            expr,
-                            options: SortOptions {
-                                descending: !asc,
-                                nulls_first: *nulls_first,
-                            },
-                        })
+                .iter()
+                .map(|expr| {
+                    if let Expr::Sort(Sort { expr, asc, nulls_first }) = expr {
+                        if let Expr::Column(col) = expr.as_ref() {
+                            let expr = physical_plan::expressions::col(&col.name, self.table_schema.as_ref())?;
+                            Ok(PhysicalSortExpr {
+                                expr,
+                                options: SortOptions {
+                                    descending: !asc,
+                                    nulls_first: *nulls_first,
+                                },
+                            })
+                        } else {
+                            plan_err!("Expected single column references in output_ordering, got {expr}")
+                        }
+                    } else {
+                        plan_err!("Expected Expr::Sort in output_ordering, but got {expr}")
                     }
-                    else {
-                        plan_err!("Expected single column references in output_ordering, got {expr}")
-                    }
-                } else {
-                    plan_err!("Expected Expr::Sort in output_ordering, but got {expr}")
-                }
-            })
-            .collect::<Result<Vec<_>>>()?;
+                })
+                .collect::<Result<Vec<_>>>()?;
             all_sort_orders.push(sort_exprs);
         }
         Ok(all_sort_orders)
@@ -867,7 +847,7 @@ impl TableProvider for ListingTable {
             &self.options.file_extension,
             &self.options.table_partition_cols,
         )
-        .await?;
+            .await?;
 
         let file_groups = file_list_stream.try_collect::<Vec<_>>().await?;
         let writer_mode;
@@ -893,7 +873,7 @@ impl TableProvider for ListingTable {
             ListingTableInsertMode::Error => {
                 return plan_err!(
                     "Invalid plan attempting write to table with TableWriteMode::Error!"
-                )
+                );
             }
         }
 
@@ -953,36 +933,54 @@ impl ListingTable {
                 &self.options.table_partition_cols,
             )
         }))
-        .await?;
+            .await?;
 
         let file_list = stream::iter(file_list).flatten();
 
         // collect the statistics if required by the config
         let files = file_list.then(|part_file| async {
             let part_file = part_file?;
-            let statistics = if self.options.collect_stat {
-                match self.collected_statistics.get(&part_file.object_meta) {
-                    Some(statistics) => statistics,
-                    None => {
-                        let statistics = self
-                            .options
-                            .format
-                            .infer_stats(
-                                ctx,
-                                &store,
-                                self.file_schema.clone(),
+            let mut statistics_result = Statistics::default();
+            if self.options.collect_stat {
+                if let Some(statistics_cache) = self.collected_statistics.clone() {
+                    match statistics_cache.get_with_extra(
+                        &part_file.object_meta.location,
+                        &part_file.object_meta,
+                    ) {
+                        Some(statistics) => statistics_result = statistics,
+                        None => {
+                            let statistics = self
+                                .options
+                                .format
+                                .infer_stats(
+                                    ctx,
+                                    &store,
+                                    self.file_schema.clone(),
+                                    &part_file.object_meta,
+                                )
+                                .await?;
+                            statistics_cache.put_with_extra(
+                                &part_file.object_meta.location,
+                                statistics.clone(),
                                 &part_file.object_meta,
-                            )
-                            .await?;
-                        self.collected_statistics
-                            .save(part_file.object_meta.clone(), statistics.clone());
-                        statistics
+                            );
+                            statistics_result = statistics;
+                        }
                     }
+                } else {
+                    statistics_result = self
+                        .options
+                        .format
+                        .infer_stats(
+                            ctx,
+                            &store,
+                            self.file_schema.clone(),
+                            &part_file.object_meta,
+                        )
+                        .await?;
                 }
-            } else {
-                Statistics::default()
-            };
-            Ok((part_file, statistics)) as Result<(PartitionedFile, Statistics)>
+            }
+            Ok((part_file, statistics_result)) as Result<(PartitionedFile, Statistics)>
         });
 
         let (files, statistics) =
@@ -1014,6 +1012,7 @@ mod tests {
     use chrono::DateTime;
     use datafusion_common::assert_contains;
     use datafusion_common::GetExt;
+    use datafusion_execution::cache::cache_unit::FileStatisticsCache;
     use datafusion_expr::LogicalPlanBuilder;
     use rstest::*;
     use std::collections::HashMap;
@@ -1155,7 +1154,6 @@ mod tests {
                         nulls_first: false,
                     },
                 }]])
-
             ),
             // ok with two columns, different options
             (
@@ -1179,9 +1177,7 @@ mod tests {
                         },
                     },
                 ]])
-
             ),
-
         ];
 
         for (file_sort_order, expected_result) in cases {
@@ -1363,7 +1359,7 @@ mod tests {
             12,
             5,
         )
-        .await?;
+            .await?;
 
         // as many expected partitions as files
         assert_list_files_for_scan_grouping(
@@ -1377,7 +1373,7 @@ mod tests {
             4,
             4,
         )
-        .await?;
+            .await?;
 
         // more files as expected partitions
         assert_list_files_for_scan_grouping(
@@ -1392,7 +1388,7 @@ mod tests {
             2,
             2,
         )
-        .await?;
+            .await?;
 
         // no files => no groups
         assert_list_files_for_scan_grouping(&[], "test:///bucket/key-prefix/", 2, 0)
@@ -1409,7 +1405,7 @@ mod tests {
             10,
             2,
         )
-        .await?;
+            .await?;
         Ok(())
     }
 
@@ -1429,7 +1425,7 @@ mod tests {
             12,
             5,
         )
-        .await?;
+            .await?;
 
         // as many expected partitions as files
         assert_list_files_for_multi_paths(
@@ -1445,7 +1441,7 @@ mod tests {
             5,
             5,
         )
-        .await?;
+            .await?;
 
         // more files as expected partitions
         assert_list_files_for_multi_paths(
@@ -1461,7 +1457,7 @@ mod tests {
             2,
             2,
         )
-        .await?;
+            .await?;
 
         // no files => no groups
         assert_list_files_for_multi_paths(&[], &["test:///bucket/key1/"], 2, 0).await?;
@@ -1480,7 +1476,7 @@ mod tests {
             2,
             1,
         )
-        .await?;
+            .await?;
         Ok(())
     }
 
@@ -1568,41 +1564,6 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_statistics_cache() {
-        let meta = ObjectMeta {
-            location: Path::from("test"),
-            last_modified: DateTime::parse_from_rfc3339("2022-09-27T22:36:00+02:00")
-                .unwrap()
-                .into(),
-            size: 1024,
-            e_tag: None,
-        };
-
-        let cache = StatisticsCache::default();
-        assert!(cache.get(&meta).is_none());
-
-        cache.save(meta.clone(), Statistics::default());
-        assert!(cache.get(&meta).is_some());
-
-        // file size changed
-        let mut meta2 = meta.clone();
-        meta2.size = 2048;
-        assert!(cache.get(&meta2).is_none());
-
-        // file last_modified changed
-        let mut meta2 = meta.clone();
-        meta2.last_modified = DateTime::parse_from_rfc3339("2022-09-27T22:40:00+02:00")
-            .unwrap()
-            .into();
-        assert!(cache.get(&meta2).is_none());
-
-        // different file
-        let mut meta2 = meta;
-        meta2.location = Path::from("test2");
-        assert!(cache.get(&meta2).is_none());
-    }
-
     #[tokio::test]
     async fn test_insert_into_append_to_json_file() -> Result<()> {
         helper_test_insert_into_append_to_existing_files(
@@ -1610,7 +1571,7 @@ mod tests {
             FileCompressionType::UNCOMPRESSED,
             None,
         )
-        .await?;
+            .await?;
         Ok(())
     }
 
@@ -1621,7 +1582,7 @@ mod tests {
             FileCompressionType::UNCOMPRESSED,
             None,
         )
-        .await?;
+            .await?;
         Ok(())
     }
 
@@ -1632,7 +1593,7 @@ mod tests {
             FileCompressionType::UNCOMPRESSED,
             None,
         )
-        .await?;
+            .await?;
         Ok(())
     }
 
@@ -1643,7 +1604,7 @@ mod tests {
             FileCompressionType::UNCOMPRESSED,
             None,
         )
-        .await?;
+            .await?;
         Ok(())
     }
 
@@ -1654,7 +1615,7 @@ mod tests {
             FileCompressionType::UNCOMPRESSED,
             None,
         )
-        .await?;
+            .await?;
         Ok(())
     }
 
@@ -1666,7 +1627,7 @@ mod tests {
             "OPTIONS (insert_mode 'append_new_files')",
             None,
         )
-        .await?;
+            .await?;
         Ok(())
     }
 
@@ -1679,7 +1640,7 @@ mod tests {
             OPTIONS (insert_mode 'append_new_files')",
             None,
         )
-        .await?;
+            .await?;
         Ok(())
     }
 
@@ -1691,7 +1652,7 @@ mod tests {
             "OPTIONS (insert_mode 'append_new_files')",
             None,
         )
-        .await?;
+            .await?;
         Ok(())
     }
 
@@ -1703,7 +1664,7 @@ mod tests {
             "",
             None,
         )
-        .await?;
+            .await?;
         Ok(())
     }
 
@@ -1772,7 +1733,7 @@ mod tests {
             "",
             Some(config_map),
         )
-        .await?;
+            .await?;
         Ok(())
     }
 
@@ -1844,13 +1805,12 @@ mod tests {
             FileCompressionType::UNCOMPRESSED,
             Some(config_map),
         )
-        .await?;
+            .await?;
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_insert_into_append_new_parquet_files_invalid_session_fails(
-    ) -> Result<()> {
+    async fn test_insert_into_append_new_parquet_files_invalid_session_fails() -> Result<()> {
         let mut config_map: HashMap<String, String> = HashMap::new();
         config_map.insert(
             "datafusion.execution.parquet.compression".into(),
@@ -1861,8 +1821,8 @@ mod tests {
             FileCompressionType::UNCOMPRESSED,
             Some(config_map),
         )
-        .await
-        .expect_err("Example should fail!");
+            .await
+            .expect_err("Example should fail!");
         assert_eq!(e.strip_backtrace(), "Invalid or Unsupported Configuration: zstd compression requires specifying a level such as zstd(4)");
 
         Ok(())
@@ -1875,7 +1835,7 @@ mod tests {
             FileCompressionType::UNCOMPRESSED,
             None,
         )
-        .await;
+            .await;
         let _err =
             maybe_err.expect_err("Appending to existing parquet file did not fail!");
         Ok(())
@@ -2302,9 +2262,9 @@ mod tests {
 
         // insert data
         session_ctx.sql("insert into foo values ('foo', 'bar', 1),('foo', 'bar', 2), ('foo', 'bar', 3)")
-           .await?
-           .collect()
-           .await?;
+            .await?
+            .collect()
+            .await?;
 
         // check count
         let batches = session_ctx

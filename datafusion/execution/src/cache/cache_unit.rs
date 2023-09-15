@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::cache::CacheAccessor;
 use dashmap::DashMap;
 use datafusion_common::Statistics;
 use object_store::path::Path;
 use object_store::ObjectMeta;
-use crate::cache::CacheAccessor;
 
 /// Collected statistics for files
 /// Cache is invalided when file size or last modification has changed
@@ -34,10 +34,8 @@ impl CacheAccessor<Path, Statistics> for FileStatisticsCache {
     /// Get `Statistics` for file location.
     fn get(&self, k: &Path) -> Option<Statistics> {
         self.statistics
-            .get(&k)
-            .map(|s| {
-                Some(s.value().1.clone())
-            })
+            .get(k)
+            .map(|s| Some(s.value().1.clone()))
             .unwrap_or(None)
     }
 
@@ -64,17 +62,23 @@ impl CacheAccessor<Path, Statistics> for FileStatisticsCache {
         panic!("Put cache in FileStatisticsCache without Extra not supported.")
     }
 
-    fn put_with_extra(&self, key: &Path, value: Statistics, e: &Self::Extra) -> Option<Statistics> {
+    fn put_with_extra(
+        &self,
+        key: &Path,
+        value: Statistics,
+        e: &Self::Extra,
+    ) -> Option<Statistics> {
         self.statistics
-            .insert(key.clone(), (e.clone(), value)).and_then(|x| Some(x.1))
+            .insert(key.clone(), (e.clone(), value))
+            .map(|x| x.1)
     }
 
     fn evict(&self, k: &Path) -> bool {
-        self.statistics.remove(&k).is_some()
+        self.statistics.remove(k).is_some()
     }
 
     fn contains_key(&self, k: &Path) -> bool {
-        self.statistics.contains_key(&k)
+        self.statistics.contains_key(k)
     }
 
     fn len(&self) -> usize {
@@ -84,12 +88,12 @@ impl CacheAccessor<Path, Statistics> for FileStatisticsCache {
 
 #[cfg(test)]
 mod tests {
+    use crate::cache::cache_unit::FileStatisticsCache;
+    use crate::cache::CacheAccessor;
     use chrono::DateTime;
     use datafusion_common::Statistics;
     use object_store::path::Path;
     use object_store::ObjectMeta;
-    use crate::cache::cache_unit::FileStatisticsCache;
-    use crate::cache::CacheAccessor;
 
     #[test]
     fn test_statistics_cache() {

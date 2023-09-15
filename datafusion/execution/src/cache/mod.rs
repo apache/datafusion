@@ -18,10 +18,8 @@
 pub mod cache_manager;
 pub mod cache_unit;
 
-
 // The cache accessor, users usually working on this interface while manipulating caches
-pub trait CacheAccessor<K, V>: Send + Sync
-{
+pub trait CacheAccessor<K, V>: Send + Sync {
     // Extra info but not part of the cache key or cache value.
     type Extra: Clone;
 

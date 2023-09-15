@@ -15,58 +15,43 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::{Result, Statistics};
-use std::sync::Arc;
-use object_store::ObjectMeta;
-use object_store::path::Path;
 use crate::cache::CacheAccessor;
+use datafusion_common::{Result, Statistics};
+use object_store::path::Path;
+use object_store::ObjectMeta;
+use std::sync::Arc;
 
-pub type TableStaticCache = Arc<dyn CacheAccessor<Path, Statistics, Extra= ObjectMeta>>;
+pub type FileStaticCache = Arc<dyn CacheAccessor<Path, Statistics, Extra=ObjectMeta>>;
 
+#[derive(Default)]
 pub struct CacheManager {
-    table_statistic_cache: Option<TableStaticCache>,
-}
-
-impl Default for CacheManager {
-    fn default() -> Self {
-        CacheManager {
-            table_statistic_cache: None,
-        }
-    }
+    file_statistic_cache: Option<FileStaticCache>,
 }
 
 impl CacheManager {
     pub fn try_new(config: &CacheManagerConfig) -> Result<Arc<Self>> {
         let mut manager = CacheManager::default();
         if let Some(cc) = &config.table_files_statistics_cache {
-            manager.table_statistic_cache = Some(cc.clone())
+            manager.file_statistic_cache = Some(cc.clone())
         }
         Ok(Arc::new(manager))
     }
 
-    pub fn get_table_statistic_cache(&self) -> Option<TableStaticCache> {
-        self.table_statistic_cache.clone()
+    pub fn get_table_statistic_cache(&self) -> Option<FileStaticCache> {
+        self.file_statistic_cache.clone()
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct CacheManagerConfig {
     /// Enable cache of files statistics when listing files.
     /// Avoid get same file statistics repeatedly in same datafusion session.
     /// Default is disable. Fow now only supports Parquet files.
-    pub table_files_statistics_cache: Option<TableStaticCache>,
-}
-
-impl Default for CacheManagerConfig {
-    fn default() -> Self {
-        CacheManagerConfig {
-            table_files_statistics_cache: None,
-        }
-    }
+    pub table_files_statistics_cache: Option<FileStaticCache>,
 }
 
 impl CacheManagerConfig {
-    pub fn enable_table_files_statistics_cache(mut self, cache: TableStaticCache) -> Self {
+    pub fn enable_table_files_statistics_cache(mut self, cache: FileStaticCache) -> Self {
         self.table_files_statistics_cache = Some(cache);
         self
     }
