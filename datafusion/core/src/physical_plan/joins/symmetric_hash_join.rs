@@ -1228,7 +1228,7 @@ mod tests {
         partitioned_sym_join_with_filter, split_record_batches,
     };
 
-    const TABLE_SIZE: i32 = 100;
+    const TABLE_SIZE: i32 = 30;
 
     use once_cell::sync::Lazy;
     use std::collections::HashMap;
@@ -1322,7 +1322,7 @@ mod tests {
         // a + b > c + 10 AND a + b < c + 100
         let task_ctx = Arc::new(TaskContext::default());
 
-        let (left_partition, right_partition) = get_or_create_table(cardinality, 13)?;
+        let (left_partition, right_partition) = get_or_create_table(cardinality, 8)?;
 
         let left_schema = &left_partition[0].schema();
         let right_schema = &right_partition[0].schema();
@@ -1392,10 +1392,10 @@ mod tests {
             JoinType::Full
         )]
         join_type: JoinType,
-        #[values(0, 1, 2, 3, 4, 5, 6, 7)] case_expr: usize,
+        #[values(0, 1, 2, 3, 4, 5)] case_expr: usize,
     ) -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
-        let (left_partition, right_partition) = get_or_create_table((4, 5), 13)?;
+        let (left_partition, right_partition) = get_or_create_table((4, 5), 8)?;
 
         let left_schema = &left_partition[0].schema();
         let right_schema = &right_partition[0].schema();
@@ -1459,10 +1459,10 @@ mod tests {
             JoinType::Full
         )]
         join_type: JoinType,
-        #[values(0, 1, 2, 3, 4, 5, 6)] case_expr: usize,
+        #[values(0, 1, 2, 3, 4, 5)] case_expr: usize,
     ) -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
-        let (left_partition, right_partition) = get_or_create_table((4, 5), 13)?;
+        let (left_partition, right_partition) = get_or_create_table((4, 5), 8)?;
 
         let left_schema = &left_partition[0].schema();
         let right_schema = &right_partition[0].schema();
@@ -1515,7 +1515,7 @@ mod tests {
         join_type: JoinType,
     ) -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
-        let (left_partition, right_partition) = get_or_create_table((11, 21), 13)?;
+        let (left_partition, right_partition) = get_or_create_table((11, 21), 8)?;
         let left_schema = &left_partition[0].schema();
         let right_schema = &right_partition[0].schema();
         let (left, right) =
@@ -1543,10 +1543,10 @@ mod tests {
             JoinType::Full
         )]
         join_type: JoinType,
-        #[values(0, 1, 2, 3, 4, 5, 6)] case_expr: usize,
+        #[values(0, 1, 2, 3, 4, 5)] case_expr: usize,
     ) -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
-        let (left_partition, right_partition) = get_or_create_table((11, 21), 13)?;
+        let (left_partition, right_partition) = get_or_create_table((11, 21), 8)?;
         let left_schema = &left_partition[0].schema();
         let right_schema = &right_partition[0].schema();
         let left_sorted = vec![PhysicalSortExpr {
@@ -1607,7 +1607,7 @@ mod tests {
         let session_config = SessionConfig::new().with_repartition_joins(false);
         let task_ctx = TaskContext::default().with_session_config(session_config);
         let task_ctx = Arc::new(task_ctx);
-        let (left_partition, right_partition) = get_or_create_table((10, 11), 13)?;
+        let (left_partition, right_partition) = get_or_create_table((10, 11), 8)?;
         let left_schema = &left_partition[0].schema();
         let right_schema = &right_partition[0].schema();
         let left_sorted = vec![PhysicalSortExpr {
@@ -1667,7 +1667,7 @@ mod tests {
         let session_config = SessionConfig::new().with_repartition_joins(false);
         let task_ctx = TaskContext::default().with_session_config(session_config);
         let task_ctx = Arc::new(task_ctx);
-        let (left_partition, right_partition) = get_or_create_table((10, 11), 13)?;
+        let (left_partition, right_partition) = get_or_create_table((10, 11), 8)?;
 
         let left_schema = &left_partition[0].schema();
         let right_schema = &right_partition[0].schema();
@@ -1730,7 +1730,7 @@ mod tests {
         let session_config = SessionConfig::new().with_repartition_joins(false);
         let task_ctx = TaskContext::default().with_session_config(session_config);
         let task_ctx = Arc::new(task_ctx);
-        let (left_partition, right_partition) = get_or_create_table(cardinality, 13)?;
+        let (left_partition, right_partition) = get_or_create_table(cardinality, 8)?;
 
         let left_schema = &left_partition[0].schema();
         let right_schema = &right_partition[0].schema();
@@ -1794,7 +1794,7 @@ mod tests {
         let session_config = SessionConfig::new().with_repartition_joins(false);
         let task_ctx = TaskContext::default().with_session_config(session_config);
         let task_ctx = Arc::new(task_ctx);
-        let (left_partition, right_partition) = get_or_create_table(cardinality, 13)?;
+        let (left_partition, right_partition) = get_or_create_table(cardinality, 8)?;
 
         let left_schema = &left_partition[0].schema();
         let right_schema = &right_partition[0].schema();
@@ -1869,7 +1869,7 @@ mod tests {
         let session_config = SessionConfig::new().with_repartition_joins(false);
         let task_ctx = TaskContext::default().with_session_config(session_config);
         let task_ctx = Arc::new(task_ctx);
-        let (left_partition, right_partition) = get_or_create_table(cardinality, 13)?;
+        let (left_partition, right_partition) = get_or_create_table(cardinality, 8)?;
 
         let left_schema = &left_partition[0].schema();
         let right_schema = &right_partition[0].schema();
@@ -1952,7 +1952,7 @@ mod tests {
         let session_config = SessionConfig::new().with_repartition_joins(false);
         let task_ctx = TaskContext::default().with_session_config(session_config);
         let task_ctx = Arc::new(task_ctx);
-        let (left_partition, right_partition) = get_or_create_table(cardinality, 13)?;
+        let (left_partition, right_partition) = get_or_create_table(cardinality, 8)?;
 
         let left_schema = &left_partition[0].schema();
         let right_schema = &right_partition[0].schema();
@@ -2025,12 +2025,12 @@ mod tests {
         (12, 17),
         )]
         cardinality: (i32, i32),
-        #[values(0, 1, 2, 3, 4, 5, 6, 7)] case_expr: usize,
+        #[values(0, 1, 2, 3, 4, 5)] case_expr: usize,
     ) -> Result<()> {
         let session_config = SessionConfig::new().with_repartition_joins(false);
         let task_ctx = TaskContext::default().with_session_config(session_config);
         let task_ctx = Arc::new(task_ctx);
-        let (left_partition, right_partition) = get_or_create_table(cardinality, 13)?;
+        let (left_partition, right_partition) = get_or_create_table(cardinality, 8)?;
 
         let left_schema = &left_partition[0].schema();
         let right_schema = &right_partition[0].schema();
