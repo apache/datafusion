@@ -211,7 +211,14 @@ impl ExecutionPlan for FilterExec {
         let input_stats = self.input.statistics();
         let input_column_stats = match input_stats.column_statistics {
             Some(stats) => stats,
-            None => ColumnStatistics::new_with_unbounded_columns(self.schema()),
+            None => self
+                .schema()
+                .fields
+                .iter()
+                .map(|field| {
+                    ColumnStatistics::new_with_unbounded_column(field.data_type())
+                })
+                .collect::<Vec<_>>(),
         };
 
         let starter_ctx =

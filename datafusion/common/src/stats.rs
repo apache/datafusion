@@ -19,7 +19,7 @@
 
 use std::fmt::Display;
 
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::DataType;
 
 use crate::ScalarValue;
 
@@ -82,27 +82,14 @@ impl ColumnStatistics {
         }
     }
 
-    /// Returns the [`Vec<ColumnStatistics>`] corresponding to the given schema by assigning
-    /// infinite bounds to each column in the schema. This is useful when even the input statistics
-    /// are not known, as the current executor can shrink the bounds of some columns.
-    pub fn new_with_unbounded_columns(schema: SchemaRef) -> Vec<ColumnStatistics> {
-        let data_types = schema
-            .fields()
-            .iter()
-            .map(|field| field.data_type())
-            .collect::<Vec<_>>();
-
-        data_types
-            .into_iter()
-            .map(|data_type| {
-                let dt = ScalarValue::try_from(data_type.clone()).ok();
-                ColumnStatistics {
-                    null_count: None,
-                    max_value: dt.clone(),
-                    min_value: dt,
-                    distinct_count: None,
-                }
-            })
-            .collect()
+    /// Returns the [`ColumnStatistics`] corresponding to the given datatype by assigning infinite bounds.
+    pub fn new_with_unbounded_column(dt: &DataType) -> ColumnStatistics {
+        let null = ScalarValue::try_from(dt.clone()).ok();
+        ColumnStatistics {
+            null_count: None,
+            max_value: null.clone(),
+            min_value: null,
+            distinct_count: None,
+        }
     }
 }
