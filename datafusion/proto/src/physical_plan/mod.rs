@@ -1804,12 +1804,12 @@ mod roundtrip_tests {
         let execution_props = ExecutionProps::new();
 
         let fun_expr = functions::create_physical_fun(
-            &BuiltinScalarFunction::Abs,
+            &BuiltinScalarFunction::Acos,
             &execution_props,
         )?;
 
         let expr = ScalarFunctionExpr::new(
-            "abs",
+            "acos",
             fun_expr,
             vec![col("a", &schema)?],
             &DataType::Int64,
