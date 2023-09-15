@@ -17,6 +17,7 @@
 
 use crate::physical_plan::aggregates::group_values::GroupValues;
 use ahash::RandomState;
+use arrow::record_batch::RecordBatch;
 use arrow::row::{RowConverter, Rows, SortField};
 use arrow_array::ArrayRef;
 use arrow_schema::SchemaRef;
@@ -180,5 +181,16 @@ impl GroupValues for GroupValuesRows {
                 output
             }
         })
+    }
+
+    fn clear_shrink(&mut self, batch: &RecordBatch) {
+        let count = batch.num_rows();
+        // FIXME: there is no good way to clear_shrink for self.group_values
+        self.group_values = self.row_converter.empty_rows(count, 0);
+        self.map.clear();
+        self.map.shrink_to(count, |_| 0); // hasher does not matter since the map is cleared
+        self.map_size = self.map.capacity() * std::mem::size_of::<(u64, usize)>();
+        self.hashes_buffer.clear();
+        self.hashes_buffer.shrink_to(count);
     }
 }
