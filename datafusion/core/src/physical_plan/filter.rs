@@ -36,7 +36,6 @@ use crate::physical_plan::{
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use arrow_schema::Schema;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
@@ -195,50 +194,39 @@ impl ExecutionPlan for FilterExec {
             let input_stats = self.input.statistics();
 
             if let Some(column_stats) = input_stats.column_statistics {
-                let starter_ctx = AnalysisContext::from_statistics(&self.input.schema(), &column_stats);
-                let analysis_context = analyze(predicate, starter_ctx).unwrap();
-                return calculate_statistics(
-                    input_stats.num_rows,
-                    input_stats.total_byte_size,
-                    &column_stats,
-                    false,
-                    analysis_context,
-                );
+                let num_rows = input_stats.num_rows;
+                let total_byte_size = input_stats.total_byte_size;
+                let input_analysis_ctx =
+                    AnalysisContext::from_statistics(&self.input.schema(), &column_stats);
+                let analysis_ctx = analyze(predicate, input_analysis_ctx).unwrap();
 
+                let selectivity = analysis_ctx.selectivity.unwrap_or(1.0);
+                let num_rows =
+                    num_rows.map(|num| (num as f64 * selectivity).ceil() as usize);
+                let total_byte_size = total_byte_size
+                    .map(|size| (size as f64 * selectivity).ceil() as usize);
+
+                return if let Some(analysis_boundaries) = analysis_ctx.boundaries {
+                    let column_statistics =
+                        collect_new_statistics(&column_stats, analysis_boundaries);
+                    Statistics {
+                        num_rows,
+                        total_byte_size,
+                        column_statistics: Some(column_statistics),
+                        is_exact: false,
+                    }
+                } else {
+                    Statistics {
+                        num_rows,
+                        total_byte_size,
+                        column_statistics: Some(column_stats.to_vec()),
+                        is_exact: false,
+                    }
+                };
             }
         }
 
         Statistics::new_with_unbounded_columns(self.schema())
-    }
-}
-
-fn calculate_statistics(
-    num_rows: Option<usize>,
-    total_byte_size: Option<usize>,
-    input_stats: &[ColumnStatistics],
-    is_exact: bool,
-    analysis_ctx: AnalysisContext,
-) -> Statistics {
-    let selectivity = analysis_ctx.selectivity.unwrap_or(1.0);
-    let num_rows = num_rows.map(|num| (num as f64 * selectivity).ceil() as usize);
-    let total_byte_size =
-        total_byte_size.map(|size| (size as f64 * selectivity).ceil() as usize);
-
-    if let Some(analysis_boundaries) = analysis_ctx.boundaries {
-        let column_statistics = collect_new_statistics(input_stats, analysis_boundaries);
-        return Statistics {
-            num_rows,
-            total_byte_size,
-            column_statistics: Some(column_statistics),
-            is_exact,
-        };
-    }
-
-    Statistics {
-        num_rows,
-        total_byte_size,
-        column_statistics: Some(input_stats.to_vec()),
-        is_exact,
     }
 }
 
