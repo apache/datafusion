@@ -237,13 +237,17 @@ impl Accumulator for FirstValueAccumulator {
         };
         if !ordered_states[0].is_empty() {
             let first_row = get_row_at_idx(&ordered_states, 0)?;
-            let first_ordering = &first_row[1..];
+            // When collecting orderings, we exclude the is_set flag from the state.
+            let first_ordering = &first_row[1..is_set_idx];
             let sort_options = get_sort_options(&self.ordering_req);
             // Either there is no existing value, or there is an earlier version in new data.
             if !self.is_set
                 || compare_rows(first_ordering, &self.orderings, &sort_options)?.is_lt()
             {
-                self.update_with_new_row(&first_row);
+                // Update with first value in the state. Note that we should exclude the
+                // is_set flag from the state. Otherwise, we will end up with a state
+                // containing two is_set flags.
+                self.update_with_new_row(&first_row[0..is_set_idx]);
             }
         }
         Ok(())
@@ -463,14 +467,18 @@ impl Accumulator for LastValueAccumulator {
         if !ordered_states[0].is_empty() {
             let last_idx = ordered_states[0].len() - 1;
             let last_row = get_row_at_idx(&ordered_states, last_idx)?;
-            let last_ordering = &last_row[1..];
+            // When collecting orderings, we exclude the is_set flag from the state.
+            let last_ordering = &last_row[1..is_set_idx];
             let sort_options = get_sort_options(&self.ordering_req);
             // Either there is no existing value, or there is a newer (latest)
             // version in the new data:
             if !self.is_set
                 || compare_rows(last_ordering, &self.orderings, &sort_options)?.is_gt()
             {
-                self.update_with_new_row(&last_row);
+                // Update with last value in the state. Note that we should exclude the
+                // is_set flag from the state. Otherwise, we will end up with a state
+                // containing two is_set flags.
+                self.update_with_new_row(&last_row[0..is_set_idx]);
             }
         }
         Ok(())
