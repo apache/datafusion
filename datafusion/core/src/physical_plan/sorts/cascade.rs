@@ -22,6 +22,58 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+/// Sort preserving cascade stream
+///
+/// The cascade works as a tree of sort-preserving-merges, where each merge has
+/// a limited fan-in (number of inputs) and a limit size yielded (batch size) per poll.
+/// The poll is called from the root merge, which will poll its children, and so on.
+///
+/// ```text
+/// ┌─────┐                ┌─────┐                                                           
+/// │  2  │                │  1  │                                                           
+/// │  3  │                │  2  │                                                           
+/// │  1  │─ ─▶  sort  ─ ─▶│  2  │─ ─ ─ ─ ─ ─ ─ ─ ┐                                          
+/// │  4  │                │  3  │                                                           
+/// │  2  │                │  4  │                │                                          
+/// └─────┘                └─────┘                                                           
+/// ┌─────┐                ┌─────┐                ▼                                          
+/// │  1  │                │  1  │                                                           
+/// │  4  │─ ▶  sort  ─ ─ ▶│  1  ├ ─ ─ ─ ─ ─ ▶ merge  ─ ─ ─ ─                                
+/// │  1  │                │  4  │                           │                               
+/// └─────┘                └─────┘                                                           
+///   ...                   ...                ...           ▼                               
+///                                                                                          
+///                                                       merge  ─ ─ ─ ─ ─ ─ ▶ sorted output
+///                                                                               stream     
+///                                                          ▲                               
+///   ...                   ...                ...           │                               
+/// ┌─────┐                ┌─────┐                                                           
+/// │  3  │                │  3  │                           │                               
+/// │  1  │─ ▶  sort  ─ ─ ▶│  1  │─ ─ ─ ─ ─ ─▶ merge  ─ ─ ─ ─                                
+/// └─────┘                └─────┘                                                           
+/// ┌─────┐                ┌─────┐                ▲                                          
+/// │  4  │                │  3  │                                                           
+/// │  3  │─ ▶  sort  ─ ─ ▶│  4  │─ ─ ─ ─ ─ ─ ─ ─ ┘                                          
+/// └─────┘                └─────┘                                                           
+///                                                                                          
+/// in_mem_batches                   do a series of merges that                              
+///                                  each has a limited fan-in                               
+///                                  (number of inputs)                                      
+/// ```
+///
+/// The cascade is built using a series of streams, each with a different purpose:
+///   * Streams leading into the leaf nodes:
+///      1. [`BatchCursorStream`] yields the initial cursors and batches. (e.g. a RowCursorStream)
+///      2. [`BatchTrackingStream`] collects the batches, to avoid passing those around. Yields a [`CursorStream`](super::stream::CursorStream).
+///      3. This initial CursorStream is for a number of partitions (e.g. 100).
+///      4. The initial single CursorStream is shared across multiple leaf nodes, using [`OffsetCursorStream`].
+///      5. The total fan-in is always limited to 10. E.g. each leaf node will pull from a dedicated 10 (out of 100) partitions.
+///
+///   * Streams between merge nodes:
+///      1. a single [`MergeStream`] is yielded per node.
+///      2. A connector [`YieldedCursorStream`] converts a [`MergeStream`] into a [`CursorStream`](super::stream::CursorStream).
+///      3. next merge node takes a fan-in of up to 10 [`CursorStream`](super::stream::CursorStream)s.
+///
 pub(crate) struct SortPreservingCascadeStream<C: Cursor> {
     /// If the stream has encountered an error, or fetch is reached
     aborted: bool,
@@ -120,21 +172,23 @@ impl<C: Cursor + Unpin + Send + 'static> SortPreservingCascadeStream<C> {
         }
     }
 
+    /// Construct and yield the root node [`RecordBatch`]s.
     fn build_record_batch(&mut self, sort_order: Vec<SortOrder>) -> Result<RecordBatch> {
         let mut batches_needed = Vec::with_capacity(sort_order.len());
         let mut batches_seen: HashMap<BatchId, (usize, usize)> =
             HashMap::with_capacity(sort_order.len()); // (batch_idx, rows_sorted)
+
+        // The sort_order yielded at each poll is relative to the sliced batch it came from.
+        // Therefore, the sort_order row_idx needs to be adjusted by the offset of the sliced batch.
         let mut sort_order_offset_adjusted = Vec::with_capacity(sort_order.len());
-        let mut batch_idx: usize = 0;
 
         for ((batch_id, offset), row_idx) in sort_order.iter() {
             let batch_idx = match batches_seen.get(batch_id) {
                 Some((batch_idx, _)) => *batch_idx,
                 None => {
+                    let batch_idx = batches_seen.len();
                     batches_needed.push(*batch_id);
-                    let batch_now = batch_idx;
-                    batch_idx += 1;
-                    batch_now
+                    batch_idx
                 }
             };
             sort_order_offset_adjusted.push((batch_idx, *row_idx + offset.0));
@@ -145,6 +199,7 @@ impl<C: Cursor + Unpin + Send + 'static> SortPreservingCascadeStream<C> {
         let batches = batch_collecter.get_batches(batches_needed.as_slice());
         drop(batch_collecter);
 
+        // remove record_batches (from the batch tracker) that are fully yielded
         let batches_to_remove = batches
             .iter()
             .zip(batches_needed)
@@ -157,6 +212,7 @@ impl<C: Cursor + Unpin + Send + 'static> SortPreservingCascadeStream<C> {
             })
             .collect::<Vec<_>>();
 
+        // record_batch data to yield
         let columns = (0..self.schema.fields.len())
             .map(|column_idx| {
                 let arrays: Vec<_> = batches
