@@ -496,11 +496,10 @@ fn create_output_array(
 
 #[cfg(test)]
 mod tests {
+    use arrow_array::Int32Array;
+
     use super::*;
-    use crate::{
-        test::{build_table_i32, columns},
-        test_util::aggr_test_schema,
-    };
+    use crate::{test::columns, test_util::aggr_test_schema};
 
     #[test]
     fn physical_plan_config_no_projection() {
@@ -775,5 +774,28 @@ mod tests {
             output_ordering: vec![],
             infinite_source: false,
         }
+    }
+
+    /// returns record batch with 3 columns of i32 in memory
+    pub fn build_table_i32(
+        a: (&str, &Vec<i32>),
+        b: (&str, &Vec<i32>),
+        c: (&str, &Vec<i32>),
+    ) -> RecordBatch {
+        let schema = Schema::new(vec![
+            Field::new(a.0, DataType::Int32, false),
+            Field::new(b.0, DataType::Int32, false),
+            Field::new(c.0, DataType::Int32, false),
+        ]);
+
+        RecordBatch::try_new(
+            Arc::new(schema),
+            vec![
+                Arc::new(Int32Array::from(a.1.clone())),
+                Arc::new(Int32Array::from(b.1.clone())),
+                Arc::new(Int32Array::from(c.1.clone())),
+            ],
+        )
+        .unwrap()
     }
 }
