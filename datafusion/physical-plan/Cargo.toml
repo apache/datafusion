@@ -53,10 +53,10 @@ log = "^0.4"
 once_cell = "1.18.0"
 parking_lot = "0.12"
 pin-project-lite = "^0.2.7"
-
-#[dev-dependencies]
-termtree = "0.4.1"
 rand = "0.8"
 rstest = "0.18.0"
 tempfile = "3"
+
+#[dev-dependencies]
+termtree = "0.4.1"
 tokio = { version = "1.28", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }
