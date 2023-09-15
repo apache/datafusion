@@ -189,7 +189,8 @@ impl ExecutionPlan for FilterExec {
     /// predicate's selectivity value can be determined for the incoming data.
     fn statistics(&self) -> Statistics {
         let predicate = self.predicate();
-
+        print_plan(&self.input);
+        println!("self.schema.fields:{:?}", self.schema().fields);
         if check_support(predicate) {
             let input_stats = self.input.statistics();
 
@@ -260,6 +261,12 @@ fn collect_new_statistics(
             },
         )
         .collect()
+}
+
+fn print_plan(plan: &Arc<dyn ExecutionPlan>) -> () {
+    let formatted = crate::physical_plan::displayable(plan.as_ref()).indent(true).to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    println!("{:#?}", actual);
 }
 
 /// The FilterExec streams wraps the input iterator and applies the predicate expression to

@@ -2157,6 +2157,12 @@ mod tests {
         Ok(())
     }
 
+    fn print_plan(plan: &Arc<dyn ExecutionPlan>) -> () {
+        let formatted = crate::physical_plan::displayable(plan.as_ref()).indent(true).to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        println!("{:#?}", actual);
+    }
+
     #[tokio::test]
     async fn test_with_csv_plan() -> Result<()> {
         let logical_plan = test_csv_scan()
@@ -2166,7 +2172,7 @@ mod tests {
             .build()?;
 
         let plan = plan(&logical_plan).await?;
-
+        print_plan(&plan);
         // c12 is f64, c7 is u8 -> cast c7 to f64
         // the cast here is implicit so has CastOptions with safe=true
         let _expected = "predicate: BinaryExpr { left: TryCastExpr { expr: Column { name: \"c7\", index: 6 }, cast_type: Float64 }, op: Lt, right: Column { name: \"c12\", index: 11 } }";

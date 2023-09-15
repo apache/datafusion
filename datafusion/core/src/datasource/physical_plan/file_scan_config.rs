@@ -130,21 +130,24 @@ impl FileScanConfig {
         let mut table_cols_stats = vec![];
         for idx in proj_iter {
             if idx < self.file_schema.fields().len() {
-                table_fields.push(self.file_schema.field(idx).clone());
+                let field = self.file_schema.field(idx).clone();
+                table_fields.push(field.clone());
                 if let Some(file_cols_stats) = &self.statistics.column_statistics {
                     table_cols_stats.push(file_cols_stats[idx].clone())
                 } else {
-                    table_cols_stats.push(ColumnStatistics::default())
+                    table_cols_stats.push(ColumnStatistics::new_with_unbounded_column(field.data_type()))
                 }
             } else {
                 let partition_idx = idx - self.file_schema.fields().len();
+                let name = &self.table_partition_cols[partition_idx].0;
+                let dtype = &self.table_partition_cols[partition_idx].1;
                 table_fields.push(Field::new(
-                    &self.table_partition_cols[partition_idx].0,
-                    self.table_partition_cols[partition_idx].1.to_owned(),
+                    name,
+                    dtype.to_owned(),
                     false,
                 ));
                 // TODO provide accurate stat for partition column (#1186)
-                table_cols_stats.push(ColumnStatistics::default())
+                table_cols_stats.push(ColumnStatistics::new_with_unbounded_column(dtype))
             }
         }
 

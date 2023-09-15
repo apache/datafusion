@@ -507,8 +507,10 @@ impl ExprIntervalGraph {
             if !children_intervals.is_empty() {
                 // Reverse to align with [PhysicalExpr]'s children:
                 children_intervals.reverse();
+                println!("self.graph[node].expr: {:?}", self.graph[node].expr);
                 self.graph[node].interval =
                     self.graph[node].expr.evaluate_bounds(&children_intervals)?;
+                println!("completed");
             }
         }
         Ok(&self.graph[self.root].interval)
@@ -533,9 +535,13 @@ impl ExprIntervalGraph {
                 .map(|child| self.graph[*child].interval())
                 .collect::<Vec<_>>();
             let node_interval = self.graph[node].interval();
+            println!("self.graph[node].expr:{:?}", self.graph[node].expr);
+            println!("children_intervals: {:?}", children_intervals);
+            println!("node_interval: {:?}", node_interval);
             let propagated_intervals = self.graph[node]
                 .expr
                 .propagate_constraints(node_interval, &children_intervals)?;
+            println!("after expr propagate");
             for (child, interval) in children.into_iter().zip(propagated_intervals) {
                 if let Some(interval) = interval {
                     self.graph[child].interval = interval;
@@ -555,13 +561,18 @@ impl ExprIntervalGraph {
         leaf_bounds: &mut [(usize, Interval)],
     ) -> Result<PropagationResult> {
         self.assign_intervals(leaf_bounds);
+        println!("self: {:?}", self);
         let bounds = self.evaluate_bounds()?;
+        println!("bounds: {:?}", bounds);
+        println!("after evaluate");
         if bounds == &Interval::CERTAINLY_FALSE {
             Ok(PropagationResult::Infeasible)
         } else if bounds == &Interval::UNCERTAIN {
-            let result = self.propagate_constraints();
+            println!("before propagate");
+            let result = self.propagate_constraints()?;
+            println!("after propagate");
             self.update_intervals(leaf_bounds);
-            result
+            Ok(result)
         } else {
             Ok(PropagationResult::CannotPropagate)
         }
