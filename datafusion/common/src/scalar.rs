@@ -4965,7 +4965,8 @@ mod tests {
                             .unwrap()
                             .and_hms_nano_opt(hour, minute, second, nanosec)
                             .unwrap()
-                            .timestamp_nanos(),
+                            .timestamp_nanos_opt()
+                            .unwrap(),
                     ),
                     None,
                 ))
