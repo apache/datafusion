@@ -207,17 +207,17 @@ mod tests {
             let (keys, values) = match self {
                 Self::High => {
                     let values: Vec<_> =
-                        (0..20).map(|_| Uuid::new_v4().to_string()).collect();
+                        (0..1024).map(|_| Uuid::new_v4().to_string()).collect();
                     let values = StringArray::from(values);
 
-                    let keys: Int32Array = (0..20)
-                        .map(|_| rand::thread_rng().gen_range(0..20))
+                    let keys: Int32Array = (0..1024)
+                        .map(|_| rand::thread_rng().gen_range(0..1024))
                         .collect();
                     (keys, values)
                 }
                 Self::Low => {
                     let values = StringArray::from_iter_values(["a", "b", "c"]);
-                    let keys: Int32Array = (0..20)
+                    let keys: Int32Array = (0..1024)
                         .map(|_| rand::thread_rng().gen_range(0..2))
                         .collect();
                     (keys, values)
@@ -228,7 +228,7 @@ mod tests {
             let col_a = Arc::new(dict) as ArrayRef;
 
             // building column `b_prim`
-            let values: Int32Array = (0..20)
+            let values: Int32Array = (0..1024)
                 .map(|_| rand::thread_rng().gen_range(0..20))
                 .collect();
             let col_b: ArrayRef = Arc::new(values);
