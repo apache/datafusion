@@ -25,6 +25,7 @@ pub mod registry;
 pub mod runtime_env;
 mod stream;
 mod task;
+mod cache;
 
 pub use disk_manager::DiskManager;
 pub use registry::FunctionRegistry;

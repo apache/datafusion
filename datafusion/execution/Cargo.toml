@@ -45,3 +45,4 @@ parking_lot = "0.12"
 rand = "0.8"
 tempfile = "3"
 url = "2.2"
+chrono = { version = "0.4", default-features = false }
