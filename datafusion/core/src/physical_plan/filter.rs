@@ -195,31 +195,21 @@ impl ExecutionPlan for FilterExec {
             let input_stats = self.input.statistics();
 
             if let Some(column_stats) = input_stats.column_statistics {
-                if let Ok(analysis_ctx) =
-                    analyze_with_context(&self.input.schema(), &column_stats, predicate)
-                {
-                    return calculate_statistics(
-                        input_stats.num_rows,
-                        input_stats.total_byte_size,
-                        &column_stats,
-                        false,
-                        analysis_ctx,
-                    );
-                }
+                let starter_ctx = AnalysisContext::from_statistics(&self.input.schema(), &column_stats);
+                let analysis_context = analyze(predicate, starter_ctx).unwrap();
+                return calculate_statistics(
+                    input_stats.num_rows,
+                    input_stats.total_byte_size,
+                    &column_stats,
+                    false,
+                    analysis_context,
+                );
+
             }
         }
 
         Statistics::new_with_unbounded_columns(self.schema())
     }
-}
-
-fn analyze_with_context(
-    input_schema: &Schema,
-    column_stats: &[ColumnStatistics],
-    predicate: &Arc<dyn PhysicalExpr>,
-) -> Result<AnalysisContext> {
-    let starter_ctx = AnalysisContext::from_statistics(input_schema, column_stats);
-    analyze(predicate, starter_ctx)
 }
 
 fn calculate_statistics(
