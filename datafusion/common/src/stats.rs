@@ -45,23 +45,19 @@ impl Statistics {
     /// bounds to each column in the schema. This is useful when the input statistics are not
     /// known to give an opportunity to the current executor to shrink the bounds of some columns.
     pub fn new_with_unbounded_columns(schema: SchemaRef) -> Self {
-        let data_types = schema
-            .fields()
-            .iter()
-            .map(|field| field.data_type())
-            .collect::<Vec<_>>();
         Self {
             num_rows: None,
             total_byte_size: None,
             column_statistics: Some(
-                data_types
-                    .into_iter()
-                    .map(|data_type| {
-                        let dt = ScalarValue::try_from(data_type.clone()).ok();
+                schema
+                    .fields()
+                    .iter()
+                    .map(|field| {
+                        let inf = ScalarValue::try_from(field.data_type()).ok();
                         ColumnStatistics {
                             null_count: None,
-                            max_value: dt.clone(),
-                            min_value: dt,
+                            max_value: inf.clone(),
+                            min_value: inf,
                             distinct_count: None,
                         }
                     })
