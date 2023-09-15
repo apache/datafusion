@@ -2081,13 +2081,12 @@ mod tests {
         // Create the initial context, schema, and batch.
         let session_ctx = match session_config_map {
             Some(cfg) => {
-                let mut config = SessionConfig::from_string_hash_map(cfg)?;
-                // Make target partition number fixed
-                config.options_mut().execution.target_partitions = 8;
+                let config = SessionConfig::from_string_hash_map(cfg)?;
                 SessionContext::with_config(config)
             }
             None => SessionContext::new(),
         };
+        let target_partition_number = session_ctx.state().config().target_partitions();
 
         // Create a new schema with one field called "a" of type Int32
         let schema = Arc::new(Schema::new(vec![Field::new(
@@ -2225,9 +2224,9 @@ mod tests {
         // Assert that the batches read from the file match the expected result.
         assert_batches_eq!(expected, &batches);
 
-        // Assert that 8 files were added to the table (by default target partition number is 8)
+        // Assert that # of `target_partition_number` files were added to the table.
         let num_files = tmp_dir.path().read_dir()?.count();
-        assert_eq!(num_files, 8);
+        assert_eq!(num_files, target_partition_number);
 
         // Create a physical plan from the insert plan
         let plan = session_ctx
@@ -2268,9 +2267,9 @@ mod tests {
         // Assert that the batches read from the file after the second append match the expected result.
         assert_batches_eq!(expected, &batches);
 
-        // Assert that another 8 files were added to the table
+        // Assert that another # of `target_partition_number` files were added to the table
         let num_files = tmp_dir.path().read_dir()?.count();
-        assert_eq!(num_files, 16);
+        assert_eq!(num_files, 2 * target_partition_number);
 
         // Return Ok if the function
         Ok(())
