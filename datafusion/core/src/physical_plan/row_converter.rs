@@ -42,7 +42,7 @@ use datafusion_common::{internal_err, DataFusionError, Result};
 /// this would likely only really make sense if the dictionary
 /// interner itself followed a similar approach, which it did not at
 /// the time of this writing.
-const LOW_CARDINALITY_THRESHOLD: usize = 10;
+const LOW_CARDINALITY_THRESHOLD: usize = 512;
 
 /// Wrapper around an [`arrow::row`] [`RowConverter`] that disables
 /// dictionary preservation for high cardinality columns, based on the
