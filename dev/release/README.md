@@ -321,7 +321,7 @@ dot -Tsvg dev/release/crate-deps.dot > dev/release/crate-deps.svg
 (cd datafusion/substrait && cargo publish)
 ```
 
-The CLI needs a `--no-verify` argument because `build.rs` generates source into the `src` directory. 
+The CLI needs a `--no-verify` argument because `build.rs` generates source into the `src` directory.
 
 ```shell
 (cd datafusion-cli && cargo publish --no-verify)
