@@ -89,9 +89,9 @@ async fn get_listing_with_cache(
     let config1 = ListingTableConfig::new(table_path.clone())
         .with_listing_options(opt.clone())
         .with_schema(schema);
-    return ListingTable::try_new(config1)
+    ListingTable::try_new(config1)
         .unwrap()
-        .with_cache(Some(cache1));
+        .with_cache(Some(cache1))
 }
 
 fn get_cache_runtime_state() -> (Arc<DefaultFileStatisticsCache>, SessionState) {
