@@ -26,6 +26,7 @@ use std::fmt::Debug;
 use std::io::Write;
 use std::sync::Arc;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::task::{JoinHandle, JoinSet};
 
 use arrow::datatypes::SchemaRef;
@@ -870,7 +871,21 @@ async fn output_single_parquet_file_parallelized(
     }
 
     let mut writer = None;
-    let shared_buff = SharedBuffer::new(1048576);
+    let endpoints: (UnboundedSender<Vec<u8>>, UnboundedReceiver<Vec<u8>>) =
+        tokio::sync::mpsc::unbounded_channel();
+    let (tx, mut rx) = endpoints;
+    let writer_join_handle: JoinHandle<
+        Result<
+            AbortableWrite<Box<dyn tokio::io::AsyncWrite + std::marker::Send + Unpin>>,
+            DataFusionError,
+        >,
+    > = tokio::task::spawn(async move {
+        while let Some(data) = rx.recv().await {
+            object_store_writer.write_all(data.as_slice()).await?;
+        }
+        Ok(object_store_writer)
+    });
+    let merged_buff = SharedBuffer::new(1048576);
     for handle in join_handles {
         let join_result = handle.await;
         match join_result {
@@ -884,7 +899,7 @@ async fn output_single_parquet_file_parallelized(
                 writer = match writer {
                     Some(writer) => Some(writer),
                     None => Some(SerializedFileWriter::new(
-                        shared_buff.clone(),
+                        merged_buff.clone(),
                         Arc::new(schema.clone()),
                         Arc::new(parquet_props.clone()),
                     )?),
@@ -893,10 +908,8 @@ async fn output_single_parquet_file_parallelized(
                 match &mut writer{
                     Some(w) => {
                         // Note: cannot use .await within this loop as RowGroupMetaData is not Send
-                        // A tokio::sync::mpsc::unbounded_channel works, but it is expensive and slow
-                        // to drain(..) the bytes and send through the buffer on each loop. Plus
-                        // it results in only a small improvement in max memory usage vs. flushing
-                        // after RowGroupMetaData goes out of scope.
+                        // Instead, use a non-blocking channel to send bytes to separate worker
+                        // which will write to ObjectStore.
                         for rg in metadata.row_groups() {
                             let mut rg_out = w.next_row_group()?;
                             for column in rg.columns() {
@@ -909,17 +922,20 @@ async fn output_single_parquet_file_parallelized(
                                     offset_index: None,
                                 };
                                 rg_out.append_column(&reader, result)?;
+                                let mut buff_to_flush = merged_buff.buffer.try_lock().unwrap();
+                                if buff_to_flush.len() > 1024000{
+                                    let bytes: Vec<u8> = buff_to_flush.drain(..).collect();
+                                    tx.send(bytes).map_err(|_| DataFusionError::Execution("Failed to send bytes to ObjectStore writer".into()))?;
+
+                                }
                             }
                             rg_out.close()?;
+                            let mut buff_to_flush = merged_buff.buffer.try_lock().unwrap();
+                            if buff_to_flush.len() > 1024000{
+                                let bytes: Vec<u8> = buff_to_flush.drain(..).collect();
+                                tx.send(bytes).map_err(|_| DataFusionError::Execution("Failed to send bytes to ObjectStore writer".into()))?;
+                            }
                         }
-                    // After all row groups of a single sub file are appended, check if there is enough
-                    // data to be worth flushing, and if so flush it.
-                    let mut inner_buff = shared_buff.buffer.try_lock().unwrap();
-                    if inner_buff.len() > 10240{
-                        object_store_writer.write_all(inner_buff.as_slice()).await?;
-                        inner_buff.clear();
-
-                    }
                     },
                     None => unreachable!("Parquet writer should always be initialized in first iteration of loop!")
                 }
@@ -933,11 +949,25 @@ async fn output_single_parquet_file_parallelized(
             }
         }
     }
-    let final_writer = writer.unwrap().into_inner()?;
-    let final_buff = final_writer.buffer.try_lock().unwrap();
+    let inner_writer = writer.unwrap().into_inner()?;
+    let final_buff = inner_writer.buffer.try_lock().unwrap();
 
+    // Explicitly drop tx to signal to rx we are done sending data
+    drop(tx);
+
+    let mut object_store_writer = match writer_join_handle.await {
+        Ok(r) => r?,
+        Err(e) => {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic())
+            } else {
+                unreachable!()
+            }
+        }
+    };
     object_store_writer.write_all(final_buff.as_slice()).await?;
     object_store_writer.shutdown().await?;
+    println!("done!");
 
     Ok(row_count)
 }
