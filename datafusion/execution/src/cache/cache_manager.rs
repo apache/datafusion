@@ -21,11 +21,16 @@ use object_store::path::Path;
 use object_store::ObjectMeta;
 use std::sync::Arc;
 
-pub type FileStaticCache = Arc<dyn CacheAccessor<Path, Statistics, Extra = ObjectMeta>>;
+/// The cache of listing files statistics.
+/// if set [`CacheManagerConfig::with_files_statistics_cache`]
+/// Will avoid infer same file statistics repeatedly during the session lifetime,
+/// this cache will store in [`crate::runtime_env::RuntimeEnv`].
+pub type FileStatisticsCache =
+    Arc<dyn CacheAccessor<Path, Arc<Statistics>, Extra = ObjectMeta>>;
 
 #[derive(Default)]
 pub struct CacheManager {
-    file_statistic_cache: Option<FileStaticCache>,
+    file_statistic_cache: Option<FileStatisticsCache>,
 }
 
 impl CacheManager {
@@ -37,7 +42,8 @@ impl CacheManager {
         Ok(Arc::new(manager))
     }
 
-    pub fn get_file_statistic_cache(&self) -> Option<FileStaticCache> {
+    /// Get the cache of listing files statistics.
+    pub fn get_file_statistic_cache(&self) -> Option<FileStatisticsCache> {
         self.file_statistic_cache.clone()
     }
 }
@@ -47,12 +53,15 @@ pub struct CacheManagerConfig {
     /// Enable cache of files statistics when listing files.
     /// Avoid get same file statistics repeatedly in same datafusion session.
     /// Default is disable. Fow now only supports Parquet files.
-    pub table_files_statistics_cache: Option<FileStaticCache>,
+    pub table_files_statistics_cache: Option<FileStatisticsCache>,
 }
 
 impl CacheManagerConfig {
-    pub fn enable_table_files_statistics_cache(mut self, cache: FileStaticCache) -> Self {
-        self.table_files_statistics_cache = Some(cache);
+    pub fn with_files_statistics_cache(
+        mut self,
+        cache: Option<FileStatisticsCache>,
+    ) -> Self {
+        self.table_files_statistics_cache = cache;
         self
     }
 }

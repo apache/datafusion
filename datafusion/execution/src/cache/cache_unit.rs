@@ -20,19 +20,20 @@ use dashmap::DashMap;
 use datafusion_common::Statistics;
 use object_store::path::Path;
 use object_store::ObjectMeta;
+use std::sync::Arc;
 
 /// Collected statistics for files
 /// Cache is invalided when file size or last modification has changed
 #[derive(Default)]
-pub struct FileStatisticsCache {
-    statistics: DashMap<Path, (ObjectMeta, Statistics)>,
+pub struct DefaultFileStatisticsCache {
+    statistics: DashMap<Path, (ObjectMeta, Arc<Statistics>)>,
 }
 
-impl CacheAccessor<Path, Statistics> for FileStatisticsCache {
+impl CacheAccessor<Path, Arc<Statistics>> for DefaultFileStatisticsCache {
     type Extra = ObjectMeta;
 
     /// Get `Statistics` for file location.
-    fn get(&self, k: &Path) -> Option<Statistics> {
+    fn get(&self, k: &Path) -> Option<Arc<Statistics>> {
         self.statistics
             .get(k)
             .map(|s| Some(s.value().1.clone()))
@@ -40,7 +41,7 @@ impl CacheAccessor<Path, Statistics> for FileStatisticsCache {
     }
 
     /// Get `Statistics` for file location. Returns None if file has changed or not found.
-    fn get_with_extra(&self, k: &Path, e: &Self::Extra) -> Option<Statistics> {
+    fn get_with_extra(&self, k: &Path, e: &Self::Extra) -> Option<Arc<Statistics>> {
         self.statistics
             .get(k)
             .map(|s| {
@@ -58,23 +59,23 @@ impl CacheAccessor<Path, Statistics> for FileStatisticsCache {
     }
 
     /// Save collected file statistics
-    fn put(&self, _key: &Path, _value: Statistics) -> Option<Statistics> {
-        panic!("Put cache in FileStatisticsCache without Extra not supported.")
+    fn put(&self, _key: &Path, _value: Arc<Statistics>) -> Option<Arc<Statistics>> {
+        panic!("Put cache in DefaultFileStatisticsCache without Extra not supported.")
     }
 
     fn put_with_extra(
         &self,
         key: &Path,
-        value: Statistics,
+        value: Arc<Statistics>,
         e: &Self::Extra,
-    ) -> Option<Statistics> {
+    ) -> Option<Arc<Statistics>> {
         self.statistics
             .insert(key.clone(), (e.clone(), value))
             .map(|x| x.1)
     }
 
-    fn evict(&self, k: &Path) -> bool {
-        self.statistics.remove(k).is_some()
+    fn remove(&mut self, k: &Path) -> Option<Arc<Statistics>> {
+        self.statistics.remove(k).map(|x| x.1 .1)
     }
 
     fn contains_key(&self, k: &Path) -> bool {
@@ -84,11 +85,15 @@ impl CacheAccessor<Path, Statistics> for FileStatisticsCache {
     fn len(&self) -> usize {
         self.statistics.len()
     }
+
+    fn clear(&self) {
+        self.statistics.clear()
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::cache::cache_unit::FileStatisticsCache;
+    use crate::cache::cache_unit::DefaultFileStatisticsCache;
     use crate::cache::CacheAccessor;
     use chrono::DateTime;
     use datafusion_common::Statistics;
@@ -106,10 +111,10 @@ mod tests {
             e_tag: None,
         };
 
-        let cache = FileStatisticsCache::default();
+        let cache = DefaultFileStatisticsCache::default();
         assert!(cache.get_with_extra(&meta.location, &meta).is_none());
 
-        cache.put_with_extra(&meta.location, Statistics::default(), &meta);
+        cache.put_with_extra(&meta.location, Statistics::default().into(), &meta);
         assert!(cache.get_with_extra(&meta.location, &meta).is_some());
 
         // file size changed

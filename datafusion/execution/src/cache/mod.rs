@@ -18,11 +18,10 @@
 pub mod cache_manager;
 pub mod cache_unit;
 
-// The cache accessor, users usually working on this interface while manipulating caches. 
+/// The cache accessor, users usually working on this interface while manipulating caches.
 /// This interface does not get `mut` references and thus has to handle its own
 /// locking via internal mutability. It can be accessed via multiple concurrent queries
 /// during planning and execution.
-
 
 pub trait CacheAccessor<K, V>: Send + Sync {
     // Extra info but not part of the cache key or cache value.
@@ -36,8 +35,8 @@ pub trait CacheAccessor<K, V>: Send + Sync {
     fn put(&self, key: &K, value: V) -> Option<V>;
     /// Put value into cache. Returns the old value associated with the key if there was one.
     fn put_with_extra(&self, key: &K, value: V, e: &Self::Extra) -> Option<V>;
-    /// Remove an entry from the cache, returning `true` if they existed in the cache.
-    fn evict(&self, k: &K) -> bool;
+    /// Remove an entry from the cache, returning value if they existed in the map.
+    fn remove(&mut self, k: &K) -> Option<V>;
     /// Check if the cache contains a specific key.
     fn contains_key(&self, k: &K) -> bool;
     /// Fetch the total number of cache entries.
@@ -46,4 +45,6 @@ pub trait CacheAccessor<K, V>: Send + Sync {
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
+    /// Removes all entries from the cache.
+    fn clear(&self);
 }

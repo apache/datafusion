@@ -387,17 +387,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                         .with_listing_options(options)
                         .with_schema(Arc::new(schema));
 
-                let provider;
-                if let Some(cache) = ctx
-                    .state()
-                    .runtime_env()
-                    .cache_manager
-                    .get_file_statistic_cache()
-                {
-                    provider = ListingTable::try_new_with_cache(config, cache)?;
-                } else {
-                    provider = ListingTable::try_new(config)?;
-                }
+                let provider = ListingTable::try_new(config)?.with_cache(
+                    ctx.state()
+                        .runtime_env()
+                        .cache_manager
+                        .get_file_statistic_cache(),
+                );
 
                 let table_name = from_owned_table_reference(
                     scan.table_name.as_ref(),

@@ -229,13 +229,8 @@ impl TableProviderFactory for ListingTableFactory {
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(options)
             .with_schema(resolved_schema);
-        let provider;
-        if let Some(cache) = state.runtime_env().cache_manager.get_file_statistic_cache()
-        {
-            provider = ListingTable::try_new_with_cache(config, cache)?;
-        } else {
-            provider = ListingTable::try_new(config)?;
-        }
+        let provider = ListingTable::try_new(config)?
+            .with_cache(state.runtime_env().cache_manager.get_file_statistic_cache());
         let table = provider.with_definition(cmd.definition.clone());
         Ok(Arc::new(table))
     }

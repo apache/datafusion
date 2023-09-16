@@ -34,13 +34,14 @@ use url::Url;
 
 #[derive(Clone)]
 /// Execution runtime environment that manages system resources such
-/// as memory, disk and storage.
+/// as memory, disk, cache and storage.
 ///
 /// A [`RuntimeEnv`] is created from a [`RuntimeConfig`] and has the
 /// following resource management functionality:
 ///
 /// * [`MemoryPool`]: Manage memory
 /// * [`DiskManager`]: Manage temporary files on local disk
+/// * [`CacheManager`]: Manage temporary cache data during the session lifetime
 /// * [`ObjectStoreRegistry`]: Manage mapping URLs to object store instances
 pub struct RuntimeEnv {
     /// Runtime memory management

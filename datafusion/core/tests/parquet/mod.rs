@@ -40,6 +40,7 @@ use std::sync::Arc;
 use tempfile::NamedTempFile;
 
 mod custom_reader;
+mod file_statistics;
 mod filter_pushdown;
 mod page_pruning;
 mod row_group_pruning;
