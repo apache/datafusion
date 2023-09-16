@@ -30,7 +30,7 @@ use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use std::sync::Arc;
 
 #[tokio::test]
-async fn load_table_stats_with_session_level_cache() -> () {
+async fn load_table_stats_with_session_level_cache() {
     let testdata = datafusion::test_util::parquet_test_data();
     let filename = format!("{}/{}", testdata, "alltypes_plain.parquet");
     let table_path = ListingTableUrl::parse(filename).unwrap();
@@ -77,8 +77,6 @@ async fn load_table_stats_with_session_level_cache() -> () {
     assert_eq!(exec3.statistics().total_byte_size, Some(671));
     // List same file no increase
     assert_eq!(get_cache_size(&state1), 1);
-
-    ()
 }
 
 async fn get_listing_with_cache(
@@ -87,14 +85,13 @@ async fn get_listing_with_cache(
     state1: &SessionState,
     opt: &ListingOptions,
 ) -> ListingTable {
-    let schema = opt.infer_schema(&state1, &table_path).await.unwrap();
+    let schema = opt.infer_schema(state1, table_path).await.unwrap();
     let config1 = ListingTableConfig::new(table_path.clone())
         .with_listing_options(opt.clone())
         .with_schema(schema);
-    let table1 = ListingTable::try_new(config1)
+    return ListingTable::try_new(config1)
         .unwrap()
         .with_cache(Some(cache1));
-    table1
 }
 
 fn get_cache_runtime_state() -> (Arc<DefaultFileStatisticsCache>, SessionState) {
