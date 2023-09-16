@@ -358,7 +358,9 @@ config_namespace! {
         /// large parquet files by first writing multiple smaller files
         /// and then stitching them together into a single large file.
         /// This will result in faster write speeds, but higher memory usage.
-        pub allow_single_file_parallelism: bool, default = true
+        /// Also currently unsupported are bloom filters and column indexes
+        /// when single_file_parallelism is enabled.
+        pub allow_single_file_parallelism: bool, default = false
 
     }
 }
