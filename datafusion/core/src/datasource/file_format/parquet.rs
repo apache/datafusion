@@ -21,12 +21,14 @@ use parquet::column::writer::ColumnCloseResult;
 use parquet::file::writer::SerializedFileWriter;
 use rand::distributions::DistString;
 use tokio::io::{AsyncWriteExt, AsyncWrite};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use std::any::Any;
 use std::fmt;
 use std::fmt::Debug;
 use std::fs::File;
 use std::io::Write;
 use std::sync::Arc;
+use std::sync::mpsc::Sender;
 use tokio::task::{JoinHandle, JoinSet};
 
 use arrow::datatypes::SchemaRef;
@@ -844,7 +846,15 @@ impl DataSink for ParquetSink {
                     }
 
                     let mut writer = None;
-
+                    let endpoints: (UnboundedSender<Vec<u8>>, UnboundedReceiver<Vec<u8>>) = tokio::sync::mpsc::unbounded_channel();
+                    let (mut tx, mut rx) = endpoints;
+                    let writer_join_handle: JoinHandle<Result<AbortableWrite<Box<dyn tokio::io::AsyncWrite + std::marker::Send + Unpin>>, DataFusionError>> = tokio::task::spawn(async move {
+                        while let Some(data) = rx.recv().await{
+                            object_store_writer.write_all(data.as_slice()).await?;
+                        }
+                        Ok(object_store_writer)
+                    });
+                    let merged_buff = SharedBuffer::new(1048576);
                     for handle in join_handles{
                         let join_result = handle.await;
                         match join_result{
@@ -855,7 +865,6 @@ impl DataSink for ParquetSink {
                                 //let reader = File::open(buffer)?;
                                 let metadata = parquet::file::footer::parse_metadata(&reader)?;
                                 let schema = metadata.file_metadata().schema();
-                                let merged_buff = SharedBuffer::new(1048576);
                                 writer = match writer{
                                     Some(writer) => Some(writer),
                                     None => {
@@ -865,6 +874,9 @@ impl DataSink for ParquetSink {
 
                                 match &mut writer{
                                     Some(w) => {
+                                        // Note: cannot use .await within this loop as RowGroupMetaData is not Send
+                                        // Instead, use a non-blocking channel to send bytes to separate worker
+                                        // which will write to ObjectStore.
                                         for rg in metadata.row_groups() {
                                             let mut rg_out = w.next_row_group()?;
                                             for column in rg.columns() {
@@ -877,17 +889,23 @@ impl DataSink for ParquetSink {
                                                     offset_index: None,
                                                 };
                                                 rg_out.append_column(&reader, result)?;
+                                                let mut buff_to_flush = merged_buff.buffer.try_lock().unwrap();
+                                                if buff_to_flush.len() > 1024000{
+                                                   let bytes: Vec<u8> = buff_to_flush.drain(..).collect();
+                                                   tx.send(bytes).map_err(|_| DataFusionError::Execution("Failed to send bytes to ObjectStore writer".into()))?;
+
+                                                }
                                             }
                                             rg_out.close()?;
+                                            let mut buff_to_flush = merged_buff.buffer.try_lock().unwrap();
+                                            if buff_to_flush.len() > 10240{
+                                               let bytes: Vec<u8> = buff_to_flush.drain(..).collect();
+                                               tx.send(bytes).map_err(|_| DataFusionError::Execution("Failed to send bytes to ObjectStore writer".into()))?;
+                                            }
                                         }
-                                        let mut buff_to_flush = merged_buff.buffer.try_lock().unwrap();
-                                        object_store_writer.write_all(buff_to_flush.as_slice()).await?;
-                                        buff_to_flush.clear();
                                     },
                                     None => unreachable!("Parquet writer should always be initialized in first iteration of loop!")
                                 }
-                                
-
                             }
                             Err(e) => {
                                 if e.is_panic() {
@@ -898,12 +916,26 @@ impl DataSink for ParquetSink {
                             }
                         }
                     }
-                    
-                    let final_buff = writer.unwrap().into_inner()?;
-                    let final_write = final_buff.buffer.try_lock().unwrap();
-                    
-                    object_store_writer.write_all(final_write.as_slice()).await?;
+                    let inner_writer = writer.unwrap().into_inner()?;
+                    let mut final_buff = inner_writer.buffer.try_lock().unwrap();
+                    //tx.send(final_bytes).map_err(|_| DataFusionError::Execution("Failed to send bytes to ObjectStore writer".into()))?;
+
+                    // Explicitly drop tx to signal to rx we are done sending data
+                    drop(tx);
+
+                    let mut object_store_writer = match writer_join_handle.await{
+                        Ok(r) => r?,
+                        Err(e) => {
+                            if e.is_panic(){
+                                std::panic::resume_unwind(e.into_panic())
+                            } else{
+                                unreachable!()
+                            }
+                        }
+                    };
+                    object_store_writer.write_all(final_buff.as_slice()).await?;
                     object_store_writer.shutdown().await?;
+                    println!("done!");
                 }
             }
         }
