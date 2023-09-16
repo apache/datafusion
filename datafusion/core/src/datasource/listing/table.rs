@@ -582,7 +582,7 @@ pub struct ListingTable {
     table_schema: SchemaRef,
     options: ListingOptions,
     definition: Option<String>,
-    collected_statistics: Option<FileStaticCache>,
+    collected_statistics: FileStaticCache,
     infinite_source: bool,
 }
 
