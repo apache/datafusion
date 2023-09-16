@@ -45,6 +45,8 @@ pub trait CacheAccessor<K, V>: Send + Sync {
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
-    /// Removes all entries from the cache.
+    /// Remove all entries from the cache.
     fn clear(&self);
+    /// Return the cache name.
+    fn name(&self) -> String;
 }

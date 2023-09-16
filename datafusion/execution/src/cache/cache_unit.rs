@@ -89,6 +89,9 @@ impl CacheAccessor<Path, Arc<Statistics>> for DefaultFileStatisticsCache {
     fn clear(&self) {
         self.statistics.clear()
     }
+    fn name(&self) -> String {
+        "DefaultFileStatisticsCache".to_string()
+    }
 }
 
 #[cfg(test)]

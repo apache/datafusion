@@ -992,10 +992,6 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use datafusion_common::assert_contains;
     use datafusion_common::GetExt;
-    use datafusion_execution::cache::cache_manager::CacheManagerConfig;
-    use datafusion_execution::cache::cache_unit;
-    use datafusion_execution::cache::cache_unit::DefaultFileStatisticsCache;
-    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion_expr::LogicalPlanBuilder;
     use rstest::*;
     use std::collections::HashMap;

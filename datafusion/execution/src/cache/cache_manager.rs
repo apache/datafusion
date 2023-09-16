@@ -19,6 +19,7 @@ use crate::cache::CacheAccessor;
 use datafusion_common::{Result, Statistics};
 use object_store::path::Path;
 use object_store::ObjectMeta;
+use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 /// The cache of listing files statistics.
@@ -27,6 +28,12 @@ use std::sync::Arc;
 /// this cache will store in [`crate::runtime_env::RuntimeEnv`].
 pub type FileStatisticsCache =
     Arc<dyn CacheAccessor<Path, Arc<Statistics>, Extra = ObjectMeta>>;
+
+impl Debug for dyn CacheAccessor<Path, Arc<Statistics>, Extra = ObjectMeta> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Cache name: {} with length: {}", self.name(), self.len())
+    }
+}
 
 #[derive(Default)]
 pub struct CacheManager {
