@@ -18,7 +18,12 @@
 pub mod cache_manager;
 pub mod cache_unit;
 
-// The cache accessor, users usually working on this interface while manipulating caches
+// The cache accessor, users usually working on this interface while manipulating caches. 
+/// This interface does not get `mut` references and thus has to handle its own
+/// locking via internal mutability. It can be accessed via multiple concurrent queries
+/// during planning and execution.
+
+
 pub trait CacheAccessor<K, V>: Send + Sync {
     // Extra info but not part of the cache key or cache value.
     type Extra: Clone;
