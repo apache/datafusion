@@ -627,7 +627,7 @@ impl ListingTable {
         Ok(table)
     }
 
-    /// Takes a [`FileStaticCache`] from session context as cache input.
+    /// Takes a [`FileStatisticsCache`] from session context as cache input.
     /// If not exit create a new [`DefaultFileStatisticsCache`],
     /// Avoid get parquet files statistics multiple times in same session.
     pub fn with_cache(mut self, cache: Option<FileStatisticsCache>) -> Self {
