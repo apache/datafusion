@@ -35,7 +35,7 @@ impl Debug for dyn CacheAccessor<Path, Arc<Statistics>, Extra = ObjectMeta> {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct CacheManager {
     file_statistic_cache: Option<FileStatisticsCache>,
 }
