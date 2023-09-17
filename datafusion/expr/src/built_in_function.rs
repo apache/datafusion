@@ -1291,7 +1291,7 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
         BuiltinScalarFunction::Rpad => &["rpad"],
         BuiltinScalarFunction::Rtrim => &["rtrim"],
         BuiltinScalarFunction::SplitPart => &["split_part"],
-        BuiltinScalarFunction::StringToArray => &["string_to_array"],
+        BuiltinScalarFunction::StringToArray => &["string_to_array", "string_to_list"],
         BuiltinScalarFunction::StartsWith => &["starts_with"],
         BuiltinScalarFunction::Strpos => &["strpos"],
         BuiltinScalarFunction::Substr => &["substr"],

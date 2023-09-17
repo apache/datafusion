@@ -628,6 +628,8 @@ nullif(expression1, expression2)
 - [rtrim](#rtrim)
 - [split_part](#split_part)
 - [starts_with](#starts_with)
+- [string_to_array](#string_to_array)
+- [string_to_list](#string_to_list)
 - [strpos](#strpos)
 - [substr](#substr)
 - [to_hex](#to_hex)
@@ -1014,6 +1016,28 @@ starts_with(str, substr)
 - **str**: String expression to test.
   Can be a constant, column, or function, and any combination of string operators.
 - **substr**: Substring to test for.
+
+### `string_to_array`
+
+Splits a string in to an array of substrings based on a delimiter. Any substrings matching the optional `null_str` argument are replaced with NULL.
+
+```
+starts_with(str, delimiter[, null_str])
+```
+
+#### Arguments
+
+- **str**: String expression to split.
+- **delimiter**: Delimiter string to split on.
+- **null_str**: Substring values to be replaced with `NULL`
+
+#### Aliases
+
+- string_to_list
+
+### `string_to_list`
+
+_Alias of [string_to_array](#string_to_array)._
 
 ### `strpos`
 

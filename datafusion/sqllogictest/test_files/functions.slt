@@ -724,16 +724,6 @@ SELECT split_part(arrow_cast('foo_bar', 'Dictionary(Int32, Utf8)'), '_', 2)
 bar
 
 query ?
-SELECT string_to_array(NULL, ' ')
-----
-NULL
-
-query ?
-SELECT string_to_array('abc def ghi', ' ')
-----
-[abc, def, ghi]
-
-query ?
 SELECT string_to_array('abcxxxdef', 'xxx')
 ----
 [abc, def]
@@ -752,6 +742,32 @@ query ?
 SELECT string_to_array('abc def', ' ', 'def')
 ----
 [abc, ]
+
+statement ok
+create table strings (value varchar) as values 
+  ('foo'), 
+  ('abc def ghi'), 
+  (' '), 
+  (NULL);
+
+query ?
+select string_to_array(value, ' ') from strings;
+----
+[foo]
+[abc, def, ghi]
+[, ]
+NULL
+
+query ?
+select string_to_list(value, ' ') from strings;
+----
+[foo]
+[abc, def, ghi]
+[, ]
+NULL
+
+statement ok
+drop table strings
 
 query T
 SELECT trim('  foo  ')
