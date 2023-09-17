@@ -33,13 +33,14 @@ use crate::{
     runtime_env::{RuntimeConfig, RuntimeEnv},
 };
 
-use arrow::{error::Result as ArrowResult, record_batch::RecordBatch};
-use futures::channel::mpsc::Receiver as SingleChannelReceiver;
+use arrow::record_batch::RecordBatch;
+// use futures::channel::mpsc::Receiver as SingleChannelReceiver;
+use tokio::sync::mpsc::Receiver as SingleChannelReceiver;
 // use futures::lock::Mutex;
 use parking_lot::Mutex;
 // use futures::
 
-type RelationHandler = SingleChannelReceiver<ArrowResult<RecordBatch>>;
+type RelationHandler = SingleChannelReceiver<Result<RecordBatch>>;
 
 /// Task Execution Context
 ///
