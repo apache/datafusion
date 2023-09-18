@@ -196,7 +196,14 @@ impl Default for Interval {
 
 impl Display for Interval {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "Interval [{}, {}]", self.lower, self.upper)
+        write!(
+            f,
+            "{}{}, {}{}",
+            if self.lower.open { "(" } else { "[" },
+            self.lower.value,
+            self.upper.value,
+            if self.upper.open { ")" } else { "]" }
+        )
     }
 }
 
@@ -1783,5 +1790,32 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_interval_display() {
+        let interval = Interval::new(
+            IntervalBound::new(ScalarValue::from(0.25_f32), true),
+            IntervalBound::new(ScalarValue::from(0.50_f32), false),
+        );
+        assert_eq!(format!("{}", interval), "(0.25, 0.5]");
+
+        let interval = Interval::new(
+            IntervalBound::new(ScalarValue::from(0.25_f32), false),
+            IntervalBound::new(ScalarValue::from(0.50_f32), true),
+        );
+        assert_eq!(format!("{}", interval), "[0.25, 0.5)");
+
+        let interval = Interval::new(
+            IntervalBound::new(ScalarValue::from(0.25_f32), true),
+            IntervalBound::new(ScalarValue::from(0.50_f32), true),
+        );
+        assert_eq!(format!("{}", interval), "(0.25, 0.5)");
+
+        let interval = Interval::new(
+            IntervalBound::new(ScalarValue::from(0.25_f32), false),
+            IntervalBound::new(ScalarValue::from(0.50_f32), false),
+        );
+        assert_eq!(format!("{}", interval), "[0.25, 0.5]");
     }
 }

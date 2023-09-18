@@ -959,31 +959,17 @@ pub fn find_valid_equijoin_key_pair(
         return Ok(None);
     }
 
-    let l_is_left =
-        check_all_columns_from_schema(&left_using_columns, left_schema.clone())?;
-    let r_is_right =
-        check_all_columns_from_schema(&right_using_columns, right_schema.clone())?;
+    if check_all_columns_from_schema(&left_using_columns, left_schema.clone())?
+        && check_all_columns_from_schema(&right_using_columns, right_schema.clone())?
+    {
+        return Ok(Some((left_key.clone(), right_key.clone())));
+    } else if check_all_columns_from_schema(&right_using_columns, left_schema)?
+        && check_all_columns_from_schema(&left_using_columns, right_schema)?
+    {
+        return Ok(Some((right_key.clone(), left_key.clone())));
+    }
 
-    let r_is_left_and_l_is_right = || {
-        let result =
-            check_all_columns_from_schema(&right_using_columns, left_schema.clone())?
-                && check_all_columns_from_schema(
-                    &left_using_columns,
-                    right_schema.clone(),
-                )?;
-
-        Result::<_>::Ok(result)
-    };
-
-    let join_key_pair = match (l_is_left, r_is_right) {
-        (true, true) => Some((left_key.clone(), right_key.clone())),
-        (_, _) if r_is_left_and_l_is_right()? => {
-            Some((right_key.clone(), left_key.clone()))
-        }
-        _ => None,
-    };
-
-    Ok(join_key_pair)
+    Ok(None)
 }
 
 /// Creates a detailed error message for a function with wrong signature.

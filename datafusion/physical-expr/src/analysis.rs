@@ -190,12 +190,15 @@ fn shrink_boundaries(
     let (_, root_index) = graph_nodes[0];
     let final_result = graph.get_interval(root_index);
 
+    // If during selectivity calculation we encounter an error, use 1.0 as cardinality estimate
+    // safest estimate(e.q largest possible value).
     let selectivity = calculate_selectivity(
         &final_result.lower.value,
         &final_result.upper.value,
         &target_boundaries,
         &initial_boundaries,
-    );
+    )
+    .unwrap_or(1.0);
 
     AnalysisContext::new(target_boundaries).with_selectivity(selectivity)
 }
