@@ -1523,6 +1523,8 @@ from_unixtime(expression)
 - [list_to_string](#list_to_string)
 - [make_array](#make_array)
 - [make_list](#make_list)
+- [string_to_array](#string_to_array)
+- [string_to_list](#string_to_list)
 - [trim_array](#trim_array)
 
 ### `array_append`
@@ -2368,6 +2370,28 @@ make_array(expression1[, ..., expression_n])
 ### `make_list`
 
 _Alias of [make_array](#make_array)._
+
+### `string_to_array`
+
+Splits a string in to an array of substrings based on a delimiter. Any substrings matching the optional `null_str` argument are replaced with NULL.
+
+```
+starts_with(str, delimiter[, null_str])
+```
+
+#### Arguments
+
+- **str**: String expression to split.
+- **delimiter**: Delimiter string to split on.
+- **null_str**: Substring values to be replaced with `NULL`
+
+#### Aliases
+
+- string_to_list
+
+### `string_to_list`
+
+_Alias of [string_to_array](#string_to_array)._
 
 ### `trim_array`
 
