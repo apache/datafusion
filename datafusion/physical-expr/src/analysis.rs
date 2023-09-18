@@ -91,13 +91,11 @@ impl ExprBoundaries {
         Self {
             column: Column::new(&col, index),
             interval: Interval::new(
-                IntervalBound::new(
+                IntervalBound::new_closed(
                     stats.min_value.clone().unwrap_or(ScalarValue::Null),
-                    false,
                 ),
-                IntervalBound::new(
+                IntervalBound::new_closed(
                     stats.max_value.clone().unwrap_or(ScalarValue::Null),
-                    false,
                 ),
             ),
             distinct_count: stats.distinct_count,
