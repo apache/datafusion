@@ -789,8 +789,9 @@ impl BuiltinScalarFunction {
 
             BuiltinScalarFunction::ArrowTypeof => Ok(Utf8),
 
-            BuiltinScalarFunction::Abs
-            | BuiltinScalarFunction::Acos
+            BuiltinScalarFunction::Abs => Ok(input_expr_types[0].clone()),
+
+            BuiltinScalarFunction::Acos
             | BuiltinScalarFunction::Asin
             | BuiltinScalarFunction::Atan
             | BuiltinScalarFunction::Acosh
@@ -1162,8 +1163,9 @@ impl BuiltinScalarFunction {
                 Signature::uniform(2, vec![Int64], self.volatility())
             }
             BuiltinScalarFunction::ArrowTypeof => Signature::any(1, self.volatility()),
-            BuiltinScalarFunction::Abs
-            | BuiltinScalarFunction::Acos
+            BuiltinScalarFunction::Abs => Signature::any(1, self.volatility()),
+
+            BuiltinScalarFunction::Acos
             | BuiltinScalarFunction::Asin
             | BuiltinScalarFunction::Atan
             | BuiltinScalarFunction::Acosh
