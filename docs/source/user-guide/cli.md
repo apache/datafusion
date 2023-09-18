@@ -146,6 +146,7 @@ via `CREATE EXTERNAL TABLE` as shown below. Filemask wildcards supported
 Parquet data sources can be registered by executing a `CREATE EXTERNAL TABLE` SQL statement. The schema information will be derived automatically.
 
 Register a single file parquet datasource
+
 ```sql
 CREATE EXTERNAL TABLE taxi
 STORED AS PARQUET
@@ -153,6 +154,7 @@ LOCATION '/mnt/nyctaxi/tripdata.parquet';
 ```
 
 Register a single folder parquet datasource. All files inside must be valid parquet files!
+
 ```sql
 CREATE EXTERNAL TABLE taxi
 STORED AS PARQUET
@@ -160,6 +162,7 @@ LOCATION '/mnt/nyctaxi/';
 ```
 
 Register a single folder parquet datasource by specifying a wildcard for files to read
+
 ```sql
 CREATE EXTERNAL TABLE taxi
 STORED AS PARQUET
