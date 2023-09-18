@@ -477,6 +477,7 @@ mod tests {
     use super::*;
     use crate::common;
     use crate::test::build_table_scan_i32;
+    use arrow_schema::{DataType, Field};
     use datafusion_common::{assert_batches_sorted_eq, assert_contains};
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 

@@ -383,7 +383,6 @@ mod tests {
     use crate::sorts::sort::SortExec;
     use crate::union::UnionExec;
     use arrow::compute::SortOptions;
-    use arrow::ipc::Null;
     use arrow::{
         array::{Float32Array, Float64Array},
         datatypes::{DataType, Field, Schema},

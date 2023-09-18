@@ -20,8 +20,6 @@
 use arrow::datatypes::{DataType, SchemaRef};
 use std::fmt::Display;
 
-use arrow::datatypes::DataType;
-
 use crate::ScalarValue;
 
 /// Statistics for a relation

@@ -96,8 +96,11 @@ impl CacheAccessor<Path, Arc<Statistics>> for DefaultFileStatisticsCache {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use crate::cache::cache_unit::DefaultFileStatisticsCache;
     use crate::cache::CacheAccessor;
+    use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use chrono::DateTime;
     use datafusion_common::Statistics;
     use object_store::path::Path;
@@ -113,11 +116,21 @@ mod tests {
             size: 1024,
             e_tag: None,
         };
-
         let cache = DefaultFileStatisticsCache::default();
         assert!(cache.get_with_extra(&meta.location, &meta).is_none());
 
-        cache.put_with_extra(&meta.location, Statistics::default().into(), &meta);
+        cache.put_with_extra(
+            &meta.location,
+            Statistics::new_with_unbounded_columns(Arc::new(Schema::new(vec![
+                Field::new(
+                    "test_column",
+                    DataType::Timestamp(TimeUnit::Second, None),
+                    false,
+                ),
+            ])))
+            .into(),
+            &meta,
+        );
         assert!(cache.get_with_extra(&meta.location, &meta).is_some());
 
         // file size changed
