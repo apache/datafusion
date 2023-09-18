@@ -1061,6 +1061,149 @@ impl<'de> serde::Deserialize<'de> for AliasNode {
         deserializer.deserialize_struct("datafusion.AliasNode", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for AnalyzeExecNode {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.verbose {
+            len += 1;
+        }
+        if self.show_statistics {
+            len += 1;
+        }
+        if self.input.is_some() {
+            len += 1;
+        }
+        if self.schema.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.AnalyzeExecNode", len)?;
+        if self.verbose {
+            struct_ser.serialize_field("verbose", &self.verbose)?;
+        }
+        if self.show_statistics {
+            struct_ser.serialize_field("showStatistics", &self.show_statistics)?;
+        }
+        if let Some(v) = self.input.as_ref() {
+            struct_ser.serialize_field("input", v)?;
+        }
+        if let Some(v) = self.schema.as_ref() {
+            struct_ser.serialize_field("schema", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for AnalyzeExecNode {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "verbose",
+            "show_statistics",
+            "showStatistics",
+            "input",
+            "schema",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Verbose,
+            ShowStatistics,
+            Input,
+            Schema,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "verbose" => Ok(GeneratedField::Verbose),
+                            "showStatistics" | "show_statistics" => Ok(GeneratedField::ShowStatistics),
+                            "input" => Ok(GeneratedField::Input),
+                            "schema" => Ok(GeneratedField::Schema),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = AnalyzeExecNode;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.AnalyzeExecNode")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<AnalyzeExecNode, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut verbose__ = None;
+                let mut show_statistics__ = None;
+                let mut input__ = None;
+                let mut schema__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Verbose => {
+                            if verbose__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("verbose"));
+                            }
+                            verbose__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::ShowStatistics => {
+                            if show_statistics__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("showStatistics"));
+                            }
+                            show_statistics__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Input => {
+                            if input__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("input"));
+                            }
+                            input__ = map_.next_value()?;
+                        }
+                        GeneratedField::Schema => {
+                            if schema__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("schema"));
+                            }
+                            schema__ = map_.next_value()?;
+                        }
+                    }
+                }
+                Ok(AnalyzeExecNode {
+                    verbose: verbose__.unwrap_or_default(),
+                    show_statistics: show_statistics__.unwrap_or_default(),
+                    input: input__,
+                    schema: schema__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.AnalyzeExecNode", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for AnalyzeNode {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -16358,6 +16501,9 @@ impl serde::Serialize for PhysicalPlanNode {
                 physical_plan_node::PhysicalPlanType::NestedLoopJoin(v) => {
                     struct_ser.serialize_field("nestedLoopJoin", v)?;
                 }
+                physical_plan_node::PhysicalPlanType::Analyze(v) => {
+                    struct_ser.serialize_field("analyze", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -16401,6 +16547,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
             "sortPreservingMerge",
             "nested_loop_join",
             "nestedLoopJoin",
+            "analyze",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -16426,6 +16573,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
             Explain,
             SortPreservingMerge,
             NestedLoopJoin,
+            Analyze,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -16468,6 +16616,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
                             "explain" => Ok(GeneratedField::Explain),
                             "sortPreservingMerge" | "sort_preserving_merge" => Ok(GeneratedField::SortPreservingMerge),
                             "nestedLoopJoin" | "nested_loop_join" => Ok(GeneratedField::NestedLoopJoin),
+                            "analyze" => Ok(GeneratedField::Analyze),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -16635,6 +16784,13 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
                                 return Err(serde::de::Error::duplicate_field("nestedLoopJoin"));
                             }
                             physical_plan_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_plan_node::PhysicalPlanType::NestedLoopJoin)
+;
+                        }
+                        GeneratedField::Analyze => {
+                            if physical_plan_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("analyze"));
+                            }
+                            physical_plan_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_plan_node::PhysicalPlanType::Analyze)
 ;
                         }
                     }
