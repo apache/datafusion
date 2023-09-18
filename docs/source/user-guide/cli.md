@@ -23,6 +23,11 @@ The DataFusion CLI is a command-line interactive SQL utility for executing
 queries against any supported data files. It is a convenient way to
 try DataFusion's SQL support with your own data.
 
+## Selecting files directly
+
+Files can be queried directly by enclosing the file or
+directory name in single `'` quotes as shown in the example.
+
 ## Example
 
 Create a CSV file to query.
@@ -131,22 +136,31 @@ OPTIONS:
     -V, --version                           Print version information
 ```
 
-## Selecting files directly
-
-Files can be queried directly by enclosing the file or
-directory name in single `'` quotes as shown in the example.
+## Creating external tables
 
 It is also possible to create a table backed by files by explicitly
-via `CREATE EXTERNAL TABLE` as shown below.
+via `CREATE EXTERNAL TABLE` as shown below. Filemask wildcards supported
 
 ## Registering Parquet Data Sources
 
-Parquet data sources can be registered by executing a `CREATE EXTERNAL TABLE` SQL statement. It is not necessary to provide schema information for Parquet files.
+Parquet data sources can be registered by executing a `CREATE EXTERNAL TABLE` SQL statement. The schema information will be derived automatically.
 
 ```sql
 CREATE EXTERNAL TABLE taxi
 STORED AS PARQUET
 LOCATION '/mnt/nyctaxi/tripdata.parquet';
+```
+
+```sql
+CREATE EXTERNAL TABLE taxi
+STORED AS PARQUET
+LOCATION '/mnt/nyctaxi/';
+```
+
+```sql
+CREATE EXTERNAL TABLE taxi
+STORED AS PARQUET
+LOCATION '/mnt/nyctaxi/*.parquet';
 ```
 
 ## Registering CSV Data Sources
