@@ -1421,6 +1421,7 @@ mod roundtrip_tests {
     use datafusion::physical_expr::expressions::{cast, in_list};
     use datafusion::physical_expr::ScalarFunctionExpr;
     use datafusion::physical_plan::aggregates::PhysicalGroupBy;
+    use datafusion::physical_plan::analyze::AnalyzeExec;
     use datafusion::physical_plan::expressions::{like, BinaryExpr, GetIndexedFieldExpr};
     use datafusion::physical_plan::functions::make_scalar_function;
     use datafusion::physical_plan::projection::ProjectionExec;
@@ -1976,7 +1977,7 @@ mod roundtrip_tests {
         ];
 
         let schema = Schema::new(fields);
-        let input = Arc::new(EmptyExec::new(false, Arc::new(schema.clone())));
+        let input = Arc::new(EmptyExec::new(true, Arc::new(schema.clone())));
 
         let col_arg = col("arg", &schema)?;
         let col_key = col("key", &schema)?;
@@ -2022,5 +2023,20 @@ mod roundtrip_tests {
         )?);
 
         roundtrip_test(plan)
+    }
+
+    #[test]
+    fn rountrip_analyze() -> Result<()> {
+        let field_a = Field::new("plan_type", DataType::Utf8, false);
+        let field_b = Field::new("plan", DataType::Utf8, false);
+        let schema = Schema::new(vec![field_a, field_b]);
+        let input = Arc::new(EmptyExec::new(true, Arc::new(schema.clone())));
+
+        roundtrip_test(Arc::new(AnalyzeExec::new(
+            false,
+            false,
+            input,
+            Arc::new(schema),
+        )))
     }
 }
