@@ -1664,7 +1664,7 @@ mod tests {
         ))];
 
         let task_ctx = if spill {
-            new_spill_ctx(2, 2144)
+            new_spill_ctx(2, 2500)
         } else {
             Arc::new(TaskContext::default())
         };

@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::row::{OwnedRow, RowConverter, Rows, SortField};
+use crate::row_converter::CardinalityAwareRowConverter;
+use arrow::row::{OwnedRow, Rows, SortField};
 use arrow_array::ArrayRef;
 use arrow_schema::Schema;
 use datafusion_common::Result;
@@ -70,7 +71,7 @@ pub(crate) struct GroupOrderingPartial {
 
     /// Converter for the sort key (used on the group columns
     /// specified in `order_indexes`)
-    row_converter: RowConverter,
+    row_converter: CardinalityAwareRowConverter,
 }
 
 #[derive(Debug, Default)]
@@ -124,7 +125,7 @@ impl GroupOrderingPartial {
         Ok(Self {
             state: State::Start,
             order_indices: order_indices.to_vec(),
-            row_converter: RowConverter::new(fields)?,
+            row_converter: CardinalityAwareRowConverter::new(fields)?,
         })
     }
 
@@ -141,7 +142,7 @@ impl GroupOrderingPartial {
             .map(|&idx| group_values[idx].clone())
             .collect();
 
-        Ok(self.row_converter.convert_columns(&sort_values)?)
+        self.row_converter.convert_columns(&sort_values)
     }
 
     /// How many groups be emitted, or None if no data can be emitted
