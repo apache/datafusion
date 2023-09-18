@@ -26,8 +26,8 @@ use crate::utils::{
 
 use datafusion_common::Column;
 use datafusion_common::{
-    get_target_functional_dependencies, not_impl_err, plan_err, DFSchemaRef, DataFusionError,
-    Result,
+    get_target_functional_dependencies, not_impl_err, plan_err, DFSchemaRef,
+    DataFusionError, Result,
 };
 use datafusion_expr::expr::Alias;
 use datafusion_expr::expr_rewriter::{
@@ -38,7 +38,9 @@ use datafusion_expr::utils::{
     expand_qualified_wildcard, expand_wildcard, expr_as_column_expr, expr_to_columns,
     find_aggregate_exprs, find_window_exprs,
 };
-use datafusion_expr::{Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning};
+use datafusion_expr::{
+    Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning,
+};
 use sqlparser::ast::{
     Distinct, Expr as SQLExpr, ReplaceSelectItem, WildcardAdditionalOptions, WindowType,
 };
@@ -80,8 +82,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         match_window_definitions(&mut select.projection, &select.named_window)?;
 
         // process the SELECT expressions, with wildcards expanded.
-        let select_exprs =
-            self.prepare_select_exprs(&plan, select.projection, empty_from, planner_context)?;
+        let select_exprs = self.prepare_select_exprs(
+            &plan,
+            select.projection,
+            empty_from,
+            planner_context,
+        )?;
 
         // having and group by clause may reference aliases defined in select projection
         let projected_plan = self.project(plan.clone(), select_exprs.clone())?;
@@ -95,8 +101,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let having_expr_opt = select
             .having
             .map::<Result<Expr>, _>(|having_expr| {
-                let having_expr =
-                    self.sql_expr_to_logical_expr(having_expr, &combined_schema, planner_context)?;
+                let having_expr = self.sql_expr_to_logical_expr(
+                    having_expr,
+                    &combined_schema,
+                    planner_context,
+                )?;
                 // This step "dereferences" any aliases in the HAVING clause.
                 //
                 // This is how we support queries with HAVING expressions that
@@ -139,10 +148,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     alias_map.remove(f.name());
                 }
                 let group_by_expr = resolve_aliases_to_exprs(&group_by_expr, &alias_map)?;
-                let group_by_expr = resolve_positions_to_exprs(&group_by_expr, &select_exprs)
-                    .unwrap_or(group_by_expr);
+                let group_by_expr =
+                    resolve_positions_to_exprs(&group_by_expr, &select_exprs)
+                        .unwrap_or(group_by_expr);
                 let group_by_expr = normalize_col(group_by_expr, &projected_plan)?;
-                self.validate_schema_satisfies_exprs(plan.schema(), &[group_by_expr.clone()])?;
+                self.validate_schema_satisfies_exprs(
+                    plan.schema(),
+                    &[group_by_expr.clone()],
+                )?;
                 Ok(group_by_expr)
             })
             .collect::<Result<Vec<Expr>>>()?;
@@ -237,7 +250,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .distribute_by
                 .iter()
                 .map(|e| {
-                    self.sql_expr_to_logical_expr(e.clone(), &combined_schema, planner_context)
+                    self.sql_expr_to_logical_expr(
+                        e.clone(),
+                        &combined_schema,
+                        planner_context,
+                    )
                 })
                 .collect::<Result<Vec<_>>>()?;
             LogicalPlanBuilder::from(plan)
@@ -349,7 +366,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Ok(vec![col])
             }
             SelectItem::ExprWithAlias { expr, alias } => {
-                let select_expr = self.sql_to_expr(expr, plan.schema(), planner_context)?;
+                let select_expr =
+                    self.sql_to_expr(expr, plan.schema(), planner_context)?;
                 let col = normalize_col_with_schemas_and_ambiguity_check(
                     select_expr,
                     &[&[plan.schema()]],
@@ -365,11 +383,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     return plan_err!("SELECT * with no tables specified is not valid");
                 }
                 // do not expand from outer schema
-                let expanded_exprs = expand_wildcard(plan.schema().as_ref(), plan, Some(&options))?;
+                let expanded_exprs =
+                    expand_wildcard(plan.schema().as_ref(), plan, Some(&options))?;
                 // If there is a REPLACE statement, replace that column with the given
                 // replace expression. Column name remains the same.
                 if let Some(replace) = options.opt_replace {
-                    self.replace_columns(plan, empty_from, planner_context, expanded_exprs, replace)
+                    self.replace_columns(
+                        plan,
+                        empty_from,
+                        planner_context,
+                        expanded_exprs,
+                        replace,
+                    )
                 } else {
                     Ok(expanded_exprs)
                 }
@@ -378,12 +403,21 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Self::check_wildcard_options(&options)?;
                 let qualifier = format!("{object_name}");
                 // do not expand from outer schema
-                let expanded_exprs =
-                    expand_qualified_wildcard(&qualifier, plan.schema().as_ref(), Some(&options))?;
+                let expanded_exprs = expand_qualified_wildcard(
+                    &qualifier,
+                    plan.schema().as_ref(),
+                    Some(&options),
+                )?;
                 // If there is a REPLACE statement, replace that column with the given
                 // replace expression. Column name remains the same.
                 if let Some(replace) = options.opt_replace {
-                    self.replace_columns(plan, empty_from, planner_context, expanded_exprs, replace)
+                    self.replace_columns(
+                        plan,
+                        empty_from,
+                        planner_context,
+                        expanded_exprs,
+                        replace,
+                    )
                 } else {
                     Ok(expanded_exprs)
                 }
@@ -547,7 +581,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // Rewrite the HAVING expression to use the columns produced by the
         // aggregation.
         let having_expr_post_aggr = if let Some(having_expr) = having_expr_opt {
-            let having_expr_post_aggr = rebase_expr(having_expr, &aggr_projection_exprs, &input)?;
+            let having_expr_post_aggr =
+                rebase_expr(having_expr, &aggr_projection_exprs, &input)?;
 
             check_columns_satisfy_exprs(
                 &column_exprs_post_aggr,
@@ -569,7 +604,10 @@ fn check_conflicting_windows(window_defs: &[NamedWindowDefinition]) -> Result<()
     for (i, window_def_i) in window_defs.iter().enumerate() {
         for window_def_j in window_defs.iter().skip(i + 1) {
             if window_def_i.0 == window_def_j.0 {
-                return plan_err!("The window {} is defined multiple times!", window_def_i.0);
+                return plan_err!(
+                    "The window {} is defined multiple times!",
+                    window_def_i.0
+                );
             }
         }
     }
@@ -639,7 +677,9 @@ fn get_updated_group_by_exprs(
         .map(|group_by_expr| group_by_expr.display_name())
         .collect::<Result<Vec<_>>>()?;
     // Get targets that can be used in a select, even if they do not occur in aggregation:
-    if let Some(target_indices) = get_target_functional_dependencies(schema, &group_by_expr_names) {
+    if let Some(target_indices) =
+        get_target_functional_dependencies(schema, &group_by_expr_names)
+    {
         // Calculate dependent fields names with determinant GROUP BY expression:
         let associated_field_names = target_indices
             .iter()
@@ -650,7 +690,9 @@ fn get_updated_group_by_exprs(
         // columns in select statements also.
         for expr in select_exprs {
             let expr_name = format!("{}", expr);
-            if !new_group_by_exprs.contains(expr) && associated_field_names.contains(&expr_name) {
+            if !new_group_by_exprs.contains(expr)
+                && associated_field_names.contains(&expr_name)
+            {
                 new_group_by_exprs.push(expr.clone());
             }
         }

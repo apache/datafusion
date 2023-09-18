@@ -330,8 +330,9 @@ mod tests {
     use arrow::datatypes::DataType;
     use datafusion_common::Result;
     use datafusion_expr::{
-        and, binary_expr, col, exists, in_subquery, lit, logical_plan::LogicalPlanBuilder,
-        not_exists, not_in_subquery, or, out_ref_col, Operator,
+        and, binary_expr, col, exists, in_subquery, lit,
+        logical_plan::LogicalPlanBuilder, not_exists, not_in_subquery, or, out_ref_col,
+        Operator,
     };
     use std::ops::Add;
 
@@ -526,7 +527,8 @@ mod tests {
         let orders = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(
-                    col("orders.o_custkey").eq(out_ref_col(DataType::Int64, "customer.c_custkey")),
+                    col("orders.o_custkey")
+                        .eq(out_ref_col(DataType::Int64, "customer.c_custkey")),
                 )?
                 .project(vec![col("orders.o_custkey")])?
                 .build()?,
@@ -575,9 +577,12 @@ mod tests {
 
         let orders = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
-                .filter(in_subquery(col("orders.o_orderkey"), lineitem).and(
-                    col("orders.o_custkey").eq(out_ref_col(DataType::Int64, "customer.c_custkey")),
-                ))?
+                .filter(
+                    in_subquery(col("orders.o_orderkey"), lineitem).and(
+                        col("orders.o_custkey")
+                            .eq(out_ref_col(DataType::Int64, "customer.c_custkey")),
+                    ),
+                )?
                 .project(vec![col("orders.o_custkey")])?
                 .build()?,
         );
@@ -744,7 +749,8 @@ mod tests {
         let sq = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(
-                    out_ref_col(DataType::Int64, "customer.c_custkey").lt(col("orders.o_custkey")),
+                    out_ref_col(DataType::Int64, "customer.c_custkey")
+                        .lt(col("orders.o_custkey")),
                 )?
                 .project(vec![col("orders.o_custkey")])?
                 .build()?,
@@ -834,7 +840,8 @@ mod tests {
         let sq = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(
-                    out_ref_col(DataType::Int64, "customer.c_custkey").eq(col("orders.o_custkey")),
+                    out_ref_col(DataType::Int64, "customer.c_custkey")
+                        .eq(col("orders.o_custkey")),
                 )?
                 .project(vec![col("orders.o_custkey")])?
                 .build()?,
@@ -866,7 +873,8 @@ mod tests {
         let sq = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(
-                    out_ref_col(DataType::Int64, "customer.c_custkey").eq(col("orders.o_custkey")),
+                    out_ref_col(DataType::Int64, "customer.c_custkey")
+                        .eq(col("orders.o_custkey")),
                 )?
                 .project(vec![col("orders.o_custkey").add(lit(1))])?
                 .build()?,
@@ -898,14 +906,18 @@ mod tests {
         let sq = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(
-                    out_ref_col(DataType::Int64, "customer.c_custkey").eq(col("orders.o_custkey")),
+                    out_ref_col(DataType::Int64, "customer.c_custkey")
+                        .eq(col("orders.o_custkey")),
                 )?
                 .project(vec![col("orders.o_custkey"), col("orders.o_orderkey")])?
                 .build()?,
         );
 
         let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
-            .filter(in_subquery(col("customer.c_custkey"), sq).and(col("c_custkey").eq(lit(1))))?
+            .filter(
+                in_subquery(col("customer.c_custkey"), sq)
+                    .and(col("c_custkey").eq(lit(1))),
+            )?
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
@@ -923,14 +935,18 @@ mod tests {
         let sq = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(
-                    out_ref_col(DataType::Int64, "customer.c_custkey").eq(col("orders.o_custkey")),
+                    out_ref_col(DataType::Int64, "customer.c_custkey")
+                        .eq(col("orders.o_custkey")),
                 )?
                 .project(vec![col("orders.o_custkey")])?
                 .build()?,
         );
 
         let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
-            .filter(in_subquery(col("customer.c_custkey"), sq).and(col("c_custkey").eq(lit(1))))?
+            .filter(
+                in_subquery(col("customer.c_custkey"), sq)
+                    .and(col("c_custkey").eq(lit(1))),
+            )?
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
@@ -956,7 +972,8 @@ mod tests {
         let sq = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(
-                    out_ref_col(DataType::Int64, "customer.c_custkey").eq(col("orders.o_custkey")),
+                    out_ref_col(DataType::Int64, "customer.c_custkey")
+                        .eq(col("orders.o_custkey")),
                 )?
                 .project(vec![col("orders.o_custkey")])?
                 .build()?,
@@ -964,7 +981,8 @@ mod tests {
 
         let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
             .filter(
-                in_subquery(col("customer.c_custkey"), sq).or(col("customer.c_custkey").eq(lit(1))),
+                in_subquery(col("customer.c_custkey"), sq)
+                    .or(col("customer.c_custkey").eq(lit(1))),
             )?
             .project(vec![col("customer.c_custkey")])?
             .build()?;
@@ -1247,7 +1265,8 @@ mod tests {
         let orders = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(
-                    col("orders.o_custkey").eq(out_ref_col(DataType::Int64, "customer.c_custkey")),
+                    col("orders.o_custkey")
+                        .eq(out_ref_col(DataType::Int64, "customer.c_custkey")),
                 )?
                 .project(vec![col("orders.o_custkey")])?
                 .build()?,
@@ -1286,9 +1305,12 @@ mod tests {
 
         let orders = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
-                .filter(exists(lineitem).and(
-                    col("orders.o_custkey").eq(out_ref_col(DataType::Int64, "customer.c_custkey")),
-                ))?
+                .filter(
+                    exists(lineitem).and(
+                        col("orders.o_custkey")
+                            .eq(out_ref_col(DataType::Int64, "customer.c_custkey")),
+                    ),
+                )?
                 .project(vec![col("orders.o_custkey")])?
                 .build()?,
         );
@@ -1418,7 +1440,8 @@ mod tests {
         let sq = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(
-                    out_ref_col(DataType::Int64, "customer.c_custkey").lt(col("orders.o_custkey")),
+                    out_ref_col(DataType::Int64, "customer.c_custkey")
+                        .lt(col("orders.o_custkey")),
                 )?
                 .project(vec![col("orders.o_custkey")])?
                 .build()?,
@@ -1500,7 +1523,8 @@ mod tests {
         let sq = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(
-                    out_ref_col(DataType::Int64, "customer.c_custkey").eq(col("orders.o_custkey")),
+                    out_ref_col(DataType::Int64, "customer.c_custkey")
+                        .eq(col("orders.o_custkey")),
                 )?
                 .project(vec![col("orders.o_custkey").add(lit(1))])?
                 .build()?,
@@ -1527,7 +1551,8 @@ mod tests {
         let sq = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(
-                    out_ref_col(DataType::Int64, "customer.c_custkey").eq(col("orders.o_custkey")),
+                    out_ref_col(DataType::Int64, "customer.c_custkey")
+                        .eq(col("orders.o_custkey")),
                 )?
                 .project(vec![col("orders.o_custkey")])?
                 .build()?,
@@ -1669,7 +1694,8 @@ mod tests {
         let subquery_scan = test_table_scan_with_name("sq")?;
         let subquery = LogicalPlanBuilder::from(subquery_scan)
             .filter(
-                (lit(1u32) + col("sq.a")).gt(out_ref_col(DataType::UInt32, "test.a") * lit(2u32)),
+                (lit(1u32) + col("sq.a"))
+                    .gt(out_ref_col(DataType::UInt32, "test.a") * lit(2u32)),
             )?
             .project(vec![lit(1u32)])?
             .build()?;
@@ -1720,7 +1746,8 @@ mod tests {
         let subquery_scan = test_table_scan_with_name("sq")?;
         let subquery = LogicalPlanBuilder::from(subquery_scan)
             .filter(
-                (lit(1u32) + col("sq.a")).gt(out_ref_col(DataType::UInt32, "test.a") * lit(2u32)),
+                (lit(1u32) + col("sq.a"))
+                    .gt(out_ref_col(DataType::UInt32, "test.a") * lit(2u32)),
             )?
             .project(vec![col("sq.c")])?
             .distinct(None)?
@@ -1747,7 +1774,8 @@ mod tests {
         let subquery_scan = test_table_scan_with_name("sq")?;
         let subquery = LogicalPlanBuilder::from(subquery_scan)
             .filter(
-                (lit(1u32) + col("sq.a")).gt(out_ref_col(DataType::UInt32, "test.a") * lit(2u32)),
+                (lit(1u32) + col("sq.a"))
+                    .gt(out_ref_col(DataType::UInt32, "test.a") * lit(2u32)),
             )?
             .project(vec![col("sq.b") + col("sq.c")])?
             .distinct(None)?
@@ -1774,7 +1802,8 @@ mod tests {
         let subquery_scan = test_table_scan_with_name("sq")?;
         let subquery = LogicalPlanBuilder::from(subquery_scan)
             .filter(
-                (lit(1u32) + col("sq.a")).gt(out_ref_col(DataType::UInt32, "test.a") * lit(2u32)),
+                (lit(1u32) + col("sq.a"))
+                    .gt(out_ref_col(DataType::UInt32, "test.a") * lit(2u32)),
             )?
             .project(vec![lit(1u32), col("sq.c")])?
             .distinct(None)?

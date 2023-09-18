@@ -113,10 +113,9 @@ impl OptimizerRule for EliminateCrossJoin {
                 } else {
                     // remove join expressions from filter
                     match remove_join_expressions(predicate, &all_join_keys)? {
-                        Some(filter_expr) => Ok(Some(LogicalPlan::Filter(Filter::try_new(
-                            filter_expr,
-                            Arc::new(left),
-                        )?))),
+                        Some(filter_expr) => Ok(Some(LogicalPlan::Filter(
+                            Filter::try_new(filter_expr, Arc::new(left))?,
+                        ))),
                         _ => Ok(Some(left)),
                     }
                 }
@@ -237,7 +236,11 @@ fn find_inner_join(
     }))
 }
 
-fn intersect(accum: &mut Vec<(Expr, Expr)>, vec1: &[(Expr, Expr)], vec2: &[(Expr, Expr)]) {
+fn intersect(
+    accum: &mut Vec<(Expr, Expr)>,
+    vec1: &[(Expr, Expr)],
+    vec2: &[(Expr, Expr)],
+) {
     if !(vec1.is_empty() || vec2.is_empty()) {
         for x1 in vec1.iter() {
             for x2 in vec2.iter() {
@@ -284,7 +287,10 @@ fn extract_possible_join_keys(expr: &Expr, accum: &mut Vec<(Expr, Expr)>) -> Res
 /// Remove join expressions from a filter expression
 /// Returns Some() when there are few remaining predicates in filter_expr
 /// Returns None otherwise
-fn remove_join_expressions(expr: &Expr, join_keys: &HashSet<(Expr, Expr)>) -> Result<Option<Expr>> {
+fn remove_join_expressions(
+    expr: &Expr,
+    join_keys: &HashSet<(Expr, Expr)>,
+) -> Result<Option<Expr>> {
     match expr {
         Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
             match op {
@@ -617,7 +623,11 @@ mod tests {
             .cross_join(t4)?
             .filter(binary_expr(
                 binary_expr(
-                    binary_expr(col("t3.a").eq(col("t4.a")), And, col("t4.c").lt(lit(15u32))),
+                    binary_expr(
+                        col("t3.a").eq(col("t4.a")),
+                        And,
+                        col("t4.c").lt(lit(15u32)),
+                    ),
                     Or,
                     binary_expr(
                         col("t3.a").eq(col("t4.a")),
@@ -691,7 +701,11 @@ mod tests {
             .cross_join(t4)?
             .filter(binary_expr(
                 binary_expr(
-                    binary_expr(col("t3.a").eq(col("t4.a")), And, col("t4.c").lt(lit(15u32))),
+                    binary_expr(
+                        col("t3.a").eq(col("t4.a")),
+                        And,
+                        col("t4.c").lt(lit(15u32)),
+                    ),
                     Or,
                     binary_expr(
                         col("t3.a").eq(col("t4.a")),
@@ -762,7 +776,11 @@ mod tests {
             .cross_join(t4)?
             .filter(binary_expr(
                 binary_expr(
-                    binary_expr(col("t3.a").eq(col("t4.a")), And, col("t4.c").lt(lit(15u32))),
+                    binary_expr(
+                        col("t3.a").eq(col("t4.a")),
+                        And,
+                        col("t4.c").lt(lit(15u32)),
+                    ),
                     Or,
                     binary_expr(
                         col("t3.a").eq(col("t4.a")),
@@ -833,7 +851,11 @@ mod tests {
             .cross_join(t4)?
             .filter(binary_expr(
                 binary_expr(
-                    binary_expr(col("t3.a").eq(col("t4.a")), And, col("t4.c").lt(lit(15u32))),
+                    binary_expr(
+                        col("t3.a").eq(col("t4.a")),
+                        And,
+                        col("t4.c").lt(lit(15u32)),
+                    ),
                     Or,
                     binary_expr(
                         col("t3.a").eq(col("t4.a")),
@@ -911,7 +933,11 @@ mod tests {
             .cross_join(plan2)?
             .filter(binary_expr(
                 binary_expr(
-                    binary_expr(col("t3.a").eq(col("t1.a")), And, col("t4.c").lt(lit(15u32))),
+                    binary_expr(
+                        col("t3.a").eq(col("t1.a")),
+                        And,
+                        col("t4.c").lt(lit(15u32)),
+                    ),
                     Or,
                     binary_expr(
                         col("t3.a").eq(col("t1.a")),
@@ -922,7 +948,11 @@ mod tests {
                 And,
                 binary_expr(
                     binary_expr(
-                        binary_expr(col("t3.a").eq(col("t4.a")), And, col("t4.c").lt(lit(15u32))),
+                        binary_expr(
+                            col("t3.a").eq(col("t4.a")),
+                            And,
+                            col("t4.c").lt(lit(15u32)),
+                        ),
                         Or,
                         binary_expr(
                             col("t3.a").eq(col("t4.a")),
@@ -976,7 +1006,11 @@ mod tests {
             .filter(binary_expr(
                 binary_expr(
                     binary_expr(
-                        binary_expr(col("t3.a").eq(col("t1.a")), And, col("t4.c").lt(lit(15u32))),
+                        binary_expr(
+                            col("t3.a").eq(col("t1.a")),
+                            And,
+                            col("t4.c").lt(lit(15u32)),
+                        ),
                         Or,
                         binary_expr(
                             col("t3.a").eq(col("t1.a")),
@@ -1009,7 +1043,11 @@ mod tests {
                 ),
                 And,
                 binary_expr(
-                    binary_expr(col("t1.a").eq(col("t2.a")), Or, col("t2.c").lt(lit(15u32))),
+                    binary_expr(
+                        col("t1.a").eq(col("t2.a")),
+                        Or,
+                        col("t2.c").lt(lit(15u32)),
+                    ),
                     And,
                     binary_expr(
                         col("t1.a").eq(col("t2.a")),

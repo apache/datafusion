@@ -27,17 +27,20 @@ use arrow::{
     array::{Array, ArrayRef, Float64Array, OffsetSizeTrait, PrimitiveArray},
     compute::kernels::cast_utils::string_to_timestamp_nanos,
     datatypes::{
-        ArrowNumericType, ArrowPrimitiveType, ArrowTemporalType, DataType, IntervalDayTimeType,
-        IntervalMonthDayNanoType, TimestampMicrosecondType, TimestampMillisecondType,
-        TimestampNanosecondType, TimestampSecondType,
+        ArrowNumericType, ArrowPrimitiveType, ArrowTemporalType, DataType,
+        IntervalDayTimeType, IntervalMonthDayNanoType, TimestampMicrosecondType,
+        TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
     },
 };
-use arrow_array::{TimestampMicrosecondArray, TimestampMillisecondArray, TimestampSecondArray};
+use arrow_array::{
+    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampSecondArray,
+};
 use chrono::prelude::*;
 use chrono::{Duration, Months, NaiveDate};
 use datafusion_common::cast::{
-    as_date32_array, as_date64_array, as_generic_string_array, as_timestamp_microsecond_array,
-    as_timestamp_millisecond_array, as_timestamp_nanosecond_array, as_timestamp_second_array,
+    as_date32_array, as_date64_array, as_generic_string_array,
+    as_timestamp_microsecond_array, as_timestamp_millisecond_array,
+    as_timestamp_nanosecond_array, as_timestamp_second_array,
 };
 use datafusion_common::{
     exec_err, internal_err, not_impl_err, DataFusionError, Result, ScalarType,
@@ -81,7 +84,11 @@ where
 // given an function that maps a `&str` to a arrow native type,
 // returns a `ColumnarValue` where the function is applied to either a `ArrayRef` or `ScalarValue`
 // depending on the `args`'s variant.
-fn handle<'a, O, F, S>(args: &'a [ColumnarValue], op: F, name: &str) -> Result<ColumnarValue>
+fn handle<'a, O, F, S>(
+    args: &'a [ColumnarValue],
+    op: F,
+    name: &str,
+) -> Result<ColumnarValue>
 where
     O: ArrowPrimitiveType,
     S: ScalarType<O::Native>,
@@ -429,7 +436,8 @@ fn date_bin_months_interval(stride_months: i64, source: i64, origin: i64) -> i64
     let origin_date = to_utc_date_time(origin);
 
     // calculate the number of months between the source and origin
-    let month_diff = (source_date.year() - origin_date.year()) * 12 + source_date.month() as i32
+    let month_diff = (source_date.year() - origin_date.year()) * 12
+        + source_date.month() as i32
         - origin_date.month() as i32;
 
     // distance from origin to bin
@@ -514,8 +522,8 @@ fn date_bin_impl(
     let stride = match stride {
         ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(v))) => {
             let (days, ms) = IntervalDayTimeType::to_parts(*v);
-            let nanos =
-                (Duration::days(days as i64) + Duration::milliseconds(ms as i64)).num_nanoseconds();
+            let nanos = (Duration::days(days as i64) + Duration::milliseconds(ms as i64))
+                .num_nanoseconds();
 
             match nanos {
                 Some(v) => Interval::Nanoseconds(v),
@@ -536,8 +544,8 @@ fn date_bin_impl(
                     Interval::Months(months as i64)
                 }
             } else {
-                let nanos =
-                    (Duration::days(days as i64) + Duration::nanoseconds(nanos)).num_nanoseconds();
+                let nanos = (Duration::days(days as i64) + Duration::nanoseconds(nanos))
+                    .num_nanoseconds();
                 match nanos {
                     Some(v) => Interval::Nanoseconds(v),
                     _ => return exec_err!("DATE_BIN stride argument is too large"),
@@ -611,7 +619,10 @@ fn date_bin_impl(
             ))
         }
         ColumnarValue::Scalar(ScalarValue::TimestampSecond(v, tz_opt)) => {
-            ColumnarValue::Scalar(ScalarValue::TimestampSecond(f_secs(*v), tz_opt.clone()))
+            ColumnarValue::Scalar(ScalarValue::TimestampSecond(
+                f_secs(*v),
+                tz_opt.clone(),
+            ))
         }
         ColumnarValue::Array(array) => match array.data_type() {
             DataType::Timestamp(TimeUnit::Nanosecond, _) => {
@@ -666,28 +677,34 @@ macro_rules! extract_date_part {
         match $ARRAY.data_type() {
             DataType::Date32 => {
                 let array = as_date32_array($ARRAY)?;
-                Ok($FN(array).map(|v| cast(&(Arc::new(v) as ArrayRef), &DataType::Float64))?)
+                Ok($FN(array)
+                    .map(|v| cast(&(Arc::new(v) as ArrayRef), &DataType::Float64))?)
             }
             DataType::Date64 => {
                 let array = as_date64_array($ARRAY)?;
-                Ok($FN(array).map(|v| cast(&(Arc::new(v) as ArrayRef), &DataType::Float64))?)
+                Ok($FN(array)
+                    .map(|v| cast(&(Arc::new(v) as ArrayRef), &DataType::Float64))?)
             }
             DataType::Timestamp(time_unit, _) => match time_unit {
                 TimeUnit::Second => {
                     let array = as_timestamp_second_array($ARRAY)?;
-                    Ok($FN(array).map(|v| cast(&(Arc::new(v) as ArrayRef), &DataType::Float64))?)
+                    Ok($FN(array)
+                        .map(|v| cast(&(Arc::new(v) as ArrayRef), &DataType::Float64))?)
                 }
                 TimeUnit::Millisecond => {
                     let array = as_timestamp_millisecond_array($ARRAY)?;
-                    Ok($FN(array).map(|v| cast(&(Arc::new(v) as ArrayRef), &DataType::Float64))?)
+                    Ok($FN(array)
+                        .map(|v| cast(&(Arc::new(v) as ArrayRef), &DataType::Float64))?)
                 }
                 TimeUnit::Microsecond => {
                     let array = as_timestamp_microsecond_array($ARRAY)?;
-                    Ok($FN(array).map(|v| cast(&(Arc::new(v) as ArrayRef), &DataType::Float64))?)
+                    Ok($FN(array)
+                        .map(|v| cast(&(Arc::new(v) as ArrayRef), &DataType::Float64))?)
                 }
                 TimeUnit::Nanosecond => {
                     let array = as_timestamp_nanosecond_array($ARRAY)?;
-                    Ok($FN(array).map(|v| cast(&(Arc::new(v) as ArrayRef), &DataType::Float64))?)
+                    Ok($FN(array)
+                        .map(|v| cast(&(Arc::new(v) as ArrayRef), &DataType::Float64))?)
                 }
             },
             datatype => internal_err!("Extract does not support datatype {:?}", datatype),
@@ -838,9 +855,10 @@ mod tests {
         ts_builder.append_null();
         let expected_timestamps = &ts_builder.finish() as &dyn Array;
 
-        let string_array = ColumnarValue::Array(Arc::new(string_builder.finish()) as ArrayRef);
-        let parsed_timestamps =
-            to_timestamp(&[string_array]).expect("that to_timestamp parsed values without error");
+        let string_array =
+            ColumnarValue::Array(Arc::new(string_builder.finish()) as ArrayRef);
+        let parsed_timestamps = to_timestamp(&[string_array])
+            .expect("that to_timestamp parsed values without error");
         if let ColumnarValue::Array(parsed_array) = parsed_timestamps {
             assert_eq!(parsed_array.len(), 2);
             assert_eq!(expected_timestamps, parsed_array.as_ref());
@@ -1041,7 +1059,8 @@ mod tests {
         //
 
         // invalid number of arguments
-        let res = date_bin(&[ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(1)))]);
+        let res =
+            date_bin(&[ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(1)))]);
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
             "Execution error: DATE_BIN expected two or three arguments"
@@ -1154,7 +1173,8 @@ mod tests {
         builder.append_value(1);
         let int64array = ColumnarValue::Array(Arc::new(builder.finish()));
 
-        let expected_err = "Internal error: Unsupported data type Int64 for function to_timestamp";
+        let expected_err =
+            "Internal error: Unsupported data type Int64 for function to_timestamp";
         match to_timestamp(&[int64array]) {
             Ok(_) => panic!("Expected error but got success"),
             Err(e) => {

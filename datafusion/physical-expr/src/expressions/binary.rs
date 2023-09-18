@@ -165,7 +165,8 @@ macro_rules! binary_string_array_op {
             DataType::LargeUtf8 => compute_utf8_op!($LEFT, $RIGHT, $OP, LargeStringArray),
             other => internal_err!(
                 "Data type {:?} not supported for binary operation '{}' on string arrays",
-                other, stringify!($OP)
+                other,
+                stringify!($OP)
             ),
         }
     }};
@@ -248,10 +249,11 @@ macro_rules! compute_utf8_flag_op_scalar {
             .downcast_ref::<$ARRAYTYPE>()
             .expect("compute_utf8_flag_op_scalar failed to downcast array");
 
-        if let ScalarValue::Utf8(Some(string_value))|ScalarValue::LargeUtf8(Some(string_value)) = $RIGHT {
+        if let ScalarValue::Utf8(Some(string_value)) | ScalarValue::LargeUtf8(Some(string_value)) =
+            $RIGHT
+        {
             let flag = if $FLAG { Some("i") } else { None };
-            let mut array =
-                paste::expr! {[<$OP _utf8_scalar>]}(&ll, &string_value, flag)?;
+            let mut array = paste::expr! {[<$OP _utf8_scalar>]}(&ll, &string_value, flag)?;
             if $NOT {
                 array = not(&array).unwrap();
             }
@@ -259,7 +261,8 @@ macro_rules! compute_utf8_flag_op_scalar {
         } else {
             internal_err!(
                 "compute_utf8_flag_op_scalar failed to cast literal value {} for operation '{}'",
-                $RIGHT, stringify!($OP)
+                $RIGHT,
+                stringify!($OP)
             )
         }
     }};
@@ -499,34 +502,42 @@ impl BinaryExpr {
     ) -> Result<Option<Result<ArrayRef>>> {
         use Operator::*;
         let scalar_result = match &self.op {
-            RegexMatch => binary_string_array_flag_op_scalar!(
-                array,
-                scalar,
-                regexp_is_match,
-                false,
-                false
-            ),
-            RegexIMatch => binary_string_array_flag_op_scalar!(
-                array,
-                scalar,
-                regexp_is_match,
-                false,
-                true
-            ),
-            RegexNotMatch => binary_string_array_flag_op_scalar!(
-                array,
-                scalar,
-                regexp_is_match,
-                true,
-                false
-            ),
-            RegexNotIMatch => binary_string_array_flag_op_scalar!(
-                array,
-                scalar,
-                regexp_is_match,
-                true,
-                true
-            ),
+            RegexMatch => {
+                binary_string_array_flag_op_scalar!(
+                    array,
+                    scalar,
+                    regexp_is_match,
+                    false,
+                    false
+                )
+            }
+            RegexIMatch => {
+                binary_string_array_flag_op_scalar!(
+                    array,
+                    scalar,
+                    regexp_is_match,
+                    false,
+                    true
+                )
+            }
+            RegexNotMatch => {
+                binary_string_array_flag_op_scalar!(
+                    array,
+                    scalar,
+                    regexp_is_match,
+                    true,
+                    false
+                )
+            }
+            RegexNotIMatch => {
+                binary_string_array_flag_op_scalar!(
+                    array,
+                    scalar,
+                    regexp_is_match,
+                    true,
+                    true
+                )
+            }
             BitwiseAnd => bitwise_and_dyn_scalar(array, scalar),
             BitwiseOr => bitwise_or_dyn_scalar(array, scalar),
             BitwiseXor => bitwise_xor_dyn_scalar(array, scalar),
@@ -549,7 +560,7 @@ impl BinaryExpr {
         use Operator::*;
         match &self.op {
             IsDistinctFrom | IsNotDistinctFrom | Lt | LtEq | Gt | GtEq | Eq | NotEq
-            | Plus | Minus | Multiply | Divide | Modulo => unreachable!(),
+            | Plus | Minus | Multiply | Divide | Modulo | ArrowAccess => unreachable!(),
             And => {
                 if left_data_type == &DataType::Boolean {
                     boolean_op!(&left, &right, and_kleene)
@@ -740,10 +751,8 @@ mod tests {
 
             // verify that we can construct the expression
             let expression = binary(left, $OP, right, &schema)?;
-            let batch = RecordBatch::try_new(
-                Arc::new(schema.clone()),
-                vec![Arc::new(a), Arc::new(b)],
-            )?;
+            let batch =
+                RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a), Arc::new(b)])?;
 
             // verify that the expression's type is correct
             assert_eq!(expression.data_type(&schema)?, $C_TYPE);
@@ -763,8 +772,7 @@ mod tests {
             for (i, x) in $VEC.iter().enumerate() {
                 let v = result.value(i);
                 assert_eq!(
-                    v,
-                    *x,
+                    v, *x,
                     "Unexpected output at position {i}:\n\nActual:\n{v}\n\nExpected:\n{x}"
                 );
             }

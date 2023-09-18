@@ -342,7 +342,6 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::GroupingSet(_)
             | Expr::Wildcard
             | Expr::QualifiedWildcard { .. }
-            | Expr::JsonAccess(_)
             | Expr::Placeholder(_) => false,
             Expr::ScalarFunction(ScalarFunction { fun, .. }) => {
                 Self::volatility_ok(fun.volatility())
@@ -833,17 +832,15 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: Modulo,
                 right,
-            }) if !info.nullable(&left)? && is_zero(&right) => {
-                match info.get_data_type(&left)? {
-                    DataType::Float32 => lit(f32::NAN),
-                    DataType::Float64 => lit(f64::NAN),
-                    _ => {
-                        return Err(DataFusionError::ArrowError(
-                            ArrowError::DivideByZero,
-                        ));
-                    }
+            }) if !info.nullable(&left)? && is_zero(&right) => match info
+                .get_data_type(&left)?
+            {
+                DataType::Float32 => lit(f32::NAN),
+                DataType::Float64 => lit(f64::NAN),
+                _ => {
+                    return Err(DataFusionError::ArrowError(ArrowError::DivideByZero));
                 }
-            }
+            },
 
             //
             // Rules for BitwiseAnd

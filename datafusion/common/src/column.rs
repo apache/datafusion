@@ -41,7 +41,10 @@ impl Column {
     /// See full details on [`TableReference::parse_str`]
     ///
     /// [`TableReference::parse_str`]: crate::TableReference::parse_str
-    pub fn new(relation: Option<impl Into<OwnedTableReference>>, name: impl Into<String>) -> Self {
+    pub fn new(
+        relation: Option<impl Into<OwnedTableReference>>,
+        name: impl Into<String>,
+    ) -> Self {
         Self {
             relation: relation.map(|r| r.into()),
             name: name.into(),
@@ -433,7 +436,10 @@ mod tests {
         // not found in any level
         let col = Column::from_name("z");
         let err = col
-            .normalize_with_schemas_and_ambiguity_check(&[&[&schema1, &schema2], &[&schema3]], &[])
+            .normalize_with_schemas_and_ambiguity_check(
+                &[&[&schema1, &schema2], &[&schema3]],
+                &[],
+            )
             .expect_err("should've failed to find field");
         let expected = r#"Schema error: No field named z. Valid fields are t1.a, t1.b, t2.c, t2.d, t3.a, t3.b, t3.c, t3.d, t3.e."#;
         assert_eq!(err.strip_backtrace(), expected);
@@ -441,7 +447,10 @@ mod tests {
         // ambiguous column reference
         let col = Column::from_name("a");
         let err = col
-            .normalize_with_schemas_and_ambiguity_check(&[&[&schema1, &schema3], &[&schema2]], &[])
+            .normalize_with_schemas_and_ambiguity_check(
+                &[&[&schema1, &schema3], &[&schema2]],
+                &[],
+            )
             .expect_err("should've found ambiguous field");
         let expected = "Schema error: Ambiguous reference to unqualified field a";
         assert_eq!(err.strip_backtrace(), expected);

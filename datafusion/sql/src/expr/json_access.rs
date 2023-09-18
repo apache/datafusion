@@ -25,6 +25,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         match op {
             JsonOperator::AtArrow => Ok(Operator::AtArrow),
             JsonOperator::ArrowAt => Ok(Operator::ArrowAt),
+            JsonOperator::Arrow => Ok(Operator::ArrowAccess),
             _ => not_impl_err!("Unsupported SQL json operator {op:?}"),
         }
     }

@@ -20,7 +20,7 @@
 use arrow::array::{new_empty_array, Array};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{
-    DataType, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
+    DataType, Field, Fields, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
     DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
 };
 
@@ -63,20 +63,20 @@ impl Signature {
 /// Returns a [`Signature`] for applying `op` to arguments of type `lhs` and `rhs`
 fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature> {
     match op {
-        Operator::Eq |
-        Operator::NotEq |
-        Operator::Lt |
-        Operator::LtEq |
-        Operator::Gt |
-        Operator::GtEq |
-        Operator::IsDistinctFrom |
-        Operator::IsNotDistinctFrom => {
-            comparison_coercion(lhs, rhs).map(Signature::comparison).ok_or_else(|| {
+        Operator::Eq
+        | Operator::NotEq
+        | Operator::Lt
+        | Operator::LtEq
+        | Operator::Gt
+        | Operator::GtEq
+        | Operator::IsDistinctFrom
+        | Operator::IsNotDistinctFrom => comparison_coercion(lhs, rhs)
+            .map(Signature::comparison)
+            .ok_or_else(|| {
                 DataFusionError::Plan(format!(
                     "Cannot infer common argument type for comparison operation {lhs} {op} {rhs}"
                 ))
-            })
-        }
+            }),
         Operator::And | Operator::Or => match (lhs, rhs) {
             // logical binary boolean operators can only be evaluated in bools or nulls
             (DataType::Boolean, DataType::Boolean)
@@ -87,47 +87,51 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
                 "Cannot infer common argument type for logical boolean operation {lhs} {op} {rhs}"
             ),
         },
-        Operator::RegexMatch |
-        Operator::RegexIMatch |
-        Operator::RegexNotMatch |
-        Operator::RegexNotIMatch => {
-            regex_coercion(lhs, rhs).map(Signature::comparison).ok_or_else(|| {
+        Operator::RegexMatch
+        | Operator::RegexIMatch
+        | Operator::RegexNotMatch
+        | Operator::RegexNotIMatch => regex_coercion(lhs, rhs)
+            .map(Signature::comparison)
+            .ok_or_else(|| {
                 DataFusionError::Plan(format!(
                     "Cannot infer common argument type for regex operation {lhs} {op} {rhs}"
                 ))
-            })
-        }
+            }),
         Operator::BitwiseAnd
         | Operator::BitwiseOr
         | Operator::BitwiseXor
         | Operator::BitwiseShiftRight
-        | Operator::BitwiseShiftLeft => {
-            bitwise_coercion(lhs, rhs).map(Signature::uniform).ok_or_else(|| {
+        | Operator::BitwiseShiftLeft => bitwise_coercion(lhs, rhs)
+            .map(Signature::uniform)
+            .ok_or_else(|| {
                 DataFusionError::Plan(format!(
                     "Cannot infer common type for bitwise operation {lhs} {op} {rhs}"
                 ))
-            })
-        }
-        Operator::StringConcat => {
-            string_concat_coercion(lhs, rhs).map(Signature::uniform).ok_or_else(|| {
+            }),
+        Operator::StringConcat => string_concat_coercion(lhs, rhs)
+            .map(Signature::uniform)
+            .ok_or_else(|| {
                 DataFusionError::Plan(format!(
                     "Cannot infer common string type for string concat operation {lhs} {op} {rhs}"
                 ))
-            })
-        }
-        Operator::AtArrow
-        | Operator::ArrowAt => {
-            array_coercion(lhs, rhs).map(Signature::uniform).ok_or_else(|| {
+            }),
+        Operator::AtArrow | Operator::ArrowAt => array_coercion(lhs, rhs)
+            .map(Signature::uniform)
+            .ok_or_else(|| {
                 DataFusionError::Plan(format!(
                     "Cannot infer common array type for arrow operation {lhs} {op} {rhs}"
                 ))
-            })
-        }
-        Operator::Plus |
-        Operator::Minus |
-        Operator::Multiply |
-        Operator::Divide|
-        Operator::Modulo =>  {
+            }),
+        Operator::ArrowAccess => Ok(Signature {
+            lhs: lhs.clone(),
+            rhs: rhs.clone(),
+            ret: arrow_access_result_type(lhs, rhs)?,
+        }),
+        Operator::Plus
+        | Operator::Minus
+        | Operator::Multiply
+        | Operator::Divide
+        | Operator::Modulo => {
             let get_result = |lhs, rhs| {
                 use arrow::compute::kernels::numeric::*;
                 let l = new_empty_array(lhs);
@@ -146,7 +150,7 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
 
             if let Ok(ret) = get_result(lhs, rhs) {
                 // Temporal arithmetic, e.g. Date32 + Interval
-                Ok(Signature{
+                Ok(Signature {
                     lhs: lhs.clone(),
                     rhs: rhs.clone(),
                     ret,
@@ -159,7 +163,7 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
                         "Cannot get result type for temporal operation {coerced} {op} {coerced}: {e}"
                     ))
                 })?;
-                Ok(Signature{
+                Ok(Signature {
                     lhs: coerced.clone(),
                     rhs: coerced,
                     ret,
@@ -171,18 +175,12 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
                         "Cannot get result type for decimal operation {lhs} {op} {rhs}: {e}"
                     ))
                 })?;
-                Ok(Signature{
-                    lhs,
-                    rhs,
-                    ret,
-                })
+                Ok(Signature { lhs, rhs, ret })
             } else if let Some(numeric) = mathematics_numerical_coercion(lhs, rhs) {
                 // Numeric arithmetic, e.g. Int32 + Int32
                 Ok(Signature::uniform(numeric))
             } else {
-                plan_err!(
-                    "Cannot coerce arithmetic expression {lhs} {op} {rhs} to valid types"
-                )
+                plan_err!("Cannot coerce arithmetic expression {lhs} {op} {rhs} to valid types")
             }
         }
     }
@@ -623,6 +621,27 @@ fn string_concat_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Da
         (List(_), from_type) | (from_type, List(_)) => Some(from_type.to_owned()),
         _ => None,
     })
+}
+
+/// We represent the JSON type as a custom arrow struct, with one field containing the
+/// JSON as text
+pub fn json_type() -> DataType {
+    let json_struct = Fields::from(vec![Field::new("json", DataType::Utf8, false)]);
+    DataType::Struct(json_struct)
+}
+
+pub fn arrow_access_result_type(left: &DataType, right: &DataType) -> Result<DataType> {
+    if left != &json_type() {
+        Err(DataFusionError::Plan(format!(
+            "Cannot use arrow access operator on non-json {left}!"
+        )))
+    } else if !right.is_integer() && right != &DataType::Utf8 {
+        Err(DataFusionError::Plan(format!(
+            "Right side of of access operator must integer or text (not {right})!"
+        )))
+    } else {
+        Ok(json_type())
+    }
 }
 
 fn array_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {

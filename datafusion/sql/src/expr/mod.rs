@@ -31,13 +31,14 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow_schema::DataType;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
-    internal_err, not_impl_err, plan_err, Column, DFSchema, DataFusionError, Result, ScalarValue,
+    internal_err, not_impl_err, plan_err, Column, DFSchema, DataFusionError, Result,
+    ScalarValue,
 };
 use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::expr::{InList, JsonAccess, Placeholder};
+use datafusion_expr::expr::{InList, Placeholder};
 use datafusion_expr::{
-    col, expr, lit, AggregateFunction, Between, BinaryExpr, BuiltinScalarFunction, Cast, Expr,
-    ExprSchemable, GetFieldAccess, GetIndexedField, Like, Operator, TryCast,
+    col, expr, lit, AggregateFunction, Between, BinaryExpr, BuiltinScalarFunction, Cast,
+    Expr, ExprSchemable, GetFieldAccess, GetIndexedField, Like, Operator, TryCast,
 };
 use sqlparser::ast::{ArrayAgg, Expr as SQLExpr, JsonOperator, TrimWhereField, Value};
 use sqlparser::parser::ParserError::ParserError;
@@ -96,8 +97,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 StackEntry::Operator(op) => {
                     let right = eval_stack.pop().unwrap();
                     let left = eval_stack.pop().unwrap();
-                    let expr =
-                        Expr::BinaryExpr(BinaryExpr::new(Box::new(left), op, Box::new(right)));
+                    let expr = Expr::BinaryExpr(BinaryExpr::new(
+                        Box::new(left),
+                        op,
+                        Box::new(right),
+                    ));
                     eval_stack.push(expr);
                 }
             }
@@ -162,19 +166,23 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Value(value) => {
                 self.parse_value(value, planner_context.prepare_param_data_types())
             }
-            SQLExpr::Extract { field, expr } => Ok(Expr::ScalarFunction(ScalarFunction::new(
-                BuiltinScalarFunction::DatePart,
-                vec![
-                    Expr::Literal(ScalarValue::Utf8(Some(format!("{field}")))),
-                    self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
-                ],
-            ))),
+            SQLExpr::Extract { field, expr } => {
+                Ok(Expr::ScalarFunction(ScalarFunction::new(
+                    BuiltinScalarFunction::DatePart,
+                    vec![
+                        Expr::Literal(ScalarValue::Utf8(Some(format!("{field}")))),
+                        self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
+                    ],
+                )))
+            }
 
             SQLExpr::Array(arr) => self.sql_array_literal(arr.elem, schema),
             SQLExpr::Interval(interval) => {
                 self.sql_interval_to_expr(false, interval, schema, planner_context)
             }
-            SQLExpr::Identifier(id) => self.sql_identifier_to_expr(id, schema, planner_context),
+            SQLExpr::Identifier(id) => {
+                self.sql_identifier_to_expr(id, schema, planner_context)
+            }
 
             SQLExpr::MapAccess { column, keys } => {
                 if let SQLExpr::Identifier(id) = *column {
@@ -192,7 +200,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
 
             SQLExpr::ArrayIndex { obj, indexes } => {
-                let expr = self.sql_expr_to_logical_expr(*obj, schema, planner_context)?;
+                let expr =
+                    self.sql_expr_to_logical_expr(*obj, schema, planner_context)?;
                 self.plan_indexed(expr, indexes, schema, planner_context)
             }
 
@@ -215,12 +224,20 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             ),
 
             SQLExpr::Cast { expr, data_type } => Ok(Expr::Cast(Cast::new(
-                Box::new(self.sql_expr_to_logical_expr(*expr, schema, planner_context)?),
+                Box::new(self.sql_expr_to_logical_expr(
+                    *expr,
+                    schema,
+                    planner_context,
+                )?),
                 self.convert_data_type(&data_type)?,
             ))),
 
             SQLExpr::TryCast { expr, data_type } => Ok(Expr::TryCast(TryCast::new(
-                Box::new(self.sql_expr_to_logical_expr(*expr, schema, planner_context)?),
+                Box::new(self.sql_expr_to_logical_expr(
+                    *expr,
+                    schema,
+                    planner_context,
+                )?),
                 self.convert_data_type(&data_type)?,
             ))),
 
@@ -229,39 +246,53 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.convert_data_type(&data_type)?,
             ))),
 
-            SQLExpr::IsNull(expr) => Ok(Expr::IsNull(Box::new(self.sql_expr_to_logical_expr(
-                *expr,
-                schema,
-                planner_context,
-            )?))),
+            SQLExpr::IsNull(expr) => Ok(Expr::IsNull(Box::new(
+                self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
+            ))),
 
             SQLExpr::IsNotNull(expr) => Ok(Expr::IsNotNull(Box::new(
                 self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
             ))),
 
-            SQLExpr::IsDistinctFrom(left, right) => Ok(Expr::BinaryExpr(BinaryExpr::new(
-                Box::new(self.sql_expr_to_logical_expr(*left, schema, planner_context)?),
-                Operator::IsDistinctFrom,
-                Box::new(self.sql_expr_to_logical_expr(*right, schema, planner_context)?),
+            SQLExpr::IsDistinctFrom(left, right) => {
+                Ok(Expr::BinaryExpr(BinaryExpr::new(
+                    Box::new(self.sql_expr_to_logical_expr(
+                        *left,
+                        schema,
+                        planner_context,
+                    )?),
+                    Operator::IsDistinctFrom,
+                    Box::new(self.sql_expr_to_logical_expr(
+                        *right,
+                        schema,
+                        planner_context,
+                    )?),
+                )))
+            }
+
+            SQLExpr::IsNotDistinctFrom(left, right) => {
+                Ok(Expr::BinaryExpr(BinaryExpr::new(
+                    Box::new(self.sql_expr_to_logical_expr(
+                        *left,
+                        schema,
+                        planner_context,
+                    )?),
+                    Operator::IsNotDistinctFrom,
+                    Box::new(self.sql_expr_to_logical_expr(
+                        *right,
+                        schema,
+                        planner_context,
+                    )?),
+                )))
+            }
+
+            SQLExpr::IsTrue(expr) => Ok(Expr::IsTrue(Box::new(
+                self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
             ))),
 
-            SQLExpr::IsNotDistinctFrom(left, right) => Ok(Expr::BinaryExpr(BinaryExpr::new(
-                Box::new(self.sql_expr_to_logical_expr(*left, schema, planner_context)?),
-                Operator::IsNotDistinctFrom,
-                Box::new(self.sql_expr_to_logical_expr(*right, schema, planner_context)?),
+            SQLExpr::IsFalse(expr) => Ok(Expr::IsFalse(Box::new(
+                self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
             ))),
-
-            SQLExpr::IsTrue(expr) => Ok(Expr::IsTrue(Box::new(self.sql_expr_to_logical_expr(
-                *expr,
-                schema,
-                planner_context,
-            )?))),
-
-            SQLExpr::IsFalse(expr) => Ok(Expr::IsFalse(Box::new(self.sql_expr_to_logical_expr(
-                *expr,
-                schema,
-                planner_context,
-            )?))),
 
             SQLExpr::IsNotTrue(expr) => Ok(Expr::IsNotTrue(Box::new(
                 self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
@@ -289,10 +320,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 low,
                 high,
             } => Ok(Expr::Between(Between::new(
-                Box::new(self.sql_expr_to_logical_expr(*expr, schema, planner_context)?),
+                Box::new(self.sql_expr_to_logical_expr(
+                    *expr,
+                    schema,
+                    planner_context,
+                )?),
                 negated,
                 Box::new(self.sql_expr_to_logical_expr(*low, schema, planner_context)?),
-                Box::new(self.sql_expr_to_logical_expr(*high, schema, planner_context)?),
+                Box::new(self.sql_expr_to_logical_expr(
+                    *high,
+                    schema,
+                    planner_context,
+                )?),
             ))),
 
             SQLExpr::InList {
@@ -374,7 +413,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 expr,
                 trim_where,
                 trim_what,
-            } => self.sql_trim_to_expr(*expr, trim_where, trim_what, schema, planner_context),
+            } => self.sql_trim_to_expr(
+                *expr,
+                trim_where,
+                trim_what,
+                schema,
+                planner_context,
+            ),
 
             SQLExpr::AggregateExpressionWithFilter { expr, filter } => {
                 self.sql_agg_with_filter_to_expr(*expr, *filter, schema, planner_context)
@@ -384,7 +429,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.sql_function_to_expr(function, schema, planner_context)
             }
 
-            SQLExpr::Rollup(exprs) => self.sql_rollup_to_expr(exprs, schema, planner_context),
+            SQLExpr::Rollup(exprs) => {
+                self.sql_rollup_to_expr(exprs, schema, planner_context)
+            }
             SQLExpr::Cube(exprs) => self.sql_cube_to_expr(exprs, schema, planner_context),
             SQLExpr::GroupingSets(exprs) => {
                 self.sql_grouping_sets_to_expr(exprs, schema, planner_context)
@@ -409,7 +456,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 planner_context,
             ),
 
-            SQLExpr::Nested(e) => self.sql_expr_to_logical_expr(*e, schema, planner_context),
+            SQLExpr::Nested(e) => {
+                self.sql_expr_to_logical_expr(*e, schema, planner_context)
+            }
 
             SQLExpr::Exists { subquery, negated } => {
                 self.parse_exists_subquery(*subquery, negated, schema, planner_context)
@@ -418,38 +467,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 expr,
                 subquery,
                 negated,
-            } => self.parse_in_subquery(*expr, *subquery, negated, schema, planner_context),
+            } => {
+                self.parse_in_subquery(*expr, *subquery, negated, schema, planner_context)
+            }
             SQLExpr::Subquery(subquery) => {
                 self.parse_scalar_subquery(*subquery, schema, planner_context)
             }
             SQLExpr::ArrayAgg(array_agg) => {
                 self.parse_array_agg(array_agg, schema, planner_context)
             }
-            SQLExpr::JsonAccess {
-                left,
-                operator,
-                right,
-            } => self.parse_json_access(*left, operator, *right, schema, planner_context),
             _ => not_impl_err!("Unsupported ast node in sqltorel: {sql:?}"),
         }
-    }
-
-    fn parse_json_access(
-        &self,
-        left: SQLExpr,
-        operator: JsonOperator,
-        right: SQLExpr,
-        input_schema: &DFSchema,
-        planner_context: &mut PlannerContext,
-    ) -> Result<Expr> {
-        let json = self.sql_expr_to_logical_expr(left, input_schema, planner_context)?;
-        let operand = self.sql_expr_to_logical_expr(right, input_schema, planner_context)?;
-        let operator = operator.try_into()?;
-        Ok(Expr::JsonAccess(JsonAccess::new(
-            Box::new(json),
-            operator,
-            Box::new(operand),
-        )))
     }
 
     fn parse_array_agg(
@@ -481,7 +509,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             return not_impl_err!("WITHIN GROUP not supported in ARRAY_AGG");
         }
 
-        let args = vec![self.sql_expr_to_logical_expr(*expr, input_schema, planner_context)?];
+        let args =
+            vec![self.sql_expr_to_logical_expr(*expr, input_schema, planner_context)?];
 
         // next, aggregate built-ins
         let fun = AggregateFunction::ArrayAgg;
@@ -575,7 +604,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let arg = self.sql_expr_to_logical_expr(expr, schema, planner_context)?;
         let args = match trim_what {
             Some(to_trim) => {
-                let to_trim = self.sql_expr_to_logical_expr(*to_trim, schema, planner_context)?;
+                let to_trim =
+                    self.sql_expr_to_logical_expr(*to_trim, schema, planner_context)?;
                 vec![arg, to_trim]
             }
             None => vec![arg],
@@ -608,7 +638,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 )?)),
                 order_by,
             ))),
-            _ => plan_err!("AggregateExpressionWithFilter expression was not an AggregateFunction"),
+            _ => plan_err!(
+                "AggregateExpressionWithFilter expression was not an AggregateFunction"
+            ),
         }
     }
 
@@ -619,25 +651,35 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         planner_context: &mut PlannerContext,
     ) -> Result<GetFieldAccess> {
         let field = match expr.clone() {
-            SQLExpr::Value(Value::SingleQuotedString(s) | Value::DoubleQuotedString(s)) => {
-                GetFieldAccess::NamedStructField {
-                    name: ScalarValue::Utf8(Some(s)),
-                }
-            }
+            SQLExpr::Value(
+                Value::SingleQuotedString(s) | Value::DoubleQuotedString(s),
+            ) => GetFieldAccess::NamedStructField {
+                name: ScalarValue::Utf8(Some(s)),
+            },
             SQLExpr::JsonAccess {
                 left,
                 operator: JsonOperator::Colon,
                 right,
             } => {
-                let start =
-                    Box::new(self.sql_expr_to_logical_expr(*left, schema, planner_context)?);
-                let stop =
-                    Box::new(self.sql_expr_to_logical_expr(*right, schema, planner_context)?);
+                let start = Box::new(self.sql_expr_to_logical_expr(
+                    *left,
+                    schema,
+                    planner_context,
+                )?);
+                let stop = Box::new(self.sql_expr_to_logical_expr(
+                    *right,
+                    schema,
+                    planner_context,
+                )?);
 
                 GetFieldAccess::ListRange { start, stop }
             }
             _ => GetFieldAccess::ListIndex {
-                key: Box::new(self.sql_expr_to_logical_expr(expr, schema, planner_context)?),
+                key: Box::new(self.sql_expr_to_logical_expr(
+                    expr,
+                    schema,
+                    planner_context,
+                )?),
             },
         };
 
@@ -743,7 +785,10 @@ mod tests {
     }
 
     impl ContextProvider for TestSchemaProvider {
-        fn get_table_provider(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
+        fn get_table_provider(
+            &self,
+            name: TableReference,
+        ) -> Result<Arc<dyn TableSource>> {
             match self.tables.get(name.table()) {
                 Some(table) => Ok(table.clone()),
                 _ => plan_err!("Table not found: {}", name.table()),

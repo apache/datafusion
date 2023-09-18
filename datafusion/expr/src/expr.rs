@@ -20,7 +20,6 @@
 use crate::aggregate_function;
 use crate::built_in_function;
 use crate::expr_fn::binary_expr;
-use crate::json::JsonAcessOperator;
 use crate::logical_plan::Subquery;
 use crate::udaf;
 use crate::utils::{expr_to_columns, find_out_reference_exprs};
@@ -179,28 +178,6 @@ pub enum Expr {
     /// A place holder which hold a reference to a qualified field
     /// in the outer query, used for correlated sub queries.
     OuterReferenceColumn(DataType, Column),
-    /// Access a JSON object, e.g. `json->'a'`
-    JsonAccess(JsonAccess),
-}
-
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct JsonAccess {
-    /// The json value being accessed
-    pub json: Box<Expr>,
-    /// The type of json access (`->` versus `->>`, etc)
-    pub operator: JsonAcessOperator,
-    /// The operand of the access (field name or index)
-    pub operand: Box<Expr>,
-}
-
-impl JsonAccess {
-    pub fn new(json: Box<Expr>, operator: JsonAcessOperator, operand: Box<Expr>) -> Self {
-        Self {
-            json,
-            operator,
-            operand,
-        }
-    }
 }
 
 /// Alias expression
@@ -244,7 +221,11 @@ impl Display for BinaryExpr {
         // based on operator precedence. For example, `(a AND b) OR c` and `a AND b OR c` are
         // equivalent and the parentheses are not necessary.
 
-        fn write_child(f: &mut Formatter<'_>, expr: &Expr, precedence: u8) -> fmt::Result {
+        fn write_child(
+            f: &mut Formatter<'_>,
+            expr: &Expr,
+            precedence: u8,
+        ) -> fmt::Result {
             match expr {
                 Expr::BinaryExpr(child) => {
                     let p = child.op.precedence();
@@ -747,7 +728,6 @@ impl Expr {
             Expr::TryCast { .. } => "TryCast",
             Expr::WindowFunction { .. } => "WindowFunction",
             Expr::Wildcard => "Wildcard",
-            Expr::JsonAccess(..) => "JsonAccess",
         }
     }
 
@@ -1290,11 +1270,6 @@ impl fmt::Display for Expr {
                 }
             },
             Expr::Placeholder(Placeholder { id, .. }) => write!(f, "{id}"),
-            Expr::JsonAccess(JsonAccess {
-                json,
-                operator,
-                operand,
-            }) => write!(f, "{json:?} {operator} {operand:?}"),
         }
     }
 }
@@ -1457,11 +1432,15 @@ fn create_name(e: &Expr) -> Result<String> {
         Expr::Exists(Exists { negated: false, .. }) => Ok("EXISTS".to_string()),
         Expr::InSubquery(InSubquery { negated: true, .. }) => Ok("NOT IN".to_string()),
         Expr::InSubquery(InSubquery { negated: false, .. }) => Ok("IN".to_string()),
-        Expr::ScalarSubquery(subquery) => Ok(subquery.subquery.schema().field(0).name().clone()),
+        Expr::ScalarSubquery(subquery) => {
+            Ok(subquery.subquery.schema().field(0).name().clone())
+        }
         Expr::GetIndexedField(GetIndexedField { expr, field }) => {
             let expr = create_name(expr)?;
             match field {
-                GetFieldAccess::NamedStructField { name } => Ok(format!("{expr}[{name}]")),
+                GetFieldAccess::NamedStructField { name } => {
+                    Ok(format!("{expr}[{name}]"))
+                }
                 GetFieldAccess::ListIndex { key } => {
                     let key = create_name(key)?;
                     Ok(format!("{expr}[{key}]"))
@@ -1476,7 +1455,9 @@ fn create_name(e: &Expr) -> Result<String> {
         Expr::ScalarFunction(func) => {
             create_function_name(&func.fun.to_string(), false, &func.args)
         }
-        Expr::ScalarUDF(ScalarUDF { fun, args }) => create_function_name(&fun.name, false, args),
+        Expr::ScalarUDF(ScalarUDF { fun, args }) => {
+            create_function_name(&fun.name, false, args)
+        }
         Expr::WindowFunction(WindowFunction {
             fun,
             args,
@@ -1484,7 +1465,8 @@ fn create_name(e: &Expr) -> Result<String> {
             partition_by,
             order_by,
         }) => {
-            let mut parts: Vec<String> = vec![create_function_name(&fun.to_string(), false, args)?];
+            let mut parts: Vec<String> =
+                vec![create_function_name(&fun.to_string(), false, args)?];
             if !partition_by.is_empty() {
                 parts.push(format!("PARTITION BY [{}]", expr_vec_fmt!(partition_by)));
             }
@@ -1533,7 +1515,9 @@ fn create_name(e: &Expr) -> Result<String> {
             GroupingSet::Rollup(exprs) => {
                 Ok(format!("ROLLUP ({})", create_names(exprs.as_slice())?))
             }
-            GroupingSet::Cube(exprs) => Ok(format!("CUBE ({})", create_names(exprs.as_slice())?)),
+            GroupingSet::Cube(exprs) => {
+                Ok(format!("CUBE ({})", create_names(exprs.as_slice())?))
+            }
             GroupingSet::GroupingSets(lists_of_exprs) => {
                 let mut list_of_names = vec![];
                 for exprs in lists_of_exprs {
@@ -1578,15 +1562,6 @@ fn create_name(e: &Expr) -> Result<String> {
             internal_err!("Create name does not support qualified wildcard")
         }
         Expr::Placeholder(Placeholder { id, .. }) => Ok((*id).to_string()),
-        Expr::JsonAccess(JsonAccess {
-            json,
-            operator,
-            operand,
-        }) => {
-            let json = create_name(json)?;
-            let operand = create_name(operand)?;
-            Ok(format!("{} {} {}", json, operator, operand))
-        }
     }
 }
 

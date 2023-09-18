@@ -18,8 +18,8 @@
 //! Functions for creating logical expressions
 
 use crate::expr::{
-    AggregateFunction, BinaryExpr, Cast, Exists, GroupingSet, InList, InSubquery, ScalarFunction,
-    TryCast,
+    AggregateFunction, BinaryExpr, Cast, Exists, GroupingSet, InList, InSubquery,
+    ScalarFunction, TryCast,
 };
 use crate::function::PartitionEvaluatorFactory;
 use crate::WindowUDF;
@@ -311,7 +311,11 @@ pub fn approx_percentile_cont(expr: Expr, percentile: Expr) -> Expr {
 }
 
 /// Calculate an approximation of the specified `percentile` for `expr` and `weight_expr`.
-pub fn approx_percentile_cont_with_weight(expr: Expr, weight_expr: Expr, percentile: Expr) -> Expr {
+pub fn approx_percentile_cont_with_weight(
+    expr: Expr,
+    weight_expr: Expr,
+    percentile: Expr,
+) -> Expr {
     Expr::AggregateFunction(AggregateFunction::new(
         aggregate_function::AggregateFunction::ApproxPercentileContWithWeight,
         vec![expr, weight_expr, percentile],
@@ -941,7 +945,9 @@ mod test {
 
     macro_rules! test_unary_scalar_expr {
         ($ENUM:ident, $FUNC:ident) => {{
-            if let Expr::ScalarFunction(ScalarFunction { fun, args }) = $FUNC(col("tableA.a")) {
+            if let Expr::ScalarFunction(ScalarFunction { fun, args }) =
+                $FUNC(col("tableA.a"))
+            {
                 let name = built_in_function::BuiltinScalarFunction::$ENUM;
                 assert_eq!(name, fun);
                 assert_eq!(1, args.len());
@@ -1047,7 +1053,13 @@ mod test {
         test_scalar_expr!(OctetLength, octet_length, string);
         test_nary_scalar_expr!(RegexpMatch, regexp_match, string, pattern);
         test_nary_scalar_expr!(RegexpMatch, regexp_match, string, pattern, flags);
-        test_nary_scalar_expr!(RegexpReplace, regexp_replace, string, pattern, replacement);
+        test_nary_scalar_expr!(
+            RegexpReplace,
+            regexp_replace,
+            string,
+            pattern,
+            replacement
+        );
         test_nary_scalar_expr!(
             RegexpReplace,
             regexp_replace,

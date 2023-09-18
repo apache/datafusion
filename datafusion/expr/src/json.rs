@@ -17,6 +17,20 @@ pub enum JsonAcessOperator {
     Arrow,
 }
 
+pub fn arrow_result_type(left: &DataType, right: &DataType) -> Result<DataType> {
+    if left != &json_type() {
+        Err(DataFusionError::Plan(format!(
+            "Cannot use arrow access operator on non-json {left}!"
+        )))
+    } else if !right.is_integer() && right != &DataType::Utf8 {
+        Err(DataFusionError::Plan(format!(
+            "Right side of of access operator must integer or text (not {right})!"
+        )))
+    } else {
+        Ok(json_type())
+    }
+}
+
 impl JsonAcessOperator {
     pub fn result_type(&self, left: &DataType, right: &DataType) -> Result<DataType> {
         match self {

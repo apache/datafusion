@@ -144,7 +144,10 @@ fn merge_grouping_set<T: Clone>(left: &[T], right: &[T]) -> Result<Vec<T>> {
 ///
 /// [`DataFusionError`] The number of group_expression in grouping_set exceeds the maximum limit \
 /// [`DataFusionError`] The number of grouping_set in grouping_sets exceeds the maximum limit
-fn cross_join_grouping_sets<T: Clone>(left: &[Vec<T>], right: &[Vec<T>]) -> Result<Vec<Vec<T>>> {
+fn cross_join_grouping_sets<T: Clone>(
+    left: &[Vec<T>],
+    right: &[Vec<T>],
+) -> Result<Vec<Vec<T>>> {
     let grouping_sets_size = left.len() * right.len();
 
     check_grouping_sets_size_limit(grouping_sets_size)?;
@@ -195,7 +198,8 @@ pub fn enumerate_grouping_sets(group_expr: Vec<Expr>) -> Result<Vec<Expr>> {
                     grouping_sets.iter().map(|e| e.iter().collect()).collect()
                 }
                 Expr::GroupingSet(GroupingSet::Cube(group_exprs)) => {
-                    let grouping_sets = powerset(group_exprs).map_err(DataFusionError::Plan)?;
+                    let grouping_sets =
+                        powerset(group_exprs).map_err(DataFusionError::Plan)?;
                     check_grouping_sets_size_limit(grouping_sets.len())?;
                     grouping_sets
                 }
@@ -292,7 +296,6 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             | Expr::QualifiedWildcard { .. }
             | Expr::GetIndexedField { .. }
             | Expr::Placeholder(_)
-            | Expr::JsonAccess(_)
             | Expr::OuterReferenceColumn { .. } => {}
         }
         Ok(())
@@ -341,7 +344,10 @@ fn get_excluded_columns(
 }
 
 /// Returns all `Expr`s in the schema, except the `Column`s in the `columns_to_skip`
-fn get_exprs_except_skipped(schema: &DFSchema, columns_to_skip: HashSet<Column>) -> Vec<Expr> {
+fn get_exprs_except_skipped(
+    schema: &DFSchema,
+    columns_to_skip: HashSet<Column>,
+) -> Vec<Expr> {
     if columns_to_skip.is_empty() {
         schema
             .fields()
@@ -452,7 +458,10 @@ pub fn expand_qualified_wildcard(
 type WindowSortKey = Vec<(Expr, bool)>;
 
 /// Generate a sort key for a given window expr's partition_by and order_bu expr
-pub fn generate_sort_key(partition_by: &[Expr], order_by: &[Expr]) -> Result<WindowSortKey> {
+pub fn generate_sort_key(
+    partition_by: &[Expr],
+    order_by: &[Expr],
+) -> Result<WindowSortKey> {
     let normalized_order_by_keys = order_by
         .iter()
         .map(|e| match e {
@@ -497,7 +506,11 @@ pub fn generate_sort_key(partition_by: &[Expr], order_by: &[Expr]) -> Result<Win
 
 /// Compare the sort expr as PostgreSQL's common_prefix_cmp():
 /// <https://github.com/postgres/postgres/blob/master/src/backend/optimizer/plan/planner.c>
-pub fn compare_sort_expr(sort_expr_a: &Expr, sort_expr_b: &Expr, schema: &DFSchemaRef) -> Ordering {
+pub fn compare_sort_expr(
+    sort_expr_a: &Expr,
+    sort_expr_b: &Expr,
+    schema: &DFSchemaRef,
+) -> Ordering {
     match (sort_expr_a, sort_expr_b) {
         (
             Expr::Sort(Sort {
@@ -749,9 +762,13 @@ pub fn exprlist_to_fields<'a>(
     // `GROUPING(person.state)` so in order to resolve `person.state` in this case we need to
     // look at the input to the aggregate instead.
     let fields = match plan {
-        LogicalPlan::Aggregate(agg) => Some(exprlist_to_fields_aggregate(&exprs, plan, agg)),
+        LogicalPlan::Aggregate(agg) => {
+            Some(exprlist_to_fields_aggregate(&exprs, plan, agg))
+        }
         LogicalPlan::Window(window) => match window.input.as_ref() {
-            LogicalPlan::Aggregate(agg) => Some(exprlist_to_fields_aggregate(&exprs, plan, agg)),
+            LogicalPlan::Aggregate(agg) => {
+                Some(exprlist_to_fields_aggregate(&exprs, plan, agg))
+            }
             _ => None,
         },
         _ => None,
@@ -843,7 +860,10 @@ pub fn expr_as_column_expr(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
 
 /// Recursively walk an expression tree, collecting the column indexes
 /// referenced in the expression
-pub(crate) fn find_column_indexes_referenced_by_expr(e: &Expr, schema: &DFSchemaRef) -> Vec<usize> {
+pub(crate) fn find_column_indexes_referenced_by_expr(
+    e: &Expr,
+    schema: &DFSchemaRef,
+) -> Vec<usize> {
     let mut indexes = vec![];
     inspect_expr_pre(e, |expr| {
         match expr {
@@ -892,7 +912,9 @@ pub fn can_hash(data_type: &DataType) -> bool {
         DataType::Date32 => true,
         DataType::Date64 => true,
         DataType::FixedSizeBinary(_) => true,
-        DataType::Dictionary(key_type, value_type) if *value_type.as_ref() == DataType::Utf8 => {
+        DataType::Dictionary(key_type, value_type)
+            if *value_type.as_ref() == DataType::Utf8 =>
+        {
             DataType::is_dictionary_key_type(key_type)
         }
         _ => false,
@@ -985,7 +1007,8 @@ mod tests {
     use super::*;
     use crate::expr_vec_fmt;
     use crate::{
-        col, cube, expr, grouping_set, rollup, AggregateFunction, WindowFrame, WindowFunction,
+        col, cube, expr, grouping_set, rollup, AggregateFunction, WindowFrame,
+        WindowFunction,
     };
 
     #[test]
@@ -1039,7 +1062,8 @@ mod tests {
     fn test_group_window_expr_by_sort_keys() -> Result<()> {
         let age_asc = Expr::Sort(expr::Sort::new(Box::new(col("age")), true, true));
         let name_desc = Expr::Sort(expr::Sort::new(Box::new(col("name")), false, true));
-        let created_at_desc = Expr::Sort(expr::Sort::new(Box::new(col("created_at")), false, true));
+        let created_at_desc =
+            Expr::Sort(expr::Sort::new(Box::new(col("created_at")), false, true));
         let max1 = Expr::WindowFunction(expr::WindowFunction::new(
             WindowFunction::AggregateFunction(AggregateFunction::Max),
             vec![col("name")],

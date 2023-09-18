@@ -23,8 +23,12 @@ use datafusion_common::{
     not_impl_err, plan_err, sql_err, Constraints, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::expr_rewriter::normalize_col;
-use datafusion_expr::{CreateMemoryTable, DdlStatement, Expr, LogicalPlan, LogicalPlanBuilder};
-use sqlparser::ast::{Expr as SQLExpr, Offset as SQLOffset, OrderByExpr, Query, SetExpr, Value};
+use datafusion_expr::{
+    CreateMemoryTable, DdlStatement, Expr, LogicalPlan, LogicalPlanBuilder,
+};
+use sqlparser::ast::{
+    Expr as SQLExpr, Offset as SQLOffset, OrderByExpr, Query, SetExpr, Value,
+};
 
 use crate::utils::{extract_aliases, resolve_aliases_to_exprs};
 use sqlparser::parser::ParserError::ParserError;
@@ -65,7 +69,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
                 // create logical plan & pass backreferencing CTEs
                 // CTE expr don't need extend outer_query_schema
-                let logical_plan = self.query_to_plan(*cte.query, &mut planner_context.clone())?;
+                let logical_plan =
+                    self.query_to_plan(*cte.query, &mut planner_context.clone())?;
 
                 // Each `WITH` block can change the column names in the last
                 // projection (e.g. "WITH table(t1, t2) AS SELECT 1, 2").
@@ -125,13 +130,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         };
 
         let fetch = match fetch {
-            Some(limit_expr) if limit_expr != sqlparser::ast::Expr::Value(Value::Null) => {
+            Some(limit_expr)
+                if limit_expr != sqlparser::ast::Expr::Value(Value::Null) =>
+            {
                 let n = match self.sql_to_expr(
                     limit_expr,
                     input.schema(),
                     &mut PlannerContext::new(),
                 )? {
-                    Expr::Literal(ScalarValue::Int64(Some(n))) if n >= 0 => Ok(n as usize),
+                    Expr::Literal(ScalarValue::Int64(Some(n))) if n >= 0 => {
+                        Ok(n as usize)
+                    }
                     _ => plan_err!("LIMIT must not be negative"),
                 }?;
                 Some(n)
@@ -178,13 +187,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     let on_expr = on_expr
                         .into_iter()
                         .map(|e| {
-                            normalize_col(resolve_aliases_to_exprs(&e, &alias_map)?, &parent_plan)
+                            normalize_col(
+                                resolve_aliases_to_exprs(&e, &alias_map)?,
+                                &parent_plan,
+                            )
                         })
                         .collect::<Result<Vec<_>>>()?;
                     let mut order_by_expressions = order_by_expressions
                         .into_iter()
                         .map(|e| {
-                            normalize_col(resolve_aliases_to_exprs(&e, &alias_map)?, &parent_plan)
+                            normalize_col(
+                                resolve_aliases_to_exprs(&e, &alias_map)?,
+                                &parent_plan,
+                            )
                         })
                         .collect::<Result<Vec<_>>>()?;
 

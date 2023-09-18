@@ -37,7 +37,6 @@ pub mod expr_rewriter;
 pub mod expr_schema;
 pub mod field_util;
 pub mod function;
-mod json;
 mod literal;
 pub mod logical_plan;
 mod nullif;
@@ -56,6 +55,7 @@ pub mod window_frame;
 pub mod window_function;
 pub mod window_state;
 
+pub use crate::type_coercion::binary::json_type;
 pub use accumulator::Accumulator;
 pub use aggregate_function::AggregateFunction;
 pub use built_in_function::BuiltinScalarFunction;
@@ -70,7 +70,6 @@ pub use function::{
     AccumulatorFactoryFunction, PartitionEvaluatorFactory, ReturnTypeFunction,
     ScalarFunctionImplementation, StateTypeFunction,
 };
-pub use json::{json_type, JsonAcessOperator};
 pub use literal::{lit, lit_timestamp_nano, Literal, TimestampLiteral};
 pub use logical_plan::*;
 pub use nullif::SUPPORTED_NULLIF_TYPES;
