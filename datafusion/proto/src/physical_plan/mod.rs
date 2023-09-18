@@ -846,14 +846,14 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 extension_codec,
             )?;
             Ok(protobuf::PhysicalPlanNode {
-                physical_plan_type: Some(PhysicalPlanType::Analyze(
+                physical_plan_type: Some(PhysicalPlanType::Analyze(Box::new(
                     protobuf::AnalyzeExecNode {
                         verbose: exec.verbose(),
                         show_statistics: exec.show_statistics(),
                         input: Some(Box::new(input)),
                         schema: Some(exec.schema().as_ref().try_into()?),
                     },
-                )),
+                ))),
             })
         } else if let Some(exec) = plan.downcast_ref::<FilterExec>() {
             let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
