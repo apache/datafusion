@@ -628,7 +628,7 @@ impl ListingTable {
     }
 
     /// Set the [`FileStatisticsCache`] used to cache parquet file statistics.
-    /// 
+    ///
     /// Setting a statistics cache on the `SessionContext` can avoid refetching statistics
     /// multiple times in the same session.
     ///
