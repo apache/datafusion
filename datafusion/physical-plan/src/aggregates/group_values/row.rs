@@ -142,8 +142,9 @@ impl GroupValues for GroupValuesRows {
     }
 
     fn size(&self) -> usize {
+        let group_values_size = self.group_values.as_ref().map(|v| v.size()).unwrap_or(0);
         self.row_converter.size()
-            + self.group_values.as_ref().unwrap().size()
+            + group_values_size
             + self.map_size
             + self.hashes_buffer.allocated_size()
     }
