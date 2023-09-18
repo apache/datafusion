@@ -17,7 +17,8 @@
 
 use arrow_schema::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{plan_err, DataFusionError, Result};
+use datafusion_expr::WindowUDF;
 use datafusion_expr::{
     logical_plan::builder::LogicalTableSource, AggregateUDF, ScalarUDF, TableSource,
 };
@@ -107,10 +108,7 @@ impl ContextProvider for MySchemaProvider {
     fn get_table_provider(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
         match self.tables.get(name.table()) {
             Some(table) => Ok(table.clone()),
-            _ => Err(DataFusionError::Plan(format!(
-                "Table not found: {}",
-                name.table()
-            ))),
+            _ => plan_err!("Table not found: {}", name.table()),
         }
     }
 
@@ -123,6 +121,10 @@ impl ContextProvider for MySchemaProvider {
     }
 
     fn get_variable_type(&self, _variable_names: &[String]) -> Option<DataType> {
+        None
+    }
+
+    fn get_window_meta(&self, _name: &str) -> Option<Arc<WindowUDF>> {
         None
     }
 

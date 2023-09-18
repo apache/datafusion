@@ -94,11 +94,14 @@ expressions such as `col("a") + col("b")` to be used.
 | factorial(x)          | factorial                                         |
 | floor(x)              | nearest integer less than or equal to argument    |
 | gcd(x, y)             | greatest common divisor                           |
+| isnan(x)              | predicate determining whether NaN/-NaN or not     |
+| iszero(x)             | predicate determining whether 0.0/-0.0 or not     |
 | lcm(x, y)             | least common multiple                             |
 | ln(x)                 | natural logarithm                                 |
 | log(base, x)          | logarithm of x for a particular base              |
 | log10(x)              | base 10 logarithm                                 |
 | log2(x)               | base 2 logarithm                                  |
+| nanvl(x, y)           | returns x if x is not NaN otherwise returns y     |
 | pi()                  | approximate value of π                            |
 | power(base, exponent) | base raised to the power of exponent              |
 | radians(x)            | converts degrees to radians                       |
@@ -179,23 +182,34 @@ Unlike to some databases the math functions in Datafusion works the same way as 
 
 ## Array Expressions
 
-| Function                             | Notes                                                           |
-| ------------------------------------ | --------------------------------------------------------------- |
-| array_append(array, element)         | Appends an element to the end of an array.                      |
-| array_concat(array[, ..., array_n])  | Concatenates arrays.                                            |
-| array_dims(array)                    | Returns an array of the array's dimensions.                     |
-| array_fill(element, array)           | Returns an array filled with copies of the given value.         |
-| array_length(array, dimension)       | Returns the length of the array dimension.                      |
-| array_ndims(array)                   | Returns the number of dimensions of the array.                  |
-| array_position(array, element)       | Searches for an element in the array, returns first occurrence. |
-| array_positions(array, element)      | Searches for an element in the array, returns all occurrences.  |
-| array_prepend(array, element)        | Prepends an element to the beginning of an array.               |
-| array_remove(array, element)         | Removes all elements equal to the given value from the array.   |
-| array_replace(array, from, to)       | Replaces a specified element with another specified element.    |
-| array_to_string(array, delimeter)    | Converts each element to its text representation.               |
-| cardinality(array)                   | Returns the total number of elements in the array.              |
-| make_array(value1, [value2 [, ...]]) | Returns an Arrow array using the specified input expressions.   |
-| trim_array(array, n)                 | Removes the last n elements from the array.                     |
+| Function                              | Notes                                                                                                                                                                    |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| array_append(array, element)          | Appends an element to the end of an array. `array_append([1, 2, 3], 4) -> [1, 2, 3, 4]`                                                                                  |
+| array_concat(array[, ..., array_n])   | Concatenates arrays. `array_concat([1, 2, 3], [4, 5, 6]) -> [1, 2, 3, 4, 5, 6]`                                                                                          |
+| array_has(array, element)             | Returns true if the array contains the element `array_has([1,2,3], 1) -> true`                                                                                           |
+| array_has_all(array, sub-array)       | Returns true if all elements of sub-array exist in array `array_has_all([1,2,3], [1,3]) -> true`                                                                         |
+| array_has_any(array, sub-array)       | Returns true if any elements exist in both arrays `array_has_any([1,2,3], [1,4]) -> true`                                                                                |
+| array_dims(array)                     | Returns an array of the array's dimensions. `array_dims([[1, 2, 3], [4, 5, 6]]) -> [2, 3]`                                                                               |
+| array_element(array, index)           | Extracts the element with the index n from the array `array_element([1, 2, 3, 4], 3) -> 3`                                                                               |
+| flatten(array)                        | Converts an array of arrays to a flat array `flatten([[1], [2, 3], [4, 5, 6]]) -> [1, 2, 3, 4, 5, 6]`                                                                    |
+| array_length(array, dimension)        | Returns the length of the array dimension. `array_length([1, 2, 3, 4, 5]) -> 5`                                                                                          |
+| array_ndims(array)                    | Returns the number of dimensions of the array. `array_ndims([[1, 2, 3], [4, 5, 6]]) -> 2`                                                                                |
+| array_pop_back(array)                 | Returns the array without the last element. `array_pop_back([1, 2, 3]) -> [1, 2]`                                                                                        |
+| array_position(array, element)        | Searches for an element in the array, returns first occurrence. `array_position([1, 2, 2, 3, 4], 2) -> 2`                                                                |
+| array_positions(array, element)       | Searches for an element in the array, returns all occurrences. `array_positions([1, 2, 2, 3, 4], 2) -> [2, 3]`                                                           |
+| array_prepend(array, element)         | Prepends an element to the beginning of an array. `array_prepend(1, [2, 3, 4]) -> [1, 2, 3, 4]`                                                                          |
+| array_repeat(element, count)          | Returns an array containing element `count` times. `array_repeat(1, 3) -> [1, 1, 1]`                                                                                     |
+| array_remove(array, element)          | Removes the first element from the array equal to the given value. `array_remove([1, 2, 2, 3, 2, 1, 4], 2) -> [1, 2, 3, 2, 1, 4]`                                        |
+| array_remove_n(array, element, max)   | Removes the first `max` elements from the array equal to the given value. `array_remove_n([1, 2, 2, 3, 2, 1, 4], 2, 2) -> [1, 3, 2, 1, 4]`                               |
+| array_remove_all(array, element)      | Removes all elements from the array equal to the given value. `array_remove_all([1, 2, 2, 3, 2, 1, 4], 2) -> [1, 3, 1, 4]`                                               |
+| array_replace(array, from, to)        | Replaces the first occurrence of the specified element with another specified element. `array_replace([1, 2, 2, 3, 2, 1, 4], 2, 5) -> [1, 5, 2, 3, 2, 1, 4]`             |
+| array_replace_n(array, from, to, max) | Replaces the first `max` occurrences of the specified element with another specified element. `array_replace_n([1, 2, 2, 3, 2, 1, 4], 2, 5, 2) -> [1, 5, 5, 3, 2, 1, 4]` |
+| array_replace_all(array, from, to)    | Replaces all occurrences of the specified element with another specified element. `array_replace_all([1, 2, 2, 3, 2, 1, 4], 2, 5) -> [1, 5, 5, 3, 5, 1, 4]`              |
+| array_slice(array, index)             | Returns a slice of the array. `array_slice([1, 2, 3, 4, 5, 6, 7, 8], 3, 6) -> [3, 4, 5, 6]`                                                                              |
+| array_to_string(array, delimiter)     | Converts each element to its text representation. `array_to_string([1, 2, 3, 4], ',') -> 1,2,3,4`                                                                        |
+| cardinality(array)                    | Returns the total number of elements in the array. `cardinality([[1, 2, 3], [4, 5, 6]]) -> 6`                                                                            |
+| make_array(value1, [value2 [, ...]])  | Returns an Arrow array using the specified input expressions. `make_array(1, 2, 3) -> [1, 2, 3]`                                                                         |
+| trim_array(array, n)                  | Deprecated                                                                                                                                                               |
 
 ## Regular Expressions
 

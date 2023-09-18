@@ -17,27 +17,24 @@
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
-use std::any::Any;
-use std::convert::TryFrom;
-use std::sync::Arc;
-
-use crate::{AggregateExpr, PhysicalExpr};
+use crate::{AggregateExpr, GroupsAccumulator, PhysicalExpr};
 use arrow::datatypes::DataType;
 use arrow::{
     array::{ArrayRef, BooleanArray},
     datatypes::Field,
 };
-use datafusion_common::{downcast_value, DataFusionError, Result, ScalarValue};
-use datafusion_expr::Accumulator;
-
-use crate::aggregate::row_accumulator::{
-    is_row_accumulator_support_dtype, RowAccumulator,
+use datafusion_common::{
+    downcast_value, internal_err, not_impl_err, DataFusionError, Result, ScalarValue,
 };
+use datafusion_expr::Accumulator;
+use std::any::Any;
+use std::sync::Arc;
+
+use crate::aggregate::groups_accumulator::bool_op::BooleanGroupsAccumulator;
 use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
 use arrow::array::Array;
 use arrow::compute::{bool_and, bool_or};
-use datafusion_row::accessor::RowAccessor;
 
 // returns the new value after bool_and/bool_or with the new values, taking nullability into account
 macro_rules! typed_bool_and_or_batch {
@@ -56,9 +53,9 @@ macro_rules! bool_and_or_batch {
                 typed_bool_and_or_batch!($VALUES, BooleanArray, Boolean, $OP)
             }
             e => {
-                return Err(DataFusionError::Internal(format!(
+                return internal_err!(
                     "Bool and/Bool or is not expected to receive the type {e:?}"
-                )));
+                );
             }
         }
     }};
@@ -72,53 +69,6 @@ fn bool_and_batch(values: &ArrayRef) -> Result<ScalarValue> {
 /// dynamically-typed bool_or(array) -> ScalarValue
 fn bool_or_batch(values: &ArrayRef) -> Result<ScalarValue> {
     bool_and_or_batch!(values, bool_or)
-}
-
-// bool_and/bool_or of two scalar values.
-macro_rules! typed_bool_and_or_v2 {
-    ($INDEX:ident, $ACC:ident, $SCALAR:expr, $TYPE:ident, $OP:ident) => {{
-        paste::item! {
-            match $SCALAR {
-                None => {}
-                Some(v) => $ACC.[<$OP _ $TYPE>]($INDEX, *v as $TYPE)
-            }
-        }
-    }};
-}
-
-macro_rules! bool_and_or_v2 {
-    ($INDEX:ident, $ACC:ident, $SCALAR:expr, $OP:ident) => {{
-        Ok(match $SCALAR {
-            ScalarValue::Boolean(rhs) => {
-                typed_bool_and_or_v2!($INDEX, $ACC, rhs, bool, $OP)
-            }
-            ScalarValue::Null => {
-                // do nothing
-            }
-            e => {
-                return Err(DataFusionError::Internal(format!(
-                    "BOOL AND/BOOL OR is not expected to receive scalars of incompatible types {:?}",
-                    e
-                )))
-            }
-        })
-    }};
-}
-
-pub fn bool_and_row(
-    index: usize,
-    accessor: &mut RowAccessor,
-    s: &ScalarValue,
-) -> Result<()> {
-    bool_and_or_v2!(index, accessor, s, bitand)
-}
-
-pub fn bool_or_row(
-    index: usize,
-    accessor: &mut RowAccessor,
-    s: &ScalarValue,
-) -> Result<()> {
-    bool_and_or_v2!(index, accessor, s, bitor)
 }
 
 /// BOOL_AND aggregate expression
@@ -161,7 +111,7 @@ impl AggregateExpr for BoolAnd {
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(BoolAndAccumulator::try_new(&self.data_type)?))
+        Ok(Box::<BoolAndAccumulator>::default())
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
@@ -180,18 +130,21 @@ impl AggregateExpr for BoolAnd {
         &self.name
     }
 
-    fn row_accumulator_supported(&self) -> bool {
-        is_row_accumulator_support_dtype(&self.data_type)
+    fn groups_accumulator_supported(&self) -> bool {
+        true
     }
 
-    fn create_row_accumulator(
-        &self,
-        start_index: usize,
-    ) -> Result<Box<dyn RowAccumulator>> {
-        Ok(Box::new(BoolAndRowAccumulator::new(
-            start_index,
-            self.data_type.clone(),
-        )))
+    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+        match self.data_type {
+            DataType::Boolean => {
+                Ok(Box::new(BooleanGroupsAccumulator::new(|x, y| x && y)))
+            }
+            _ => not_impl_err!(
+                "GroupsAccumulator not supported for {} with {}",
+                self.name(),
+                self.data_type
+            ),
+        }
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
@@ -199,7 +152,7 @@ impl AggregateExpr for BoolAnd {
     }
 
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(BoolAndAccumulator::try_new(&self.data_type)?))
+        Ok(Box::<BoolAndAccumulator>::default())
     }
 }
 
@@ -217,25 +170,20 @@ impl PartialEq<dyn Any> for BoolAnd {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct BoolAndAccumulator {
-    bool_and: ScalarValue,
-}
-
-impl BoolAndAccumulator {
-    /// new bool_and accumulator
-    pub fn try_new(data_type: &DataType) -> Result<Self> {
-        Ok(Self {
-            bool_and: ScalarValue::try_from(data_type)?,
-        })
-    }
+    acc: Option<bool>,
 }
 
 impl Accumulator for BoolAndAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
-        let delta = &bool_and_batch(values)?;
-        self.bool_and = self.bool_and.and(delta)?;
+        self.acc = match (self.acc, bool_and_batch(values)?) {
+            (None, ScalarValue::Boolean(v)) => v,
+            (Some(v), ScalarValue::Boolean(None)) => Some(v),
+            (Some(a), ScalarValue::Boolean(Some(b))) => Some(a && b),
+            _ => unreachable!(),
+        };
         Ok(())
     }
 
@@ -244,74 +192,15 @@ impl Accumulator for BoolAndAccumulator {
     }
 
     fn state(&self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![self.bool_and.clone()])
+        Ok(vec![ScalarValue::Boolean(self.acc)])
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
-        Ok(self.bool_and.clone())
+        Ok(ScalarValue::Boolean(self.acc))
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self) - std::mem::size_of_val(&self.bool_and)
-            + self.bool_and.size()
-    }
-}
-
-#[derive(Debug)]
-struct BoolAndRowAccumulator {
-    index: usize,
-    datatype: DataType,
-}
-
-impl BoolAndRowAccumulator {
-    pub fn new(index: usize, datatype: DataType) -> Self {
-        Self { index, datatype }
-    }
-}
-
-impl RowAccumulator for BoolAndRowAccumulator {
-    fn update_batch(
-        &mut self,
-        values: &[ArrayRef],
-        accessor: &mut RowAccessor,
-    ) -> Result<()> {
-        let values = &values[0];
-        let delta = &bool_and_batch(values)?;
-        bool_and_row(self.index, accessor, delta)
-    }
-
-    fn update_scalar_values(
-        &mut self,
-        values: &[ScalarValue],
-        accessor: &mut RowAccessor,
-    ) -> Result<()> {
-        let value = &values[0];
-        bool_and_row(self.index, accessor, value)
-    }
-
-    fn update_scalar(
-        &mut self,
-        value: &ScalarValue,
-        accessor: &mut RowAccessor,
-    ) -> Result<()> {
-        bool_and_row(self.index, accessor, value)
-    }
-
-    fn merge_batch(
-        &mut self,
-        states: &[ArrayRef],
-        accessor: &mut RowAccessor,
-    ) -> Result<()> {
-        self.update_batch(states, accessor)
-    }
-
-    fn evaluate(&self, accessor: &RowAccessor) -> Result<ScalarValue> {
-        Ok(accessor.get_as_scalar(&self.datatype, self.index))
-    }
-
-    #[inline(always)]
-    fn state_index(&self) -> usize {
-        self.index
+        std::mem::size_of_val(self)
     }
 }
 
@@ -355,7 +244,7 @@ impl AggregateExpr for BoolOr {
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(BoolOrAccumulator::try_new(&self.data_type)?))
+        Ok(Box::<BoolOrAccumulator>::default())
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
@@ -374,18 +263,21 @@ impl AggregateExpr for BoolOr {
         &self.name
     }
 
-    fn row_accumulator_supported(&self) -> bool {
-        is_row_accumulator_support_dtype(&self.data_type)
+    fn groups_accumulator_supported(&self) -> bool {
+        true
     }
 
-    fn create_row_accumulator(
-        &self,
-        start_index: usize,
-    ) -> Result<Box<dyn RowAccumulator>> {
-        Ok(Box::new(BoolOrRowAccumulator::new(
-            start_index,
-            self.data_type.clone(),
-        )))
+    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+        match self.data_type {
+            DataType::Boolean => {
+                Ok(Box::new(BooleanGroupsAccumulator::new(|x, y| x || y)))
+            }
+            _ => not_impl_err!(
+                "GroupsAccumulator not supported for {} with {}",
+                self.name(),
+                self.data_type
+            ),
+        }
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
@@ -393,7 +285,7 @@ impl AggregateExpr for BoolOr {
     }
 
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(BoolOrAccumulator::try_new(&self.data_type)?))
+        Ok(Box::<BoolOrAccumulator>::default())
     }
 }
 
@@ -411,29 +303,24 @@ impl PartialEq<dyn Any> for BoolOr {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct BoolOrAccumulator {
-    bool_or: ScalarValue,
-}
-
-impl BoolOrAccumulator {
-    /// new bool_or accumulator
-    pub fn try_new(data_type: &DataType) -> Result<Self> {
-        Ok(Self {
-            bool_or: ScalarValue::try_from(data_type)?,
-        })
-    }
+    acc: Option<bool>,
 }
 
 impl Accumulator for BoolOrAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![self.bool_or.clone()])
+        Ok(vec![ScalarValue::Boolean(self.acc)])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
-        let delta = bool_or_batch(values)?;
-        self.bool_or = self.bool_or.or(&delta)?;
+        self.acc = match (self.acc, bool_or_batch(values)?) {
+            (None, ScalarValue::Boolean(v)) => v,
+            (Some(v), ScalarValue::Boolean(None)) => Some(v),
+            (Some(a), ScalarValue::Boolean(Some(b))) => Some(a || b),
+            _ => unreachable!(),
+        };
         Ok(())
     }
 
@@ -442,71 +329,11 @@ impl Accumulator for BoolOrAccumulator {
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
-        Ok(self.bool_or.clone())
+        Ok(ScalarValue::Boolean(self.acc))
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self) - std::mem::size_of_val(&self.bool_or)
-            + self.bool_or.size()
-    }
-}
-
-#[derive(Debug)]
-struct BoolOrRowAccumulator {
-    index: usize,
-    datatype: DataType,
-}
-
-impl BoolOrRowAccumulator {
-    pub fn new(index: usize, datatype: DataType) -> Self {
-        Self { index, datatype }
-    }
-}
-
-impl RowAccumulator for BoolOrRowAccumulator {
-    fn update_batch(
-        &mut self,
-        values: &[ArrayRef],
-        accessor: &mut RowAccessor,
-    ) -> Result<()> {
-        let values = &values[0];
-        let delta = &bool_or_batch(values)?;
-        bool_or_row(self.index, accessor, delta)?;
-        Ok(())
-    }
-
-    fn update_scalar_values(
-        &mut self,
-        values: &[ScalarValue],
-        accessor: &mut RowAccessor,
-    ) -> Result<()> {
-        let value = &values[0];
-        bool_or_row(self.index, accessor, value)
-    }
-
-    fn update_scalar(
-        &mut self,
-        value: &ScalarValue,
-        accessor: &mut RowAccessor,
-    ) -> Result<()> {
-        bool_or_row(self.index, accessor, value)
-    }
-
-    fn merge_batch(
-        &mut self,
-        states: &[ArrayRef],
-        accessor: &mut RowAccessor,
-    ) -> Result<()> {
-        self.update_batch(states, accessor)
-    }
-
-    fn evaluate(&self, accessor: &RowAccessor) -> Result<ScalarValue> {
-        Ok(accessor.get_as_scalar(&self.datatype, self.index))
-    }
-
-    #[inline(always)]
-    fn state_index(&self) -> usize {
-        self.index
+        std::mem::size_of_val(self)
     }
 }
 

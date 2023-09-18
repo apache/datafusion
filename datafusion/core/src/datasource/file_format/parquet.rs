@@ -17,23 +17,31 @@
 
 //! Parquet format abstractions
 
+use rand::distributions::DistString;
 use std::any::Any;
+use std::fmt;
+use std::fmt::Debug;
 use std::sync::Arc;
+use tokio::task::JoinSet;
 
 use arrow::datatypes::SchemaRef;
 use arrow::datatypes::{Fields, Schema};
 use async_trait::async_trait;
 use bytes::{BufMut, BytesMut};
-use datafusion_common::DataFusionError;
+use datafusion_common::{exec_err, not_impl_err, plan_err, DataFusionError, FileType};
+use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
 use futures::{StreamExt, TryStreamExt};
 use hashbrown::HashMap;
 use object_store::{ObjectMeta, ObjectStore};
-use parquet::arrow::parquet_to_arrow_schema;
+use parquet::arrow::{parquet_to_arrow_schema, AsyncArrowWriter};
 use parquet::file::footer::{decode_footer, decode_metadata};
 use parquet::file::metadata::ParquetMetaData;
+use parquet::file::properties::WriterProperties;
 use parquet::file::statistics::Statistics as ParquetStatistics;
+use rand::distributions::Alphanumeric;
 
+use super::write::FileWriterMode;
 use super::FileFormat;
 use super::FileScanConfig;
 use crate::arrow::array::{
@@ -42,15 +50,19 @@ use crate::arrow::array::{
 use crate::arrow::datatypes::DataType;
 use crate::config::ConfigOptions;
 
-use crate::datasource::physical_plan::{ParquetExec, SchemaAdapter};
+use crate::datasource::physical_plan::{
+    FileGroupDisplay, FileMeta, FileSinkConfig, ParquetExec, SchemaAdapter,
+};
+
 use crate::datasource::{create_max_min_accs, get_col_stats};
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
-use crate::physical_plan::{Accumulator, ExecutionPlan, Statistics};
-
-/// The default file extension of parquet files
-pub const DEFAULT_PARQUET_EXTENSION: &str = ".parquet";
+use crate::physical_plan::insert::{DataSink, FileSinkExec};
+use crate::physical_plan::{
+    Accumulator, DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream,
+    Statistics,
+};
 
 /// The number of files to read in parallel when inferring schema
 const SCHEMA_INFERENCE_CONCURRENCY: usize = 32;
@@ -207,6 +219,26 @@ impl FileFormat for ParquetFormat {
             predicate,
             self.metadata_size_hint(state.config_options()),
         )))
+    }
+
+    async fn create_writer_physical_plan(
+        &self,
+        input: Arc<dyn ExecutionPlan>,
+        _state: &SessionState,
+        conf: FileSinkConfig,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        if conf.overwrite {
+            return not_impl_err!("Overwrites are not implemented yet for Parquet");
+        }
+
+        let sink_schema = conf.output_schema().clone();
+        let sink = Arc::new(ParquetSink::new(conf));
+
+        Ok(Arc::new(FileSinkExec::new(input, sink, sink_schema)) as _)
+    }
+
+    fn file_type(&self) -> FileType {
+        FileType::PARQUET
     }
 }
 
@@ -386,10 +418,7 @@ pub async fn fetch_parquet_metadata(
     size_hint: Option<usize>,
 ) -> Result<ParquetMetaData> {
     if meta.size < 8 {
-        return Err(DataFusionError::Execution(format!(
-            "file size of {} is less than footer",
-            meta.size
-        )));
+        return exec_err!("file size of {} is less than footer", meta.size);
     }
 
     // If a size hint is provided, read more than the minimum size
@@ -412,11 +441,11 @@ pub async fn fetch_parquet_metadata(
     let length = decode_footer(&footer)?;
 
     if meta.size < length + 8 {
-        return Err(DataFusionError::Execution(format!(
+        return exec_err!(
             "file size of {} is less than footer + metadata {}",
             meta.size,
             length + 8
-        )));
+        );
     }
 
     // Did not fetch the entire file metadata in the initial read, need to make a second request
@@ -543,6 +572,205 @@ async fn fetch_statistics(
     Ok(statistics)
 }
 
+/// Implements [`DataSink`] for writing to a parquet file.
+struct ParquetSink {
+    /// Config options for writing data
+    config: FileSinkConfig,
+}
+
+impl Debug for ParquetSink {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ParquetSink").finish()
+    }
+}
+
+impl DisplayAs for ParquetSink {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(
+                    f,
+                    "ParquetSink(writer_mode={:?}, file_groups=",
+                    self.config.writer_mode
+                )?;
+                FileGroupDisplay(&self.config.file_groups).fmt_as(t, f)?;
+                write!(f, ")")
+            }
+        }
+    }
+}
+
+impl ParquetSink {
+    fn new(config: FileSinkConfig) -> Self {
+        Self { config }
+    }
+
+    // Create a write for parquet files
+    async fn create_writer(
+        &self,
+        file_meta: FileMeta,
+        object_store: Arc<dyn ObjectStore>,
+        parquet_props: WriterProperties,
+    ) -> Result<
+        AsyncArrowWriter<Box<dyn tokio::io::AsyncWrite + std::marker::Send + Unpin>>,
+    > {
+        let object = &file_meta.object_meta;
+        match self.config.writer_mode {
+            FileWriterMode::Append => {
+                plan_err!(
+                    "Appending to Parquet files is not supported by the file format!"
+                )
+            }
+            FileWriterMode::Put => {
+                not_impl_err!("FileWriterMode::Put is not implemented for ParquetSink")
+            }
+            FileWriterMode::PutMultipart => {
+                let (_, multipart_writer) = object_store
+                    .put_multipart(&object.location)
+                    .await
+                    .map_err(DataFusionError::ObjectStore)?;
+                let writer = AsyncArrowWriter::try_new(
+                    multipart_writer,
+                    self.config.output_schema.clone(),
+                    10485760,
+                    Some(parquet_props),
+                )?;
+                Ok(writer)
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl DataSink for ParquetSink {
+    async fn write_all(
+        &self,
+        mut data: Vec<SendableRecordBatchStream>,
+        context: &Arc<TaskContext>,
+    ) -> Result<u64> {
+        let num_partitions = data.len();
+        let parquet_props = self
+            .config
+            .file_type_writer_options
+            .try_into_parquet()?
+            .writer_options();
+
+        let object_store = context
+            .runtime_env()
+            .object_store(&self.config.object_store_url)?;
+
+        // Construct writer for each file group
+        let mut writers = vec![];
+        match self.config.writer_mode {
+            FileWriterMode::Append => {
+                return plan_err!(
+                    "Parquet format does not support appending to existing file!"
+                )
+            }
+            FileWriterMode::Put => {
+                return not_impl_err!("Put Mode is not implemented for ParquetSink yet")
+            }
+            FileWriterMode::PutMultipart => {
+                // Currently assuming only 1 partition path (i.e. not hive-style partitioning on a column)
+                let base_path = &self.config.table_paths[0];
+                match self.config.single_file_output {
+                    false => {
+                        // Uniquely identify this batch of files with a random string, to prevent collisions overwriting files
+                        let write_id =
+                            Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+                        for part_idx in 0..num_partitions {
+                            let file_path = base_path
+                                .prefix()
+                                .child(format!("{}_{}.parquet", write_id, part_idx));
+                            let object_meta = ObjectMeta {
+                                location: file_path,
+                                last_modified: chrono::offset::Utc::now(),
+                                size: 0,
+                                e_tag: None,
+                            };
+                            let writer = self
+                                .create_writer(
+                                    object_meta.into(),
+                                    object_store.clone(),
+                                    parquet_props.clone(),
+                                )
+                                .await?;
+                            writers.push(writer);
+                        }
+                    }
+                    true => {
+                        let file_path = base_path.prefix();
+                        let object_meta = ObjectMeta {
+                            location: file_path.clone(),
+                            last_modified: chrono::offset::Utc::now(),
+                            size: 0,
+                            e_tag: None,
+                        };
+                        let writer = self
+                            .create_writer(
+                                object_meta.into(),
+                                object_store.clone(),
+                                parquet_props.clone(),
+                            )
+                            .await?;
+                        writers.push(writer);
+                    }
+                }
+            }
+        }
+
+        let mut row_count = 0;
+
+        match self.config.single_file_output {
+            false => {
+                let mut join_set: JoinSet<Result<usize, DataFusionError>> =
+                    JoinSet::new();
+                for (mut data_stream, mut writer) in
+                    data.into_iter().zip(writers.into_iter())
+                {
+                    join_set.spawn(async move {
+                        let mut cnt = 0;
+                        while let Some(batch) = data_stream.next().await.transpose()? {
+                            cnt += batch.num_rows();
+                            writer.write(&batch).await?;
+                        }
+                        writer.close().await?;
+                        Ok(cnt)
+                    });
+                }
+                while let Some(result) = join_set.join_next().await {
+                    match result {
+                        Ok(res) => {
+                            row_count += res?;
+                        } // propagate DataFusion error
+                        Err(e) => {
+                            if e.is_panic() {
+                                std::panic::resume_unwind(e.into_panic());
+                            } else {
+                                unreachable!();
+                            }
+                        }
+                    }
+                }
+            }
+            true => {
+                let mut writer = writers.remove(0);
+                for data_stream in data.iter_mut() {
+                    while let Some(batch) = data_stream.next().await.transpose()? {
+                        row_count += batch.num_rows();
+                        // TODO cleanup all multipart writes when any encounters an error
+                        writer.write(&batch).await?;
+                    }
+                }
+
+                writer.close().await?;
+            }
+        }
+
+        Ok(row_count as u64)
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod test_util {
     use super::*;
@@ -623,7 +851,6 @@ mod tests {
     use super::*;
 
     use crate::datasource::file_format::parquet::test_util::store_parquet;
-    use crate::datasource::physical_plan::get_scan_files;
     use crate::physical_plan::metrics::MetricValue;
     use crate::prelude::{SessionConfig, SessionContext};
     use arrow::array::{Array, ArrayRef, StringArray};
@@ -1181,10 +1408,13 @@ mod tests {
         let column = batches[0].column(0);
         assert_eq!(&DataType::Decimal128(13, 2), column.data_type());
 
-        // parquet use the fixed length binary as the physical type to store decimal
-        // TODO: arrow-rs don't support convert the physical type of binary to decimal
-        // https://github.com/apache/arrow-rs/pull/2160
-        // let exec = get_exec(&session_ctx, "byte_array_decimal.parquet", None, None).await?;
+        // parquet use the byte array as the physical type to store decimal
+        let exec = get_exec(&state, "byte_array_decimal.parquet", None, None).await?;
+        let batches = collect(exec, task_ctx.clone()).await?;
+        assert_eq!(1, batches.len());
+        assert_eq!(1, batches[0].num_columns());
+        let column = batches[0].column(0);
+        assert_eq!(&DataType::Decimal128(4, 2), column.data_type());
 
         Ok(())
     }
@@ -1211,25 +1441,6 @@ mod tests {
             .metadata()
             .clone();
         check_page_index_validation(builder.column_index(), builder.offset_index());
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_get_scan_files() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let state = session_ctx.state();
-        let projection = Some(vec![9]);
-        let exec = get_exec(&state, "alltypes_plain.parquet", projection, None).await?;
-        let scan_files = get_scan_files(exec)?;
-        assert_eq!(scan_files.len(), 1);
-        assert_eq!(scan_files[0].len(), 1);
-        assert_eq!(scan_files[0][0].len(), 1);
-        assert!(scan_files[0][0][0]
-            .object_meta
-            .location
-            .to_string()
-            .contains("alltypes_plain.parquet"));
 
         Ok(())
     }

@@ -25,8 +25,9 @@ use datafusion_common::tree_node::{
     RewriteRecursion, TreeNode, TreeNodeRewriter, TreeNodeVisitor, VisitRecursion,
 };
 use datafusion_common::{
-    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result,
+    internal_err, Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result,
 };
+use datafusion_expr::expr::Alias;
 use datafusion_expr::{
     col,
     logical_plan::{Aggregate, Filter, LogicalPlan, Projection, Sort, Window},
@@ -161,9 +162,7 @@ impl CommonSubexprEliminate {
                 Arc::new(new_input),
             )?))
         } else {
-            Err(DataFusionError::Internal(
-                "Failed to pop predicate expr".to_string(),
-            ))
+            internal_err!("Failed to pop predicate expr")
         }
     }
 
@@ -264,22 +263,18 @@ impl CommonSubexprEliminate {
                         agg_exprs.push(expr.clone().alias(&id));
                     }
                     _ => {
-                        return Err(DataFusionError::Internal(
-                            "expr_set invalid state".to_string(),
-                        ));
+                        return internal_err!("expr_set invalid state");
                     }
                 }
             }
 
             let mut proj_exprs = vec![];
             for expr in &new_group_expr {
-                let out_col: Column =
-                    expr.to_field(&new_input_schema)?.qualified_column();
-                proj_exprs.push(Expr::Column(out_col));
+                extract_expressions(expr, &new_input_schema, &mut proj_exprs)?
             }
             for (expr_rewritten, expr_orig) in rewritten.into_iter().zip(new_aggr_expr) {
                 if expr_rewritten == expr_orig {
-                    if let Expr::Alias(expr, name) = expr_rewritten {
+                    if let Expr::Alias(Alias { expr, name, .. }) = expr_rewritten {
                         agg_exprs.push(expr.alias(&name));
                         proj_exprs.push(Expr::Column(Column::from_name(name)));
                     } else {
@@ -369,6 +364,7 @@ impl OptimizerRule for CommonSubexprEliminate {
             | LogicalPlan::Distinct(_)
             | LogicalPlan::Extension(_)
             | LogicalPlan::Dml(_)
+            | LogicalPlan::Copy(_)
             | LogicalPlan::Unnest(_)
             | LogicalPlan::Prepare(_) => {
                 // apply the optimization to all inputs of the plan
@@ -453,9 +449,7 @@ fn build_common_expr_project_plan(
                 project_exprs.push(expr.clone().alias(&id));
             }
             _ => {
-                return Err(DataFusionError::Internal(
-                    "expr_set invalid state".to_string(),
-                ));
+                return internal_err!("expr_set invalid state");
             }
         }
     }
@@ -486,6 +480,22 @@ fn build_recover_project_plan(schema: &DFSchema, input: LogicalPlan) -> LogicalP
         Projection::try_new(col_exprs, Arc::new(input))
             .expect("Cannot build projection plan from an invalid schema"),
     )
+}
+
+fn extract_expressions(
+    expr: &Expr,
+    schema: &DFSchema,
+    result: &mut Vec<Expr>,
+) -> Result<()> {
+    if let Expr::GroupingSet(groupings) = expr {
+        for e in groupings.distinct_expr() {
+            result.push(Expr::Column(e.to_field(schema)?.qualified_column()))
+        }
+    } else {
+        result.push(Expr::Column(expr.to_field(schema)?.qualified_column()));
+    }
+
+    Ok(())
 }
 
 /// Which type of [expressions](Expr) should be considered for rewriting?
@@ -705,9 +715,7 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
                     Ok(RewriteRecursion::Skip)
                 }
             }
-            _ => Err(DataFusionError::Internal(
-                "expr_set invalid state".to_string(),
-            )),
+            _ => internal_err!("expr_set invalid state"),
         }
     }
 
@@ -773,8 +781,8 @@ mod test {
         avg, col, lit, logical_plan::builder::LogicalPlanBuilder, sum,
     };
     use datafusion_expr::{
-        AccumulatorFunctionImplementation, AggregateUDF, ReturnTypeFunction, Signature,
-        StateTypeFunction, Volatility,
+        grouping_set, AccumulatorFactoryFunction, AggregateUDF, ReturnTypeFunction,
+        Signature, StateTypeFunction, Volatility,
     };
 
     use crate::optimizer::OptimizerContext;
@@ -898,8 +906,7 @@ mod test {
             assert_eq!(inputs, &[DataType::UInt32]);
             Ok(Arc::new(DataType::UInt32))
         });
-        let accumulator: AccumulatorFunctionImplementation =
-            Arc::new(|_| unimplemented!());
+        let accumulator: AccumulatorFactoryFunction = Arc::new(|_| unimplemented!());
         let state_type: StateTypeFunction = Arc::new(|_| unimplemented!());
         let udf_agg = |inner: Expr| {
             Expr::AggregateUDF(datafusion_expr::expr::AggregateUDF::new(
@@ -1218,7 +1225,7 @@ mod test {
             .map(|field| (field.name(), field.data_type()))
             .collect();
         let formatted_fields_with_datatype = format!("{fields_with_datatypes:#?}");
-        let expected = r###"[
+        let expected = r#"[
     (
         "a",
         UInt64,
@@ -1231,7 +1238,7 @@ mod test {
         "c",
         UInt64,
     ),
-]"###;
+]"#;
         assert_eq!(expected, formatted_fields_with_datatype);
     }
 
@@ -1250,6 +1257,54 @@ mod test {
 
         assert_optimized_plan_eq(expected, &plan);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_extract_expressions_from_grouping_set() -> Result<()> {
+        let mut result = Vec::with_capacity(3);
+        let grouping = grouping_set(vec![vec![col("a"), col("b")], vec![col("c")]]);
+        let schema = DFSchema::new_with_metadata(
+            vec![
+                DFField::new_unqualified("a", DataType::Int32, false),
+                DFField::new_unqualified("b", DataType::Int32, false),
+                DFField::new_unqualified("c", DataType::Int32, false),
+            ],
+            HashMap::default(),
+        )?;
+        extract_expressions(&grouping, &schema, &mut result)?;
+
+        assert!(result.len() == 3);
+        Ok(())
+    }
+
+    #[test]
+    fn test_extract_expressions_from_grouping_set_with_identical_expr() -> Result<()> {
+        let mut result = Vec::with_capacity(2);
+        let grouping = grouping_set(vec![vec![col("a"), col("b")], vec![col("a")]]);
+        let schema = DFSchema::new_with_metadata(
+            vec![
+                DFField::new_unqualified("a", DataType::Int32, false),
+                DFField::new_unqualified("b", DataType::Int32, false),
+            ],
+            HashMap::default(),
+        )?;
+        extract_expressions(&grouping, &schema, &mut result)?;
+
+        assert!(result.len() == 2);
+        Ok(())
+    }
+
+    #[test]
+    fn test_extract_expressions_from_col() -> Result<()> {
+        let mut result = Vec::with_capacity(1);
+        let schema = DFSchema::new_with_metadata(
+            vec![DFField::new_unqualified("a", DataType::Int32, false)],
+            HashMap::default(),
+        )?;
+        extract_expressions(&col("a"), &schema, &mut result)?;
+
+        assert!(result.len() == 1);
         Ok(())
     }
 }

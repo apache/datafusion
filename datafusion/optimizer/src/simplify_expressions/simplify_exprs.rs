@@ -23,7 +23,7 @@ use super::{ExprSimplifier, SimplifyContext};
 use crate::utils::merge_schema;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{DFSchema, DFSchemaRef, Result};
-use datafusion_expr::{logical_plan::LogicalPlan, utils::from_plan};
+use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_physical_expr::execution_props::ExecutionProps;
 
 /// Optimizer Pass that simplifies [`LogicalPlan`]s by rewriting
@@ -86,28 +86,14 @@ impl SimplifyExpressions {
             .expressions()
             .into_iter()
             .map(|e| {
-                // We need to keep original expression name, if any.
-                // Constant folding should not change expression name.
-                let name = &e.display_name();
-
-                // Apply the actual simplification logic
+                // TODO: unify with `rewrite_preserving_name`
+                let original_name = e.name_for_alias()?;
                 let new_e = simplifier.simplify(e)?;
-
-                let new_name = &new_e.display_name();
-
-                if let (Ok(expr_name), Ok(new_expr_name)) = (name, new_name) {
-                    if expr_name != new_expr_name {
-                        Ok(new_e.alias(expr_name))
-                    } else {
-                        Ok(new_e)
-                    }
-                } else {
-                    Ok(new_e)
-                }
+                new_e.alias_if_changed(original_name)
             })
             .collect::<Result<Vec<_>>>()?;
 
-        from_plan(plan, &expr, &new_inputs)
+        plan.with_new_exprs(expr, &new_inputs)
     }
 }
 
@@ -487,8 +473,8 @@ mod tests {
         let expected = format!(
             "Projection: TimestampNanosecond({}, Some(\"+00:00\")) AS now(), TimestampNanosecond({}, Some(\"+00:00\")) AS t2\
             \n  TableScan: test",
-            time.timestamp_nanos(),
-            time.timestamp_nanos()
+            time.timestamp_nanos_opt().unwrap(),
+            time.timestamp_nanos_opt().unwrap()
         );
 
         assert_eq!(expected, actual);

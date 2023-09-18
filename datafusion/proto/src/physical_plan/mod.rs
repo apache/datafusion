@@ -21,7 +21,6 @@ use std::sync::Arc;
 
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::datasource::file_format::file_type::FileCompressionType;
 use datafusion::datasource::physical_plan::{AvroExec, CsvExec, ParquetExec};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
@@ -35,7 +34,7 @@ use datafusion::physical_plan::explain::ExplainExec;
 use datafusion::physical_plan::expressions::{Column, PhysicalSortExpr};
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
-use datafusion::physical_plan::joins::CrossJoinExec;
+use datafusion::physical_plan::joins::{CrossJoinExec, NestedLoopJoinExec};
 use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion::physical_plan::projection::ProjectionExec;
@@ -47,12 +46,13 @@ use datafusion::physical_plan::windows::{create_window_expr, WindowAggExec};
 use datafusion::physical_plan::{
     udaf, AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, WindowExpr,
 };
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::FileCompressionType;
+use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use prost::bytes::BufMut;
 use prost::Message;
 
-use crate::common::proto_error;
-use crate::common::{csv_delimiter_to_string, str_to_byte};
+use crate::common::str_to_byte;
+use crate::common::{byte_to_string, proto_error};
 use crate::physical_plan::from_proto::{
     parse_physical_expr, parse_physical_sort_expr, parse_protobuf_file_scan_config,
 };
@@ -155,7 +155,16 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     registry,
                 )?,
                 scan.has_header,
-                str_to_byte(&scan.delimiter)?,
+                str_to_byte(&scan.delimiter, "delimiter")?,
+                str_to_byte(&scan.quote, "quote")?,
+                if let Some(protobuf::csv_scan_exec_node::OptionalEscape::Escape(
+                    escape,
+                )) = &scan.optional_escape
+                {
+                    Some(str_to_byte(escape, "escape")?)
+                } else {
+                    None
+                },
                 FileCompressionType::UNCOMPRESSED,
             ))),
             PhysicalPlanType::ParquetScan(scan) => {
@@ -240,9 +249,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                             ),
                         )?))
                     }
-                    _ => Err(DataFusionError::Internal(
-                        "Invalid partitioning scheme".to_owned(),
-                    )),
+                    _ => internal_err!("Invalid partitioning scheme"),
                 }
             }
             PhysicalPlanType::GlobalLimit(limit) => {
@@ -322,9 +329,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                     &physical_schema,
                                 )?)
                             }
-                            _ => Err(DataFusionError::Internal(
-                                "Invalid expression for WindowAggrExec".to_string(),
-                            )),
+                            _ => internal_err!("Invalid expression for WindowAggrExec"),
                         }
                     })
                     .collect::<Result<Vec<_>, _>>()?;
@@ -358,6 +363,9 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         AggregateMode::FinalPartitioned
                     }
                     protobuf::AggregateMode::Single => AggregateMode::Single,
+                    protobuf::AggregateMode::SinglePartitioned => {
+                        AggregateMode::SinglePartitioned
+                    }
                 };
 
                 let num_expr = hash_agg.group_expr.len();
@@ -441,7 +449,8 @@ impl AsExecutionPlan for PhysicalPlanNode {
                             ExprType::AggregateExpr(agg_node) => {
                                 let input_phy_expr: Vec<Arc<dyn PhysicalExpr>> = agg_node.expr.iter()
                                     .map(|e| parse_physical_expr(e, registry, &physical_schema).unwrap()).collect();
-
+                                let ordering_req: Vec<PhysicalSortExpr> = agg_node.ordering_req.iter()
+                                    .map(|e| parse_physical_sort_expr(e, registry, &physical_schema).unwrap()).collect();
                                 agg_node.aggregate_function.as_ref().map(|func| {
                                     match func {
                                         AggregateFunction::AggrFunction(i) => {
@@ -458,6 +467,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                                 &aggr_function.into(),
                                                 agg_node.distinct,
                                                 input_phy_expr.as_slice(),
+                                                &ordering_req,
                                                 &physical_schema,
                                                 name.to_string(),
                                             )
@@ -471,10 +481,9 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                     proto_error("Invalid AggregateExpr, missing aggregate_function")
                                 })
                             }
-                            _ => Err(DataFusionError::Internal(
+                            _ => internal_err!(
                                 "Invalid aggregate expression for AggregateExec"
-                                    .to_string(),
-                            )),
+                            ),
                         }
                     })
                     .collect::<Result<Vec<_>, _>>()?;
@@ -637,9 +646,9 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                 },
                             })
                         } else {
-                            Err(DataFusionError::Internal(format!(
+                            internal_err!(
                                 "physical_plan::from_proto() {self:?}"
-                            )))
+                            )
                         }
                     })
                     .collect::<Result<Vec<_>, _>>()?;
@@ -684,13 +693,20 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                 },
                             })
                         } else {
-                            Err(DataFusionError::Internal(format!(
+                            internal_err!(
                                 "physical_plan::from_proto() {self:?}"
-                            )))
+                            )
                         }
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok(Arc::new(SortPreservingMergeExec::new(exprs, input)))
+                let fetch = if sort.fetch < 0 {
+                    None
+                } else {
+                    Some(sort.fetch as usize)
+                };
+                Ok(Arc::new(
+                    SortPreservingMergeExec::new(exprs, input).with_fetch(fetch),
+                ))
             }
             PhysicalPlanType::Extension(extension) => {
                 let inputs: Vec<Arc<dyn ExecutionPlan>> = extension
@@ -706,6 +722,61 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 )?;
 
                 Ok(extension_node)
+            }
+            PhysicalPlanType::NestedLoopJoin(join) => {
+                let left: Arc<dyn ExecutionPlan> =
+                    into_physical_plan(&join.left, registry, runtime, extension_codec)?;
+                let right: Arc<dyn ExecutionPlan> =
+                    into_physical_plan(&join.right, registry, runtime, extension_codec)?;
+                let join_type =
+                    protobuf::JoinType::from_i32(join.join_type).ok_or_else(|| {
+                        proto_error(format!(
+                            "Received a NestedLoopJoinExecNode message with unknown JoinType {}",
+                            join.join_type
+                        ))
+                    })?;
+                let filter = join
+                    .filter
+                    .as_ref()
+                    .map(|f| {
+                        let schema = f
+                            .schema
+                            .as_ref()
+                            .ok_or_else(|| proto_error("Missing JoinFilter schema"))?
+                            .try_into()?;
+
+                        let expression = parse_physical_expr(
+                            f.expression.as_ref().ok_or_else(|| {
+                                proto_error("Unexpected empty filter expression")
+                            })?,
+                            registry, &schema
+                        )?;
+                        let column_indices = f.column_indices
+                            .iter()
+                            .map(|i| {
+                                let side = protobuf::JoinSide::from_i32(i.side)
+                                    .ok_or_else(|| proto_error(format!(
+                                        "Received a NestedLoopJoinExecNode message with JoinSide in Filter {}",
+                                        i.side))
+                                    )?;
+
+                                Ok(ColumnIndex{
+                                    index: i.index as usize,
+                                    side: side.into(),
+                                })
+                            })
+                            .collect::<Result<Vec<_>>>()?;
+
+                        Ok(JoinFilter::new(expression, column_indices, schema))
+                    })
+                    .map_or(Ok(None), |v: Result<JoinFilter>| v.map(Some))?;
+
+                Ok(Arc::new(NestedLoopJoinExec::try_new(
+                    left,
+                    right,
+                    filter,
+                    &join_type.into(),
+                )?))
             }
         }
     }
@@ -932,6 +1003,9 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     protobuf::AggregateMode::FinalPartitioned
                 }
                 AggregateMode::Single => protobuf::AggregateMode::Single,
+                AggregateMode::SinglePartitioned => {
+                    protobuf::AggregateMode::SinglePartitioned
+                }
             };
             let input_schema = exec.input_schema();
             let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
@@ -1000,7 +1074,15 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     protobuf::CsvScanExecNode {
                         base_conf: Some(exec.base_config().try_into()?),
                         has_header: exec.has_header(),
-                        delimiter: csv_delimiter_to_string(exec.delimiter())?,
+                        delimiter: byte_to_string(exec.delimiter(), "delimiter")?,
+                        quote: byte_to_string(exec.quote(), "quote")?,
+                        optional_escape: if let Some(escape) = exec.escape() {
+                            Some(protobuf::csv_scan_exec_node::OptionalEscape::Escape(
+                                byte_to_string(escape, "escape")?,
+                            ))
+                        } else {
+                            None
+                        },
                     },
                 )),
             })
@@ -1142,8 +1224,55 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     Box::new(protobuf::SortPreservingMergeExecNode {
                         input: Some(Box::new(input)),
                         expr,
+                        fetch: exec.fetch().map(|f| f as i64).unwrap_or(-1),
                     }),
                 )),
+            })
+        } else if let Some(exec) = plan.downcast_ref::<NestedLoopJoinExec>() {
+            let left = protobuf::PhysicalPlanNode::try_from_physical_plan(
+                exec.left().to_owned(),
+                extension_codec,
+            )?;
+            let right = protobuf::PhysicalPlanNode::try_from_physical_plan(
+                exec.right().to_owned(),
+                extension_codec,
+            )?;
+
+            let join_type: protobuf::JoinType = exec.join_type().to_owned().into();
+            let filter = exec
+                .filter()
+                .as_ref()
+                .map(|f| {
+                    let expression = f.expression().to_owned().try_into()?;
+                    let column_indices = f
+                        .column_indices()
+                        .iter()
+                        .map(|i| {
+                            let side: protobuf::JoinSide = i.side.to_owned().into();
+                            protobuf::ColumnIndex {
+                                index: i.index as u32,
+                                side: side.into(),
+                            }
+                        })
+                        .collect();
+                    let schema = f.schema().try_into()?;
+                    Ok(protobuf::JoinFilter {
+                        expression: Some(expression),
+                        column_indices,
+                        schema: Some(schema),
+                    })
+                })
+                .map_or(Ok(None), |v: Result<protobuf::JoinFilter>| v.map(Some))?;
+
+            Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::NestedLoopJoin(Box::new(
+                    protobuf::NestedLoopJoinExecNode {
+                        left: Some(Box::new(left)),
+                        right: Some(Box::new(right)),
+                        join_type: join_type.into(),
+                        filter,
+                    },
+                ))),
             })
         } else {
             let mut buf: Vec<u8> = vec![];
@@ -1166,9 +1295,9 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         )),
                     })
                 }
-                Err(e) => Err(DataFusionError::Internal(format!(
+                Err(e) => internal_err!(
                     "Unsupported plan and extension codec failed with [{e}]. Plan: {plan_clone:?}"
-                ))),
+                ),
             }
         }
     }
@@ -1220,9 +1349,7 @@ impl PhysicalExtensionCodec for DefaultPhysicalExtensionCodec {
         _inputs: &[Arc<dyn ExecutionPlan>],
         _registry: &dyn FunctionRegistry,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Err(DataFusionError::NotImplemented(
-            "PhysicalExtensionCodec is not provided".to_string(),
-        ))
+        not_impl_err!("PhysicalExtensionCodec is not provided")
     }
 
     fn try_encode(
@@ -1230,9 +1357,7 @@ impl PhysicalExtensionCodec for DefaultPhysicalExtensionCodec {
         _node: Arc<dyn ExecutionPlan>,
         _buf: &mut Vec<u8>,
     ) -> Result<()> {
-        Err(DataFusionError::NotImplemented(
-            "PhysicalExtensionCodec is not provided".to_string(),
-        ))
+        not_impl_err!("PhysicalExtensionCodec is not provided")
     }
 }
 
@@ -1262,19 +1387,18 @@ mod roundtrip_tests {
     use datafusion::execution::context::ExecutionProps;
     use datafusion::logical_expr::create_udf;
     use datafusion::logical_expr::{BuiltinScalarFunction, Volatility};
-    use datafusion::physical_expr::expressions::in_list;
+    use datafusion::physical_expr::expressions::GetFieldAccessExpr;
+    use datafusion::physical_expr::expressions::{cast, in_list};
     use datafusion::physical_expr::ScalarFunctionExpr;
     use datafusion::physical_plan::aggregates::PhysicalGroupBy;
-    use datafusion::physical_plan::expressions::{
-        date_time_interval_expr, like, BinaryExpr, GetIndexedFieldExpr,
-    };
+    use datafusion::physical_plan::expressions::{like, BinaryExpr, GetIndexedFieldExpr};
     use datafusion::physical_plan::functions::make_scalar_function;
     use datafusion::physical_plan::projection::ProjectionExec;
     use datafusion::physical_plan::{functions, udaf};
     use datafusion::{
         arrow::{
             compute::kernels::sort::SortOptions,
-            datatypes::{DataType, Field, Schema},
+            datatypes::{DataType, Field, Fields, Schema},
         },
         datasource::{
             listing::PartitionedFile,
@@ -1287,7 +1411,7 @@ mod roundtrip_tests {
             expressions::{binary, col, lit, NotExpr},
             expressions::{Avg, Column, DistinctCount, PhysicalSortExpr},
             filter::FilterExec,
-            joins::{HashJoinExec, PartitionMode},
+            joins::{HashJoinExec, NestedLoopJoinExec, PartitionMode},
             limit::{GlobalLimitExec, LocalLimitExec},
             sorts::sort::SortExec,
             AggregateExpr, ExecutionPlan, PhysicalExpr, Statistics,
@@ -1297,7 +1421,7 @@ mod roundtrip_tests {
     };
     use datafusion_common::Result;
     use datafusion_expr::{
-        Accumulator, AccumulatorFunctionImplementation, AggregateUDF, ReturnTypeFunction,
+        Accumulator, AccumulatorFactoryFunction, AggregateUDF, ReturnTypeFunction,
         Signature, StateTypeFunction,
     };
 
@@ -1350,7 +1474,7 @@ mod roundtrip_tests {
         let date_expr = col("some_date", &schema)?;
         let literal_expr = col("some_interval", &schema)?;
         let date_time_interval_expr =
-            date_time_interval_expr(date_expr, Operator::Plus, literal_expr, &schema)?;
+            binary(date_expr, Operator::Plus, literal_expr, &schema)?;
         let plan = Arc::new(ProjectionExec::try_new(
             vec![(date_time_interval_expr, "result".to_string())],
             input,
@@ -1424,6 +1548,34 @@ mod roundtrip_tests {
     }
 
     #[test]
+    fn roundtrip_nested_loop_join() -> Result<()> {
+        let field_a = Field::new("col", DataType::Int64, false);
+        let schema_left = Schema::new(vec![field_a.clone()]);
+        let schema_right = Schema::new(vec![field_a]);
+
+        let schema_left = Arc::new(schema_left);
+        let schema_right = Arc::new(schema_right);
+        for join_type in &[
+            JoinType::Inner,
+            JoinType::Left,
+            JoinType::Right,
+            JoinType::Full,
+            JoinType::LeftAnti,
+            JoinType::RightAnti,
+            JoinType::LeftSemi,
+            JoinType::RightSemi,
+        ] {
+            roundtrip_test(Arc::new(NestedLoopJoinExec::try_new(
+                Arc::new(EmptyExec::new(false, schema_left.clone())),
+                Arc::new(EmptyExec::new(false, schema_right.clone())),
+                None,
+                join_type,
+            )?))?;
+        }
+        Ok(())
+    }
+
+    #[test]
     fn rountrip_aggregate() -> Result<()> {
         let field_a = Field::new("a", DataType::Int64, false);
         let field_b = Field::new("b", DataType::Int64, false);
@@ -1432,14 +1584,11 @@ mod roundtrip_tests {
         let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
             vec![(col("a", &schema)?, "unused".to_string())];
 
-        let aggregates: Vec<Arc<dyn AggregateExpr>> =
-            vec![Arc::new(Avg::new_with_pre_cast(
-                col("b", &schema)?,
-                "AVG(b)".to_string(),
-                DataType::Float64,
-                DataType::Float64,
-                true,
-            ))];
+        let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Avg::new(
+            cast(col("b", &schema)?, &schema, DataType::Float64)?,
+            "AVG(b)".to_string(),
+            DataType::Float64,
+        ))];
 
         roundtrip_test(Arc::new(AggregateExec::try_new(
             AggregateMode::Final,
@@ -1484,8 +1633,7 @@ mod roundtrip_tests {
 
         let rt_func: ReturnTypeFunction =
             Arc::new(move |_| Ok(Arc::new(DataType::Int64)));
-        let accumulator: AccumulatorFunctionImplementation =
-            Arc::new(|_| Ok(Box::new(Example)));
+        let accumulator: AccumulatorFactoryFunction = Arc::new(|_| Ok(Box::new(Example)));
         let st_func: StateTypeFunction =
             Arc::new(move |_| Ok(Arc::new(vec![DataType::Int64])));
 
@@ -1665,6 +1813,7 @@ mod roundtrip_tests {
             fun_expr,
             vec![col("a", &schema)?],
             &DataType::Int64,
+            None,
         );
 
         let project =
@@ -1698,6 +1847,7 @@ mod roundtrip_tests {
             scalar_fn,
             vec![col("a", &schema)?],
             &DataType::Int64,
+            None,
         );
 
         let project =
@@ -1758,18 +1908,83 @@ mod roundtrip_tests {
     }
 
     #[test]
-    fn roundtrip_get_indexed_field() -> Result<()> {
+    fn roundtrip_get_indexed_field_named_struct_field() -> Result<()> {
         let fields = vec![
             Field::new("id", DataType::Int64, true),
-            Field::new_list("a", Field::new("item", DataType::Float64, true), true),
+            Field::new_struct(
+                "arg",
+                Fields::from(vec![Field::new("name", DataType::Float64, true)]),
+                true,
+            ),
         ];
 
         let schema = Schema::new(fields);
         let input = Arc::new(EmptyExec::new(false, Arc::new(schema.clone())));
 
-        let col_a = col("a", &schema)?;
-        let key = ScalarValue::Int64(Some(1));
-        let get_indexed_field_expr = Arc::new(GetIndexedFieldExpr::new(col_a, key));
+        let col_arg = col("arg", &schema)?;
+        let get_indexed_field_expr = Arc::new(GetIndexedFieldExpr::new(
+            col_arg,
+            GetFieldAccessExpr::NamedStructField {
+                name: ScalarValue::Utf8(Some(String::from("name"))),
+            },
+        ));
+
+        let plan = Arc::new(ProjectionExec::try_new(
+            vec![(get_indexed_field_expr, "result".to_string())],
+            input,
+        )?);
+
+        roundtrip_test(plan)
+    }
+
+    #[test]
+    fn roundtrip_get_indexed_field_list_index() -> Result<()> {
+        let fields = vec![
+            Field::new("id", DataType::Int64, true),
+            Field::new_list("arg", Field::new("item", DataType::Float64, true), true),
+            Field::new("key", DataType::Int64, true),
+        ];
+
+        let schema = Schema::new(fields);
+        let input = Arc::new(EmptyExec::new(false, Arc::new(schema.clone())));
+
+        let col_arg = col("arg", &schema)?;
+        let col_key = col("key", &schema)?;
+        let get_indexed_field_expr = Arc::new(GetIndexedFieldExpr::new(
+            col_arg,
+            GetFieldAccessExpr::ListIndex { key: col_key },
+        ));
+
+        let plan = Arc::new(ProjectionExec::try_new(
+            vec![(get_indexed_field_expr, "result".to_string())],
+            input,
+        )?);
+
+        roundtrip_test(plan)
+    }
+
+    #[test]
+    fn roundtrip_get_indexed_field_list_range() -> Result<()> {
+        let fields = vec![
+            Field::new("id", DataType::Int64, true),
+            Field::new_list("arg", Field::new("item", DataType::Float64, true), true),
+            Field::new("start", DataType::Int64, true),
+            Field::new("stop", DataType::Int64, true),
+        ];
+
+        let schema = Schema::new(fields);
+        let input = Arc::new(EmptyExec::new(false, Arc::new(schema.clone())));
+
+        let col_arg = col("arg", &schema)?;
+        let col_start = col("start", &schema)?;
+        let col_stop = col("stop", &schema)?;
+        let get_indexed_field_expr = Arc::new(GetIndexedFieldExpr::new(
+            col_arg,
+            GetFieldAccessExpr::ListRange {
+                start: col_start,
+                stop: col_stop,
+            },
+        ));
 
         let plan = Arc::new(ProjectionExec::try_new(
             vec![(get_indexed_field_expr, "result".to_string())],

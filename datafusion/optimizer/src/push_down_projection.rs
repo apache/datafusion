@@ -19,15 +19,16 @@
 //! loaded into memory
 
 use crate::eliminate_project::can_eliminate;
+use crate::merge_projection::merge_projection;
 use crate::optimizer::ApplyOrder;
 use crate::push_down_filter::replace_cols_by_name;
 use crate::{OptimizerConfig, OptimizerRule};
 use arrow::error::Result as ArrowResult;
 use datafusion_common::ScalarValue::UInt8;
 use datafusion_common::{
-    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ToDFSchema,
+    plan_err, Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ToDFSchema,
 };
-use datafusion_expr::expr::AggregateFunction;
+use datafusion_expr::expr::{AggregateFunction, Alias};
 use datafusion_expr::utils::exprlist_to_fields;
 use datafusion_expr::{
     logical_plan::{Aggregate, LogicalPlan, Projection, TableScan, Union},
@@ -89,32 +90,7 @@ impl OptimizerRule for PushDownProjection {
 
         let new_plan = match child_plan {
             LogicalPlan::Projection(child_projection) => {
-                // merge projection
-                let replace_map = collect_projection_expr(child_projection);
-                let new_exprs = projection
-                    .expr
-                    .iter()
-                    .map(|expr| replace_cols_by_name(expr.clone(), &replace_map))
-                    .enumerate()
-                    .map(|(i, e)| match e {
-                        Ok(e) => {
-                            let parent_expr =
-                                projection.schema.fields()[i].qualified_name();
-                            if e.display_name()? == parent_expr {
-                                Ok(e)
-                            } else {
-                                Ok(e.alias(parent_expr))
-                            }
-                        }
-                        Err(e) => Err(e),
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                let new_plan = LogicalPlan::Projection(Projection::try_new_with_schema(
-                    new_exprs,
-                    child_projection.input.clone(),
-                    projection.schema.clone(),
-                )?);
-
+                let new_plan = merge_projection(projection, child_projection)?;
                 self.try_optimize(&new_plan, _config)?.unwrap_or(new_plan)
             }
             LogicalPlan::Join(join) => {
@@ -410,7 +386,7 @@ pub fn collect_projection_expr(projection: &Projection) -> HashMap<String, Expr>
         .flat_map(|(i, field)| {
             // strip alias, as they should not be part of filters
             let expr = match &projection.expr[i] {
-                Expr::Alias(expr, _) => expr.as_ref().clone(),
+                Expr::Alias(Alias { expr, .. }) => expr.as_ref().clone(),
                 expr => expr.clone(),
             };
 
@@ -439,9 +415,7 @@ fn get_expr(columns: &HashSet<Column>, schema: &DFSchemaRef) -> Result<Vec<Expr>
         })
         .collect::<Vec<Expr>>();
     if columns.len() != expr.len() {
-        Err(DataFusionError::Plan(format!(
-            "required columns can't push down, columns: {columns:?}"
-        )))
+        plan_err!("required columns can't push down, columns: {columns:?}")
     } else {
         Ok(expr)
     }

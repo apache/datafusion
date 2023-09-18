@@ -23,11 +23,12 @@ use arrow::{
 };
 use blake2::{Blake2b512, Blake2s256, Digest};
 use blake3::Hasher as Blake3;
-use datafusion_common::cast::{
-    as_binary_array, as_generic_binary_array, as_generic_string_array,
-};
 use datafusion_common::ScalarValue;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{
+    cast::{as_binary_array, as_generic_binary_array, as_generic_string_array},
+    plan_err,
+};
+use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 use md5::Md5;
 use sha2::{Sha224, Sha256, Sha384, Sha512};
@@ -65,9 +66,9 @@ fn digest_process(
             DataType::LargeBinary => {
                 digest_algorithm.digest_binary_array::<i64>(a.as_ref())
             }
-            other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {other:?} for function {digest_algorithm}",
-            ))),
+            other => internal_err!(
+                "Unsupported data type {other:?} for function {digest_algorithm}"
+            ),
         },
         ColumnarValue::Scalar(scalar) => match scalar {
             ScalarValue::Utf8(a) | ScalarValue::LargeUtf8(a) => {
@@ -76,9 +77,9 @@ fn digest_process(
             }
             ScalarValue::Binary(a) | ScalarValue::LargeBinary(a) => Ok(digest_algorithm
                 .digest_scalar(a.as_ref().map(|v: &Vec<u8>| v.as_slice()))),
-            other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {other:?} for function {digest_algorithm}",
-            ))),
+            other => internal_err!(
+                "Unsupported data type {other:?} for function {digest_algorithm}"
+            ),
         },
     }
 }
@@ -224,9 +225,9 @@ impl FromStr for DigestAlgorithm {
                 .map(|i| i.to_string())
                 .collect::<Vec<_>>()
                 .join(", ");
-                return Err(DataFusionError::Plan(format!(
-                    "There is no built-in digest algorithm named '{name}', currently supported algorithms are: {options}",
-                )));
+                return plan_err!(
+                    "There is no built-in digest algorithm named '{name}', currently supported algorithms are: {options}"
+                );
             }
         })
     }
@@ -237,11 +238,11 @@ macro_rules! define_digest_function {
         #[doc = $DOC]
         pub fn $NAME(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             if args.len() != 1 {
-                return Err(DataFusionError::Internal(format!(
+                return internal_err!(
                     "{:?} args were supplied but {} takes exactly one argument",
                     args.len(),
-                    DigestAlgorithm::$METHOD.to_string(),
-                )));
+                    DigestAlgorithm::$METHOD.to_string()
+                );
             }
             digest_process(&args[0], DigestAlgorithm::$METHOD)
         }
@@ -263,11 +264,11 @@ fn hex_encode<T: AsRef<[u8]>>(data: T) -> String {
 /// computes md5 hash digest of the given input
 pub fn md5(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     if args.len() != 1 {
-        return Err(DataFusionError::Internal(format!(
+        return internal_err!(
             "{:?} args were supplied but {} takes exactly one argument",
             args.len(),
-            DigestAlgorithm::Md5,
-        )));
+            DigestAlgorithm::Md5
+        );
     }
     let value = digest_process(&args[0], DigestAlgorithm::Md5)?;
     // md5 requires special handling because of its unique utf8 return type
@@ -283,11 +284,7 @@ pub fn md5(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         ColumnarValue::Scalar(ScalarValue::Binary(opt)) => {
             ColumnarValue::Scalar(ScalarValue::Utf8(opt.map(hex_encode::<_>)))
         }
-        _ => {
-            return Err(DataFusionError::Internal(
-                "Impossibly got invalid results from digest".into(),
-            ))
-        }
+        _ => return internal_err!("Impossibly got invalid results from digest"),
     })
 }
 
@@ -332,23 +329,21 @@ define_digest_function!(
 /// Standard algorithms are md5, sha1, sha224, sha256, sha384 and sha512.
 pub fn digest(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     if args.len() != 2 {
-        return Err(DataFusionError::Internal(format!(
+        return internal_err!(
             "{:?} args were supplied but digest takes exactly two arguments",
-            args.len(),
-        )));
+            args.len()
+        );
     }
     let digest_algorithm = match &args[1] {
         ColumnarValue::Scalar(scalar) => match scalar {
             ScalarValue::Utf8(Some(method)) | ScalarValue::LargeUtf8(Some(method)) => {
                 method.parse::<DigestAlgorithm>()
             }
-            other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {other:?} for function digest",
-            ))),
+            other => internal_err!("Unsupported data type {other:?} for function digest"),
         },
-        ColumnarValue::Array(_) => Err(DataFusionError::Internal(
-            "Digest using dynamically decided method is not yet supported".into(),
-        )),
+        ColumnarValue::Array(_) => {
+            internal_err!("Digest using dynamically decided method is not yet supported")
+        }
     }?;
     digest_process(&args[0], digest_algorithm)
 }

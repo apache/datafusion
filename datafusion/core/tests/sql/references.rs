@@ -29,12 +29,12 @@ async fn qualified_table_references() -> Result<()> {
     ] {
         let sql = format!("SELECT COUNT(*) FROM {table_ref}");
         let actual = execute_to_batches(&ctx, &sql).await;
-        let expected = vec![
-            "+-----------------+",
-            "| COUNT(UInt8(1)) |",
-            "+-----------------+",
-            "| 100             |",
-            "+-----------------+",
+        let expected = [
+            "+----------+",
+            "| COUNT(*) |",
+            "+----------+",
+            "| 100      |",
+            "+----------+",
         ];
         assert_batches_eq!(expected, &actual);
     }
@@ -73,7 +73,7 @@ async fn qualified_table_references_and_fields() -> Result<()> {
     // however, enclosing it in double quotes is ok
     let sql = r#"SELECT "f.c1" from test"#;
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+--------+",
         "| f.c1   |",
         "+--------+",
@@ -91,7 +91,7 @@ async fn qualified_table_references_and_fields() -> Result<()> {
     // check that duplicated table name and column name are ok
     let sql = r#"SELECT "test.c2" as expr1, test."test.c2" as expr2 from test"#;
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+-------+-------+",
         "| expr1 | expr2 |",
         "+-------+-------+",
@@ -107,7 +107,7 @@ async fn qualified_table_references_and_fields() -> Result<()> {
     // this
     let sql = r#"SELECT "....", "...." as c3 from test order by "....""#;
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+------+----+",
         "| .... | c3 |",
         "+------+----+",
@@ -124,7 +124,7 @@ async fn qualified_table_references_and_fields() -> Result<()> {
 async fn test_partial_qualified_name() -> Result<()> {
     let ctx = create_join_context("t1_id", "t2_id", true)?;
     let sql = "SELECT t1.t1_id, t1_name FROM public.t1";
-    let expected = vec![
+    let expected = [
         "+-------+---------+",
         "| t1_id | t1_name |",
         "+-------+---------+",

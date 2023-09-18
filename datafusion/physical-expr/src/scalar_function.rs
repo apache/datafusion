@@ -29,12 +29,16 @@
 //! This module also has a set of coercion rules to improve user experience: if an argument i32 is passed
 //! to a function that supports f64, it is coerced to f64.
 
+use crate::functions::out_ordering;
+use crate::functions::FuncMonotonicity;
 use crate::physical_expr::down_cast_any_ref;
+use crate::sort_properties::SortProperties;
 use crate::utils::expr_list_eq_strict_order;
 use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
+use datafusion_expr::expr_vec_fmt;
 use datafusion_expr::BuiltinScalarFunction;
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::ScalarFunctionImplementation;
@@ -50,6 +54,11 @@ pub struct ScalarFunctionExpr {
     name: String,
     args: Vec<Arc<dyn PhysicalExpr>>,
     return_type: DataType,
+    // Keeps monotonicity information of the function.
+    // FuncMonotonicity vector is one to one mapped to `args`,
+    // and it specifies the effect of an increase or decrease in
+    // the corresponding `arg` to the function value.
+    monotonicity: Option<FuncMonotonicity>,
 }
 
 impl Debug for ScalarFunctionExpr {
@@ -70,12 +79,14 @@ impl ScalarFunctionExpr {
         fun: ScalarFunctionImplementation,
         args: Vec<Arc<dyn PhysicalExpr>>,
         return_type: &DataType,
+        monotonicity: Option<FuncMonotonicity>,
     ) -> Self {
         Self {
             fun,
             name: name.to_owned(),
             args,
             return_type: return_type.clone(),
+            monotonicity,
         }
     }
 
@@ -102,16 +113,7 @@ impl ScalarFunctionExpr {
 
 impl fmt::Display for ScalarFunctionExpr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "{}({})",
-            self.name,
-            self.args
-                .iter()
-                .map(|e| format!("{e}"))
-                .collect::<Vec<String>>()
-                .join(", ")
-        )
+        write!(f, "{}({})", self.name, expr_vec_fmt!(self.args))
     }
 }
 
@@ -133,7 +135,11 @@ impl PhysicalExpr for ScalarFunctionExpr {
         // evaluate the arguments, if there are no arguments we'll instead pass in a null array
         // indicating the batch size (as a convention)
         let inputs = match (self.args.len(), self.name.parse::<BuiltinScalarFunction>()) {
-            (0, Ok(scalar_fun)) if scalar_fun.supports_zero_argument() => {
+            // MakeArray support zero argument but has the different behavior from the array with one null.
+            (0, Ok(scalar_fun))
+                if scalar_fun.supports_zero_argument()
+                    && scalar_fun != BuiltinScalarFunction::MakeArray =>
+            {
                 vec![ColumnarValue::create_null_array(batch.num_rows())]
             }
             _ => self
@@ -161,6 +167,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
             self.fun.clone(),
             children,
             self.return_type(),
+            self.monotonicity.clone(),
         )))
     }
 
@@ -170,6 +177,13 @@ impl PhysicalExpr for ScalarFunctionExpr {
         self.args.hash(&mut s);
         self.return_type.hash(&mut s);
         // Add `self.fun` when hash is available
+    }
+
+    fn get_ordering(&self, children: &[SortProperties]) -> SortProperties {
+        self.monotonicity
+            .as_ref()
+            .map(|monotonicity| out_ordering(monotonicity, children))
+            .unwrap_or(SortProperties::Unordered)
     }
 }
 

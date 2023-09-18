@@ -88,6 +88,10 @@ message ProjectionColumns {
 message CsvFormat {
   bool has_header = 1;
   string delimiter = 2;
+  string quote = 3;
+  oneof optional_escape {
+    string escape = 4;
+  }
 }
 
 message ParquetFormat {
@@ -396,11 +400,26 @@ message RollupNode {
   repeated LogicalExprNode expr = 1;
 }
 
+message NamedStructField {
+  ScalarValue name = 1;
+}
 
+message ListIndex {
+  LogicalExprNode key = 1;
+}
+
+message ListRange {
+  LogicalExprNode start = 1;
+  LogicalExprNode stop = 2;
+}
 
 message GetIndexedField {
   LogicalExprNode expr = 1;
-  ScalarValue key = 2;
+  oneof field {
+    NamedStructField named_struct_field = 2;
+    ListIndex list_index = 3;
+    ListRange list_range = 4;
+  }
 }
 
 message IsNull {
@@ -552,7 +571,7 @@ enum ScalarFunction {
   ArrayAppend = 86;
   ArrayConcat = 87;
   ArrayDims = 88;
-  ArrayFill = 89;
+  ArrayRepeat = 89;
   ArrayLength = 90;
   ArrayNdims = 91;
   ArrayPosition = 92;
@@ -562,7 +581,24 @@ enum ScalarFunction {
   ArrayReplace = 96;
   ArrayToString = 97;
   Cardinality = 98;
-  TrimArray = 99;
+  ArrayElement = 99;
+  ArraySlice = 100;
+  Encode = 101;
+  Decode = 102;
+  Cot = 103;
+  ArrayHas = 104;
+  ArrayHasAny = 105;
+  ArrayHasAll = 106;
+  ArrayRemoveN = 107;
+  ArrayReplaceN = 108;
+  ArrayRemoveAll = 109;
+  ArrayReplaceAll = 110;
+  Nanvl = 111;
+  Flatten = 112;
+  Isnan = 113;
+  Iszero = 114;
+  ArrayEmpty = 115;
+  ArrayPopBack = 116;
 }
 
 message ScalarFunctionNode {
@@ -599,6 +635,15 @@ enum AggregateFunction {
   // we append "_AGG" to obey name scoping rules.
   FIRST_VALUE_AGG = 24;
   LAST_VALUE_AGG = 25;
+  REGR_SLOPE = 26;
+  REGR_INTERCEPT = 27;
+  REGR_COUNT = 28;
+  REGR_R2 = 29;
+  REGR_AVGX = 30;
+  REGR_AVGY = 31;
+  REGR_SXX = 32;
+  REGR_SYY = 33;
+  REGR_SXY = 34;
 }
 
 message AggregateExprNode {
@@ -639,7 +684,8 @@ message WindowExprNode {
   oneof window_function {
     AggregateFunction aggr_function = 1;
     BuiltInWindowFunction built_in_function = 2;
-    // udaf = 3
+    string udaf = 3;
+    string udwf = 9;
   }
   LogicalExprNode expr = 4;
   repeated LogicalExprNode partition_by = 5;
@@ -736,6 +782,7 @@ message WindowFrameBound {
 
 message Schema {
   repeated Field columns = 1;
+  map<string, string> metadata = 2;
 }
 
 message Field {
@@ -745,6 +792,7 @@ message Field {
   bool nullable = 3;
   // for complex data types like structs, unions
   repeated Field children = 4;
+  map<string, string> metadata = 5;
 }
 
 message FixedSizeBinary{
@@ -899,9 +947,17 @@ message ScalarValue{
     //WAS: ScalarType null_list_value = 18;
 
     Decimal128 decimal128_value = 20;
+    Decimal256 decimal256_value = 39;
+
     int64 date_64_value = 21;
     int32 interval_yearmonth_value = 24;
     int64 interval_daytime_value = 25;
+
+    int64 duration_second_value = 35;
+    int64 duration_millisecond_value = 36;
+    int64 duration_microsecond_value = 37;
+    int64 duration_nanosecond_value = 38;
+
     ScalarTimestampValue timestamp_value = 26;
     ScalarDictionaryValue dictionary_value = 27;
     bytes binary_value = 28;
@@ -914,6 +970,12 @@ message ScalarValue{
 }
 
 message Decimal128{
+  bytes value = 1;
+  int64 p = 2;
+  int64 s = 3;
+}
+
+message Decimal256{
   bytes value = 1;
   int64 p = 2;
   int64 s = 3;
@@ -1047,6 +1109,7 @@ message PhysicalPlanNode {
     UnionExecNode union = 19;
     ExplainExecNode explain = 20;
     SortPreservingMergeExecNode sort_preserving_merge = 21;
+    NestedLoopJoinExecNode nested_loop_join = 22;
   }
 }
 
@@ -1057,6 +1120,9 @@ message PhysicalExtensionNode {
 
 // physical expressions
 message PhysicalExprNode {
+  // Was date_time_interval_expr
+  reserved 17;
+
   oneof ExprType {
     // column references
     PhysicalColumn column = 1;
@@ -1087,8 +1153,6 @@ message PhysicalExprNode {
 
     PhysicalScalarUdfNode scalar_udf = 16;
 
-    PhysicalDateTimeIntervalExprNode date_time_interval_expr = 17;
-
     PhysicalLikeExprNode like_expr = 18;
 
     PhysicalGetIndexedFieldExprNode get_indexed_field_expr = 19;
@@ -1107,6 +1171,7 @@ message PhysicalAggregateExprNode {
     string user_defined_aggr_function = 4;
   }
   repeated PhysicalExprNode expr = 2;
+  repeated PhysicalSortExprNode ordering_req = 5;
   bool distinct = 3;
 }
 
@@ -1244,6 +1309,10 @@ message CsvScanExecNode {
   FileScanExecConf base_conf = 1;
   bool has_header = 2;
   string delimiter = 3;
+  string quote = 4;
+  oneof optional_escape {
+    string escape = 5;
+  }
 }
 
 message AvroScanExecNode {
@@ -1307,6 +1376,7 @@ enum AggregateMode {
   FINAL = 1;
   FINAL_PARTITIONED = 2;
   SINGLE = 3;
+  SINGLE_PARTITIONED = 4;
 }
 
 message WindowAggExecNode {
@@ -1363,6 +1433,15 @@ message SortExecNode {
 message SortPreservingMergeExecNode {
   PhysicalPlanNode input = 1;
   repeated PhysicalExprNode expr = 2;
+  // Maximum number of highest/lowest rows to fetch; negative means no limit
+  int64 fetch = 3;
+}
+
+message NestedLoopJoinExecNode {
+  PhysicalPlanNode left = 1;
+  PhysicalPlanNode right = 2;
+  JoinType join_type = 3;
+  JoinFilter filter = 4;
 }
 
 message CoalesceBatchesExecNode {
@@ -1438,7 +1517,24 @@ message ColumnStats {
   uint32 distinct_count = 4;
 }
 
+message NamedStructFieldExpr {
+  ScalarValue name = 1;
+}
+
+message ListIndexExpr {
+  PhysicalExprNode key = 1;
+}
+
+message ListRangeExpr {
+  PhysicalExprNode start = 1;
+  PhysicalExprNode stop = 2;
+}
+
 message PhysicalGetIndexedFieldExprNode {
   PhysicalExprNode arg = 1;
-  ScalarValue key = 2;
+  oneof field {
+    NamedStructFieldExpr named_struct_field_expr = 2;
+    ListIndexExpr list_index_expr = 3;
+    ListRangeExpr list_range_expr = 4;
+  }
 }

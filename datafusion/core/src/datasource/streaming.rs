@@ -23,23 +23,14 @@ use std::sync::Arc;
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_expr::{Expr, TableType};
 use log::debug;
 
 use crate::datasource::TableProvider;
-use crate::execution::context::{SessionState, TaskContext};
-use crate::physical_plan::streaming::StreamingTableExec;
-use crate::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
-
-/// A partition that can be converted into a [`SendableRecordBatchStream`]
-pub trait PartitionStream: Send + Sync {
-    /// Returns the schema of this partition
-    fn schema(&self) -> &SchemaRef;
-
-    /// Returns a stream yielding this partitions values
-    fn execute(&self, ctx: Arc<TaskContext>) -> SendableRecordBatchStream;
-}
+use crate::execution::context::SessionState;
+use crate::physical_plan::streaming::{PartitionStream, StreamingTableExec};
+use crate::physical_plan::ExecutionPlan;
 
 /// A [`TableProvider`] that streams a set of [`PartitionStream`]
 pub struct StreamingTable {
@@ -61,9 +52,7 @@ impl StreamingTable {
                     "target schema does not contain partition schema. \
                         Target_schema: {schema:?}. Partiton Schema: {partition_schema:?}"
                 );
-                return Err(DataFusionError::Plan(
-                    "Mismatch between schema and batches".to_string(),
-                ));
+                return plan_err!("Mismatch between schema and batches");
             }
         }
 
@@ -106,6 +95,7 @@ impl TableProvider for StreamingTable {
             self.schema.clone(),
             self.partitions.clone(),
             projection,
+            None,
             self.infinite,
         )?))
     }

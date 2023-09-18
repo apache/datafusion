@@ -17,16 +17,17 @@
 
 //! Defines physical expression for `row_number` that can evaluated at runtime during query execution
 
-use crate::equivalence::OrderingEquivalenceBuilder;
 use crate::expressions::Column;
-use crate::window::partition_evaluator::PartitionEvaluator;
 use crate::window::window_expr::NumRowsState;
 use crate::window::BuiltInWindowFunctionExpr;
 use crate::{PhysicalExpr, PhysicalSortExpr};
+
 use arrow::array::{ArrayRef, UInt64Array};
 use arrow::datatypes::{DataType, Field};
-use arrow_schema::SortOptions;
+use arrow_schema::{SchemaRef, SortOptions};
 use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::PartitionEvaluator;
+
 use std::any::Any;
 use std::ops::Range;
 use std::sync::Arc;
@@ -64,30 +65,20 @@ impl BuiltInWindowFunctionExpr for RowNumber {
         &self.name
     }
 
-    fn add_equal_orderings(&self, builder: &mut OrderingEquivalenceBuilder) {
-        // The built-in RowNumber window function introduces a new
-        // ordering:
-        let schema = builder.schema();
-        if let Some((idx, field)) = schema.column_with_name(self.name()) {
-            let column = Column::new(field.name(), idx);
+    fn get_result_ordering(&self, schema: &SchemaRef) -> Option<PhysicalSortExpr> {
+        // The built-in ROW_NUMBER window function introduces a new ordering:
+        schema.column_with_name(self.name()).map(|(idx, field)| {
+            let expr = Arc::new(Column::new(field.name(), idx));
             let options = SortOptions {
                 descending: false,
                 nulls_first: false,
             }; // ASC, NULLS LAST
-            let rhs = PhysicalSortExpr {
-                expr: Arc::new(column) as _,
-                options,
-            };
-            builder.add_equal_conditions(vec![rhs]);
-        }
+            PhysicalSortExpr { expr, options }
+        })
     }
 
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
         Ok(Box::<NumRowsEvaluator>::default())
-    }
-
-    fn supports_bounded_execution(&self) -> bool {
-        true
     }
 }
 
@@ -97,22 +88,28 @@ pub(crate) struct NumRowsEvaluator {
 }
 
 impl PartitionEvaluator for NumRowsEvaluator {
-    fn get_range(&self, idx: usize, _n_rows: usize) -> Result<Range<usize>> {
-        let start = idx;
-        let end = idx + 1;
-        Ok(Range { start, end })
-    }
-
     /// evaluate window function result inside given range
-    fn evaluate_stateful(&mut self, _values: &[ArrayRef]) -> Result<ScalarValue> {
+    fn evaluate(
+        &mut self,
+        _values: &[ArrayRef],
+        _range: &Range<usize>,
+    ) -> Result<ScalarValue> {
         self.state.n_rows += 1;
         Ok(ScalarValue::UInt64(Some(self.state.n_rows as u64)))
     }
 
-    fn evaluate(&self, _values: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
+    fn evaluate_all(
+        &mut self,
+        _values: &[ArrayRef],
+        num_rows: usize,
+    ) -> Result<ArrayRef> {
         Ok(Arc::new(UInt64Array::from_iter_values(
             1..(num_rows as u64) + 1,
         )))
+    }
+
+    fn supports_bounded_execution(&self) -> bool {
+        true
     }
 }
 
@@ -134,7 +131,7 @@ mod tests {
         let values = row_number.evaluate_args(&batch)?;
         let result = row_number
             .create_evaluator()?
-            .evaluate(&values, batch.num_rows())?;
+            .evaluate_all(&values, batch.num_rows())?;
         let result = as_uint64_array(&result)?;
         let result = result.values();
         assert_eq!(vec![1, 2, 3, 4, 5, 6, 7, 8], *result);
@@ -152,7 +149,7 @@ mod tests {
         let values = row_number.evaluate_args(&batch)?;
         let result = row_number
             .create_evaluator()?
-            .evaluate(&values, batch.num_rows())?;
+            .evaluate_all(&values, batch.num_rows())?;
         let result = as_uint64_array(&result)?;
         let result = result.values();
         assert_eq!(vec![1, 2, 3, 4, 5, 6, 7, 8], *result);

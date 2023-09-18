@@ -29,10 +29,8 @@ use datafusion::execution::context::ExecutionProps;
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::window_function::WindowFunction;
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
-use datafusion::physical_plan::expressions::{
-    date_time_interval_expr, GetIndexedFieldExpr,
-};
 use datafusion::physical_plan::expressions::{in_list, LikeExpr};
+use datafusion::physical_plan::expressions::{GetFieldAccessExpr, GetIndexedFieldExpr};
 use datafusion::physical_plan::{
     expressions::{
         BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, Literal,
@@ -41,7 +39,7 @@ use datafusion::physical_plan::{
     functions, Partitioning,
 };
 use datafusion::physical_plan::{ColumnStatistics, PhysicalExpr, Statistics};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{not_impl_err, DataFusionError, Result};
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use std::convert::{TryFrom, TryInto};
@@ -125,36 +123,18 @@ pub fn parse_physical_expr(
                 input_schema,
             )?,
         )),
-        ExprType::DateTimeIntervalExpr(expr) => date_time_interval_expr(
-            parse_required_physical_expr(
-                expr.l.as_deref(),
-                registry,
-                "left",
-                input_schema,
-            )?,
-            logical_plan::from_proto::from_proto_binary_op(&expr.op)?,
-            parse_required_physical_expr(
-                expr.r.as_deref(),
-                registry,
-                "right",
-                input_schema,
-            )?,
-            input_schema,
-        )?,
         ExprType::AggregateExpr(_) => {
-            return Err(DataFusionError::NotImplemented(
-                "Cannot convert aggregate expr node to physical expression".to_owned(),
-            ));
+            return not_impl_err!(
+                "Cannot convert aggregate expr node to physical expression"
+            );
         }
         ExprType::WindowExpr(_) => {
-            return Err(DataFusionError::NotImplemented(
-                "Cannot convert window expr node to physical expression".to_owned(),
-            ));
+            return not_impl_err!(
+                "Cannot convert window expr node to physical expression"
+            );
         }
         ExprType::Sort(_) => {
-            return Err(DataFusionError::NotImplemented(
-                "Cannot convert sort expr node to physical expression".to_owned(),
-            ));
+            return not_impl_err!("Cannot convert sort expr node to physical expression");
         }
         ExprType::IsNullExpr(e) => {
             Arc::new(IsNullExpr::new(parse_required_physical_expr(
@@ -275,6 +255,7 @@ pub fn parse_physical_expr(
                 fun_expr,
                 args,
                 &convert_required!(e.return_type)?,
+                None,
             ))
         }
         ExprType::ScalarUdf(e) => {
@@ -291,6 +272,7 @@ pub fn parse_physical_expr(
                 scalar_fun,
                 args,
                 &convert_required!(e.return_type)?,
+                None,
             ))
         }
         ExprType::LikeExpr(like_expr) => Arc::new(LikeExpr::new(
@@ -310,6 +292,36 @@ pub fn parse_physical_expr(
             )?,
         )),
         ExprType::GetIndexedFieldExpr(get_indexed_field_expr) => {
+            let field = match &get_indexed_field_expr.field {
+                Some(protobuf::physical_get_indexed_field_expr_node::Field::NamedStructFieldExpr(named_struct_field_expr)) => GetFieldAccessExpr::NamedStructField{
+                    name: convert_required!(named_struct_field_expr.name)?,
+                },
+                Some(protobuf::physical_get_indexed_field_expr_node::Field::ListIndexExpr(list_index_expr)) => GetFieldAccessExpr::ListIndex{
+                    key: parse_required_physical_expr(
+                        list_index_expr.key.as_deref(),
+                        registry,
+                        "key",
+                        input_schema,
+                    )?},
+                Some(protobuf::physical_get_indexed_field_expr_node::Field::ListRangeExpr(list_range_expr)) => GetFieldAccessExpr::ListRange{
+                    start: parse_required_physical_expr(
+                        list_range_expr.start.as_deref(),
+                        registry,
+                        "start",
+                        input_schema,
+                    )?,
+                    stop: parse_required_physical_expr(
+                        list_range_expr.stop.as_deref(),
+                        registry,
+                        "stop",
+                        input_schema
+                    )?,
+                },
+                None =>                 return Err(proto_error(
+                    "Field must not be None",
+                )),
+            };
+
             Arc::new(GetIndexedFieldExpr::new(
                 parse_required_physical_expr(
                     get_indexed_field_expr.arg.as_deref(),
@@ -317,7 +329,7 @@ pub fn parse_physical_expr(
                     "arg",
                     input_schema,
                 )?,
-                convert_required!(get_indexed_field_expr.key)?,
+                field,
             ))
         }
     };

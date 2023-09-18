@@ -18,11 +18,12 @@
 //! Implementation of the `arrow_cast` function that allows
 //! casting to arbitrary arrow types (rather than SQL types)
 
-use std::{fmt::Display, iter::Peekable, str::Chars};
+use std::{fmt::Display, iter::Peekable, str::Chars, sync::Arc};
 
-use arrow_schema::{DataType, IntervalUnit, TimeUnit};
+use arrow_schema::{DataType, Field, IntervalUnit, TimeUnit};
 use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
 
+use datafusion_common::plan_err;
 use datafusion_expr::{Expr, ExprSchemable};
 
 pub const ARROW_CAST_NAME: &str = "arrow_cast";
@@ -51,21 +52,18 @@ pub const ARROW_CAST_NAME: &str = "arrow_cast";
 /// [`BuiltinScalarFunction`]: datafusion_expr::BuiltinScalarFunction
 pub fn create_arrow_cast(mut args: Vec<Expr>, schema: &DFSchema) -> Result<Expr> {
     if args.len() != 2 {
-        return Err(DataFusionError::Plan(format!(
-            "arrow_cast needs 2 arguments, {} provided",
-            args.len()
-        )));
+        return plan_err!("arrow_cast needs 2 arguments, {} provided", args.len());
     }
     let arg1 = args.pop().unwrap();
     let arg0 = args.pop().unwrap();
 
-    // arg1 must be a stirng
+    // arg1 must be a string
     let data_type_string = if let Expr::Literal(ScalarValue::Utf8(Some(v))) = arg1 {
         v
     } else {
-        return Err(DataFusionError::Plan(format!(
+        return plan_err!(
             "arrow_cast requires its second argument to be a constant string, got {arg1}"
-        )));
+        );
     };
 
     // do the actual lookup to the appropriate data type
@@ -150,11 +148,22 @@ impl<'a> Parser<'a> {
             Token::Decimal128 => self.parse_decimal_128(),
             Token::Decimal256 => self.parse_decimal_256(),
             Token::Dictionary => self.parse_dictionary(),
+            Token::List => self.parse_list(),
             tok => Err(make_error(
                 self.val,
                 &format!("finding next type, got unexpected '{tok}'"),
             )),
         }
+    }
+
+    /// Parses the List type
+    fn parse_list(&mut self) -> Result<DataType> {
+        self.expect_token(Token::LParen)?;
+        let data_type = self.parse_next_type()?;
+        self.expect_token(Token::RParen)?;
+        Ok(DataType::List(Arc::new(Field::new(
+            "item", data_type, true,
+        ))))
     }
 
     /// Parses the next timeunit
@@ -486,6 +495,8 @@ impl<'a> Tokenizer<'a> {
             "Date32" => Token::SimpleType(DataType::Date32),
             "Date64" => Token::SimpleType(DataType::Date64),
 
+            "List" => Token::List,
+
             "Second" => Token::TimeUnit(TimeUnit::Second),
             "Millisecond" => Token::TimeUnit(TimeUnit::Millisecond),
             "Microsecond" => Token::TimeUnit(TimeUnit::Microsecond),
@@ -573,12 +584,14 @@ enum Token {
     None,
     Integer(i64),
     DoubleQuotedString(String),
+    List,
 }
 
 impl Display for Token {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Token::SimpleType(t) => write!(f, "{t}"),
+            Token::List => write!(f, "List"),
             Token::Timestamp => write!(f, "Timestamp"),
             Token::Time32 => write!(f, "Time32"),
             Token::Time64 => write!(f, "Time64"),

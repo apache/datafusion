@@ -26,6 +26,7 @@ use crate::{
     },
     print_options::PrintOptions,
 };
+use datafusion::sql::{parser::DFParser, sqlparser::dialect::dialect_from_str};
 use datafusion::{
     datasource::listing::ListingTableUrl,
     error::{DataFusionError, Result},
@@ -40,6 +41,20 @@ use std::io::BufReader;
 use std::time::Instant;
 use std::{fs::File, sync::Arc};
 use url::Url;
+
+/// run and execute SQL statements and commands, against a context with the given print options
+pub async fn exec_from_commands(
+    ctx: &mut SessionContext,
+    print_options: &PrintOptions,
+    commands: Vec<String>,
+) {
+    for sql in commands {
+        match exec_and_print(ctx, print_options, sql).await {
+            Ok(_) => {}
+            Err(err) => println!("{err}"),
+        }
+    }
+}
 
 /// run and execute SQL statements and commands from a file, against a context with the given print options
 pub async fn exec_from_lines(
@@ -58,11 +73,8 @@ pub async fn exec_from_lines(
                 let line = line.trim_end();
                 query.push_str(line);
                 if line.ends_with(';') {
-                    match unescape_input(line) {
-                        Ok(sql) => match exec_and_print(ctx, print_options, sql).await {
-                            Ok(_) => {}
-                            Err(err) => eprintln!("{err}"),
-                        },
+                    match exec_and_print(ctx, print_options, query).await {
+                        Ok(_) => {}
                         Err(err) => eprintln!("{err}"),
                     }
                     query = "".to_owned();
@@ -77,7 +89,8 @@ pub async fn exec_from_lines(
     }
 
     // run the left over query if the last statement doesn't contain ‘;’
-    if !query.is_empty() {
+    // ignore if it only consists of '\n'
+    if query.contains(|c| c != '\n') {
         match exec_and_print(ctx, print_options, query).await {
             Ok(_) => {}
             Err(err) => println!("{err}"),
@@ -106,7 +119,9 @@ pub async fn exec_from_repl(
     print_options: &mut PrintOptions,
 ) -> rustyline::Result<()> {
     let mut rl = Editor::new()?;
-    rl.set_helper(Some(CliHelper::default()));
+    rl.set_helper(Some(CliHelper::new(
+        &ctx.task_ctx().session_config().options().sql_parser.dialect,
+    )));
     rl.load_history(".history").ok();
 
     let mut print_options = print_options.clone();
@@ -149,13 +164,14 @@ pub async fn exec_from_repl(
             }
             Ok(line) => {
                 rl.add_history_entry(line.trim_end())?;
-                match unescape_input(&line) {
-                    Ok(sql) => match exec_and_print(ctx, &print_options, sql).await {
-                        Ok(_) => {}
-                        Err(err) => eprintln!("{err}"),
-                    },
+                match exec_and_print(ctx, &print_options, line).await {
+                    Ok(_) => {}
                     Err(err) => eprintln!("{err}"),
                 }
+                // dialect might have changed
+                rl.helper_mut().unwrap().set_dialect(
+                    &ctx.task_ctx().session_config().options().sql_parser.dialect,
+                );
             }
             Err(ReadlineError::Interrupted) => {
                 println!("^C");
@@ -182,18 +198,30 @@ async fn exec_and_print(
 ) -> Result<()> {
     let now = Instant::now();
 
-    let plan = ctx.state().create_logical_plan(&sql).await?;
-    let df = match &plan {
-        LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) => {
-            create_external_table(ctx, cmd).await?;
-            ctx.execute_logical_plan(plan).await?
-        }
-        _ => ctx.execute_logical_plan(plan).await?,
-    };
+    let sql = unescape_input(&sql)?;
+    let task_ctx = ctx.task_ctx();
+    let dialect = &task_ctx.session_config().options().sql_parser.dialect;
+    let dialect = dialect_from_str(dialect).ok_or_else(|| {
+        DataFusionError::Plan(format!(
+            "Unsupported SQL dialect: {dialect}. Available dialects: \
+                 Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
+                 MsSQL, ClickHouse, BigQuery, Ansi."
+        ))
+    })?;
+    let statements = DFParser::parse_sql_with_dialect(&sql, dialect.as_ref())?;
+    for statement in statements {
+        let plan = ctx.state().statement_to_plan(statement).await?;
+        let df = match &plan {
+            LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) => {
+                create_external_table(ctx, cmd).await?;
+                ctx.execute_logical_plan(plan).await?
+            }
+            _ => ctx.execute_logical_plan(plan).await?,
+        };
 
-    let results = df.collect().await?;
-    print_options.print_batches(&results, now)?;
-
+        let results = df.collect().await?;
+        print_options.print_batches(&results, now)?;
+    }
     Ok(())
 }
 
@@ -241,6 +269,7 @@ async fn create_external_table(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion::common::plan_err;
 
     async fn create_external_table_test(location: &str, sql: &str) -> Result<()> {
         let ctx = SessionContext::new();
@@ -249,9 +278,7 @@ mod tests {
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &plan {
             create_external_table(&ctx, cmd).await?;
         } else {
-            return Err(DataFusionError::Plan(
-                "LogicalPlan is not a CreateExternalTable".to_string(),
-            ));
+            return plan_err!("LogicalPlan is not a CreateExternalTable");
         }
 
         ctx.runtime_env()

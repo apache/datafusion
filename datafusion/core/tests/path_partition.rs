@@ -43,7 +43,8 @@ use datafusion_common::ScalarValue;
 use futures::stream;
 use futures::stream::BoxStream;
 use object_store::{
-    path::Path, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore,
+    path::Path, GetOptions, GetResult, GetResultPayload, ListResult, MultipartId,
+    ObjectMeta, ObjectStore,
 };
 use tokio::io::AsyncWrite;
 use url::Url;
@@ -81,7 +82,7 @@ async fn parquet_distinct_partition_col() -> Result<()> {
         .collect()
         .await?;
 
-    let expected = vec![
+    let expected = [
         "+------+-------+-----+",
         "| year | month | day |",
         "+------+-------+-----+",
@@ -124,7 +125,7 @@ async fn parquet_distinct_partition_col() -> Result<()> {
 
     let mut max_limit = match ScalarValue::try_from_array(results[0].column(0), 0)? {
         ScalarValue::Int64(Some(count)) => count,
-        s => panic!("Expected count as Int64 found {}", s.get_datatype()),
+        s => panic!("Expected count as Int64 found {}", s.data_type()),
     };
 
     max_limit += 1;
@@ -135,7 +136,7 @@ async fn parquet_distinct_partition_col() -> Result<()> {
     let mut min_limit =
         match ScalarValue::try_from_array(last_batch.column(0), last_row_idx)? {
             ScalarValue::Int64(Some(count)) => count,
-            s => panic!("Expected count as Int64 found {}", s.get_datatype()),
+            s => panic!("Expected count as Int64 found {}", s.data_type()),
         };
 
     min_limit -= 1;
@@ -217,7 +218,7 @@ async fn csv_filter_with_file_col() -> Result<()> {
         .collect()
         .await?;
 
-    let expected = vec![
+    let expected = [
         "+----+----+",
         "| c1 | c2 |",
         "+----+----+",
@@ -253,7 +254,7 @@ async fn csv_filter_with_file_nonstring_col() -> Result<()> {
         .collect()
         .await?;
 
-    let expected = vec![
+    let expected = [
         "+----+----+------------+",
         "| c1 | c2 | date       |",
         "+----+----+------------+",
@@ -289,7 +290,7 @@ async fn csv_projection_on_partition() -> Result<()> {
         .collect()
         .await?;
 
-    let expected = vec![
+    let expected = [
         "+----+------------+",
         "| c1 | date       |",
         "+----+------------+",
@@ -326,13 +327,13 @@ async fn csv_grouping_by_partition() -> Result<()> {
         .collect()
         .await?;
 
-    let expected = vec![
-        "+------------+-----------------+----------------------+",
-        "| date       | COUNT(UInt8(1)) | COUNT(DISTINCT t.c1) |",
-        "+------------+-----------------+----------------------+",
-        "| 2021-10-26 | 100             | 5                    |",
-        "| 2021-10-27 | 100             | 5                    |",
-        "+------------+-----------------+----------------------+",
+    let expected = [
+        "+------------+----------+----------------------+",
+        "| date       | COUNT(*) | COUNT(DISTINCT t.c1) |",
+        "+------------+----------+----------------------+",
+        "| 2021-10-26 | 100      | 5                    |",
+        "| 2021-10-27 | 100      | 5                    |",
+        "+------------+----------+----------------------+",
     ];
     assert_batches_sorted_eq!(expected, &result);
 
@@ -366,7 +367,7 @@ async fn parquet_multiple_partitions() -> Result<()> {
         .collect()
         .await?;
 
-    let expected = vec![
+    let expected = [
         "+----+-----+",
         "| id | day |",
         "+----+-----+",
@@ -412,7 +413,7 @@ async fn parquet_multiple_nonstring_partitions() -> Result<()> {
         .collect()
         .await?;
 
-    let expected = vec![
+    let expected = [
         "+----+-----+",
         "| id | day |",
         "+----+-----+",
@@ -648,7 +649,19 @@ impl ObjectStore for MirroringObjectStore {
         self.files.iter().find(|x| *x == location).unwrap();
         let path = std::path::PathBuf::from(&self.mirrored_file);
         let file = File::open(&path).unwrap();
-        Ok(GetResult::File(file, path))
+        let metadata = file.metadata().unwrap();
+        let meta = ObjectMeta {
+            location: location.clone(),
+            last_modified: metadata.modified().map(chrono::DateTime::from).unwrap(),
+            size: metadata.len() as usize,
+            e_tag: None,
+        };
+
+        Ok(GetResult {
+            range: 0..meta.size,
+            payload: GetResultPayload::File(file, path),
+            meta,
+        })
     }
 
     async fn get_range(

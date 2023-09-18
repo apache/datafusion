@@ -18,8 +18,8 @@
 //! Tree node implementation for logical expr
 
 use crate::expr::{
-    AggregateFunction, AggregateUDF, Between, BinaryExpr, Case, Cast, GetIndexedField,
-    GroupingSet, InList, InSubquery, JsonAccess, Like, Placeholder, ScalarFunction,
+    AggregateFunction, AggregateUDF, Alias, Between, BinaryExpr, Case, Cast,
+    GetIndexedField, GroupingSet, InList, InSubquery, Like, Placeholder, ScalarFunction,
     ScalarUDF, Sort, TryCast, WindowFunction,
 };
 use crate::Expr;
@@ -32,7 +32,7 @@ impl TreeNode for Expr {
         F: FnMut(&Self) -> Result<VisitRecursion>,
     {
         let children = match self {
-            Expr::Alias(expr, _)
+            Expr::Alias(Alias{expr,..})
             | Expr::Not(expr)
             | Expr::IsNotNull(expr)
             | Expr::IsTrue(expr)
@@ -72,7 +72,6 @@ impl TreeNode for Expr {
                 vec![left.as_ref().clone(), right.as_ref().clone()]
             }
             Expr::Like(Like { expr, pattern, .. })
-            | Expr::ILike(Like { expr, pattern, .. })
             | Expr::SimilarTo(Like { expr, pattern, .. }) => {
                 vec![expr.as_ref().clone(), pattern.as_ref().clone()]
             }
@@ -150,8 +149,8 @@ impl TreeNode for Expr {
         let mut transform = transform;
 
         Ok(match self {
-            Expr::Alias(expr, name) => {
-                Expr::Alias(transform_boxed(expr, &mut transform)?, name)
+            Expr::Alias(Alias { expr, name, .. }) => {
+                Expr::Alias(Alias::new(transform(*expr)?, name))
             }
             Expr::Column(_) => self,
             Expr::OuterReferenceColumn(_, _) => self,
@@ -180,33 +179,26 @@ impl TreeNode for Expr {
                 expr,
                 pattern,
                 escape_char,
+                case_insensitive,
             }) => Expr::Like(Like::new(
                 negated,
                 transform_boxed(expr, &mut transform)?,
                 transform_boxed(pattern, &mut transform)?,
                 escape_char,
-            )),
-            Expr::ILike(Like {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-            }) => Expr::ILike(Like::new(
-                negated,
-                transform_boxed(expr, &mut transform)?,
-                transform_boxed(pattern, &mut transform)?,
-                escape_char,
+                case_insensitive,
             )),
             Expr::SimilarTo(Like {
                 negated,
                 expr,
                 pattern,
                 escape_char,
+                case_insensitive,
             }) => Expr::SimilarTo(Like::new(
                 negated,
                 transform_boxed(expr, &mut transform)?,
                 transform_boxed(pattern, &mut transform)?,
                 escape_char,
+                case_insensitive,
             )),
             Expr::Not(expr) => Expr::Not(transform_boxed(expr, &mut transform)?),
             Expr::IsNotNull(expr) => {
@@ -353,10 +345,10 @@ impl TreeNode for Expr {
             Expr::QualifiedWildcard { qualifier } => {
                 Expr::QualifiedWildcard { qualifier }
             }
-            Expr::GetIndexedField(GetIndexedField { key, expr }) => {
+            Expr::GetIndexedField(GetIndexedField { expr, field }) => {
                 Expr::GetIndexedField(GetIndexedField::new(
                     transform_boxed(expr, &mut transform)?,
-                    key,
+                    field,
                 ))
             }
             Expr::Placeholder(Placeholder { id, data_type }) => {

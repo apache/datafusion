@@ -22,17 +22,17 @@ use crate::datasource::physical_plan::{
 use crate::error::Result;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
-    ordering_equivalence_properties_helper, DisplayFormatType, ExecutionPlan,
-    Partitioning, SendableRecordBatchStream,
+    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
 };
 use arrow_schema::SchemaRef;
 use datafusion_common::Statistics;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{
-    LexOrdering, OrderingEquivalenceProperties, PhysicalSortExpr,
+    ordering_equivalence_properties_helper, LexOrdering, OrderingEquivalenceProperties,
+    PhysicalSortExpr,
 };
 use futures::StreamExt;
-use object_store::{GetResult, ObjectStore};
+use object_store::{GetResultPayload, ObjectStore};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -65,6 +65,17 @@ impl ArrowExec {
     /// Ref to the base configs
     pub fn base_config(&self) -> &FileScanConfig {
         &self.base_config
+    }
+}
+
+impl DisplayAs for ArrowExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        write!(f, "ArrowExec: ")?;
+        self.base_config.fmt_as(t, f)
     }
 }
 
@@ -132,18 +143,6 @@ impl ExecutionPlan for ArrowExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default => {
-                write!(f, "ArrowExec: {}", self.base_config)
-            }
-        }
-    }
-
     fn statistics(&self) -> Statistics {
         self.projected_statistics.clone()
     }
@@ -159,13 +158,14 @@ impl FileOpener for ArrowOpener {
         let object_store = self.object_store.clone();
         let projection = self.projection.clone();
         Ok(Box::pin(async move {
-            match object_store.get(file_meta.location()).await? {
-                GetResult::File(file, _) => {
+            let r = object_store.get(file_meta.location()).await?;
+            match r.payload {
+                GetResultPayload::File(file, _) => {
                     let arrow_reader =
                         arrow::ipc::reader::FileReader::try_new(file, projection)?;
                     Ok(futures::stream::iter(arrow_reader).boxed())
                 }
-                r @ GetResult::Stream(_) => {
+                GetResultPayload::Stream(_) => {
                     let bytes = r.bytes().await?;
                     let cursor = std::io::Cursor::new(bytes);
                     let arrow_reader =

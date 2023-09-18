@@ -15,12 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashSet;
+use std::sync::Arc;
+
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use crate::utils::{
     check_columns_satisfy_exprs, extract_aliases, rebase_expr, resolve_aliases_to_exprs,
     resolve_columns, resolve_positions_to_exprs,
 };
-use datafusion_common::{DataFusionError, Result};
+
+use datafusion_common::Column;
+use datafusion_common::{
+    get_target_functional_dependencies, not_impl_err, plan_err, DFSchemaRef,
+    DataFusionError, Result,
+};
+use datafusion_expr::expr::Alias;
 use datafusion_expr::expr_rewriter::{
     normalize_col, normalize_col_with_schemas_and_ambiguity_check,
 };
@@ -29,13 +38,13 @@ use datafusion_expr::utils::{
     expand_qualified_wildcard, expand_wildcard, expr_as_column_expr, expr_to_columns,
     find_aggregate_exprs, find_window_exprs,
 };
-use datafusion_expr::Expr::Alias;
-use datafusion_expr::{Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning};
-
-use sqlparser::ast::{Distinct, Expr as SQLExpr, WildcardAdditionalOptions, WindowType};
+use datafusion_expr::{
+    Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning,
+};
+use sqlparser::ast::{
+    Distinct, Expr as SQLExpr, ReplaceSelectItem, WildcardAdditionalOptions, WindowType,
+};
 use sqlparser::ast::{NamedWindowDefinition, Select, SelectItem, TableWithJoins};
-use std::collections::HashSet;
-use std::sync::Arc;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// Generate a logic plan from an SQL select
@@ -46,19 +55,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<LogicalPlan> {
         // check for unsupported syntax first
         if !select.cluster_by.is_empty() {
-            return Err(DataFusionError::NotImplemented("CLUSTER BY".to_string()));
+            return not_impl_err!("CLUSTER BY");
         }
         if !select.lateral_views.is_empty() {
-            return Err(DataFusionError::NotImplemented("LATERAL VIEWS".to_string()));
+            return not_impl_err!("LATERAL VIEWS");
         }
         if select.qualify.is_some() {
-            return Err(DataFusionError::NotImplemented("QUALIFY".to_string()));
+            return not_impl_err!("QUALIFY");
         }
         if select.top.is_some() {
-            return Err(DataFusionError::NotImplemented("TOP".to_string()));
+            return not_impl_err!("TOP");
         }
         if !select.sort_by.is_empty() {
-            return Err(DataFusionError::NotImplemented("SORT BY".to_string()));
+            return not_impl_err!("SORT BY");
         }
 
         // process `from` clause
@@ -154,8 +163,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             )?
         } else {
             match having_expr_opt {
-                Some(having_expr) => return Err(DataFusionError::Plan(
-                    format!("HAVING clause references: {having_expr} must appear in the GROUP BY clause or be used in an aggregate function"))),
+                Some(having_expr) => return plan_err!("HAVING clause references: {having_expr} must appear in the GROUP BY clause or be used in an aggregate function"),
                 None => (plan, select_exprs, having_expr_opt)
             }
         };
@@ -189,22 +197,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let plan = project(plan, select_exprs_post_aggr)?;
 
         // process distinct clause
-        let plan = if let Some(distinct) = select.distinct {
-            let on_expr = match distinct {
-                Distinct::Distinct => None,
-                Distinct::On(o) => Some(
-                    o.iter()
-                        .map(|e| {
-                            self.sql_expr_to_logical_expr(
-                                e.clone(),
-                                &plan.schema(),
-                                planner_context,
-                            )
-                        })
-                        .collect::<Result<Vec<_>>>()?,
-                ),
-            };
-            LogicalPlanBuilder::from(plan).distinct(on_expr)?.build()?
+        let distinct = select
+            .distinct
+            .map(|distinct| match distinct {
+                Distinct::Distinct => Ok(true),
+                Distinct::On(_) => not_impl_err!("DISTINCT ON Exprs not supported"),
+            })
+            .transpose()?
+            .unwrap_or(false);
+
+        let plan = if distinct {
+            LogicalPlanBuilder::from(plan).distinct()?.build()
         } else {
             plan
         };
@@ -333,25 +336,54 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     &[&[plan.schema()]],
                     &plan.using_columns()?,
                 )?;
-                let expr = Alias(Box::new(col), self.normalizer.normalize(alias));
+                let expr = Expr::Alias(Alias::new(col, self.normalizer.normalize(alias)));
                 Ok(vec![expr])
             }
             SelectItem::Wildcard(options) => {
                 Self::check_wildcard_options(&options)?;
 
                 if empty_from {
-                    return Err(DataFusionError::Plan(
-                        "SELECT * with no tables specified is not valid".to_string(),
-                    ));
+                    return plan_err!("SELECT * with no tables specified is not valid");
                 }
                 // do not expand from outer schema
-                expand_wildcard(plan.schema().as_ref(), plan, Some(options))
+                let expanded_exprs =
+                    expand_wildcard(plan.schema().as_ref(), plan, Some(&options))?;
+                // If there is a REPLACE statement, replace that column with the given
+                // replace expression. Column name remains the same.
+                if let Some(replace) = options.opt_replace {
+                    self.replace_columns(
+                        plan,
+                        empty_from,
+                        planner_context,
+                        expanded_exprs,
+                        replace,
+                    )
+                } else {
+                    Ok(expanded_exprs)
+                }
             }
             SelectItem::QualifiedWildcard(ref object_name, options) => {
                 Self::check_wildcard_options(&options)?;
                 let qualifier = format!("{object_name}");
                 // do not expand from outer schema
-                expand_qualified_wildcard(&qualifier, plan.schema().as_ref(), Some(options))
+                let expanded_exprs = expand_qualified_wildcard(
+                    &qualifier,
+                    plan.schema().as_ref(),
+                    Some(&options),
+                )?;
+                // If there is a REPLACE statement, replace that column with the given
+                // replace expression. Column name remains the same.
+                if let Some(replace) = options.opt_replace {
+                    self.replace_columns(
+                        plan,
+                        empty_from,
+                        planner_context,
+                        expanded_exprs,
+                        replace,
+                    )
+                } else {
+                    Ok(expanded_exprs)
+                }
             }
         }
     }
@@ -362,16 +394,52 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             opt_exclude: _opt_exclude,
             opt_except: _opt_except,
             opt_rename,
-            opt_replace,
+            opt_replace: _opt_replace,
         } = options;
 
-        if opt_rename.is_some() || opt_replace.is_some() {
+        if opt_rename.is_some() {
             Err(DataFusionError::NotImplemented(
-                "wildcard * with RENAME or REPLACE not supported ".to_string(),
+                "wildcard * with RENAME not supported ".to_string(),
             ))
         } else {
             Ok(())
         }
+    }
+
+    /// If there is a REPLACE statement in the projected expression in the form of
+    /// "REPLACE (some_column_within_an_expr AS some_column)", this function replaces
+    /// that column with the given replace expression. Column name remains the same.
+    /// Multiple REPLACEs are also possible with comma separations.
+    fn replace_columns(
+        &self,
+        plan: &LogicalPlan,
+        empty_from: bool,
+        planner_context: &mut PlannerContext,
+        mut exprs: Vec<Expr>,
+        replace: ReplaceSelectItem,
+    ) -> Result<Vec<Expr>> {
+        for expr in exprs.iter_mut() {
+            if let Expr::Column(Column { name, .. }) = expr {
+                if let Some(item) = replace
+                    .items
+                    .iter()
+                    .find(|item| item.column_name.value == *name)
+                {
+                    let new_expr = self.sql_select_to_rex(
+                        SelectItem::UnnamedExpr(item.expr.clone()),
+                        plan,
+                        empty_from,
+                        planner_context,
+                    )?[0]
+                        .clone();
+                    *expr = Expr::Alias(Alias {
+                        expr: Box::new(new_expr),
+                        name: name.clone(),
+                    });
+                }
+            }
+        }
+        Ok(exprs)
     }
 
     /// Wrap a plan in a projection
@@ -412,6 +480,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         group_by_exprs: Vec<Expr>,
         aggr_exprs: Vec<Expr>,
     ) -> Result<(LogicalPlan, Vec<Expr>, Option<Expr>)> {
+        let group_by_exprs =
+            get_updated_group_by_exprs(&group_by_exprs, select_exprs, input.schema())?;
+
         // create the aggregate plan
         let plan = LogicalPlanBuilder::from(input.clone())
             .aggregate(group_by_exprs.clone(), aggr_exprs.clone())?
@@ -495,10 +566,10 @@ fn check_conflicting_windows(window_defs: &[NamedWindowDefinition]) -> Result<()
     for (i, window_def_i) in window_defs.iter().enumerate() {
         for window_def_j in window_defs.iter().skip(i + 1) {
             if window_def_i.0 == window_def_j.0 {
-                return Err(DataFusionError::Plan(format!(
+                return plan_err!(
                     "The window {} is defined multiple times!",
                     window_def_i.0
-                )));
+                );
             }
         }
     }
@@ -527,11 +598,67 @@ fn match_window_definitions(
             }
             // All named windows must be defined with a WindowSpec.
             if let Some(WindowType::NamedWindow(ident)) = &f.over {
-                return Err(DataFusionError::Plan(format!(
-                    "The window {ident} is not defined!"
-                )));
+                return plan_err!("The window {ident} is not defined!");
             }
         }
     }
     Ok(())
+}
+
+/// Update group by exprs, according to functional dependencies
+/// The query below
+///
+/// SELECT sn, amount
+/// FROM sales_global
+/// GROUP BY sn
+///
+/// cannot be calculated, because it has a column(`amount`) which is not
+/// part of group by expression.
+/// However, if we know that, `sn` is determinant of `amount`. We can
+/// safely, determine value of `amount` for each distinct `sn`. For these cases
+/// we rewrite the query above as
+///
+/// SELECT sn, amount
+/// FROM sales_global
+/// GROUP BY sn, amount
+///
+/// Both queries, are functionally same. \[Because, (`sn`, `amount`) and (`sn`)
+/// defines the identical groups. \]
+/// This function updates group by expressions such that select expressions that are
+/// not in group by expression, are added to the group by expressions if they are dependent
+/// of the sub-set of group by expressions.
+fn get_updated_group_by_exprs(
+    group_by_exprs: &[Expr],
+    select_exprs: &[Expr],
+    schema: &DFSchemaRef,
+) -> Result<Vec<Expr>> {
+    let mut new_group_by_exprs = group_by_exprs.to_vec();
+    let fields = schema.fields();
+    let group_by_expr_names = group_by_exprs
+        .iter()
+        .map(|group_by_expr| group_by_expr.display_name())
+        .collect::<Result<Vec<_>>>()?;
+    // Get targets that can be used in a select, even if they do not occur in aggregation:
+    if let Some(target_indices) =
+        get_target_functional_dependencies(schema, &group_by_expr_names)
+    {
+        // Calculate dependent fields names with determinant GROUP BY expression:
+        let associated_field_names = target_indices
+            .iter()
+            .map(|idx| fields[*idx].qualified_name())
+            .collect::<Vec<_>>();
+        // Expand GROUP BY expressions with select expressions: If a GROUP
+        // BY expression is a determinant key, we can use its dependent
+        // columns in select statements also.
+        for expr in select_exprs {
+            let expr_name = format!("{}", expr);
+            if !new_group_by_exprs.contains(expr)
+                && associated_field_names.contains(&expr_name)
+            {
+                new_group_by_exprs.push(expr.clone());
+            }
+        }
+    }
+
+    Ok(new_group_by_exprs)
 }

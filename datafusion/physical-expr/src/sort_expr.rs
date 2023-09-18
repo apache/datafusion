@@ -17,13 +17,16 @@
 
 //! Sort expressions
 
-use crate::PhysicalExpr;
-use arrow::compute::kernels::sort::{SortColumn, SortOptions};
-use arrow::record_batch::RecordBatch;
-use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::ColumnarValue;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+
+use crate::PhysicalExpr;
+
+use arrow::compute::kernels::sort::{SortColumn, SortOptions};
+use arrow::record_batch::RecordBatch;
+use datafusion_common::plan_err;
+use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::ColumnarValue;
 
 /// Represents Sort operation for a column in a RecordBatch
 #[derive(Clone, Debug)]
@@ -62,9 +65,9 @@ impl PhysicalSortExpr {
         let array_to_sort = match value_to_sort {
             ColumnarValue::Array(array) => array,
             ColumnarValue::Scalar(scalar) => {
-                return Err(DataFusionError::Plan(format!(
+                return plan_err!(
                     "Sort operation is not applicable to scalar value {scalar}"
-                )));
+                );
             }
         };
         Ok(SortColumn {
@@ -226,6 +229,9 @@ fn to_str(options: &SortOptions) -> &str {
 
 ///`LexOrdering` is a type alias for lexicographical ordering definition`Vec<PhysicalSortExpr>`
 pub type LexOrdering = Vec<PhysicalSortExpr>;
+
+///`LexOrderingRef` is a type alias for lexicographical ordering reference &`[PhysicalSortExpr]`
+pub type LexOrderingRef<'a> = &'a [PhysicalSortExpr];
 
 ///`LexOrderingReq` is a type alias for lexicographical ordering requirement definition`Vec<PhysicalSortRequirement>`
 pub type LexOrderingReq = Vec<PhysicalSortRequirement>;

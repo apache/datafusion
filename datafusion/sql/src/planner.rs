@@ -15,25 +15,30 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! SQL Query Planner (produces logical plan from SQL AST)
+//! [`SqlToRel`]: SQL Query Planner (produces [`LogicalPlan`] from SQL AST)
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::vec;
 
 use arrow_schema::*;
 use datafusion_common::field_not_found;
+use datafusion_common::internal_err;
+use datafusion_expr::WindowUDF;
 use sqlparser::ast::ExactNumberInfo;
 use sqlparser::ast::TimezoneInfo;
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{DataType as SQLDataType, Ident, ObjectName, TableAlias};
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{unqualified_field_not_found, DFSchema, DataFusionError, Result};
+use datafusion_common::{
+    not_impl_err, plan_err, unqualified_field_not_found, DFSchema, DataFusionError,
+    Result,
+};
 use datafusion_common::{OwnedTableReference, TableReference};
 use datafusion_expr::logical_plan::{LogicalPlan, LogicalPlanBuilder};
 use datafusion_expr::utils::find_column_exprs;
 use datafusion_expr::TableSource;
-use datafusion_expr::{col, AggregateUDF, Expr, ScalarUDF, SubqueryAlias};
+use datafusion_expr::{col, AggregateUDF, Expr, ScalarUDF};
 
 use crate::utils::make_decimal_type;
 
@@ -46,6 +51,8 @@ pub trait ContextProvider {
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>>;
     /// Getter for a UDAF description
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>>;
+    /// Getter for a UDWF
+    fn get_window_meta(&self, name: &str) -> Option<Arc<WindowUDF>>;
     /// Getter for system/user-defined variable type
     fn get_variable_type(&self, variable_names: &[String]) -> Option<DataType>;
 
@@ -219,18 +226,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         Ok(Schema::new(fields))
     }
 
-    /// Apply the given TableAlias to the top-level projection.
+    /// Apply the given TableAlias to the input plan
     pub(crate) fn apply_table_alias(
         &self,
         plan: LogicalPlan,
         alias: TableAlias,
     ) -> Result<LogicalPlan> {
-        let apply_name_plan = LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
-            plan,
-            self.normalizer.normalize(alias.name),
-        )?);
+        let plan = self.apply_expr_alias(plan, alias.columns)?;
 
-        self.apply_expr_alias(apply_name_plan, alias.columns)
+        LogicalPlanBuilder::from(plan)
+            .alias(self.normalizer.normalize(alias.name))?
+            .build()
     }
 
     pub(crate) fn apply_expr_alias(
@@ -241,11 +247,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         if idents.is_empty() {
             Ok(plan)
         } else if idents.len() != plan.schema().fields().len() {
-            Err(DataFusionError::Plan(format!(
+            plan_err!(
                 "Source table contains {} columns but only {} names given as column alias",
                 plan.schema().fields().len(),
-                idents.len(),
-            )))
+                idents.len()
+            )
         } else {
             let fields = plan.schema().fields().clone();
             LogicalPlanBuilder::from(plan)
@@ -281,7 +287,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .map_err(|_: DataFusionError| {
                     field_not_found(col.relation.clone(), col.name.as_str(), schema)
                 }),
-                _ => Err(DataFusionError::Internal("Not a column".to_string())),
+                _ => internal_err!("Not a column"),
             })
     }
 
@@ -294,29 +300,29 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     "field", data_type, true,
                 ))))
             }
-            SQLDataType::Array(None) => Err(DataFusionError::NotImplemented(
-                "Arrays with unspecified type is not supported".to_string(),
-            )),
+            SQLDataType::Array(None) => {
+                not_impl_err!("Arrays with unspecified type is not supported")
+            }
             other => self.convert_simple_data_type(other),
         }
     }
 
     fn convert_simple_data_type(&self, sql_type: &SQLDataType) -> Result<DataType> {
         match sql_type {
-            SQLDataType::Boolean => Ok(DataType::Boolean),
+            SQLDataType::Boolean | SQLDataType::Bool => Ok(DataType::Boolean),
             SQLDataType::TinyInt(_) => Ok(DataType::Int8),
-            SQLDataType::SmallInt(_) => Ok(DataType::Int16),
-            SQLDataType::Int(_) | SQLDataType::Integer(_) => Ok(DataType::Int32),
-            SQLDataType::BigInt(_) => Ok(DataType::Int64),
+            SQLDataType::SmallInt(_) | SQLDataType::Int2(_) => Ok(DataType::Int16),
+            SQLDataType::Int(_) | SQLDataType::Integer(_) | SQLDataType::Int4(_) => Ok(DataType::Int32),
+            SQLDataType::BigInt(_) | SQLDataType::Int8(_) => Ok(DataType::Int64),
             SQLDataType::UnsignedTinyInt(_) => Ok(DataType::UInt8),
-            SQLDataType::UnsignedSmallInt(_) => Ok(DataType::UInt16),
-            SQLDataType::UnsignedInt(_) | SQLDataType::UnsignedInteger(_) => {
+            SQLDataType::UnsignedSmallInt(_) | SQLDataType::UnsignedInt2(_) => Ok(DataType::UInt16),
+            SQLDataType::UnsignedInt(_) | SQLDataType::UnsignedInteger(_) | SQLDataType::UnsignedInt4(_) => {
                 Ok(DataType::UInt32)
             }
-            SQLDataType::UnsignedBigInt(_) => Ok(DataType::UInt64),
+            SQLDataType::UnsignedBigInt(_) | SQLDataType::UnsignedInt8(_) => Ok(DataType::UInt64),
             SQLDataType::Float(_) => Ok(DataType::Float32),
-            SQLDataType::Real => Ok(DataType::Float32),
-            SQLDataType::Double | SQLDataType::DoublePrecision => Ok(DataType::Float64),
+            SQLDataType::Real | SQLDataType::Float4 => Ok(DataType::Float32),
+            SQLDataType::Double | SQLDataType::DoublePrecision | SQLDataType::Float8 => Ok(DataType::Float64),
             SQLDataType::Char(_)
             | SQLDataType::Varchar(_)
             | SQLDataType::Text
@@ -343,9 +349,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     Ok(DataType::Time64(TimeUnit::Nanosecond))
                 } else {
                     // We dont support TIMETZ and TIME WITH TIME ZONE for now
-                    Err(DataFusionError::NotImplemented(format!(
+                    not_impl_err!(
                         "Unsupported SQL type {sql_type:?}"
-                    )))
+                    )
                 }
             }
             SQLDataType::Numeric(exact_number_info)
@@ -390,9 +396,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::Dec(_)
             | SQLDataType::BigNumeric(_)
             | SQLDataType::BigDecimal(_)
-            | SQLDataType::Clob(_) => Err(DataFusionError::NotImplemented(format!(
+            | SQLDataType::Clob(_) => not_impl_err!(
                 "Unsupported SQL type {sql_type:?}"
-            ))),
+            ),
         }
     }
 
@@ -459,10 +465,7 @@ pub(crate) fn idents_to_table_reference(
             let catalog = taker.take(enable_normalization);
             Ok(OwnedTableReference::full(catalog, schema, table))
         }
-        _ => Err(DataFusionError::Plan(format!(
-            "Unsupported compound identifier '{:?}'",
-            taker.0,
-        ))),
+        _ => plan_err!("Unsupported compound identifier '{:?}'", taker.0),
     }
 }
 

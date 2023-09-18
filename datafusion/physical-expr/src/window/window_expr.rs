@@ -15,16 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::window::partition_evaluator::PartitionEvaluator;
-use crate::window::window_frame_state::WindowFrameContext;
 use crate::{PhysicalExpr, PhysicalSortExpr};
 use arrow::array::{new_empty_array, Array, ArrayRef};
 use arrow::compute::kernels::sort::SortColumn;
-use arrow::compute::{concat, SortOptions};
+use arrow::compute::SortOptions;
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
-use arrow_schema::DataType;
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
+use datafusion_expr::window_state::{
+    PartitionBatchState, WindowAggState, WindowFrameContext,
+};
+use datafusion_expr::PartitionEvaluator;
 use datafusion_expr::{Accumulator, WindowFrame};
 use indexmap::IndexMap;
 use std::any::Any;
@@ -96,10 +97,7 @@ pub trait WindowExpr: Send + Sync + Debug {
         _partition_batches: &PartitionBatches,
         _window_agg_state: &mut PartitionWindowAggStates,
     ) -> Result<()> {
-        Err(DataFusionError::Internal(format!(
-            "evaluate_stateful is not implemented for {}",
-            self.name()
-        )))
+        internal_err!("evaluate_stateful is not implemented for {}", self.name())
     }
 
     /// Expressions that's from the window function's partition by clause, empty if absent
@@ -114,25 +112,6 @@ pub trait WindowExpr: Send + Sync + Debug {
             .iter()
             .map(|e| e.evaluate_to_sort_column(batch))
             .collect::<Result<Vec<SortColumn>>>()
-    }
-
-    /// Get sort columns that can be used for peer evaluation, empty if absent
-    fn sort_columns(&self, batch: &RecordBatch) -> Result<Vec<SortColumn>> {
-        let order_by_columns = self.order_by_columns(batch)?;
-        Ok(order_by_columns)
-    }
-
-    /// Get values columns (argument of Window Function)
-    /// and order by columns (columns of the ORDER BY expression) used in evaluators
-    fn get_values_orderbys(
-        &self,
-        record_batch: &RecordBatch,
-    ) -> Result<(Vec<ArrayRef>, Vec<ArrayRef>)> {
-        let values = self.evaluate_args(record_batch)?;
-        let order_by_columns = self.order_by_columns(record_batch)?;
-        let order_bys: Vec<ArrayRef> =
-            order_by_columns.iter().map(|s| s.values.clone()).collect();
-        Ok((values, order_bys))
     }
 
     /// Get the window frame of this [WindowExpr].
@@ -243,7 +222,8 @@ pub trait AggregateWindowExpr: WindowExpr {
         mut idx: usize,
         not_end: bool,
     ) -> Result<ArrayRef> {
-        let (values, order_bys) = self.get_values_orderbys(record_batch)?;
+        let values = self.evaluate_args(record_batch)?;
+        let order_bys = get_orderby_values(self.order_by_columns(record_batch)?);
         // We iterate on each row to perform a running calculation.
         let length = values[0].len();
         let mut row_wise_results: Vec<ScalarValue> = vec![];
@@ -271,9 +251,13 @@ pub trait AggregateWindowExpr: WindowExpr {
             let out_type = field.data_type();
             Ok(new_empty_array(out_type))
         } else {
-            ScalarValue::iter_to_array(row_wise_results.into_iter())
+            ScalarValue::iter_to_array(row_wise_results)
         }
     }
+}
+/// Get order by expression results inside `order_by_columns`.
+pub(crate) fn get_orderby_values(order_by_columns: Vec<SortColumn>) -> Vec<ArrayRef> {
+    order_by_columns.into_iter().map(|s| s.values).collect()
 }
 
 #[derive(Debug)]
@@ -289,6 +273,8 @@ pub struct RankState {
     pub last_rank_data: Vec<ScalarValue>,
     /// The index where last_rank_boundary is started
     pub last_rank_boundary: usize,
+    /// Keep the number of entries in current rank
+    pub current_group_count: usize,
     /// Rank number kept from the start
     pub n_rank: usize,
 }
@@ -322,89 +308,6 @@ pub struct NthValueState {
     pub kind: NthValueKind,
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct LeadLagState {
-    pub idx: usize,
-}
-
-/// Holds the state of evaluating a window function
-#[derive(Debug)]
-pub struct WindowAggState {
-    /// The range that we calculate the window function
-    pub window_frame_range: Range<usize>,
-    pub window_frame_ctx: Option<WindowFrameContext>,
-    /// The index of the last row that its result is calculated inside the partition record batch buffer.
-    pub last_calculated_index: usize,
-    /// The offset of the deleted row number
-    pub offset_pruned_rows: usize,
-    /// Stores the results calculated by window frame
-    pub out_col: ArrayRef,
-    /// Keeps track of how many rows should be generated to be in sync with input record_batch.
-    // (For each row in the input record batch we need to generate a window result).
-    pub n_row_result_missing: usize,
-    /// flag indicating whether we have received all data for this partition
-    pub is_end: bool,
-}
-
-impl WindowAggState {
-    pub fn prune_state(&mut self, n_prune: usize) {
-        self.window_frame_range = Range {
-            start: self.window_frame_range.start - n_prune,
-            end: self.window_frame_range.end - n_prune,
-        };
-        self.last_calculated_index -= n_prune;
-        self.offset_pruned_rows += n_prune;
-
-        match self.window_frame_ctx.as_mut() {
-            // Rows have no state do nothing
-            Some(WindowFrameContext::Rows(_)) => {}
-            Some(WindowFrameContext::Range { .. }) => {}
-            Some(WindowFrameContext::Groups { state, .. }) => {
-                let mut n_group_to_del = 0;
-                for (_, end_idx) in &state.group_end_indices {
-                    if n_prune < *end_idx {
-                        break;
-                    }
-                    n_group_to_del += 1;
-                }
-                state.group_end_indices.drain(0..n_group_to_del);
-                state
-                    .group_end_indices
-                    .iter_mut()
-                    .for_each(|(_, start_idx)| *start_idx -= n_prune);
-                state.current_group_idx -= n_group_to_del;
-            }
-            None => {}
-        };
-    }
-}
-
-impl WindowAggState {
-    pub fn update(
-        &mut self,
-        out_col: &ArrayRef,
-        partition_batch_state: &PartitionBatchState,
-    ) -> Result<()> {
-        self.last_calculated_index += out_col.len();
-        self.out_col = concat(&[&self.out_col, &out_col])?;
-        self.n_row_result_missing =
-            partition_batch_state.record_batch.num_rows() - self.last_calculated_index;
-        self.is_end = partition_batch_state.is_end;
-        Ok(())
-    }
-}
-
-/// State for each unique partition determined according to PARTITION BY column(s)
-#[derive(Debug)]
-pub struct PartitionBatchState {
-    /// The record_batch belonging to current partition
-    pub record_batch: RecordBatch,
-    /// Flag indicating whether we have received all data for this partition
-    pub is_end: bool,
-    /// Number of rows emitted for each partition
-    pub n_out_row: usize,
-}
-
 /// Key for IndexMap for each unique partition
 ///
 /// For instance, if window frame is `OVER(PARTITION BY a,b)`,
@@ -420,18 +323,3 @@ pub type PartitionWindowAggStates = IndexMap<PartitionKey, WindowState>;
 
 /// The IndexMap (i.e. an ordered HashMap) where record batches are separated for each partition.
 pub type PartitionBatches = IndexMap<PartitionKey, PartitionBatchState>;
-
-impl WindowAggState {
-    pub fn new(out_type: &DataType) -> Result<Self> {
-        let empty_out_col = ScalarValue::try_from(out_type)?.to_array_of_size(0);
-        Ok(Self {
-            window_frame_range: Range { start: 0, end: 0 },
-            window_frame_ctx: None,
-            last_calculated_index: 0,
-            offset_pruned_rows: 0,
-            out_col: empty_out_col,
-            n_row_result_missing: 0,
-            is_end: false,
-        })
-    }
-}

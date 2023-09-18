@@ -22,20 +22,24 @@ use std::fmt::Debug;
 use std::ops::BitAnd;
 use std::sync::Arc;
 
-use crate::aggregate::row_accumulator::RowAccumulator;
 use crate::aggregate::utils::down_cast_any_ref;
-use crate::{AggregateExpr, PhysicalExpr};
+use crate::{AggregateExpr, GroupsAccumulator, PhysicalExpr};
 use arrow::array::{Array, Int64Array};
 use arrow::compute;
 use arrow::datatypes::DataType;
 use arrow::{array::ArrayRef, datatypes::Field};
+use arrow_array::cast::AsArray;
+use arrow_array::types::Int64Type;
+use arrow_array::PrimitiveArray;
 use arrow_buffer::BooleanBuffer;
 use datafusion_common::{downcast_value, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Accumulator;
-use datafusion_row::accessor::RowAccessor;
 
 use crate::expressions::format_state_name;
+
+use super::groups_accumulator::accumulate::accumulate_indices;
+use super::groups_accumulator::EmitTo;
 
 /// COUNT aggregate expression
 /// Returns the amount of non-null values of the given expression.
@@ -44,6 +48,10 @@ pub struct Count {
     name: String,
     data_type: DataType,
     nullable: bool,
+    /// Input exprs
+    ///
+    /// For `COUNT(c1)` this is `[c1]`
+    /// For `COUNT(c1, c2)` this is `[c1, c2]`
     exprs: Vec<Arc<dyn PhysicalExpr>>,
 }
 
@@ -76,6 +84,114 @@ impl Count {
     }
 }
 
+/// An accumulator to compute the counts of [`PrimitiveArray<T>`].
+/// Stores values as native types, and does overflow checking
+///
+/// Unlike most other accumulators, COUNT never produces NULLs. If no
+/// non-null values are seen in any group the output is 0. Thus, this
+/// accumulator has no additional null or seen filter tracking.
+#[derive(Debug)]
+struct CountGroupsAccumulator {
+    /// Count per group.
+    ///
+    /// Note this is an i64 and not a u64 (or usize) because the
+    /// output type of count is `DataType::Int64`. Thus by using `i64`
+    /// for the counts, the output [`Int64Array`] can be created
+    /// without copy.
+    counts: Vec<i64>,
+}
+
+impl CountGroupsAccumulator {
+    pub fn new() -> Self {
+        Self { counts: vec![] }
+    }
+}
+
+impl GroupsAccumulator for CountGroupsAccumulator {
+    fn update_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&arrow_array::BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        assert_eq!(values.len(), 1, "single argument to update_batch");
+        let values = &values[0];
+
+        // Add one to each group's counter for each non null, non
+        // filtered value
+        self.counts.resize(total_num_groups, 0);
+        accumulate_indices(
+            group_indices,
+            values.nulls(), // ignore values
+            opt_filter,
+            |group_index| {
+                self.counts[group_index] += 1;
+            },
+        );
+
+        Ok(())
+    }
+
+    fn merge_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&arrow_array::BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        assert_eq!(values.len(), 1, "one argument to merge_batch");
+        // first batch is counts, second is partial sums
+        let partial_counts = values[0].as_primitive::<Int64Type>();
+
+        // intermediate counts are always created as non null
+        assert_eq!(partial_counts.null_count(), 0);
+        let partial_counts = partial_counts.values();
+
+        // Adds the counts with the partial counts
+        self.counts.resize(total_num_groups, 0);
+        match opt_filter {
+            Some(filter) => filter
+                .iter()
+                .zip(group_indices.iter())
+                .zip(partial_counts.iter())
+                .for_each(|((filter_value, &group_index), partial_count)| {
+                    if let Some(true) = filter_value {
+                        self.counts[group_index] += partial_count;
+                    }
+                }),
+            None => group_indices.iter().zip(partial_counts.iter()).for_each(
+                |(&group_index, partial_count)| {
+                    self.counts[group_index] += partial_count;
+                },
+            ),
+        }
+
+        Ok(())
+    }
+
+    fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
+        let counts = emit_to.take_needed(&mut self.counts);
+
+        // Count is always non null (null inputs just don't contribute to the overall values)
+        let nulls = None;
+        let array = PrimitiveArray::<Int64Type>::new(counts.into(), nulls);
+
+        Ok(Arc::new(array))
+    }
+
+    // return arrays for counts
+    fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+        let counts = emit_to.take_needed(&mut self.counts);
+        let counts: PrimitiveArray<Int64Type> = Int64Array::from(counts); // zero copy, no nulls
+        Ok(vec![Arc::new(counts) as ArrayRef])
+    }
+
+    fn size(&self) -> usize {
+        self.counts.capacity() * std::mem::size_of::<usize>()
+    }
+}
+
 /// count null values for multiple columns
 /// for each row if one column value is null, then null_count + 1
 fn null_count_for_multiple_cols(values: &[ArrayRef]) -> usize {
@@ -102,17 +218,13 @@ impl AggregateExpr for Count {
     }
 
     fn field(&self) -> Result<Field> {
-        Ok(Field::new(
-            &self.name,
-            self.data_type.clone(),
-            self.nullable,
-        ))
+        Ok(Field::new(&self.name, DataType::Int64, self.nullable))
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![Field::new(
             format_state_name(&self.name, "count"),
-            self.data_type.clone(),
+            DataType::Int64,
             true,
         )])
     }
@@ -129,19 +241,10 @@ impl AggregateExpr for Count {
         &self.name
     }
 
-    fn row_accumulator_supported(&self) -> bool {
-        true
-    }
-
-    fn supports_bounded_execution(&self) -> bool {
-        true
-    }
-
-    fn create_row_accumulator(
-        &self,
-        start_index: usize,
-    ) -> Result<Box<dyn RowAccumulator>> {
-        Ok(Box::new(CountRowAccumulator::new(start_index)))
+    fn groups_accumulator_supported(&self) -> bool {
+        // groups accumulator only supports `COUNT(c1)`, not
+        // `COUNT(c1, c2)`, etc
+        self.exprs.len() == 1
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
@@ -150,6 +253,11 @@ impl AggregateExpr for Count {
 
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(CountAccumulator::new()))
+    }
+
+    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+        // instantiate specialized accumulator
+        Ok(Box::new(CountGroupsAccumulator::new()))
     }
 }
 
@@ -214,81 +322,12 @@ impl Accumulator for CountAccumulator {
         Ok(ScalarValue::Int64(Some(self.count)))
     }
 
+    fn supports_retract_batch(&self) -> bool {
+        true
+    }
+
     fn size(&self) -> usize {
         std::mem::size_of_val(self)
-    }
-}
-
-#[derive(Debug)]
-struct CountRowAccumulator {
-    state_index: usize,
-}
-
-impl CountRowAccumulator {
-    pub fn new(index: usize) -> Self {
-        Self { state_index: index }
-    }
-}
-
-impl RowAccumulator for CountRowAccumulator {
-    fn update_batch(
-        &mut self,
-        values: &[ArrayRef],
-        accessor: &mut RowAccessor,
-    ) -> Result<()> {
-        let array = &values[0];
-        let delta = (array.len() - null_count_for_multiple_cols(values)) as u64;
-        accessor.add_u64(self.state_index, delta);
-        Ok(())
-    }
-
-    fn update_scalar_values(
-        &mut self,
-        values: &[ScalarValue],
-        accessor: &mut RowAccessor,
-    ) -> Result<()> {
-        if !values.iter().any(|s| matches!(s, ScalarValue::Null)) {
-            accessor.add_u64(self.state_index, 1)
-        }
-        Ok(())
-    }
-
-    fn update_scalar(
-        &mut self,
-        value: &ScalarValue,
-        accessor: &mut RowAccessor,
-    ) -> Result<()> {
-        match value {
-            ScalarValue::Null => {
-                // do not update the accumulator
-            }
-            _ => accessor.add_u64(self.state_index, 1),
-        }
-        Ok(())
-    }
-
-    fn merge_batch(
-        &mut self,
-        states: &[ArrayRef],
-        accessor: &mut RowAccessor,
-    ) -> Result<()> {
-        let counts = downcast_value!(states[0], Int64Array);
-        let delta = &compute::sum(counts);
-        if let Some(d) = delta {
-            accessor.add_i64(self.state_index, *d);
-        }
-        Ok(())
-    }
-
-    fn evaluate(&self, accessor: &RowAccessor) -> Result<ScalarValue> {
-        Ok(ScalarValue::Int64(Some(
-            accessor.get_u64_opt(self.state_index()).unwrap_or(0) as i64,
-        )))
-    }
-
-    #[inline(always)]
-    fn state_index(&self) -> usize {
-        self.state_index
     }
 }
 

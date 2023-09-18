@@ -31,6 +31,7 @@
 //! argument is automatically is coerced to f64.
 
 use crate::execution_props::ExecutionProps;
+use crate::sort_properties::SortProperties;
 use crate::{
     array_expressions, conditional_expressions, datetime_expressions,
     expressions::{cast_column, nullif_func},
@@ -43,10 +44,11 @@ use arrow::{
     datatypes::TimeUnit,
     datatypes::{DataType, Int32Type, Int64Type, Schema},
 };
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
     BuiltinScalarFunction, ColumnarValue, ScalarFunctionImplementation,
 };
+use std::ops::Neg;
 use std::sync::Arc;
 
 /// Create a physical (function) expression.
@@ -82,9 +84,9 @@ pub fn create_physical_expr(
                 }
                 Ok(DataType::Utf8) => datetime_expressions::to_timestamp,
                 other => {
-                    return Err(DataFusionError::Internal(format!(
-                        "Unsupported data type {other:?} for function to_timestamp",
-                    )));
+                    return internal_err!(
+                        "Unsupported data type {other:?} for function to_timestamp"
+                    );
                 }
             })
         }
@@ -101,9 +103,9 @@ pub fn create_physical_expr(
                 }
                 Ok(DataType::Utf8) => datetime_expressions::to_timestamp_millis,
                 other => {
-                    return Err(DataFusionError::Internal(format!(
-                        "Unsupported data type {other:?} for function to_timestamp_millis",
-                    )));
+                    return internal_err!(
+                        "Unsupported data type {other:?} for function to_timestamp_millis"
+                    );
                 }
             })
         }
@@ -120,9 +122,9 @@ pub fn create_physical_expr(
                 }
                 Ok(DataType::Utf8) => datetime_expressions::to_timestamp_micros,
                 other => {
-                    return Err(DataFusionError::Internal(format!(
-                        "Unsupported data type {other:?} for function to_timestamp_micros",
-                    )));
+                    return internal_err!(
+                        "Unsupported data type {other:?} for function to_timestamp_micros"
+                    );
                 }
             })
         }
@@ -139,9 +141,9 @@ pub fn create_physical_expr(
                 }
                 Ok(DataType::Utf8) => datetime_expressions::to_timestamp_seconds,
                 other => {
-                    return Err(DataFusionError::Internal(format!(
-                        "Unsupported data type {other:?} for function to_timestamp_seconds",
-                    )));
+                    return internal_err!(
+                        "Unsupported data type {other:?} for function to_timestamp_seconds"
+                    );
                 }
             }
         }),
@@ -155,9 +157,9 @@ pub fn create_physical_expr(
                     )
                 },
                 other => {
-                    return Err(DataFusionError::Internal(format!(
-                        "Unsupported data type {other:?} for function from_unixtime",
-                    )));
+                    return internal_err!(
+                        "Unsupported data type {other:?} for function from_unixtime"
+                    );
                 }
             }
         }),
@@ -173,12 +175,35 @@ pub fn create_physical_expr(
         _ => create_physical_fun(fun, execution_props)?,
     };
 
+    let monotonicity = get_func_monotonicity(fun);
+
     Ok(Arc::new(ScalarFunctionExpr::new(
         &format!("{fun}"),
         fun_expr,
         input_phy_exprs.to_vec(),
         &data_type,
+        monotonicity,
     )))
+}
+
+#[cfg(feature = "encoding_expressions")]
+macro_rules! invoke_if_encoding_expressions_feature_flag {
+    ($FUNC:ident, $NAME:expr) => {{
+        use crate::encoding_expressions;
+        encoding_expressions::$FUNC
+    }};
+}
+
+#[cfg(not(feature = "encoding_expressions"))]
+macro_rules! invoke_if_encoding_expressions_feature_flag {
+    ($FUNC:ident, $NAME:expr) => {
+        |_: &[ColumnarValue]| -> Result<ColumnarValue> {
+            internal_err!(
+                "function {} requires compilation with feature flag: encoding_expressions.",
+                $NAME
+            )
+        }
+    };
 }
 
 #[cfg(feature = "crypto_expressions")]
@@ -193,10 +218,10 @@ macro_rules! invoke_if_crypto_expressions_feature_flag {
 macro_rules! invoke_if_crypto_expressions_feature_flag {
     ($FUNC:ident, $NAME:expr) => {
         |_: &[ColumnarValue]| -> Result<ColumnarValue> {
-            Err(DataFusionError::Internal(format!(
+            internal_err!(
                 "function {} requires compilation with feature flag: crypto_expressions.",
                 $NAME
-            )))
+            )
         }
     };
 }
@@ -213,10 +238,10 @@ macro_rules! invoke_on_array_if_regex_expressions_feature_flag {
 macro_rules! invoke_on_array_if_regex_expressions_feature_flag {
     ($FUNC:ident, $T:tt, $NAME:expr) => {
         |_: &[ArrayRef]| -> Result<ArrayRef> {
-            Err(DataFusionError::Internal(format!(
+            internal_err!(
                 "function {} requires compilation with feature flag: regex_expressions.",
                 $NAME
-            )))
+            )
         }
     };
 }
@@ -233,10 +258,10 @@ macro_rules! invoke_on_columnar_value_if_regex_expressions_feature_flag {
 macro_rules! invoke_on_columnar_value_if_regex_expressions_feature_flag {
     ($FUNC:ident, $T:tt, $NAME:expr) => {
         |_: &[ColumnarValue]| -> Result<ScalarFunctionImplementation> {
-            Err(DataFusionError::Internal(format!(
+            internal_err!(
                 "function {} requires compilation with feature flag: regex_expressions.",
                 $NAME
-            )))
+            )
         }
     };
 }
@@ -253,10 +278,10 @@ macro_rules! invoke_if_unicode_expressions_feature_flag {
 macro_rules! invoke_if_unicode_expressions_feature_flag {
   ($FUNC:ident, $T:tt, $NAME:expr) => {
     |_: &[ArrayRef]| -> Result<ArrayRef> {
-      Err(DataFusionError::Internal(format!(
+      internal_err!(
         "function {} requires compilation with feature flag: unicode_expressions.",
         $NAME
-      )))
+      )
     }
   };
 }
@@ -354,12 +379,21 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Gcd => {
             Arc::new(|args| make_scalar_function(math_expressions::gcd)(args))
         }
+        BuiltinScalarFunction::Isnan => {
+            Arc::new(|args| make_scalar_function(math_expressions::isnan)(args))
+        }
+        BuiltinScalarFunction::Iszero => {
+            Arc::new(|args| make_scalar_function(math_expressions::iszero)(args))
+        }
         BuiltinScalarFunction::Lcm => {
             Arc::new(|args| make_scalar_function(math_expressions::lcm)(args))
         }
         BuiltinScalarFunction::Ln => Arc::new(math_expressions::ln),
         BuiltinScalarFunction::Log10 => Arc::new(math_expressions::log10),
         BuiltinScalarFunction::Log2 => Arc::new(math_expressions::log2),
+        BuiltinScalarFunction::Nanvl => {
+            Arc::new(|args| make_scalar_function(math_expressions::nanvl)(args))
+        }
         BuiltinScalarFunction::Radians => Arc::new(math_expressions::to_radians),
         BuiltinScalarFunction::Random => Arc::new(math_expressions::random),
         BuiltinScalarFunction::Round => {
@@ -372,7 +406,9 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Cbrt => Arc::new(math_expressions::cbrt),
         BuiltinScalarFunction::Tan => Arc::new(math_expressions::tan),
         BuiltinScalarFunction::Tanh => Arc::new(math_expressions::tanh),
-        BuiltinScalarFunction::Trunc => Arc::new(math_expressions::trunc),
+        BuiltinScalarFunction::Trunc => {
+            Arc::new(|args| make_scalar_function(math_expressions::trunc)(args))
+        }
         BuiltinScalarFunction::Pi => Arc::new(math_expressions::pi),
         BuiltinScalarFunction::Power => {
             Arc::new(|args| make_scalar_function(math_expressions::power)(args))
@@ -383,32 +419,94 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Log => {
             Arc::new(|args| make_scalar_function(math_expressions::log)(args))
         }
+        BuiltinScalarFunction::Cot => {
+            Arc::new(|args| make_scalar_function(math_expressions::cot)(args))
+        }
 
         // array functions
-        BuiltinScalarFunction::ArrayAppend => Arc::new(array_expressions::array_append),
-        BuiltinScalarFunction::ArrayConcat => Arc::new(array_expressions::array_concat),
-        BuiltinScalarFunction::ArrayDims => Arc::new(array_expressions::array_dims),
-        BuiltinScalarFunction::ArrayFill => Arc::new(array_expressions::array_fill),
-        BuiltinScalarFunction::ArrayLength => Arc::new(array_expressions::array_length),
-        BuiltinScalarFunction::ArrayNdims => Arc::new(array_expressions::array_ndims),
+        BuiltinScalarFunction::ArrayAppend => {
+            Arc::new(|args| make_scalar_function(array_expressions::array_append)(args))
+        }
+        BuiltinScalarFunction::ArrayConcat => {
+            Arc::new(|args| make_scalar_function(array_expressions::array_concat)(args))
+        }
+        BuiltinScalarFunction::ArrayEmpty => {
+            Arc::new(|args| make_scalar_function(array_expressions::array_empty)(args))
+        }
+        BuiltinScalarFunction::ArrayHasAll => {
+            Arc::new(|args| make_scalar_function(array_expressions::array_has_all)(args))
+        }
+        BuiltinScalarFunction::ArrayHasAny => {
+            Arc::new(|args| make_scalar_function(array_expressions::array_has_any)(args))
+        }
+        BuiltinScalarFunction::ArrayHas => {
+            Arc::new(|args| make_scalar_function(array_expressions::array_has)(args))
+        }
+        BuiltinScalarFunction::ArrayDims => {
+            Arc::new(|args| make_scalar_function(array_expressions::array_dims)(args))
+        }
+        BuiltinScalarFunction::ArrayElement => {
+            Arc::new(|args| make_scalar_function(array_expressions::array_element)(args))
+        }
+        BuiltinScalarFunction::ArrayLength => {
+            Arc::new(|args| make_scalar_function(array_expressions::array_length)(args))
+        }
+        BuiltinScalarFunction::Flatten => {
+            Arc::new(|args| make_scalar_function(array_expressions::flatten)(args))
+        }
+        BuiltinScalarFunction::ArrayNdims => {
+            Arc::new(|args| make_scalar_function(array_expressions::array_ndims)(args))
+        }
+        BuiltinScalarFunction::ArrayPopBack => {
+            Arc::new(|args| make_scalar_function(array_expressions::array_pop_back)(args))
+        }
         BuiltinScalarFunction::ArrayPosition => {
-            Arc::new(array_expressions::array_position)
+            Arc::new(|args| make_scalar_function(array_expressions::array_position)(args))
         }
-        BuiltinScalarFunction::ArrayPositions => {
-            Arc::new(array_expressions::array_positions)
+        BuiltinScalarFunction::ArrayPositions => Arc::new(|args| {
+            make_scalar_function(array_expressions::array_positions)(args)
+        }),
+        BuiltinScalarFunction::ArrayPrepend => {
+            Arc::new(|args| make_scalar_function(array_expressions::array_prepend)(args))
         }
-        BuiltinScalarFunction::ArrayPrepend => Arc::new(array_expressions::array_prepend),
-        BuiltinScalarFunction::ArrayRemove => Arc::new(array_expressions::array_remove),
-        BuiltinScalarFunction::ArrayReplace => Arc::new(array_expressions::array_replace),
-        BuiltinScalarFunction::ArrayToString => {
-            Arc::new(array_expressions::array_to_string)
+        BuiltinScalarFunction::ArrayRepeat => {
+            Arc::new(|args| make_scalar_function(array_expressions::array_repeat)(args))
         }
-        BuiltinScalarFunction::Cardinality => Arc::new(array_expressions::cardinality),
-        BuiltinScalarFunction::MakeArray => Arc::new(array_expressions::make_array),
-        BuiltinScalarFunction::TrimArray => Arc::new(array_expressions::trim_array),
+        BuiltinScalarFunction::ArrayRemove => {
+            Arc::new(|args| make_scalar_function(array_expressions::array_remove)(args))
+        }
+        BuiltinScalarFunction::ArrayRemoveN => {
+            Arc::new(|args| make_scalar_function(array_expressions::array_remove_n)(args))
+        }
+        BuiltinScalarFunction::ArrayRemoveAll => Arc::new(|args| {
+            make_scalar_function(array_expressions::array_remove_all)(args)
+        }),
+        BuiltinScalarFunction::ArrayReplace => {
+            Arc::new(|args| make_scalar_function(array_expressions::array_replace)(args))
+        }
+        BuiltinScalarFunction::ArrayReplaceN => Arc::new(|args| {
+            make_scalar_function(array_expressions::array_replace_n)(args)
+        }),
+        BuiltinScalarFunction::ArrayReplaceAll => Arc::new(|args| {
+            make_scalar_function(array_expressions::array_replace_all)(args)
+        }),
+        BuiltinScalarFunction::ArraySlice => {
+            Arc::new(|args| make_scalar_function(array_expressions::array_slice)(args))
+        }
+        BuiltinScalarFunction::ArrayToString => Arc::new(|args| {
+            make_scalar_function(array_expressions::array_to_string)(args)
+        }),
+        BuiltinScalarFunction::Cardinality => {
+            Arc::new(|args| make_scalar_function(array_expressions::cardinality)(args))
+        }
+        BuiltinScalarFunction::MakeArray => {
+            Arc::new(|args| make_scalar_function(array_expressions::make_array)(args))
+        }
+
+        // struct functions
+        BuiltinScalarFunction::Struct => Arc::new(struct_expressions::struct_expr),
 
         // string functions
-        BuiltinScalarFunction::Struct => Arc::new(struct_expressions::struct_expr),
         BuiltinScalarFunction::Ascii => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
                 make_scalar_function(string_expressions::ascii::<i32>)(args)
@@ -416,9 +514,7 @@ pub fn create_physical_fun(
             DataType::LargeUtf8 => {
                 make_scalar_function(string_expressions::ascii::<i64>)(args)
             }
-            other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {other:?} for function ascii",
-            ))),
+            other => internal_err!("Unsupported data type {other:?} for function ascii"),
         }),
         BuiltinScalarFunction::BitLength => Arc::new(|args| match &args[0] {
             ColumnarValue::Array(v) => Ok(ColumnarValue::Array(bit_length(v.as_ref())?)),
@@ -439,9 +535,7 @@ pub fn create_physical_fun(
             DataType::LargeUtf8 => {
                 make_scalar_function(string_expressions::btrim::<i64>)(args)
             }
-            other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {other:?} for function btrim",
-            ))),
+            other => internal_err!("Unsupported data type {other:?} for function btrim"),
         }),
         BuiltinScalarFunction::CharacterLength => {
             Arc::new(|args| match args[0].data_type() {
@@ -461,9 +555,9 @@ pub fn create_physical_fun(
                     );
                     make_scalar_function(func)(args)
                 }
-                other => Err(DataFusionError::Internal(format!(
-                    "Unsupported data type {other:?} for function character_length",
-                ))),
+                other => internal_err!(
+                    "Unsupported data type {other:?} for function character_length"
+                ),
             })
         }
         BuiltinScalarFunction::Chr => {
@@ -502,9 +596,9 @@ pub fn create_physical_fun(
             DataType::LargeUtf8 => {
                 make_scalar_function(string_expressions::initcap::<i64>)(args)
             }
-            other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {other:?} for function initcap",
-            ))),
+            other => {
+                internal_err!("Unsupported data type {other:?} for function initcap")
+            }
         }),
         BuiltinScalarFunction::Left => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
@@ -515,9 +609,7 @@ pub fn create_physical_fun(
                 let func = invoke_if_unicode_expressions_feature_flag!(left, i64, "left");
                 make_scalar_function(func)(args)
             }
-            other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {other:?} for function left",
-            ))),
+            other => internal_err!("Unsupported data type {other:?} for function left"),
         }),
         BuiltinScalarFunction::Lower => Arc::new(string_expressions::lower),
         BuiltinScalarFunction::Lpad => Arc::new(|args| match args[0].data_type() {
@@ -529,9 +621,7 @@ pub fn create_physical_fun(
                 let func = invoke_if_unicode_expressions_feature_flag!(lpad, i64, "lpad");
                 make_scalar_function(func)(args)
             }
-            other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {other:?} for function lpad",
-            ))),
+            other => internal_err!("Unsupported data type {other:?} for function lpad"),
         }),
         BuiltinScalarFunction::Ltrim => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
@@ -540,9 +630,7 @@ pub fn create_physical_fun(
             DataType::LargeUtf8 => {
                 make_scalar_function(string_expressions::ltrim::<i64>)(args)
             }
-            other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {other:?} for function ltrim",
-            ))),
+            other => internal_err!("Unsupported data type {other:?} for function ltrim"),
         }),
         BuiltinScalarFunction::MD5 => {
             Arc::new(invoke_if_crypto_expressions_feature_flag!(md5, "md5"))
@@ -550,6 +638,12 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Digest => {
             Arc::new(invoke_if_crypto_expressions_feature_flag!(digest, "digest"))
         }
+        BuiltinScalarFunction::Decode => Arc::new(
+            invoke_if_encoding_expressions_feature_flag!(decode, "decode"),
+        ),
+        BuiltinScalarFunction::Encode => Arc::new(
+            invoke_if_encoding_expressions_feature_flag!(encode, "encode"),
+        ),
         BuiltinScalarFunction::NullIf => Arc::new(nullif_func),
         BuiltinScalarFunction::OctetLength => Arc::new(|args| match &args[0] {
             ColumnarValue::Array(v) => Ok(ColumnarValue::Array(length(v.as_ref())?)),
@@ -581,9 +675,9 @@ pub fn create_physical_fun(
                     );
                     make_scalar_function(func)(args)
                 }
-                other => Err(DataFusionError::Internal(format!(
+                other => internal_err!(
                     "Unsupported data type {other:?} for function regexp_match"
-                ))),
+                ),
             })
         }
         BuiltinScalarFunction::RegexpReplace => {
@@ -606,9 +700,9 @@ pub fn create_physical_fun(
                     let func = specializer_func(args)?;
                     func(args)
                 }
-                other => Err(DataFusionError::Internal(format!(
-                    "Unsupported data type {other:?} for function regexp_replace",
-                ))),
+                other => internal_err!(
+                    "Unsupported data type {other:?} for function regexp_replace"
+                ),
             })
         }
         BuiltinScalarFunction::Repeat => Arc::new(|args| match args[0].data_type() {
@@ -618,9 +712,7 @@ pub fn create_physical_fun(
             DataType::LargeUtf8 => {
                 make_scalar_function(string_expressions::repeat::<i64>)(args)
             }
-            other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {other:?} for function repeat",
-            ))),
+            other => internal_err!("Unsupported data type {other:?} for function repeat"),
         }),
         BuiltinScalarFunction::Replace => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
@@ -629,9 +721,9 @@ pub fn create_physical_fun(
             DataType::LargeUtf8 => {
                 make_scalar_function(string_expressions::replace::<i64>)(args)
             }
-            other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {other:?} for function replace",
-            ))),
+            other => {
+                internal_err!("Unsupported data type {other:?} for function replace")
+            }
         }),
         BuiltinScalarFunction::Reverse => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
@@ -644,9 +736,9 @@ pub fn create_physical_fun(
                     invoke_if_unicode_expressions_feature_flag!(reverse, i64, "reverse");
                 make_scalar_function(func)(args)
             }
-            other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {other:?} for function reverse",
-            ))),
+            other => {
+                internal_err!("Unsupported data type {other:?} for function reverse")
+            }
         }),
         BuiltinScalarFunction::Right => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
@@ -659,9 +751,7 @@ pub fn create_physical_fun(
                     invoke_if_unicode_expressions_feature_flag!(right, i64, "right");
                 make_scalar_function(func)(args)
             }
-            other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {other:?} for function right",
-            ))),
+            other => internal_err!("Unsupported data type {other:?} for function right"),
         }),
         BuiltinScalarFunction::Rpad => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
@@ -672,9 +762,7 @@ pub fn create_physical_fun(
                 let func = invoke_if_unicode_expressions_feature_flag!(rpad, i64, "rpad");
                 make_scalar_function(func)(args)
             }
-            other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {other:?} for function rpad",
-            ))),
+            other => internal_err!("Unsupported data type {other:?} for function rpad"),
         }),
         BuiltinScalarFunction::Rtrim => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
@@ -683,9 +771,7 @@ pub fn create_physical_fun(
             DataType::LargeUtf8 => {
                 make_scalar_function(string_expressions::rtrim::<i64>)(args)
             }
-            other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {other:?} for function rtrim",
-            ))),
+            other => internal_err!("Unsupported data type {other:?} for function rtrim"),
         }),
         BuiltinScalarFunction::SHA224 => {
             Arc::new(invoke_if_crypto_expressions_feature_flag!(sha224, "sha224"))
@@ -706,9 +792,9 @@ pub fn create_physical_fun(
             DataType::LargeUtf8 => {
                 make_scalar_function(string_expressions::split_part::<i64>)(args)
             }
-            other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {other:?} for function split_part",
-            ))),
+            other => {
+                internal_err!("Unsupported data type {other:?} for function split_part")
+            }
         }),
         BuiltinScalarFunction::StartsWith => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
@@ -717,9 +803,9 @@ pub fn create_physical_fun(
             DataType::LargeUtf8 => {
                 make_scalar_function(string_expressions::starts_with::<i64>)(args)
             }
-            other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {other:?} for function starts_with",
-            ))),
+            other => {
+                internal_err!("Unsupported data type {other:?} for function starts_with")
+            }
         }),
         BuiltinScalarFunction::Strpos => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
@@ -734,9 +820,7 @@ pub fn create_physical_fun(
                 );
                 make_scalar_function(func)(args)
             }
-            other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {other:?} for function strpos",
-            ))),
+            other => internal_err!("Unsupported data type {other:?} for function strpos"),
         }),
         BuiltinScalarFunction::Substr => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
@@ -749,9 +833,7 @@ pub fn create_physical_fun(
                     invoke_if_unicode_expressions_feature_flag!(substr, i64, "substr");
                 make_scalar_function(func)(args)
             }
-            other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {other:?} for function substr",
-            ))),
+            other => internal_err!("Unsupported data type {other:?} for function substr"),
         }),
         BuiltinScalarFunction::ToHex => Arc::new(|args| match args[0].data_type() {
             DataType::Int32 => {
@@ -760,9 +842,7 @@ pub fn create_physical_fun(
             DataType::Int64 => {
                 make_scalar_function(string_expressions::to_hex::<Int64Type>)(args)
             }
-            other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {other:?} for function to_hex",
-            ))),
+            other => internal_err!("Unsupported data type {other:?} for function to_hex"),
         }),
         BuiltinScalarFunction::Translate => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
@@ -781,9 +861,9 @@ pub fn create_physical_fun(
                 );
                 make_scalar_function(func)(args)
             }
-            other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {other:?} for function translate",
-            ))),
+            other => {
+                internal_err!("Unsupported data type {other:?} for function translate")
+            }
         }),
         BuiltinScalarFunction::Trim => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
@@ -792,18 +872,118 @@ pub fn create_physical_fun(
             DataType::LargeUtf8 => {
                 make_scalar_function(string_expressions::btrim::<i64>)(args)
             }
-            other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {other:?} for function trim",
-            ))),
+            other => internal_err!("Unsupported data type {other:?} for function trim"),
         }),
         BuiltinScalarFunction::Upper => Arc::new(string_expressions::upper),
         BuiltinScalarFunction::Uuid => Arc::new(string_expressions::uuid),
         _ => {
-            return Err(DataFusionError::Internal(format!(
+            return internal_err!(
                 "create_physical_fun: Unsupported scalar function {fun:?}"
-            )));
+            );
         }
     })
+}
+
+/// Monotonicity of the `ScalarFunctionExpr` with respect to its arguments.
+/// Each element of this vector corresponds to an argument and indicates whether
+/// the function's behavior is monotonic, or non-monotonic/unknown for that argument, namely:
+/// - `None` signifies unknown monotonicity or non-monotonicity.
+/// - `Some(true)` indicates that the function is monotonically increasing w.r.t. the argument in question.
+/// - Some(false) indicates that the function is monotonically decreasing w.r.t. the argument in question.
+pub type FuncMonotonicity = Vec<Option<bool>>;
+
+/// Determines a [`ScalarFunctionExpr`]'s monotonicity for the given arguments
+/// and the function's behavior depending on its arguments.
+pub fn out_ordering(
+    func: &FuncMonotonicity,
+    arg_orderings: &[SortProperties],
+) -> SortProperties {
+    func.iter().zip(arg_orderings).fold(
+        SortProperties::Singleton,
+        |prev_sort, (item, arg)| {
+            let current_sort = func_order_in_one_dimension(item, arg);
+
+            match (prev_sort, current_sort) {
+                (_, SortProperties::Unordered) => SortProperties::Unordered,
+                (SortProperties::Singleton, SortProperties::Ordered(_)) => current_sort,
+                (SortProperties::Ordered(prev), SortProperties::Ordered(current))
+                    if prev.descending != current.descending =>
+                {
+                    SortProperties::Unordered
+                }
+                _ => prev_sort,
+            }
+        },
+    )
+}
+
+/// This function decides the monotonicity property of a [`ScalarFunctionExpr`] for a single argument (i.e. across a single dimension), given that argument's sort properties.
+fn func_order_in_one_dimension(
+    func_monotonicity: &Option<bool>,
+    arg: &SortProperties,
+) -> SortProperties {
+    if *arg == SortProperties::Singleton {
+        SortProperties::Singleton
+    } else {
+        match func_monotonicity {
+            None => SortProperties::Unordered,
+            Some(false) => {
+                if let SortProperties::Ordered(_) = arg {
+                    arg.neg()
+                } else {
+                    SortProperties::Unordered
+                }
+            }
+            Some(true) => {
+                if let SortProperties::Ordered(_) = arg {
+                    *arg
+                } else {
+                    SortProperties::Unordered
+                }
+            }
+        }
+    }
+}
+
+/// This function specifies monotonicity behaviors for built-in scalar functions.
+/// The list can be extended, only mathematical and datetime functions are
+/// considered for the initial implementation of this feature.
+pub fn get_func_monotonicity(fun: &BuiltinScalarFunction) -> Option<FuncMonotonicity> {
+    if matches!(
+        fun,
+        BuiltinScalarFunction::Atan
+            | BuiltinScalarFunction::Acosh
+            | BuiltinScalarFunction::Asinh
+            | BuiltinScalarFunction::Atanh
+            | BuiltinScalarFunction::Ceil
+            | BuiltinScalarFunction::Degrees
+            | BuiltinScalarFunction::Exp
+            | BuiltinScalarFunction::Factorial
+            | BuiltinScalarFunction::Floor
+            | BuiltinScalarFunction::Ln
+            | BuiltinScalarFunction::Log10
+            | BuiltinScalarFunction::Log2
+            | BuiltinScalarFunction::Radians
+            | BuiltinScalarFunction::Round
+            | BuiltinScalarFunction::Signum
+            | BuiltinScalarFunction::Sinh
+            | BuiltinScalarFunction::Sqrt
+            | BuiltinScalarFunction::Cbrt
+            | BuiltinScalarFunction::Tanh
+            | BuiltinScalarFunction::Trunc
+            | BuiltinScalarFunction::Pi
+    ) {
+        Some(vec![Some(true)])
+    } else if matches!(
+        fun,
+        BuiltinScalarFunction::DateTrunc | BuiltinScalarFunction::DateBin
+    ) {
+        Some(vec![None, Some(true)])
+    } else if *fun == BuiltinScalarFunction::Log {
+        Some(vec![Some(true), Some(false)])
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -820,6 +1000,7 @@ mod tests {
         record_batch::RecordBatch,
     };
     use datafusion_common::cast::as_uint64_array;
+    use datafusion_common::{exec_err, plan_err};
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::type_coercion::functions::data_types;
     use datafusion_expr::Signature;
@@ -865,7 +1046,7 @@ mod tests {
                     match expr.evaluate(&batch) {
                         Ok(_) => assert!(false, "expected error"),
                         Err(error) => {
-                            assert_eq!(error.to_string(), expected_error.to_string());
+                            assert!(expected_error.strip_backtrace().starts_with(&error.strip_backtrace()));
                         }
                     }
                 }
@@ -1023,9 +1204,9 @@ mod tests {
         test_function!(
             CharacterLength,
             &[lit("josé")],
-            Err(DataFusionError::Internal(
-                "function character_length requires compilation with feature flag: unicode_expressions.".to_string()
-            )),
+            internal_err!(
+                "function character_length requires compilation with feature flag: unicode_expressions."
+            ),
             i32,
             Int32,
             Int32Array
@@ -1073,9 +1254,7 @@ mod tests {
         test_function!(
             Chr,
             &[lit(ScalarValue::Int64(Some(0)))],
-            Err(DataFusionError::Execution(
-                "null character not permitted.".to_string(),
-            )),
+            exec_err!("null character not permitted."),
             &str,
             Utf8,
             StringArray
@@ -1083,9 +1262,7 @@ mod tests {
         test_function!(
             Chr,
             &[lit(ScalarValue::Int64(Some(i64::MAX)))],
-            Err(DataFusionError::Execution(
-                "requested character too large for encoding.".to_string(),
-            )),
+            exec_err!("requested character too large for encoding."),
             &str,
             Utf8,
             StringArray
@@ -1300,9 +1477,9 @@ mod tests {
                 lit("abcde"),
                 lit(ScalarValue::Int8(Some(2))),
             ],
-            Err(DataFusionError::Internal(
-                "function left requires compilation with feature flag: unicode_expressions.".to_string()
-            )),
+            internal_err!(
+                "function left requires compilation with feature flag: unicode_expressions."
+            ),
             &str,
             Utf8,
             StringArray
@@ -1451,9 +1628,9 @@ mod tests {
                 lit("josé"),
                 lit(ScalarValue::Int64(Some(5))),
             ],
-            Err(DataFusionError::Internal(
-                "function lpad requires compilation with feature flag: unicode_expressions.".to_string()
-            )),
+            internal_err!(
+                "function lpad requires compilation with feature flag: unicode_expressions."
+            ),
             &str,
             Utf8,
             StringArray
@@ -1537,9 +1714,9 @@ mod tests {
         test_function!(
             MD5,
             &[lit("tom")],
-            Err(DataFusionError::Internal(
-                "function md5 requires compilation with feature flag: crypto_expressions.".to_string()
-            )),
+            internal_err!(
+                "function md5 requires compilation with feature flag: crypto_expressions."
+            ),
             &str,
             Utf8,
             StringArray
@@ -1687,9 +1864,9 @@ mod tests {
                 lit("b.."),
                 lit("X"),
             ],
-            Err(DataFusionError::Internal(
-                "function regexp_replace requires compilation with feature flag: regex_expressions.".to_string()
-            )),
+            internal_err!(
+                "function regexp_replace requires compilation with feature flag: regex_expressions."
+            ),
             &str,
             Utf8,
             StringArray
@@ -1761,9 +1938,9 @@ mod tests {
         test_function!(
             Reverse,
             &[lit("abcde")],
-            Err(DataFusionError::Internal(
-                "function reverse requires compilation with feature flag: unicode_expressions.".to_string()
-            )),
+            internal_err!(
+                "function reverse requires compilation with feature flag: unicode_expressions."
+            ),
             &str,
             Utf8,
             StringArray
@@ -1859,9 +2036,9 @@ mod tests {
                 lit("abcde"),
                 lit(ScalarValue::Int8(Some(2))),
             ],
-            Err(DataFusionError::Internal(
-                "function right requires compilation with feature flag: unicode_expressions.".to_string()
-            )),
+            internal_err!(
+                "function right requires compilation with feature flag: unicode_expressions."
+            ),
             &str,
             Utf8,
             StringArray
@@ -2010,9 +2187,9 @@ mod tests {
                 lit("josé"),
                 lit(ScalarValue::Int64(Some(5))),
             ],
-            Err(DataFusionError::Internal(
-                "function rpad requires compilation with feature flag: unicode_expressions.".to_string()
-            )),
+            internal_err!(
+                "function rpad requires compilation with feature flag: unicode_expressions."
+            ),
             &str,
             Utf8,
             StringArray
@@ -2104,9 +2281,9 @@ mod tests {
         test_function!(
             SHA224,
             &[lit("tom")],
-            Err(DataFusionError::Internal(
-                "function sha224 requires compilation with feature flag: crypto_expressions.".to_string()
-            )),
+            internal_err!(
+                "function sha224 requires compilation with feature flag: crypto_expressions."
+            ),
             &[u8],
             Binary,
             BinaryArray
@@ -2150,9 +2327,9 @@ mod tests {
         test_function!(
             SHA256,
             &[lit("tom")],
-            Err(DataFusionError::Internal(
-                "function sha256 requires compilation with feature flag: crypto_expressions.".to_string()
-            )),
+            internal_err!(
+                "function sha256 requires compilation with feature flag: crypto_expressions."
+            ),
             &[u8],
             Binary,
             BinaryArray
@@ -2200,9 +2377,9 @@ mod tests {
         test_function!(
             SHA384,
             &[lit("tom")],
-            Err(DataFusionError::Internal(
-                "function sha384 requires compilation with feature flag: crypto_expressions.".to_string()
-            )),
+            internal_err!(
+                "function sha384 requires compilation with feature flag: crypto_expressions."
+            ),
             &[u8],
             Binary,
             BinaryArray
@@ -2252,9 +2429,9 @@ mod tests {
         test_function!(
             SHA512,
             &[lit("tom")],
-            Err(DataFusionError::Internal(
-                "function sha512 requires compilation with feature flag: crypto_expressions.".to_string()
-            )),
+            internal_err!(
+                "function sha512 requires compilation with feature flag: crypto_expressions."
+            ),
             &[u8],
             Binary,
             BinaryArray
@@ -2290,9 +2467,7 @@ mod tests {
                 lit("~@~"),
                 lit(ScalarValue::Int64(Some(-1))),
             ],
-            Err(DataFusionError::Execution(
-                "field position must be greater than zero".to_string(),
-            )),
+            exec_err!("field position must be greater than zero"),
             &str,
             Utf8,
             StringArray
@@ -2390,9 +2565,9 @@ mod tests {
                 lit("joséésoj"),
                 lit(ScalarValue::Utf8(None)),
             ],
-            Err(DataFusionError::Internal(
-                "function strpos requires compilation with feature flag: unicode_expressions.".to_string()
-            )),
+            internal_err!(
+                "function strpos requires compilation with feature flag: unicode_expressions."
+            ),
             i32,
             Int32,
             Int32Array
@@ -2593,9 +2768,7 @@ mod tests {
                 lit(ScalarValue::Int64(Some(1))),
                 lit(ScalarValue::Int64(Some(-1))),
             ],
-            Err(DataFusionError::Execution(
-                "negative substring length not allowed: substr(<str>, 1, -1)".to_string(),
-            )),
+            exec_err!("negative substring length not allowed: substr(<str>, 1, -1)"),
             &str,
             Utf8,
             StringArray
@@ -2620,9 +2793,9 @@ mod tests {
                 lit("alphabet"),
                 lit(ScalarValue::Int64(Some(0))),
             ],
-            Err(DataFusionError::Internal(
-                "function substr requires compilation with feature flag: unicode_expressions.".to_string()
-            )),
+            internal_err!(
+                "function substr requires compilation with feature flag: unicode_expressions."
+            ),
             &str,
             Utf8,
             StringArray
@@ -2680,9 +2853,9 @@ mod tests {
                 lit("143"),
                 lit("ax"),
             ],
-            Err(DataFusionError::Internal(
-                "function translate requires compilation with feature flag: unicode_expressions.".to_string()
-            )),
+            internal_err!(
+                "function translate requires compilation with feature flag: unicode_expressions."
+            ),
             &str,
             Utf8,
             StringArray
@@ -2769,21 +2942,21 @@ mod tests {
 
             match expr {
                 Ok(..) => {
-                    return Err(DataFusionError::Plan(format!(
+                    return plan_err!(
                         "Builtin scalar function {fun} does not support empty arguments"
-                    )));
+                    );
                 }
                 Err(DataFusionError::Plan(err)) => {
                     if !err
                         .contains("No function matches the given name and argument types")
                     {
-                        return Err(DataFusionError::Internal(format!(
-                            "Builtin scalar function {fun} didn't got the right error message with empty arguments")));
+                        return plan_err!(
+                            "Builtin scalar function {fun} didn't got the right error message with empty arguments");
                     }
                 }
                 Err(..) => {
-                    return Err(DataFusionError::Internal(format!(
-                        "Builtin scalar function {fun} didn't got the right error with empty arguments")));
+                    return internal_err!(
+                        "Builtin scalar function {fun} didn't got the right error with empty arguments");
                 }
             }
         }
@@ -2935,9 +3108,7 @@ mod tests {
         if let ColumnarValue::Array(array) = col? {
             Ok(as_uint64_array(&array)?.values().to_vec())
         } else {
-            Err(DataFusionError::Internal(
-                "Unexpected scalar created by a test function".to_string(),
-            ))
+            internal_err!("Unexpected scalar created by a test function")
         }
     }
 

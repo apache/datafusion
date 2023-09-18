@@ -20,25 +20,28 @@
 use futures::StreamExt;
 use log::debug;
 use std::any::Any;
-use std::fmt::{self, Debug, Display};
+use std::fmt::{self, Debug};
 use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
+use datafusion_common::{
+    not_impl_err, plan_err, Constraints, DataFusionError, SchemaExt,
+};
 use datafusion_execution::TaskContext;
 use tokio::sync::RwLock;
+use tokio::task::JoinSet;
 
 use crate::datasource::{TableProvider, TableType};
-use crate::error::{DataFusionError, Result};
+use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::logical_expr::Expr;
-use crate::physical_plan::common::AbortOnDropSingle;
-use crate::physical_plan::insert::{DataSink, InsertExec};
+use crate::physical_plan::insert::{DataSink, FileSinkExec};
 use crate::physical_plan::memory::MemoryExec;
-use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::{common, SendableRecordBatchStream};
 use crate::physical_plan::{repartition::RepartitionExec, Partitioning};
+use crate::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
 /// Type alias for partition data
 pub type PartitionData = Arc<RwLock<Vec<RecordBatch>>>;
@@ -51,6 +54,7 @@ pub type PartitionData = Arc<RwLock<Vec<RecordBatch>>>;
 pub struct MemTable {
     schema: SchemaRef,
     pub(crate) batches: Vec<PartitionData>,
+    constraints: Option<Constraints>,
 }
 
 impl MemTable {
@@ -63,9 +67,7 @@ impl MemTable {
                     "mem table schema does not contain batches schema. \
                         Target_schema: {schema:?}. Batches Schema: {batches_schema:?}"
                 );
-                return Err(DataFusionError::Plan(
-                    "Mismatch between schema and batches".to_string(),
-                ));
+                return plan_err!("Mismatch between schema and batches");
             }
         }
 
@@ -75,7 +77,16 @@ impl MemTable {
                 .into_iter()
                 .map(|e| Arc::new(RwLock::new(e)))
                 .collect::<Vec<_>>(),
+            constraints: None,
         })
+    }
+
+    /// Assign constraints
+    pub fn with_constraints(mut self, constraints: Constraints) -> Self {
+        if !constraints.is_empty() {
+            self.constraints = Some(constraints);
+        }
+        self
     }
 
     /// Create a mem table by reading from another data source
@@ -88,26 +99,31 @@ impl MemTable {
         let exec = t.scan(state, None, &[], None).await?;
         let partition_count = exec.output_partitioning().partition_count();
 
-        let tasks = (0..partition_count)
-            .map(|part_i| {
-                let task = state.task_ctx();
-                let exec = exec.clone();
-                let task = tokio::spawn(async move {
-                    let stream = exec.execute(part_i, task)?;
-                    common::collect(stream).await
-                });
+        let mut join_set = JoinSet::new();
 
-                AbortOnDropSingle::new(task)
-            })
-            // this collect *is needed* so that the join below can
-            // switch between tasks
-            .collect::<Vec<_>>();
+        for part_idx in 0..partition_count {
+            let task = state.task_ctx();
+            let exec = exec.clone();
+            join_set.spawn(async move {
+                let stream = exec.execute(part_idx, task)?;
+                common::collect(stream).await
+            });
+        }
 
         let mut data: Vec<Vec<RecordBatch>> =
             Vec::with_capacity(exec.output_partitioning().partition_count());
 
-        for result in futures::future::join_all(tasks).await {
-            data.push(result.map_err(|e| DataFusionError::External(Box::new(e)))??)
+        while let Some(result) = join_set.join_next().await {
+            match result {
+                Ok(res) => data.push(res?),
+                Err(e) => {
+                    if e.is_panic() {
+                        std::panic::resume_unwind(e.into_panic());
+                    } else {
+                        unreachable!();
+                    }
+                }
+            }
         }
 
         let exec = MemoryExec::try_new(&data, schema.clone(), None)?;
@@ -147,6 +163,10 @@ impl TableProvider for MemTable {
         self.schema.clone()
     }
 
+    fn constraints(&self) -> Option<&Constraints> {
+        self.constraints.as_ref()
+    }
+
     fn table_type(&self) -> TableType {
         TableType::Base
     }
@@ -163,8 +183,8 @@ impl TableProvider for MemTable {
             let inner_vec = arc_inner_vec.read().await;
             partitions.push(inner_vec.clone())
         }
-        Ok(Arc::new(MemoryExec::try_new_owned_data(
-            partitions,
+        Ok(Arc::new(MemoryExec::try_new(
+            &partitions,
             self.schema(),
             projection.cloned(),
         )?))
@@ -186,16 +206,24 @@ impl TableProvider for MemTable {
         &self,
         _state: &SessionState,
         input: Arc<dyn ExecutionPlan>,
+        overwrite: bool,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Create a physical plan from the logical plan.
         // Check that the schema of the plan matches the schema of this table.
-        if !input.schema().eq(&self.schema) {
-            return Err(DataFusionError::Plan(
-                "Inserting query must have the same schema with the table.".to_string(),
-            ));
+        if !self.schema().equivalent_names_and_types(&input.schema()) {
+            return plan_err!(
+                "Inserting query must have the same schema with the table."
+            );
+        }
+        if overwrite {
+            return not_impl_err!("Overwrite not implemented for MemoryTable yet");
         }
         let sink = Arc::new(MemSink::new(self.batches.clone()));
-        Ok(Arc::new(InsertExec::new(input, sink)))
+        Ok(Arc::new(FileSinkExec::new(
+            input,
+            sink,
+            self.schema.clone(),
+        )))
     }
 }
 
@@ -213,10 +241,14 @@ impl Debug for MemSink {
     }
 }
 
-impl Display for MemSink {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let partition_count = self.batches.len();
-        write!(f, "MemoryTable (partitions={partition_count})")
+impl DisplayAs for MemSink {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                let partition_count = self.batches.len();
+                write!(f, "MemoryTable (partitions={partition_count})")
+            }
+        }
     }
 }
 
@@ -230,7 +262,7 @@ impl MemSink {
 impl DataSink for MemSink {
     async fn write_all(
         &self,
-        mut data: SendableRecordBatchStream,
+        mut data: Vec<SendableRecordBatchStream>,
         _context: &Arc<TaskContext>,
     ) -> Result<u64> {
         let num_partitions = self.batches.len();
@@ -240,10 +272,14 @@ impl DataSink for MemSink {
         let mut new_batches = vec![vec![]; num_partitions];
         let mut i = 0;
         let mut row_count = 0;
-        while let Some(batch) = data.next().await.transpose()? {
-            row_count += batch.num_rows();
-            new_batches[i].push(batch);
-            i = (i + 1) % num_partitions;
+        let num_parts = data.len();
+        // TODO parallelize outer and inner loops
+        for data_part in data.iter_mut().take(num_parts) {
+            while let Some(batch) = data_part.next().await.transpose()? {
+                row_count += batch.num_rows();
+                new_batches[i].push(batch);
+                i = (i + 1) % num_partitions;
+            }
         }
 
         // write the outputs into the batches
@@ -399,12 +435,11 @@ mod tests {
             ],
         )?;
 
-        match MemTable::try_new(schema2, vec![vec![batch]]) {
-            Err(DataFusionError::Plan(e)) => {
-                assert_eq!("\"Mismatch between schema and batches\"", format!("{e:?}"))
-            }
-            _ => panic!("MemTable::new should have failed due to schema mismatch"),
-        }
+        let e = MemTable::try_new(schema2, vec![vec![batch]]).unwrap_err();
+        assert_eq!(
+            "Error during planning: Mismatch between schema and batches",
+            e.strip_backtrace()
+        );
 
         Ok(())
     }
@@ -430,12 +465,11 @@ mod tests {
             ],
         )?;
 
-        match MemTable::try_new(schema2, vec![vec![batch]]) {
-            Err(DataFusionError::Plan(e)) => {
-                assert_eq!("\"Mismatch between schema and batches\"", format!("{e:?}"))
-            }
-            _ => panic!("MemTable::new should have failed due to schema mismatch"),
-        }
+        let e = MemTable::try_new(schema2, vec![vec![batch]]).unwrap_err();
+        assert_eq!(
+            "Error during planning: Mismatch between schema and batches",
+            e.strip_backtrace()
+        );
 
         Ok(())
     }
@@ -520,7 +554,7 @@ mod tests {
         let scan_plan = LogicalPlanBuilder::scan("source", source, None)?.build()?;
         // Create an insert plan to insert the source data into the initial table
         let insert_into_table =
-            LogicalPlanBuilder::insert_into(scan_plan, "t", &schema)?.build()?;
+            LogicalPlanBuilder::insert_into(scan_plan, "t", &schema, false)?.build()?;
         // Create a physical plan from the insert plan
         let plan = session_ctx
             .state()

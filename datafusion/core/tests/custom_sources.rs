@@ -26,7 +26,7 @@ use datafusion::logical_expr::{
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::{
-    project_schema, ColumnStatistics, ExecutionPlan, Partitioning, RecordBatchStream,
+    ColumnStatistics, DisplayAs, ExecutionPlan, Partitioning, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
 use datafusion::scalar::ScalarValue;
@@ -37,11 +37,15 @@ use datafusion::{
 use datafusion::{error::Result, physical_plan::DisplayFormatType};
 
 use datafusion_common::cast::as_primitive_array;
+use datafusion_common::project_schema;
 use futures::stream::Stream;
 use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+
+/// Also run all tests that are found in the `custom_sources_cases` directory
+mod custom_sources_cases;
 
 use async_trait::async_trait;
 
@@ -98,6 +102,20 @@ impl Stream for TestCustomRecordBatchStream {
     }
 }
 
+impl DisplayAs for CustomExecutionPlan {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "CustomExecutionPlan: projection={:#?}", self.projection)
+            }
+        }
+    }
+}
+
 impl ExecutionPlan for CustomExecutionPlan {
     fn as_any(&self) -> &dyn Any {
         self
@@ -133,18 +151,6 @@ impl ExecutionPlan for CustomExecutionPlan {
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(TestCustomRecordBatchStream { nb_batch: 1 }))
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default => {
-                write!(f, "CustomExecutionPlan: projection={:#?}", self.projection)
-            }
-        }
     }
 
     fn statistics(&self) -> Statistics {

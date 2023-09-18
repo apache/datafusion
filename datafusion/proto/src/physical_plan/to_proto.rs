@@ -48,11 +48,11 @@ use crate::protobuf::{
     ScalarValue,
 };
 use datafusion::logical_expr::BuiltinScalarFunction;
-use datafusion::physical_expr::expressions::{DateTimeIntervalExpr, GetIndexedFieldExpr};
+use datafusion::physical_expr::expressions::{GetFieldAccessExpr, GetIndexedFieldExpr};
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::joins::utils::JoinSide;
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 
 impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
     type Error = DataFusionError;
@@ -63,6 +63,13 @@ impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
 
         let expressions: Vec<protobuf::PhysicalExprNode> = a
             .expressions()
+            .iter()
+            .map(|e| e.clone().try_into())
+            .collect::<Result<Vec<_>>>()?;
+
+        let ordering_req: Vec<protobuf::PhysicalSortExprNode> = a
+            .order_bys()
+            .unwrap_or(&[])
             .iter()
             .map(|e| e.clone().try_into())
             .collect::<Result<Vec<_>>>()?;
@@ -151,6 +158,10 @@ impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
             .is_some()
         {
             Ok(AggregateFunction::ApproxMedian.into())
+        } else if a.as_any().is::<expressions::FirstValue>() {
+            Ok(AggregateFunction::FirstValueAgg.into())
+        } else if a.as_any().is::<expressions::LastValue>() {
+            Ok(AggregateFunction::LastValueAgg.into())
         } else {
             if let Some(a) = a.as_any().downcast_ref::<AggregateFunctionExpr>() {
                 return Ok(protobuf::PhysicalExprNode {
@@ -158,15 +169,14 @@ impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
                         protobuf::PhysicalAggregateExprNode {
                             aggregate_function: Some(physical_aggregate_expr_node::AggregateFunction::UserDefinedAggrFunction(a.fun().name.clone())),
                             expr: expressions,
+                            ordering_req,
                             distinct,
                         },
                     )),
                 });
             }
 
-            Err(DataFusionError::NotImplemented(format!(
-                "Aggregate function not supported: {a:?}"
-            )))
+            not_impl_err!("Aggregate function not supported: {a:?}")
         }?;
 
         Ok(protobuf::PhysicalExprNode {
@@ -178,6 +188,7 @@ impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
                         ),
                     ),
                     expr: expressions,
+                    ordering_req,
                     distinct,
                 },
             )),
@@ -350,20 +361,6 @@ impl TryFrom<Arc<dyn PhysicalExpr>> for protobuf::PhysicalExprNode {
                     )),
                 })
             }
-        } else if let Some(expr) = expr.downcast_ref::<DateTimeIntervalExpr>() {
-            let dti_expr = Box::new(protobuf::PhysicalDateTimeIntervalExprNode {
-                l: Some(Box::new(expr.lhs().to_owned().try_into()?)),
-                r: Some(Box::new(expr.rhs().to_owned().try_into()?)),
-                op: format!("{:?}", expr.op()),
-            });
-
-            Ok(protobuf::PhysicalExprNode {
-                expr_type: Some(
-                    protobuf::physical_expr_node::ExprType::DateTimeIntervalExpr(
-                        dti_expr,
-                    ),
-                ),
-            })
         } else if let Some(expr) = expr.downcast_ref::<LikeExpr>() {
             Ok(protobuf::PhysicalExprNode {
                 expr_type: Some(protobuf::physical_expr_node::ExprType::LikeExpr(
@@ -376,20 +373,37 @@ impl TryFrom<Arc<dyn PhysicalExpr>> for protobuf::PhysicalExprNode {
                 )),
             })
         } else if let Some(expr) = expr.downcast_ref::<GetIndexedFieldExpr>() {
+            let field = match expr.field() {
+                GetFieldAccessExpr::NamedStructField{name} => Some(
+                    protobuf::physical_get_indexed_field_expr_node::Field::NamedStructFieldExpr(protobuf::NamedStructFieldExpr {
+                        name: Some(ScalarValue::try_from(name)?)
+                    })
+                ),
+                GetFieldAccessExpr::ListIndex{key} => Some(
+                    protobuf::physical_get_indexed_field_expr_node::Field::ListIndexExpr(Box::new(protobuf::ListIndexExpr {
+                        key: Some(Box::new(key.to_owned().try_into()?))
+                    }))
+                ),
+                GetFieldAccessExpr::ListRange{start, stop} => Some(
+                    protobuf::physical_get_indexed_field_expr_node::Field::ListRangeExpr(Box::new(protobuf::ListRangeExpr {
+                        start: Some(Box::new(start.to_owned().try_into()?)),
+                        stop: Some(Box::new(stop.to_owned().try_into()?)),
+                    }))
+                ),
+            };
+
             Ok(protobuf::PhysicalExprNode {
                 expr_type: Some(
                     protobuf::physical_expr_node::ExprType::GetIndexedFieldExpr(
                         Box::new(protobuf::PhysicalGetIndexedFieldExprNode {
                             arg: Some(Box::new(expr.arg().to_owned().try_into()?)),
-                            key: Some(ScalarValue::try_from(expr.key())?),
+                            field,
                         }),
                     ),
                 ),
             })
         } else {
-            Err(DataFusionError::Internal(format!(
-                "physical_plan::to_proto() unsupported expression {value:?}"
-            )))
+            internal_err!("physical_plan::to_proto() unsupported expression {value:?}")
         }
     }
 }
@@ -408,10 +422,16 @@ impl TryFrom<&PartitionedFile> for protobuf::PartitionedFile {
     type Error = DataFusionError;
 
     fn try_from(pf: &PartitionedFile) -> Result<Self, Self::Error> {
+        let last_modified = pf.object_meta.last_modified;
+        let last_modified_ns = last_modified.timestamp_nanos_opt().ok_or_else(|| {
+            DataFusionError::Plan(format!(
+                "Invalid timestamp on PartitionedFile::ObjectMeta: {last_modified}"
+            ))
+        })? as u64;
         Ok(protobuf::PartitionedFile {
             path: pf.object_meta.location.as_ref().to_owned(),
             size: pf.object_meta.size as u64,
-            last_modified_ns: pf.object_meta.last_modified.timestamp_nanos() as u64,
+            last_modified_ns,
             partition_values: pf
                 .partition_values
                 .iter()

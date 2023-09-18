@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{DFSchema, DataFusionError, Result};
+use datafusion_common::{not_impl_err, DFSchema, DataFusionError, Result};
 use datafusion_expr::{lit, Expr};
 use sqlparser::ast::{Expr as SQLExpr, UnaryOperator, Value};
 
@@ -44,17 +44,21 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         Err(_) => Ok(lit(-n
                             .parse::<f64>()
                             .map_err(|_e| {
-                                DataFusionError::Internal(format!(
+                                DataFusionError::Plan(format!(
                                     "negative operator can be only applied to integer and float operands, got: {n}"))
                             })?)),
                     },
+                    SQLExpr::Interval(interval) => self.sql_interval_to_expr(
+                        true,
+                        interval,
+                        schema,
+                        planner_context,
+                    ),
                     // not a literal, apply negative operator on expression
                     _ => Ok(Expr::Negative(Box::new(self.sql_expr_to_logical_expr(expr, schema, planner_context)?))),
                 }
             }
-            _ => Err(DataFusionError::NotImplemented(format!(
-                "Unsupported SQL unary operator {op:?}"
-            ))),
+            _ => not_impl_err!("Unsupported SQL unary operator {op:?}"),
         }
     }
 }

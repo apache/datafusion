@@ -17,8 +17,11 @@
 
 //! Collection of utility functions that are leveraged by the query optimizer rules
 
+use itertools::concat;
 use std::borrow::Borrow;
 use std::collections::HashSet;
+use std::fmt;
+use std::fmt::Formatter;
 use std::sync::Arc;
 
 use crate::error::Result;
@@ -29,16 +32,81 @@ use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::physical_plan::union::UnionExec;
 use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
-use crate::physical_plan::ExecutionPlan;
+use crate::physical_plan::{displayable, ExecutionPlan};
+
 use datafusion_common::DataFusionError;
 use datafusion_physical_expr::utils::ordering_satisfy;
 use datafusion_physical_expr::PhysicalSortExpr;
+
+/// This object implements a tree that we use while keeping track of paths
+/// leading to [`SortExec`]s.
+#[derive(Debug, Clone)]
+pub(crate) struct ExecTree {
+    /// The `ExecutionPlan` associated with this node
+    pub plan: Arc<dyn ExecutionPlan>,
+    /// Child index of the plan in its parent
+    pub idx: usize,
+    /// Children of the plan that would need updating if we remove leaf executors
+    pub children: Vec<ExecTree>,
+}
+
+impl fmt::Display for ExecTree {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let plan_string = get_plan_string(&self.plan);
+        write!(f, "\nidx: {:?}", self.idx)?;
+        write!(f, "\nplan: {:?}", plan_string)?;
+        for child in self.children.iter() {
+            write!(f, "\nexec_tree:{}", child)?;
+        }
+        writeln!(f)
+    }
+}
+
+impl ExecTree {
+    /// Create new Exec tree
+    pub fn new(
+        plan: Arc<dyn ExecutionPlan>,
+        idx: usize,
+        children: Vec<ExecTree>,
+    ) -> Self {
+        ExecTree {
+            plan,
+            idx,
+            children,
+        }
+    }
+
+    /// This function returns the executors at the leaves of the tree.
+    pub fn get_leaves(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+        if self.children.is_empty() {
+            vec![self.plan.clone()]
+        } else {
+            concat(self.children.iter().map(|e| e.get_leaves()))
+        }
+    }
+}
+
+// Get output (un)boundedness information for the given `plan`.
+pub(crate) fn unbounded_output(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    let result = if plan.children().is_empty() {
+        plan.unbounded_output(&[])
+    } else {
+        let children_unbounded_output = plan
+            .children()
+            .iter()
+            .map(unbounded_output)
+            .collect::<Vec<_>>();
+        plan.unbounded_output(&children_unbounded_output)
+    };
+    result.unwrap_or(true)
+}
 
 /// This utility function adds a `SortExec` above an operator according to the
 /// given ordering requirements while preserving the original partitioning.
 pub fn add_sort_above(
     node: &mut Arc<dyn ExecutionPlan>,
     sort_expr: Vec<PhysicalSortExpr>,
+    fetch: Option<usize>,
 ) -> Result<()> {
     // If the ordering requirement is already satisfied, do not add a sort.
     if !ordering_satisfy(
@@ -47,7 +115,7 @@ pub fn add_sort_above(
         || node.equivalence_properties(),
         || node.ordering_equivalence_properties(),
     ) {
-        let new_sort = SortExec::new(sort_expr, node.clone());
+        let new_sort = SortExec::new(sort_expr, node.clone()).with_fetch(fetch);
 
         *node = Arc::new(if node.output_partitioning().partition_count() > 1 {
             new_sort.with_preserve_partitioning(true)
@@ -151,6 +219,13 @@ pub fn is_union(plan: &Arc<dyn ExecutionPlan>) -> bool {
 /// Checks whether the given operator is a [`RepartitionExec`].
 pub fn is_repartition(plan: &Arc<dyn ExecutionPlan>) -> bool {
     plan.as_any().is::<RepartitionExec>()
+}
+
+/// Utility function yielding a string representation of the given [`ExecutionPlan`].
+pub fn get_plan_string(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
+    let formatted = displayable(plan.as_ref()).indent(true).to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    actual.iter().map(|elem| elem.to_string()).collect()
 }
 
 #[cfg(test)]

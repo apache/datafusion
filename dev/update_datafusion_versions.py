@@ -36,9 +36,9 @@ crates = {
     'datafusion-optimizer': 'datafusion/optimizer/Cargo.toml',
     'datafusion-physical-expr': 'datafusion/physical-expr/Cargo.toml',
     'datafusion-proto': 'datafusion/proto/Cargo.toml',
-    'datafusion-row': 'datafusion/row/Cargo.toml',
     'datafusion-substrait': 'datafusion/substrait/Cargo.toml',
     'datafusion-sql': 'datafusion/sql/Cargo.toml',
+    'datafusion-sqllogictest': 'datafusion/sqllogictest/Cargo.toml',
     'datafusion-benchmarks': 'benchmarks/Cargo.toml',
     'datafusion-examples': 'datafusion-examples/Cargo.toml',
 }

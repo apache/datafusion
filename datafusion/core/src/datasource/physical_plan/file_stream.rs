@@ -519,10 +519,11 @@ impl<F: FileOpener> RecordBatchStream for FileStream<F> {
 #[cfg(test)]
 mod tests {
     use arrow_schema::Schema;
+    use datafusion_common::internal_err;
     use datafusion_common::DataFusionError;
 
     use super::*;
-    use crate::datasource::file_format::BatchSerializer;
+    use crate::datasource::file_format::write::BatchSerializer;
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::datasource::physical_plan::FileMeta;
     use crate::physical_plan::metrics::ExecutionPlanMetricsSet;
@@ -557,10 +558,7 @@ mod tests {
             let idx = self.current_idx.fetch_add(1, Ordering::SeqCst);
 
             if self.error_opening_idx.contains(&idx) {
-                Ok(futures::future::ready(Err(DataFusionError::Internal(
-                    "error opening".to_owned(),
-                )))
-                .boxed())
+                Ok(futures::future::ready(internal_err!("error opening")).boxed())
             } else if self.error_scanning_idx.contains(&idx) {
                 let error = futures::future::ready(Err(ArrowError::IoError(
                     "error scanning".to_owned(),

@@ -27,9 +27,10 @@ use arrow::{
     },
     datatypes::{DataType, Field},
 };
-use datafusion_common::DataFusionError;
-use datafusion_common::Result;
-use datafusion_common::{downcast_value, ScalarValue};
+use datafusion_common::{
+    downcast_value, exec_err, internal_err, not_impl_err, plan_err, DataFusionError,
+    Result, ScalarValue,
+};
 use datafusion_expr::Accumulator;
 use std::{any::Any, iter, sync::Arc};
 
@@ -106,9 +107,9 @@ impl ApproxPercentileCont {
                 }
             }
             other => {
-                return Err(DataFusionError::NotImplemented(format!(
+                return not_impl_err!(
                     "Support for 'APPROX_PERCENTILE_CONT' for data type {other} is not implemented"
-                )))
+                )
             }
         };
         Ok(accumulator)
@@ -144,17 +145,17 @@ fn validate_input_percentile_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<f64> {
     let percentile = match lit {
         ScalarValue::Float32(Some(q)) => *q as f64,
         ScalarValue::Float64(Some(q)) => *q,
-        got => return Err(DataFusionError::NotImplemented(format!(
+        got => return not_impl_err!(
             "Percentile value for 'APPROX_PERCENTILE_CONT' must be Float32 or Float64 literal (got data type {})",
-            got.get_datatype()
-        )))
+            got.data_type()
+        )
     };
 
     // Ensure the percentile is between 0 and 1.
     if !(0.0..=1.0).contains(&percentile) {
-        return Err(DataFusionError::Plan(format!(
+        return plan_err!(
             "Percentile value must be between 0.0 and 1.0 inclusive, {percentile} is invalid"
-        )));
+        );
     }
     Ok(percentile)
 }
@@ -179,10 +180,10 @@ fn validate_input_max_size_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<usize> {
         ScalarValue::Int64(Some(q)) if *q > 0 => *q as usize,
         ScalarValue::Int16(Some(q)) if *q > 0 => *q as usize,
         ScalarValue::Int8(Some(q)) if *q > 0 => *q as usize,
-        got => return Err(DataFusionError::NotImplemented(format!(
+        got => return not_impl_err!(
             "Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be UInt > 0 literal (got data type {}).",
-            got.get_datatype()
-        )))
+            got.data_type()
+        )
     };
     Ok(max_size)
 }
@@ -371,9 +372,9 @@ impl ApproxPercentileAccumulator {
                     .filter_map(|v| v.try_as_f64().transpose())
                     .collect::<Result<Vec<_>>>()?)
             }
-            e => Err(DataFusionError::Internal(format!(
+            e => internal_err!(
                 "APPROX_PERCENTILE_CONT is not expected to receive the type {e:?}"
-            ))),
+            ),
         }
     }
 }
@@ -393,9 +394,7 @@ impl Accumulator for ApproxPercentileAccumulator {
 
     fn evaluate(&self) -> Result<ScalarValue> {
         if self.digest.count() == 0.0 {
-            return Err(DataFusionError::Execution(
-                "aggregate function needs at least one non-null element".to_string(),
-            ));
+            return exec_err!("aggregate function needs at least one non-null element");
         }
         let q = self.digest.estimate_quantile(self.percentile);
 

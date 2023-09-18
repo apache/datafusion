@@ -63,7 +63,7 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
                 }
             }
             Expr::Literal(_)
-            | Expr::Alias(_, _)
+            | Expr::Alias(_)
             | Expr::OuterReferenceColumn(_, _)
             | Expr::ScalarVariable(_, _)
             | Expr::Not(_)
@@ -81,7 +81,6 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
             | Expr::BinaryExpr { .. }
             | Expr::Between { .. }
             | Expr::Like { .. }
-            | Expr::ILike { .. }
             | Expr::SimilarTo { .. }
             | Expr::InList { .. }
             | Expr::Exists { .. }
@@ -322,11 +321,13 @@ pub async fn pruned_partition_list<'a>(
     file_extension: &'a str,
     partition_cols: &'a [(String, DataType)],
 ) -> Result<BoxStream<'a, Result<PartitionedFile>>> {
-    let list = table_path.list_all_files(store, file_extension);
-
     // if no partition col => simply list all the files
     if partition_cols.is_empty() {
-        return Ok(Box::pin(list.map_ok(|object_meta| object_meta.into())));
+        return Ok(Box::pin(
+            table_path
+                .list_all_files(store, file_extension)
+                .map_ok(|object_meta| object_meta.into()),
+        ));
     }
 
     let partitions = list_partitions(store, table_path, partition_cols.len()).await?;

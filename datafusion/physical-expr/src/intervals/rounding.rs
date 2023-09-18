@@ -168,7 +168,6 @@ impl FloatBits for f64 {
 /// let next_f = next_up(f);
 /// assert_eq!(next_f, 1.0000001);
 /// ```
-#[allow(dead_code)]
 pub fn next_up<F: FloatBits + Copy>(float: F) -> F {
     let bits = float.to_bits();
     if float.float_is_nan() || bits == F::infinity().to_bits() {
@@ -202,7 +201,6 @@ pub fn next_up<F: FloatBits + Copy>(float: F) -> F {
 /// let next_f = next_down(f);
 /// assert_eq!(next_f, 0.99999994);
 /// ```
-#[allow(dead_code)]
 pub fn next_down<F: FloatBits + Copy>(float: F) -> F {
     let bits = float.to_bits();
     if float.float_is_nan() || bits == F::neg_infinity().to_bits() {

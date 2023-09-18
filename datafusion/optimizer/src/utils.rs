@@ -18,13 +18,11 @@
 //! Collection of utility functions that are leveraged by the query optimizer rules
 
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::tree_node::{TreeNode, TreeNodeRewriter};
+use datafusion_common::DataFusionError;
 use datafusion_common::{plan_err, Column, DFSchemaRef};
 use datafusion_common::{DFSchema, Result};
-use datafusion_expr::expr::{BinaryExpr, Sort};
+use datafusion_expr::expr::{Alias, BinaryExpr};
 use datafusion_expr::expr_rewriter::{replace_col, strip_outer_reference};
-use datafusion_expr::logical_plan::LogicalPlanBuilder;
-use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
     and,
     logical_plan::{Filter, LogicalPlan},
@@ -46,7 +44,6 @@ pub fn optimize_children(
     plan: &LogicalPlan,
     config: &dyn OptimizerConfig,
 ) -> Result<Option<LogicalPlan>> {
-    let new_exprs = plan.expressions();
     let mut new_inputs = Vec::with_capacity(plan.inputs().len());
     let mut plan_is_changed = false;
     for input in plan.inputs() {
@@ -55,7 +52,7 @@ pub fn optimize_children(
         new_inputs.push(new_input.unwrap_or_else(|| input.clone()))
     }
     if plan_is_changed {
-        Ok(Some(from_plan(plan, &new_exprs, &new_inputs)?))
+        Ok(Some(plan.with_new_inputs(&new_inputs)?))
     } else {
         Ok(None)
     }
@@ -78,7 +75,7 @@ fn split_conjunction_impl<'a>(expr: &'a Expr, mut exprs: Vec<&'a Expr>) -> Vec<&
             let exprs = split_conjunction_impl(left, exprs);
             split_conjunction_impl(right, exprs)
         }
-        Expr::Alias(expr, _) => split_conjunction_impl(expr, exprs),
+        Expr::Alias(Alias { expr, .. }) => split_conjunction_impl(expr, exprs),
         other => {
             exprs.push(other);
             exprs
@@ -147,7 +144,9 @@ fn split_binary_owned_impl(
             let exprs = split_binary_owned_impl(*left, operator, exprs);
             split_binary_owned_impl(*right, operator, exprs)
         }
-        Expr::Alias(expr, _) => split_binary_owned_impl(*expr, operator, exprs),
+        Expr::Alias(Alias { expr, .. }) => {
+            split_binary_owned_impl(*expr, operator, exprs)
+        }
         other => {
             exprs.push(other);
             exprs
@@ -172,7 +171,7 @@ fn split_binary_impl<'a>(
             let exprs = split_binary_impl(left, operator, exprs);
             split_binary_impl(right, operator, exprs)
         }
-        Expr::Alias(expr, _) => split_binary_impl(expr, operator, exprs),
+        Expr::Alias(Alias { expr, .. }) => split_binary_impl(expr, operator, exprs),
         other => {
             exprs.push(other);
             exprs
@@ -213,15 +212,6 @@ pub fn conjunction(filters: impl IntoIterator<Item = Expr>) -> Option<Expr> {
 /// Returns None if the filters array is empty.
 pub fn disjunction(filters: impl IntoIterator<Item = Expr>) -> Option<Expr> {
     filters.into_iter().reduce(|accum, expr| accum.or(expr))
-}
-
-/// Recursively un-alias an expressions
-#[inline]
-pub fn unalias(expr: Expr) -> Expr {
-    match expr {
-        Expr::Alias(sub_expr, _) => unalias(*sub_expr),
-        _ => expr,
-    }
 }
 
 /// returns a new [LogicalPlan] that wraps `plan` in a [LogicalPlan::Filter] with
@@ -286,51 +276,6 @@ pub fn only_or_err<T>(slice: &[T]) -> Result<&T> {
     }
 }
 
-/// Rewrites `expr` using `rewriter`, ensuring that the output has the
-/// same name as `expr` prior to rewrite, adding an alias if necessary.
-///
-/// This is important when optimizing plans to ensure the output
-/// schema of plan nodes don't change after optimization
-pub fn rewrite_preserving_name<R>(expr: Expr, rewriter: &mut R) -> Result<Expr>
-where
-    R: TreeNodeRewriter<N = Expr>,
-{
-    let original_name = name_for_alias(&expr)?;
-    let expr = expr.rewrite(rewriter)?;
-    add_alias_if_changed(original_name, expr)
-}
-
-/// Return the name to use for the specific Expr, recursing into
-/// `Expr::Sort` as appropriate
-fn name_for_alias(expr: &Expr) -> Result<String> {
-    match expr {
-        Expr::Sort(Sort { expr, .. }) => name_for_alias(expr),
-        expr => expr.display_name(),
-    }
-}
-
-/// Ensure `expr` has the name as `original_name` by adding an
-/// alias if necessary.
-fn add_alias_if_changed(original_name: String, expr: Expr) -> Result<Expr> {
-    let new_name = name_for_alias(&expr)?;
-
-    if new_name == original_name {
-        return Ok(expr);
-    }
-
-    Ok(match expr {
-        Expr::Sort(Sort {
-            expr,
-            asc,
-            nulls_first,
-        }) => {
-            let expr = add_alias_if_changed(original_name, *expr)?;
-            Expr::Sort(Sort::new(Box::new(expr), asc, nulls_first))
-        }
-        expr => expr.alias(original_name),
-    })
-}
-
 /// merge inputs schema into a single schema.
 pub fn merge_schema(inputs: Vec<&LogicalPlan>) -> DFSchema {
     if inputs.len() == 1 {
@@ -343,29 +288,6 @@ pub fn merge_schema(inputs: Vec<&LogicalPlan>) -> DFSchema {
                 lhs
             },
         )
-    }
-}
-
-/// Extract join predicates from the correlated subquery's [Filter] expressions.
-/// The join predicate means that the expression references columns
-/// from both the subquery and outer table or only from the outer table.
-///
-/// Returns join predicates and subquery(extracted).
-pub(crate) fn extract_join_filters(
-    maybe_filter: &LogicalPlan,
-) -> Result<(Vec<Expr>, LogicalPlan)> {
-    if let LogicalPlan::Filter(plan_filter) = maybe_filter {
-        let subquery_filter_exprs = split_conjunction(&plan_filter.predicate);
-        let (join_filters, subquery_filters) = find_join_exprs(subquery_filter_exprs)?;
-        // if the subquery still has filter expressions, restore them.
-        let mut plan = LogicalPlanBuilder::from((*plan_filter.input).clone());
-        if let Some(expr) = conjunction(subquery_filters) {
-            plan = plan.filter(expr)?
-        }
-
-        Ok((join_filters, plan.build()?))
-    } else {
-        Ok((vec![], maybe_filter.clone()))
     }
 }
 
@@ -417,7 +339,6 @@ mod tests {
     use datafusion_expr::expr::Cast;
     use datafusion_expr::{col, lit, utils::expr_to_columns};
     use std::collections::HashSet;
-    use std::ops::Add;
 
     #[test]
     fn test_split_conjunction() {
@@ -557,65 +478,5 @@ mod tests {
         assert_eq!(1, accum.len());
         assert!(accum.contains(&Column::from_name("a")));
         Ok(())
-    }
-
-    #[test]
-    fn test_rewrite_preserving_name() {
-        test_rewrite(col("a"), col("a"));
-
-        test_rewrite(col("a"), col("b"));
-
-        // cast data types
-        test_rewrite(
-            col("a"),
-            Expr::Cast(Cast::new(Box::new(col("a")), DataType::Int32)),
-        );
-
-        // change literal type from i32 to i64
-        test_rewrite(col("a").add(lit(1i32)), col("a").add(lit(1i64)));
-
-        // SortExpr a+1 ==> b + 2
-        test_rewrite(
-            Expr::Sort(Sort::new(Box::new(col("a").add(lit(1i32))), true, false)),
-            Expr::Sort(Sort::new(Box::new(col("b").add(lit(2i64))), true, false)),
-        );
-    }
-
-    /// rewrites `expr_from` to `rewrite_to` using
-    /// `rewrite_preserving_name` verifying the result is `expected_expr`
-    fn test_rewrite(expr_from: Expr, rewrite_to: Expr) {
-        struct TestRewriter {
-            rewrite_to: Expr,
-        }
-
-        impl TreeNodeRewriter for TestRewriter {
-            type N = Expr;
-
-            fn mutate(&mut self, _: Expr) -> Result<Expr> {
-                Ok(self.rewrite_to.clone())
-            }
-        }
-
-        let mut rewriter = TestRewriter {
-            rewrite_to: rewrite_to.clone(),
-        };
-        let expr = rewrite_preserving_name(expr_from.clone(), &mut rewriter).unwrap();
-
-        let original_name = match &expr_from {
-            Expr::Sort(Sort { expr, .. }) => expr.display_name(),
-            expr => expr.display_name(),
-        }
-        .unwrap();
-
-        let new_name = match &expr {
-            Expr::Sort(Sort { expr, .. }) => expr.display_name(),
-            expr => expr.display_name(),
-        }
-        .unwrap();
-
-        assert_eq!(
-            original_name, new_name,
-            "mismatch rewriting expr_from: {expr_from} to {rewrite_to}"
-        )
     }
 }

@@ -18,15 +18,7 @@
 use std::hash::{Hash, Hasher};
 use std::{any::Any, sync::Arc};
 
-use arrow::{
-    array::{new_null_array, Array, ArrayRef, LargeStringArray, StringArray},
-    record_batch::RecordBatch,
-};
-use arrow_schema::{DataType, Schema};
-use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::ColumnarValue;
-
-use crate::{physical_expr::down_cast_any_ref, AnalysisContext, PhysicalExpr};
+use crate::{physical_expr::down_cast_any_ref, PhysicalExpr};
 
 use arrow::compute::kernels::comparison::{
     ilike_utf8, like_utf8, nilike_utf8, nlike_utf8,
@@ -34,6 +26,13 @@ use arrow::compute::kernels::comparison::{
 use arrow::compute::kernels::comparison::{
     ilike_utf8_scalar, like_utf8_scalar, nilike_utf8_scalar, nlike_utf8_scalar,
 };
+use arrow::{
+    array::{new_null_array, Array, ArrayRef, LargeStringArray, StringArray},
+    record_batch::RecordBatch,
+};
+use arrow_schema::{DataType, Schema};
+use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
+use datafusion_expr::ColumnarValue;
 
 // Like expression
 #[derive(Debug, Hash)]
@@ -137,12 +136,12 @@ impl PhysicalExpr for LikeExpr {
                 DataType::Dictionary(_, dict_t),
             ) if dict_t.as_ref() == scalar_t => {}
             _ => {
-                return Err(DataFusionError::Internal(format!(
+                return internal_err!(
                     "Cannot evaluate {} expression with types {:?} and {:?}",
                     self.op_name(),
                     expr_data_type,
                     pattern_data_type
-                )));
+                );
             }
         }
 
@@ -183,11 +182,6 @@ impl PhysicalExpr for LikeExpr {
         )))
     }
 
-    /// Return the boundaries of this binary expression's result.
-    fn analyze(&self, context: AnalysisContext) -> AnalysisContext {
-        context.with_boundaries(None)
-    }
-
     fn dyn_hash(&self, state: &mut dyn Hasher) {
         let mut s = state;
         self.hash(&mut s);
@@ -213,10 +207,10 @@ macro_rules! binary_string_array_op_scalar {
         let result: Result<Arc<dyn Array>> = match $LEFT.data_type() {
             DataType::Utf8 => compute_utf8_op_scalar!($LEFT, $RIGHT, $OP, StringArray, $OP_TYPE),
             DataType::LargeUtf8 => compute_utf8_op_scalar!($LEFT, $RIGHT, $OP, LargeStringArray, $OP_TYPE),
-            other => Err(DataFusionError::Internal(format!(
+            other => internal_err!(
                 "Data type {:?} not supported for scalar operation '{}' on string array",
                 other, stringify!($OP)
-            ))),
+            ),
         };
         Some(result)
     }};
@@ -284,9 +278,9 @@ pub fn like(
     let expr_type = &expr.data_type(input_schema)?;
     let pattern_type = &pattern.data_type(input_schema)?;
     if !expr_type.eq(pattern_type) {
-        return Err(DataFusionError::Internal(format!(
+        return internal_err!(
             "The type of {expr_type} AND {pattern_type} of like physical should be same"
-        )));
+        );
     }
     Ok(Arc::new(LikeExpr::new(
         negated,

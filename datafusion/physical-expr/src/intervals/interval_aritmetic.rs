@@ -20,22 +20,25 @@
 use std::borrow::Borrow;
 use std::fmt;
 use std::fmt::{Display, Formatter};
+use std::ops::{AddAssign, SubAssign};
+
+use crate::aggregate::min_max::{max, min};
+use crate::intervals::rounding::{alter_fp_rounding_mode, next_down, next_up};
 
 use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::DataType;
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use arrow_array::ArrowNativeTypeOp;
+use datafusion_common::{exec_err, internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::Operator;
 
-use crate::aggregate::min_max::{max, min};
-use crate::intervals::rounding::alter_fp_rounding_mode;
-
-/// This type represents a single endpoint of an [`Interval`]. An endpoint can
-/// be open or closed, denoting whether the interval includes or excludes the
-/// endpoint itself.
+/// This type represents a single endpoint of an [`Interval`]. An
+/// endpoint can be open (does not include the endpoint) or closed
+/// (includes the endpoint).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IntervalBound {
     pub value: ScalarValue,
+    /// If true, interval does not include `value`
     pub open: bool,
 }
 
@@ -43,6 +46,18 @@ impl IntervalBound {
     /// Creates a new `IntervalBound` object using the given value.
     pub const fn new(value: ScalarValue, open: bool) -> IntervalBound {
         IntervalBound { value, open }
+    }
+
+    /// Creates a new "open" interval (does not include the `value`
+    /// bound)
+    pub const fn new_open(value: ScalarValue) -> IntervalBound {
+        IntervalBound::new(value, true)
+    }
+
+    /// Creates a new "closed" interval (includes the `value`
+    /// bound)
+    pub const fn new_closed(value: ScalarValue) -> IntervalBound {
+        IntervalBound::new(value, false)
     }
 
     /// This convenience function creates an unbounded interval endpoint.
@@ -53,7 +68,7 @@ impl IntervalBound {
     /// This convenience function returns the data type associated with this
     /// `IntervalBound`.
     pub fn get_datatype(&self) -> DataType {
-        self.value.get_datatype()
+        self.value.data_type()
     }
 
     /// This convenience function checks whether the `IntervalBound` represents
@@ -180,7 +195,14 @@ impl Default for Interval {
 
 impl Display for Interval {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "Interval [{}, {}]", self.lower, self.upper)
+        write!(
+            f,
+            "{}{}, {}{}",
+            if self.lower.open { "(" } else { "[" },
+            self.lower.value,
+            self.upper.value,
+            if self.upper.open { ")" } else { "]" }
+        )
     }
 }
 
@@ -250,15 +272,15 @@ impl Interval {
 
     /// This function returns the data type of this interval. If both endpoints
     /// do not have the same data type, returns an error.
-    pub(crate) fn get_datatype(&self) -> Result<DataType> {
+    pub fn get_datatype(&self) -> Result<DataType> {
         let lower_type = self.lower.get_datatype();
         let upper_type = self.upper.get_datatype();
         if lower_type == upper_type {
             Ok(lower_type)
         } else {
-            Err(DataFusionError::Internal(format!(
-                "Interval bounds have different types: {lower_type} != {upper_type}",
-            )))
+            internal_err!(
+                "Interval bounds have different types: {lower_type} != {upper_type}"
+            )
         }
     }
 
@@ -334,7 +356,7 @@ impl Interval {
 
     /// Decide if this interval is certainly equal to, possibly equal to,
     /// or can't be equal to `other` by returning [true, true],
-    /// [false, true] or [false, false] respectively.    
+    /// [false, true] or [false, false] respectively.
     pub(crate) fn equal<T: Borrow<Interval>>(&self, other: T) -> Interval {
         let rhs = other.borrow();
         let flags = if !self.lower.is_unbounded()
@@ -377,9 +399,23 @@ impl Interval {
                     upper: IntervalBound::new(ScalarValue::Boolean(Some(upper)), false),
                 })
             }
-            _ => Err(DataFusionError::Internal(
-                "Incompatible types for logical conjunction".to_string(),
-            )),
+            _ => internal_err!("Incompatible types for logical conjunction"),
+        }
+    }
+
+    /// Compute the logical negation of this (boolean) interval.
+    pub(crate) fn not(&self) -> Result<Self> {
+        if !matches!(self.get_datatype()?, DataType::Boolean) {
+            return internal_err!(
+                "Cannot apply logical negation to non-boolean interval"
+            );
+        }
+        if self == &Interval::CERTAINLY_TRUE {
+            Ok(Interval::CERTAINLY_FALSE)
+        } else if self == &Interval::CERTAINLY_FALSE {
+            Ok(Interval::CERTAINLY_TRUE)
+        } else {
+            Ok(Interval::UNCERTAIN)
         }
     }
 
@@ -413,6 +449,23 @@ impl Interval {
         Ok(non_empty.then_some(Interval::new(lower, upper)))
     }
 
+    /// Decide if this interval is certainly contains, possibly contains,
+    /// or can't can't `other` by returning [true, true],
+    /// [false, true] or [false, false] respectively.
+    pub fn contains<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
+        match self.intersect(other.borrow())? {
+            Some(intersection) => {
+                // Need to compare with same bounds close-ness.
+                if intersection.close_bounds() == other.borrow().clone().close_bounds() {
+                    Ok(Interval::CERTAINLY_TRUE)
+                } else {
+                    Ok(Interval::UNCERTAIN)
+                }
+            }
+            None => Ok(Interval::CERTAINLY_FALSE),
+        }
+    }
+
     /// Add the given interval (`other`) to this interval. Say we have
     /// intervals [a1, b1] and [a2, b2], then their sum is [a1 + a2, b1 + b2].
     /// Note that this represents all possible values the sum can take if
@@ -438,55 +491,189 @@ impl Interval {
     }
 
     pub const CERTAINLY_FALSE: Interval = Interval {
-        lower: IntervalBound::new(ScalarValue::Boolean(Some(false)), false),
-        upper: IntervalBound::new(ScalarValue::Boolean(Some(false)), false),
+        lower: IntervalBound::new_closed(ScalarValue::Boolean(Some(false))),
+        upper: IntervalBound::new_closed(ScalarValue::Boolean(Some(false))),
     };
 
     pub const UNCERTAIN: Interval = Interval {
-        lower: IntervalBound::new(ScalarValue::Boolean(Some(false)), false),
-        upper: IntervalBound::new(ScalarValue::Boolean(Some(true)), false),
+        lower: IntervalBound::new_closed(ScalarValue::Boolean(Some(false))),
+        upper: IntervalBound::new_closed(ScalarValue::Boolean(Some(true))),
     };
 
     pub const CERTAINLY_TRUE: Interval = Interval {
-        lower: IntervalBound::new(ScalarValue::Boolean(Some(true)), false),
-        upper: IntervalBound::new(ScalarValue::Boolean(Some(true)), false),
+        lower: IntervalBound::new_closed(ScalarValue::Boolean(Some(true))),
+        upper: IntervalBound::new_closed(ScalarValue::Boolean(Some(true))),
+    };
+
+    /// Returns the cardinality of this interval, which is the number of all
+    /// distinct points inside it.
+    pub fn cardinality(&self) -> Result<u64> {
+        match self.get_datatype() {
+            Ok(data_type) if data_type.is_integer() => {
+                if let Some(diff) = self.upper.value.distance(&self.lower.value) {
+                    Ok(calculate_cardinality_based_on_bounds(
+                        self.lower.open,
+                        self.upper.open,
+                        diff as u64,
+                    ))
+                } else {
+                    exec_err!("Cardinality cannot be calculated for {:?}", self)
+                }
+            }
+            // Ordering floating-point numbers according to their binary representations
+            // coincide with their natural ordering. Therefore, we can consider their
+            // binary representations as "indices" and subtract them. For details, see:
+            // https://stackoverflow.com/questions/8875064/how-many-distinct-floating-point-numbers-in-a-specific-range
+            Ok(data_type) if data_type.is_floating() => {
+                // If the minimum value is a negative number, we need to
+                // switch sides to ensure an unsigned result.
+                let (min, max) = if self.lower.value
+                    < ScalarValue::new_zero(&self.lower.value.data_type())?
+                {
+                    (self.upper.value.clone(), self.lower.value.clone())
+                } else {
+                    (self.lower.value.clone(), self.upper.value.clone())
+                };
+
+                match (min, max) {
+                    (
+                        ScalarValue::Float32(Some(lower)),
+                        ScalarValue::Float32(Some(upper)),
+                    ) => Ok(calculate_cardinality_based_on_bounds(
+                        self.lower.open,
+                        self.upper.open,
+                        (upper.to_bits().sub_checked(lower.to_bits()))? as u64,
+                    )),
+                    (
+                        ScalarValue::Float64(Some(lower)),
+                        ScalarValue::Float64(Some(upper)),
+                    ) => Ok(calculate_cardinality_based_on_bounds(
+                        self.lower.open,
+                        self.upper.open,
+                        upper.to_bits().sub_checked(lower.to_bits())?,
+                    )),
+                    _ => exec_err!(
+                        "Cardinality cannot be calculated for the datatype {:?}",
+                        data_type
+                    ),
+                }
+            }
+            // If the cardinality cannot be calculated anyway, give an error.
+            _ => exec_err!("Cardinality cannot be calculated for {:?}", self),
+        }
+    }
+
+    /// This function "closes" this interval; i.e. it modifies the endpoints so
+    /// that we end up with the narrowest possible closed interval containing
+    /// the original interval.
+    pub fn close_bounds(mut self) -> Interval {
+        if self.lower.open {
+            // Get next value
+            self.lower.value = next_value::<true>(self.lower.value);
+            self.lower.open = false;
+        }
+
+        if self.upper.open {
+            // Get previous value
+            self.upper.value = next_value::<false>(self.upper.value);
+            self.upper.open = false;
+        }
+
+        self
+    }
+}
+
+trait OneTrait: Sized + std::ops::Add + std::ops::Sub {
+    fn one() -> Self;
+}
+
+macro_rules! impl_OneTrait{
+    ($($m:ty),*) => {$( impl OneTrait for $m  { fn one() -> Self { 1 as $m } })*}
+}
+impl_OneTrait! {u8, u16, u32, u64, i8, i16, i32, i64}
+
+/// This function either increments or decrements its argument, depending on the `INC` value.
+/// If `true`, it increments; otherwise it decrements the argument.
+fn increment_decrement<const INC: bool, T: OneTrait + SubAssign + AddAssign>(
+    mut val: T,
+) -> T {
+    if INC {
+        val.add_assign(T::one());
+    } else {
+        val.sub_assign(T::one());
+    }
+    val
+}
+
+macro_rules! check_infinite_bounds {
+    ($value:expr, $val:expr, $type:ident, $inc:expr) => {
+        if ($val == $type::MAX && $inc) || ($val == $type::MIN && !$inc) {
+            return $value;
+        }
     };
 }
 
-/// Indicates whether interval arithmetic is supported for the given operator.
-pub fn is_operator_supported(op: &Operator) -> bool {
-    matches!(
-        op,
-        &Operator::Plus
-            | &Operator::Minus
-            | &Operator::And
-            | &Operator::Gt
-            | &Operator::GtEq
-            | &Operator::Lt
-            | &Operator::LtEq
-    )
+/// This function returns the next/previous value depending on the `ADD` value.
+/// If `true`, it returns the next value; otherwise it returns the previous value.
+fn next_value<const INC: bool>(value: ScalarValue) -> ScalarValue {
+    use ScalarValue::*;
+    match value {
+        Float32(Some(val)) => {
+            let new_float = if INC { next_up(val) } else { next_down(val) };
+            Float32(Some(new_float))
+        }
+        Float64(Some(val)) => {
+            let new_float = if INC { next_up(val) } else { next_down(val) };
+            Float64(Some(new_float))
+        }
+        Int8(Some(val)) => {
+            check_infinite_bounds!(value, val, i8, INC);
+            Int8(Some(increment_decrement::<INC, i8>(val)))
+        }
+        Int16(Some(val)) => {
+            check_infinite_bounds!(value, val, i16, INC);
+            Int16(Some(increment_decrement::<INC, i16>(val)))
+        }
+        Int32(Some(val)) => {
+            check_infinite_bounds!(value, val, i32, INC);
+            Int32(Some(increment_decrement::<INC, i32>(val)))
+        }
+        Int64(Some(val)) => {
+            check_infinite_bounds!(value, val, i64, INC);
+            Int64(Some(increment_decrement::<INC, i64>(val)))
+        }
+        UInt8(Some(val)) => {
+            check_infinite_bounds!(value, val, u8, INC);
+            UInt8(Some(increment_decrement::<INC, u8>(val)))
+        }
+        UInt16(Some(val)) => {
+            check_infinite_bounds!(value, val, u16, INC);
+            UInt16(Some(increment_decrement::<INC, u16>(val)))
+        }
+        UInt32(Some(val)) => {
+            check_infinite_bounds!(value, val, u32, INC);
+            UInt32(Some(increment_decrement::<INC, u32>(val)))
+        }
+        UInt64(Some(val)) => {
+            check_infinite_bounds!(value, val, u64, INC);
+            UInt64(Some(increment_decrement::<INC, u64>(val)))
+        }
+        _ => value, // Unsupported datatypes
+    }
 }
 
-/// Indicates whether interval arithmetic is supported for the given data type.
-pub fn is_datatype_supported(data_type: &DataType) -> bool {
-    matches!(
-        data_type,
-        &DataType::Int64
-            | &DataType::Int32
-            | &DataType::Int16
-            | &DataType::Int8
-            | &DataType::UInt64
-            | &DataType::UInt32
-            | &DataType::UInt16
-            | &DataType::UInt8
-            | &DataType::Float64
-            | &DataType::Float32
-    )
+/// This function computes the cardinality ratio of the given intervals.
+pub fn cardinality_ratio(
+    initial_interval: &Interval,
+    final_interval: &Interval,
+) -> Result<f64> {
+    Ok(final_interval.cardinality()? as f64 / initial_interval.cardinality()? as f64)
 }
 
 pub fn apply_operator(op: &Operator, lhs: &Interval, rhs: &Interval) -> Result<Interval> {
     match *op {
         Operator::Eq => Ok(lhs.equal(rhs)),
+        Operator::NotEq => Ok(lhs.equal(rhs).not()?),
         Operator::Gt => Ok(lhs.gt(rhs)),
         Operator::GtEq => Ok(lhs.gt_eq(rhs)),
         Operator::Lt => Ok(lhs.lt(rhs)),
@@ -508,11 +695,303 @@ fn cast_scalar_value(
     ScalarValue::try_from_array(&cast_array, 0)
 }
 
+/// This function calculates the final cardinality result by inspecting the endpoints of the interval.
+fn calculate_cardinality_based_on_bounds(
+    lower_open: bool,
+    upper_open: bool,
+    diff: u64,
+) -> u64 {
+    match (lower_open, upper_open) {
+        (false, false) => diff + 1,
+        (true, true) => diff - 1,
+        _ => diff,
+    }
+}
+
+/// An [Interval] that also tracks null status using a boolean interval.
+///
+/// This represents values that may be in a particular range or be null.
+///
+/// # Examples
+///
+/// ```
+/// use arrow::datatypes::DataType;
+/// use datafusion_physical_expr::intervals::{Interval, NullableInterval};
+/// use datafusion_common::ScalarValue;
+///
+/// // [1, 2) U {NULL}
+/// NullableInterval::MaybeNull {
+///    values: Interval::make(Some(1), Some(2), (false, true)),
+/// };
+///
+/// // (0, ∞)
+/// NullableInterval::NotNull {
+///   values: Interval::make(Some(0), None, (true, true)),
+/// };
+///
+/// // {NULL}
+/// NullableInterval::Null { datatype: DataType::Int32 };
+///
+/// // {4}
+/// NullableInterval::from(ScalarValue::Int32(Some(4)));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NullableInterval {
+    /// The value is always null in this interval
+    ///
+    /// This is typed so it can be used in physical expressions, which don't do
+    /// type coercion.
+    Null { datatype: DataType },
+    /// The value may or may not be null in this interval. If it is non null its value is within
+    /// the specified values interval
+    MaybeNull { values: Interval },
+    /// The value is definitely not null in this interval and is within values
+    NotNull { values: Interval },
+}
+
+impl Default for NullableInterval {
+    fn default() -> Self {
+        NullableInterval::MaybeNull {
+            values: Interval::default(),
+        }
+    }
+}
+
+impl Display for NullableInterval {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Null { .. } => write!(f, "NullableInterval: {{NULL}}"),
+            Self::MaybeNull { values } => {
+                write!(f, "NullableInterval: {} U {{NULL}}", values)
+            }
+            Self::NotNull { values } => write!(f, "NullableInterval: {}", values),
+        }
+    }
+}
+
+impl From<ScalarValue> for NullableInterval {
+    /// Create an interval that represents a single value.
+    fn from(value: ScalarValue) -> Self {
+        if value.is_null() {
+            Self::Null {
+                datatype: value.data_type(),
+            }
+        } else {
+            Self::NotNull {
+                values: Interval::new(
+                    IntervalBound::new(value.clone(), false),
+                    IntervalBound::new(value, false),
+                ),
+            }
+        }
+    }
+}
+
+impl NullableInterval {
+    /// Get the values interval, or None if this interval is definitely null.
+    pub fn values(&self) -> Option<&Interval> {
+        match self {
+            Self::Null { .. } => None,
+            Self::MaybeNull { values } | Self::NotNull { values } => Some(values),
+        }
+    }
+
+    /// Get the data type
+    pub fn get_datatype(&self) -> Result<DataType> {
+        match self {
+            Self::Null { datatype } => Ok(datatype.clone()),
+            Self::MaybeNull { values } | Self::NotNull { values } => {
+                values.get_datatype()
+            }
+        }
+    }
+
+    /// Return true if the value is definitely true (and not null).
+    pub fn is_certainly_true(&self) -> bool {
+        match self {
+            Self::Null { .. } | Self::MaybeNull { .. } => false,
+            Self::NotNull { values } => values == &Interval::CERTAINLY_TRUE,
+        }
+    }
+
+    /// Return true if the value is definitely false (and not null).
+    pub fn is_certainly_false(&self) -> bool {
+        match self {
+            Self::Null { .. } => false,
+            Self::MaybeNull { .. } => false,
+            Self::NotNull { values } => values == &Interval::CERTAINLY_FALSE,
+        }
+    }
+
+    /// Perform logical negation on a boolean nullable interval.
+    fn not(&self) -> Result<Self> {
+        match self {
+            Self::Null { datatype } => Ok(Self::Null {
+                datatype: datatype.clone(),
+            }),
+            Self::MaybeNull { values } => Ok(Self::MaybeNull {
+                values: values.not()?,
+            }),
+            Self::NotNull { values } => Ok(Self::NotNull {
+                values: values.not()?,
+            }),
+        }
+    }
+
+    /// Apply the given operator to this interval and the given interval.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use datafusion_common::ScalarValue;
+    /// use datafusion_expr::Operator;
+    /// use datafusion_physical_expr::intervals::{Interval, NullableInterval};
+    ///
+    /// // 4 > 3 -> true
+    /// let lhs = NullableInterval::from(ScalarValue::Int32(Some(4)));
+    /// let rhs = NullableInterval::from(ScalarValue::Int32(Some(3)));
+    /// let result = lhs.apply_operator(&Operator::Gt, &rhs).unwrap();
+    /// assert_eq!(result, NullableInterval::from(ScalarValue::Boolean(Some(true))));
+    ///
+    /// // [1, 3) > NULL -> NULL
+    /// let lhs = NullableInterval::NotNull {
+    ///     values: Interval::make(Some(1), Some(3), (false, true)),
+    /// };
+    /// let rhs = NullableInterval::from(ScalarValue::Int32(None));
+    /// let result = lhs.apply_operator(&Operator::Gt, &rhs).unwrap();
+    /// assert_eq!(result.single_value(), Some(ScalarValue::Boolean(None)));
+    ///
+    /// // [1, 3] > [2, 4] -> [false, true]
+    /// let lhs = NullableInterval::NotNull {
+    ///     values: Interval::make(Some(1), Some(3), (false, false)),
+    /// };
+    /// let rhs = NullableInterval::NotNull {
+    ///    values: Interval::make(Some(2), Some(4), (false, false)),
+    /// };
+    /// let result = lhs.apply_operator(&Operator::Gt, &rhs).unwrap();
+    /// // Both inputs are valid (non-null), so result must be non-null
+    /// assert_eq!(result, NullableInterval::NotNull {
+    ///    // Uncertain whether inequality is true or false
+    ///    values: Interval::UNCERTAIN,
+    /// });
+    ///
+    /// ```
+    pub fn apply_operator(&self, op: &Operator, rhs: &Self) -> Result<Self> {
+        match op {
+            Operator::IsDistinctFrom => {
+                let values = match (self, rhs) {
+                    // NULL is distinct from NULL -> False
+                    (Self::Null { .. }, Self::Null { .. }) => Interval::CERTAINLY_FALSE,
+                    // x is distinct from y -> x != y,
+                    // if at least one of them is never null.
+                    (Self::NotNull { .. }, _) | (_, Self::NotNull { .. }) => {
+                        let lhs_values = self.values();
+                        let rhs_values = rhs.values();
+                        match (lhs_values, rhs_values) {
+                            (Some(lhs_values), Some(rhs_values)) => {
+                                lhs_values.equal(rhs_values).not()?
+                            }
+                            (Some(_), None) | (None, Some(_)) => Interval::CERTAINLY_TRUE,
+                            (None, None) => unreachable!("Null case handled above"),
+                        }
+                    }
+                    _ => Interval::UNCERTAIN,
+                };
+                // IsDistinctFrom never returns null.
+                Ok(Self::NotNull { values })
+            }
+            Operator::IsNotDistinctFrom => self
+                .apply_operator(&Operator::IsDistinctFrom, rhs)
+                .map(|i| i.not())?,
+            _ => {
+                if let (Some(left_values), Some(right_values)) =
+                    (self.values(), rhs.values())
+                {
+                    let values = apply_operator(op, left_values, right_values)?;
+                    match (self, rhs) {
+                        (Self::NotNull { .. }, Self::NotNull { .. }) => {
+                            Ok(Self::NotNull { values })
+                        }
+                        _ => Ok(Self::MaybeNull { values }),
+                    }
+                } else if op.is_comparison_operator() {
+                    Ok(Self::Null {
+                        datatype: DataType::Boolean,
+                    })
+                } else {
+                    Ok(Self::Null {
+                        datatype: self.get_datatype()?,
+                    })
+                }
+            }
+        }
+    }
+
+    /// Determine if this interval contains the given interval. Returns a boolean
+    /// interval that is [true, true] if this interval is a superset of the
+    /// given interval, [false, false] if this interval is disjoint from the
+    /// given interval, and [false, true] otherwise.
+    pub fn contains<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
+        let rhs = other.borrow();
+        if let (Some(left_values), Some(right_values)) = (self.values(), rhs.values()) {
+            let values = left_values.contains(right_values)?;
+            match (self, rhs) {
+                (Self::NotNull { .. }, Self::NotNull { .. }) => {
+                    Ok(Self::NotNull { values })
+                }
+                _ => Ok(Self::MaybeNull { values }),
+            }
+        } else {
+            Ok(Self::Null {
+                datatype: DataType::Boolean,
+            })
+        }
+    }
+
+    /// If the interval has collapsed to a single value, return that value.
+    ///
+    /// Otherwise returns None.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use datafusion_common::ScalarValue;
+    /// use datafusion_physical_expr::intervals::{Interval, NullableInterval};
+    ///
+    /// let interval = NullableInterval::from(ScalarValue::Int32(Some(4)));
+    /// assert_eq!(interval.single_value(), Some(ScalarValue::Int32(Some(4))));
+    ///
+    /// let interval = NullableInterval::from(ScalarValue::Int32(None));
+    /// assert_eq!(interval.single_value(), Some(ScalarValue::Int32(None)));
+    ///
+    /// let interval = NullableInterval::MaybeNull {
+    ///     values: Interval::make(Some(1), Some(4), (false, true)),
+    /// };
+    /// assert_eq!(interval.single_value(), None);
+    /// ```
+    pub fn single_value(&self) -> Option<ScalarValue> {
+        match self {
+            Self::Null { datatype } => {
+                Some(ScalarValue::try_from(datatype).unwrap_or(ScalarValue::Null))
+            }
+            Self::MaybeNull { values } | Self::NotNull { values }
+                if values.lower.value == values.upper.value
+                    && !values.lower.is_unbounded() =>
+            {
+                Some(values.lower.value.clone())
+            }
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::next_value;
     use crate::intervals::{Interval, IntervalBound};
+
+    use arrow_schema::DataType;
     use datafusion_common::{Result, ScalarValue};
-    use ScalarValue::Boolean;
 
     fn open_open<T>(lower: Option<T>, upper: Option<T>) -> Interval
     where
@@ -1060,6 +1539,7 @@ mod tests {
     // ([false, false], [false, true], [true, true]) for boolean intervals.
     #[test]
     fn non_standard_interval_constructs() {
+        use ScalarValue::Boolean;
         let cases = vec![
             (
                 IntervalBound::new(Boolean(None), true),
@@ -1171,5 +1651,172 @@ mod tests {
         let lower = 1.5;
         let upper = 1.5;
         capture_mode_change_f32((lower, upper), true, true);
+    }
+
+    #[test]
+    fn test_cardinality_of_intervals() -> Result<()> {
+        // In IEEE 754 standard for floating-point arithmetic, if we keep the sign and exponent fields same,
+        // we can represent 4503599627370496 different numbers by changing the mantissa
+        // (4503599627370496 = 2^52, since there are 52 bits in mantissa, and 2^23 = 8388608 for f32).
+        let distinct_f64 = 4503599627370496;
+        let distinct_f32 = 8388608;
+        let intervals = [
+            Interval::new(
+                IntervalBound::new(ScalarValue::from(0.25), false),
+                IntervalBound::new(ScalarValue::from(0.50), true),
+            ),
+            Interval::new(
+                IntervalBound::new(ScalarValue::from(0.5), false),
+                IntervalBound::new(ScalarValue::from(1.0), true),
+            ),
+            Interval::new(
+                IntervalBound::new(ScalarValue::from(1.0), false),
+                IntervalBound::new(ScalarValue::from(2.0), true),
+            ),
+            Interval::new(
+                IntervalBound::new(ScalarValue::from(32.0), false),
+                IntervalBound::new(ScalarValue::from(64.0), true),
+            ),
+            Interval::new(
+                IntervalBound::new(ScalarValue::from(-0.50), false),
+                IntervalBound::new(ScalarValue::from(-0.25), true),
+            ),
+            Interval::new(
+                IntervalBound::new(ScalarValue::from(-32.0), false),
+                IntervalBound::new(ScalarValue::from(-16.0), true),
+            ),
+        ];
+        for interval in intervals {
+            assert_eq!(interval.cardinality()?, distinct_f64);
+        }
+
+        let intervals = [
+            Interval::new(
+                IntervalBound::new(ScalarValue::from(0.25_f32), false),
+                IntervalBound::new(ScalarValue::from(0.50_f32), true),
+            ),
+            Interval::new(
+                IntervalBound::new(ScalarValue::from(-1_f32), false),
+                IntervalBound::new(ScalarValue::from(-0.5_f32), true),
+            ),
+        ];
+        for interval in intervals {
+            assert_eq!(interval.cardinality()?, distinct_f32);
+        }
+
+        let interval = Interval::new(
+            IntervalBound::new(ScalarValue::from(-0.0625), false),
+            IntervalBound::new(ScalarValue::from(0.0625), true),
+        );
+        assert_eq!(interval.cardinality()?, distinct_f64 * 2_048);
+
+        let interval = Interval::new(
+            IntervalBound::new(ScalarValue::from(-0.0625_f32), false),
+            IntervalBound::new(ScalarValue::from(0.0625_f32), true),
+        );
+        assert_eq!(interval.cardinality()?, distinct_f32 * 256);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_next_value() -> Result<()> {
+        // integer increment / decrement
+        let zeros = vec![
+            ScalarValue::new_zero(&DataType::UInt8)?,
+            ScalarValue::new_zero(&DataType::UInt16)?,
+            ScalarValue::new_zero(&DataType::UInt32)?,
+            ScalarValue::new_zero(&DataType::UInt64)?,
+            ScalarValue::new_zero(&DataType::Int8)?,
+            ScalarValue::new_zero(&DataType::Int8)?,
+            ScalarValue::new_zero(&DataType::Int8)?,
+            ScalarValue::new_zero(&DataType::Int8)?,
+        ];
+
+        let ones = vec![
+            ScalarValue::new_one(&DataType::UInt8)?,
+            ScalarValue::new_one(&DataType::UInt16)?,
+            ScalarValue::new_one(&DataType::UInt32)?,
+            ScalarValue::new_one(&DataType::UInt64)?,
+            ScalarValue::new_one(&DataType::Int8)?,
+            ScalarValue::new_one(&DataType::Int8)?,
+            ScalarValue::new_one(&DataType::Int8)?,
+            ScalarValue::new_one(&DataType::Int8)?,
+        ];
+
+        zeros.into_iter().zip(ones).for_each(|(z, o)| {
+            assert_eq!(next_value::<true>(z.clone()), o);
+            assert_eq!(next_value::<false>(o), z);
+        });
+
+        // floating value increment / decrement
+        let values = vec![
+            ScalarValue::new_zero(&DataType::Float32)?,
+            ScalarValue::new_zero(&DataType::Float64)?,
+        ];
+
+        let eps = vec![
+            ScalarValue::Float32(Some(1e-6)),
+            ScalarValue::Float64(Some(1e-6)),
+        ];
+
+        values.into_iter().zip(eps).for_each(|(v, e)| {
+            assert!(next_value::<true>(v.clone()).sub(v.clone()).unwrap().lt(&e));
+            assert!(v.clone().sub(next_value::<false>(v)).unwrap().lt(&e));
+        });
+
+        // Min / Max values do not change for integer values
+        let min = vec![
+            ScalarValue::UInt64(Some(u64::MIN)),
+            ScalarValue::Int8(Some(i8::MIN)),
+        ];
+        let max = vec![
+            ScalarValue::UInt64(Some(u64::MAX)),
+            ScalarValue::Int8(Some(i8::MAX)),
+        ];
+
+        min.into_iter().zip(max).for_each(|(min, max)| {
+            assert_eq!(next_value::<true>(max.clone()), max);
+            assert_eq!(next_value::<false>(min.clone()), min);
+        });
+
+        // Min / Max values results in infinity for floating point values
+        assert_eq!(
+            next_value::<true>(ScalarValue::Float32(Some(f32::MAX))),
+            ScalarValue::Float32(Some(f32::INFINITY))
+        );
+        assert_eq!(
+            next_value::<false>(ScalarValue::Float64(Some(f64::MIN))),
+            ScalarValue::Float64(Some(f64::NEG_INFINITY))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_interval_display() {
+        let interval = Interval::new(
+            IntervalBound::new(ScalarValue::from(0.25_f32), true),
+            IntervalBound::new(ScalarValue::from(0.50_f32), false),
+        );
+        assert_eq!(format!("{}", interval), "(0.25, 0.5]");
+
+        let interval = Interval::new(
+            IntervalBound::new(ScalarValue::from(0.25_f32), false),
+            IntervalBound::new(ScalarValue::from(0.50_f32), true),
+        );
+        assert_eq!(format!("{}", interval), "[0.25, 0.5)");
+
+        let interval = Interval::new(
+            IntervalBound::new(ScalarValue::from(0.25_f32), true),
+            IntervalBound::new(ScalarValue::from(0.50_f32), true),
+        );
+        assert_eq!(format!("{}", interval), "(0.25, 0.5)");
+
+        let interval = Interval::new(
+            IntervalBound::new(ScalarValue::from(0.25_f32), false),
+            IntervalBound::new(ScalarValue::from(0.50_f32), false),
+        );
+        assert_eq!(format!("{}", interval), "[0.25, 0.5]");
     }
 }
