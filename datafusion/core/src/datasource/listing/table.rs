@@ -627,9 +627,12 @@ impl ListingTable {
         Ok(table)
     }
 
-    /// Takes a [`FileStatisticsCache`] from session context as cache input.
-    /// If not exit create a new [`DefaultFileStatisticsCache`],
-    /// Avoid get parquet files statistics multiple times in same session.
+    /// Set the [`FileStatisticsCache`] used to cache parquet file statistics.
+    /// 
+    /// Setting a statistics cache on the `SessionContext` can avoid refetching statistics
+    /// multiple times in the same session.
+    ///
+    /// If `None`, creates a new [`DefaultFileStatisticsCache`] scoped to this query.
     pub fn with_cache(mut self, cache: Option<FileStatisticsCache>) -> Self {
         self.collected_statistics =
             cache.unwrap_or(Arc::new(DefaultFileStatisticsCache::default()));
