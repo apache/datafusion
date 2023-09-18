@@ -1145,6 +1145,7 @@ name = "datafusion-execution"
 version = "31.0.0"
 dependencies = [
  "arrow",
+ "chrono",
  "dashmap",
  "datafusion-common",
  "datafusion-expr",
