@@ -22,6 +22,5 @@ pub mod datafusion {
     include!("prost.rs");
 
     #[cfg(feature = "json")]
-    #[allow(deprecated)] // https://github.com/influxdata/pbjson/pull/113
     include!("pbjson.rs");
 }

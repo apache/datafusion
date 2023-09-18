@@ -31,5 +31,5 @@ publish = false
 
 [dependencies]
 # Pin these dependencies so that the generated output is deterministic
-pbjson-build = { git = "https://github.com/influxdata/pbjson.git", rev = "c1f3fe781f91914070815aa7085f659fe682c095" }
-prost-build = { version = "=0.12.1" }
+pbjson-build = "=0.6.2"
+prost-build = "=0.12.1"
