@@ -2345,55 +2345,13 @@ impl ScalarValue {
                 // println!("(list_to_arry) data_type: {:?}", data_type);
                 // println!("(list_to_arry) values: {:?}", values);
 
-                let res = if values.is_some() {
-                    let r = ScalarValue::iter_to_array_list_v3(
-                        values.clone(),
-                        data_type,
+                ScalarValue::iter_to_array_list_v3(values.clone(),
+                       data_type,
                         DataType::List(Arc::new(Field::new(
                             "item",
                             data_type.to_owned(),
                             true,
-                        ))),
-                    );
-                    // println!("(list_to_arry) iter_to_array_list_v3 res: {:?}", r);
-                    r
-                } else {
-                    let data_type = field.data_type();
-                    match data_type {
-                        DataType::Int64 => {
-                            // TODO: ListArray from iter primitive can construct null in array, how to do?
-                            let arr = new_null_array(&DataType::Null, 1);
-                            return arr;
-
-                            // return arr
-                            // let mut builder = ListBuilder::new(Int64Builder::new());
-                            // builder.values().append_null();
-                            // builder.append(true);
-                            // let arr = builder.finish();
-                            // let (field, offsets, values, nulls) =
-                            //     arr.clone().into_parts();
-
-                            // let data_type = DataType::List(Arc::new(Field::new(
-                            //     field.name(),
-                            //     field.data_type().to_owned(),
-                            //     field.is_nullable(),
-                            // )));
-
-                            // let field = Arc::new(Field::new("item", data_type, true));
-
-                            // let arr =
-                            //     ListArray::new(field, offsets, Arc::new(arr), nulls);
-                            // println!("(list_to_arry) arr: {:?}", arr);
-                            // Ok(arr)
-                        }
-                        _ => {
-                            // _not_impl_err!("list_to_array for data_type: {:?}", data_type)
-                            panic!("list_to_array for data_type: {:?}", data_type)
-                        }
-                    }
-                };
-
-                res.unwrap()
+                        )))).unwrap()
             }
 
 
@@ -2794,171 +2752,6 @@ impl ScalarValue {
         }
     }
 
-    // Similar to build_values_list, but processing ScalarValue::ListArr, not ScalarValue::List
-    pub fn conver_scalar_lists_to_array(
-        scalars: impl IntoIterator<Item = ScalarValue>,
-        data_type: &DataType,
-    ) -> Result<Self> {
-        match data_type {
-            // ScalarValue::ListArr(StringArray("1", "2", "3")) + ScalarValue::ListArr(StringArray("4", "5", "6"))
-            //  => ScalarValue::ListArr(ListArray(StringArray("1", "2", "3", "4", "5", "6")))
-            // TODO: Support more type.
-            DataType::Utf8 => {
-                let mut builder = ListBuilder::new(StringBuilder::new());
-                for scalar in scalars {
-                    match scalar {
-                        ScalarValue::List(_, _) => {
-                            return _internal_err!("Unsupported ScalarValue::List")
-                        }
-                        ScalarValue::ListArr(arr) => {
-                            let arr = as_string_array(&arr).to_owned();
-                            for v in arr.iter() {
-                                if v.is_some() {
-                                    builder.values().append_value(v.unwrap());
-                                } else {
-                                    builder.values().append_null();
-                                }
-                            }
-                        }
-                        _ => return _internal_err!("Unsupported ScalarValue in utf8"),
-                    }
-                }
-                builder.append(true);
-                let arr = builder.finish();
-                Ok(ScalarValue::ListArr(Arc::new(arr) as ArrayRef))
-            }
-            DataType::Float32 => {
-                let mut builder = ListBuilder::new(Float32Builder::new());
-                for scalar in scalars {
-                    match scalar {
-                        ScalarValue::List(_, _) => {
-                            return _internal_err!("Unsupported ScalarValue::List")
-                        }
-                        // Used in ArrayAggAccumulator
-                        // TODO: maybe seperate this to anotehr function is better
-                        ScalarValue::ListArr(arr) => {
-                            let arr = as_primitive_array::<Float32Type>(&arr).to_owned();
-                            for v in arr.iter() {
-                                if v.is_some() {
-                                    builder.values().append_value(v.unwrap());
-                                } else {
-                                    builder.values().append_null();
-                                }
-                            }
-                        }
-                        ScalarValue::Float32(v) => {
-                            if v.is_some() {
-                                builder.values().append_value(v.unwrap());
-                            } else {
-                                builder.values().append_null();
-                            }
-                        }
-                        _ => return _internal_err!("Unsupported ScalarValue in f32"),
-                    }
-                }
-                builder.append(true);
-                let arr = builder.finish();
-                Ok(ScalarValue::ListArr(Arc::new(arr) as ArrayRef))
-            }
-            DataType::List(field) => {
-                // let list_data_type = &DataType::List(Arc::new(Field::new(
-                //     "item",
-                //     data_type.clone(),
-                //     true,
-                // )));
-                let to_type = field.data_type().to_owned();
-                let arr = ScalarValue::iter_to_array_list_v2(scalars, to_type).unwrap();
-                Ok(ScalarValue::ListArr(Arc::new(arr) as ArrayRef))
-            }
-            DataType::Timestamp(time_unit, _tz) => {
-                // unit, tz, scalars, 1
-                match time_unit {
-                    TimeUnit::Nanosecond => {
-                        //     TimestampNanosecondBuilder,
-                        // TimestampNanosecond,
-                        // values,
-                        // $SIZE
-                        // Append value with 1641016800000000000 get null in array, is this expected?
-                        let mut builder =
-                            ListBuilder::new(TimestampNanosecondBuilder::new());
-                        for scalar in scalars {
-                            // println!("innter time scalar: {:?}", scalar);
-                            match scalar {
-                                ScalarValue::TimestampNanosecond(Some(v), _) => {
-                                    builder.values().append_value(v.clone());
-                                }
-                                ScalarValue::TimestampNanosecond(None, _) => {
-                                    builder.values().append_null();
-                                }
-                                sv => {
-                                    panic!("!!!!!!!!");
-                                    // return _internal_err!(
-                                    //     "Unsupported ScalarValue {sv:?} in TimestampNanosecond"
-                                    // )
-                                }
-                            }
-                        }
-                        builder.append(true);
-                        let arr = builder.finish();
-                        Ok(ScalarValue::ListArr(Arc::new(arr) as ArrayRef))
-                    }
-                    tu => {
-                        _not_impl_err!("(conver_scalar_lists_to_array) Unsupported time unit: {tu:?}")
-                    }
-                }
-            }
-            dara_type => {
-                _not_impl_err!(
-                    "(conver_scalar_lists_to_array) Unsupported data type: {dara_type:?}"
-                )
-            }
-        }
-    }
-
-    // TODO(jayzhan): use `scalars: impl IntoIterator<Item = ScalarValue>`
-    // Convert Vec<ScalarValue> to ArrayRef
-    // pub fn scalars_to_array(scalars: Vec<ScalarValue>, data_type: &DataType) -> ArrayRef {
-    //     let size = 1;
-
-    //     let values = if scalars.is_empty() {
-    //         None
-    //     } else {
-    //         Some(scalars.clone())
-    //     };
-
-    //     let values = &values;
-
-    //     Arc::new(match data_type {
-    //         DataType::Boolean => build_list!(BooleanBuilder, Boolean, values, size),
-    //         DataType::Int8 => build_list!(Int8Builder, Int8, values, size),
-    //         DataType::Int16 => build_list!(Int16Builder, Int16, values, size),
-    //         DataType::Int32 => build_list!(Int32Builder, Int32, values, size),
-    //         DataType::Int64 => build_list!(Int64Builder, Int64, values, size),
-    //         DataType::UInt8 => build_list!(UInt8Builder, UInt8, values, size),
-    //         DataType::UInt16 => build_list!(UInt16Builder, UInt16, values, size),
-    //         DataType::UInt32 => build_list!(UInt32Builder, UInt32, values, size),
-    //         DataType::UInt64 => build_list!(UInt64Builder, UInt64, values, size),
-    //         DataType::Utf8 => build_list!(StringBuilder, Utf8, values, size),
-    //         DataType::Float32 => build_list!(Float32Builder, Float32, values, size),
-    //         DataType::Float64 => build_list!(Float64Builder, Float64, values, size),
-    //         DataType::LargeUtf8 => {
-    //             build_list!(LargeStringBuilder, LargeUtf8, values, size)
-    //         }
-    //         DataType::List(_) => {
-    //             let list_data_type = &DataType::List(Arc::new(Field::new(
-    //                 "item",
-    //                 data_type.clone(),
-    //                 true,
-    //             )));
-    //             println!("list_data_type: {:?}", list_data_type);
-    //             ScalarValue::iter_to_array_list_v2(scalars, list_data_type).unwrap()
-    //         }
-    //         data_type => {
-    //             panic!("data type not supported: {:?}", data_type)
-    //         }
-    //     })
-    // }
-
     pub fn try_from_array_v2(array: &dyn Array, index: usize) -> Result<Vec<Self>> {
         match array.data_type() {
             DataType::List(_) => {
@@ -2996,27 +2789,6 @@ impl ScalarValue {
             // scalars.extend(values);
         }
         Ok(scalars)
-    }
-
-    /// Only DataType::List is modified
-    /// Converts a value in `array` at `index` into a ScalarValue
-    pub fn try_from_array_v3(array: &dyn Array, index: usize) -> Result<Self> {
-        // handle NULL value
-        if !array.is_valid(index) {
-            return array.data_type().try_into();
-        }
-
-        match array.data_type() {
-            DataType::List(_) => {
-                // unreachable!("ListArray should be handled in try_from_array_v2");
-                // Previous implementation considered nested version of list array.
-                // Not sure if it is necessary so it is not implemented, but leave a comment here.
-
-                let list_arr = as_list_array(array)?.to_owned();
-                Ok(ScalarValue::ListArr(list_arr.value(index)))
-            }
-            _ => Self::try_from_array(array, index),
-        }
     }
 
     /// Derived from V4, but return None if null.
@@ -3079,8 +2851,6 @@ impl ScalarValue {
 
         match array.data_type() {
             DataType::List(nested_type) => {
-                // println!("nested_type: {:?}", nested_type);
-                // println!("array: {:?}", array);
                 let list_array = as_list_array(array)?;
                 let value = match list_array.is_null(index) {
                     true => None,
@@ -3095,6 +2865,27 @@ impl ScalarValue {
 
                 let arr = ScalarValue::list_to_array(&value, nested_type.data_type());
                 Ok(ScalarValue::ListArr(arr))
+            }
+            _ => Self::try_from_array(array, index),
+        }
+    }
+
+    /// Only DataType::List is modified
+    /// Converts a value in `array` at `index` into a ScalarValue
+    pub fn try_from_array_v3(array: &dyn Array, index: usize) -> Result<Self> {
+        // handle NULL value
+        if !array.is_valid(index) {
+            return array.data_type().try_into();
+        }
+
+        match array.data_type() {
+            DataType::List(_) => {
+                // unreachable!("ListArray should be handled in try_from_array_v2");
+                // Previous implementation considered nested version of list array.
+                // Not sure if it is necessary so it is not implemented, but leave a comment here.
+
+                let list_arr = as_list_array(array)?.to_owned();
+                Ok(ScalarValue::ListArr(list_arr.value(index)))
             }
             _ => Self::try_from_array(array, index),
         }

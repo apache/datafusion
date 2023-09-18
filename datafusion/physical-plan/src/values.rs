@@ -69,9 +69,7 @@ impl ValuesExec {
                         // println!("r: {:?}", r);
 
                         match r {
-                            Ok(ColumnarValue::Scalar(scalar)) => {
-                                Ok(scalar)
-                            }
+                            Ok(ColumnarValue::Scalar(scalar)) => Ok(scalar),
                             Ok(ColumnarValue::Array(a)) if a.len() == 1 => {
                                 Ok(ScalarValue::ListArr(a))
                             }

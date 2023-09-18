@@ -355,7 +355,7 @@ pub fn create_physical_expr(
                     create_physical_expr(e, input_dfschema, input_schema, execution_props)
                 })
                 .collect::<Result<Vec<_>>>()?;
-            
+
             functions::create_physical_expr(
                 fun,
                 &physical_args,

@@ -797,6 +797,20 @@ SELECT t1_id, (SELECT count(*) + 2 as _cnt FROM t2 WHERE t2.t2_int = t1.t1_int) 
 33 5
 44 2
 
+#correlated_scalar_subquery_count_agg_where_clause
+query TT
+explain select t1.t1_int from t1 where (select count(*) from t2 where t1.t1_id = t2.t2_id) < t1.t1_int
+----
+logical_plan
+Projection: t1.t1_int
+--Filter: CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.COUNT(*) END < CAST(t1.t1_int AS Int64)
+----Projection: t1.t1_int, __scalar_sq_1.COUNT(*), __scalar_sq_1.__always_true
+------Left Join: t1.t1_id = __scalar_sq_1.t2_id
+--------TableScan: t1 projection=[t1_id, t1_int]
+--------SubqueryAlias: __scalar_sq_1
+----------Projection: COUNT(*), t2.t2_id, __always_true
+------------Aggregate: groupBy=[[t2.t2_id, Boolean(true) AS __always_true]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
+--------------TableScan: t2 projection=[t2_id]
 
 query I rowsort
 select t1.t1_int from t1 where (select count(*) from t2 where t1.t1_id = t2.t2_id) < t1.t1_int
