@@ -213,4 +213,4 @@ To recap, you need to:
 1. Implement the `TableProvider` trait to create a table provider, or use an existing one.
 2. Implement the `SchemaProvider` trait to create a schema provider, or use an existing one.
 3. Implement the `CatalogProvider` trait to create a catalog provider, or use an existing one.
-4. Implement the `CatalogList` trait to create a cataloglist, or use an existing one.
+4. Implement the `Cataloglist` trait to create a cataloglist, or use an existing one.
