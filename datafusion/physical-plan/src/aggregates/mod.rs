@@ -1176,7 +1176,10 @@ fn finalize_aggregation(
             // merge the state to the final value
             accumulators
                 .iter()
-                .map(|accumulator| accumulator.evaluate().map(|v| v.to_array()))
+                .map(|accumulator| {
+                    let state = accumulator.evaluate();
+                    state.map(|v| v.to_array())
+                })
                 .collect::<Result<Vec<ArrayRef>>>()
         }
     }

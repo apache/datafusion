@@ -16,6 +16,16 @@
 // under the License.
 
 use arrow::datatypes::{DataType, Field};
+use arrow_array::types::Int16Type;
+use arrow_array::types::Int32Type;
+use arrow_array::types::Int64Type;
+use arrow_array::types::Int8Type;
+use arrow_array::types::UInt16Type;
+use arrow_array::types::UInt32Type;
+use arrow_array::types::UInt64Type;
+use arrow_array::types::UInt8Type;
+use arrow_array::ListArray;
+
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -27,8 +37,8 @@ use std::collections::HashSet;
 use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
+use datafusion_common::Result;
 use datafusion_common::ScalarValue;
-use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_expr::Accumulator;
 
 type DistinctScalarValues = ScalarValue;
@@ -142,17 +152,64 @@ impl DistinctCountAccumulator {
 
 impl Accumulator for DistinctCountAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
-        let mut cols_out =
-            ScalarValue::new_list(Some(Vec::new()), self.state_data_type.clone());
-        self.values
-            .iter()
-            .enumerate()
-            .for_each(|(_, distinct_values)| {
-                if let ScalarValue::List(Some(ref mut v), _) = cols_out {
-                    v.push(distinct_values.clone());
-                }
-            });
-        Ok(vec![cols_out])
+        let scalars = self.values.iter().cloned().collect::<Vec<_>>();
+
+        macro_rules! build_a_list_array_from_scalar_value_vec {
+            ($ARRAY_TY:ty, $SCALAR_TY:ident) => {{
+                let s = scalars
+                    .into_iter()
+                    .map(|sv| match sv {
+                        ScalarValue::$SCALAR_TY(Some(x)) => Some(x),
+                        _ => {
+                            panic!(
+                                "Inconsistent types in ScalarValue::iter_to_array. \
+                                Expected List, got {:?}",
+                                sv
+                            )
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                Arc::new(ListArray::from_iter_primitive::<$ARRAY_TY, _, _>(vec![
+                    Some(s),
+                ]))
+            }};
+        }
+
+        let arr = match self.state_data_type {
+            DataType::Int8 => {
+                build_a_list_array_from_scalar_value_vec!(Int8Type, Int8)
+            }
+            DataType::Int16 => {
+                build_a_list_array_from_scalar_value_vec!(Int16Type, Int16)
+            }
+            DataType::Int32 => {
+                build_a_list_array_from_scalar_value_vec!(Int32Type, Int32)
+            }
+            DataType::Int64 => {
+                build_a_list_array_from_scalar_value_vec!(Int64Type, Int64)
+            }
+            DataType::UInt8 => {
+                build_a_list_array_from_scalar_value_vec!(UInt8Type, UInt8)
+            }
+            DataType::UInt16 => {
+                build_a_list_array_from_scalar_value_vec!(UInt16Type, UInt16)
+            }
+            DataType::UInt32 => {
+                build_a_list_array_from_scalar_value_vec!(UInt32Type, UInt32)
+            }
+            DataType::UInt64 => {
+                build_a_list_array_from_scalar_value_vec!(UInt64Type, UInt64)
+            }
+
+            _ => {
+                panic!(
+                    "Inconsistent types in ScalarValue::iter_to_array. \
+                    Expected List, got {:?}",
+                    self.state_data_type
+                )
+            }
+        };
+        Ok(vec![ScalarValue::ListArr(arr)])
     }
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         if values.is_empty() {
@@ -172,20 +229,16 @@ impl Accumulator for DistinctCountAccumulator {
             return Ok(());
         }
         let arr = &states[0];
-        (0..arr.len()).try_for_each(|index| {
-            let scalar = ScalarValue::try_from_array(arr, index)?;
 
-            if let ScalarValue::List(Some(scalar), _) = scalar {
-                scalar.iter().for_each(|scalar| {
-                    if !ScalarValue::is_null(scalar) {
-                        self.values.insert(scalar.clone());
-                    }
-                });
-            } else {
-                return internal_err!("Unexpected accumulator state");
-            }
-            Ok(())
-        })
+        let scalar_vec = ScalarValue::process_array_to_scalar_vec(arr)?;
+        for scalars in scalar_vec.into_iter() {
+            scalars.iter().for_each(|scalar| {
+                if !ScalarValue::is_null(scalar) {
+                    self.values.insert(scalar.clone());
+                }
+            });
+        }
+        Ok(())
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {

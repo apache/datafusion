@@ -417,6 +417,7 @@ fn array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
 
     match data_type {
         // empty array
+        // TODO: remoe new lsit
         None => Ok(ColumnarValue::Scalar(ScalarValue::new_list(
             Some(vec![]),
             DataType::Null,
@@ -442,6 +443,7 @@ fn array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
 
 /// `make_array` SQL function
 pub fn make_array(arrays: &[ArrayRef]) -> Result<ArrayRef> {
+    // println!("(make_array) arrays: {:?}", arrays);
     let values: Vec<ColumnarValue> = arrays
         .iter()
         .map(|x| ColumnarValue::Array(x.clone()))

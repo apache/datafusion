@@ -1166,6 +1166,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     )),
                 })
             }
+            ScalarValue::ListArr(_) => todo!("ListArr"),
             ScalarValue::Date32(val) => {
                 create_proto_scalar(val.as_ref(), &data_type, |s| Value::Date32Value(*s))
             }

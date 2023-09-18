@@ -25,7 +25,7 @@ use super::utils::*;
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use crate::simplify_expressions::regex::simplify_regex_expr;
 use arrow::{
-    array::new_null_array,
+    array::{new_null_array, AsArray},
     datatypes::{DataType, Field, Schema},
     error::ArrowError,
     record_batch::RecordBatch,
@@ -384,7 +384,9 @@ impl<'a> ConstEvaluator<'a> {
             &self.input_batch.schema(),
             self.execution_props,
         )?;
+        // println!("phys_expr: {:?}", phys_expr);
         let col_val = phys_expr.evaluate(&self.input_batch)?;
+        // println!("col_val: {:?}", col_val);
         match col_val {
             ColumnarValue::Array(a) => {
                 if a.len() != 1 {
@@ -393,7 +395,16 @@ impl<'a> ConstEvaluator<'a> {
                         a.len()
                     )
                 } else {
-                    Ok(ScalarValue::try_from_array(&a, 0)?)
+                    if a.as_list_opt::<i32>().is_none() {
+                        // Non-ListArray
+                        let r = ScalarValue::try_from_array_v3(&a, 0)?;
+                        // println!("evaluate r: {:?}", r);
+                        Ok(r)
+                    } else {
+                        // ListArray
+                        // println!("evaluate a: {:?}", a);
+                        Ok(ScalarValue::ListArr(a))
+                    }
                 }
             }
             ColumnarValue::Scalar(s) => Ok(s),

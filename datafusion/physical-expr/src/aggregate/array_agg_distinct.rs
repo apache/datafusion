@@ -28,7 +28,7 @@ use std::collections::HashSet;
 use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
-use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
 /// Expression for a ARRAY_AGG(DISTINCT) aggregation.
@@ -125,10 +125,7 @@ impl DistinctArrayAggAccumulator {
 
 impl Accumulator for DistinctArrayAggAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![ScalarValue::new_list(
-            Some(self.values.clone().into_iter().collect()),
-            self.datatype.clone(),
-        )])
+        Ok(vec![self.evaluate()?])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
@@ -155,24 +152,21 @@ impl Accumulator for DistinctArrayAggAccumulator {
         );
 
         let array = &states[0];
-        (0..array.len()).try_for_each(|i| {
-            let scalar = ScalarValue::try_from_array(array, i)?;
-            if let ScalarValue::List(Some(values), _) = scalar {
-                self.values.extend(values);
-                Ok(())
-            } else {
-                internal_err!("array_agg_distinct state must be list")
-            }
-        })?;
+        let scalars = ScalarValue::process_array_to_scalar_vec(array)?;
+
+        for scalar in scalars {
+            self.values.extend(scalar)
+        }
 
         Ok(())
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
-        Ok(ScalarValue::new_list(
-            Some(self.values.clone().into_iter().collect()),
-            self.datatype.clone(),
-        ))
+        let arr = ScalarValue::list_to_array(
+            &Some(self.values.clone().into_iter().collect()),
+            &self.datatype,
+        );
+        Ok(ScalarValue::ListArr(arr))
     }
 
     fn size(&self) -> usize {

@@ -424,7 +424,7 @@ impl Accumulator for ApproxPercentileAccumulator {
             .map(|index| {
                 states
                     .iter()
-                    .map(|array| ScalarValue::try_from_array(array, index))
+                    .map(|array| ScalarValue::try_from_array_v3(array, index))
                     .collect::<Result<Vec<_>>>()
                     .map(|state| TDigest::from_scalar_state(&state))
             })

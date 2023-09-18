@@ -76,6 +76,24 @@ macro_rules! unary_primitive_array_op {
                 ScalarValue::Float64(a) => Ok(ColumnarValue::Scalar(
                     ScalarValue::Float64(a.map(|x| x.$FUNC())),
                 )),
+                ScalarValue::ListArr(arr) => match arr.data_type() {
+                    DataType::Float32 => {
+                        let result =
+                            downcast_compute_op!(arr, $NAME, $FUNC, Float32Array);
+                        Ok(ColumnarValue::Array(result?))
+                    }
+                    DataType::Float64 => {
+                        let result =
+                            downcast_compute_op!(arr, $NAME, $FUNC, Float64Array);
+                        Ok(ColumnarValue::Array(result?))
+                    }
+                    other => internal_err!(
+                        "Unsupported data type {:?} for function {}",
+                        other,
+                        $NAME
+                    ),
+                },
+
                 _ => internal_err!(
                     "Unsupported data type {:?} for function {}",
                     ($VALUE).data_type(),

@@ -641,9 +641,10 @@ where
                 .values
                 .iter()
                 .map(|x| ScalarValue::new_primitive::<T>(Some(*x), &T::DATA_TYPE))
-                .collect();
+                .collect::<Vec<_>>();
 
-            vec![ScalarValue::new_list(Some(values), T::DATA_TYPE)]
+            let arr = ScalarValue::list_to_array(&Some(values), &T::DATA_TYPE);
+            vec![ScalarValue::ListArr(arr)]
         };
         Ok(state_out)
     }

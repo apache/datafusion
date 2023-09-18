@@ -22,6 +22,8 @@ use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field};
+use arrow_array::cast::AsArray;
+use arrow_array::Array;
 use datafusion_common::ScalarValue;
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_expr::Accumulator;
@@ -116,34 +118,33 @@ impl ArrayAggAccumulator {
     }
 }
 
+// TODO: Remove ScalarValue::List in ArrayAggAccumulator
 impl Accumulator for ArrayAggAccumulator {
+    // Append value like Int64Array(1,2,3)
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         if values.is_empty() {
             return Ok(());
         }
         assert!(values.len() == 1, "array_agg can only take 1 param!");
         let arr = &values[0];
-        (0..arr.len()).try_for_each(|index| {
-            let scalar = ScalarValue::try_from_array(arr, index)?;
-            self.values.push(scalar);
-            Ok(())
-        })
+        self.values.push(ScalarValue::ListArr(arr.to_owned()));
+        Ok(())
     }
 
+    // Append value like ListArray(Int64Array(1,2,3), Int64Array(4,5,6))
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         if states.is_empty() {
             return Ok(());
         }
         assert!(states.len() == 1, "array_agg states must be singleton!");
         let arr = &states[0];
+
         (0..arr.len()).try_for_each(|index| {
-            let scalar = ScalarValue::try_from_array(arr, index)?;
-            if let ScalarValue::List(Some(values), _) = scalar {
-                self.values.extend(values);
-                Ok(())
-            } else {
-                internal_err!("array_agg state must be list!")
+            if let Some(arr) = arr.as_list_opt::<i32>() {
+                let a = arr.value(index);
+                self.values.push(ScalarValue::ListArr(a))
             }
+            Ok(())
         })
     }
 
@@ -152,10 +153,15 @@ impl Accumulator for ArrayAggAccumulator {
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
-        Ok(ScalarValue::new_list(
-            Some(self.values.clone()),
-            self.datatype.clone(),
-        ))
+        // Transform Vec<ListArr> to ListArr
+        if self.values.is_empty() {
+            let arr =
+                ScalarValue::list_to_array(&Some(self.values.clone()), &self.datatype);
+            return Ok(ScalarValue::ListArr(arr));
+        }
+
+        let e_arr = ScalarValue::iter_to_array_v4(self.values.clone())?;
+        Ok(ScalarValue::ListArr(e_arr))
     }
 
     fn size(&self) -> usize {

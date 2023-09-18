@@ -353,7 +353,10 @@ where
         if len.is_some() {
             result.map(ColumnarValue::Array)
         } else {
-            ScalarValue::try_from_array(&result?, 0).map(ColumnarValue::Scalar)
+            let arr = result?;
+            // println!("(fucntini) arr: {:?}", arr);
+            let res = ColumnarValue::Scalar(ScalarValue::ListArr(arr));
+            Ok(res)
         }
     })
 }

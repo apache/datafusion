@@ -151,9 +151,10 @@ impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
             .iter()
             .map(|x| ScalarValue::new_primitive::<T>(Some(*x), &self.data_type))
             .collect();
-        let state = ScalarValue::new_list(Some(all_values), self.data_type.clone());
 
-        Ok(vec![state])
+        let values = &Some(all_values);
+        let arr = ScalarValue::list_to_array(values, &self.data_type);
+        Ok(vec![ScalarValue::ListArr(arr)])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {

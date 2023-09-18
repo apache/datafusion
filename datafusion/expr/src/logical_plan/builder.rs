@@ -42,6 +42,7 @@ use crate::{
     },
     Expr, ExprSchemable, TableSource,
 };
+use arrow::array::new_null_array;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::plan_err;
 use datafusion_common::UnnestOptions;
@@ -189,10 +190,16 @@ impl LogicalPlanBuilder {
             })
             .collect::<Vec<_>>();
         for (i, j) in nulls {
+            // println!("null at {}, {} type {:?}", i, j, fields[j].data_type());
+
+            // let null = new_null_array(&DataType::Null, 1);
+            // values[i][j] = lit(ScalarValue::ListArr(null));
+
             values[i][j] = Expr::Literal(ScalarValue::try_from(fields[j].data_type())?);
         }
         let schema =
             DFSchemaRef::new(DFSchema::new_with_metadata(fields, HashMap::new())?);
+        // println!("after values: {:?}", values);
         Ok(Self::from(LogicalPlan::Values(Values { schema, values })))
     }
 
