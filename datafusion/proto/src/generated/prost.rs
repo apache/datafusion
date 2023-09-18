@@ -172,7 +172,9 @@ pub struct ListingTableScanNode {
     #[prost(message, repeated, tag = "13")]
     pub file_sort_order: ::prost::alloc::vec::Vec<LogicalExprNodeCollection>,
     #[prost(oneof = "listing_table_scan_node::FileFormatType", tags = "10, 11, 12")]
-    pub file_format_type: ::core::option::Option<listing_table_scan_node::FileFormatType>,
+    pub file_format_type: ::core::option::Option<
+        listing_table_scan_node::FileFormatType,
+    >,
 }
 /// Nested message and enum types in `ListingTableScanNode`.
 pub mod listing_table_scan_node {
@@ -1427,8 +1429,9 @@ pub struct FullTableReference {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct OwnedTableReference {
     #[prost(oneof = "owned_table_reference::TableReferenceEnum", tags = "1, 2, 3")]
-    pub table_reference_enum:
-        ::core::option::Option<owned_table_reference::TableReferenceEnum>,
+    pub table_reference_enum: ::core::option::Option<
+        owned_table_reference::TableReferenceEnum,
+    >,
 }
 /// Nested message and enum types in `OwnedTableReference`.
 pub mod owned_table_reference {
@@ -1449,7 +1452,7 @@ pub mod owned_table_reference {
 pub struct PhysicalPlanNode {
     #[prost(
         oneof = "physical_plan_node::PhysicalPlanType",
-        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22"
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23"
     )]
     pub physical_plan_type: ::core::option::Option<physical_plan_node::PhysicalPlanType>,
 }
@@ -1503,7 +1506,7 @@ pub mod physical_plan_node {
         #[prost(message, tag = "22")]
         NestedLoopJoin(::prost::alloc::boxed::Box<super::NestedLoopJoinExecNode>),
         #[prost(message, tag = "23")]
-        Analyze(super::AnalyzeExecNode),
+        Analyze(::prost::alloc::boxed::Box<super::AnalyzeExecNode>),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -1593,12 +1596,10 @@ pub struct PhysicalAggregateExprNode {
     pub ordering_req: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
     #[prost(bool, tag = "3")]
     pub distinct: bool,
-    #[prost(
-        oneof = "physical_aggregate_expr_node::AggregateFunction",
-        tags = "1, 4"
-    )]
-    pub aggregate_function:
-        ::core::option::Option<physical_aggregate_expr_node::AggregateFunction>,
+    #[prost(oneof = "physical_aggregate_expr_node::AggregateFunction", tags = "1, 4")]
+    pub aggregate_function: ::core::option::Option<
+        physical_aggregate_expr_node::AggregateFunction,
+    >,
 }
 /// Nested message and enum types in `PhysicalAggregateExprNode`.
 pub mod physical_aggregate_expr_node {
@@ -1617,8 +1618,9 @@ pub struct PhysicalWindowExprNode {
     #[prost(message, optional, boxed, tag = "4")]
     pub expr: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
     #[prost(oneof = "physical_window_expr_node::WindowFunction", tags = "1, 2")]
-    pub window_function:
-        ::core::option::Option<physical_window_expr_node::WindowFunction>,
+    pub window_function: ::core::option::Option<
+        physical_window_expr_node::WindowFunction,
+    >,
 }
 /// Nested message and enum types in `PhysicalWindowExprNode`.
 pub mod physical_window_expr_node {
@@ -2185,10 +2187,7 @@ pub struct ListRangeExpr {
 pub struct PhysicalGetIndexedFieldExprNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub arg: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
-    #[prost(
-        oneof = "physical_get_indexed_field_expr_node::Field",
-        tags = "2, 3, 4"
-    )]
+    #[prost(oneof = "physical_get_indexed_field_expr_node::Field", tags = "2, 3, 4")]
     pub field: ::core::option::Option<physical_get_indexed_field_expr_node::Field>,
 }
 /// Nested message and enum types in `PhysicalGetIndexedFieldExprNode`.
@@ -2204,9 +2203,7 @@ pub mod physical_get_indexed_field_expr_node {
         ListRangeExpr(::prost::alloc::boxed::Box<super::ListRangeExpr>),
     }
 }
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum JoinType {
     Inner = 0,
@@ -2250,9 +2247,7 @@ impl JoinType {
         }
     }
 }
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum JoinConstraint {
     On = 0,
@@ -2278,9 +2273,7 @@ impl JoinConstraint {
         }
     }
 }
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum ScalarFunction {
     Abs = 0,
@@ -2651,9 +2644,7 @@ impl ScalarFunction {
         }
     }
 }
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum AggregateFunction {
     Min = 0,
@@ -2784,9 +2775,7 @@ impl AggregateFunction {
         }
     }
 }
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum BuiltInWindowFunction {
     RowNumber = 0,
@@ -2839,9 +2828,7 @@ impl BuiltInWindowFunction {
         }
     }
 }
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum WindowFrameUnits {
     Rows = 0,
@@ -2870,9 +2857,7 @@ impl WindowFrameUnits {
         }
     }
 }
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum WindowFrameBoundType {
     CurrentRow = 0,
@@ -2901,9 +2886,7 @@ impl WindowFrameBoundType {
         }
     }
 }
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum DateUnit {
     Day = 0,
@@ -2929,9 +2912,7 @@ impl DateUnit {
         }
     }
 }
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum TimeUnit {
     Second = 0,
@@ -2963,9 +2944,7 @@ impl TimeUnit {
         }
     }
 }
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum IntervalUnit {
     YearMonth = 0,
@@ -2994,9 +2973,7 @@ impl IntervalUnit {
         }
     }
 }
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum UnionMode {
     Sparse = 0,
@@ -3022,9 +2999,7 @@ impl UnionMode {
         }
     }
 }
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum PartitionMode {
     CollectLeft = 0,
@@ -3053,9 +3028,7 @@ impl PartitionMode {
         }
     }
 }
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum AggregateMode {
     Partial = 0,
@@ -3090,9 +3063,7 @@ impl AggregateMode {
         }
     }
 }
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum JoinSide {
     LeftSide = 0,
