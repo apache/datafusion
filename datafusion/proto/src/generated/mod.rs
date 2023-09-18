@@ -22,5 +22,6 @@ pub mod datafusion {
     include!("prost.rs");
 
     #[cfg(feature = "json")]
+    #[allow(deprecated)]
     include!("pbjson.rs");
 }

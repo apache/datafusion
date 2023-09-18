@@ -560,7 +560,7 @@ mod tests {
             if self.error_opening_idx.contains(&idx) {
                 Ok(futures::future::ready(internal_err!("error opening")).boxed())
             } else if self.error_scanning_idx.contains(&idx) {
-                let error = futures::future::ready(Err(ArrowError::IoError(
+                let error = futures::future::ready(Err(ArrowError::IpcError(
                     "error scanning".to_owned(),
                 )));
                 let stream = futures::stream::once(error).boxed();

@@ -348,8 +348,8 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     runtime,
                     extension_codec,
                 )?;
-                let mode = protobuf::AggregateMode::from_i32(hash_agg.mode).ok_or_else(
-                    || {
+                let mode = protobuf::AggregateMode::try_from(hash_agg.mode).map_err(
+                    |_| {
                         proto_error(format!(
                             "Received a AggregateNode message with unknown AggregateMode {}",
                             hash_agg.mode
@@ -454,9 +454,9 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                 agg_node.aggregate_function.as_ref().map(|func| {
                                     match func {
                                         AggregateFunction::AggrFunction(i) => {
-                                            let aggr_function = protobuf::AggregateFunction::from_i32(*i)
-                                                .ok_or_else(
-                                                    || {
+                                            let aggr_function = protobuf::AggregateFunction::try_from(*i)
+                                                .map_err(
+                                                    |_| {
                                                         proto_error(format!(
                                                             "Received an unknown aggregate function: {i}"
                                                         ))
@@ -520,8 +520,8 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         Ok((left, right))
                     })
                     .collect::<Result<_>>()?;
-                let join_type = protobuf::JoinType::from_i32(hashjoin.join_type)
-                    .ok_or_else(|| {
+                let join_type = protobuf::JoinType::try_from(hashjoin.join_type)
+                    .map_err(|_| {
                         proto_error(format!(
                             "Received a HashJoinNode message with unknown JoinType {}",
                             hashjoin.join_type
@@ -546,8 +546,8 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         let column_indices = f.column_indices
                             .iter()
                             .map(|i| {
-                                let side = protobuf::JoinSide::from_i32(i.side)
-                                    .ok_or_else(|| proto_error(format!(
+                                let side = protobuf::JoinSide::try_from(i.side)
+                                    .map_err(|_| proto_error(format!(
                                         "Received a HashJoinNode message with JoinSide in Filter {}",
                                         i.side))
                                     )?;
@@ -564,8 +564,8 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     .map_or(Ok(None), |v: Result<JoinFilter>| v.map(Some))?;
 
                 let partition_mode =
-                    protobuf::PartitionMode::from_i32(hashjoin.partition_mode)
-                        .ok_or_else(|| {
+                    protobuf::PartitionMode::try_from(hashjoin.partition_mode)
+                        .map_err(|_| {
                             proto_error(format!(
                         "Received a HashJoinNode message with unknown PartitionMode {}",
                         hashjoin.partition_mode
@@ -729,7 +729,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 let right: Arc<dyn ExecutionPlan> =
                     into_physical_plan(&join.right, registry, runtime, extension_codec)?;
                 let join_type =
-                    protobuf::JoinType::from_i32(join.join_type).ok_or_else(|| {
+                    protobuf::JoinType::try_from(join.join_type).map_err(|_| {
                         proto_error(format!(
                             "Received a NestedLoopJoinExecNode message with unknown JoinType {}",
                             join.join_type
@@ -754,8 +754,8 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         let column_indices = f.column_indices
                             .iter()
                             .map(|i| {
-                                let side = protobuf::JoinSide::from_i32(i.side)
-                                    .ok_or_else(|| proto_error(format!(
+                                let side = protobuf::JoinSide::try_from(i.side)
+                                    .map_err(|_| proto_error(format!(
                                         "Received a NestedLoopJoinExecNode message with JoinSide in Filter {}",
                                         i.side))
                                     )?;
