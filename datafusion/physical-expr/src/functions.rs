@@ -799,10 +799,10 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::StringToArray => {
             Arc::new(|args| match args[0].data_type() {
                 DataType::Utf8 => {
-                    make_scalar_function(string_expressions::string_to_array::<i32>)(args)
+                    make_scalar_function(array_expressions::string_to_array::<i32>)(args)
                 }
                 DataType::LargeUtf8 => {
-                    make_scalar_function(string_expressions::string_to_array::<i64>)(args)
+                    make_scalar_function(array_expressions::string_to_array::<i64>)(args)
                 }
                 other => {
                     internal_err!(
