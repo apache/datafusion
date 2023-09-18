@@ -181,8 +181,8 @@ impl LogicalPlan {
             LogicalPlan::Analyze(analyze) => &analyze.schema,
             LogicalPlan::Extension(extension) => extension.node.schema(),
             LogicalPlan::Union(Union { schema, .. }) => schema,
-            LogicalPlan::DescribeTable(DescribeTable { dummy_schema, .. }) => {
-                dummy_schema
+            LogicalPlan::DescribeTable(DescribeTable { output_schema, .. }) => {
+                output_schema
             }
             LogicalPlan::Dml(DmlStatement { table_schema, .. }) => table_schema,
             LogicalPlan::Copy(CopyTo { input, .. }) => input.schema(),
@@ -261,6 +261,15 @@ impl LogicalPlan {
             Field::new("plan_type", DataType::Utf8, false),
             Field::new("plan", DataType::Utf8, false),
         ]))
+    }
+
+    /// Returns the (fixed) output schema for `DESCRIBE` plans
+    pub fn describe_schema() -> Schema {
+        Schema::new(vec![
+            Field::new("column_name", DataType::Utf8, false),
+            Field::new("data_type", DataType::Utf8, false),
+            Field::new("is_nullable", DataType::Utf8, false),
+        ])
     }
 
     /// returns all expressions (non-recursively) in the current
@@ -1947,12 +1956,33 @@ pub struct Prepare {
 }
 
 /// Describe the schema of table
+///
+/// # Example output:
+///
+/// ```sql
+/// ❯ describe traces;
+/// +--------------------+-----------------------------+-------------+
+/// | column_name        | data_type                   | is_nullable |
+/// +--------------------+-----------------------------+-------------+
+/// | attributes         | Utf8                        | YES         |
+/// | duration_nano      | Int64                       | YES         |
+/// | end_time_unix_nano | Int64                       | YES         |
+/// | service.name       | Dictionary(Int32, Utf8)     | YES         |
+/// | span.kind          | Utf8                        | YES         |
+/// | span.name          | Utf8                        | YES         |
+/// | span_id            | Dictionary(Int32, Utf8)     | YES         |
+/// | time               | Timestamp(Nanosecond, None) | NO          |
+/// | trace_id           | Dictionary(Int32, Utf8)     | YES         |
+/// | otel.status_code   | Utf8                        | YES         |
+/// | parent_span_id     | Utf8                        | YES         |
+/// +--------------------+-----------------------------+-------------+
+/// ```
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct DescribeTable {
     /// Table schema
     pub schema: Arc<Schema>,
-    /// Dummy schema
-    pub dummy_schema: DFSchemaRef,
+    /// schema of describe table output
+    pub output_schema: DFSchemaRef,
 }
 
 /// Produces a relation with string representations of

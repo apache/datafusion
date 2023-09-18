@@ -32,6 +32,7 @@ pub mod pipeline_checker;
 pub mod pruning;
 pub mod replace_with_order_preserving_variants;
 mod sort_pushdown;
+pub mod topk_aggregation;
 mod utils;
 
 #[cfg(test)]

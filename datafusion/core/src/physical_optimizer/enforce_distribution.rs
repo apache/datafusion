@@ -28,8 +28,9 @@ use std::sync::Arc;
 use crate::config::ConfigOptions;
 use crate::datasource::physical_plan::{CsvExec, ParquetExec};
 use crate::error::{DataFusionError, Result};
-use crate::physical_optimizer::enforce_sorting::{unbounded_output, ExecTree};
-use crate::physical_optimizer::utils::{add_sort_above, get_plan_string};
+use crate::physical_optimizer::utils::{
+    add_sort_above, get_plan_string, unbounded_output, ExecTree,
+};
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -53,8 +54,7 @@ use datafusion_physical_expr::utils::{
     map_columns_before_projection, ordering_satisfy_requirement_concrete,
 };
 use datafusion_physical_expr::{
-    expr_list_eq_strict_order, normalize_expr_with_equivalence_properties, PhysicalExpr,
-    PhysicalSortRequirement,
+    expr_list_eq_strict_order, PhysicalExpr, PhysicalSortRequirement,
 };
 
 use datafusion_common::internal_err;
@@ -378,7 +378,7 @@ fn adjust_input_keys_ordering(
         )?)
     } else if let Some(aggregate_exec) = plan_any.downcast_ref::<AggregateExec>() {
         if !parent_required.is_empty() {
-            match aggregate_exec.mode {
+            match aggregate_exec.mode() {
                 AggregateMode::FinalPartitioned => Some(reorder_aggregate_keys(
                     requirements.plan.clone(),
                     &parent_required,
@@ -390,9 +390,8 @@ fn adjust_input_keys_ordering(
             // Keep everything unchanged
             None
         }
-    } else if let Some(ProjectionExec { expr, .. }) =
-        plan_any.downcast_ref::<ProjectionExec>()
-    {
+    } else if let Some(proj) = plan_any.downcast_ref::<ProjectionExec>() {
+        let expr = proj.expr();
         // For Projection, we need to transform the requirements to the columns before the Projection
         // And then to push down the requirements
         // Construct a mapping from new name to the the orginal Column
@@ -487,7 +486,7 @@ fn reorder_aggregate_keys(
     agg_exec: &AggregateExec,
 ) -> Result<PlanWithKeyRequirements> {
     let out_put_columns = agg_exec
-        .group_by
+        .group_by()
         .expr()
         .iter()
         .enumerate()
@@ -500,7 +499,7 @@ fn reorder_aggregate_keys(
         .collect::<Vec<_>>();
 
     if parent_required.len() != out_put_exprs.len()
-        || !agg_exec.group_by.null_expr().is_empty()
+        || !agg_exec.group_by().null_expr().is_empty()
         || expr_list_eq_strict_order(&out_put_exprs, parent_required)
     {
         Ok(PlanWithKeyRequirements::new(agg_plan))
@@ -509,7 +508,9 @@ fn reorder_aggregate_keys(
         match new_positions {
             None => Ok(PlanWithKeyRequirements::new(agg_plan)),
             Some(positions) => {
-                let new_partial_agg = if let Some(AggregateExec {
+                let new_partial_agg = if let Some(agg_exec) =
+                    agg_exec.input().as_any().downcast_ref::<AggregateExec>()
+                /*AggregateExec {
                     mode,
                     group_by,
                     aggr_expr,
@@ -519,12 +520,13 @@ fn reorder_aggregate_keys(
                     input_schema,
                     ..
                 }) =
-                    agg_exec.input.as_any().downcast_ref::<AggregateExec>()
+                */
                 {
-                    if matches!(mode, AggregateMode::Partial) {
+                    if matches!(agg_exec.mode(), &AggregateMode::Partial) {
                         let mut new_group_exprs = vec![];
                         for idx in positions.iter() {
-                            new_group_exprs.push(group_by.expr()[*idx].clone());
+                            new_group_exprs
+                                .push(agg_exec.group_by().expr()[*idx].clone());
                         }
                         let new_partial_group_by =
                             PhysicalGroupBy::new_single(new_group_exprs);
@@ -532,11 +534,11 @@ fn reorder_aggregate_keys(
                         Some(Arc::new(AggregateExec::try_new(
                             AggregateMode::Partial,
                             new_partial_group_by,
-                            aggr_expr.clone(),
-                            filter_expr.clone(),
-                            order_by_expr.clone(),
-                            input.clone(),
-                            input_schema.clone(),
+                            agg_exec.aggr_expr().to_vec(),
+                            agg_exec.filter_expr().to_vec(),
+                            agg_exec.order_by_expr().to_vec(),
+                            agg_exec.input().clone(),
+                            agg_exec.input_schema.clone(),
                         )?))
                     } else {
                         None
@@ -564,11 +566,11 @@ fn reorder_aggregate_keys(
                     let new_final_agg = Arc::new(AggregateExec::try_new(
                         AggregateMode::FinalPartitioned,
                         new_group_by,
-                        agg_exec.aggr_expr.to_vec(),
-                        agg_exec.filter_expr.to_vec(),
-                        agg_exec.order_by_expr.to_vec(),
+                        agg_exec.aggr_expr().to_vec(),
+                        agg_exec.filter_expr().to_vec(),
+                        agg_exec.order_by_expr().to_vec(),
                         partial_agg,
-                        agg_exec.input_schema.clone(),
+                        agg_exec.input_schema().clone(),
                     )?);
 
                     // Need to create a new projection to change the expr ordering back
@@ -804,36 +806,21 @@ fn try_reorder(
     } else if !equivalence_properties.classes().is_empty() {
         normalized_expected = expected
             .iter()
-            .map(|e| {
-                normalize_expr_with_equivalence_properties(
-                    e.clone(),
-                    equivalence_properties.classes(),
-                )
-            })
+            .map(|e| equivalence_properties.normalize_expr(e.clone()))
             .collect::<Vec<_>>();
         assert_eq!(normalized_expected.len(), expected.len());
 
         normalized_left_keys = join_keys
             .left_keys
             .iter()
-            .map(|e| {
-                normalize_expr_with_equivalence_properties(
-                    e.clone(),
-                    equivalence_properties.classes(),
-                )
-            })
+            .map(|e| equivalence_properties.normalize_expr(e.clone()))
             .collect::<Vec<_>>();
         assert_eq!(join_keys.left_keys.len(), normalized_left_keys.len());
 
         normalized_right_keys = join_keys
             .right_keys
             .iter()
-            .map(|e| {
-                normalize_expr_with_equivalence_properties(
-                    e.clone(),
-                    equivalence_properties.classes(),
-                )
-            })
+            .map(|e| equivalence_properties.normalize_expr(e.clone()))
             .collect::<Vec<_>>();
         assert_eq!(join_keys.right_keys.len(), normalized_right_keys.len());
 
@@ -1446,7 +1433,7 @@ fn ensure_distribution(
 /// we can optimize distribution of the plan if/when necessary.
 #[derive(Debug, Clone)]
 struct DistributionContext {
-    pub(crate) plan: Arc<dyn ExecutionPlan>,
+    plan: Arc<dyn ExecutionPlan>,
     /// Keep track of associations for each child of the plan. If `None`,
     /// there is no distribution changing operator in its descendants.
     distribution_onwards: Vec<Option<ExecTree>>,
@@ -1602,7 +1589,7 @@ struct JoinKeyPairs {
 
 #[derive(Debug, Clone)]
 struct PlanWithKeyRequirements {
-    pub plan: Arc<dyn ExecutionPlan>,
+    plan: Arc<dyn ExecutionPlan>,
     /// Parent required key ordering
     required_key_ordering: Vec<Arc<dyn PhysicalExpr>>,
     /// The request key ordering to children
@@ -1610,7 +1597,7 @@ struct PlanWithKeyRequirements {
 }
 
 impl PlanWithKeyRequirements {
-    pub fn new(plan: Arc<dyn ExecutionPlan>) -> Self {
+    fn new(plan: Arc<dyn ExecutionPlan>) -> Self {
         let children_len = plan.children().len();
         PlanWithKeyRequirements {
             plan,
@@ -1619,7 +1606,7 @@ impl PlanWithKeyRequirements {
         }
     }
 
-    pub fn children(&self) -> Vec<PlanWithKeyRequirements> {
+    fn children(&self) -> Vec<PlanWithKeyRequirements> {
         let plan_children = self.plan.children();
         assert_eq!(plan_children.len(), self.request_key_ordering.len());
         plan_children

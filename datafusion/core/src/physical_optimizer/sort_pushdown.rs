@@ -140,7 +140,7 @@ pub(crate) fn pushdown_sorts(
             let parent_required_expr = PhysicalSortRequirement::to_sort_exprs(
                 parent_required.ok_or_else(err)?.iter().cloned(),
             );
-            new_plan = sort_exec.input.clone();
+            new_plan = sort_exec.input().clone();
             add_sort_above(&mut new_plan, parent_required_expr, sort_exec.fetch())?;
         };
         let required_ordering = new_plan
@@ -221,12 +221,12 @@ fn pushdown_requirement_to_children(
         ]))
     } else if let Some(smj) = plan.as_any().downcast_ref::<SortMergeJoinExec>() {
         // If the current plan is SortMergeJoinExec
-        let left_columns_len = smj.left.schema().fields().len();
+        let left_columns_len = smj.left().schema().fields().len();
         let parent_required_expr = PhysicalSortRequirement::to_sort_exprs(
             parent_required.ok_or_else(err)?.iter().cloned(),
         );
         let expr_source_side =
-            expr_source_sides(&parent_required_expr, smj.join_type, left_columns_len);
+            expr_source_sides(&parent_required_expr, smj.join_type(), left_columns_len);
         match expr_source_side {
             Some(JoinSide::Left) => try_pushdown_requirements_to_join(
                 smj,
@@ -236,7 +236,7 @@ fn pushdown_requirement_to_children(
             ),
             Some(JoinSide::Right) => {
                 let right_offset =
-                    smj.schema().fields.len() - smj.right.schema().fields.len();
+                    smj.schema().fields.len() - smj.right().schema().fields.len();
                 let new_right_required =
                     shift_right_required(parent_required.ok_or_else(err)?, right_offset)?;
                 let new_right_required_expr = PhysicalSortRequirement::to_sort_exprs(
@@ -331,8 +331,8 @@ fn try_pushdown_requirements_to_join(
     sort_expr: Vec<PhysicalSortExpr>,
     push_side: JoinSide,
 ) -> Result<Option<Vec<Option<Vec<PhysicalSortRequirement>>>>> {
-    let left_ordering = smj.left.output_ordering().unwrap_or(&[]);
-    let right_ordering = smj.right.output_ordering().unwrap_or(&[]);
+    let left_ordering = smj.left().output_ordering().unwrap_or(&[]);
+    let right_ordering = smj.right().output_ordering().unwrap_or(&[]);
     let (new_left_ordering, new_right_ordering) = match push_side {
         JoinSide::Left => (sort_expr.as_slice(), right_ordering),
         JoinSide::Right => (left_ordering, sort_expr.as_slice()),
@@ -340,11 +340,11 @@ fn try_pushdown_requirements_to_join(
     let new_output_ordering = calculate_join_output_ordering(
         new_left_ordering,
         new_right_ordering,
-        smj.join_type,
-        &smj.on,
-        smj.left.schema().fields.len(),
+        smj.join_type(),
+        smj.on(),
+        smj.left().schema().fields.len(),
         &smj.maintains_input_order(),
-        Some(SortMergeJoinExec::probe_side(&smj.join_type)),
+        Some(SortMergeJoinExec::probe_side(&smj.join_type())),
     )?;
     Ok(ordering_satisfy_requirement(
         new_output_ordering.as_deref(),

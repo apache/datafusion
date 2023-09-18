@@ -17,8 +17,11 @@
 
 //! Collection of utility functions that are leveraged by the query optimizer rules
 
+use itertools::concat;
 use std::borrow::Borrow;
 use std::collections::HashSet;
+use std::fmt;
+use std::fmt::Formatter;
 use std::sync::Arc;
 
 use crate::error::Result;
@@ -34,6 +37,69 @@ use crate::physical_plan::{displayable, ExecutionPlan};
 use datafusion_common::DataFusionError;
 use datafusion_physical_expr::utils::ordering_satisfy;
 use datafusion_physical_expr::PhysicalSortExpr;
+
+/// This object implements a tree that we use while keeping track of paths
+/// leading to [`SortExec`]s.
+#[derive(Debug, Clone)]
+pub(crate) struct ExecTree {
+    /// The `ExecutionPlan` associated with this node
+    pub plan: Arc<dyn ExecutionPlan>,
+    /// Child index of the plan in its parent
+    pub idx: usize,
+    /// Children of the plan that would need updating if we remove leaf executors
+    pub children: Vec<ExecTree>,
+}
+
+impl fmt::Display for ExecTree {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let plan_string = get_plan_string(&self.plan);
+        write!(f, "\nidx: {:?}", self.idx)?;
+        write!(f, "\nplan: {:?}", plan_string)?;
+        for child in self.children.iter() {
+            write!(f, "\nexec_tree:{}", child)?;
+        }
+        writeln!(f)
+    }
+}
+
+impl ExecTree {
+    /// Create new Exec tree
+    pub fn new(
+        plan: Arc<dyn ExecutionPlan>,
+        idx: usize,
+        children: Vec<ExecTree>,
+    ) -> Self {
+        ExecTree {
+            plan,
+            idx,
+            children,
+        }
+    }
+
+    /// This function returns the executors at the leaves of the tree.
+    pub fn get_leaves(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+        if self.children.is_empty() {
+            vec![self.plan.clone()]
+        } else {
+            concat(self.children.iter().map(|e| e.get_leaves()))
+        }
+    }
+}
+
+// Get output (un)boundedness information for the given `plan`.
+pub(crate) fn unbounded_output(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    let result = if plan.children().is_empty() {
+        plan.unbounded_output(&[])
+    } else {
+        let children_unbounded_output = plan
+            .children()
+            .iter()
+            .map(unbounded_output)
+            .collect::<Vec<_>>();
+        plan.unbounded_output(&children_unbounded_output)
+    };
+    result.unwrap_or(true)
+}
 
 /// This utility function adds a `SortExec` above an operator according to the
 /// given ordering requirements while preserving the original partitioning.

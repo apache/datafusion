@@ -17,6 +17,7 @@
 
 pub mod context;
 pub mod expr_simplifier;
+mod guarantees;
 mod or_in_list_simplifier;
 mod regex;
 pub mod simplify_exprs;

@@ -249,6 +249,7 @@ physical_plan after CombinePartialFinalAggregate SAME TEXT AS ABOVE
 physical_plan after EnforceSorting SAME TEXT AS ABOVE
 physical_plan after coalesce_batches SAME TEXT AS ABOVE
 physical_plan after PipelineChecker SAME TEXT AS ABOVE
+physical_plan after LimitAggregation SAME TEXT AS ABOVE
 physical_plan CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a, b, c], has_header=true
 
 
