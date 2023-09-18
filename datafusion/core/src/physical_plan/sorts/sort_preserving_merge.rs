@@ -20,25 +20,21 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use arrow::datatypes::SchemaRef;
+use log::{debug, trace};
+
 use crate::physical_plan::common::spawn_buffered;
-use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
 };
 use crate::physical_plan::sorts::streaming_merge;
 use crate::physical_plan::{
-    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
-    SendableRecordBatchStream, Statistics,
+    expressions::PhysicalSortExpr, DisplayFormatType, Distribution, ExecutionPlan,
+    Partitioning, SendableRecordBatchStream, Statistics,
 };
-
-use arrow::datatypes::SchemaRef;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{
-    EquivalenceProperties, OrderingEquivalenceProperties, PhysicalSortRequirement,
-};
-
-use log::{debug, trace};
+use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortRequirement};
 
 /// Sort preserving merge execution plan
 ///
@@ -75,8 +71,6 @@ pub struct SortPreservingMergeExec {
     expr: Vec<PhysicalSortExpr>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    /// Optional number of rows to fetch. Stops producing rows after this fetch
-    fetch: Option<usize>,
 }
 
 impl SortPreservingMergeExec {
@@ -86,13 +80,7 @@ impl SortPreservingMergeExec {
             input,
             expr,
             metrics: ExecutionPlanMetricsSet::new(),
-            fetch: None,
         }
-    }
-    /// Sets the number of rows to fetch
-    pub fn with_fetch(mut self, fetch: Option<usize>) -> Self {
-        self.fetch = fetch;
-        self
     }
 
     /// Input schema
@@ -103,31 +91,6 @@ impl SortPreservingMergeExec {
     /// Sort expressions
     pub fn expr(&self) -> &[PhysicalSortExpr] {
         &self.expr
-    }
-
-    /// Fetch
-    pub fn fetch(&self) -> Option<usize> {
-        self.fetch
-    }
-}
-
-impl DisplayAs for SortPreservingMergeExec {
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                let expr: Vec<String> = self.expr.iter().map(|e| e.to_string()).collect();
-                write!(f, "SortPreservingMergeExec: [{}]", expr.join(","))?;
-                if let Some(fetch) = self.fetch {
-                    write!(f, ", fetch={fetch}")?;
-                };
-
-                Ok(())
-            }
-        }
     }
 }
 
@@ -144,13 +107,6 @@ impl ExecutionPlan for SortPreservingMergeExec {
     /// Get the output partitioning of this plan
     fn output_partitioning(&self) -> Partitioning {
         Partitioning::UnknownPartitioning(1)
-    }
-
-    /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but its input(s) are
-    /// infinite, returns an error to indicate this.
-    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
-        Ok(children[0])
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -173,10 +129,6 @@ impl ExecutionPlan for SortPreservingMergeExec {
         self.input.equivalence_properties()
     }
 
-    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        self.input.ordering_equivalence_properties()
-    }
-
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![self.input.clone()]
     }
@@ -185,10 +137,10 @@ impl ExecutionPlan for SortPreservingMergeExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(
-            SortPreservingMergeExec::new(self.expr.clone(), children[0].clone())
-                .with_fetch(self.fetch),
-        ))
+        Ok(Arc::new(SortPreservingMergeExec::new(
+            self.expr.clone(),
+            children[0].clone(),
+        )))
     }
 
     fn execute(
@@ -240,12 +192,24 @@ impl ExecutionPlan for SortPreservingMergeExec {
                     &self.expr,
                     BaselineMetrics::new(&self.metrics, partition),
                     context.session_config().batch_size(),
-                    self.fetch,
                 )?;
 
                 debug!("Got stream result from SortPreservingMergeStream::new_from_receivers");
 
                 Ok(result)
+            }
+        }
+    }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                let expr: Vec<String> = self.expr.iter().map(|e| e.to_string()).collect();
+                write!(f, "SortPreservingMergeExec: [{}]", expr.join(","))
             }
         }
     }
@@ -850,7 +814,6 @@ mod tests {
             sort.as_slice(),
             BaselineMetrics::new(&metrics, 0),
             task_ctx.session_config().batch_size(),
-            None,
         )
         .unwrap();
 

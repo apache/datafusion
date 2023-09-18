@@ -34,7 +34,6 @@ use futures::Stream;
 use itertools::Itertools;
 use log::{debug, trace, warn};
 
-use super::DisplayAs;
 use super::{
     expressions::PhysicalSortExpr,
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
@@ -145,20 +144,6 @@ impl UnionExec {
     }
 }
 
-impl DisplayAs for UnionExec {
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "UnionExec")
-            }
-        }
-    }
-}
-
 impl ExecutionPlan for UnionExec {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -262,6 +247,18 @@ impl ExecutionPlan for UnionExec {
         )))
     }
 
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                write!(f, "UnionExec")
+            }
+        }
+    }
+
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }
@@ -345,20 +342,6 @@ impl InterleaveExec {
     }
 }
 
-impl DisplayAs for InterleaveExec {
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "InterleaveExec")
-            }
-        }
-    }
-}
-
 impl ExecutionPlan for InterleaveExec {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -436,6 +419,18 @@ impl ExecutionPlan for InterleaveExec {
         Err(DataFusionError::Execution(format!(
             "Partition {partition} not found in InterleaveExec"
         )))
+    }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                write!(f, "InterleaveExec")
+            }
+        }
     }
 
     fn metrics(&self) -> Option<MetricsSet> {

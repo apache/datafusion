@@ -19,8 +19,7 @@
 
 use super::expressions::PhysicalSortExpr;
 use super::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
-    Statistics,
+    DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -32,7 +31,7 @@ use datafusion_common::Result;
 use datafusion_physical_expr::PhysicalSortRequirement;
 use futures::StreamExt;
 use std::any::Any;
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::sync::Arc;
 
 use crate::physical_plan::stream::RecordBatchStreamAdapter;
@@ -46,7 +45,7 @@ use datafusion_execution::TaskContext;
 /// The `Display` impl is used to format the sink for explain plan
 /// output.
 #[async_trait]
-pub trait DataSink: DisplayAs + Debug + Send + Sync {
+pub trait DataSink: Display + Debug + Send + Sync {
     // TODO add desired input ordering
     // How does this sink want its input ordered?
 
@@ -68,87 +67,25 @@ pub trait DataSink: DisplayAs + Debug + Send + Sync {
 pub struct InsertExec {
     /// Input plan that produces the record batches to be written.
     input: Arc<dyn ExecutionPlan>,
-    /// Sink to which to write
+    /// Sink to whic to write
     sink: Arc<dyn DataSink>,
-    /// Schema of the sink for validating the input data
-    sink_schema: SchemaRef,
-    /// Schema describing the structure of the output data.
-    count_schema: SchemaRef,
+    /// Schema describing the structure of the data.
+    schema: SchemaRef,
 }
 
 impl fmt::Debug for InsertExec {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "InsertExec schema: {:?}", self.count_schema)
+        write!(f, "InsertExec schema: {:?}", self.schema)
     }
 }
 
 impl InsertExec {
     /// Create a plan to write to `sink`
-    pub fn new(
-        input: Arc<dyn ExecutionPlan>,
-        sink: Arc<dyn DataSink>,
-        sink_schema: SchemaRef,
-    ) -> Self {
+    pub fn new(input: Arc<dyn ExecutionPlan>, sink: Arc<dyn DataSink>) -> Self {
         Self {
             input,
             sink,
-            sink_schema,
-            count_schema: make_count_schema(),
-        }
-    }
-
-    fn make_input_stream(
-        &self,
-        partition: usize,
-        context: Arc<TaskContext>,
-    ) -> Result<SendableRecordBatchStream> {
-        let input_stream = self.input.execute(partition, context)?;
-
-        debug_assert_eq!(
-            self.sink_schema.fields().len(),
-            self.input.schema().fields().len()
-        );
-
-        // Find input columns that may violate the not null constraint.
-        let risky_columns: Vec<_> = self
-            .sink_schema
-            .fields()
-            .iter()
-            .zip(self.input.schema().fields().iter())
-            .enumerate()
-            .filter_map(|(i, (sink_field, input_field))| {
-                if !sink_field.is_nullable() && input_field.is_nullable() {
-                    Some(i)
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        if risky_columns.is_empty() {
-            Ok(input_stream)
-        } else {
-            // Check not null constraint on the input stream
-            Ok(Box::pin(RecordBatchStreamAdapter::new(
-                self.sink_schema.clone(),
-                input_stream
-                    .map(move |batch| check_not_null_contraits(batch?, &risky_columns)),
-            )))
-        }
-    }
-}
-
-impl DisplayAs for InsertExec {
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "InsertExec: sink=")?;
-                self.sink.fmt_as(t, f)
-            }
+            schema: make_count_schema(),
         }
     }
 }
@@ -161,7 +98,7 @@ impl ExecutionPlan for InsertExec {
 
     /// Get the schema for this execution plan
     fn schema(&self) -> SchemaRef {
-        self.count_schema.clone()
+        self.schema.clone()
     }
 
     fn output_partitioning(&self) -> Partitioning {
@@ -204,8 +141,7 @@ impl ExecutionPlan for InsertExec {
         Ok(Arc::new(Self {
             input: children[0].clone(),
             sink: self.sink.clone(),
-            sink_schema: self.sink_schema.clone(),
-            count_schema: self.count_schema.clone(),
+            schema: self.schema.clone(),
         }))
     }
 
@@ -231,9 +167,8 @@ impl ExecutionPlan for InsertExec {
             )));
         }
 
-        let data = self.make_input_stream(0, context.clone())?;
-
-        let count_schema = self.count_schema.clone();
+        let data = self.input.execute(0, context.clone())?;
+        let schema = self.schema.clone();
         let sink = self.sink.clone();
 
         let stream = futures::stream::once(async move {
@@ -241,10 +176,19 @@ impl ExecutionPlan for InsertExec {
         })
         .boxed();
 
-        Ok(Box::pin(RecordBatchStreamAdapter::new(
-            count_schema,
-            stream,
-        )))
+        Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
+    }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                write!(f, "InsertExec: sink={}", self.sink)
+            }
+        }
     }
 
     fn statistics(&self) -> Statistics {
@@ -274,28 +218,4 @@ fn make_count_schema() -> SchemaRef {
         DataType::UInt64,
         false,
     )]))
-}
-
-fn check_not_null_contraits(
-    batch: RecordBatch,
-    column_indices: &Vec<usize>,
-) -> Result<RecordBatch> {
-    for &index in column_indices {
-        if batch.num_columns() <= index {
-            return Err(DataFusionError::Execution(format!(
-                "Invalid batch column count {} expected > {}",
-                batch.num_columns(),
-                index
-            )));
-        }
-
-        if batch.column(index).null_count() > 0 {
-            return Err(DataFusionError::Execution(format!(
-                "Invalid batch column at '{}' has null but schema specifies non-nullable",
-                index
-            )));
-        }
-    }
-
-    Ok(batch)
 }

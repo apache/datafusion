@@ -86,10 +86,24 @@ impl SimplifyExpressions {
             .expressions()
             .into_iter()
             .map(|e| {
-                // TODO: unify with `rewrite_preserving_name`
-                let original_name = e.name_for_alias()?;
+                // We need to keep original expression name, if any.
+                // Constant folding should not change expression name.
+                let name = &e.display_name();
+
+                // Apply the actual simplification logic
                 let new_e = simplifier.simplify(e)?;
-                new_e.alias_if_changed(original_name)
+
+                let new_name = &new_e.display_name();
+
+                if let (Ok(expr_name), Ok(new_expr_name)) = (name, new_name) {
+                    if expr_name != new_expr_name {
+                        Ok(new_e.alias(expr_name))
+                    } else {
+                        Ok(new_e)
+                    }
+                } else {
+                    Ok(new_e)
+                }
             })
             .collect::<Result<Vec<_>>>()?;
 

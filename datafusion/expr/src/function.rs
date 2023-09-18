@@ -17,7 +17,7 @@
 
 //! Function module contains typing and signature for built-in and user defined functions.
 
-use crate::{Accumulator, BuiltinScalarFunction, PartitionEvaluator, Signature};
+use crate::{Accumulator, BuiltinScalarFunction, Signature};
 use crate::{AggregateFunction, BuiltInWindowFunction, ColumnarValue};
 use arrow::datatypes::DataType;
 use datafusion_common::utils::datafusion_strsim;
@@ -42,13 +42,8 @@ pub type ReturnTypeFunction =
 
 /// Factory that returns an accumulator for the given aggregate, given
 /// its return datatype.
-pub type AccumulatorFactoryFunction =
+pub type AccumulatorFunctionImplementation =
     Arc<dyn Fn(&DataType) -> Result<Box<dyn Accumulator>> + Send + Sync>;
-
-/// Factory that creates a PartitionEvaluator for the given window
-/// function
-pub type PartitionEvaluatorFactory =
-    Arc<dyn Fn() -> Result<Box<dyn PartitionEvaluator>> + Send + Sync>;
 
 /// Factory that returns the types used by an aggregator to serialize
 /// its state, given its return datatype.

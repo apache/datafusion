@@ -30,11 +30,11 @@ async fn qualified_table_references() -> Result<()> {
         let sql = format!("SELECT COUNT(*) FROM {table_ref}");
         let actual = execute_to_batches(&ctx, &sql).await;
         let expected = vec![
-            "+----------+",
-            "| COUNT(*) |",
-            "+----------+",
-            "| 100      |",
-            "+----------+",
+            "+-----------------+",
+            "| COUNT(UInt8(1)) |",
+            "+-----------------+",
+            "| 100             |",
+            "+-----------------+",
         ];
         assert_batches_eq!(expected, &actual);
     }

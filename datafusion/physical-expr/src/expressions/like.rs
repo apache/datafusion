@@ -18,14 +18,6 @@
 use std::hash::{Hash, Hasher};
 use std::{any::Any, sync::Arc};
 
-use crate::{physical_expr::down_cast_any_ref, PhysicalExpr};
-
-use arrow::compute::kernels::comparison::{
-    ilike_utf8, like_utf8, nilike_utf8, nlike_utf8,
-};
-use arrow::compute::kernels::comparison::{
-    ilike_utf8_scalar, like_utf8_scalar, nilike_utf8_scalar, nlike_utf8_scalar,
-};
 use arrow::{
     array::{new_null_array, Array, ArrayRef, LargeStringArray, StringArray},
     record_batch::RecordBatch,
@@ -33,6 +25,15 @@ use arrow::{
 use arrow_schema::{DataType, Schema};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
+
+use crate::{physical_expr::down_cast_any_ref, AnalysisContext, PhysicalExpr};
+
+use arrow::compute::kernels::comparison::{
+    ilike_utf8, like_utf8, nilike_utf8, nlike_utf8,
+};
+use arrow::compute::kernels::comparison::{
+    ilike_utf8_scalar, like_utf8_scalar, nilike_utf8_scalar, nlike_utf8_scalar,
+};
 
 // Like expression
 #[derive(Debug, Hash)]
@@ -180,6 +181,11 @@ impl PhysicalExpr for LikeExpr {
             children[0].clone(),
             children[1].clone(),
         )))
+    }
+
+    /// Return the boundaries of this binary expression's result.
+    fn analyze(&self, context: AnalysisContext) -> AnalysisContext {
+        context.with_boundaries(None)
     }
 
     fn dyn_hash(&self, state: &mut dyn Hasher) {

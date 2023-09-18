@@ -18,26 +18,51 @@
 //! Defines the join plan for executing partitions in parallel and then joining the results
 //! into a set of partitions.
 
+use ahash::RandomState;
+use arrow::array::Array;
+use arrow::array::{
+    Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
+    StringArray, TimestampNanosecondArray, UInt16Array, UInt32Array, UInt64Array,
+    UInt8Array,
+};
+use arrow::datatypes::{ArrowNativeType, DataType};
+use arrow::datatypes::{Schema, SchemaRef};
+use arrow::record_batch::RecordBatch;
+use arrow::{
+    array::{
+        ArrayData, ArrayRef, BooleanArray, Date32Array, Date64Array, Decimal128Array,
+        DictionaryArray, FixedSizeBinaryArray, LargeStringArray, PrimitiveArray,
+        Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
+        Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+        TimestampSecondArray, UInt32BufferBuilder, UInt64BufferBuilder,
+    },
+    datatypes::{
+        Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type,
+        UInt8Type,
+    },
+    util::bit_util,
+};
+use futures::{ready, Stream, StreamExt, TryStreamExt};
+use hashbrown::raw::RawTable;
+use smallvec::smallvec;
 use std::fmt;
-use std::mem::size_of;
 use std::sync::Arc;
 use std::task::Poll;
 use std::{any::Any, usize, vec};
 
+use datafusion_common::cast::{as_dictionary_array, as_string_array};
+use datafusion_execution::memory_pool::MemoryReservation;
+
 use crate::physical_plan::joins::utils::{
-    add_offset_to_ordering_equivalence_classes, adjust_indices_by_join_type,
-    apply_join_filter_to_indices, build_batch_from_indices,
-    calculate_hash_join_output_order, get_final_indices_from_bit_map,
-    need_produce_result_in_final, JoinSide,
+    adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
+    get_final_indices_from_bit_map, need_produce_result_in_final, JoinSide,
 };
-use crate::physical_plan::DisplayAs;
 use crate::physical_plan::{
     coalesce_batches::concat_batches,
     coalesce_partitions::CoalescePartitionsExec,
     expressions::Column,
     expressions::PhysicalSortExpr,
     hash_utils::create_hashes,
-    joins::hash_join_utils::JoinHashMap,
     joins::utils::{
         adjust_right_output_partitioning, build_join_schema, check_join_is_valid,
         combine_join_equivalence_properties, estimate_join_statistics,
@@ -48,42 +73,17 @@ use crate::physical_plan::{
     DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan, Partitioning,
     PhysicalExpr, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
+use arrow::array::BooleanBufferBuilder;
+use arrow::datatypes::TimeUnit;
+use datafusion_common::JoinType;
+use datafusion_common::{DataFusionError, Result};
+use datafusion_execution::{memory_pool::MemoryConsumer, TaskContext};
 
 use super::{
     utils::{OnceAsync, OnceFut},
     PartitionMode,
 };
-
-use arrow::buffer::BooleanBuffer;
-use arrow::compute::{and, eq_dyn, is_null, or_kleene, take, FilterBuilder};
-use arrow::record_batch::RecordBatch;
-use arrow::{
-    array::{
-        Array, ArrayRef, BooleanArray, BooleanBufferBuilder, Date32Array, Date64Array,
-        Decimal128Array, DictionaryArray, FixedSizeBinaryArray, Float32Array,
-        Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, LargeStringArray,
-        PrimitiveArray, StringArray, Time32MillisecondArray, Time32SecondArray,
-        Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
-        TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
-        UInt16Array, UInt32Array, UInt32BufferBuilder, UInt64Array, UInt64BufferBuilder,
-        UInt8Array,
-    },
-    datatypes::{
-        ArrowNativeType, DataType, Int16Type, Int32Type, Int64Type, Int8Type, Schema,
-        SchemaRef, TimeUnit, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
-    },
-    util::bit_util,
-};
-use arrow_array::cast::downcast_array;
-use arrow_schema::ArrowError;
-use datafusion_common::cast::{as_dictionary_array, as_string_array};
-use datafusion_common::{DataFusionError, JoinType, Result};
-use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
-use datafusion_execution::TaskContext;
-use datafusion_physical_expr::OrderingEquivalenceProperties;
-
-use ahash::RandomState;
-use futures::{ready, Stream, StreamExt, TryStreamExt};
+use crate::physical_plan::joins::hash_join_utils::JoinHashMap;
 
 type JoinLeftData = (JoinHashMap, RecordBatch, MemoryReservation);
 
@@ -111,8 +111,6 @@ pub struct HashJoinExec {
     left_fut: OnceAsync<JoinLeftData>,
     /// Shares the `RandomState` for the hashing algorithm
     random_state: RandomState,
-    /// Output order
-    output_order: Option<Vec<PhysicalSortExpr>>,
     /// Partitioning mode to use
     pub(crate) mode: PartitionMode,
     /// Execution metrics
@@ -151,13 +149,6 @@ impl HashJoinExec {
 
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
 
-        let output_order = calculate_hash_join_output_order(
-            join_type,
-            left.output_ordering(),
-            right.output_ordering(),
-            left.schema().fields().len(),
-        )?;
-
         Ok(HashJoinExec {
             left,
             right,
@@ -171,7 +162,6 @@ impl HashJoinExec {
             metrics: ExecutionPlanMetricsSet::new(),
             column_indices,
             null_equals_null,
-            output_order,
         })
     }
 
@@ -208,30 +198,6 @@ impl HashJoinExec {
     /// Get null_equals_null
     pub fn null_equals_null(&self) -> bool {
         self.null_equals_null
-    }
-}
-
-impl DisplayAs for HashJoinExec {
-    fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                let display_filter = self.filter.as_ref().map_or_else(
-                    || "".to_string(),
-                    |f| format!(", filter={}", f.expression()),
-                );
-                let on = self
-                    .on
-                    .iter()
-                    .map(|(c1, c2)| format!("({}, {})", c1, c2))
-                    .collect::<Vec<String>>()
-                    .join(", ");
-                write!(
-                    f,
-                    "HashJoinExec: mode={:?}, join_type={:?}, on=[{}]{}",
-                    self.mode, self.join_type, on, display_filter
-                )
-            }
-        }
     }
 }
 
@@ -334,34 +300,10 @@ impl ExecutionPlan for HashJoinExec {
         }
     }
 
+    // TODO Output ordering might be kept for some cases.
+    // For example if it is inner join then the stream side order can be kept
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.output_order.as_deref()
-    }
-
-    // For [JoinType::Inner] and [JoinType::RightSemi] in hash joins, the probe phase initiates by
-    // applying the hash function to convert the join key(s) in each row into a hash value from the
-    // probe side table in the order they're arranged. The hash value is used to look up corresponding
-    // entries in the hash table that was constructed from the build side table during the build phase.
-    //
-    // Because of the immediate generation of result rows once a match is found,
-    // the output of the join tends to follow the order in which the rows were read from
-    // the probe side table. This is simply due to the sequence in which the rows were processed.
-    // Hence, it appears that the hash join is preserving the order of the probe side.
-    //
-    // Meanwhile, in the case of a [JoinType::RightAnti] hash join,
-    // the unmatched rows from the probe side are also kept in order.
-    // This is because the **`RightAnti`** join is designed to return rows from the right
-    // (probe side) table that have no match in the left (build side) table. Because the rows
-    // are processed sequentially in the probe phase, and unmatched rows are directly output
-    // as results, these results tend to retain the order of the probe side table.
-    fn maintains_input_order(&self) -> Vec<bool> {
-        vec![
-            false,
-            matches!(
-                self.join_type,
-                JoinType::Inner | JoinType::RightAnti | JoinType::RightSemi
-            ),
-        ]
+        None
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
@@ -374,34 +316,6 @@ impl ExecutionPlan for HashJoinExec {
             self.on(),
             self.schema(),
         )
-    }
-
-    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        let mut new_properties = OrderingEquivalenceProperties::new(self.schema());
-        let left_columns_len = self.left.schema().fields.len();
-        let right_oeq_properties = self.right.ordering_equivalence_properties();
-        match self.join_type {
-            JoinType::RightAnti | JoinType::RightSemi => {
-                // For `RightAnti` and `RightSemi` joins, the right table schema remains valid.
-                // Hence, its ordering equivalence properties can be used as is.
-                new_properties.extend(right_oeq_properties.classes().iter().cloned());
-            }
-            JoinType::Inner => {
-                // For `Inner` joins, the right table schema is no longer valid.
-                // Size of the left table is added as an offset to the right table
-                // columns when constructing the join output schema.
-                let updated_right_classes = add_offset_to_ordering_equivalence_classes(
-                    right_oeq_properties.classes(),
-                    left_columns_len,
-                )
-                .unwrap();
-                new_properties.extend(updated_right_classes);
-            }
-            // In other cases, we cannot propagate ordering equivalences as
-            // the output ordering is not preserved.
-            _ => {}
-        }
-        new_properties
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -503,6 +417,22 @@ impl ExecutionPlan for HashJoinExec {
         }))
     }
 
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                let display_filter = self.filter.as_ref().map_or_else(
+                    || "".to_string(),
+                    |f| format!(", filter={}", f.expression()),
+                );
+                write!(
+                    f,
+                    "HashJoinExec: mode={:?}, join_type={:?}, on={:?}{}",
+                    self.mode, self.join_type, self.on, display_filter
+                )
+            }
+        }
+    }
+
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }
@@ -580,16 +510,15 @@ async fn collect_left_input(
         )
     })? / 7)
         .next_power_of_two();
-    // 16 bytes per `(u64, u64)`
+    // 32 bytes per `(u64, SmallVec<[u64; 1]>)`
     // + 1 byte for each bucket
-    // + fixed size of JoinHashMap (RawTable + Vec)
-    let estimated_hastable_size =
-        16 * estimated_buckets + estimated_buckets + size_of::<JoinHashMap>();
+    // + 16 bytes fixed
+    let estimated_hastable_size = 32 * estimated_buckets + estimated_buckets + 16;
 
     reservation.try_grow(estimated_hastable_size)?;
     metrics.build_mem_used.add(estimated_hastable_size);
 
-    let mut hashmap = JoinHashMap::with_capacity(num_rows);
+    let mut hashmap = JoinHashMap(RawTable::with_capacity(num_rows));
     let mut hashes_buffer = Vec::new();
     let mut offset = 0;
     for batch in batches.iter() {
@@ -634,24 +563,16 @@ pub fn update_hash(
     // insert hashes to key of the hashmap
     for (row, hash_value) in hash_values.iter().enumerate() {
         let item = hash_map
-            .map
+            .0
             .get_mut(*hash_value, |(hash, _)| *hash_value == *hash);
-        if let Some((_, index)) = item {
-            // Already exists: add index to next array
-            let prev_index = *index;
-            // Store new value inside hashmap
-            *index = (row + offset + 1) as u64;
-            // Update chained Vec at row + offset with previous value
-            hash_map.next[row + offset] = prev_index;
+        if let Some((_, indices)) = item {
+            indices.push((row + offset) as u64);
         } else {
-            hash_map.map.insert(
+            hash_map.0.insert(
                 *hash_value,
-                // store the value + 1 as 0 value reserved for end of list
-                (*hash_value, (row + offset + 1) as u64),
+                (*hash_value, smallvec![(row + offset) as u64]),
                 |(hash, _)| *hash,
             );
-            // chained list at (row + offset) is already initialized with 0
-            // meaning end of list
         }
     }
     Ok(())
@@ -692,6 +613,49 @@ struct HashJoinStream {
 impl RecordBatchStream for HashJoinStream {
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
+    }
+}
+
+/// Gets build and probe indices which satisfy the on condition (including
+/// the equality condition and the join filter) in the join.
+#[allow(clippy::too_many_arguments)]
+pub fn build_join_indices(
+    probe_batch: &RecordBatch,
+    build_hashmap: &JoinHashMap,
+    build_input_buffer: &RecordBatch,
+    on_build: &[Column],
+    on_probe: &[Column],
+    filter: Option<&JoinFilter>,
+    random_state: &RandomState,
+    null_equals_null: bool,
+    hashes_buffer: &mut Vec<u64>,
+    offset: Option<usize>,
+    build_side: JoinSide,
+) -> Result<(UInt64Array, UInt32Array)> {
+    // Get the indices that satisfy the equality condition, like `left.a1 = right.a2`
+    let (build_indices, probe_indices) = build_equal_condition_join_indices(
+        build_hashmap,
+        build_input_buffer,
+        probe_batch,
+        on_build,
+        on_probe,
+        random_state,
+        null_equals_null,
+        hashes_buffer,
+        offset,
+    )?;
+    if let Some(filter) = filter {
+        // Filter the indices which satisfy the non-equal join condition, like `left.b1 = 10`
+        apply_join_filter_to_indices(
+            build_input_buffer,
+            probe_batch,
+            build_indices,
+            probe_indices,
+            filter,
+            build_side,
+        )
+    } else {
+        Ok((build_indices, probe_indices))
     }
 }
 
@@ -736,8 +700,7 @@ pub fn build_equal_condition_join_indices(
     random_state: &RandomState,
     null_equals_null: bool,
     hashes_buffer: &mut Vec<u64>,
-    filter: Option<&JoinFilter>,
-    build_side: JoinSide,
+    offset: Option<usize>,
 ) -> Result<(UInt64Array, UInt32Array)> {
     let keys_values = probe_on
         .iter()
@@ -756,6 +719,7 @@ pub fn build_equal_condition_join_indices(
     // Using a buffer builder to avoid slower normal builder
     let mut build_indices = UInt64BufferBuilder::new(0);
     let mut probe_indices = UInt32BufferBuilder::new(0);
+    let offset_value = offset.unwrap_or(0);
     // Visit all of the probe rows
     for (row, hash_value) in hash_values.iter().enumerate() {
         // Get the hash and find it in the build index
@@ -763,49 +727,40 @@ pub fn build_equal_condition_join_indices(
         // For every item on the build and probe we check if it matches
         // This possibly contains rows with hash collisions,
         // So we have to check here whether rows are equal or not
-        if let Some((_, index)) = build_hashmap
-            .map
+        if let Some((_, indices)) = build_hashmap
+            .0
             .get(*hash_value, |(hash, _)| *hash_value == *hash)
         {
-            let mut i = *index - 1;
-            loop {
-                build_indices.append(i);
-                probe_indices.append(row as u32);
-                // Follow the chain to get the next index value
-                let next = build_hashmap.next[i as usize];
-                if next == 0 {
-                    // end of list
-                    break;
+            for &i in indices {
+                // Check hash collisions
+                let offset_build_index = i as usize - offset_value;
+                // Check hash collisions
+                if equal_rows(
+                    offset_build_index,
+                    row,
+                    &build_join_values,
+                    &keys_values,
+                    null_equals_null,
+                )? {
+                    build_indices.append(offset_build_index as u64);
+                    probe_indices.append(row as u32);
                 }
-                i = next - 1;
             }
         }
     }
+    let build = ArrayData::builder(DataType::UInt64)
+        .len(build_indices.len())
+        .add_buffer(build_indices.finish())
+        .build()?;
+    let probe = ArrayData::builder(DataType::UInt32)
+        .len(probe_indices.len())
+        .add_buffer(probe_indices.finish())
+        .build()?;
 
-    let left: UInt64Array = PrimitiveArray::new(build_indices.finish().into(), None);
-    let right: UInt32Array = PrimitiveArray::new(probe_indices.finish().into(), None);
-
-    let (left, right) = if let Some(filter) = filter {
-        // Filter the indices which satisfy the non-equal join condition, like `left.b1 = 10`
-        apply_join_filter_to_indices(
-            build_input_buffer,
-            probe_batch,
-            left,
-            right,
-            filter,
-            build_side,
-        )?
-    } else {
-        (left, right)
-    };
-
-    equal_rows_arr(
-        &left,
-        &right,
-        &build_join_values,
-        &keys_values,
-        null_equals_null,
-    )
+    Ok((
+        PrimitiveArray::<UInt64Type>::from(build),
+        PrimitiveArray::<UInt32Type>::from(probe),
+    ))
 }
 
 macro_rules! equal_rows_elem {
@@ -875,7 +830,7 @@ macro_rules! equal_rows_elem_with_string_dict {
 /// Left and right row have equal values
 /// If more data types are supported here, please also add the data types in can_hash function
 /// to generate hash join logical plan.
-pub fn equal_rows(
+fn equal_rows(
     left: usize,
     right: usize,
     left_arrays: &[ArrayRef],
@@ -1140,71 +1095,6 @@ pub fn equal_rows(
     err.unwrap_or(Ok(res))
 }
 
-// version of eq_dyn supporting equality on null arrays
-fn eq_dyn_null(
-    left: &dyn Array,
-    right: &dyn Array,
-    null_equals_null: bool,
-) -> Result<BooleanArray, ArrowError> {
-    match (left.data_type(), right.data_type()) {
-        (DataType::Null, DataType::Null) => Ok(BooleanArray::new(
-            BooleanBuffer::collect_bool(left.len(), |_| null_equals_null),
-            None,
-        )),
-        _ if null_equals_null => {
-            let eq: BooleanArray = eq_dyn(left, right)?;
-
-            let left_is_null = is_null(left)?;
-            let right_is_null = is_null(right)?;
-
-            or_kleene(&and(&left_is_null, &right_is_null)?, &eq)
-        }
-        _ => eq_dyn(left, right),
-    }
-}
-
-pub fn equal_rows_arr(
-    indices_left: &UInt64Array,
-    indices_right: &UInt32Array,
-    left_arrays: &[ArrayRef],
-    right_arrays: &[ArrayRef],
-    null_equals_null: bool,
-) -> Result<(UInt64Array, UInt32Array)> {
-    let mut iter = left_arrays.iter().zip(right_arrays.iter());
-
-    let (first_left, first_right) = iter.next().ok_or_else(|| {
-        DataFusionError::Internal(
-            "At least one array should be provided for both left and right".to_string(),
-        )
-    })?;
-
-    let arr_left = take(first_left.as_ref(), indices_left, None)?;
-    let arr_right = take(first_right.as_ref(), indices_right, None)?;
-
-    let mut equal: BooleanArray = eq_dyn_null(&arr_left, &arr_right, null_equals_null)?;
-
-    // Use map and try_fold to iterate over the remaining pairs of arrays.
-    // In each iteration, take is used on the pair of arrays and their equality is determined.
-    // The results are then folded (combined) using the and function to get a final equality result.
-    equal = iter
-        .map(|(left, right)| {
-            let arr_left = take(left.as_ref(), indices_left, None)?;
-            let arr_right = take(right.as_ref(), indices_right, None)?;
-            eq_dyn_null(arr_left.as_ref(), arr_right.as_ref(), null_equals_null)
-        })
-        .try_fold(equal, |acc, equal2| and(&acc, &equal2?))?;
-
-    let filter_builder = FilterBuilder::new(&equal).optimize().build();
-
-    let left_filtered = filter_builder.filter(indices_left)?;
-    let right_filtered = filter_builder.filter(indices_right)?;
-
-    Ok((
-        downcast_array(left_filtered.as_ref()),
-        downcast_array(right_filtered.as_ref()),
-    ))
-}
-
 impl HashJoinStream {
     /// Separate implementation function that unpins the [`HashJoinStream`] so
     /// that partial borrows work correctly
@@ -1257,16 +1147,17 @@ impl HashJoinStream {
                     let timer = self.join_metrics.join_time.timer();
 
                     // get the matched two indices for the on condition
-                    let left_right_indices = build_equal_condition_join_indices(
+                    let left_right_indices = build_join_indices(
+                        &batch,
                         &left_data.0,
                         &left_data.1,
-                        &batch,
                         &self.on_left,
                         &self.on_right,
+                        self.filter.as_ref(),
                         &self.random_state,
                         self.null_equals_null,
                         &mut hashes_buffer,
-                        self.filter.as_ref(),
+                        None,
                         JoinSide::Left,
                     );
 
@@ -1292,8 +1183,8 @@ impl HashJoinStream {
                                 &self.schema,
                                 &left_data.1,
                                 &batch,
-                                &left_side,
-                                &right_side,
+                                left_side,
+                                right_side,
                                 &self.column_indices,
                                 JoinSide::Left,
                             );
@@ -1324,8 +1215,8 @@ impl HashJoinStream {
                             &self.schema,
                             &left_data.1,
                             &empty_right_batch,
-                            &left_side,
-                            &right_side,
+                            left_side,
+                            right_side,
                             &self.column_indices,
                             JoinSide::Left,
                         );
@@ -1367,11 +1258,11 @@ mod tests {
 
     use arrow::array::{ArrayRef, Date32Array, Int32Array, UInt32Builder, UInt64Builder};
     use arrow::datatypes::{DataType, Field, Schema};
+    use smallvec::smallvec;
 
     use datafusion_common::ScalarValue;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::Literal;
-    use hashbrown::raw::RawTable;
 
     use crate::execution::context::SessionConfig;
     use crate::physical_expr::expressions::BinaryExpr;
@@ -2725,10 +2616,8 @@ mod tests {
             create_hashes(&[left.columns()[0].clone()], &random_state, hashes_buff)?;
 
         // Create hash collisions (same hashes)
-        hashmap_left.insert(hashes[0], (hashes[0], 1), |(h, _)| *h);
-        hashmap_left.insert(hashes[1], (hashes[1], 1), |(h, _)| *h);
-
-        let next = vec![2, 0];
+        hashmap_left.insert(hashes[0], (hashes[0], smallvec![0, 1]), |(h, _)| *h);
+        hashmap_left.insert(hashes[1], (hashes[1], smallvec![0, 1]), |(h, _)| *h);
 
         let right = build_table_i32(
             ("a", &vec![10, 20]),
@@ -2736,13 +2625,7 @@ mod tests {
             ("c", &vec![30, 40]),
         );
 
-        let left_data = (
-            JoinHashMap {
-                map: hashmap_left,
-                next,
-            },
-            left,
-        );
+        let left_data = (JoinHashMap(hashmap_left), left);
         let (l, r) = build_equal_condition_join_indices(
             &left_data.0,
             &left_data.1,
@@ -2753,7 +2636,6 @@ mod tests {
             false,
             &mut vec![0; right.num_rows()],
             None,
-            JoinSide::Left,
         )?;
 
         let mut left_ids = UInt64Builder::with_capacity(0);

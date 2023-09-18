@@ -18,7 +18,7 @@
 use arrow::datatypes::DataType;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::TableReference;
-use datafusion_expr::{AggregateUDF, ScalarUDF, TableSource, WindowUDF};
+use datafusion_expr::{AggregateUDF, ScalarUDF, TableSource};
 use datafusion_sql::planner::ContextProvider;
 use std::sync::Arc;
 
@@ -46,10 +46,6 @@ impl ContextProvider for LogicTestContextProvider {
     }
 
     fn options(&self) -> &ConfigOptions {
-        todo!()
-    }
-
-    fn get_window_meta(&self, _name: &str) -> Option<Arc<WindowUDF>> {
         todo!()
     }
 }

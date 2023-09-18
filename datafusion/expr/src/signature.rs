@@ -49,10 +49,8 @@ pub enum TypeSignature {
     /// arbitrary number of arguments with arbitrary types
     VariadicAny,
     /// fixed number of arguments of an arbitrary but equal type out of a list of valid types
-    ///
-    /// # Examples
-    /// 1. A function of one argument of f64 is `Uniform(1, vec![DataType::Float64])`
-    /// 2. A function of one argument of f64 or f32 is `Uniform(1, vec![DataType::Float32, DataType::Float64])`
+    // A function of one argument of f64 is `Uniform(1, vec![DataType::Float64])`
+    // A function of one argument of f64 or f32 is `Uniform(1, vec![DataType::Float32, DataType::Float64])`
     Uniform(usize, Vec<DataType>),
     /// exact number of arguments of an exact type
     Exact(Vec<DataType>),

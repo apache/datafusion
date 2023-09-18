@@ -36,7 +36,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .schema_provider
                 .get_variable_type(&var_names)
                 .ok_or_else(|| {
-                    DataFusionError::Plan(format!(
+                    DataFusionError::Execution(format!(
                         "variable {var_names:?} has no type information"
                     ))
                 })?;

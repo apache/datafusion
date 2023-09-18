@@ -83,19 +83,6 @@ pub fn channels<T>(
     (senders, receivers)
 }
 
-type PartitionAwareSenders<T> = Vec<Vec<DistributionSender<T>>>;
-type PartitionAwareReceivers<T> = Vec<Vec<DistributionReceiver<T>>>;
-
-/// Create `n_out` empty channels for each of the `n_in` inputs.
-/// This way, each distinct partition will communicate via a dedicated channel.
-/// This SPSC structure enables us to track which partition input data comes from.
-pub fn partition_aware_channels<T>(
-    n_in: usize,
-    n_out: usize,
-) -> (PartitionAwareSenders<T>, PartitionAwareReceivers<T>) {
-    (0..n_in).map(|_| channels(n_out)).unzip()
-}
-
 /// Erroring during [send](DistributionSender::send).
 ///
 /// This occurs when the [receiver](DistributionReceiver) is gone.

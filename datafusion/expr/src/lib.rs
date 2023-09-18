@@ -42,7 +42,6 @@ mod literal;
 pub mod logical_plan;
 mod nullif;
 mod operator;
-mod partition_evaluator;
 mod signature;
 pub mod struct_expressions;
 mod table_source;
@@ -50,11 +49,9 @@ pub mod tree_node;
 pub mod type_coercion;
 mod udaf;
 mod udf;
-mod udwf;
 pub mod utils;
 pub mod window_frame;
 pub mod window_function;
-pub mod window_state;
 
 pub use accumulator::Accumulator;
 pub use aggregate_function::AggregateFunction;
@@ -66,20 +63,18 @@ pub use expr::{
 pub use expr_fn::*;
 pub use expr_schema::ExprSchemable;
 pub use function::{
-    AccumulatorFactoryFunction, PartitionEvaluatorFactory, ReturnTypeFunction,
-    ScalarFunctionImplementation, StateTypeFunction,
+    AccumulatorFunctionImplementation, ReturnTypeFunction, ScalarFunctionImplementation,
+    StateTypeFunction,
 };
 pub use json::{json_type, JsonAcessOperator};
 pub use literal::{lit, lit_timestamp_nano, Literal, TimestampLiteral};
 pub use logical_plan::*;
 pub use nullif::SUPPORTED_NULLIF_TYPES;
 pub use operator::Operator;
-pub use partition_evaluator::PartitionEvaluator;
 pub use signature::{Signature, TypeSignature, Volatility};
 pub use table_source::{TableProviderFilterPushDown, TableSource, TableType};
 pub use udaf::AggregateUDF;
 pub use udf::ScalarUDF;
-pub use udwf::WindowUDF;
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 pub use window_function::{BuiltInWindowFunction, WindowFunction};
 

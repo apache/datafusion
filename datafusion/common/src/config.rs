@@ -323,13 +323,10 @@ config_namespace! {
         /// long runner execution, all types of joins may encounter out-of-memory errors.
         pub allow_symmetric_joins_without_pruning: bool, default = true
 
-        /// When set to `true`, file groups will be repartitioned to achieve maximum parallelism.
-        /// Currently Parquet and CSV formats are supported.
-        ///
-        /// If set to `true`, all files will be repartitioned evenly (i.e., a single large file
-        /// might be partitioned into smaller chunks) for parallel scanning.
-        /// If set to `false`, different files will be read in parallel, but repartitioning won't
-        /// happen within a single file.
+        /// When set to true, file groups will be repartitioned to achieve maximum parallelism.
+        /// Currently supported only for Parquet format in which case
+        /// multiple row groups from the same file may be read concurrently. If false then each
+        /// row group is read serially, though different files may be read in parallel.
         pub repartition_file_scans: bool, default = true
 
         /// Should DataFusion repartition data using the partitions keys to execute window

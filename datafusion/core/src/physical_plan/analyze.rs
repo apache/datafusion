@@ -30,7 +30,7 @@ use futures::StreamExt;
 
 use super::expressions::PhysicalSortExpr;
 use super::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
-use super::{DisplayAs, Distribution, SendableRecordBatchStream};
+use super::{Distribution, SendableRecordBatchStream};
 use datafusion_execution::TaskContext;
 
 /// `EXPLAIN ANALYZE` execution plan operator. This operator runs its input,
@@ -52,20 +52,6 @@ impl AnalyzeExec {
             verbose,
             input,
             schema,
-        }
-    }
-}
-
-impl DisplayAs for AnalyzeExec {
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "AnalyzeExec verbose={}", self.verbose)
-            }
         }
     }
 }
@@ -172,6 +158,18 @@ impl ExecutionPlan for AnalyzeExec {
         )))
     }
 
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                write!(f, "AnalyzeExec verbose={}", self.verbose)
+            }
+        }
+    }
+
     fn statistics(&self) -> Statistics {
         // Statistics an an ANALYZE plan are not relevant
         Statistics::default()
@@ -193,7 +191,7 @@ fn create_output_batch(
     type_builder.append_value("Plan with Metrics");
 
     let annotated_plan = DisplayableExecutionPlan::with_metrics(input.as_ref())
-        .indent(verbose)
+        .indent()
         .to_string();
     plan_builder.append_value(annotated_plan);
 
@@ -203,7 +201,7 @@ fn create_output_batch(
         type_builder.append_value("Plan with Full Metrics");
 
         let annotated_plan = DisplayableExecutionPlan::with_full_metrics(input.as_ref())
-            .indent(verbose)
+            .indent()
             .to_string();
         plan_builder.append_value(annotated_plan);
 

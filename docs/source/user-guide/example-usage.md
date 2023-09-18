@@ -21,14 +21,12 @@
 
 In this example some simple processing is performed on the [`example.csv`](../../../datafusion/core/tests/data/example.csv) file.
 
-Even [`more code examples`](../../../datafusion-examples) attached to the project
-
 ## Update `Cargo.toml`
 
 Add the following to your `Cargo.toml` file:
 
 ```toml
-datafusion = "26"
+datafusion = "22"
 tokio = "1.0"
 ```
 
@@ -112,7 +110,7 @@ unexpectedly.
 [`arrow`]: https://docs.rs/arrow/latest/arrow/
 [`parquet`]: https://docs.rs/parquet/latest/parquet/
 [datafusion's crates.io]: https://crates.io/crates/datafusion
-[datafusion `26.0.0` dependencies]: https://crates.io/crates/datafusion/26.0.0/dependencies
+[datafusion `25.0.0` dependencies]: https://crates.io/crates/datafusion/25.0.0/dependencies
 
 ## Identifiers and Capitalization
 

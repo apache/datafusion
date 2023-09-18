@@ -89,8 +89,6 @@ pub fn scan_partitioned_csv(partitions: usize) -> Result<Arc<CsvExec>> {
         config,
         true,
         b',',
-        b'"',
-        None,
         FileCompressionType::UNCOMPRESSED,
     )))
 }
@@ -350,8 +348,6 @@ pub fn csv_exec_sorted(
         },
         false,
         0,
-        0,
-        None,
         FileCompressionType::UNCOMPRESSED,
     ))
 }

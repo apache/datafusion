@@ -21,13 +21,13 @@ use std::any::Any;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use crate::physical_expr::down_cast_any_ref;
-use crate::PhysicalExpr;
-
 use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
+
+use crate::physical_expr::down_cast_any_ref;
+use crate::{AnalysisContext, PhysicalExpr};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
@@ -102,6 +102,13 @@ impl PhysicalExpr for Column {
         _children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(self)
+    }
+
+    /// Return the boundaries of this column, if known.
+    fn analyze(&self, context: AnalysisContext) -> AnalysisContext {
+        assert!(self.index < context.column_boundaries.len());
+        let col_bounds = context.column_boundaries[self.index].clone();
+        context.with_boundaries(col_bounds)
     }
 
     fn dyn_hash(&self, state: &mut dyn Hasher) {
@@ -214,13 +221,11 @@ pub fn col(name: &str, schema: &Schema) -> Result<Arc<dyn PhysicalExpr>> {
 #[cfg(test)]
 mod test {
     use crate::expressions::Column;
-    use crate::PhysicalExpr;
-
+    use crate::{AnalysisContext, ExprBoundaries, PhysicalExpr};
     use arrow::array::StringArray;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
-    use datafusion_common::Result;
-
+    use datafusion_common::{ColumnStatistics, Result, ScalarValue, Statistics};
     use std::sync::Arc;
 
     #[test]
@@ -256,6 +261,78 @@ mod test {
             but input schema only has 1 columns: [\"foo\"]. This was likely caused by a bug in \
             DataFusion's code and we would welcome that you file an bug report in our issue tracker",
                    &format!("{error}"));
+        Ok(())
+    }
+
+    /// Returns a pair of (schema, statistics) for a table of:
+    /// - a => Stats(range=[1, 100], distinct=15)
+    /// - b => unknown
+    /// - c => Stats(range=[1, 100], distinct=unknown)
+    fn get_test_table_stats() -> (Schema, Statistics) {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Int32, true),
+        ]);
+
+        let columns = vec![
+            ColumnStatistics {
+                min_value: Some(ScalarValue::Int32(Some(1))),
+                max_value: Some(ScalarValue::Int32(Some(100))),
+                distinct_count: Some(15),
+                ..Default::default()
+            },
+            ColumnStatistics::default(),
+            ColumnStatistics {
+                min_value: Some(ScalarValue::Int32(Some(1))),
+                max_value: Some(ScalarValue::Int32(Some(75))),
+                distinct_count: None,
+                ..Default::default()
+            },
+        ];
+
+        let statistics = Statistics {
+            column_statistics: Some(columns),
+            ..Default::default()
+        };
+
+        (schema, statistics)
+    }
+
+    #[test]
+    fn stats_bounds_analysis() -> Result<()> {
+        let (schema, statistics) = get_test_table_stats();
+        let context = AnalysisContext::from_statistics(&schema, &statistics);
+
+        let cases = [
+            // (name, index, expected boundaries)
+            (
+                "a",
+                0,
+                Some(ExprBoundaries::new(
+                    ScalarValue::Int32(Some(1)),
+                    ScalarValue::Int32(Some(100)),
+                    Some(15),
+                )),
+            ),
+            ("b", 1, None),
+            (
+                "c",
+                2,
+                Some(ExprBoundaries::new(
+                    ScalarValue::Int32(Some(1)),
+                    ScalarValue::Int32(Some(75)),
+                    None,
+                )),
+            ),
+        ];
+
+        for (name, index, expected) in cases {
+            let col = Column::new(name, index);
+            let test_ctx = col.analyze(context.clone());
+            assert_eq!(test_ctx.boundaries, expected);
+        }
+
         Ok(())
     }
 }

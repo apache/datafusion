@@ -20,26 +20,25 @@
 use futures::StreamExt;
 use log::debug;
 use std::any::Any;
-use std::fmt::{self, Debug};
+use std::fmt::{self, Debug, Display};
 use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
-use datafusion_common::{Constraints, SchemaExt};
 use datafusion_execution::TaskContext;
 use tokio::sync::RwLock;
-use tokio::task::JoinSet;
 
 use crate::datasource::{TableProvider, TableType};
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::SessionState;
 use crate::logical_expr::Expr;
+use crate::physical_plan::common::AbortOnDropSingle;
 use crate::physical_plan::insert::{DataSink, InsertExec};
 use crate::physical_plan::memory::MemoryExec;
+use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::{common, SendableRecordBatchStream};
 use crate::physical_plan::{repartition::RepartitionExec, Partitioning};
-use crate::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
 /// Type alias for partition data
 pub type PartitionData = Arc<RwLock<Vec<RecordBatch>>>;
@@ -52,7 +51,6 @@ pub type PartitionData = Arc<RwLock<Vec<RecordBatch>>>;
 pub struct MemTable {
     schema: SchemaRef,
     pub(crate) batches: Vec<PartitionData>,
-    constraints: Option<Constraints>,
 }
 
 impl MemTable {
@@ -77,16 +75,7 @@ impl MemTable {
                 .into_iter()
                 .map(|e| Arc::new(RwLock::new(e)))
                 .collect::<Vec<_>>(),
-            constraints: None,
         })
-    }
-
-    /// Assign constraints
-    pub fn with_constraints(mut self, constraints: Constraints) -> Self {
-        if !constraints.is_empty() {
-            self.constraints = Some(constraints);
-        }
-        self
     }
 
     /// Create a mem table by reading from another data source
@@ -99,31 +88,26 @@ impl MemTable {
         let exec = t.scan(state, None, &[], None).await?;
         let partition_count = exec.output_partitioning().partition_count();
 
-        let mut join_set = JoinSet::new();
+        let tasks = (0..partition_count)
+            .map(|part_i| {
+                let task = state.task_ctx();
+                let exec = exec.clone();
+                let task = tokio::spawn(async move {
+                    let stream = exec.execute(part_i, task)?;
+                    common::collect(stream).await
+                });
 
-        for part_idx in 0..partition_count {
-            let task = state.task_ctx();
-            let exec = exec.clone();
-            join_set.spawn(async move {
-                let stream = exec.execute(part_idx, task)?;
-                common::collect(stream).await
-            });
-        }
+                AbortOnDropSingle::new(task)
+            })
+            // this collect *is needed* so that the join below can
+            // switch between tasks
+            .collect::<Vec<_>>();
 
         let mut data: Vec<Vec<RecordBatch>> =
             Vec::with_capacity(exec.output_partitioning().partition_count());
 
-        while let Some(result) = join_set.join_next().await {
-            match result {
-                Ok(res) => data.push(res?),
-                Err(e) => {
-                    if e.is_panic() {
-                        std::panic::resume_unwind(e.into_panic());
-                    } else {
-                        unreachable!();
-                    }
-                }
-            }
+        for result in futures::future::join_all(tasks).await {
+            data.push(result.map_err(|e| DataFusionError::External(Box::new(e)))??)
         }
 
         let exec = MemoryExec::try_new(&data, schema.clone(), None)?;
@@ -163,10 +147,6 @@ impl TableProvider for MemTable {
         self.schema.clone()
     }
 
-    fn constraints(&self) -> Option<&Constraints> {
-        self.constraints.as_ref()
-    }
-
     fn table_type(&self) -> TableType {
         TableType::Base
     }
@@ -183,8 +163,8 @@ impl TableProvider for MemTable {
             let inner_vec = arc_inner_vec.read().await;
             partitions.push(inner_vec.clone())
         }
-        Ok(Arc::new(MemoryExec::try_new(
-            &partitions,
+        Ok(Arc::new(MemoryExec::try_new_owned_data(
+            partitions,
             self.schema(),
             projection.cloned(),
         )?))
@@ -209,13 +189,13 @@ impl TableProvider for MemTable {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Create a physical plan from the logical plan.
         // Check that the schema of the plan matches the schema of this table.
-        if !self.schema().equivalent_names_and_types(&input.schema()) {
+        if !input.schema().eq(&self.schema) {
             return Err(DataFusionError::Plan(
                 "Inserting query must have the same schema with the table.".to_string(),
             ));
         }
         let sink = Arc::new(MemSink::new(self.batches.clone()));
-        Ok(Arc::new(InsertExec::new(input, sink, self.schema.clone())))
+        Ok(Arc::new(InsertExec::new(input, sink)))
     }
 }
 
@@ -233,14 +213,10 @@ impl Debug for MemSink {
     }
 }
 
-impl DisplayAs for MemSink {
-    fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                let partition_count = self.batches.len();
-                write!(f, "MemoryTable (partitions={partition_count})")
-            }
-        }
+impl Display for MemSink {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let partition_count = self.batches.len();
+        write!(f, "MemoryTable (partitions={partition_count})")
     }
 }
 

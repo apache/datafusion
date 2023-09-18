@@ -44,16 +44,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         Err(_) => Ok(lit(-n
                             .parse::<f64>()
                             .map_err(|_e| {
-                                DataFusionError::Plan(format!(
+                                DataFusionError::Internal(format!(
                                     "negative operator can be only applied to integer and float operands, got: {n}"))
                             })?)),
                     },
-                    SQLExpr::Interval(interval) => self.sql_interval_to_expr(
-                        true,
-                        interval,
-                        schema,
-                        planner_context,
-                    ),
                     // not a literal, apply negative operator on expression
                     _ => Ok(Expr::Negative(Box::new(self.sql_expr_to_logical_expr(expr, schema, planner_context)?))),
                 }

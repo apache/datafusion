@@ -41,7 +41,7 @@ fn default_cast_options() -> CastOptions<'static> {
 }
 
 /// CAST expression casts an expression to a specific data type and returns a runtime error on invalid cast
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct CastExpr {
     /// The expression to cast
     expr: Arc<dyn PhysicalExpr>,

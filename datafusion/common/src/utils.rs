@@ -177,10 +177,9 @@ where
     Ok(low)
 }
 
-/// Given a list of 0 or more already sorted columns, finds the
-/// partition ranges that would partition equally across columns.
-///
-/// See [`lexicographical_partition_ranges`] for more details.
+/// This function finds the partition points according to `partition_columns`.
+/// If there are no sort columns, then the result will be a single element
+/// vector containing one partition range spanning all data.
 pub fn evaluate_partition_ranges(
     num_rows: usize,
     partition_columns: &[SortColumn],
@@ -246,14 +245,13 @@ pub fn get_arrayref_at_indices(
         .collect()
 }
 
-pub(crate) fn parse_identifiers_normalized(s: &str, ignore_case: bool) -> Vec<String> {
+pub(crate) fn parse_identifiers_normalized(s: &str) -> Vec<String> {
     parse_identifiers(s)
         .unwrap_or_default()
         .into_iter()
         .map(|id| match id.quote_style {
             Some(_) => id.value,
-            None if ignore_case => id.value,
-            _ => id.value.to_ascii_lowercase(),
+            None => id.value.to_ascii_lowercase(),
         })
         .collect::<Vec<_>>()
 }

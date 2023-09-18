@@ -28,19 +28,43 @@ pub type Result<T, E = DFSqlLogicTestError> = std::result::Result<T, E>;
 pub enum DFSqlLogicTestError {
     /// Error from sqllogictest-rs
     #[error("SqlLogicTest error(from sqllogictest-rs crate): {0}")]
-    SqlLogicTest(#[from] TestError),
+    SqlLogicTest(TestError),
     /// Error from datafusion
     #[error("DataFusion error: {0}")]
-    DataFusion(#[from] DataFusionError),
+    DataFusion(DataFusionError),
     /// Error returned when SQL is syntactically incorrect.
     #[error("SQL Parser error: {0}")]
-    Sql(#[from] ParserError),
+    Sql(ParserError),
     /// Error from arrow-rs
     #[error("Arrow error: {0}")]
-    Arrow(#[from] ArrowError),
+    Arrow(ArrowError),
     /// Generic error
     #[error("Other Error: {0}")]
     Other(String),
+}
+
+impl From<TestError> for DFSqlLogicTestError {
+    fn from(value: TestError) -> Self {
+        DFSqlLogicTestError::SqlLogicTest(value)
+    }
+}
+
+impl From<DataFusionError> for DFSqlLogicTestError {
+    fn from(value: DataFusionError) -> Self {
+        DFSqlLogicTestError::DataFusion(value)
+    }
+}
+
+impl From<ParserError> for DFSqlLogicTestError {
+    fn from(value: ParserError) -> Self {
+        DFSqlLogicTestError::Sql(value)
+    }
+}
+
+impl From<ArrowError> for DFSqlLogicTestError {
+    fn from(value: ArrowError) -> Self {
+        DFSqlLogicTestError::Arrow(value)
+    }
 }
 
 impl From<String> for DFSqlLogicTestError {

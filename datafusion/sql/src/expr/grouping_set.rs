@@ -48,7 +48,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .into_iter()
             .map(|v| {
                 if v.len() != 1 {
-                    Err(DataFusionError::Plan(
+                    Err(DataFusionError::Internal(
                         "Tuple expressions are not supported for Rollup expressions"
                             .to_string(),
                     ))
@@ -70,7 +70,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .into_iter()
             .map(|v| {
                 if v.len() != 1 {
-                    Err(DataFusionError::Plan(
+                    Err(DataFusionError::Internal(
                         "Tuple expressions not are supported for Cube expressions"
                             .to_string(),
                     ))

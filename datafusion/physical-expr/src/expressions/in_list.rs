@@ -34,7 +34,9 @@ use arrow::record_batch::RecordBatch;
 use arrow::util::bit_iterator::BitIndexIterator;
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
 use datafusion_common::{
-    cast::{as_boolean_array, as_generic_binary_array, as_string_array},
+    cast::{
+        as_boolean_array, as_generic_binary_array, as_primitive_array, as_string_array,
+    },
     DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::ColumnarValue;
@@ -177,6 +179,14 @@ fn make_set(array: &dyn Array) -> Result<Arc<dyn Set>> {
             let array = as_boolean_array(array)?;
             Arc::new(ArraySet::new(array, make_hash_set(array)))
         },
+        DataType::Decimal128(_, _) => {
+            let array = as_primitive_array::<Decimal128Type>(array)?;
+            Arc::new(ArraySet::new(array, make_hash_set(array)))
+        }
+        DataType::Decimal256(_, _) => {
+            let array = as_primitive_array::<Decimal256Type>(array)?;
+            Arc::new(ArraySet::new(array, make_hash_set(array)))
+        }
         DataType::Utf8 => {
             let array = as_string_array(array)?;
             Arc::new(ArraySet::new(array, make_hash_set(array)))

@@ -348,9 +348,6 @@ SELECT * FROM new_table;
 statement ok
 DROP TABLE new_table
 
-statement ok
-DROP TABLE my_table;
-
 # create_table_with_schema_as_multiple_values
 statement ok
 CREATE TABLE test_table(c1 int, c2 float, c3 varchar) AS VALUES(1, 2, 'hello'),(2, 1, 'there'),(3, 0, '!');
@@ -365,32 +362,7 @@ SELECT * FROM new_table
 2 1 there
 
 statement ok
-DROP TABLE new_table;
-
-# Select into without alias names of window aggregates
-statement ok
-SELECT SUM(c1) OVER(ORDER BY c2), c2, c3 INTO new_table FROM test_table
-
-query IRT
-SELECT * FROM new_table
-----
-3 0 !
-5 1 there
-6 2 hello
-
-statement ok
-DROP TABLE new_table;
-
-# Create table as without alias names of window aggregates
-statement ok
-CREATE TABLE new_table AS SELECT SUM(c1) OVER(ORDER BY c2), c2, c3 FROM test_table
-
-query IRT
-SELECT * FROM new_table
-----
-3 0 !
-5 1 there
-6 2 hello
+DROP TABLE my_table;
 
 statement ok
 DROP TABLE new_table;

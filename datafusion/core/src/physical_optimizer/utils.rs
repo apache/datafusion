@@ -39,7 +39,6 @@ use datafusion_physical_expr::PhysicalSortExpr;
 pub fn add_sort_above(
     node: &mut Arc<dyn ExecutionPlan>,
     sort_expr: Vec<PhysicalSortExpr>,
-    fetch: Option<usize>,
 ) -> Result<()> {
     // If the ordering requirement is already satisfied, do not add a sort.
     if !ordering_satisfy(
@@ -48,7 +47,7 @@ pub fn add_sort_above(
         || node.equivalence_properties(),
         || node.ordering_equivalence_properties(),
     ) {
-        let new_sort = SortExec::new(sort_expr, node.clone()).with_fetch(fetch);
+        let new_sort = SortExec::new(sort_expr, node.clone());
 
         *node = Arc::new(if node.output_partitioning().partition_count() > 1 {
             new_sort.with_preserve_partitioning(true)

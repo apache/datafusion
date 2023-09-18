@@ -20,17 +20,15 @@
 
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
-use std::fmt::{Display, Formatter};
 use std::hash::Hash;
 use std::sync::Arc;
 
 use crate::error::{unqualified_field_not_found, DataFusionError, Result, SchemaError};
-use crate::{
-    field_not_found, Column, FunctionalDependencies, OwnedTableReference, TableReference,
-};
+use crate::{field_not_found, Column, OwnedTableReference, TableReference};
 
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
+use std::fmt::{Display, Formatter};
 
 /// A reference-counted reference to a `DFSchema`.
 pub type DFSchemaRef = Arc<DFSchema>;
@@ -42,8 +40,6 @@ pub struct DFSchema {
     fields: Vec<DFField>,
     /// Additional metadata in form of key value pairs
     metadata: HashMap<String, String>,
-    /// Stores functional dependencies in the schema.
-    functional_dependencies: FunctionalDependencies,
 }
 
 impl DFSchema {
@@ -52,7 +48,6 @@ impl DFSchema {
         Self {
             fields: vec![],
             metadata: HashMap::new(),
-            functional_dependencies: FunctionalDependencies::empty(),
         }
     }
 
@@ -102,11 +97,7 @@ impl DFSchema {
                 ));
             }
         }
-        Ok(Self {
-            fields,
-            metadata,
-            functional_dependencies: FunctionalDependencies::empty(),
-        })
+        Ok(Self { fields, metadata })
     }
 
     /// Create a `DFSchema` from an Arrow schema and a given qualifier
@@ -123,15 +114,6 @@ impl DFSchema {
                 .collect(),
             schema.metadata().clone(),
         )
-    }
-
-    /// Assigns functional dependencies.
-    pub fn with_functional_dependencies(
-        mut self,
-        functional_dependencies: FunctionalDependencies,
-    ) -> Self {
-        self.functional_dependencies = functional_dependencies;
-        self
     }
 
     /// Create a new schema that contains the fields from this schema followed by the fields
@@ -467,11 +449,6 @@ impl DFSchema {
     pub fn metadata(&self) -> &HashMap<String, String> {
         &self.metadata
     }
-
-    /// Get functional dependencies
-    pub fn functional_dependencies(&self) -> &FunctionalDependencies {
-        &self.functional_dependencies
-    }
 }
 
 impl From<DFSchema> for Schema {
@@ -582,9 +559,6 @@ pub trait ExprSchema: std::fmt::Debug {
 
     /// What is the datatype of this column?
     fn data_type(&self, col: &Column) -> Result<&DataType>;
-
-    /// Returns the column's optional metadata.
-    fn metadata(&self, col: &Column) -> Result<&HashMap<String, String>>;
 }
 
 // Implement `ExprSchema` for `Arc<DFSchema>`
@@ -596,10 +570,6 @@ impl<P: AsRef<DFSchema> + std::fmt::Debug> ExprSchema for P {
     fn data_type(&self, col: &Column) -> Result<&DataType> {
         self.as_ref().data_type(col)
     }
-
-    fn metadata(&self, col: &Column) -> Result<&HashMap<String, String>> {
-        ExprSchema::metadata(self.as_ref(), col)
-    }
 }
 
 impl ExprSchema for DFSchema {
@@ -609,10 +579,6 @@ impl ExprSchema for DFSchema {
 
     fn data_type(&self, col: &Column) -> Result<&DataType> {
         Ok(self.field_from_column(col)?.data_type())
-    }
-
-    fn metadata(&self, col: &Column) -> Result<&HashMap<String, String>> {
-        Ok(self.field_from_column(col)?.metadata())
     }
 }
 
@@ -673,10 +639,6 @@ impl DFField {
         self.field.is_nullable()
     }
 
-    pub fn metadata(&self) -> &HashMap<String, String> {
-        self.field.metadata()
-    }
-
     /// Returns a string to the `DFField`'s qualified name
     pub fn qualified_name(&self) -> String {
         if let Some(qualifier) = &self.qualifier {
@@ -724,13 +686,6 @@ impl DFField {
         self.field = f.into();
         self
     }
-
-    /// Return field with new metadata
-    pub fn with_metadata(mut self, metadata: HashMap<String, String>) -> Self {
-        let f = self.field().as_ref().clone().with_metadata(metadata);
-        self.field = f.into();
-        self
-    }
 }
 
 impl From<FieldRef> for DFField {
@@ -745,34 +700,6 @@ impl From<FieldRef> for DFField {
 impl From<Field> for DFField {
     fn from(value: Field) -> Self {
         Self::from(Arc::new(value))
-    }
-}
-
-/// DataFusion-specific extensions to [`Schema`].
-pub trait SchemaExt {
-    /// This is a specialized version of Eq that ignores differences
-    /// in nullability and metadata.
-    ///
-    /// It works the same as [`DFSchema::equivalent_names_and_types`].
-    fn equivalent_names_and_types(&self, other: &Self) -> bool;
-}
-
-impl SchemaExt for Schema {
-    fn equivalent_names_and_types(&self, other: &Self) -> bool {
-        if self.fields().len() != other.fields().len() {
-            return false;
-        }
-
-        self.fields()
-            .iter()
-            .zip(other.fields().iter())
-            .all(|(f1, f2)| {
-                f1.name() == f2.name()
-                    && DFSchema::datatype_is_semantically_equal(
-                        f1.data_type(),
-                        f2.data_type(),
-                    )
-            })
     }
 }
 
@@ -1042,8 +969,7 @@ mod tests {
         TestCase {
             fields1: vec![&field1_i16_t],
             fields2: vec![&field1_i16_t],
-            expected_dfschema: true,
-            expected_arrow: true,
+            expected: true,
         }
         .run();
 
@@ -1051,8 +977,7 @@ mod tests {
         TestCase {
             fields1: vec![&field1_i16_t_meta],
             fields2: vec![&field1_i16_t],
-            expected_dfschema: true,
-            expected_arrow: true,
+            expected: true,
         }
         .run();
 
@@ -1060,8 +985,7 @@ mod tests {
         TestCase {
             fields1: vec![&field1_i16_t],
             fields2: vec![&field2_i16_t],
-            expected_dfschema: false,
-            expected_arrow: false,
+            expected: false,
         }
         .run();
 
@@ -1069,8 +993,7 @@ mod tests {
         TestCase {
             fields1: vec![&field1_i16_t],
             fields2: vec![&field1_i32_t],
-            expected_dfschema: false,
-            expected_arrow: false,
+            expected: false,
         }
         .run();
 
@@ -1078,8 +1001,7 @@ mod tests {
         TestCase {
             fields1: vec![&field1_i16_t],
             fields2: vec![&field1_i16_f],
-            expected_dfschema: true,
-            expected_arrow: true,
+            expected: true,
         }
         .run();
 
@@ -1087,8 +1009,7 @@ mod tests {
         TestCase {
             fields1: vec![&field1_i16_t],
             fields2: vec![&field1_i16_t_qualified],
-            expected_dfschema: false,
-            expected_arrow: true,
+            expected: false,
         }
         .run();
 
@@ -1096,8 +1017,7 @@ mod tests {
         TestCase {
             fields1: vec![&field2_i16_t, &field1_i16_t],
             fields2: vec![&field2_i16_t, &field3_i16_t],
-            expected_dfschema: false,
-            expected_arrow: false,
+            expected: false,
         }
         .run();
 
@@ -1105,8 +1025,7 @@ mod tests {
         TestCase {
             fields1: vec![&field1_i16_t, &field2_i16_t],
             fields2: vec![&field1_i16_t],
-            expected_dfschema: false,
-            expected_arrow: false,
+            expected: false,
         }
         .run();
 
@@ -1114,8 +1033,7 @@ mod tests {
         TestCase {
             fields1: vec![&field_dict_t],
             fields2: vec![&field_dict_t],
-            expected_dfschema: true,
-            expected_arrow: true,
+            expected: true,
         }
         .run();
 
@@ -1123,8 +1041,7 @@ mod tests {
         TestCase {
             fields1: vec![&field_dict_t],
             fields2: vec![&field_dict_f],
-            expected_dfschema: true,
-            expected_arrow: true,
+            expected: true,
         }
         .run();
 
@@ -1132,8 +1049,7 @@ mod tests {
         TestCase {
             fields1: vec![&field_dict_t],
             fields2: vec![&field1_i16_t],
-            expected_dfschema: false,
-            expected_arrow: false,
+            expected: false,
         }
         .run();
 
@@ -1141,8 +1057,7 @@ mod tests {
         TestCase {
             fields1: vec![&list_t],
             fields2: vec![&list_f],
-            expected_dfschema: true,
-            expected_arrow: true,
+            expected: true,
         }
         .run();
 
@@ -1150,8 +1065,7 @@ mod tests {
         TestCase {
             fields1: vec![&list_t],
             fields2: vec![&list_f_name],
-            expected_dfschema: false,
-            expected_arrow: false,
+            expected: false,
         }
         .run();
 
@@ -1159,8 +1073,7 @@ mod tests {
         TestCase {
             fields1: vec![&struct_t],
             fields2: vec![&struct_f],
-            expected_dfschema: true,
-            expected_arrow: true,
+            expected: true,
         }
         .run();
 
@@ -1168,8 +1081,7 @@ mod tests {
         TestCase {
             fields1: vec![&struct_t],
             fields2: vec![&struct_f_meta],
-            expected_dfschema: true,
-            expected_arrow: true,
+            expected: true,
         }
         .run();
 
@@ -1177,8 +1089,7 @@ mod tests {
         TestCase {
             fields1: vec![&struct_t],
             fields2: vec![&struct_f_type],
-            expected_dfschema: false,
-            expected_arrow: false,
+            expected: false,
         }
         .run();
 
@@ -1186,8 +1097,7 @@ mod tests {
         struct TestCase<'a> {
             fields1: Vec<&'a DFField>,
             fields2: Vec<&'a DFField>,
-            expected_dfschema: bool,
-            expected_arrow: bool,
+            expected: bool,
         }
 
         impl<'a> TestCase<'a> {
@@ -1197,24 +1107,12 @@ mod tests {
                 let schema2 = to_df_schema(self.fields2);
                 assert_eq!(
                     schema1.equivalent_names_and_types(&schema2),
-                    self.expected_dfschema,
+                    self.expected,
                     "Comparison did not match expected: {}\n\n\
                      schema1:\n\n{:#?}\n\nschema2:\n\n{:#?}",
-                    self.expected_dfschema,
+                    self.expected,
                     schema1,
                     schema2
-                );
-
-                let arrow_schema1 = Schema::from(schema1);
-                let arrow_schema2 = Schema::from(schema2);
-                assert_eq!(
-                    arrow_schema1.equivalent_names_and_types(&arrow_schema2),
-                    self.expected_arrow,
-                    "Comparison did not match expected: {}\n\n\
-                     arrow schema1:\n\n{:#?}\n\n arrow schema2:\n\n{:#?}",
-                    self.expected_arrow,
-                    arrow_schema1,
-                    arrow_schema2
                 );
             }
         }

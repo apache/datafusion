@@ -26,7 +26,7 @@ use crate::physical_plan::windows::{
     calc_requirements, get_ordered_partition_by_indices, window_ordering_equivalence,
 };
 use crate::physical_plan::{
-    ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, EquivalenceProperties,
+    ColumnStatistics, DisplayFormatType, Distribution, EquivalenceProperties,
     ExecutionPlan, Partitioning, PhysicalExpr, RecordBatchStream,
     SendableRecordBatchStream, Statistics, WindowExpr,
 };
@@ -118,34 +118,6 @@ impl WindowAggExec {
         // Partition by sort keys indices are stored in self.ordered_partition_by_indices.
         let sort_keys = self.input.output_ordering().unwrap_or(&[]);
         get_at_indices(sort_keys, &self.ordered_partition_by_indices)
-    }
-}
-
-impl DisplayAs for WindowAggExec {
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "WindowAggExec: ")?;
-                let g: Vec<String> = self
-                    .window_expr
-                    .iter()
-                    .map(|e| {
-                        format!(
-                            "{}: {:?}, frame: {:?}",
-                            e.name().to_owned(),
-                            e.field(),
-                            e.get_window_frame()
-                        )
-                    })
-                    .collect();
-                write!(f, "wdw=[{}]", g.join(", "))?;
-            }
-        }
-        Ok(())
     }
 }
 
@@ -251,6 +223,32 @@ impl ExecutionPlan for WindowAggExec {
             self.ordered_partition_by_indices.clone(),
         )?);
         Ok(stream)
+    }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                write!(f, "WindowAggExec: ")?;
+                let g: Vec<String> = self
+                    .window_expr
+                    .iter()
+                    .map(|e| {
+                        format!(
+                            "{}: {:?}, frame: {:?}",
+                            e.name().to_owned(),
+                            e.field(),
+                            e.get_window_frame()
+                        )
+                    })
+                    .collect();
+                write!(f, "wdw=[{}]", g.join(", "))?;
+            }
+        }
+        Ok(())
     }
 
     fn metrics(&self) -> Option<MetricsSet> {

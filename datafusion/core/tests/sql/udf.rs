@@ -234,7 +234,7 @@ async fn simple_udaf() -> Result<()> {
     // define a udaf, using a DataFusion's accumulator
     let my_avg = create_udaf(
         "my_avg",
-        vec![DataType::Float64],
+        DataType::Float64,
         Arc::new(DataType::Float64),
         Volatility::Immutable,
         Arc::new(|_| {
@@ -291,7 +291,7 @@ async fn udaf_as_window_func() -> Result<()> {
 
     let my_acc = create_udaf(
         "my_acc",
-        vec![DataType::Int32],
+        DataType::Int32,
         Arc::new(DataType::Int32),
         Volatility::Immutable,
         Arc::new(|_| Ok(Box::new(MyAccumulator))),

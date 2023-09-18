@@ -26,16 +26,15 @@ use crate::physical_plan::{
     udaf, ExecutionPlan, PhysicalExpr,
 };
 use arrow::datatypes::Schema;
-use arrow_schema::{DataType, Field, SchemaRef};
+use arrow_schema::SchemaRef;
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{
     window_function::{BuiltInWindowFunction, WindowFunction},
-    PartitionEvaluator, WindowFrame, WindowUDF,
+    WindowFrame,
 };
-use datafusion_physical_expr::{
-    window::{BuiltInWindowFunctionExpr, SlidingAggregateWindowExpr},
-    AggregateExpr,
+use datafusion_physical_expr::window::{
+    BuiltInWindowFunctionExpr, SlidingAggregateWindowExpr,
 };
 use std::borrow::Borrow;
 use std::convert::TryInto;
@@ -67,20 +66,23 @@ pub fn create_window_expr(
 ) -> Result<Arc<dyn WindowExpr>> {
     Ok(match fun {
         WindowFunction::AggregateFunction(fun) => {
-            let aggregate = aggregates::create_aggregate_expr(
-                fun,
-                false,
-                args,
-                &[],
-                input_schema,
-                name,
-            )?;
-            window_expr_from_aggregate_expr(
-                partition_by,
-                order_by,
-                window_frame,
-                aggregate,
-            )
+            let aggregate =
+                aggregates::create_aggregate_expr(fun, false, args, input_schema, name)?;
+            if !window_frame.start_bound.is_unbounded() {
+                Arc::new(SlidingAggregateWindowExpr::new(
+                    aggregate,
+                    partition_by,
+                    order_by,
+                    window_frame,
+                ))
+            } else {
+                Arc::new(PlainAggregateWindowExpr::new(
+                    aggregate,
+                    partition_by,
+                    order_by,
+                    window_frame,
+                ))
+            }
         }
         WindowFunction::BuiltInWindowFunction(fun) => Arc::new(BuiltInWindowExpr::new(
             create_built_in_window_expr(fun, args, input_schema, name)?,
@@ -88,50 +90,13 @@ pub fn create_window_expr(
             order_by,
             window_frame,
         )),
-        WindowFunction::AggregateUDF(fun) => {
-            let aggregate =
-                udaf::create_aggregate_expr(fun.as_ref(), args, input_schema, name)?;
-            window_expr_from_aggregate_expr(
-                partition_by,
-                order_by,
-                window_frame,
-                aggregate,
-            )
-        }
-        WindowFunction::WindowUDF(fun) => Arc::new(BuiltInWindowExpr::new(
-            create_udwf_window_expr(fun, args, input_schema, name)?,
+        WindowFunction::AggregateUDF(fun) => Arc::new(PlainAggregateWindowExpr::new(
+            udaf::create_aggregate_expr(fun.as_ref(), args, input_schema, name)?,
             partition_by,
             order_by,
             window_frame,
         )),
     })
-}
-
-/// Creates an appropriate [`WindowExpr`] based on the window frame and
-fn window_expr_from_aggregate_expr(
-    partition_by: &[Arc<dyn PhysicalExpr>],
-    order_by: &[PhysicalSortExpr],
-    window_frame: Arc<WindowFrame>,
-    aggregate: Arc<dyn AggregateExpr>,
-) -> Arc<dyn WindowExpr> {
-    // Is there a potentially unlimited sized window frame?
-    let unbounded_window = window_frame.start_bound.is_unbounded();
-
-    if !unbounded_window {
-        Arc::new(SlidingAggregateWindowExpr::new(
-            aggregate,
-            partition_by,
-            order_by,
-            window_frame,
-        ))
-    } else {
-        Arc::new(PlainAggregateWindowExpr::new(
-            aggregate,
-            partition_by,
-            order_by,
-            window_frame,
-        ))
-    }
 }
 
 fn get_scalar_value_from_args(
@@ -218,71 +183,6 @@ fn create_built_in_window_expr(
     })
 }
 
-/// Creates a `BuiltInWindowFunctionExpr` suitable for a user defined window function
-fn create_udwf_window_expr(
-    fun: &Arc<WindowUDF>,
-    args: &[Arc<dyn PhysicalExpr>],
-    input_schema: &Schema,
-    name: String,
-) -> Result<Arc<dyn BuiltInWindowFunctionExpr>> {
-    // need to get the types into an owned vec for some reason
-    let input_types: Vec<_> = args
-        .iter()
-        .map(|arg| arg.data_type(input_schema))
-        .collect::<Result<_>>()?;
-
-    // figure out the output type
-    let data_type = (fun.return_type)(&input_types)?;
-    Ok(Arc::new(WindowUDFExpr {
-        fun: Arc::clone(fun),
-        args: args.to_vec(),
-        name,
-        data_type,
-    }))
-}
-
-/// Implements [`BuiltInWindowFunctionExpr`] for [`WindowUDF`]
-#[derive(Clone, Debug)]
-struct WindowUDFExpr {
-    fun: Arc<WindowUDF>,
-    args: Vec<Arc<dyn PhysicalExpr>>,
-    /// Display name
-    name: String,
-    /// result type
-    data_type: Arc<DataType>,
-}
-
-impl BuiltInWindowFunctionExpr for WindowUDFExpr {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn field(&self) -> Result<Field> {
-        let nullable = true;
-        Ok(Field::new(
-            &self.name,
-            self.data_type.as_ref().clone(),
-            nullable,
-        ))
-    }
-
-    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        self.args.clone()
-    }
-
-    fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
-        (self.fun.partition_evaluator_factory)()
-    }
-
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn reverse_expr(&self) -> Option<Arc<dyn BuiltInWindowFunctionExpr>> {
-        None
-    }
-}
-
 pub(crate) fn calc_requirements<
     T: Borrow<Arc<dyn PhysicalExpr>>,
     S: Borrow<PhysicalSortExpr>,
@@ -350,7 +250,8 @@ pub(crate) fn window_ordering_equivalence(
             expr.as_any().downcast_ref::<BuiltInWindowExpr>()
         {
             builtin_window_expr
-                .add_equal_orderings(&mut builder, || input.equivalence_properties());
+                .get_built_in_func_expr()
+                .add_equal_orderings(&mut builder);
         }
     }
     builder.build()
@@ -539,7 +440,7 @@ mod tests {
 
         let my_count = create_udaf(
             "my_count",
-            vec![DataType::Int64],
+            DataType::Int64,
             Arc::new(DataType::Int64),
             Volatility::Immutable,
             Arc::new(|_| Ok(Box::new(MyCount(0)))),

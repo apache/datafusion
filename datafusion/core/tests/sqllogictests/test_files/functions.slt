@@ -565,3 +565,4 @@ SELECT sqrt(column1),sqrt(column2),sqrt(column3),sqrt(column4),sqrt(column5),sqr
 
 statement ok
 drop table t
+

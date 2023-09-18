@@ -119,7 +119,7 @@ use super::IntervalBound;
 
 /// This object implements a directed acyclic expression graph (DAEG) that
 /// is used to compute ranges for expressions through interval arithmetic.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ExprIntervalGraph {
     graph: StableGraph<ExprIntervalGraphNode, usize>,
     root: NodeIndex,
@@ -251,10 +251,10 @@ pub fn propagate_arithmetic(
 }
 
 /// This function provides a target parent interval for comparison operators.
-/// If we have expression > 0, expression must have the range (0, ∞).
-/// If we have expression >= 0, expression must have the range [0, ∞).
-/// If we have expression < 0, expression must have the range (-∞, 0).
-/// If we have expression <= 0, expression must have the range (-∞, 0].
+/// If we have expression > 0, expression must have the range [0, ∞].
+/// If we have expression < 0, expression must have the range [-∞, 0].
+/// Currently, we only support strict inequalities since open/closed intervals
+/// are not implemented yet.
 fn comparison_operator_target(
     left_datatype: &DataType,
     op: &Operator,
@@ -268,10 +268,6 @@ fn comparison_operator_target(
         Operator::Gt => Interval::new(IntervalBound::new(zero, true), unbounded),
         Operator::LtEq => Interval::new(unbounded, IntervalBound::new(zero, false)),
         Operator::Lt => Interval::new(unbounded, IntervalBound::new(zero, true)),
-        Operator::Eq => Interval::new(
-            IntervalBound::new(zero.clone(), false),
-            IntervalBound::new(zero, false),
-        ),
         _ => unreachable!(),
     })
 }
@@ -534,11 +530,6 @@ impl ExprIntervalGraph {
         } else {
             Ok(PropagationResult::CannotPropagate)
         }
-    }
-
-    /// Returns the interval associated with the node at the given `index`.
-    pub fn get_interval(&self, index: usize) -> Interval {
-        self.graph[NodeIndex::new(index)].interval.clone()
     }
 }
 

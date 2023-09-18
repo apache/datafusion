@@ -17,14 +17,12 @@
 
 //! Default TableSource implementation used in DataFusion physical plans
 
+use crate::datasource::TableProvider;
+use arrow::datatypes::SchemaRef;
+use datafusion_common::DataFusionError;
+use datafusion_expr::{Expr, TableProviderFilterPushDown, TableSource};
 use std::any::Any;
 use std::sync::Arc;
-
-use crate::datasource::TableProvider;
-
-use arrow::datatypes::SchemaRef;
-use datafusion_common::{Constraints, DataFusionError};
-use datafusion_expr::{Expr, TableProviderFilterPushDown, TableSource};
 
 /// DataFusion default table source, wrapping TableProvider
 ///
@@ -52,11 +50,6 @@ impl TableSource for DefaultTableSource {
     /// Get a reference to the schema for this table
     fn schema(&self) -> SchemaRef {
         self.table_provider.schema()
-    }
-
-    /// Get a reference to applicable constraints, if any exists.
-    fn constraints(&self) -> Option<&Constraints> {
-        self.table_provider.constraints()
     }
 
     /// Tests whether the table provider can make use of any or all filter expressions

@@ -17,7 +17,7 @@
 use crate::physical_optimizer::utils::{add_sort_above, is_limit, is_union, is_window};
 use crate::physical_plan::filter::FilterExec;
 use crate::physical_plan::joins::utils::JoinSide;
-use crate::physical_plan::joins::{HashJoinExec, SortMergeJoinExec};
+use crate::physical_plan::joins::SortMergeJoinExec;
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
@@ -136,7 +136,7 @@ pub(crate) fn pushdown_sorts(
                 parent_required.ok_or_else(err)?.iter().cloned(),
             );
             new_plan = sort_exec.input.clone();
-            add_sort_above(&mut new_plan, parent_required_expr, sort_exec.fetch())?;
+            add_sort_above(&mut new_plan, parent_required_expr)?;
         };
         let required_ordering = new_plan
             .output_ordering()
@@ -183,7 +183,7 @@ pub(crate) fn pushdown_sorts(
                 parent_required.ok_or_else(err)?.iter().cloned(),
             );
             let mut new_plan = plan.clone();
-            add_sort_above(&mut new_plan, parent_required_expr, None)?;
+            add_sort_above(&mut new_plan, parent_required_expr)?;
             Ok(Transformed::Yes(SortPushDown::init(new_plan)))
         }
     }
@@ -263,25 +263,16 @@ fn pushdown_requirement_to_children(
         // TODO: Add support for Projection push down
         || plan.as_any().is::<ProjectionExec>()
         || is_limit(plan)
-        || plan.as_any().is::<HashJoinExec>()
     {
         // If the current plan is a leaf node or can not maintain any of the input ordering, can not pushed down requirements.
         // For RepartitionExec, we always choose to not push down the sort requirements even the RepartitionExec(input_partition=1) could maintain input ordering.
         // Pushing down is not beneficial
         Ok(None)
     } else {
-        Ok(Some(
-            maintains_input_order
-                .iter()
-                .map(|flag| {
-                    if *flag {
-                        parent_required.map(|elem| elem.to_vec())
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<_>>(),
-        ))
+        Ok(Some(vec![
+            parent_required.map(|elem| elem.to_vec());
+            plan.children().len()
+        ]))
     }
     // TODO: Add support for Projection push down
 }
@@ -345,7 +336,7 @@ fn try_pushdown_requirements_to_join(
         }
         RequirementsCompatibility::NonCompatible => {
             // Can not push down, add new SortExec
-            add_sort_above(&mut plan.clone(), sort_expr, None)?;
+            add_sort_above(&mut plan.clone(), sort_expr)?;
             Ok(None)
         }
     }

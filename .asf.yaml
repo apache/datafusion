@@ -21,8 +21,8 @@
 # https://cwiki.apache.org/confluence/display/INFRA/Git+-+.asf.yaml+features
 
 notifications:
-  commits: commits@arrow.apache.org
-  issues: github@arrow.apache.org
+  commits:      commits@arrow.apache.org
+  issues:       github@arrow.apache.org
   pullrequests: github@arrow.apache.org
   jira_options: link label worklog
 github:
@@ -44,8 +44,6 @@ github:
     rebase: false
   features:
     issues: true
-  protected_branches:
-    main: { }
 
 # publishes the content of the `asf-site` branch to
 # https://arrow.apache.org/datafusion/

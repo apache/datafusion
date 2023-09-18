@@ -27,7 +27,7 @@ use crate::{
 };
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr::{Alias, Cast, InList, ScalarFunction, ScalarUDF};
+use datafusion_expr::expr::{Cast, InList, ScalarFunction, ScalarUDF};
 use datafusion_expr::{
     binary_expr, Between, BinaryExpr, Expr, GetIndexedField, Like, Operator, TryCast,
 };
@@ -57,7 +57,7 @@ pub fn create_physical_expr(
         )));
     }
     match e {
-        Expr::Alias(Alias { expr, .. }) => Ok(create_physical_expr(
+        Expr::Alias(expr, ..) => Ok(create_physical_expr(
             expr,
             input_dfschema,
             input_schema,
@@ -228,7 +228,6 @@ pub fn create_physical_expr(
             expr,
             pattern,
             escape_char,
-            case_insensitive,
         }) => {
             if escape_char.is_some() {
                 return Err(DataFusionError::Execution(
@@ -249,7 +248,38 @@ pub fn create_physical_expr(
             )?;
             like(
                 *negated,
-                *case_insensitive,
+                false,
+                physical_expr,
+                physical_pattern,
+                input_schema,
+            )
+        }
+        Expr::ILike(Like {
+            negated,
+            expr,
+            pattern,
+            escape_char,
+        }) => {
+            if escape_char.is_some() {
+                return Err(DataFusionError::Execution(
+                    "ILIKE does not support escape_char".to_string(),
+                ));
+            }
+            let physical_expr = create_physical_expr(
+                expr,
+                input_dfschema,
+                input_schema,
+                execution_props,
+            )?;
+            let physical_pattern = create_physical_expr(
+                pattern,
+                input_dfschema,
+                input_schema,
+                execution_props,
+            )?;
+            like(
+                *negated,
+                true,
                 physical_expr,
                 physical_pattern,
                 input_schema,

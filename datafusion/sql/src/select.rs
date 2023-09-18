@@ -15,17 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashSet;
-use std::sync::Arc;
-
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use crate::utils::{
     check_columns_satisfy_exprs, extract_aliases, rebase_expr, resolve_aliases_to_exprs,
     resolve_columns, resolve_positions_to_exprs,
 };
-
-use datafusion_common::{get_target_functional_dependencies, DFSchemaRef, DataFusionError, Result};
-use datafusion_expr::expr::Alias;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::expr_rewriter::{
     normalize_col, normalize_col_with_schemas_and_ambiguity_check,
 };
@@ -34,10 +29,13 @@ use datafusion_expr::utils::{
     expand_qualified_wildcard, expand_wildcard, expr_as_column_expr, expr_to_columns,
     find_aggregate_exprs, find_window_exprs,
 };
-
+use datafusion_expr::Expr::Alias;
 use datafusion_expr::{Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning};
+
 use sqlparser::ast::{Distinct, Expr as SQLExpr, WildcardAdditionalOptions, WindowType};
 use sqlparser::ast::{NamedWindowDefinition, Select, SelectItem, TableWithJoins};
+use std::collections::HashSet;
+use std::sync::Arc;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// Generate a logic plan from an SQL select
@@ -335,7 +333,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     &[&[plan.schema()]],
                     &plan.using_columns()?,
                 )?;
-                let expr = Expr::Alias(Alias::new(col, self.normalizer.normalize(alias)));
+                let expr = Alias(Box::new(col), self.normalizer.normalize(alias));
                 Ok(vec![expr])
             }
             SelectItem::Wildcard(options) => {
@@ -414,9 +412,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         group_by_exprs: Vec<Expr>,
         aggr_exprs: Vec<Expr>,
     ) -> Result<(LogicalPlan, Vec<Expr>, Option<Expr>)> {
-        let group_by_exprs =
-            get_updated_group_by_exprs(&group_by_exprs, select_exprs, input.schema())?;
-
         // create the aggregate plan
         let plan = LogicalPlanBuilder::from(input.clone())
             .aggregate(group_by_exprs.clone(), aggr_exprs.clone())?
@@ -539,58 +534,4 @@ fn match_window_definitions(
         }
     }
     Ok(())
-}
-
-/// Update group by exprs, according to functional dependencies
-/// The query below
-///
-/// SELECT sn, amount
-/// FROM sales_global
-/// GROUP BY sn
-///
-/// cannot be calculated, because it has a column(`amount`) which is not
-/// part of group by expression.
-/// However, if we know that, `sn` is determinant of `amount`. We can
-/// safely, determine value of `amount` for each distinct `sn`. For these cases
-/// we rewrite the query above as
-///
-/// SELECT sn, amount
-/// FROM sales_global
-/// GROUP BY sn, amount
-///
-/// Both queries, are functionally same. \[Because, (`sn`, `amount`) and (`sn`)
-/// defines the identical groups. \]
-/// This function updates group by expressions such that select expressions that are
-/// not in group by expression, are added to the group by expressions if they are dependent
-/// of the sub-set of group by expressions.
-fn get_updated_group_by_exprs(
-    group_by_exprs: &[Expr],
-    select_exprs: &[Expr],
-    schema: &DFSchemaRef,
-) -> Result<Vec<Expr>> {
-    let mut new_group_by_exprs = group_by_exprs.to_vec();
-    let fields = schema.fields();
-    let group_by_expr_names = group_by_exprs
-        .iter()
-        .map(|group_by_expr| group_by_expr.display_name())
-        .collect::<Result<Vec<_>>>()?;
-    // Get targets that can be used in a select, even if they do not occur in aggregation:
-    if let Some(target_indices) = get_target_functional_dependencies(schema, &group_by_expr_names) {
-        // Calculate dependent fields names with determinant GROUP BY expression:
-        let associated_field_names = target_indices
-            .iter()
-            .map(|idx| fields[*idx].qualified_name())
-            .collect::<Vec<_>>();
-        // Expand GROUP BY expressions with select expressions: If a GROUP
-        // BY expression is a determinant key, we can use its dependent
-        // columns in select statements also.
-        for expr in select_exprs {
-            let expr_name = format!("{}", expr);
-            if !new_group_by_exprs.contains(expr) && associated_field_names.contains(&expr_name) {
-                new_group_by_exprs.push(expr.clone());
-            }
-        }
-    }
-
-    Ok(new_group_by_exprs)
 }

@@ -17,15 +17,13 @@
 
 //! Sort expressions
 
-use std::hash::{Hash, Hasher};
-use std::sync::Arc;
-
 use crate::PhysicalExpr;
-
 use arrow::compute::kernels::sort::{SortColumn, SortOptions};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 /// Represents Sort operation for a column in a RecordBatch
 #[derive(Clone, Debug)]
@@ -228,9 +226,6 @@ fn to_str(options: &SortOptions) -> &str {
 
 ///`LexOrdering` is a type alias for lexicographical ordering definition`Vec<PhysicalSortExpr>`
 pub type LexOrdering = Vec<PhysicalSortExpr>;
-
-///`LexOrderingRef` is a type alias for lexicographical ordering reference &`[PhysicalSortExpr]`
-pub type LexOrderingRef<'a> = &'a [PhysicalSortExpr];
 
 ///`LexOrderingReq` is a type alias for lexicographical ordering requirement definition`Vec<PhysicalSortRequirement>`
 pub type LexOrderingReq = Vec<PhysicalSortRequirement>;

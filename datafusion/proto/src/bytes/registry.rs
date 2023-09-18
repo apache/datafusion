@@ -19,7 +19,7 @@ use std::{collections::HashSet, sync::Arc};
 
 use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
+use datafusion_expr::{AggregateUDF, ScalarUDF};
 
 /// A default [`FunctionRegistry`] registry that does not resolve any
 /// user defined functions
@@ -39,12 +39,6 @@ impl FunctionRegistry for NoRegistry {
     fn udaf(&self, name: &str) -> Result<Arc<AggregateUDF>> {
         Err(DataFusionError::Plan(
             format!("No function registry provided to deserialize, so can not deserialize User Defined Aggregate Function '{name}'"))
-        )
-    }
-
-    fn udwf(&self, name: &str) -> Result<Arc<WindowUDF>> {
-        Err(DataFusionError::Plan(
-            format!("No function registry provided to deserialize, so can not deserialize User Defined Window Function '{name}'"))
         )
     }
 }

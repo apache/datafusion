@@ -20,7 +20,7 @@
 use std::any::Any;
 use std::collections::HashSet;
 use std::fmt;
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::sync::Arc;
 
 use arrow::csv::WriterBuilder;
@@ -51,7 +51,7 @@ use crate::datasource::physical_plan::{
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::insert::{DataSink, InsertExec};
-use crate::physical_plan::{DisplayAs, DisplayFormatType, Statistics};
+use crate::physical_plan::Statistics;
 use crate::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
 
 /// The default file extension of csv files
@@ -61,8 +61,6 @@ pub const DEFAULT_CSV_EXTENSION: &str = ".csv";
 pub struct CsvFormat {
     has_header: bool,
     delimiter: u8,
-    quote: u8,
-    escape: Option<u8>,
     schema_infer_max_rec: Option<usize>,
     file_compression_type: FileCompressionType,
 }
@@ -73,8 +71,6 @@ impl Default for CsvFormat {
             schema_infer_max_rec: Some(DEFAULT_SCHEMA_INFER_MAX_RECORD),
             has_header: true,
             delimiter: b',',
-            quote: b'"',
-            escape: None,
             file_compression_type: FileCompressionType::UNCOMPRESSED,
         }
     }
@@ -163,20 +159,6 @@ impl CsvFormat {
         self
     }
 
-    /// The quote character in a row.
-    /// - default to '"'
-    pub fn with_quote(mut self, quote: u8) -> Self {
-        self.quote = quote;
-        self
-    }
-
-    /// The escape character in a row.
-    /// - default is None
-    pub fn with_escape(mut self, escape: Option<u8>) -> Self {
-        self.escape = escape;
-        self
-    }
-
     /// Set a `FileCompressionType` of CSV
     /// - defaults to `FileCompressionType::UNCOMPRESSED`
     pub fn with_file_compression_type(
@@ -190,16 +172,6 @@ impl CsvFormat {
     /// The delimiter character.
     pub fn delimiter(&self) -> u8 {
         self.delimiter
-    }
-
-    /// The quote character.
-    pub fn quote(&self) -> u8 {
-        self.quote
-    }
-
-    /// The escape character.
-    pub fn escape(&self) -> Option<u8> {
-        self.escape
     }
 }
 
@@ -255,8 +227,6 @@ impl FileFormat for CsvFormat {
             conf,
             self.has_header,
             self.delimiter,
-            self.quote,
-            self.escape,
             self.file_compression_type.to_owned(),
         );
         Ok(Arc::new(exec))
@@ -268,7 +238,6 @@ impl FileFormat for CsvFormat {
         _state: &SessionState,
         conf: FileSinkConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let sink_schema = conf.output_schema().clone();
         let sink = Arc::new(CsvSink::new(
             conf,
             self.has_header,
@@ -276,7 +245,7 @@ impl FileFormat for CsvFormat {
             self.file_compression_type.clone(),
         ));
 
-        Ok(Arc::new(InsertExec::new(input, sink, sink_schema)) as _)
+        Ok(Arc::new(InsertExec::new(input, sink)) as _)
     }
 }
 
@@ -474,19 +443,14 @@ impl Debug for CsvSink {
     }
 }
 
-impl DisplayAs for CsvSink {
-    fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(
-                    f,
-                    "CsvSink(writer_mode={:?}, file_groups=",
-                    self.config.writer_mode
-                )?;
-                FileGroupDisplay(&self.config.file_groups).fmt_as(t, f)?;
-                write!(f, ")")
-            }
-        }
+impl Display for CsvSink {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "CsvSink(writer_mode={:?}, file_groups={})",
+            self.config.writer_mode,
+            FileGroupDisplay(&self.config.file_groups),
+        )
     }
 }
 
@@ -628,13 +592,8 @@ impl DataSink for CsvSink {
 mod tests {
     use super::super::test_util::scan_format;
     use super::*;
-    use crate::arrow::util::pretty;
     use crate::assert_batches_eq;
-    use crate::datasource::file_format::file_type::FileCompressionType;
-    use crate::datasource::file_format::file_type::FileType;
-    use crate::datasource::file_format::file_type::GetExt;
     use crate::datasource::file_format::test_util::VariableStream;
-    use crate::datasource::listing::ListingOptions;
     use crate::physical_plan::collect;
     use crate::prelude::{CsvReadOptions, SessionConfig, SessionContext};
     use crate::test_util::arrow_test_data;
@@ -646,7 +605,6 @@ mod tests {
     use futures::StreamExt;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
-    use regex::Regex;
     use rstest::*;
 
     #[tokio::test]
@@ -959,367 +917,6 @@ mod tests {
             "2,1\n5,-40\n1,29\n1,-85\n5,-82\n4,-111\n3,104\n3,13\n1,38\n4,-38\n",
             String::from_utf8(bytes.into()).unwrap()
         );
-        Ok(())
-    }
-
-    /// Explain the `sql` query under `ctx` to make sure the underlying csv scan is parallelized
-    /// e.g. "CsvExec: file_groups={2 groups:" in plan means 2 CsvExec runs concurrently
-    async fn count_query_csv_partitions(
-        ctx: &SessionContext,
-        sql: &str,
-    ) -> Result<usize> {
-        let df = ctx.sql(&format!("EXPLAIN {sql}")).await?;
-        let result = df.collect().await?;
-        let plan = format!("{}", &pretty::pretty_format_batches(&result)?);
-
-        let re = Regex::new(r"CsvExec: file_groups=\{(\d+) group").unwrap();
-
-        if let Some(captures) = re.captures(&plan) {
-            if let Some(match_) = captures.get(1) {
-                let n_partitions = match_.as_str().parse::<usize>().unwrap();
-                return Ok(n_partitions);
-            }
-        }
-
-        Err(DataFusionError::Internal(
-            "query contains no CsvExec".to_string(),
-        ))
-    }
-
-    #[rstest(n_partitions, case(1), case(2), case(3), case(4))]
-    #[tokio::test]
-    async fn test_csv_parallel_basic(n_partitions: usize) -> Result<()> {
-        let config = SessionConfig::new()
-            .with_repartition_file_scans(true)
-            .with_repartition_file_min_size(0)
-            .with_target_partitions(n_partitions);
-        let ctx = SessionContext::with_config(config);
-        let testdata = arrow_test_data();
-        ctx.register_csv(
-            "aggr",
-            &format!("{testdata}/csv/aggregate_test_100.csv"),
-            CsvReadOptions::new().has_header(true),
-        )
-        .await?;
-
-        let query = "select sum(c2) from aggr;";
-        let query_result = ctx.sql(query).await?.collect().await?;
-        let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
-
-        #[rustfmt::skip]
-        let expected = vec![
-            "+--------------+",
-            "| SUM(aggr.c2) |",
-            "+--------------+",
-            "| 285          |",
-            "+--------------+",
-        ];
-        assert_batches_eq!(expected, &query_result);
-        assert_eq!(n_partitions, actual_partitions);
-
-        Ok(())
-    }
-
-    #[rstest(n_partitions, case(1), case(2), case(3), case(4))]
-    #[tokio::test]
-    async fn test_csv_parallel_compressed(n_partitions: usize) -> Result<()> {
-        let config = SessionConfig::new()
-            .with_repartition_file_scans(true)
-            .with_repartition_file_min_size(0)
-            .with_target_partitions(n_partitions);
-        let csv_options = CsvReadOptions::default()
-            .has_header(true)
-            .file_compression_type(FileCompressionType::GZIP)
-            .file_extension("csv.gz");
-        let ctx = SessionContext::with_config(config);
-        let testdata = arrow_test_data();
-        ctx.register_csv(
-            "aggr",
-            &format!("{testdata}/csv/aggregate_test_100.csv.gz"),
-            csv_options,
-        )
-        .await?;
-
-        let query = "select sum(c3) from aggr;";
-        let query_result = ctx.sql(query).await?.collect().await?;
-        let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
-
-        #[rustfmt::skip]
-        let expected = vec![
-            "+--------------+",
-            "| SUM(aggr.c3) |",
-            "+--------------+",
-            "| 781          |",
-            "+--------------+",
-        ];
-        assert_batches_eq!(expected, &query_result);
-        assert_eq!(1, actual_partitions); // Compressed csv won't be scanned in parallel
-
-        Ok(())
-    }
-
-    /// Read a single empty csv file in parallel
-    ///
-    /// empty_0_byte.csv:
-    /// (file is empty)
-    #[rstest(n_partitions, case(1), case(2), case(3), case(4))]
-    #[tokio::test]
-    async fn test_csv_parallel_empty_file(n_partitions: usize) -> Result<()> {
-        let config = SessionConfig::new()
-            .with_repartition_file_scans(true)
-            .with_repartition_file_min_size(0)
-            .with_target_partitions(n_partitions);
-        let ctx = SessionContext::with_config(config);
-        ctx.register_csv(
-            "empty",
-            "tests/data/empty_0_byte.csv",
-            CsvReadOptions::new().has_header(false),
-        )
-        .await?;
-
-        // Require a predicate to enable repartition for the optimizer
-        let query = "select * from empty where random() > 0.5;";
-        let query_result = ctx.sql(query).await?.collect().await?;
-        let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
-
-        #[rustfmt::skip]
-        let expected = vec![
-            "++",
-            "++",
-        ];
-        assert_batches_eq!(expected, &query_result);
-        assert_eq!(1, actual_partitions); // Won't get partitioned if all files are empty
-
-        Ok(())
-    }
-
-    /// Read a single empty csv file with header in parallel
-    ///
-    /// empty.csv:
-    /// c1,c2,c3
-    #[rstest(n_partitions, case(1), case(2), case(3))]
-    #[tokio::test]
-    async fn test_csv_parallel_empty_with_header(n_partitions: usize) -> Result<()> {
-        let config = SessionConfig::new()
-            .with_repartition_file_scans(true)
-            .with_repartition_file_min_size(0)
-            .with_target_partitions(n_partitions);
-        let ctx = SessionContext::with_config(config);
-        ctx.register_csv(
-            "empty",
-            "tests/data/empty.csv",
-            CsvReadOptions::new().has_header(true),
-        )
-        .await?;
-
-        // Require a predicate to enable repartition for the optimizer
-        let query = "select * from empty where random() > 0.5;";
-        let query_result = ctx.sql(query).await?.collect().await?;
-        let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
-
-        #[rustfmt::skip]
-        let expected = vec![
-            "++",
-            "++",
-        ];
-        assert_batches_eq!(expected, &query_result);
-        assert_eq!(n_partitions, actual_partitions);
-
-        Ok(())
-    }
-
-    /// Read multiple empty csv files in parallel
-    ///
-    /// all_empty
-    /// ├── empty0.csv
-    /// ├── empty1.csv
-    /// └── empty2.csv
-    ///
-    /// empty0.csv/empty1.csv/empty2.csv:
-    /// (file is empty)
-    #[rstest(n_partitions, case(1), case(2), case(3), case(4))]
-    #[tokio::test]
-    async fn test_csv_parallel_multiple_empty_files(n_partitions: usize) -> Result<()> {
-        let config = SessionConfig::new()
-            .with_repartition_file_scans(true)
-            .with_repartition_file_min_size(0)
-            .with_target_partitions(n_partitions);
-        let ctx = SessionContext::with_config(config);
-        let file_format = CsvFormat::default().with_has_header(false);
-        let listing_options = ListingOptions::new(Arc::new(file_format))
-            .with_file_extension(FileType::CSV.get_ext());
-        ctx.register_listing_table(
-            "empty",
-            "tests/data/empty_files/all_empty/",
-            listing_options,
-            None,
-            None,
-        )
-        .await
-        .unwrap();
-
-        // Require a predicate to enable repartition for the optimizer
-        let query = "select * from empty where random() > 0.5;";
-        let query_result = ctx.sql(query).await?.collect().await?;
-        let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
-
-        #[rustfmt::skip]
-        let expected = vec![
-            "++",
-            "++",
-        ];
-        assert_batches_eq!(expected, &query_result);
-        assert_eq!(1, actual_partitions); // Won't get partitioned if all files are empty
-
-        Ok(())
-    }
-
-    /// Read multiple csv files (some are empty) in parallel
-    ///
-    /// some_empty
-    /// ├── a_empty.csv
-    /// ├── b.csv
-    /// ├── c_empty.csv
-    /// ├── d.csv
-    /// └── e_empty.csv
-    ///
-    /// a_empty.csv/c_empty.csv/e_empty.csv:
-    /// (file is empty)
-    ///
-    /// b.csv/d.csv:
-    /// 1\n
-    /// 1\n
-    /// 1\n
-    /// 1\n
-    /// 1\n
-    #[rstest(n_partitions, case(1), case(2), case(3), case(4))]
-    #[tokio::test]
-    async fn test_csv_parallel_some_file_empty(n_partitions: usize) -> Result<()> {
-        let config = SessionConfig::new()
-            .with_repartition_file_scans(true)
-            .with_repartition_file_min_size(0)
-            .with_target_partitions(n_partitions);
-        let ctx = SessionContext::with_config(config);
-        let file_format = CsvFormat::default().with_has_header(false);
-        let listing_options = ListingOptions::new(Arc::new(file_format))
-            .with_file_extension(FileType::CSV.get_ext());
-        ctx.register_listing_table(
-            "empty",
-            "tests/data/empty_files/some_empty",
-            listing_options,
-            None,
-            None,
-        )
-        .await
-        .unwrap();
-
-        // Require a predicate to enable repartition for the optimizer
-        let query = "select sum(column_1) from empty where column_1 > 0;";
-        let query_result = ctx.sql(query).await?.collect().await?;
-        let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
-
-        #[rustfmt::skip]
-        let expected = vec![
-            "+---------------------+",
-            "| SUM(empty.column_1) |",
-            "+---------------------+",
-            "| 10                  |",
-            "+---------------------+",
-        ];
-        assert_batches_eq!(expected, &query_result);
-        assert_eq!(n_partitions, actual_partitions); // Won't get partitioned if all files are empty
-
-        Ok(())
-    }
-
-    /// Parallel scan on a csv file with only 1 byte in each line
-    /// Testing partition byte range land on line boundaries
-    ///
-    /// one_col.csv:
-    /// 5\n
-    /// 5\n
-    /// (...10 rows total)
-    #[rstest(n_partitions, case(1), case(2), case(3), case(5), case(10), case(32))]
-    #[tokio::test]
-    async fn test_csv_parallel_one_col(n_partitions: usize) -> Result<()> {
-        let config = SessionConfig::new()
-            .with_repartition_file_scans(true)
-            .with_repartition_file_min_size(0)
-            .with_target_partitions(n_partitions);
-        let ctx = SessionContext::with_config(config);
-
-        ctx.register_csv(
-            "one_col",
-            "tests/data/one_col.csv",
-            CsvReadOptions::new().has_header(false),
-        )
-        .await?;
-
-        let query = "select sum(column_1) from one_col where column_1 > 0;";
-        let query_result = ctx.sql(query).await?.collect().await?;
-        let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
-
-        #[rustfmt::skip]
-        let expected = vec![
-            "+-----------------------+",
-            "| SUM(one_col.column_1) |",
-            "+-----------------------+",
-            "| 50                    |",
-            "+-----------------------+",
-        ];
-        let file_size = if cfg!(target_os = "windows") {
-            30 // new line on Win is '\r\n'
-        } else {
-            20
-        };
-        // A 20-Byte file at most get partitioned into 20 chunks
-        let expected_partitions = if n_partitions <= file_size {
-            n_partitions
-        } else {
-            file_size
-        };
-        assert_batches_eq!(expected, &query_result);
-        assert_eq!(expected_partitions, actual_partitions);
-
-        Ok(())
-    }
-
-    /// Parallel scan on a csv file with 2 wide rows
-    /// The byte range of a partition might be within some line
-    ///
-    /// wode_rows.csv:
-    /// 1, 1, ..., 1\n (100 columns total)
-    /// 2, 2, ..., 2\n
-    #[rstest(n_partitions, case(1), case(2), case(10), case(16))]
-    #[tokio::test]
-    async fn test_csv_parallel_wide_rows(n_partitions: usize) -> Result<()> {
-        let config = SessionConfig::new()
-            .with_repartition_file_scans(true)
-            .with_repartition_file_min_size(0)
-            .with_target_partitions(n_partitions);
-        let ctx = SessionContext::with_config(config);
-        ctx.register_csv(
-            "wide_rows",
-            "tests/data/wide_rows.csv",
-            CsvReadOptions::new().has_header(false),
-        )
-        .await?;
-
-        let query = "select sum(column_1) + sum(column_33) + sum(column_50) + sum(column_77) + sum(column_100) as sum_of_5_cols from wide_rows where column_1 > 0;";
-        let query_result = ctx.sql(query).await?.collect().await?;
-        let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
-
-        #[rustfmt::skip]
-        let expected = vec![
-            "+---------------+",
-            "| sum_of_5_cols |",
-            "+---------------+",
-            "| 15            |",
-            "+---------------+",
-        ];
-        assert_batches_eq!(expected, &query_result);
-        assert_eq!(n_partitions, actual_partitions);
-
         Ok(())
     }
 }

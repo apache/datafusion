@@ -15,9 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Merge that deals with an arbitrary size of streaming inputs.
-//! This is an order-preserving merge.
-
 use crate::physical_plan::metrics::BaselineMetrics;
 use crate::physical_plan::sorts::builder::BatchBuilder;
 use crate::physical_plan::sorts::cursor::Cursor;
@@ -42,38 +39,35 @@ macro_rules! primitive_merge_helper {
 }
 
 macro_rules! merge_helper {
-    ($t:ty, $sort:ident, $streams:ident, $schema:ident, $tracking_metrics:ident, $batch_size:ident, $fetch:ident) => {{
+    ($t:ty, $sort:ident, $streams:ident, $schema:ident, $tracking_metrics:ident, $batch_size:ident) => {{
         let streams = FieldCursorStream::<$t>::new($sort, $streams);
         return Ok(Box::pin(SortPreservingMergeStream::new(
             Box::new(streams),
             $schema,
             $tracking_metrics,
             $batch_size,
-            $fetch,
         )));
     }};
 }
 
-/// Perform a streaming merge of [`SendableRecordBatchStream`] based on provided sort expressions
-/// while preserving order.
-pub fn streaming_merge(
+/// Perform a streaming merge of [`SendableRecordBatchStream`]
+pub(crate) fn streaming_merge(
     streams: Vec<SendableRecordBatchStream>,
     schema: SchemaRef,
     expressions: &[PhysicalSortExpr],
     metrics: BaselineMetrics,
     batch_size: usize,
-    fetch: Option<usize>,
 ) -> Result<SendableRecordBatchStream> {
     // Special case single column comparisons with optimized cursor implementations
     if expressions.len() == 1 {
         let sort = expressions[0].clone();
         let data_type = sort.expr.data_type(schema.as_ref())?;
         downcast_primitive! {
-            data_type => (primitive_merge_helper, sort, streams, schema, metrics, batch_size, fetch),
-            DataType::Utf8 => merge_helper!(StringArray, sort, streams, schema, metrics, batch_size, fetch)
-            DataType::LargeUtf8 => merge_helper!(LargeStringArray, sort, streams, schema, metrics, batch_size, fetch)
-            DataType::Binary => merge_helper!(BinaryArray, sort, streams, schema, metrics, batch_size, fetch)
-            DataType::LargeBinary => merge_helper!(LargeBinaryArray, sort, streams, schema, metrics, batch_size, fetch)
+            data_type => (primitive_merge_helper, sort, streams, schema, metrics, batch_size),
+            DataType::Utf8 => merge_helper!(StringArray, sort, streams, schema, metrics, batch_size)
+            DataType::LargeUtf8 => merge_helper!(LargeStringArray, sort, streams, schema, metrics, batch_size)
+            DataType::Binary => merge_helper!(BinaryArray, sort, streams, schema, metrics, batch_size)
+            DataType::LargeBinary => merge_helper!(LargeBinaryArray, sort, streams, schema, metrics, batch_size)
             _ => {}
         }
     }
@@ -84,7 +78,6 @@ pub fn streaming_merge(
         schema,
         metrics,
         batch_size,
-        fetch,
     )))
 }
 
@@ -147,12 +140,6 @@ struct SortPreservingMergeStream<C> {
 
     /// Vector that holds cursors for each non-exhausted input partition
     cursors: Vec<Option<C>>,
-
-    /// Optional number of rows to fetch
-    fetch: Option<usize>,
-
-    /// number of rows produced
-    produced: usize,
 }
 
 impl<C: Cursor> SortPreservingMergeStream<C> {
@@ -161,7 +148,6 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
         schema: SchemaRef,
         metrics: BaselineMetrics,
         batch_size: usize,
-        fetch: Option<usize>,
     ) -> Self {
         let stream_count = streams.partitions();
 
@@ -174,8 +160,6 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
             loser_tree: vec![],
             loser_tree_adjusted: false,
             batch_size,
-            fetch,
-            produced: 0,
         }
     }
 
@@ -243,25 +227,13 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
             if self.advance(stream_idx) {
                 self.loser_tree_adjusted = false;
                 self.in_progress.push_row(stream_idx);
-
-                // stop sorting if fetch has been reached
-                if self.fetch_reached() {
-                    self.aborted = true;
-                } else if self.in_progress.len() < self.batch_size {
+                if self.in_progress.len() < self.batch_size {
                     continue;
                 }
             }
 
-            self.produced += self.in_progress.len();
-
             return Poll::Ready(self.in_progress.build_record_batch().transpose());
         }
-    }
-
-    fn fetch_reached(&mut self) -> bool {
-        self.fetch
-            .map(|fetch| self.produced + self.in_progress.len() >= fetch)
-            .unwrap_or(false)
     }
 
     fn advance(&mut self, stream_idx: usize) -> bool {

@@ -42,7 +42,9 @@ impl OptimizerRule for EliminateProjection {
             LogicalPlan::Projection(projection) => {
                 let child_plan = projection.input.as_ref();
                 match child_plan {
-                    LogicalPlan::Union(_)
+                    LogicalPlan::Join(_)
+                    | LogicalPlan::CrossJoin(_)
+                    | LogicalPlan::Union(_)
                     | LogicalPlan::Filter(_)
                     | LogicalPlan::TableScan(_)
                     | LogicalPlan::SubqueryAlias(_)

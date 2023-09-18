@@ -115,7 +115,6 @@ python/requirements*.txt
 benchmarks/queries/*
 benchmarks/expected-plans/*
 benchmarks/data/*
-datafusion-cli/tests/data/*
 ci/*
 **/*.svg
 **/*.csv

@@ -21,7 +21,7 @@ use arrow::array::ArrayRef;
 use arrow::array::{Float32Array, Float64Array, Int64Array};
 use arrow::datatypes::DataType;
 use datafusion_common::ScalarValue;
-use datafusion_common::ScalarValue::{Float32, Int64};
+use datafusion_common::ScalarValue::Float32;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 use rand::{thread_rng, Rng};
@@ -158,6 +158,7 @@ math_unary_function!("acosh", acosh);
 math_unary_function!("atanh", atanh);
 math_unary_function!("floor", floor);
 math_unary_function!("ceil", ceil);
+math_unary_function!("trunc", trunc);
 math_unary_function!("abs", abs);
 math_unary_function!("signum", signum);
 math_unary_function!("exp", exp);
@@ -496,108 +497,6 @@ pub fn log(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-///cot SQL function
-pub fn cot(args: &[ArrayRef]) -> Result<ArrayRef> {
-    match args[0].data_type() {
-        DataType::Float64 => Ok(Arc::new(make_function_scalar_inputs!(
-            &args[0],
-            "x",
-            Float64Array,
-            { compute_cot64 }
-        )) as ArrayRef),
-
-        DataType::Float32 => Ok(Arc::new(make_function_scalar_inputs!(
-            &args[0],
-            "x",
-            Float32Array,
-            { compute_cot32 }
-        )) as ArrayRef),
-
-        other => Err(DataFusionError::Internal(format!(
-            "Unsupported data type {other:?} for function cot"
-        ))),
-    }
-}
-
-fn compute_cot32(x: f32) -> f32 {
-    let a = f32::tan(x);
-    1.0 / a
-}
-
-fn compute_cot64(x: f64) -> f64 {
-    let a = f64::tan(x);
-    1.0 / a
-}
-
-/// Truncate(numeric, decimalPrecision) and trunc(numeric) SQL function
-pub fn trunc(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 1 && args.len() != 2 {
-        return Err(DataFusionError::Internal(format!(
-            "truncate function requires one or two arguments, got {}",
-            args.len()
-        )));
-    }
-
-    //if only one arg then invoke toolchain trunc(num) and precision = 0 by default
-    //or then invoke the compute_truncate method to process precision
-    let num = &args[0];
-    let precision = if args.len() == 1 {
-        ColumnarValue::Scalar(Int64(Some(0)))
-    } else {
-        ColumnarValue::Array(args[1].clone())
-    };
-
-    match args[0].data_type() {
-        DataType::Float64 => match precision {
-            ColumnarValue::Scalar(Int64(Some(0))) => Ok(Arc::new(
-                make_function_scalar_inputs!(num, "num", Float64Array, { f64::trunc }),
-            ) as ArrayRef),
-            ColumnarValue::Array(precision) => Ok(Arc::new(make_function_inputs2!(
-                num,
-                precision,
-                "x",
-                "y",
-                Float64Array,
-                Int64Array,
-                { compute_truncate64 }
-            )) as ArrayRef),
-            _ => Err(DataFusionError::Internal(
-                "trunc function requires a scalar or array for precision".to_string(),
-            )),
-        },
-        DataType::Float32 => match precision {
-            ColumnarValue::Scalar(Int64(Some(0))) => Ok(Arc::new(
-                make_function_scalar_inputs!(num, "num", Float32Array, { f32::trunc }),
-            ) as ArrayRef),
-            ColumnarValue::Array(precision) => Ok(Arc::new(make_function_inputs2!(
-                num,
-                precision,
-                "x",
-                "y",
-                Float32Array,
-                Int64Array,
-                { compute_truncate32 }
-            )) as ArrayRef),
-            _ => Err(DataFusionError::Internal(
-                "trunc function requires a scalar or array for precision".to_string(),
-            )),
-        },
-        other => Err(DataFusionError::Internal(format!(
-            "Unsupported data type {other:?} for function trunc"
-        ))),
-    }
-}
-
-fn compute_truncate32(x: f32, y: i64) -> f32 {
-    let factor = 10.0_f32.powi(y as i32);
-    (x * factor).round() / factor
-}
-
-fn compute_truncate64(x: f64, y: i64) -> f64 {
-    let factor = 10.0_f64.powi(y as i32);
-    (x * factor).round() / factor
-}
-
 #[cfg(test)]
 mod tests {
 
@@ -839,123 +738,5 @@ mod tests {
         assert_eq!(ints.value(1), 6);
         assert_eq!(ints.value(2), 75);
         assert_eq!(ints.value(3), 16);
-    }
-
-    #[test]
-    fn test_cot_f32() {
-        let args: Vec<ArrayRef> =
-            vec![Arc::new(Float32Array::from(vec![12.1, 30.0, 90.0, -30.0]))];
-        let result = cot(&args).expect("failed to initialize function cot");
-        let floats =
-            as_float32_array(&result).expect("failed to initialize function cot");
-
-        let expected = Float32Array::from(vec![
-            -1.986_460_4,
-            -0.156_119_96,
-            -0.501_202_8,
-            0.156_119_96,
-        ]);
-
-        let eps = 1e-6;
-        assert_eq!(floats.len(), 4);
-        assert!((floats.value(0) - expected.value(0)).abs() < eps);
-        assert!((floats.value(1) - expected.value(1)).abs() < eps);
-        assert!((floats.value(2) - expected.value(2)).abs() < eps);
-        assert!((floats.value(3) - expected.value(3)).abs() < eps);
-    }
-
-    #[test]
-    fn test_cot_f64() {
-        let args: Vec<ArrayRef> =
-            vec![Arc::new(Float64Array::from(vec![12.1, 30.0, 90.0, -30.0]))];
-        let result = cot(&args).expect("failed to initialize function cot");
-        let floats =
-            as_float64_array(&result).expect("failed to initialize function cot");
-
-        let expected = Float64Array::from(vec![
-            -1.986_458_685_881_4,
-            -0.156_119_952_161_6,
-            -0.501_202_783_380_1,
-            0.156_119_952_161_6,
-        ]);
-
-        let eps = 1e-12;
-        assert_eq!(floats.len(), 4);
-        assert!((floats.value(0) - expected.value(0)).abs() < eps);
-        assert!((floats.value(1) - expected.value(1)).abs() < eps);
-        assert!((floats.value(2) - expected.value(2)).abs() < eps);
-        assert!((floats.value(3) - expected.value(3)).abs() < eps);
-    }
-
-    #[test]
-    fn test_truncate_32() {
-        let args: Vec<ArrayRef> = vec![
-            Arc::new(Float32Array::from(vec![
-                15.0,
-                1_234.267_8,
-                1_233.123_4,
-                3.312_979_2,
-                -21.123_4,
-            ])),
-            Arc::new(Int64Array::from(vec![0, 3, 2, 5, 6])),
-        ];
-
-        let result = trunc(&args).expect("failed to initialize function truncate");
-        let floats =
-            as_float32_array(&result).expect("failed to initialize function truncate");
-
-        assert_eq!(floats.len(), 5);
-        assert_eq!(floats.value(0), 15.0);
-        assert_eq!(floats.value(1), 1_234.268);
-        assert_eq!(floats.value(2), 1_233.12);
-        assert_eq!(floats.value(3), 3.312_98);
-        assert_eq!(floats.value(4), -21.123_4);
-    }
-
-    #[test]
-    fn test_truncate_64() {
-        let args: Vec<ArrayRef> = vec![
-            Arc::new(Float64Array::from(vec![
-                5.0,
-                234.267_812_176,
-                123.123_456_789,
-                123.312_979_313_2,
-                -321.123_1,
-            ])),
-            Arc::new(Int64Array::from(vec![0, 3, 2, 5, 6])),
-        ];
-
-        let result = trunc(&args).expect("failed to initialize function truncate");
-        let floats =
-            as_float64_array(&result).expect("failed to initialize function truncate");
-
-        assert_eq!(floats.len(), 5);
-        assert_eq!(floats.value(0), 5.0);
-        assert_eq!(floats.value(1), 234.268);
-        assert_eq!(floats.value(2), 123.12);
-        assert_eq!(floats.value(3), 123.312_98);
-        assert_eq!(floats.value(4), -321.123_1);
-    }
-
-    #[test]
-    fn test_truncate_64_one_arg() {
-        let args: Vec<ArrayRef> = vec![Arc::new(Float64Array::from(vec![
-            5.0,
-            234.267_812,
-            123.123_45,
-            123.312_979_313_2,
-            -321.123,
-        ]))];
-
-        let result = trunc(&args).expect("failed to initialize function truncate");
-        let floats =
-            as_float64_array(&result).expect("failed to initialize function truncate");
-
-        assert_eq!(floats.len(), 5);
-        assert_eq!(floats.value(0), 5.0);
-        assert_eq!(floats.value(1), 234.0);
-        assert_eq!(floats.value(2), 123.0);
-        assert_eq!(floats.value(3), 123.0);
-        assert_eq!(floats.value(4), -321.0);
     }
 }

@@ -33,6 +33,7 @@ use crate::engines::postgres::Postgres;
 
 mod engines;
 mod setup;
+mod utils;
 
 const TEST_DIRECTORY: &str = "tests/sqllogictests/test_files/";
 const PG_COMPAT_FILE_PREFIX: &str = "pg_compat_";
@@ -128,12 +129,8 @@ async fn run_test_file(test_file: TestFile) -> Result<()> {
         info!("Skipping: {}", path.display());
         return Ok(());
     };
-    let mut runner = sqllogictest::Runner::new(|| async {
-        Ok(DataFusion::new(
-            test_ctx.session_ctx().clone(),
-            relative_path.clone(),
-        ))
-    });
+    let ctx = test_ctx.session_ctx().clone();
+    let mut runner = sqllogictest::Runner::new(DataFusion::new(ctx, relative_path));
     runner.with_column_validator(strict_column_validator);
     runner
         .run_file_async(path)
@@ -147,8 +144,10 @@ async fn run_test_file_with_postgres(test_file: TestFile) -> Result<()> {
         relative_path,
     } = test_file;
     info!("Running with Postgres runner: {}", path.display());
-    let mut runner =
-        sqllogictest::Runner::new(|| Postgres::connect(relative_path.clone()));
+    let postgres_client = Postgres::connect(relative_path)
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let mut runner = sqllogictest::Runner::new(postgres_client);
     runner.with_column_validator(strict_column_validator);
     runner
         .run_file_async(path)
@@ -170,12 +169,9 @@ async fn run_complete_file(test_file: TestFile) -> Result<()> {
         info!("Skipping: {}", path.display());
         return Ok(());
     };
-    let mut runner = sqllogictest::Runner::new(|| async {
-        Ok(DataFusion::new(
-            test_ctx.session_ctx().clone(),
-            relative_path.clone(),
-        ))
-    });
+    let ctx = test_ctx.session_ctx().clone();
+    let mut runner =
+        sqllogictest::Runner::new(DataFusion::new(ctx, relative_path.clone()));
     let col_separator = " ";
     runner
         .update_test_file(
@@ -267,17 +263,13 @@ async fn context_for_test_file(relative_path: &Path) -> Option<TestContext> {
 
     let file_name = relative_path.file_name().unwrap().to_str().unwrap();
     match file_name {
+        "aggregate.slt" => {
+            info!("Registering aggregate tables");
+            setup::register_aggregate_tables(test_ctx.session_ctx()).await;
+        }
         "scalar.slt" => {
             info!("Registering scalar tables");
             setup::register_scalar_tables(test_ctx.session_ctx()).await;
-        }
-        "information_schema_table_types.slt" => {
-            info!("Registering local temporary table");
-            setup::register_temp_table(test_ctx.session_ctx()).await;
-        }
-        "information_schema_columns.slt" => {
-            info!("Registering table with many types");
-            setup::register_table_with_many_types(test_ctx.session_ctx()).await;
         }
         "avro.slt" => {
             #[cfg(feature = "avro")]
@@ -294,7 +286,11 @@ async fn context_for_test_file(relative_path: &Path) -> Option<TestContext> {
             }
         }
         "joins.slt" => {
-            info!("Registering partition table tables");
+            info!("Registering timestamps tables");
+            setup::register_timestamps_table(test_ctx.session_ctx()).await;
+            setup::register_hashjoin_datatype_table(test_ctx.session_ctx()).await;
+            setup::register_left_semi_anti_join_table(test_ctx.session_ctx()).await;
+            setup::register_right_semi_anti_join_table(test_ctx.session_ctx()).await;
 
             let mut test_ctx = test_ctx;
             setup::register_partition_table(&mut test_ctx).await;

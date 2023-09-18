@@ -35,7 +35,6 @@ use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
-use datafusion_expr::expr_vec_fmt;
 use datafusion_expr::BuiltinScalarFunction;
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::ScalarFunctionImplementation;
@@ -103,7 +102,16 @@ impl ScalarFunctionExpr {
 
 impl fmt::Display for ScalarFunctionExpr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}({})", self.name, expr_vec_fmt!(self.args))
+        write!(
+            f,
+            "{}({})",
+            self.name,
+            self.args
+                .iter()
+                .map(|e| format!("{e}"))
+                .collect::<Vec<String>>()
+                .join(", ")
+        )
     }
 }
 

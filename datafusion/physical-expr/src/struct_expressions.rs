@@ -26,7 +26,7 @@ use std::sync::Arc;
 fn array_struct(args: &[ArrayRef]) -> Result<ArrayRef> {
     // do not accept 0 arguments.
     if args.is_empty() {
-        return Err(DataFusionError::Execution(
+        return Err(DataFusionError::Internal(
             "struct requires at least one argument".to_string(),
         ));
     }

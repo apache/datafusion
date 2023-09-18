@@ -84,93 +84,35 @@ macro_rules! hash_float_value {
 }
 hash_float_value!((half::f16, u16), (f32, u32), (f64, u64));
 
-/// Builds hash values of PrimitiveArray and writes them into `hashes_buffer`
-/// If `rehash==true` this combines the previous hash value in the buffer
-/// with the new hash using `combine_hashes`
-fn hash_array_primitive<T>(
-    array: &PrimitiveArray<T>,
-    random_state: &RandomState,
-    hashes_buffer: &mut [u64],
-    rehash: bool,
-) where
-    T: ArrowPrimitiveType,
-    <T as arrow_array::ArrowPrimitiveType>::Native: HashValue,
-{
-    assert_eq!(
-        hashes_buffer.len(),
-        array.len(),
-        "hashes_buffer and array should be of equal length"
-    );
-
-    if array.null_count() == 0 {
-        if rehash {
-            for (hash, &value) in hashes_buffer.iter_mut().zip(array.values().iter()) {
-                *hash = combine_hashes(value.hash_one(random_state), *hash);
-            }
-        } else {
-            for (hash, &value) in hashes_buffer.iter_mut().zip(array.values().iter()) {
-                *hash = value.hash_one(random_state);
-            }
-        }
-    } else if rehash {
-        for (i, hash) in hashes_buffer.iter_mut().enumerate() {
-            if !array.is_null(i) {
-                let value = unsafe { array.value_unchecked(i) };
-                *hash = combine_hashes(value.hash_one(random_state), *hash);
-            }
-        }
-    } else {
-        for (i, hash) in hashes_buffer.iter_mut().enumerate() {
-            if !array.is_null(i) {
-                let value = unsafe { array.value_unchecked(i) };
-                *hash = value.hash_one(random_state);
-            }
-        }
-    }
-}
-
-/// Hashes one array into the `hashes_buffer`
-/// If `rehash==true` this combines the previous hash value in the buffer
-/// with the new hash using `combine_hashes`
 fn hash_array<T>(
     array: T,
     random_state: &RandomState,
     hashes_buffer: &mut [u64],
-    rehash: bool,
+    multi_col: bool,
 ) where
     T: ArrayAccessor,
     T::Item: HashValue,
 {
-    assert_eq!(
-        hashes_buffer.len(),
-        array.len(),
-        "hashes_buffer and array should be of equal length"
-    );
-
     if array.null_count() == 0 {
-        if rehash {
+        if multi_col {
             for (i, hash) in hashes_buffer.iter_mut().enumerate() {
-                let value = unsafe { array.value_unchecked(i) };
-                *hash = combine_hashes(value.hash_one(random_state), *hash);
+                *hash = combine_hashes(array.value(i).hash_one(random_state), *hash);
             }
         } else {
             for (i, hash) in hashes_buffer.iter_mut().enumerate() {
-                let value = unsafe { array.value_unchecked(i) };
-                *hash = value.hash_one(random_state);
+                *hash = array.value(i).hash_one(random_state);
             }
         }
-    } else if rehash {
+    } else if multi_col {
         for (i, hash) in hashes_buffer.iter_mut().enumerate() {
             if !array.is_null(i) {
-                let value = unsafe { array.value_unchecked(i) };
-                *hash = combine_hashes(value.hash_one(random_state), *hash);
+                *hash = combine_hashes(array.value(i).hash_one(random_state), *hash);
             }
         }
     } else {
         for (i, hash) in hashes_buffer.iter_mut().enumerate() {
             if !array.is_null(i) {
-                let value = unsafe { array.value_unchecked(i) };
-                *hash = value.hash_one(random_state);
+                *hash = array.value(i).hash_one(random_state);
             }
         }
     }
@@ -266,32 +208,34 @@ pub fn create_hashes<'a>(
     random_state: &RandomState,
     hashes_buffer: &'a mut Vec<u64>,
 ) -> Result<&'a mut Vec<u64>> {
-    for (i, col) in arrays.iter().enumerate() {
+    // combine hashes with `combine_hashes` if we have more than 1 column
+
+    let multi_col = arrays.len() > 1;
+
+    for col in arrays {
         let array = col.as_ref();
-        // combine hashes with `combine_hashes` for all columns besides the first
-        let rehash = i >= 1;
         downcast_primitive_array! {
-            array => hash_array_primitive(array, random_state, hashes_buffer, rehash),
-            DataType::Null => hash_null(random_state, hashes_buffer, rehash),
-            DataType::Boolean => hash_array(as_boolean_array(array)?, random_state, hashes_buffer, rehash),
-            DataType::Utf8 => hash_array(as_string_array(array)?, random_state, hashes_buffer, rehash),
-            DataType::LargeUtf8 => hash_array(as_largestring_array(array), random_state, hashes_buffer, rehash),
-            DataType::Binary => hash_array(as_generic_binary_array::<i32>(array)?, random_state, hashes_buffer, rehash),
-            DataType::LargeBinary => hash_array(as_generic_binary_array::<i64>(array)?, random_state, hashes_buffer, rehash),
+            array => hash_array(array, random_state, hashes_buffer, multi_col),
+            DataType::Null => hash_null(random_state, hashes_buffer, multi_col),
+            DataType::Boolean => hash_array(as_boolean_array(array)?, random_state, hashes_buffer, multi_col),
+            DataType::Utf8 => hash_array(as_string_array(array)?, random_state, hashes_buffer, multi_col),
+            DataType::LargeUtf8 => hash_array(as_largestring_array(array), random_state, hashes_buffer, multi_col),
+            DataType::Binary => hash_array(as_generic_binary_array::<i32>(array)?, random_state, hashes_buffer, multi_col),
+            DataType::LargeBinary => hash_array(as_generic_binary_array::<i64>(array)?, random_state, hashes_buffer, multi_col),
             DataType::FixedSizeBinary(_) => {
                 let array: &FixedSizeBinaryArray = array.as_any().downcast_ref().unwrap();
-                hash_array(array, random_state, hashes_buffer, rehash)
+                hash_array(array, random_state, hashes_buffer, multi_col)
             }
             DataType::Decimal128(_, _) => {
                 let array = as_primitive_array::<Decimal128Type>(array)?;
-                hash_array_primitive(array, random_state, hashes_buffer, rehash)
+                hash_array(array, random_state, hashes_buffer, multi_col)
             }
             DataType::Decimal256(_, _) => {
                 let array = as_primitive_array::<Decimal256Type>(array)?;
-                hash_array_primitive(array, random_state, hashes_buffer, rehash)
+                hash_array(array, random_state, hashes_buffer, multi_col)
             }
             DataType::Dictionary(_, _) => downcast_dictionary_array! {
-                array => hash_dictionary(array, random_state, hashes_buffer, rehash)?,
+                array => hash_dictionary(array, random_state, hashes_buffer, multi_col)?,
                 _ => unreachable!()
             }
             _ => {

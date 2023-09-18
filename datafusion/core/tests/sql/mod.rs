@@ -80,7 +80,6 @@ pub mod aggregates;
 pub mod arrow_files;
 #[cfg(feature = "avro")]
 pub mod create_drop;
-pub mod csv_files;
 pub mod explain_analyze;
 pub mod expr;
 pub mod group_by;
@@ -88,16 +87,17 @@ pub mod joins;
 pub mod limit;
 pub mod order;
 pub mod parquet;
-pub mod parquet_schema;
-pub mod partitioned_csv;
 pub mod predicates;
 pub mod projection;
 pub mod references;
-pub mod repartition;
 pub mod select;
-pub mod subqueries;
 pub mod timestamp;
 pub mod udf;
+
+pub mod information_schema;
+pub mod parquet_schema;
+pub mod partitioned_csv;
+pub mod subqueries;
 
 fn assert_float_eq<T>(expected: &[Vec<T>], received: &[Vec<String>])
 where
@@ -180,6 +180,82 @@ fn create_join_context(
 
     let t2_schema = Arc::new(Schema::new(vec![
         Field::new(column_right, DataType::UInt32, true),
+        Field::new("t2_name", DataType::Utf8, true),
+        Field::new("t2_int", DataType::UInt32, true),
+    ]));
+    let t2_data = RecordBatch::try_new(
+        t2_schema,
+        vec![
+            Arc::new(UInt32Array::from(vec![11, 22, 44, 55])),
+            Arc::new(StringArray::from(vec![
+                Some("z"),
+                Some("y"),
+                Some("x"),
+                Some("w"),
+            ])),
+            Arc::new(UInt32Array::from(vec![3, 1, 3, 3])),
+        ],
+    )?;
+    ctx.register_batch("t2", t2_data)?;
+
+    Ok(ctx)
+}
+
+fn create_sub_query_join_context(
+    column_outer: &str,
+    column_inner_left: &str,
+    column_inner_right: &str,
+    repartition_joins: bool,
+) -> Result<SessionContext> {
+    let ctx = SessionContext::with_config(
+        SessionConfig::new()
+            .with_repartition_joins(repartition_joins)
+            .with_target_partitions(2)
+            .with_batch_size(4096),
+    );
+
+    let t0_schema = Arc::new(Schema::new(vec![
+        Field::new(column_outer, DataType::UInt32, true),
+        Field::new("t0_name", DataType::Utf8, true),
+        Field::new("t0_int", DataType::UInt32, true),
+    ]));
+    let t0_data = RecordBatch::try_new(
+        t0_schema,
+        vec![
+            Arc::new(UInt32Array::from(vec![11, 22, 33, 44])),
+            Arc::new(StringArray::from(vec![
+                Some("a"),
+                Some("b"),
+                Some("c"),
+                Some("d"),
+            ])),
+            Arc::new(UInt32Array::from(vec![1, 2, 3, 4])),
+        ],
+    )?;
+    ctx.register_batch("t0", t0_data)?;
+
+    let t1_schema = Arc::new(Schema::new(vec![
+        Field::new(column_inner_left, DataType::UInt32, true),
+        Field::new("t1_name", DataType::Utf8, true),
+        Field::new("t1_int", DataType::UInt32, true),
+    ]));
+    let t1_data = RecordBatch::try_new(
+        t1_schema,
+        vec![
+            Arc::new(UInt32Array::from(vec![11, 22, 33, 44])),
+            Arc::new(StringArray::from(vec![
+                Some("a"),
+                Some("b"),
+                Some("c"),
+                Some("d"),
+            ])),
+            Arc::new(UInt32Array::from(vec![1, 2, 3, 4])),
+        ],
+    )?;
+    ctx.register_batch("t1", t1_data)?;
+
+    let t2_schema = Arc::new(Schema::new(vec![
+        Field::new(column_inner_right, DataType::UInt32, true),
         Field::new("t2_name", DataType::Utf8, true),
         Field::new("t2_int", DataType::UInt32, true),
     ]));

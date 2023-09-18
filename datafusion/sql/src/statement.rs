@@ -23,15 +23,12 @@ use crate::planner::{
     object_name_to_qualifier, ContextProvider, PlannerContext, SqlToRel,
 };
 use crate::utils::normalize_ident;
-
 use arrow_schema::DataType;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    unqualified_field_not_found, Column, Constraints, DFField, DFSchema, DFSchemaRef,
-    DataFusionError, ExprSchema, OwnedTableReference, Result, SchemaReference,
-    TableReference, ToDFSchema,
+    unqualified_field_not_found, Column, DFField, DFSchema, DFSchemaRef, DataFusionError,
+    ExprSchema, OwnedTableReference, Result, SchemaReference, TableReference, ToDFSchema,
 };
-use datafusion_expr::expr::Placeholder;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
 use datafusion_expr::logical_plan::builder::project;
 use datafusion_expr::logical_plan::DdlStatement;
@@ -48,11 +45,12 @@ use datafusion_expr::{
 use sqlparser::ast;
 use sqlparser::ast::{
     Assignment, Expr as SQLExpr, Expr, Ident, ObjectName, ObjectType, Query, SchemaName,
-    SetExpr, ShowCreateObject, ShowStatementFilter, Statement, TableFactor,
-    TableWithJoins, TransactionMode, UnaryOperator, Value,
+    SetExpr, ShowCreateObject, ShowStatementFilter, Statement, TableConstraint,
+    TableFactor, TableWithJoins, TransactionMode, UnaryOperator, Value,
 };
-use sqlparser::parser::ParserError::ParserError;
 
+use datafusion_expr::expr::Placeholder;
+use sqlparser::parser::ParserError::ParserError;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
@@ -134,6 +132,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 ..
             } if table_properties.is_empty() && with_options.is_empty() => match query {
                 Some(query) => {
+                    let primary_key = Self::primary_key_from_constraints(&constraints)?;
+
                     let plan = self.query_to_plan(*query, planner_context)?;
                     let input_schema = plan.schema();
 
@@ -163,15 +163,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         plan
                     };
 
-                    let constraints = Constraints::new_from_table_constraints(
-                        &constraints,
-                        plan.schema(),
-                    )?;
-
                     Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
                         CreateMemoryTable {
                             name: self.object_name_to_table_reference(name)?,
-                            constraints,
+                            primary_key,
                             input: Arc::new(plan),
                             if_not_exists,
                             or_replace,
@@ -180,20 +175,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
 
                 None => {
+                    let primary_key = Self::primary_key_from_constraints(&constraints)?;
+
                     let schema = self.build_schema(columns)?.to_dfschema_ref()?;
                     let plan = EmptyRelation {
                         produce_one_row: false,
                         schema,
                     };
                     let plan = LogicalPlan::EmptyRelation(plan);
-                    let constraints = Constraints::new_from_table_constraints(
-                        &constraints,
-                        plan.schema(),
-                    )?;
+
                     Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
                         CreateMemoryTable {
                             name: self.object_name_to_table_reference(name)?,
-                            constraints,
+                            primary_key,
                             input: Arc::new(plan),
                             if_not_exists,
                             or_replace,
@@ -1165,5 +1159,55 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         self.schema_provider
             .get_table_provider(tables_reference)
             .is_ok()
+    }
+
+    fn primary_key_from_constraints(
+        constraints: &[TableConstraint],
+    ) -> Result<Vec<Column>> {
+        let pk: Result<Vec<&Vec<Ident>>> = constraints
+            .iter()
+            .map(|c: &TableConstraint| match c {
+                TableConstraint::Unique {
+                    columns,
+                    is_primary,
+                    ..
+                } => match is_primary {
+                    true => Ok(columns),
+                    false => Err(DataFusionError::Plan(
+                        "Non-primary unique constraints are not supported".to_string(),
+                    )),
+                },
+                TableConstraint::ForeignKey { .. } => Err(DataFusionError::Plan(
+                    "Foreign key constraints are not currently supported".to_string(),
+                )),
+                TableConstraint::Check { .. } => Err(DataFusionError::Plan(
+                    "Check constraints are not currently supported".to_string(),
+                )),
+                TableConstraint::Index { .. } => Err(DataFusionError::Plan(
+                    "Indexes are not currently supported".to_string(),
+                )),
+                TableConstraint::FulltextOrSpatial { .. } => Err(DataFusionError::Plan(
+                    "Indexes are not currently supported".to_string(),
+                )),
+            })
+            .collect();
+        let pk = pk?;
+        let pk = match pk.as_slice() {
+            [] => return Ok(vec![]),
+            [pk] => pk,
+            _ => {
+                return Err(DataFusionError::Plan(
+                    "Only one primary key is supported!".to_string(),
+                ))?
+            }
+        };
+        let primary_key: Vec<Column> = pk
+            .iter()
+            .map(|c| Column {
+                relation: None,
+                name: c.value.clone(),
+            })
+            .collect();
+        Ok(primary_key)
     }
 }

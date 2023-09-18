@@ -50,6 +50,7 @@ pub struct FileRange {
 
 #[derive(Debug, Clone)]
 /// A single file or part of a file that should be read, along with its schema, statistics
+/// A single file that should be read, along with its schema, statistics
 /// and partition column values that need to be appended to each row.
 pub struct PartitionedFile {
     /// Path for the file (e.g. URL, filesystem path, etc)
@@ -100,12 +101,6 @@ impl PartitionedFile {
             range: Some(FileRange { start, end }),
             extensions: None,
         }
-    }
-
-    /// Return a file reference from the given path
-    pub fn from_path(path: String) -> Result<Self> {
-        let size = std::fs::metadata(path.clone())?.len();
-        Ok(Self::new(path, size))
     }
 }
 

@@ -299,7 +299,7 @@ impl<'a> TableReference<'a> {
     /// Forms a [`TableReference`] by parsing `s` as a multipart SQL
     /// identifier. See docs on [`TableReference`] for more details.
     pub fn parse_str(s: &'a str) -> Self {
-        let mut parts = parse_identifiers_normalized(s, false);
+        let mut parts = parse_identifiers_normalized(s);
 
         match parts.len() {
             1 => Self::Bare {

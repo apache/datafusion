@@ -45,7 +45,6 @@ async fn main() -> Result<()> {
         Some(vec![12, 0]),
         true,
         b',',
-        b'"',
         object_store,
     );
 

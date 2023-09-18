@@ -181,26 +181,6 @@ pub fn create_physical_expr(
     )))
 }
 
-#[cfg(feature = "encoding_expressions")]
-macro_rules! invoke_if_encoding_expressions_feature_flag {
-    ($FUNC:ident, $NAME:expr) => {{
-        use crate::encoding_expressions;
-        encoding_expressions::$FUNC
-    }};
-}
-
-#[cfg(not(feature = "encoding_expressions"))]
-macro_rules! invoke_if_encoding_expressions_feature_flag {
-    ($FUNC:ident, $NAME:expr) => {
-        |_: &[ColumnarValue]| -> Result<ColumnarValue> {
-            Err(DataFusionError::Internal(format!(
-                "function {} requires compilation with feature flag: encoding_expressions.",
-                $NAME
-            )))
-        }
-    };
-}
-
 #[cfg(feature = "crypto_expressions")]
 macro_rules! invoke_if_crypto_expressions_feature_flag {
     ($FUNC:ident, $NAME:expr) => {{
@@ -392,9 +372,7 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Cbrt => Arc::new(math_expressions::cbrt),
         BuiltinScalarFunction::Tan => Arc::new(math_expressions::tan),
         BuiltinScalarFunction::Tanh => Arc::new(math_expressions::tanh),
-        BuiltinScalarFunction::Trunc => {
-            Arc::new(|args| make_scalar_function(math_expressions::trunc)(args))
-        }
+        BuiltinScalarFunction::Trunc => Arc::new(math_expressions::trunc),
         BuiltinScalarFunction::Pi => Arc::new(math_expressions::pi),
         BuiltinScalarFunction::Power => {
             Arc::new(|args| make_scalar_function(math_expressions::power)(args))
@@ -405,73 +383,29 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Log => {
             Arc::new(|args| make_scalar_function(math_expressions::log)(args))
         }
-        BuiltinScalarFunction::Cot => {
-            Arc::new(|args| make_scalar_function(math_expressions::cot)(args))
-        }
 
         // array functions
-        BuiltinScalarFunction::ArrayAppend => {
-            Arc::new(|args| make_scalar_function(array_expressions::array_append)(args))
-        }
-        BuiltinScalarFunction::ArrayConcat => {
-            Arc::new(|args| make_scalar_function(array_expressions::array_concat)(args))
-        }
-        BuiltinScalarFunction::ArrayHasAll => {
-            Arc::new(|args| make_scalar_function(array_expressions::array_has_all)(args))
-        }
-        BuiltinScalarFunction::ArrayHasAny => {
-            Arc::new(|args| make_scalar_function(array_expressions::array_has_any)(args))
-        }
-        BuiltinScalarFunction::ArrayHas => {
-            Arc::new(|args| make_scalar_function(array_expressions::array_has)(args))
-        }
-        BuiltinScalarFunction::ArrayDims => {
-            Arc::new(|args| make_scalar_function(array_expressions::array_dims)(args))
-        }
+        BuiltinScalarFunction::ArrayAppend => Arc::new(array_expressions::array_append),
+        BuiltinScalarFunction::ArrayConcat => Arc::new(array_expressions::array_concat),
+        BuiltinScalarFunction::ArrayDims => Arc::new(array_expressions::array_dims),
         BuiltinScalarFunction::ArrayFill => Arc::new(array_expressions::array_fill),
-        BuiltinScalarFunction::ArrayLength => {
-            Arc::new(|args| make_scalar_function(array_expressions::array_length)(args))
-        }
-        BuiltinScalarFunction::ArrayNdims => {
-            Arc::new(|args| make_scalar_function(array_expressions::array_ndims)(args))
-        }
+        BuiltinScalarFunction::ArrayLength => Arc::new(array_expressions::array_length),
+        BuiltinScalarFunction::ArrayNdims => Arc::new(array_expressions::array_ndims),
         BuiltinScalarFunction::ArrayPosition => {
-            Arc::new(|args| make_scalar_function(array_expressions::array_position)(args))
+            Arc::new(array_expressions::array_position)
         }
-        BuiltinScalarFunction::ArrayPositions => Arc::new(|args| {
-            make_scalar_function(array_expressions::array_positions)(args)
-        }),
-        BuiltinScalarFunction::ArrayPrepend => {
-            Arc::new(|args| make_scalar_function(array_expressions::array_prepend)(args))
+        BuiltinScalarFunction::ArrayPositions => {
+            Arc::new(array_expressions::array_positions)
         }
-        BuiltinScalarFunction::ArrayRemove => {
-            Arc::new(|args| make_scalar_function(array_expressions::array_remove)(args))
+        BuiltinScalarFunction::ArrayPrepend => Arc::new(array_expressions::array_prepend),
+        BuiltinScalarFunction::ArrayRemove => Arc::new(array_expressions::array_remove),
+        BuiltinScalarFunction::ArrayReplace => Arc::new(array_expressions::array_replace),
+        BuiltinScalarFunction::ArrayToString => {
+            Arc::new(array_expressions::array_to_string)
         }
-        BuiltinScalarFunction::ArrayRemoveN => {
-            Arc::new(|args| make_scalar_function(array_expressions::array_remove_n)(args))
-        }
-        BuiltinScalarFunction::ArrayRemoveAll => Arc::new(|args| {
-            make_scalar_function(array_expressions::array_remove_all)(args)
-        }),
-        BuiltinScalarFunction::ArrayReplace => {
-            Arc::new(|args| make_scalar_function(array_expressions::array_replace)(args))
-        }
-        BuiltinScalarFunction::ArrayReplaceN => Arc::new(|args| {
-            make_scalar_function(array_expressions::array_replace_n)(args)
-        }),
-        BuiltinScalarFunction::ArrayReplaceAll => Arc::new(|args| {
-            make_scalar_function(array_expressions::array_replace_all)(args)
-        }),
-        BuiltinScalarFunction::ArrayToString => Arc::new(|args| {
-            make_scalar_function(array_expressions::array_to_string)(args)
-        }),
-        BuiltinScalarFunction::Cardinality => {
-            Arc::new(|args| make_scalar_function(array_expressions::cardinality)(args))
-        }
+        BuiltinScalarFunction::Cardinality => Arc::new(array_expressions::cardinality),
         BuiltinScalarFunction::MakeArray => Arc::new(array_expressions::make_array),
-        BuiltinScalarFunction::TrimArray => {
-            Arc::new(|args| make_scalar_function(array_expressions::trim_array)(args))
-        }
+        BuiltinScalarFunction::TrimArray => Arc::new(array_expressions::trim_array),
 
         // string functions
         BuiltinScalarFunction::Struct => Arc::new(struct_expressions::struct_expr),
@@ -616,12 +550,6 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Digest => {
             Arc::new(invoke_if_crypto_expressions_feature_flag!(digest, "digest"))
         }
-        BuiltinScalarFunction::Decode => Arc::new(
-            invoke_if_encoding_expressions_feature_flag!(decode, "decode"),
-        ),
-        BuiltinScalarFunction::Encode => Arc::new(
-            invoke_if_encoding_expressions_feature_flag!(encode, "encode"),
-        ),
         BuiltinScalarFunction::NullIf => Arc::new(nullif_func),
         BuiltinScalarFunction::OctetLength => Arc::new(|args| match &args[0] {
             ColumnarValue::Array(v) => Ok(ColumnarValue::Array(length(v.as_ref())?)),

@@ -44,8 +44,32 @@ impl OptimizerRule for MergeProjection {
             LogicalPlan::Projection(parent_projection) => {
                 match parent_projection.input.as_ref() {
                     LogicalPlan::Projection(child_projection) => {
+                        let replace_map = collect_projection_expr(child_projection);
+                        let new_exprs = parent_projection
+                            .expr
+                            .iter()
+                            .map(|expr| replace_cols_by_name(expr.clone(), &replace_map))
+                            .enumerate()
+                            .map(|(i, e)| match e {
+                                Ok(e) => {
+                                    let parent_expr = parent_projection.schema.fields()
+                                        [i]
+                                        .qualified_name();
+                                    if e.display_name()? == parent_expr {
+                                        Ok(e)
+                                    } else {
+                                        Ok(e.alias(parent_expr))
+                                    }
+                                }
+                                Err(e) => Err(e),
+                            })
+                            .collect::<Result<Vec<_>>>()?;
                         let new_plan =
-                            merge_projection(parent_projection, child_projection)?;
+                            LogicalPlan::Projection(Projection::try_new_with_schema(
+                                new_exprs,
+                                child_projection.input.clone(),
+                                parent_projection.schema.clone(),
+                            )?);
                         Ok(Some(
                             self.try_optimize(&new_plan, _config)?.unwrap_or(new_plan),
                         ))
@@ -64,32 +88,6 @@ impl OptimizerRule for MergeProjection {
     fn apply_order(&self) -> Option<ApplyOrder> {
         Some(ApplyOrder::TopDown)
     }
-}
-
-pub(super) fn merge_projection(
-    parent_projection: &Projection,
-    child_projection: &Projection,
-) -> Result<LogicalPlan> {
-    let replace_map = collect_projection_expr(child_projection);
-    let new_exprs = parent_projection
-        .expr
-        .iter()
-        .map(|expr| replace_cols_by_name(expr.clone(), &replace_map))
-        .enumerate()
-        .map(|(i, e)| match e {
-            Ok(e) => {
-                let parent_expr = parent_projection.schema.fields()[i].qualified_name();
-                e.alias_if_changed(parent_expr)
-            }
-            Err(e) => Err(e),
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let new_plan = LogicalPlan::Projection(Projection::try_new_with_schema(
-        new_exprs,
-        child_projection.input.clone(),
-        parent_projection.schema.clone(),
-    )?);
-    Ok(new_plan)
 }
 
 pub fn collect_projection_expr(projection: &Projection) -> HashMap<String, Expr> {
