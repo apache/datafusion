@@ -221,7 +221,10 @@ fn take_optimizable_min(
                     ..
                 } = &col_stats[col_expr.index()]
                 {
-                    return Some((val.clone(), casted_expr.name().to_string()));
+                    // Exclude the unbounded case
+                    if !val.is_null() {
+                        return Some((val.clone(), casted_expr.name().to_string()));
+                    }
                 }
             }
         }
@@ -249,7 +252,10 @@ fn take_optimizable_max(
                     ..
                 } = &col_stats[col_expr.index()]
                 {
-                    return Some((val.clone(), casted_expr.name().to_string()));
+                    // Exclude the unbounded case
+                    if !val.is_null() {
+                        return Some((val.clone(), casted_expr.name().to_string()));
+                    }
                 }
             }
         }

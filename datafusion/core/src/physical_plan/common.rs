@@ -146,10 +146,10 @@ pub fn compute_record_batch_statistics(
         None => (0..schema.fields().len()).collect(),
     };
 
-    let mut column_statistics = schema
-        .fields()
+    let fields = schema.fields();
+    let mut column_statistics = projection
         .iter()
-        .map(|field| ColumnStatistics::new_with_unbounded_column(field.data_type()))
+        .map(|&idx| ColumnStatistics::new_with_unbounded_column(fields[idx].data_type()))
         .collect::<Vec<_>>();
 
     for partition in batches.iter() {
@@ -383,11 +383,13 @@ mod tests {
     use crate::physical_plan::sorts::sort::SortExec;
     use crate::physical_plan::union::UnionExec;
     use arrow::compute::SortOptions;
+    use arrow::ipc::Null;
     use arrow::{
         array::{Float32Array, Float64Array},
         datatypes::{DataType, Field, Schema},
         record_batch::RecordBatch,
     };
+    use datafusion_common::ScalarValue;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{col, Column};
 
@@ -704,14 +706,14 @@ mod tests {
             column_statistics: Some(vec![
                 ColumnStatistics {
                     distinct_count: None,
-                    max_value: None,
-                    min_value: None,
+                    max_value: Some(ScalarValue::Float32(None)),
+                    min_value: Some(ScalarValue::Float32(None)),
                     null_count: Some(0),
                 },
                 ColumnStatistics {
                     distinct_count: None,
-                    max_value: None,
-                    min_value: None,
+                    max_value: Some(ScalarValue::Float64(None)),
+                    min_value: Some(ScalarValue::Float64(None)),
                     null_count: Some(0),
                 },
             ]),
