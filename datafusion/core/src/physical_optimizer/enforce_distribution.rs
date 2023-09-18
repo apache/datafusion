@@ -946,11 +946,12 @@ fn update_distribution_onward(
     }
 }
 
-fn delete_top_from_distribution_onward(
-    child_plan: &Arc<dyn ExecutionPlan>,
+/// Get ExecTree for each child of the plan
+fn get_children_exectrees(
+    n_children: usize,
     dist_onward: &Option<ExecTree>,
 ) -> Vec<Option<ExecTree>> {
-    let mut new_distribution_onwards = vec![None; child_plan.children().len()];
+    let mut new_distribution_onwards = vec![None; n_children];
     if let Some(exec_tree) = &dist_onward {
         for child in &exec_tree.children {
             new_distribution_onwards[child.idx] = Some(child.clone());
@@ -1105,7 +1106,8 @@ fn add_spm_on_top(
 }
 
 /// Updates the physical plan inside `distribution_context` if having a
-/// `RepartitionExec(RoundRobin)` is not helpful.
+/// so that executors that change distribution are removed from the top
+/// (If they are necessary, they will be added in subsequent stages).
 ///
 /// Assume that following plan is given:
 /// ```text
@@ -1114,12 +1116,11 @@ fn add_spm_on_top(
 /// "    ParquetExec: file_groups={2 groups: \[\[x], \[y]]}, projection=\[a, b, c, d, e], output_ordering=\[a@0 ASC]",
 /// ```
 ///
-/// `RepartitionExec` at the top is unnecessary. Since it doesn't help with increasing parallelism.
-/// This function removes top repartition, and returns following plan.
+/// Since `RepartitionExec`s changes distribution.
+/// This function removes `RepartitionExec`s, and returns following plan.
 ///
 /// ```text
-/// "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
-/// "  ParquetExec: file_groups={2 groups: \[\[x], \[y]]}, projection=\[a, b, c, d, e], output_ordering=\[a@0 ASC]",
+/// "ParquetExec: file_groups={2 groups: \[\[x], \[y]]}, projection=\[a, b, c, d, e], output_ordering=\[a@0 ASC]",
 /// ```
 fn remove_dist_changing_operators(
     distribution_context: DistributionContext,
@@ -1138,7 +1139,7 @@ fn remove_dist_changing_operators(
         // All of above operators have single child. when we remove top operator, we take first child.
         plan = plan.children()[0].clone();
         distribution_onwards =
-            delete_top_from_distribution_onward(&plan, &distribution_onwards[0]);
+            get_children_exectrees(plan.children().len(), &distribution_onwards[0]);
     }
 
     // Create a plan with the updated children:
@@ -1643,6 +1644,7 @@ impl TreeNode for PlanWithKeyRequirements {
     }
 }
 
+/// This functions removes ancillary `SortRequiringExec` from the physical plan.
 fn remove_top_ordering_req(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -1658,18 +1660,23 @@ fn remove_top_ordering_req(
     }
 }
 
+/// This functions adds ancillary `SortRequiringExec` to the the physical plan, so that
+/// global ordering requirement is not lost during optimization
 fn require_top_ordering(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
     let (new_plan, is_changed) = require_top_ordering_helper(plan)?;
     if is_changed {
         Ok(new_plan)
     } else {
+        // Add SortRequiringExec to the top.
         Ok(Arc::new(SortRequiringExec::new(
             new_plan,
+            // there is no ordering requirement
             None,
             Distribution::UnspecifiedDistribution,
         )) as _)
     }
 }
+
 /// Helper function that adds an ancillary `SortRequiringExec` to the given plan.
 fn require_top_ordering_helper(
     plan: Arc<dyn ExecutionPlan>,
@@ -1677,17 +1684,13 @@ fn require_top_ordering_helper(
     let mut children = plan.children();
     // Global ordering defines desired ordering in the final result.
     if children.len() != 1 {
-        // Ok(Arc::new(SortRequiringExec::new(plan.clone(), None, Distribution::UnspecifiedDistribution)) as _)
         Ok((plan, false))
     } else if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
         let req_ordering = sort_exec.output_ordering().unwrap_or(&[]);
+        let req_dist = sort_exec.required_input_distribution()[0].clone();
         let reqs = PhysicalSortRequirement::from_sort_exprs(req_ordering);
         Ok((
-            Arc::new(SortRequiringExec::new(
-                plan.clone(),
-                Some(reqs),
-                Distribution::SinglePartition,
-            )) as _,
+            Arc::new(SortRequiringExec::new(plan.clone(), Some(reqs), req_dist)) as _,
             true,
         ))
     } else if let Some(spm) = plan.as_any().downcast_ref::<SortPreservingMergeExec>() {
@@ -1713,13 +1716,11 @@ fn require_top_ordering_helper(
         Ok((plan.with_new_children(vec![new_child])?, is_changed))
     } else {
         // Stop searching, there is no global ordering desired for the query.
-        // Ok(Arc::new(SortRequiringExec::new(plan.clone(), None, Distribution::UnspecifiedDistribution)) as _)
         Ok((plan, false))
     }
 }
 
-/// Models operators like BoundedWindowExec that require an input
-/// ordering but is easy to construct
+/// Ancillary operator that require given ordering
 #[derive(Debug)]
 struct SortRequiringExec {
     input: Arc<dyn ExecutionPlan>,
