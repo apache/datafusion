@@ -188,7 +188,6 @@ async fn query_nested_get_indexed_field_on_struct() -> Result<()> {
 }
 
 #[tokio::test]
-#[cfg(feature = "dictionary_expressions")]
 async fn query_on_string_dictionary() -> Result<()> {
     // Test to ensure DataFusion can operate on dictionary types
     // Use StringDictionary (32 bit indexes = keys)
