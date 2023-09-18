@@ -41,12 +41,13 @@ use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::BinaryExpr;
-use datafusion_physical_expr::intervals::utils::check_support;
 use datafusion_physical_expr::{
     analyze, split_conjunction, AnalysisContext, ExprBoundaries,
     OrderingEquivalenceProperties, PhysicalExpr,
 };
 
+use datafusion_physical_expr::intervals::utils::check_support;
+use datafusion_physical_expr::utils::collect_columns;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -153,7 +154,19 @@ impl ExecutionPlan for FilterExec {
     }
 
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        self.input.ordering_equivalence_properties()
+        let stats = self.statistics();
+        // Add the columns that have only one value (singleton) after filtering to constants.
+        if let Some(col_stats) = stats.column_statistics {
+            let constants = collect_columns(self.predicate())
+                .into_iter()
+                .filter(|column| col_stats[column.index()].is_singleton())
+                .map(|column| Arc::new(column) as Arc<dyn PhysicalExpr>)
+                .collect::<Vec<_>>();
+            let filter_oeq = self.input.ordering_equivalence_properties();
+            filter_oeq.with_constants(constants)
+        } else {
+            self.input.ordering_equivalence_properties()
+        }
     }
 
     fn with_new_children(
@@ -197,7 +210,14 @@ impl ExecutionPlan for FilterExec {
         let input_stats = self.input.statistics();
         let input_column_stats = match input_stats.column_statistics {
             Some(stats) => stats,
-            None => return Statistics::default(),
+            None => self
+                .schema()
+                .fields
+                .iter()
+                .map(|field| {
+                    ColumnStatistics::new_with_unbounded_column(field.data_type())
+                })
+                .collect::<Vec<_>>(),
         };
 
         let starter_ctx =

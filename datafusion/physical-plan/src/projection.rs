@@ -40,11 +40,11 @@ use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::expressions::{Literal, UnKnownColumn};
 use datafusion_physical_expr::{
-    find_orderings_of_exprs, normalize_out_expr_with_columns_map,
-    project_equivalence_properties, project_ordering_equivalence_properties,
-    OrderingEquivalenceProperties,
+    normalize_out_expr_with_columns_map, project_equivalence_properties,
+    project_ordering_equivalence_properties, OrderingEquivalenceProperties,
 };
 
+use datafusion_physical_expr::utils::find_orderings_of_exprs;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 

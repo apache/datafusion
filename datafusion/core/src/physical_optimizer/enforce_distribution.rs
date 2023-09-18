@@ -54,8 +54,7 @@ use datafusion_physical_expr::utils::{
     map_columns_before_projection, ordering_satisfy_requirement_concrete,
 };
 use datafusion_physical_expr::{
-    expr_list_eq_strict_order, normalize_expr_with_equivalence_properties, PhysicalExpr,
-    PhysicalSortRequirement,
+    expr_list_eq_strict_order, PhysicalExpr, PhysicalSortRequirement,
 };
 
 use datafusion_common::internal_err;
@@ -807,36 +806,21 @@ fn try_reorder(
     } else if !equivalence_properties.classes().is_empty() {
         normalized_expected = expected
             .iter()
-            .map(|e| {
-                normalize_expr_with_equivalence_properties(
-                    e.clone(),
-                    equivalence_properties.classes(),
-                )
-            })
+            .map(|e| equivalence_properties.normalize_expr(e.clone()))
             .collect::<Vec<_>>();
         assert_eq!(normalized_expected.len(), expected.len());
 
         normalized_left_keys = join_keys
             .left_keys
             .iter()
-            .map(|e| {
-                normalize_expr_with_equivalence_properties(
-                    e.clone(),
-                    equivalence_properties.classes(),
-                )
-            })
+            .map(|e| equivalence_properties.normalize_expr(e.clone()))
             .collect::<Vec<_>>();
         assert_eq!(join_keys.left_keys.len(), normalized_left_keys.len());
 
         normalized_right_keys = join_keys
             .right_keys
             .iter()
-            .map(|e| {
-                normalize_expr_with_equivalence_properties(
-                    e.clone(),
-                    equivalence_properties.classes(),
-                )
-            })
+            .map(|e| equivalence_properties.normalize_expr(e.clone()))
             .collect::<Vec<_>>();
         assert_eq!(join_keys.right_keys.len(), normalized_right_keys.len());
 

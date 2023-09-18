@@ -296,9 +296,9 @@ mod tests {
         assert_eq!(mem_exec.output_ordering().unwrap(), expected_output_order);
         let order_eq = mem_exec.ordering_equivalence_properties();
         assert!(order_eq
-            .classes()
-            .iter()
-            .any(|class| class.contains(&expected_order_eq)));
+            .oeq_class()
+            .map(|class| class.contains(&expected_order_eq))
+            .unwrap_or(false));
         Ok(())
     }
 }
