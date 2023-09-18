@@ -79,13 +79,45 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
     pub fn schema_lookup(schema: AvroSchema) -> Result<BTreeMap<String, usize>> {
         match schema {
             AvroSchema::Record(RecordSchema {
-                lookup: ref schema_lookup,
-                ..
-            }) => Ok(schema_lookup.clone()),
+                fields, mut lookup, ..
+            }) => {
+                for field in fields {
+                    Self::child_schema_lookup(&field.schema, &mut lookup)?;
+                }
+                Ok(lookup)
+            }
             _ => Err(DataFusionError::ArrowError(SchemaError(
                 "expected avro schema to be a record".to_string(),
             ))),
         }
+    }
+
+    fn child_schema_lookup<'b>(
+        schema: &AvroSchema,
+        schema_lookup: &'b mut BTreeMap<String, usize>,
+    ) -> Result<&'b BTreeMap<String, usize>> {
+        match schema {
+            AvroSchema::Record(RecordSchema {
+                name,
+                fields,
+                lookup,
+                ..
+            }) => {
+                lookup.iter().for_each(|(field_name, pos)| {
+                    schema_lookup
+                        .insert(format!("{}.{}", name.fullname(None), field_name), *pos);
+                });
+
+                for field in fields {
+                    Self::child_schema_lookup(&field.schema, schema_lookup)?;
+                }
+            }
+            AvroSchema::Array(schema) => {
+                Self::child_schema_lookup(schema, schema_lookup)?;
+            }
+            _ => (),
+        }
+        Ok(schema_lookup)
     }
 
     /// Read the next batch of records
@@ -519,9 +551,10 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                 let num_bytes = bit_util::ceil(array_item_count, 8);
                 let mut null_buffer = MutableBuffer::from_len_zeroed(num_bytes);
                 let mut struct_index = 0;
-                let rows: Vec<Vec<(String, Value)>> = rows
+                let null_struct_array = vec![("null".to_string(), Value::Null)];
+                let rows: Vec<&Vec<(String, Value)>> = rows
                     .iter()
-                    .map(|row| {
+                    .flat_map(|row| {
                         if let Value::Array(values) = row {
                             values.iter().for_each(|_| {
                                 bit_util::set_bit(&mut null_buffer, struct_index);
@@ -529,15 +562,17 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                             });
                             values
                                 .iter()
-                                .map(|v| ("".to_string(), v.clone()))
-                                .collect::<Vec<(String, Value)>>()
+                                .map(|v| match v {
+                                    Value::Record(record) => record,
+                                    other => panic!("expected Record, got {other:?}"),
+                                })
+                                .collect::<Vec<&Vec<(String, Value)>>>()
                         } else {
                             struct_index += 1;
-                            vec![("null".to_string(), Value::Null)]
+                            vec![&null_struct_array]
                         }
                     })
                     .collect();
-                let rows = rows.iter().collect::<Vec<&Vec<(String, Value)>>>();
                 let arrays = self.build_struct_array(&rows, fields, &[])?;
                 let data_type = DataType::Struct(fields.clone());
                 ArrayDataBuilder::new(data_type)

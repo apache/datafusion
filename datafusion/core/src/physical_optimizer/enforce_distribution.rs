@@ -56,8 +56,8 @@ use datafusion_physical_expr::utils::{
     map_columns_before_projection, ordering_satisfy_requirement_concrete,
 };
 use datafusion_physical_expr::{
-    expr_list_eq_strict_order, normalize_expr_with_equivalence_properties,
-    LexOrderingReq, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
+    expr_list_eq_strict_order, LexOrderingReq, PhysicalExpr, PhysicalSortExpr,
+    PhysicalSortRequirement,
 };
 
 use datafusion_common::Statistics;
@@ -380,7 +380,7 @@ fn adjust_input_keys_ordering(
         )?)
     } else if let Some(aggregate_exec) = plan_any.downcast_ref::<AggregateExec>() {
         if !parent_required.is_empty() {
-            match aggregate_exec.mode {
+            match aggregate_exec.mode() {
                 AggregateMode::FinalPartitioned => Some(reorder_aggregate_keys(
                     requirements.plan.clone(),
                     &parent_required,
@@ -392,9 +392,8 @@ fn adjust_input_keys_ordering(
             // Keep everything unchanged
             None
         }
-    } else if let Some(ProjectionExec { expr, .. }) =
-        plan_any.downcast_ref::<ProjectionExec>()
-    {
+    } else if let Some(proj) = plan_any.downcast_ref::<ProjectionExec>() {
+        let expr = proj.expr();
         // For Projection, we need to transform the requirements to the columns before the Projection
         // And then to push down the requirements
         // Construct a mapping from new name to the the orginal Column
@@ -489,7 +488,7 @@ fn reorder_aggregate_keys(
     agg_exec: &AggregateExec,
 ) -> Result<PlanWithKeyRequirements> {
     let out_put_columns = agg_exec
-        .group_by
+        .group_by()
         .expr()
         .iter()
         .enumerate()
@@ -502,7 +501,7 @@ fn reorder_aggregate_keys(
         .collect::<Vec<_>>();
 
     if parent_required.len() != out_put_exprs.len()
-        || !agg_exec.group_by.null_expr().is_empty()
+        || !agg_exec.group_by().null_expr().is_empty()
         || expr_list_eq_strict_order(&out_put_exprs, parent_required)
     {
         Ok(PlanWithKeyRequirements::new(agg_plan))
@@ -511,7 +510,9 @@ fn reorder_aggregate_keys(
         match new_positions {
             None => Ok(PlanWithKeyRequirements::new(agg_plan)),
             Some(positions) => {
-                let new_partial_agg = if let Some(AggregateExec {
+                let new_partial_agg = if let Some(agg_exec) =
+                    agg_exec.input().as_any().downcast_ref::<AggregateExec>()
+                /*AggregateExec {
                     mode,
                     group_by,
                     aggr_expr,
@@ -521,12 +522,13 @@ fn reorder_aggregate_keys(
                     input_schema,
                     ..
                 }) =
-                    agg_exec.input.as_any().downcast_ref::<AggregateExec>()
+                */
                 {
-                    if matches!(mode, AggregateMode::Partial) {
+                    if matches!(agg_exec.mode(), &AggregateMode::Partial) {
                         let mut new_group_exprs = vec![];
                         for idx in positions.iter() {
-                            new_group_exprs.push(group_by.expr()[*idx].clone());
+                            new_group_exprs
+                                .push(agg_exec.group_by().expr()[*idx].clone());
                         }
                         let new_partial_group_by =
                             PhysicalGroupBy::new_single(new_group_exprs);
@@ -534,11 +536,11 @@ fn reorder_aggregate_keys(
                         Some(Arc::new(AggregateExec::try_new(
                             AggregateMode::Partial,
                             new_partial_group_by,
-                            aggr_expr.clone(),
-                            filter_expr.clone(),
-                            order_by_expr.clone(),
-                            input.clone(),
-                            input_schema.clone(),
+                            agg_exec.aggr_expr().to_vec(),
+                            agg_exec.filter_expr().to_vec(),
+                            agg_exec.order_by_expr().to_vec(),
+                            agg_exec.input().clone(),
+                            agg_exec.input_schema.clone(),
                         )?))
                     } else {
                         None
@@ -566,11 +568,11 @@ fn reorder_aggregate_keys(
                     let new_final_agg = Arc::new(AggregateExec::try_new(
                         AggregateMode::FinalPartitioned,
                         new_group_by,
-                        agg_exec.aggr_expr.to_vec(),
-                        agg_exec.filter_expr.to_vec(),
-                        agg_exec.order_by_expr.to_vec(),
+                        agg_exec.aggr_expr().to_vec(),
+                        agg_exec.filter_expr().to_vec(),
+                        agg_exec.order_by_expr().to_vec(),
                         partial_agg,
-                        agg_exec.input_schema.clone(),
+                        agg_exec.input_schema().clone(),
                     )?);
 
                     // Need to create a new projection to change the expr ordering back
@@ -806,36 +808,21 @@ fn try_reorder(
     } else if !equivalence_properties.classes().is_empty() {
         normalized_expected = expected
             .iter()
-            .map(|e| {
-                normalize_expr_with_equivalence_properties(
-                    e.clone(),
-                    equivalence_properties.classes(),
-                )
-            })
+            .map(|e| equivalence_properties.normalize_expr(e.clone()))
             .collect::<Vec<_>>();
         assert_eq!(normalized_expected.len(), expected.len());
 
         normalized_left_keys = join_keys
             .left_keys
             .iter()
-            .map(|e| {
-                normalize_expr_with_equivalence_properties(
-                    e.clone(),
-                    equivalence_properties.classes(),
-                )
-            })
+            .map(|e| equivalence_properties.normalize_expr(e.clone()))
             .collect::<Vec<_>>();
         assert_eq!(join_keys.left_keys.len(), normalized_left_keys.len());
 
         normalized_right_keys = join_keys
             .right_keys
             .iter()
-            .map(|e| {
-                normalize_expr_with_equivalence_properties(
-                    e.clone(),
-                    equivalence_properties.classes(),
-                )
-            })
+            .map(|e| equivalence_properties.normalize_expr(e.clone()))
             .collect::<Vec<_>>();
         assert_eq!(join_keys.right_keys.len(), normalized_right_keys.len());
 

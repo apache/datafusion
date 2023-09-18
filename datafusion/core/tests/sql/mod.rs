@@ -82,6 +82,8 @@ pub mod arrow_files;
 #[cfg(feature = "avro")]
 pub mod create_drop;
 pub mod csv_files;
+pub mod describe;
+pub mod displayable;
 pub mod explain_analyze;
 pub mod expr;
 pub mod group_by;

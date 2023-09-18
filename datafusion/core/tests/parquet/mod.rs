@@ -40,6 +40,7 @@ use std::sync::Arc;
 use tempfile::NamedTempFile;
 
 mod custom_reader;
+mod file_statistics;
 mod filter_pushdown;
 mod page_pruning;
 mod row_group_pruning;
@@ -290,7 +291,8 @@ fn make_timestamp_batch(offset: Duration) -> RecordBatch {
                 offset_nanos
                     + t.parse::<chrono::NaiveDateTime>()
                         .unwrap()
-                        .timestamp_nanos()
+                        .timestamp_nanos_opt()
+                        .unwrap()
             })
         })
         .collect::<Vec<_>>();
