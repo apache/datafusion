@@ -19,6 +19,8 @@
 
 use std::fmt::Display;
 
+use arrow::datatypes::DataType;
+
 use crate::ScalarValue;
 
 /// Statistics for a relation
@@ -69,4 +71,26 @@ pub struct ColumnStatistics {
     pub min_value: Option<ScalarValue>,
     /// Number of distinct values
     pub distinct_count: Option<usize>,
+}
+
+impl ColumnStatistics {
+    /// Column contains a single non null value (e.g constant).
+    pub fn is_singleton(&self) -> bool {
+        match (&self.min_value, &self.max_value) {
+            // Min and max values are the same and not infinity.
+            (Some(min), Some(max)) => !min.is_null() && !max.is_null() && (min == max),
+            (_, _) => false,
+        }
+    }
+
+    /// Returns the [`ColumnStatistics`] corresponding to the given datatype by assigning infinite bounds.
+    pub fn new_with_unbounded_column(dt: &DataType) -> ColumnStatistics {
+        let null = ScalarValue::try_from(dt.clone()).ok();
+        ColumnStatistics {
+            null_count: None,
+            max_value: null.clone(),
+            min_value: null,
+            distinct_count: None,
+        }
+    }
 }

@@ -15,34 +15,37 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::expressions::Column;
-use crate::utils::collect_columns;
+use crate::expressions::{CastExpr, Column};
+use crate::utils::{collect_columns, merge_vectors};
 use crate::{
-    normalize_expr_with_equivalence_properties, LexOrdering, PhysicalExpr,
-    PhysicalSortExpr,
+    LexOrdering, LexOrderingRef, LexOrderingReq, PhysicalExpr, PhysicalSortExpr,
+    PhysicalSortRequirement,
 };
 
 use arrow::datatypes::SchemaRef;
 use arrow_schema::Fields;
 
+use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::Result;
+use itertools::izip;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
+use std::ops::Range;
 use std::sync::Arc;
 
 /// Represents a collection of [`EquivalentClass`] (equivalences
 /// between columns in relations)
 ///
-/// This is used to represent both:
+/// This is used to represent:
 ///
 /// 1. Equality conditions (like `A=B`), when `T` = [`Column`]
-/// 2. Ordering (like `A ASC = B ASC`), when `T` = [`PhysicalSortExpr`]
 #[derive(Debug, Clone)]
-pub struct EquivalenceProperties<T = Column> {
-    classes: Vec<EquivalentClass<T>>,
+pub struct EquivalenceProperties {
+    classes: Vec<EquivalentClass<Column>>,
     schema: SchemaRef,
 }
 
-impl<T: Eq + Clone + Hash> EquivalenceProperties<T> {
+impl EquivalenceProperties {
     pub fn new(schema: SchemaRef) -> Self {
         EquivalenceProperties {
             classes: vec![],
@@ -51,7 +54,7 @@ impl<T: Eq + Clone + Hash> EquivalenceProperties<T> {
     }
 
     /// return the set of equivalences
-    pub fn classes(&self) -> &[EquivalentClass<T>] {
+    pub fn classes(&self) -> &[EquivalentClass<Column>] {
         &self.classes
     }
 
@@ -60,7 +63,7 @@ impl<T: Eq + Clone + Hash> EquivalenceProperties<T> {
     }
 
     /// Add the [`EquivalentClass`] from `iter` to this list
-    pub fn extend<I: IntoIterator<Item = EquivalentClass<T>>>(&mut self, iter: I) {
+    pub fn extend<I: IntoIterator<Item = EquivalentClass<Column>>>(&mut self, iter: I) {
         for ec in iter {
             self.classes.push(ec)
         }
@@ -68,7 +71,7 @@ impl<T: Eq + Clone + Hash> EquivalenceProperties<T> {
 
     /// Adds new equal conditions into the EquivalenceProperties. New equal
     /// conditions usually come from equality predicates in a join/filter.
-    pub fn add_equal_conditions(&mut self, new_conditions: (&T, &T)) {
+    pub fn add_equal_conditions(&mut self, new_conditions: (&Column, &Column)) {
         let mut idx1: Option<usize> = None;
         let mut idx2: Option<usize> = None;
         for (idx, class) in self.classes.iter_mut().enumerate() {
@@ -106,13 +109,88 @@ impl<T: Eq + Clone + Hash> EquivalenceProperties<T> {
             }
             (None, None) => {
                 // adding new pairs
-                self.classes.push(EquivalentClass::<T>::new(
+                self.classes.push(EquivalentClass::<Column>::new(
                     new_conditions.0.clone(),
                     vec![new_conditions.1.clone()],
                 ));
             }
             _ => {}
         }
+    }
+
+    /// Normalizes physical expression according to `EquivalentClass`es inside `self.classes`.
+    /// expression is replaced with `EquivalentClass::head` expression if it is among `EquivalentClass::others`.
+    pub fn normalize_expr(&self, expr: Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalExpr> {
+        expr.clone()
+            .transform(&|expr| {
+                let normalized_form =
+                    expr.as_any().downcast_ref::<Column>().and_then(|column| {
+                        for class in &self.classes {
+                            if class.contains(column) {
+                                return Some(Arc::new(class.head().clone()) as _);
+                            }
+                        }
+                        None
+                    });
+                Ok(if let Some(normalized_form) = normalized_form {
+                    Transformed::Yes(normalized_form)
+                } else {
+                    Transformed::No(expr)
+                })
+            })
+            .unwrap_or(expr)
+    }
+
+    /// This function applies the \[`normalize_expr`]
+    /// function for all expression in `exprs` and returns a vector of
+    /// normalized physical expressions.
+    pub fn normalize_exprs(
+        &self,
+        exprs: &[Arc<dyn PhysicalExpr>],
+    ) -> Vec<Arc<dyn PhysicalExpr>> {
+        exprs
+            .iter()
+            .map(|expr| self.normalize_expr(expr.clone()))
+            .collect::<Vec<_>>()
+    }
+
+    /// This function normalizes `sort_requirement` according to `EquivalenceClasses` in the `self`.
+    /// If the given sort requirement doesn't belong to equivalence set inside
+    /// `self`, it returns `sort_requirement` as is.
+    pub fn normalize_sort_requirement(
+        &self,
+        mut sort_requirement: PhysicalSortRequirement,
+    ) -> PhysicalSortRequirement {
+        sort_requirement.expr = self.normalize_expr(sort_requirement.expr);
+        sort_requirement
+    }
+
+    /// This function applies the \[`normalize_sort_requirement`]
+    /// function for all sort requirements in `sort_reqs` and returns a vector of
+    /// normalized sort expressions.
+    pub fn normalize_sort_requirements(
+        &self,
+        sort_reqs: &[PhysicalSortRequirement],
+    ) -> Vec<PhysicalSortRequirement> {
+        let normalized_sort_reqs = sort_reqs
+            .iter()
+            .map(|sort_req| self.normalize_sort_requirement(sort_req.clone()))
+            .collect::<Vec<_>>();
+        collapse_vec(normalized_sort_reqs)
+    }
+
+    /// Similar to the \[`normalize_sort_requirements`] this function normalizes
+    /// sort expressions in `sort_exprs` and returns a vector of
+    /// normalized sort expressions.
+    pub fn normalize_sort_exprs(
+        &self,
+        sort_exprs: &[PhysicalSortExpr],
+    ) -> Vec<PhysicalSortExpr> {
+        let sort_requirements =
+            PhysicalSortRequirement::from_sort_exprs(sort_exprs.iter());
+        let normalized_sort_requirement =
+            self.normalize_sort_requirements(&sort_requirements);
+        PhysicalSortRequirement::to_sort_exprs(normalized_sort_requirement)
     }
 }
 
@@ -131,17 +209,120 @@ impl<T: Eq + Clone + Hash> EquivalenceProperties<T> {
 /// where both `a ASC` and `b DESC` can describe the table ordering. With
 /// `OrderingEquivalenceProperties`, we can keep track of these equivalences
 /// and treat `a ASC` and `b DESC` as the same ordering requirement.
-pub type OrderingEquivalenceProperties = EquivalenceProperties<LexOrdering>;
+#[derive(Debug, Clone)]
+pub struct OrderingEquivalenceProperties {
+    oeq_class: Option<OrderingEquivalentClass>,
+    /// Keeps track of expressions that have constant value.
+    constants: Vec<Arc<dyn PhysicalExpr>>,
+    schema: SchemaRef,
+}
 
 impl OrderingEquivalenceProperties {
+    /// Create an empty `OrderingEquivalenceProperties`
+    pub fn new(schema: SchemaRef) -> Self {
+        Self {
+            oeq_class: None,
+            constants: vec![],
+            schema,
+        }
+    }
+
+    /// Extends `OrderingEquivalenceProperties` by adding ordering inside the `other`
+    /// to the `self.oeq_class`.
+    pub fn extend(&mut self, other: Option<OrderingEquivalentClass>) {
+        if let Some(other) = other {
+            if let Some(class) = &mut self.oeq_class {
+                class.others.insert(other.head);
+                class.others.extend(other.others);
+            } else {
+                self.oeq_class = Some(other);
+            }
+        }
+    }
+
+    pub fn oeq_class(&self) -> Option<&OrderingEquivalentClass> {
+        self.oeq_class.as_ref()
+    }
+
+    /// Adds new equal conditions into the EquivalenceProperties. New equal
+    /// conditions usually come from equality predicates in a join/filter.
+    pub fn add_equal_conditions(&mut self, new_conditions: (&LexOrdering, &LexOrdering)) {
+        if let Some(class) = &mut self.oeq_class {
+            class.insert(new_conditions.0.clone());
+            class.insert(new_conditions.1.clone());
+        } else {
+            let head = new_conditions.0.clone();
+            let others = vec![new_conditions.1.clone()];
+            self.oeq_class = Some(OrderingEquivalentClass::new(head, others))
+        }
+    }
+
+    /// Add physical expression that have constant value to the `self.constants`
+    pub fn with_constants(mut self, constants: Vec<Arc<dyn PhysicalExpr>>) -> Self {
+        constants.into_iter().for_each(|constant| {
+            if !physical_exprs_contains(&self.constants, &constant) {
+                self.constants.push(constant);
+            }
+        });
+        self
+    }
+
+    pub fn schema(&self) -> SchemaRef {
+        self.schema.clone()
+    }
+
+    /// This function normalizes `sort_reqs` by
+    /// - removing expressions that have constant value from requirement
+    /// - replacing sections that are in the `self.oeq_class.others` with `self.oeq_class.head`
+    /// - removing sections that satisfies global ordering that are in the post fix of requirement
+    pub fn normalize_sort_requirements(
+        &self,
+        sort_reqs: &[PhysicalSortRequirement],
+    ) -> Vec<PhysicalSortRequirement> {
+        let normalized_sort_reqs =
+            prune_sort_reqs_with_constants(sort_reqs, &self.constants);
+        let mut normalized_sort_reqs = collapse_lex_req(normalized_sort_reqs);
+        if let Some(oeq_class) = &self.oeq_class {
+            for item in oeq_class.others() {
+                let item = PhysicalSortRequirement::from_sort_exprs(item);
+                let item = prune_sort_reqs_with_constants(&item, &self.constants);
+                let ranges = get_compatible_ranges(&normalized_sort_reqs, &item);
+                let mut offset: i64 = 0;
+                for Range { start, end } in ranges {
+                    let head = PhysicalSortRequirement::from_sort_exprs(oeq_class.head());
+                    let mut head = prune_sort_reqs_with_constants(&head, &self.constants);
+                    let updated_start = (start as i64 + offset) as usize;
+                    let updated_end = (end as i64 + offset) as usize;
+                    let range = end - start;
+                    offset += head.len() as i64 - range as i64;
+                    let all_none = normalized_sort_reqs[updated_start..updated_end]
+                        .iter()
+                        .all(|req| req.options.is_none());
+                    if all_none {
+                        for req in head.iter_mut() {
+                            req.options = None;
+                        }
+                    }
+                    normalized_sort_reqs.splice(updated_start..updated_end, head);
+                }
+            }
+            normalized_sort_reqs = simplify_lex_req(normalized_sort_reqs, oeq_class);
+        }
+        collapse_lex_req(normalized_sort_reqs)
+    }
+
     /// Checks whether `leading_ordering` is contained in any of the ordering
     /// equivalence classes.
     pub fn satisfies_leading_ordering(
         &self,
         leading_ordering: &PhysicalSortExpr,
     ) -> bool {
-        for cls in &self.classes {
-            for ordering in cls.others.iter().chain(std::iter::once(&cls.head)) {
+        if let Some(oeq_class) = &self.oeq_class {
+            for ordering in oeq_class
+                .others
+                .iter()
+                .chain(std::iter::once(&oeq_class.head))
+            {
                 if ordering[0].eq(leading_ordering) {
                     return true;
                 }
@@ -280,6 +461,55 @@ impl OrderingEquivalentClass {
             self.insert(update_with_alias(ordering, oeq_alias_map));
         }
     }
+
+    /// Adds `offset` value to the index of each expression inside `self.head` and `self.others`.
+    pub fn add_offset(&self, offset: usize) -> Result<OrderingEquivalentClass> {
+        let head = add_offset_to_lex_ordering(self.head(), offset)?;
+        let others = self
+            .others()
+            .iter()
+            .map(|ordering| add_offset_to_lex_ordering(ordering, offset))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(OrderingEquivalentClass::new(head, others))
+    }
+
+    /// This function normalizes `OrderingEquivalenceProperties` according to `eq_properties`.
+    /// More explicitly, it makes sure that expressions in `oeq_class` are head entries
+    /// in `eq_properties`, replacing any non-head entries with head entries if necessary.
+    pub fn normalize_with_equivalence_properties(
+        &self,
+        eq_properties: &EquivalenceProperties,
+    ) -> OrderingEquivalentClass {
+        let head = eq_properties.normalize_sort_exprs(self.head());
+
+        let others = self
+            .others()
+            .iter()
+            .map(|other| eq_properties.normalize_sort_exprs(other))
+            .collect();
+
+        EquivalentClass::new(head, others)
+    }
+
+    /// Prefix with existing ordering.
+    pub fn prefix_ordering_equivalent_class_with_existing_ordering(
+        &self,
+        existing_ordering: &[PhysicalSortExpr],
+        eq_properties: &EquivalenceProperties,
+    ) -> OrderingEquivalentClass {
+        let existing_ordering = eq_properties.normalize_sort_exprs(existing_ordering);
+        let normalized_head = eq_properties.normalize_sort_exprs(self.head());
+        let updated_head = merge_vectors(&existing_ordering, &normalized_head);
+        let updated_others = self
+            .others()
+            .iter()
+            .map(|ordering| {
+                let normalized_ordering = eq_properties.normalize_sort_exprs(ordering);
+                merge_vectors(&existing_ordering, &normalized_ordering)
+            })
+            .collect();
+        OrderingEquivalentClass::new(updated_head, updated_others)
+    }
 }
 
 /// This is a builder object facilitating incremental construction
@@ -308,7 +538,7 @@ impl OrderingEquivalenceBuilder {
         new_ordering_eq_properties: OrderingEquivalenceProperties,
     ) -> Self {
         self.ordering_eq_properties
-            .extend(new_ordering_eq_properties.classes().iter().cloned());
+            .extend(new_ordering_eq_properties.oeq_class().cloned());
         self
     }
 
@@ -334,10 +564,7 @@ impl OrderingEquivalenceBuilder {
         let mut normalized_out_ordering = vec![];
         for item in &self.existing_ordering {
             // To account for ordering equivalences, first normalize the expression:
-            let normalized = normalize_expr_with_equivalence_properties(
-                item.expr.clone(),
-                self.eq_properties.classes(),
-            );
+            let normalized = self.eq_properties.normalize_expr(item.expr.clone());
             normalized_out_ordering.push(PhysicalSortExpr {
                 expr: normalized,
                 options: item.options,
@@ -459,40 +686,77 @@ pub fn project_ordering_equivalence_properties(
     let schema = output_eq.schema();
     let fields = schema.fields();
 
-    let mut eq_classes = input_eq.classes().to_vec();
+    let oeq_class = input_eq.oeq_class();
+    let mut oeq_class = if let Some(oeq_class) = oeq_class {
+        oeq_class.clone()
+    } else {
+        return;
+    };
     let mut oeq_alias_map = vec![];
     for (column, columns) in columns_map {
         if is_column_invalid_in_new_schema(column, fields) {
             oeq_alias_map.push((column.clone(), columns[0].clone()));
         }
     }
-    for class in eq_classes.iter_mut() {
-        class.update_with_aliases(&oeq_alias_map, fields);
-    }
+    oeq_class.update_with_aliases(&oeq_alias_map, fields);
 
-    // Prune columns that are no longer in the schema from the OrderingEquivalenceProperties.
-    for class in eq_classes.iter_mut() {
-        let sort_exprs_to_remove = class
-            .iter()
-            .filter(|sort_exprs| {
-                sort_exprs.iter().any(|sort_expr| {
-                    let cols_in_expr = collect_columns(&sort_expr.expr);
-                    // If any one of the columns, used in Expression is invalid, remove expression
-                    // from ordering equivalences
-                    cols_in_expr
-                        .iter()
-                        .any(|col| is_column_invalid_in_new_schema(col, fields))
-                })
+    // Prune columns that no longer is in the schema from from the OrderingEquivalenceProperties.
+    let sort_exprs_to_remove = oeq_class
+        .iter()
+        .filter(|sort_exprs| {
+            sort_exprs.iter().any(|sort_expr| {
+                let cols_in_expr = collect_columns(&sort_expr.expr);
+                // If any one of the columns, used in Expression is invalid, remove expression
+                // from ordering equivalences
+                cols_in_expr
+                    .iter()
+                    .any(|col| is_column_invalid_in_new_schema(col, fields))
             })
-            .cloned()
-            .collect::<Vec<_>>();
-        for sort_exprs in sort_exprs_to_remove {
-            class.remove(&sort_exprs);
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    for sort_exprs in sort_exprs_to_remove {
+        oeq_class.remove(&sort_exprs);
+    }
+    if oeq_class.len() > 1 {
+        output_eq.extend(Some(oeq_class));
+    }
+}
+
+/// Update `ordering` if it contains cast expression with target column
+/// after projection, if there is no cast expression among `ordering` expressions,
+/// returns `None`.
+fn update_with_cast_exprs(
+    cast_exprs: &[(CastExpr, Column)],
+    mut ordering: LexOrdering,
+) -> Option<LexOrdering> {
+    let mut is_changed = false;
+    for sort_expr in ordering.iter_mut() {
+        for (cast_expr, target_col) in cast_exprs.iter() {
+            if sort_expr.expr.eq(cast_expr.expr()) {
+                sort_expr.expr = Arc::new(target_col.clone()) as _;
+                is_changed = true;
+            }
         }
     }
-    eq_classes.retain(|props| props.len() > 1);
+    is_changed.then_some(ordering)
+}
 
-    output_eq.extend(eq_classes);
+/// Update cast expressions inside ordering equivalence
+/// properties with its target column after projection
+pub fn update_ordering_equivalence_with_cast(
+    cast_exprs: &[(CastExpr, Column)],
+    input_oeq: &mut OrderingEquivalenceProperties,
+) {
+    if let Some(cls) = &mut input_oeq.oeq_class {
+        for ordering in
+            std::iter::once(cls.head().clone()).chain(cls.others().clone().into_iter())
+        {
+            if let Some(updated_ordering) = update_with_cast_exprs(cast_exprs, ordering) {
+                cls.insert(updated_ordering);
+            }
+        }
+    }
 }
 
 /// Retrieves the ordering equivalence properties for a given schema and output ordering.
@@ -516,6 +780,197 @@ pub fn ordering_equivalence_properties_helper(
     oep
 }
 
+/// This function constructs a duplicate-free vector by filtering out duplicate
+/// entries inside the given vector `input`.
+fn collapse_vec<T: PartialEq>(input: Vec<T>) -> Vec<T> {
+    let mut output = vec![];
+    for item in input {
+        if !output.contains(&item) {
+            output.push(item);
+        }
+    }
+    output
+}
+
+/// This function constructs a duplicate-free `LexOrderingReq` by filtering out duplicate
+/// entries that have same physical expression inside the given vector `input`.
+/// `vec![a Some(Asc), a Some(Desc)]` is collapsed to the `vec![a Some(Asc)]`. Since
+/// when same expression is already seen before, following expressions are redundant.
+fn collapse_lex_req(input: LexOrderingReq) -> LexOrderingReq {
+    let mut output = vec![];
+    for item in input {
+        if !lex_req_contains(&output, &item) {
+            output.push(item);
+        }
+    }
+    output
+}
+
+/// Check whether `sort_req.expr` is among the expressions of `lex_req`.
+fn lex_req_contains(
+    lex_req: &[PhysicalSortRequirement],
+    sort_req: &PhysicalSortRequirement,
+) -> bool {
+    for constant in lex_req {
+        if constant.expr.eq(&sort_req.expr) {
+            return true;
+        }
+    }
+    false
+}
+
+/// This function simplifies lexicographical ordering requirement
+/// inside `input` by removing postfix lexicographical requirements
+/// that satisfy global ordering (occurs inside the ordering equivalent class)
+fn simplify_lex_req(
+    input: LexOrderingReq,
+    oeq_class: &OrderingEquivalentClass,
+) -> LexOrderingReq {
+    let mut section = &input[..];
+    loop {
+        let n_prune = prune_last_n_that_is_in_oeq(section, oeq_class);
+        // Cannot prune entries from the end of requirement
+        if n_prune == 0 {
+            break;
+        }
+        section = &section[0..section.len() - n_prune];
+    }
+    if section.is_empty() {
+        PhysicalSortRequirement::from_sort_exprs(oeq_class.head())
+    } else {
+        section.to_vec()
+    }
+}
+
+/// Determines how many entries from the end can be deleted.
+/// Last n entry satisfies global ordering, hence having them
+/// as postfix in the lexicographical requirement is unnecessary.
+/// Assume requirement is [a ASC, b ASC, c ASC], also assume that
+/// existing ordering is [c ASC, d ASC]. In this case, since [c ASC]
+/// is satisfied by the existing ordering (e.g corresponding section is global ordering),
+/// [c ASC] can be pruned from the requirement: [a ASC, b ASC, c ASC]. In this case,
+/// this function will return 1, to indicate last element can be removed from the requirement
+fn prune_last_n_that_is_in_oeq(
+    input: &[PhysicalSortRequirement],
+    oeq_class: &OrderingEquivalentClass,
+) -> usize {
+    let input_len = input.len();
+    for ordering in std::iter::once(oeq_class.head()).chain(oeq_class.others().iter()) {
+        let mut search_range = std::cmp::min(ordering.len(), input_len);
+        while search_range > 0 {
+            let req_section = &input[input_len - search_range..];
+            // let given_section = &ordering[0..search_range];
+            if req_satisfied(ordering, req_section) {
+                return search_range;
+            } else {
+                search_range -= 1;
+            }
+        }
+    }
+    0
+}
+
+/// Checks whether given section satisfies req.
+fn req_satisfied(given: LexOrderingRef, req: &[PhysicalSortRequirement]) -> bool {
+    for (given, req) in izip!(given.iter(), req.iter()) {
+        let PhysicalSortRequirement { expr, options } = req;
+        if let Some(options) = options {
+            if options != &given.options || !expr.eq(&given.expr) {
+                return false;
+            }
+        } else if !expr.eq(&given.expr) {
+            return false;
+        }
+    }
+    true
+}
+
+/// This function searches for the slice `section` inside the slice `given`.
+/// It returns each range where `section` is compatible with the corresponding
+/// slice in `given`.
+fn get_compatible_ranges(
+    given: &[PhysicalSortRequirement],
+    section: &[PhysicalSortRequirement],
+) -> Vec<Range<usize>> {
+    let n_section = section.len();
+    let n_end = if given.len() >= n_section {
+        given.len() - n_section + 1
+    } else {
+        0
+    };
+    (0..n_end)
+        .filter_map(|idx| {
+            let end = idx + n_section;
+            given[idx..end]
+                .iter()
+                .zip(section)
+                .all(|(req, given)| given.compatible(req))
+                .then_some(Range { start: idx, end })
+        })
+        .collect()
+}
+
+/// It is similar to contains method of vector.
+/// Finds whether `expr` is among `physical_exprs`.
+pub fn physical_exprs_contains(
+    physical_exprs: &[Arc<dyn PhysicalExpr>],
+    expr: &Arc<dyn PhysicalExpr>,
+) -> bool {
+    physical_exprs
+        .iter()
+        .any(|physical_expr| physical_expr.eq(expr))
+}
+
+/// Remove ordering requirements that have constant value
+fn prune_sort_reqs_with_constants(
+    ordering: &[PhysicalSortRequirement],
+    constants: &[Arc<dyn PhysicalExpr>],
+) -> Vec<PhysicalSortRequirement> {
+    ordering
+        .iter()
+        .filter(|&order| !physical_exprs_contains(constants, &order.expr))
+        .cloned()
+        .collect()
+}
+
+/// Adds the `offset` value to `Column` indices inside `expr`. This function is
+/// generally used during the update of the right table schema in join operations.
+pub(crate) fn add_offset_to_expr(
+    expr: Arc<dyn PhysicalExpr>,
+    offset: usize,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    expr.transform_down(&|e| match e.as_any().downcast_ref::<Column>() {
+        Some(col) => Ok(Transformed::Yes(Arc::new(Column::new(
+            col.name(),
+            offset + col.index(),
+        )))),
+        None => Ok(Transformed::No(e)),
+    })
+}
+
+/// Adds the `offset` value to `Column` indices inside `sort_expr.expr`.
+pub(crate) fn add_offset_to_sort_expr(
+    sort_expr: &PhysicalSortExpr,
+    offset: usize,
+) -> Result<PhysicalSortExpr> {
+    Ok(PhysicalSortExpr {
+        expr: add_offset_to_expr(sort_expr.expr.clone(), offset)?,
+        options: sort_expr.options,
+    })
+}
+
+/// Adds the `offset` value to `Column` indices for each `sort_expr.expr`
+/// inside `sort_exprs`.
+pub fn add_offset_to_lex_ordering(
+    sort_exprs: LexOrderingRef,
+    offset: usize,
+) -> Result<LexOrdering> {
+    sort_exprs
+        .iter()
+        .map(|sort_expr| add_offset_to_sort_expr(sort_expr, offset))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -523,7 +978,19 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::Result;
 
+    use arrow_schema::SortOptions;
     use std::sync::Arc;
+
+    fn convert_to_requirement(
+        in_data: &[(&Column, Option<SortOptions>)],
+    ) -> Vec<PhysicalSortRequirement> {
+        in_data
+            .iter()
+            .map(|(col, options)| {
+                PhysicalSortRequirement::new(Arc::new((*col).clone()) as _, *options)
+            })
+            .collect::<Vec<_>>()
+    }
 
     #[test]
     fn add_equal_conditions_test() -> Result<()> {
@@ -613,6 +1080,55 @@ mod tests {
         assert!(out_properties.classes()[0].contains(&Column::new("a3", 2)));
         assert!(out_properties.classes()[0].contains(&Column::new("a4", 3)));
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_collapse_vec() -> Result<()> {
+        assert_eq!(collapse_vec(vec![1, 2, 3]), vec![1, 2, 3]);
+        assert_eq!(collapse_vec(vec![1, 2, 3, 2, 3]), vec![1, 2, 3]);
+        assert_eq!(collapse_vec(vec![3, 1, 2, 3, 2, 3]), vec![3, 1, 2]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_compatible_ranges() -> Result<()> {
+        let col_a = &Column::new("a", 0);
+        let col_b = &Column::new("b", 1);
+        let option1 = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        let test_data = vec![
+            (
+                vec![(col_a, Some(option1)), (col_b, Some(option1))],
+                vec![(col_a, Some(option1))],
+                vec![(0, 1)],
+            ),
+            (
+                vec![(col_a, None), (col_b, Some(option1))],
+                vec![(col_a, Some(option1))],
+                vec![(0, 1)],
+            ),
+            (
+                vec![
+                    (col_a, None),
+                    (col_b, Some(option1)),
+                    (col_a, Some(option1)),
+                ],
+                vec![(col_a, Some(option1))],
+                vec![(0, 1), (2, 3)],
+            ),
+        ];
+        for (searched, to_search, expected) in test_data {
+            let searched = convert_to_requirement(&searched);
+            let to_search = convert_to_requirement(&to_search);
+            let expected = expected
+                .into_iter()
+                .map(|(start, end)| Range { start, end })
+                .collect::<Vec<_>>();
+            assert_eq!(get_compatible_ranges(&searched, &to_search), expected);
+        }
         Ok(())
     }
 }

@@ -189,12 +189,15 @@ fn shrink_boundaries(
     })?;
     let final_result = graph.get_interval(*root_index);
 
+    // If during selectivity calculation we encounter an error, use 1.0 as cardinality estimate
+    // safest estimate(e.q largest possible value).
     let selectivity = calculate_selectivity(
         &final_result.lower.value,
         &final_result.upper.value,
         &target_boundaries,
         &initial_boundaries,
-    )?;
+    )
+    .unwrap_or(1.0);
 
     if !(0.0..=1.0).contains(&selectivity) {
         return internal_err!("Selectivity is out of limit: {}", selectivity);
