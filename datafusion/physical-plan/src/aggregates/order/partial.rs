@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::row_converter::CardinalityAwareRowConverter;
-use arrow::row::{OwnedRow, RowConverter, Rows, SortField};
+use arrow::row::{OwnedRow, Rows, SortField};
 use arrow_array::ArrayRef;
 use arrow_schema::Schema;
 use datafusion_common::Result;
