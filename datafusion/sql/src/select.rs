@@ -26,8 +26,8 @@ use crate::utils::{
 
 use datafusion_common::Column;
 use datafusion_common::{
-    get_target_functional_dependencies, not_impl_err, plan_err, DFSchemaRef,
-    DataFusionError, Result,
+    get_target_functional_dependencies, not_impl_err, plan_err, DFSchemaRef, DataFusionError,
+    Result,
 };
 use datafusion_expr::expr::Alias;
 use datafusion_expr::expr_rewriter::{
@@ -38,9 +38,7 @@ use datafusion_expr::utils::{
     expand_qualified_wildcard, expand_wildcard, expr_as_column_expr, expr_to_columns,
     find_aggregate_exprs, find_window_exprs,
 };
-use datafusion_expr::{
-    Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning,
-};
+use datafusion_expr::{Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning};
 use sqlparser::ast::{
     Distinct, Expr as SQLExpr, ReplaceSelectItem, WildcardAdditionalOptions, WindowType,
 };
@@ -197,17 +195,38 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let plan = project(plan, select_exprs_post_aggr)?;
 
         // process distinct clause
-        let distinct = select
-            .distinct
-            .map(|distinct| match distinct {
-                Distinct::Distinct => Ok(true),
-                Distinct::On(_) => not_impl_err!("DISTINCT ON Exprs not supported"),
-            })
-            .transpose()?
-            .unwrap_or(false);
+        // let distinct = select
+        //     .distinct
+        //     .map(|distinct| match distinct {
+        //         Distinct::Distinct => Ok(true),
+        //         Distinct::On(_) => not_impl_err!("DISTINCT ON Exprs not supported"),
+        //     })
+        //     .transpose()?
+        //     .unwrap_or(false);
 
-        let plan = if distinct {
-            LogicalPlanBuilder::from(plan).distinct()?.build()
+        // let plan = if distinct {
+        //     LogicalPlanBuilder::from(plan).distinct()?.build()
+        // } else {
+        //     plan
+        // };
+        //
+        // process distinct clause
+        let plan = if let Some(distinct) = select.distinct {
+            let on_expr = match distinct {
+                Distinct::Distinct => None,
+                Distinct::On(o) => Some(
+                    o.iter()
+                        .map(|e| {
+                            self.sql_expr_to_logical_expr(
+                                e.clone(),
+                                &plan.schema(),
+                                planner_context,
+                            )
+                        })
+                        .collect::<Result<Vec<_>>>()?,
+                ),
+            };
+            LogicalPlanBuilder::from(plan).distinct(on_expr)?.build()?
         } else {
             plan
         };
@@ -346,18 +365,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     return plan_err!("SELECT * with no tables specified is not valid");
                 }
                 // do not expand from outer schema
-                let expanded_exprs =
-                    expand_wildcard(plan.schema().as_ref(), plan, Some(&options))?;
+                let expanded_exprs = expand_wildcard(plan.schema().as_ref(), plan, Some(&options))?;
                 // If there is a REPLACE statement, replace that column with the given
                 // replace expression. Column name remains the same.
                 if let Some(replace) = options.opt_replace {
-                    self.replace_columns(
-                        plan,
-                        empty_from,
-                        planner_context,
-                        expanded_exprs,
-                        replace,
-                    )
+                    self.replace_columns(plan, empty_from, planner_context, expanded_exprs, replace)
                 } else {
                     Ok(expanded_exprs)
                 }
@@ -366,21 +378,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Self::check_wildcard_options(&options)?;
                 let qualifier = format!("{object_name}");
                 // do not expand from outer schema
-                let expanded_exprs = expand_qualified_wildcard(
-                    &qualifier,
-                    plan.schema().as_ref(),
-                    Some(&options),
-                )?;
+                let expanded_exprs =
+                    expand_qualified_wildcard(&qualifier, plan.schema().as_ref(), Some(&options))?;
                 // If there is a REPLACE statement, replace that column with the given
                 // replace expression. Column name remains the same.
                 if let Some(replace) = options.opt_replace {
-                    self.replace_columns(
-                        plan,
-                        empty_from,
-                        planner_context,
-                        expanded_exprs,
-                        replace,
-                    )
+                    self.replace_columns(plan, empty_from, planner_context, expanded_exprs, replace)
                 } else {
                     Ok(expanded_exprs)
                 }
@@ -566,10 +569,7 @@ fn check_conflicting_windows(window_defs: &[NamedWindowDefinition]) -> Result<()
     for (i, window_def_i) in window_defs.iter().enumerate() {
         for window_def_j in window_defs.iter().skip(i + 1) {
             if window_def_i.0 == window_def_j.0 {
-                return plan_err!(
-                    "The window {} is defined multiple times!",
-                    window_def_i.0
-                );
+                return plan_err!("The window {} is defined multiple times!", window_def_i.0);
             }
         }
     }
@@ -639,9 +639,7 @@ fn get_updated_group_by_exprs(
         .map(|group_by_expr| group_by_expr.display_name())
         .collect::<Result<Vec<_>>>()?;
     // Get targets that can be used in a select, even if they do not occur in aggregation:
-    if let Some(target_indices) =
-        get_target_functional_dependencies(schema, &group_by_expr_names)
-    {
+    if let Some(target_indices) = get_target_functional_dependencies(schema, &group_by_expr_names) {
         // Calculate dependent fields names with determinant GROUP BY expression:
         let associated_field_names = target_indices
             .iter()
@@ -652,9 +650,7 @@ fn get_updated_group_by_exprs(
         // columns in select statements also.
         for expr in select_exprs {
             let expr_name = format!("{}", expr);
-            if !new_group_by_exprs.contains(expr)
-                && associated_field_names.contains(&expr_name)
-            {
+            if !new_group_by_exprs.contains(expr) && associated_field_names.contains(&expr_name) {
                 new_group_by_exprs.push(expr.clone());
             }
         }

@@ -24,12 +24,10 @@ use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::{DmlStatement, Statement};
 use crate::utils::{
-    enumerate_grouping_sets, exprlist_to_fields, find_out_reference_exprs,
-    grouping_set_expr_count, grouping_set_to_exprlist, inspect_expr_pre,
+    enumerate_grouping_sets, exprlist_to_fields, find_out_reference_exprs, grouping_set_expr_count,
+    grouping_set_to_exprlist, inspect_expr_pre,
 };
-use crate::{
-    build_join_schema, Expr, ExprSchemable, TableProviderFilterPushDown, TableSource,
-};
+use crate::{build_join_schema, Expr, ExprSchemable, TableProviderFilterPushDown, TableSource};
 use crate::{
     expr_vec_fmt, BinaryExpr, CreateMemoryTable, CreateView, LogicalPlanBuilder, Operator,
 };
@@ -39,13 +37,12 @@ use super::DdlStatement;
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::tree_node::{
-    RewriteRecursion, Transformed, TreeNode, TreeNodeRewriter, TreeNodeVisitor,
-    VisitRecursion,
+    RewriteRecursion, Transformed, TreeNode, TreeNodeRewriter, TreeNodeVisitor, VisitRecursion,
 };
 use datafusion_common::{
-    aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
-    DFField, DFSchema, DFSchemaRef, DataFusionError, FunctionalDependencies,
-    OwnedTableReference, Result, ScalarValue, UnnestOptions,
+    aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints, DFField,
+    DFSchema, DFSchemaRef, DataFusionError, FunctionalDependencies, OwnedTableReference, Result,
+    ScalarValue, UnnestOptions,
 };
 // backwards compatibility
 pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
@@ -181,9 +178,7 @@ impl LogicalPlan {
             LogicalPlan::Analyze(analyze) => &analyze.schema,
             LogicalPlan::Extension(extension) => extension.node.schema(),
             LogicalPlan::Union(Union { schema, .. }) => schema,
-            LogicalPlan::DescribeTable(DescribeTable { output_schema, .. }) => {
-                output_schema
-            }
+            LogicalPlan::DescribeTable(DescribeTable { output_schema, .. }) => output_schema,
             LogicalPlan::Dml(DmlStatement { table_schema, .. }) => table_schema,
             LogicalPlan::Copy(CopyTo { input, .. }) => input.schema(),
             LogicalPlan::Ddl(ddl) => ddl.schema(),
@@ -373,6 +368,7 @@ impl LogicalPlan {
             | LogicalPlan::Dml(_)
             | LogicalPlan::Ddl(_)
             | LogicalPlan::Copy(_)
+            | LogicalPlan::Distinct(_)
             | LogicalPlan::DescribeTable(_)
             | LogicalPlan::Prepare(_) => Ok(()),
         }
@@ -442,9 +438,7 @@ impl LogicalPlan {
     /// returns the first output expression of this `LogicalPlan` node.
     pub fn head_output_expr(&self) -> Result<Option<Expr>> {
         match self {
-            LogicalPlan::Projection(projection) => {
-                Ok(Some(projection.expr.as_slice()[0].clone()))
-            }
+            LogicalPlan::Projection(projection) => Ok(Some(projection.expr.as_slice()[0].clone())),
             LogicalPlan::Aggregate(agg) => {
                 if agg.group_expr.is_empty() {
                     Ok(Some(agg.aggr_expr.as_slice()[0].clone()))
@@ -579,13 +573,9 @@ impl LogicalPlan {
         inputs: &[LogicalPlan],
     ) -> Result<LogicalPlan> {
         match self {
-            LogicalPlan::Projection(Projection { schema, .. }) => {
-                Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
-                    expr,
-                    Arc::new(inputs[0].clone()),
-                    schema.clone(),
-                )?))
-            }
+            LogicalPlan::Projection(Projection { schema, .. }) => Ok(LogicalPlan::Projection(
+                Projection::try_new_with_schema(expr, Arc::new(inputs[0].clone()), schema.clone())?,
+            )),
             LogicalPlan::Dml(DmlStatement {
                 table_name,
                 table_schema,
@@ -610,15 +600,13 @@ impl LogicalPlan {
                 single_file_output: *single_file_output,
                 copy_options: copy_options.clone(),
             })),
-            LogicalPlan::Values(Values { schema, .. }) => {
-                Ok(LogicalPlan::Values(Values {
-                    schema: schema.clone(),
-                    values: expr
-                        .chunks_exact(schema.fields().len())
-                        .map(|s| s.to_vec())
-                        .collect::<Vec<_>>(),
-                }))
-            }
+            LogicalPlan::Values(Values { schema, .. }) => Ok(LogicalPlan::Values(Values {
+                schema: schema.clone(),
+                values: expr
+                    .chunks_exact(schema.fields().len())
+                    .map(|s| s.to_vec())
+                    .collect::<Vec<_>>(),
+            })),
             LogicalPlan::Filter { .. } => {
                 assert_eq!(1, expr.len());
                 let predicate = expr.pop().unwrap();
@@ -642,9 +630,7 @@ impl LogicalPlan {
 
                     fn pre_visit(&mut self, expr: &Expr) -> Result<RewriteRecursion> {
                         match expr {
-                            Expr::Exists { .. }
-                            | Expr::ScalarSubquery(_)
-                            | Expr::InSubquery(_) => {
+                            Expr::Exists { .. } | Expr::ScalarSubquery(_) | Expr::InSubquery(_) => {
                                 // subqueries could contain aliases so we don't recurse into those
                                 Ok(RewriteRecursion::Stop)
                             }
@@ -670,22 +656,18 @@ impl LogicalPlan {
                 partitioning_scheme,
                 ..
             }) => match partitioning_scheme {
-                Partitioning::RoundRobinBatch(n) => {
-                    Ok(LogicalPlan::Repartition(Repartition {
-                        partitioning_scheme: Partitioning::RoundRobinBatch(*n),
-                        input: Arc::new(inputs[0].clone()),
-                    }))
-                }
+                Partitioning::RoundRobinBatch(n) => Ok(LogicalPlan::Repartition(Repartition {
+                    partitioning_scheme: Partitioning::RoundRobinBatch(*n),
+                    input: Arc::new(inputs[0].clone()),
+                })),
                 Partitioning::Hash(_, n) => Ok(LogicalPlan::Repartition(Repartition {
                     partitioning_scheme: Partitioning::Hash(expr, *n),
                     input: Arc::new(inputs[0].clone()),
                 })),
-                Partitioning::DistributeBy(_) => {
-                    Ok(LogicalPlan::Repartition(Repartition {
-                        partitioning_scheme: Partitioning::DistributeBy(expr),
-                        input: Arc::new(inputs[0].clone()),
-                    }))
-                }
+                Partitioning::DistributeBy(_) => Ok(LogicalPlan::Repartition(Repartition {
+                    partitioning_scheme: Partitioning::DistributeBy(expr),
+                    input: Arc::new(inputs[0].clone()),
+                })),
             },
             LogicalPlan::Window(Window {
                 window_expr,
@@ -724,8 +706,7 @@ impl LogicalPlan {
                 null_equals_null,
                 ..
             }) => {
-                let schema =
-                    build_join_schema(inputs[0].schema(), inputs[1].schema(), join_type)?;
+                let schema = build_join_schema(inputs[0].schema(), inputs[1].schema(), join_type)?;
 
                 let equi_expr_count = on.len();
                 assert!(expr.len() >= equi_expr_count);
@@ -784,13 +765,11 @@ impl LogicalPlan {
                     alias.clone(),
                 )?))
             }
-            LogicalPlan::Limit(Limit { skip, fetch, .. }) => {
-                Ok(LogicalPlan::Limit(Limit {
-                    skip: *skip,
-                    fetch: *fetch,
-                    input: Arc::new(inputs[0].clone()),
-                }))
-            }
+            LogicalPlan::Limit(Limit { skip, fetch, .. }) => Ok(LogicalPlan::Limit(Limit {
+                skip: *skip,
+                fetch: *fetch,
+                input: Arc::new(inputs[0].clone()),
+            })),
             LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(CreateMemoryTable {
                 name,
                 if_not_exists,
@@ -823,8 +802,9 @@ impl LogicalPlan {
                 inputs: inputs.iter().cloned().map(Arc::new).collect(),
                 schema: schema.clone(),
             })),
-            LogicalPlan::Distinct(Distinct { .. }) => {
+            LogicalPlan::Distinct(Distinct { on_expr, .. }) => {
                 Ok(LogicalPlan::Distinct(Distinct {
+                    on_expr: on_expr.clone(),
                     input: Arc::new(inputs[0].clone()),
                 }))
             }
@@ -865,9 +845,7 @@ impl LogicalPlan {
                     ..ts.clone()
                 }))
             }
-            LogicalPlan::EmptyRelation(_)
-            | LogicalPlan::Ddl(_)
-            | LogicalPlan::Statement(_) => {
+            LogicalPlan::EmptyRelation(_) | LogicalPlan::Ddl(_) | LogicalPlan::Statement(_) => {
                 // All of these plan types have no inputs / exprs so should not be called
                 assert!(expr.is_empty(), "{self:?} should have no exprs");
                 assert!(inputs.is_empty(), "{self:?}  should have no inputs");
@@ -898,14 +876,11 @@ impl LogicalPlan {
                     .collect::<Vec<_>>();
 
                 let schema = Arc::new(
-                    DFSchema::new_with_metadata(
-                        fields,
-                        input.schema().metadata().clone(),
-                    )?
-                    // We can use the existing functional dependencies as is:
-                    .with_functional_dependencies(
-                        input.schema().functional_dependencies().clone(),
-                    ),
+                    DFSchema::new_with_metadata(fields, input.schema().metadata().clone())?
+                        // We can use the existing functional dependencies as is:
+                        .with_functional_dependencies(
+                            input.schema().functional_dependencies().clone(),
+                        ),
                 );
 
                 Ok(LogicalPlan::Unnest(Unnest {
@@ -1423,18 +1398,10 @@ impl LogicalPlan {
                             }
 
                             if !full_filter.is_empty() {
-                                write!(
-                                    f,
-                                    ", full_filters=[{}]",
-                                    expr_vec_fmt!(full_filter)
-                                )?;
+                                write!(f, ", full_filters=[{}]", expr_vec_fmt!(full_filter))?;
                             };
                             if !partial_filter.is_empty() {
-                                write!(
-                                    f,
-                                    ", partial_filters=[{}]",
-                                    expr_vec_fmt!(partial_filter)
-                                )?;
+                                write!(f, ", partial_filters=[{}]", expr_vec_fmt!(partial_filter))?;
                             }
                             if !unsupported_filters.is_empty() {
                                 write!(
@@ -1581,11 +1548,7 @@ impl LogicalPlan {
                         Partitioning::DistributeBy(expr) => {
                             let dist_by_expr: Vec<String> =
                                 expr.iter().map(|e| format!("{e}")).collect();
-                            write!(
-                                f,
-                                "Repartition: DistributeBy({})",
-                                dist_by_expr.join(", "),
-                            )
+                            write!(f, "Repartition: DistributeBy({})", dist_by_expr.join(", "),)
                         }
                     },
                     LogicalPlan::Limit(Limit {
@@ -1822,13 +1785,11 @@ impl Window {
     /// Create a new window operator.
     pub fn try_new(window_expr: Vec<Expr>, input: Arc<LogicalPlan>) -> Result<Self> {
         let mut window_fields: Vec<DFField> = input.schema().fields().clone();
-        window_fields
-            .extend_from_slice(&exprlist_to_fields(window_expr.iter(), input.as_ref())?);
+        window_fields.extend_from_slice(&exprlist_to_fields(window_expr.iter(), input.as_ref())?);
         let metadata = input.schema().metadata().clone();
 
         // Update functional dependencies for window:
-        let mut window_func_dependencies =
-            input.schema().functional_dependencies().clone();
+        let mut window_func_dependencies = input.schema().functional_dependencies().clone();
         window_func_dependencies.extend_target_indices(window_fields.len());
 
         Ok(Window {
@@ -2068,9 +2029,7 @@ impl Aggregate {
         schema: DFSchemaRef,
     ) -> Result<Self> {
         if group_expr.is_empty() && aggr_expr.is_empty() {
-            return plan_err!(
-                "Aggregate requires at least one grouping or aggregate expression"
-            );
+            return plan_err!("Aggregate requires at least one grouping or aggregate expression");
         }
         let group_expr_count = grouping_set_expr_count(&group_expr)?;
         if schema.fields().len() != group_expr_count + aggr_expr.len() {
@@ -2084,9 +2043,7 @@ impl Aggregate {
         let aggregate_func_dependencies =
             calc_func_dependencies_for_aggregate(&group_expr, &input, &schema)?;
         let new_schema = schema.as_ref().clone();
-        let schema = Arc::new(
-            new_schema.with_functional_dependencies(aggregate_func_dependencies),
-        );
+        let schema = Arc::new(new_schema.with_functional_dependencies(aggregate_func_dependencies));
         Ok(Self {
             input,
             group_expr,
@@ -2122,11 +2079,8 @@ fn calc_func_dependencies_for_aggregate(
             .iter()
             .map(|item| item.display_name())
             .collect::<Result<Vec<_>>>()?;
-        let aggregate_func_dependencies = aggregate_functional_dependencies(
-            input.schema(),
-            &group_by_expr_names,
-            aggr_schema,
-        );
+        let aggregate_func_dependencies =
+            aggregate_functional_dependencies(input.schema(), &group_by_expr_names, aggr_schema);
         Ok(aggregate_func_dependencies)
     } else {
         Ok(FunctionalDependencies::empty())

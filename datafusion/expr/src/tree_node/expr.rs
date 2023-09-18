@@ -18,9 +18,9 @@
 //! Tree node implementation for logical expr
 
 use crate::expr::{
-    AggregateFunction, AggregateUDF, Alias, Between, BinaryExpr, Case, Cast,
-    GetIndexedField, GroupingSet, InList, InSubquery, Like, Placeholder, ScalarFunction,
-    ScalarUDF, Sort, TryCast, WindowFunction,
+    AggregateFunction, AggregateUDF, Alias, Between, BinaryExpr, Case, Cast, GetIndexedField,
+    GroupingSet, InList, InSubquery, JsonAccess, Like, Placeholder, ScalarFunction, ScalarUDF,
+    Sort, TryCast, WindowFunction,
 };
 use crate::Expr;
 use datafusion_common::tree_node::VisitRecursion;
@@ -167,13 +167,11 @@ impl TreeNode for Expr {
             Expr::ScalarSubquery(_) => self,
             Expr::ScalarVariable(ty, names) => Expr::ScalarVariable(ty, names),
             Expr::Literal(value) => Expr::Literal(value),
-            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                Expr::BinaryExpr(BinaryExpr::new(
-                    transform_boxed(left, &mut transform)?,
-                    op,
-                    transform_boxed(right, &mut transform)?,
-                ))
-            }
+            Expr::BinaryExpr(BinaryExpr { left, op, right }) => Expr::BinaryExpr(BinaryExpr::new(
+                transform_boxed(left, &mut transform)?,
+                op,
+                transform_boxed(right, &mut transform)?,
+            )),
             Expr::Like(Like {
                 negated,
                 expr,
@@ -201,27 +199,15 @@ impl TreeNode for Expr {
                 case_insensitive,
             )),
             Expr::Not(expr) => Expr::Not(transform_boxed(expr, &mut transform)?),
-            Expr::IsNotNull(expr) => {
-                Expr::IsNotNull(transform_boxed(expr, &mut transform)?)
-            }
+            Expr::IsNotNull(expr) => Expr::IsNotNull(transform_boxed(expr, &mut transform)?),
             Expr::IsNull(expr) => Expr::IsNull(transform_boxed(expr, &mut transform)?),
             Expr::IsTrue(expr) => Expr::IsTrue(transform_boxed(expr, &mut transform)?),
             Expr::IsFalse(expr) => Expr::IsFalse(transform_boxed(expr, &mut transform)?),
-            Expr::IsUnknown(expr) => {
-                Expr::IsUnknown(transform_boxed(expr, &mut transform)?)
-            }
-            Expr::IsNotTrue(expr) => {
-                Expr::IsNotTrue(transform_boxed(expr, &mut transform)?)
-            }
-            Expr::IsNotFalse(expr) => {
-                Expr::IsNotFalse(transform_boxed(expr, &mut transform)?)
-            }
-            Expr::IsNotUnknown(expr) => {
-                Expr::IsNotUnknown(transform_boxed(expr, &mut transform)?)
-            }
-            Expr::Negative(expr) => {
-                Expr::Negative(transform_boxed(expr, &mut transform)?)
-            }
+            Expr::IsUnknown(expr) => Expr::IsUnknown(transform_boxed(expr, &mut transform)?),
+            Expr::IsNotTrue(expr) => Expr::IsNotTrue(transform_boxed(expr, &mut transform)?),
+            Expr::IsNotFalse(expr) => Expr::IsNotFalse(transform_boxed(expr, &mut transform)?),
+            Expr::IsNotUnknown(expr) => Expr::IsNotUnknown(transform_boxed(expr, &mut transform)?),
+            Expr::Negative(expr) => Expr::Negative(transform_boxed(expr, &mut transform)?),
             Expr::Between(Between {
                 expr,
                 negated,
@@ -299,12 +285,12 @@ impl TreeNode for Expr {
                 transform_option_vec(order_by, &mut transform)?,
             )),
             Expr::GroupingSet(grouping_set) => match grouping_set {
-                GroupingSet::Rollup(exprs) => Expr::GroupingSet(GroupingSet::Rollup(
-                    transform_vec(exprs, &mut transform)?,
-                )),
-                GroupingSet::Cube(exprs) => Expr::GroupingSet(GroupingSet::Cube(
-                    transform_vec(exprs, &mut transform)?,
-                )),
+                GroupingSet::Rollup(exprs) => {
+                    Expr::GroupingSet(GroupingSet::Rollup(transform_vec(exprs, &mut transform)?))
+                }
+                GroupingSet::Cube(exprs) => {
+                    Expr::GroupingSet(GroupingSet::Cube(transform_vec(exprs, &mut transform)?))
+                }
                 GroupingSet::GroupingSets(lists_of_exprs) => {
                     Expr::GroupingSet(GroupingSet::GroupingSets(
                         lists_of_exprs
@@ -342,15 +328,10 @@ impl TreeNode for Expr {
                 negated,
             )),
             Expr::Wildcard => Expr::Wildcard,
-            Expr::QualifiedWildcard { qualifier } => {
-                Expr::QualifiedWildcard { qualifier }
-            }
-            Expr::GetIndexedField(GetIndexedField { expr, field }) => {
-                Expr::GetIndexedField(GetIndexedField::new(
-                    transform_boxed(expr, &mut transform)?,
-                    field,
-                ))
-            }
+            Expr::QualifiedWildcard { qualifier } => Expr::QualifiedWildcard { qualifier },
+            Expr::GetIndexedField(GetIndexedField { expr, field }) => Expr::GetIndexedField(
+                GetIndexedField::new(transform_boxed(expr, &mut transform)?, field),
+            ),
             Expr::Placeholder(Placeholder { id, data_type }) => {
                 Expr::Placeholder(Placeholder { id, data_type })
             }

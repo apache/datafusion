@@ -17,9 +17,9 @@
 
 use super::{Between, Expr, Like};
 use crate::expr::{
-    AggregateFunction, AggregateUDF, Alias, BinaryExpr, Cast, GetFieldAccess,
-    GetIndexedField, InList, InSubquery, Placeholder, ScalarFunction, ScalarUDF, Sort,
-    TryCast, WindowFunction,
+    AggregateFunction, AggregateUDF, Alias, BinaryExpr, Cast, GetFieldAccess, GetIndexedField,
+    InList, InSubquery, JsonAccess, Placeholder, ScalarFunction, ScalarUDF, Sort, TryCast,
+    WindowFunction,
 };
 use crate::field_util::GetFieldAccessSchema;
 use crate::type_coercion::binary::get_result_type;
@@ -27,8 +27,7 @@ use crate::{LogicalPlan, Projection, Subquery};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{
-    internal_err, plan_err, Column, DFField, DFSchema, DataFusionError, ExprSchema,
-    Result,
+    internal_err, plan_err, Column, DFField, DFSchema, DataFusionError, ExprSchema, Result,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -79,8 +78,9 @@ impl ExprSchemable for Expr {
             Expr::ScalarVariable(ty, _) => Ok(ty.clone()),
             Expr::Literal(l) => Ok(l.data_type()),
             Expr::Case(case) => case.when_then_expr[0].1.get_type(schema),
-            Expr::Cast(Cast { data_type, .. })
-            | Expr::TryCast(TryCast { data_type, .. }) => Ok(data_type.clone()),
+            Expr::Cast(Cast { data_type, .. }) | Expr::TryCast(TryCast { data_type, .. }) => {
+                Ok(data_type.clone())
+            }
             Expr::ScalarUDF(ScalarUDF { fun, args }) => {
                 let data_types = args
                     .iter()
@@ -141,18 +141,16 @@ impl ExprSchemable for Expr {
             Expr::Like { .. } | Expr::SimilarTo { .. } => Ok(DataType::Boolean),
             Expr::Placeholder(Placeholder { data_type, .. }) => {
                 data_type.clone().ok_or_else(|| {
-                    DataFusionError::Plan(
-                        "Placeholder type could not be resolved".to_owned(),
-                    )
+                    DataFusionError::Plan("Placeholder type could not be resolved".to_owned())
                 })
             }
             Expr::Wildcard => {
                 // Wildcard do not really have a type and do not appear in projections
                 Ok(DataType::Null)
             }
-            Expr::QualifiedWildcard { .. } => internal_err!(
-                "QualifiedWildcard expressions are not valid in a logical query plan"
-            ),
+            Expr::QualifiedWildcard { .. } => {
+                internal_err!("QualifiedWildcard expressions are not valid in a logical query plan")
+            }
             Expr::GroupingSet(_) => {
                 // grouping sets do not really have a type and do not appear in projections
                 Ok(DataType::Null)
@@ -256,9 +254,7 @@ impl ExprSchemable for Expr {
             | Expr::IsNotUnknown(_)
             | Expr::Exists { .. } => Ok(false),
             Expr::InSubquery(InSubquery { expr, .. }) => expr.nullable(input_schema),
-            Expr::ScalarSubquery(subquery) => {
-                Ok(subquery.subquery.schema().field(0).is_nullable())
-            }
+            Expr::ScalarSubquery(subquery) => Ok(subquery.subquery.schema().field(0).is_nullable()),
             Expr::BinaryExpr(BinaryExpr {
                 ref left,
                 ref right,
@@ -268,12 +264,12 @@ impl ExprSchemable for Expr {
             | Expr::SimilarTo(Like { expr, pattern, .. }) => {
                 Ok(expr.nullable(input_schema)? || pattern.nullable(input_schema)?)
             }
-            Expr::Wildcard => internal_err!(
-                "Wildcard expressions are not valid in a logical query plan"
-            ),
-            Expr::QualifiedWildcard { .. } => internal_err!(
-                "QualifiedWildcard expressions are not valid in a logical query plan"
-            ),
+            Expr::Wildcard => {
+                internal_err!("Wildcard expressions are not valid in a logical query plan")
+            }
+            Expr::QualifiedWildcard { .. } => {
+                internal_err!("QualifiedWildcard expressions are not valid in a logical query plan")
+            }
             Expr::GetIndexedField(GetIndexedField { expr, field }) => {
                 field_for_index(expr, field, input_schema).map(|x| x.is_nullable())
             }
@@ -388,10 +384,7 @@ pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subq
         _ => {
             let cast_expr = Expr::Column(plan.schema().field(0).qualified_column())
                 .cast_to(cast_to_type, subquery.subquery.schema())?;
-            LogicalPlan::Projection(Projection::try_new(
-                vec![cast_expr],
-                subquery.subquery,
-            )?)
+            LogicalPlan::Projection(Projection::try_new(vec![cast_expr], subquery.subquery)?)
         }
     };
     Ok(Subquery {
@@ -530,12 +523,13 @@ mod tests {
                 .unwrap()
         );
 
-        let schema = DFSchema::new_with_metadata(
-            vec![DFField::new_unqualified("foo", DataType::Int32, true)
-                .with_metadata(meta.clone())],
-            HashMap::new(),
-        )
-        .unwrap();
+        let schema =
+            DFSchema::new_with_metadata(
+                vec![DFField::new_unqualified("foo", DataType::Int32, true)
+                    .with_metadata(meta.clone())],
+                HashMap::new(),
+            )
+            .unwrap();
 
         // verify to_field method populates metadata
         assert_eq!(&meta, expr.to_field(&schema).unwrap().metadata());

@@ -22,12 +22,9 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{
     not_impl_err, plan_err, sql_err, Constraints, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::{
-    CreateMemoryTable, DdlStatement, Expr, LogicalPlan, LogicalPlanBuilder,
-};
-use sqlparser::ast::{
-    Expr as SQLExpr, Offset as SQLOffset, OrderByExpr, Query, SetExpr, Value,
-};
+use datafusion_expr::expr_rewriter::normalize_col;
+use datafusion_expr::{CreateMemoryTable, DdlStatement, Expr, LogicalPlan, LogicalPlanBuilder};
+use sqlparser::ast::{Expr as SQLExpr, Offset as SQLOffset, OrderByExpr, Query, SetExpr, Value};
 
 use crate::utils::{extract_aliases, resolve_aliases_to_exprs};
 use sqlparser::parser::ParserError::ParserError;
@@ -134,9 +131,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     input.schema(),
                     &mut PlannerContext::new(),
                 )? {
-                    Expr::Literal(ScalarValue::Int64(Some(n))) if n >= 0 => {
-                        Ok(n as usize)
-                    }
+                    Expr::Literal(ScalarValue::Int64(Some(n))) if n >= 0 => Ok(n as usize),
                     _ => plan_err!("LIMIT must not be negative"),
                 }?;
                 Some(n)
