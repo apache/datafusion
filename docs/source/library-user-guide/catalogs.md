@@ -179,6 +179,7 @@ pub struct MemoryCatalogList {
 ```
 
 With that the `CataLogList` trait can be implemented.
+
 ```rust
 impl CatalogList for MemoryCatalogList {
     fn as_any(&self) -> &dyn Any {
@@ -202,6 +203,7 @@ impl CatalogList for MemoryCatalogList {
     }
 }
 ```
+
 Like other traits, it also maintains the mapping of the Catalog's name to the CatalogProvider.
 
 ## Recap
