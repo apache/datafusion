@@ -1482,12 +1482,14 @@ impl ScalarValue {
             DataType::List(fields) if fields.data_type() == &DataType::Float64 => {
                 merge_list_arrays_to_one!(Float64Type)
             }
+            // Write test for this
             DataType::List(fields) if fields.data_type() == &DataType::Utf8 => {
                 let mut builder = ListBuilder::new(StringBuilder::new());
                 for scalar in scalars.into_iter() {
                     match scalar {
                         ScalarValue::ListArr(arr) => {
                             // nullarray
+
                             if arr.as_any().downcast_ref::<NullArray>().is_some() {
                                 builder.append(false);
                                 continue;
@@ -1535,46 +1537,7 @@ impl ScalarValue {
                 let list_array = ScalarValue::iter_to_array_list_v2(scalars, to_type)?;
                 Arc::new(list_array)
             }
-
-            // DataType::Int64 => {
-            //     let mut values = vec![];
-
-            //     // Two cases, one all the scalars is ListArr, they are transformed to Array already
-            //     // The other case is that scalars value only, fallback to v1.
-
-            //     let scalars = scalars.into_iter().collect::<Vec<_>>();
-
-            //     for sv in scalars.iter() {
-            //         if let ScalarValue::ListArr(arr) = sv {
-            //             let arr2 = arr.as_primitive::<Int64Type>();
-            //             let values2 = arr2.iter().map(|x| match x {
-            //                 Some(x) => Some(x),
-            //                 None => None,
-            //             }).collect::<Vec<Option<_>>>();
-            //             values.extend(values2);
-            //         }
-            //         else {
-
-            //         }
-            //     }
-
-            //     if values.is_empty() {
-            //         return Self::iter_to_array(scalars);
-            //     }
-
-            //     let array = PrimitiveArray::<Int64Type>::from(values);
-            //     Arc::new(array)
-
-            // }
             _ => {
-                // TODO: SHould I need this?
-                if scalars.len() == 1 {
-                    let scalars = scalars.clone().into_iter().collect::<Vec<_>>();
-                    if let ScalarValue::ListArr(arr) = scalars.get(0).unwrap() {
-                        return Ok(arr.to_owned());
-                    }
-                }
-
                 return Self::iter_to_array(scalars);
             }
         };
@@ -2311,6 +2274,16 @@ impl ScalarValue {
         // TODO: Build Array if Values is None
         // Int64 => Int64Array[]
         // List => ListArray
+
+        // let na = new_null_array(
+        //     &DataType::List(Arc::new(Field::new(
+        //         "item",
+        //         DataType::Int64,
+        //         true,
+        //     ))),
+        //     1);
+        //     println!("na: {:?}", na);
+        // ListArray[null]
 
         if values.is_none() {
             let arr = new_null_array(&DataType::Null, 1);
