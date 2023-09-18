@@ -15,12 +15,29 @@
 .. specific language governing permissions and limitations
 .. under the License.
 
+.. Code from https://buttons.github.io/
+.. raw:: html
+
+    <!-- Place this tag in your head or just before your close body tag. -->
+    <script async defer src="https://buttons.github.io/buttons.js"></script>
+
 .. image:: _static/images/DataFusion-Logo-Background-White.png
   :alt: DataFusion Logo
+
 
 =======================
 Apache Arrow DataFusion
 =======================
+
+.. Code from https://buttons.github.io/
+.. raw:: html
+
+  <p>
+    <!-- Place this tag where you want the button to render. -->
+    <a class="github-button" href="https://github.com/apache/arrow-datafusion" data-size="large" data-show-count="true" aria-label="Star apache/arrow-datafusion on GitHub">Star</a>
+    <!-- Place this tag where you want the button to render. -->
+    <a class="github-button" href="https://github.com/apache/arrow-datafusion/fork" data-size="large" data-show-count="true" aria-label="Fork apache/arrow-datafusion on GitHub">Fork</a>
+  </p>
 
 DataFusion is a very fast, extensible query engine for building high-quality data-centric systems in
 `Rust <http://rustlang.org>`_, using the `Apache Arrow <https://arrow.apache.org>`_
