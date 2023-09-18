@@ -2291,6 +2291,16 @@ impl ScalarValue {
             .unwrap()
     }
 
+    fn wrap_into_list_array(arr: ArrayRef) -> ListArray {
+        let offsets = OffsetBuffer::from_lengths([arr.len()]);
+        ListArray::new(
+            Arc::new(Field::new("item", arr.data_type().to_owned(), true)),
+            offsets,
+            Arc::new(arr),
+            None,
+        )
+    }
+
     // Old ScalarValue::List to array of size 1
     pub fn list_to_array(
         values: &Option<Vec<ScalarValue>>,
@@ -2338,32 +2348,28 @@ impl ScalarValue {
             &DataType::LargeUtf8 => {
                 build_list!(LargeStringBuilder, LargeUtf8, values, size)
             }
-            DataType::List(field) => {
-                ScalarValue::iter_to_array_list_v3(values.clone(),
-                       data_type,
-                        DataType::List(Arc::new(Field::new(
-                            "item",
-                            data_type.to_owned(),
-                            true,
-                        )))).unwrap()
-            }
+            DataType::List(field) => ScalarValue::iter_to_array_list_v3(
+                values.clone(),
+                data_type,
+                DataType::List(Arc::new(Field::new("item", data_type.to_owned(), true))),
+            )
+            .unwrap(),
 
             DataType::Decimal128(precision, scale) => {
                 let mut vals = vec![];
                 if let Some(values) = values {
                     for value in values.iter() {
                         if let ScalarValue::Decimal128(v, _, _) = value {
-                           vals.push(v.to_owned())
+                            vals.push(v.to_owned())
                         }
                     }
                 }
 
                 let arr = Decimal128Array::from(vals)
-                .with_precision_and_scale(*precision, *scale).unwrap();
-                let offsets = OffsetBuffer::from_lengths([arr.len()]);
-                ListArray::new(Arc::new(Field::new("item", data_type.to_owned(), true)), offsets, Arc::new(arr), None)
+                    .with_precision_and_scale(*precision, *scale)
+                    .unwrap();
+                Self::wrap_into_list_array(Arc::new(arr))
             }
-
 
             DataType::Struct(fields) => {
                 let e = ScalarValue::new_list(values.clone(), data_type.clone());
@@ -2372,31 +2378,14 @@ impl ScalarValue {
                 return arr;
             }
             DataType::Null => {
-                // let len = values.as_ref().unwrap().len();
-                // let arr = new_null_array(&DataType::Null, len);
-                // return arr;
-
-                // let arr = new_null_array(&DataType::List(Arc::new(Field::new("item", DataType::Null, true))), 1);
-                // return arr
-
-                let e = ScalarValue::new_list(values.clone(), DataType::Null);
-                let arr = e.to_array();
-                // println!("(list to array when null) arr: {:?}", arr);
-                return arr;
+                let values = values.as_ref().unwrap();
+                let arr = new_null_array(&DataType::Null, values.len());
+                Self::wrap_into_list_array(arr)
             }
-
-            data_type => {
-                println!("(TODO) datatype fallback to default: {:?}", data_type);
-                let e = ScalarValue::new_list(values.clone(), data_type.clone());
-                let arr = e.to_array();
-                // println!("(list to array when struct) arr: {:?}", arr);
-                return arr;
-            }
-
-            // _ => panic!(
-            //     "Unsupported data type {:?} for ScalarValue::List",
-            //     data_type
-            // ),
+            _ => panic!(
+                "Unsupported data type {:?} for ScalarValue::list_to_array",
+                data_type
+            ),
         })
     }
 
