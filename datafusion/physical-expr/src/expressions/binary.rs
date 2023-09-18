@@ -272,7 +272,7 @@ impl PhysicalExpr for BinaryExpr {
             Operator::Plus => return apply(&lhs, &rhs, add_wrapping),
             Operator::Minus => return apply(&lhs, &rhs, sub_wrapping),
             Operator::Multiply => return apply(&lhs, &rhs, mul_wrapping),
-            Operator::Divide => return apply(&lhs, &rhs, mul_wrapping),
+            Operator::Divide => return apply(&lhs, &rhs, div),
             Operator::Modulo => return apply(&lhs, &rhs, rem),
             Operator::Eq => return apply_cmp(&lhs, &rhs, eq),
             Operator::NotEq => return apply_cmp(&lhs, &rhs, neq),
