@@ -33,9 +33,9 @@ chrono = { workspace = true }
 datafusion = { version = "31.0.0", path = "../core" }
 itertools = "0.11"
 object_store = "0.7.0"
-prost = "0.12"
-prost-types = "0.12"
-substrait = "0.13.1"
+prost = "0.11"
+prost-types = "0.11"
+substrait = "0.14.0"
 tokio = "1.17"
 
 [features]
