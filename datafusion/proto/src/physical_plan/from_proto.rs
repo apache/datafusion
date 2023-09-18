@@ -367,12 +367,11 @@ impl TryFrom<&protobuf::physical_window_expr_node::WindowFunction> for WindowFun
                 Ok(WindowFunction::AggregateFunction(f.into()))
             }
             protobuf::physical_window_expr_node::WindowFunction::BuiltInFunction(n) => {
-                let f =
-                    protobuf::BuiltInWindowFunction::try_from(*n).map_err(|_| {
-                        proto_error(format!(
-                            "Received an unknown window builtin function: {n}"
-                        ))
-                    })?;
+                let f = protobuf::BuiltInWindowFunction::try_from(*n).map_err(|_| {
+                    proto_error(format!(
+                        "Received an unknown window builtin function: {n}"
+                    ))
+                })?;
 
                 Ok(WindowFunction::BuiltInWindowFunction(f.into()))
             }

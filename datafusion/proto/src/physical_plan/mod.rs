@@ -564,14 +564,15 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     })
                     .map_or(Ok(None), |v: Result<JoinFilter>| v.map(Some))?;
 
-                let partition_mode =
-                    protobuf::PartitionMode::try_from(hashjoin.partition_mode)
-                        .map_err(|_| {
-                            proto_error(format!(
+                let partition_mode = protobuf::PartitionMode::try_from(
+                    hashjoin.partition_mode,
+                )
+                .map_err(|_| {
+                    proto_error(format!(
                         "Received a HashJoinNode message with unknown PartitionMode {}",
                         hashjoin.partition_mode
                     ))
-                        })?;
+                })?;
                 let partition_mode = match partition_mode {
                     protobuf::PartitionMode::CollectLeft => PartitionMode::CollectLeft,
                     protobuf::PartitionMode::Partitioned => PartitionMode::Partitioned,
