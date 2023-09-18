@@ -44,6 +44,7 @@ use arrow::{
         DECIMAL128_MAX_PRECISION,
     },
 };
+use arrow_array::types::Decimal128Type;
 use arrow_array::{ArrowNativeTypeOp, Scalar};
 
 /// Represents a dynamically typed, nullable single value.
@@ -2325,10 +2326,6 @@ impl ScalarValue {
                     build_list!(StringBuilder, Utf8, values, size)
                 } else {
                     build_list!(StringBuilder, Utf8, values, size)
-                    // let mut builder = ListBuilder::new(StringBuilder::new());
-                    // // builder.values().append_null();
-                    // builder.append(true);
-                    // builder.finish()
                 }
             }
             DataType::Float32 => build_list!(Float32Builder, Float32, values, size),
@@ -2342,9 +2339,6 @@ impl ScalarValue {
                 build_list!(LargeStringBuilder, LargeUtf8, values, size)
             }
             DataType::List(field) => {
-                // println!("(list_to_arry) data_type: {:?}", data_type);
-                // println!("(list_to_arry) values: {:?}", values);
-
                 ScalarValue::iter_to_array_list_v3(values.clone(),
                        data_type,
                         DataType::List(Arc::new(Field::new(
@@ -2354,6 +2348,21 @@ impl ScalarValue {
                         )))).unwrap()
             }
 
+            DataType::Decimal128(precision, scale) => {
+                let mut vals = vec![];
+                if let Some(values) = values {
+                    for value in values.iter() {
+                        if let ScalarValue::Decimal128(v, _, _) = value {
+                           vals.push(v.to_owned())
+                        }
+                    }
+                }
+
+                let arr = Decimal128Array::from(vals)
+                .with_precision_and_scale(*precision, *scale).unwrap();
+                let offsets = OffsetBuffer::from_lengths([arr.len()]);
+                ListArray::new(Arc::new(Field::new("item", data_type.to_owned(), true)), offsets, Arc::new(arr), None)
+            }
 
 
             DataType::Struct(fields) => {
