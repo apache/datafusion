@@ -370,17 +370,27 @@
      </code>
     </a>
    </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#implementing-memorycatalogprovider">
-     Implementing
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       MemoryCatalogProvider
-      </span>
-     </code>
-    </a>
-   </li>
   </ul>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#implementing-memorycatalogprovider">
+   Implementing
+   <code class="docutils literal notranslate">
+    <span class="pre">
+     MemoryCatalogProvider
+    </span>
+   </code>
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#implementing-memorycataloglist">
+   Implementing
+   <code class="docutils literal notranslate">
+    <span class="pre">
+     MemoryCatalogList
+    </span>
+   </code>
+  </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#recap">
@@ -438,11 +448,11 @@
 <p>This section describes how to create and manage catalogs, schemas, and tables in DataFusion. For those wanting to dive into the code quickly please see the <a class="reference download internal" download="" href="../_downloads/9dc934d68aef6b44bd3235a7dbc9a8be/catalog.rs"><span class="xref download myst">example</span></a>.</p>
 <section id="general-concepts">
 <h2>General Concepts<a class="headerlink" href="#general-concepts" title="Link to this heading">¶</a></h2>
-<p>Catalogs, schemas, and tables are organized in a hierarchy. A catalog contains schemas, and a schema contains tables.</p>
+<p>CatalogList, Catalogs, schemas, and tables are organized in a hierarchy. A CatalogList contains catalogs, a catalog contains schemas and a schema contains tables.</p>
 <p>DataFusion comes with a basic in memory catalog functionality in the <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/catalog/index.html"><code class="docutils literal notranslate"><span class="pre">catalog</span></code> module</a>. You can use these in memory implementations as is, or extend DataFusion with your own catalog implementations, for example based on local files or files on remote object storage.</p>
 <p>Similarly to other concepts in DataFusion, you’ll implement various traits to create your own catalogs, schemas, and tables. The following sections describe the traits you’ll need to implement.</p>
-<p>The <code class="docutils literal notranslate"><span class="pre">CatalogProvider</span></code> trait has methods to set a schema to a name, get a schema by name, and list all schemas. The <code class="docutils literal notranslate"><span class="pre">SchemaProvider</span></code>, which can be registered with a <code class="docutils literal notranslate"><span class="pre">CatalogProvider</span></code>, has methods to set a table to a name, get a table by name, list all tables, deregister a table, and check for a table’s existence. The <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code> trait has methods to scan underlying data and use it in DataFusion. The <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code> trait is covered in more detail <a class="reference internal" href="custom-table-providers.html"><span class="std std-doc">here</span></a>.</p>
-<p>In the following example, we’ll implement an in memory catalog, starting with the <code class="docutils literal notranslate"><span class="pre">SchemaProvider</span></code> trait as we need one to register with the <code class="docutils literal notranslate"><span class="pre">CatalogProvider</span></code>.</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">CatalogList</span></code> trait has methods to register new catalogs, get a catalog by name and list all catalogs .The <code class="docutils literal notranslate"><span class="pre">CatalogProvider</span></code> trait has methods to set a schema to a name, get a schema by name, and list all schemas. The <code class="docutils literal notranslate"><span class="pre">SchemaProvider</span></code>, which can be registered with a <code class="docutils literal notranslate"><span class="pre">CatalogProvider</span></code>, has methods to set a table to a name, get a table by name, list all tables, deregister a table, and check for a table’s existence. The <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code> trait has methods to scan underlying data and use it in DataFusion. The <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code> trait is covered in more detail <a class="reference internal" href="custom-table-providers.html"><span class="std std-doc">here</span></a>.</p>
+<p>In the following example, we’ll implement an in memory catalog, starting with the <code class="docutils literal notranslate"><span class="pre">SchemaProvider</span></code> trait as we need one to register with the <code class="docutils literal notranslate"><span class="pre">CatalogProvider</span></code>. Finally we will implement <code class="docutils literal notranslate"><span class="pre">CatalogList</span></code> to register the <code class="docutils literal notranslate"><span class="pre">CatalogProvider</span></code>.</p>
 </section>
 <section id="implementing-memoryschemaprovider">
 <h2>Implementing <code class="docutils literal notranslate"><span class="pre">MemorySchemaProvider</span></code><a class="headerlink" href="#implementing-memoryschemaprovider" title="Link to this heading">¶</a></h2>
@@ -516,12 +526,12 @@
 </pre></div>
 </div>
 </section>
+</section>
 <section id="implementing-memorycatalogprovider">
-<h3>Implementing <code class="docutils literal notranslate"><span class="pre">MemoryCatalogProvider</span></code><a class="headerlink" href="#implementing-memorycatalogprovider" title="Link to this heading">¶</a></h3>
+<h2>Implementing <code class="docutils literal notranslate"><span class="pre">MemoryCatalogProvider</span></code><a class="headerlink" href="#implementing-memorycatalogprovider" title="Link to this heading">¶</a></h2>
 <p>As mentioned, the <code class="docutils literal notranslate"><span class="pre">CatalogProvider</span></code> can manage the schemas in a catalog, and the <code class="docutils literal notranslate"><span class="pre">MemoryCatalogProvider</span></code> is a simple implementation of the <code class="docutils literal notranslate"><span class="pre">CatalogProvider</span></code> trait. It stores schemas in a <code class="docutils literal notranslate"><span class="pre">DashMap</span></code>.</p>
-<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">pub</span><span class="w"> </span><span class="k">struct</span> <span class="nc">MemoryCatalogList</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="sd">/// Collection of catalogs containing schemas and ultimately TableProviders</span>
-<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">catalogs</span>: <span class="nc">DashMap</span><span class="o">&lt;</span><span class="nb">String</span><span class="p">,</span><span class="w"> </span><span class="n">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">CatalogProvider</span><span class="o">&gt;&gt;</span><span class="p">,</span>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">pub</span><span class="w"> </span><span class="k">struct</span> <span class="nc">MemoryCatalogProvider</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">schemas</span>: <span class="nc">DashMap</span><span class="o">&lt;</span><span class="nb">String</span><span class="p">,</span><span class="w"> </span><span class="n">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">SchemaProvider</span><span class="o">&gt;&gt;</span><span class="p">,</span>
 <span class="p">}</span>
 </pre></div>
 </div>
@@ -566,6 +576,39 @@
 </div>
 <p>Again, this is fairly straightforward, as there’s an underlying data structure to store the state, via key-value pairs.</p>
 </section>
+<section id="implementing-memorycataloglist">
+<h2>Implementing <code class="docutils literal notranslate"><span class="pre">MemoryCatalogList</span></code><a class="headerlink" href="#implementing-memorycataloglist" title="Link to this heading">¶</a></h2>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">pub</span><span class="w"> </span><span class="k">struct</span> <span class="nc">MemoryCatalogList</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="sd">/// Collection of catalogs containing schemas and ultimately TableProviders</span>
+<span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="n">catalogs</span>: <span class="nc">DashMap</span><span class="o">&lt;</span><span class="nb">String</span><span class="p">,</span><span class="w"> </span><span class="n">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">CatalogProvider</span><span class="o">&gt;&gt;</span><span class="p">,</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>With that the <code class="docutils literal notranslate"><span class="pre">CatalogList</span></code> trait can be implemented.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">impl</span><span class="w"> </span><span class="n">CatalogList</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">MemoryCatalogList</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span> <span class="nf">as_any</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span>-&gt; <span class="kp">&amp;</span><span class="nc">dyn</span><span class="w"> </span><span class="n">Any</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="bp">self</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">fn</span> <span class="nf">register_catalog</span><span class="p">(</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">        </span><span class="n">name</span>: <span class="nb">String</span><span class="p">,</span>
+<span class="w">        </span><span class="n">catalog</span>: <span class="nc">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">CatalogProvider</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span>-&gt; <span class="nb">Option</span><span class="o">&lt;</span><span class="n">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">CatalogProvider</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="bp">self</span><span class="p">.</span><span class="n">catalogs</span><span class="p">.</span><span class="n">insert</span><span class="p">(</span><span class="n">name</span><span class="p">,</span><span class="w"> </span><span class="n">catalog</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">fn</span> <span class="nf">catalog_names</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span>-&gt; <span class="nb">Vec</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="bp">self</span><span class="p">.</span><span class="n">catalogs</span><span class="p">.</span><span class="n">iter</span><span class="p">().</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">c</span><span class="o">|</span><span class="w"> </span><span class="n">c</span><span class="p">.</span><span class="n">key</span><span class="p">().</span><span class="n">clone</span><span class="p">()).</span><span class="n">collect</span><span class="p">()</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">fn</span> <span class="nf">catalog</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">name</span>: <span class="kp">&amp;</span><span class="kt">str</span><span class="p">)</span><span class="w"> </span>-&gt; <span class="nb">Option</span><span class="o">&lt;</span><span class="n">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">CatalogProvider</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="bp">self</span><span class="p">.</span><span class="n">catalogs</span><span class="p">.</span><span class="n">get</span><span class="p">(</span><span class="n">name</span><span class="p">).</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">c</span><span class="o">|</span><span class="w"> </span><span class="n">c</span><span class="p">.</span><span class="n">value</span><span class="p">().</span><span class="n">clone</span><span class="p">())</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>Like other traits, it also maintains the mapping of the Catalog’s name to the CatalogProvider.</p>
 </section>
 <section id="recap">
 <h2>Recap<a class="headerlink" href="#recap" title="Link to this heading">¶</a></h2>
@@ -574,6 +617,7 @@
 <li><p>Implement the <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code> trait to create a table provider, or use an existing one.</p></li>
 <li><p>Implement the <code class="docutils literal notranslate"><span class="pre">SchemaProvider</span></code> trait to create a schema provider, or use an existing one.</p></li>
 <li><p>Implement the <code class="docutils literal notranslate"><span class="pre">CatalogProvider</span></code> trait to create a catalog provider, or use an existing one.</p></li>
+<li><p>Implement the <code class="docutils literal notranslate"><span class="pre">CatalogList</span></code> trait to create a CatalogList, or use an existing one.</p></li>
 </ol>
 </section>
 </section>
@@ -618,7 +662,7 @@
     
     <div class="footer-item">
       <p class="sphinx-version">
-Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.2.5.<br>
+Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.2.6.<br>
 </p>
     </div>
     
