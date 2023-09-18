@@ -36,10 +36,9 @@ use std::sync::Arc;
 /// Represents a collection of [`EquivalentClass`] (equivalences
 /// between columns in relations)
 ///
-/// This is used to represent both:
+/// This is used to represent:
 ///
 /// 1. Equality conditions (like `A=B`), when `T` = [`Column`]
-/// 2. Ordering (like `A ASC = B ASC`), when `T` = [`PhysicalSortExpr`]
 #[derive(Debug, Clone)]
 pub struct EquivalenceProperties {
     classes: Vec<EquivalentClass<Column>>,
