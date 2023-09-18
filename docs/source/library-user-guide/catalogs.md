@@ -23,7 +23,7 @@ This section describes how to create and manage catalogs, schemas, and tables in
 
 ## General Concepts
 
-Cataloglist, Catalogs, schemas, and tables are organized in a hierarchy. A cataloglist contains catalogs, a catalog contains schemas and a schema contains tables.
+CatalogList, Catalogs, schemas, and tables are organized in a hierarchy. A CatalogList contains catalogs, a catalog contains schemas and a schema contains tables.
 
 DataFusion comes with a basic in memory catalog functionality in the [`catalog` module]. You can use these in memory implementations as is, or extend DataFusion with your own catalog implementations, for example based on local files or files on remote object storage.
 
@@ -213,4 +213,4 @@ To recap, you need to:
 1. Implement the `TableProvider` trait to create a table provider, or use an existing one.
 2. Implement the `SchemaProvider` trait to create a schema provider, or use an existing one.
 3. Implement the `CatalogProvider` trait to create a catalog provider, or use an existing one.
-4. Implement the `Cataloglist` trait to create a cataloglist, or use an existing one.
+4. Implement the `CatalogList` trait to create a CatalogList, or use an existing one.
