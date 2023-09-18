@@ -348,6 +348,7 @@ pub mod memory;
 pub mod metrics;
 pub mod projection;
 pub mod repartition;
+mod row_converter;
 pub mod sorts;
 pub mod stream;
 pub mod streaming;
