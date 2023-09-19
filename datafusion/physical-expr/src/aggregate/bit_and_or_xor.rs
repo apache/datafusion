@@ -637,13 +637,13 @@ where
         // 1. Stores aggregate state in `ScalarValue::List`
         // 2. Constructs `ScalarValue::List` state from distinct numeric stored in hash set
         let state_out = {
-            let values = self
+            let values: Vec<ScalarValue> = self
                 .values
                 .iter()
                 .map(|x| ScalarValue::new_primitive::<T>(Some(*x), &T::DATA_TYPE))
-                .collect::<Vec<_>>();
+                .collect();
 
-            let arr = ScalarValue::list_to_array(&Some(values), &T::DATA_TYPE);
+            let arr = ScalarValue::list_to_array(&values, &T::DATA_TYPE);
             vec![ScalarValue::ListArr(arr)]
         };
         Ok(state_out)

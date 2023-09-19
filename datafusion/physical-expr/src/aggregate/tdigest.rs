@@ -568,14 +568,14 @@ impl TDigest {
     /// [`TDigest`].
     pub(crate) fn to_scalar_state(&self) -> Vec<ScalarValue> {
         // Gather up all the centroids
-        let centroids: Vec<_> = self
+        let centroids: Vec<ScalarValue> = self
             .centroids
             .iter()
             .flat_map(|c| [c.mean(), c.weight()])
             .map(|v| ScalarValue::Float64(Some(v)))
             .collect();
 
-        let arr = ScalarValue::list_to_array(&Some(centroids), &DataType::Float64);
+        let arr = ScalarValue::list_to_array(&centroids, &DataType::Float64);
 
         vec![
             ScalarValue::UInt64(Some(self.max_size as u64)),

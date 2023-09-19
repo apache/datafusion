@@ -154,8 +154,7 @@ impl Accumulator for ArrayAggAccumulator {
     fn evaluate(&self) -> Result<ScalarValue> {
         // Transform Vec<ListArr> to ListArr
         if self.values.is_empty() {
-            let arr =
-                ScalarValue::list_to_array(&Some(self.values.clone()), &self.datatype);
+            let arr = ScalarValue::list_to_array(&self.values, &self.datatype);
             return Ok(ScalarValue::ListArr(arr));
         }
 

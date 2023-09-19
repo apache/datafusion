@@ -249,8 +249,7 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
-        let values = &Some(self.values.clone());
-        let arr = ScalarValue::list_to_array(values, &self.datatypes[0]);
+        let arr = ScalarValue::list_to_array(&self.values, &self.datatypes[0]);
         Ok(ScalarValue::ListArr(arr))
     }
 
@@ -306,7 +305,7 @@ impl OrderSensitiveArrayAggAccumulator {
     fn evaluate_orderings(&self) -> Result<ScalarValue> {
         let fields = ordering_fields(&self.ordering_req, &self.datatypes[1..]);
         let struct_field = Fields::from(fields.clone());
-        let orderings = self
+        let orderings: Vec<ScalarValue> = self
             .ordering_values
             .iter()
             .map(|ordering| {
@@ -315,8 +314,8 @@ impl OrderSensitiveArrayAggAccumulator {
             .collect();
         let struct_type = DataType::Struct(Fields::from(fields));
 
-        let values = &Some(orderings);
-        let arr = ScalarValue::list_to_array(values, &struct_type);
+        // let values = &Some(orderings);
+        let arr = ScalarValue::list_to_array(&orderings, &struct_type);
         Ok(ScalarValue::ListArr(arr))
     }
 }

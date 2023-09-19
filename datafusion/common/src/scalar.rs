@@ -2265,10 +2265,7 @@ impl ScalarValue {
     }
 
     // Old ScalarValue::List to array of size 1
-    pub fn list_to_array(
-        values: &Option<Vec<ScalarValue>>,
-        data_type: &DataType,
-    ) -> ArrayRef {
+    pub fn list_to_array(values: &[ScalarValue], data_type: &DataType) -> ArrayRef {
         let size = 1;
 
         // TODO: Build Array if Values is None
@@ -2285,10 +2282,7 @@ impl ScalarValue {
         //     println!("na: {:?}", na);
         // ListArray[null]
 
-        if values.is_none() {
-            let arr = new_null_array(&DataType::Null, 0);
-            return arr;
-        }
+        let values = &Some(values.to_vec());
 
         // TODO: Fix build_list too!!
         Arc::new(match data_type {
@@ -2729,18 +2723,18 @@ impl ScalarValue {
         match array.data_type() {
             DataType::List(nested_type) => {
                 let list_array = as_list_array(array)?;
-                let value = match list_array.is_null(index) {
-                    true => None,
-                    false => {
-                        let nested_array = list_array.value(index);
-                        let scalar_vec = (0..nested_array.len())
-                            .map(|i| ScalarValue::try_from_array_v4(&nested_array, i))
-                            .collect::<Result<Vec<_>>>()?;
-                        Some(scalar_vec)
-                    }
-                };
 
-                let arr = ScalarValue::list_to_array(&value, nested_type.data_type());
+                if list_array.is_null(index) {
+                    return Ok(ScalarValue::ListArr(new_null_array(&DataType::Null, 0)));
+                }
+
+                let nested_array = list_array.value(index);
+                let scalar_vec = (0..nested_array.len())
+                    .map(|i| ScalarValue::try_from_array_v4(&nested_array, i))
+                    .collect::<Result<Vec<_>>>()?;
+
+                let arr =
+                    ScalarValue::list_to_array(&scalar_vec, nested_type.data_type());
                 Ok(ScalarValue::ListArr(arr))
             }
             _ => Self::try_from_array(array, index),

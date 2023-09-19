@@ -162,10 +162,8 @@ impl Accumulator for DistinctArrayAggAccumulator {
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
-        let arr = ScalarValue::list_to_array(
-            &Some(self.values.clone().into_iter().collect()),
-            &self.datatype,
-        );
+        let values: Vec<ScalarValue> = self.values.iter().cloned().collect();
+        let arr = ScalarValue::list_to_array(&values, &self.datatype);
         Ok(ScalarValue::ListArr(arr))
     }
 

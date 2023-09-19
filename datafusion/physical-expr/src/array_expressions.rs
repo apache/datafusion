@@ -419,7 +419,7 @@ fn array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
         // empty array
         // TODO: remoe new lsit
         None => {
-            let arr = ScalarValue::list_to_array(&Some(vec![]), &DataType::Null);
+            let arr = ScalarValue::list_to_array(&[], &DataType::Null);
 
             Ok(ColumnarValue::Scalar(ScalarValue::ListArr(arr)))
         }
