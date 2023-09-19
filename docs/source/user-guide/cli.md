@@ -23,54 +23,6 @@ The DataFusion CLI is a command-line interactive SQL utility for executing
 queries against any supported data files. It is a convenient way to
 try DataFusion's SQL support with your own data.
 
-## Selecting files directly
-
-Files can be queried directly by enclosing the file or
-directory name in single `'` quotes as shown in the example.
-
-## Example
-
-Create a CSV file to query.
-
-```shell
-$ echo "a,b" > data.csv
-$ echo "1,2" >> data.csv
-```
-
-Query that single file (the CLI also supports parquet, compressed csv, avro, json and more)
-
-```shell
-$ datafusion-cli
-DataFusion CLI v17.0.0
-❯ select * from 'data.csv';
-+---+---+
-| a | b |
-+---+---+
-| 1 | 2 |
-+---+---+
-1 row in set. Query took 0.007 seconds.
-```
-
-You can also query directories of files with compatible schemas:
-
-```shell
-$ ls data_dir/
-data.csv   data2.csv
-```
-
-```shell
-$ datafusion-cli
-DataFusion CLI v16.0.0
-❯ select * from 'data_dir';
-+---+---+
-| a | b |
-+---+---+
-| 3 | 4 |
-| 1 | 2 |
-+---+---+
-2 rows in set. Query took 0.007 seconds.
-```
-
 ## Installation
 
 ### Install and run using Cargo
@@ -134,6 +86,54 @@ OPTIONS:
     -q, --quiet                             Reduce printing other than the results and work quietly
     -r, --rc <RC>...                        Run the provided files on startup instead of ~/.datafusionrc
     -V, --version                           Print version information
+```
+
+## Querying data from the files directly
+
+Files can be queried directly by enclosing the file or
+directory name in single `'` quotes as shown in the example.
+
+## Example
+
+Create a CSV file to query.
+
+```shell
+$ echo "a,b" > data.csv
+$ echo "1,2" >> data.csv
+```
+
+Query that single file (the CLI also supports parquet, compressed csv, avro, json and more)
+
+```shell
+$ datafusion-cli
+DataFusion CLI v17.0.0
+❯ select * from 'data.csv';
++---+---+
+| a | b |
++---+---+
+| 1 | 2 |
++---+---+
+1 row in set. Query took 0.007 seconds.
+```
+
+You can also query directories of files with compatible schemas:
+
+```shell
+$ ls data_dir/
+data.csv   data2.csv
+```
+
+```shell
+$ datafusion-cli
+DataFusion CLI v16.0.0
+❯ select * from 'data_dir';
++---+---+
+| a | b |
++---+---+
+| 3 | 4 |
+| 1 | 2 |
++---+---+
+2 rows in set. Query took 0.007 seconds.
 ```
 
 ## Creating external tables
