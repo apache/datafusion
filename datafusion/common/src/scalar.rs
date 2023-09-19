@@ -2345,10 +2345,37 @@ impl ScalarValue {
             }
 
             DataType::Struct(fields) => {
-                let e = ScalarValue::new_list(values.clone(), data_type.clone());
-                let arr = e.to_array();
+                let arr = ScalarValue::iter_to_array_list_v3(
+                    values.clone(),
+                    data_type,
+                    DataType::List(Arc::new(Field::new(
+                        "item",
+                        data_type.to_owned(),
+                        true,
+                    ))),
+                );
+                arr.unwrap()
+                // println!("arr: {:?}", arr);
+
+                // let mut vals = vec![];
+                // let mut field_vec = vec![];
+                // if let Some(values) = values {
+                //     for value in values.iter() {
+                //         if let ScalarValue::Struct(v, f) = value {
+                //             vals.push(v.to_owned());
+                //             field_vec.push(f.to_owned());
+                //         }
+                //     }
+                // }
+
+                // // println!("fields: {:?}", fields);
+                // // println!("vals: {:?}", vals);
+                // // println!("field_vec: {:?}", field_vec);
+
+                // let e = ScalarValue::new_list(values.clone(), data_type.clone());
+                // let arr = e.to_array();
                 // println!("(list to array when struct) arr: {:?}", arr);
-                return arr;
+                // return arr;
             }
             DataType::Null => {
                 let values = values.as_ref().unwrap();
