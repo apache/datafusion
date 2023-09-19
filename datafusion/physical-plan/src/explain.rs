@@ -171,7 +171,7 @@ impl ExecutionPlan for ExplainExec {
 
     fn statistics(&self) -> Statistics {
         // Statistics an EXPLAIN plan are not relevant
-        Statistics::new_with_unbounded_columns(self.schema())
+        Statistics::new_with_unbounded_columns(&self.schema())
     }
 }
 

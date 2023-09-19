@@ -72,7 +72,7 @@ async fn get_parquet_exec(state: &SessionState, filter: Expr) -> ParquetExec {
             object_store_url,
             file_groups: vec![vec![partitioned_file]],
             file_schema: schema.clone(),
-            statistics: Statistics::new_with_unbounded_columns(schema),
+            statistics: Statistics::new_with_unbounded_columns(&schema),
             // file has 10 cols so index 12 should be month
             projection: None,
             limit: None,

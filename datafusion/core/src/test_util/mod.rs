@@ -239,7 +239,7 @@ impl ExecutionPlan for UnboundedExec {
     }
 
     fn statistics(&self) -> Statistics {
-        Statistics::new_with_unbounded_columns(self.schema())
+        Statistics::new_with_unbounded_columns(&self.schema())
     }
 }
 

@@ -536,7 +536,6 @@ impl ExprIntervalGraph {
             let propagated_intervals = self.graph[node]
                 .expr
                 .propagate_constraints(node_interval, &children_intervals)?;
-
             for (child, interval) in children.into_iter().zip(propagated_intervals) {
                 if let Some(interval) = interval {
                     self.graph[child].interval = interval;

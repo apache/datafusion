@@ -17,7 +17,7 @@
 
 //! This module provides data structures to represent statistics
 
-use arrow::datatypes::{DataType, SchemaRef};
+use arrow::datatypes::{DataType, Schema};
 use std::fmt::Display;
 
 use crate::ScalarValue;
@@ -44,27 +44,30 @@ impl Statistics {
     /// Returns a [`Statistics`] instance corresponding to the given schema by assigning infinite
     /// bounds to each column in the schema. This is useful when the input statistics are not
     /// known to give an opportunity to the current executor to shrink the bounds of some columns.
-    pub fn new_with_unbounded_columns(schema: SchemaRef) -> Self {
+    pub fn new_with_unbounded_columns(schema: &Schema) -> Self {
         Self {
             num_rows: None,
             total_byte_size: None,
-            column_statistics: Some(
-                schema
-                    .fields()
-                    .iter()
-                    .map(|field| {
-                        let inf = ScalarValue::try_from(field.data_type()).ok();
-                        ColumnStatistics {
-                            null_count: None,
-                            max_value: inf.clone(),
-                            min_value: inf,
-                            distinct_count: None,
-                        }
-                    })
-                    .collect(),
-            ),
+            column_statistics: Some(Statistics::unbounded_column_statistics(schema)),
             is_exact: false,
         }
+    }
+
+    /// Returns an unbounded ColumnStatistics for each field in the schema.
+    pub fn unbounded_column_statistics(schema: &Schema) -> Vec<ColumnStatistics> {
+        schema
+            .fields()
+            .iter()
+            .map(|field| {
+                let inf = ScalarValue::try_from(field.data_type()).ok();
+                ColumnStatistics {
+                    null_count: None,
+                    max_value: inf.clone(),
+                    min_value: inf,
+                    distinct_count: None,
+                }
+            })
+            .collect()
     }
 }
 

@@ -493,7 +493,7 @@ impl ExecutionPlan for TopKExec {
     fn statistics(&self) -> Statistics {
         // to improve the optimizability of this plan
         // better statistics inference could be provided
-        Statistics::new_with_unbounded_columns(self.schema())
+        Statistics::new_with_unbounded_columns(&self.schema())
     }
 }
 

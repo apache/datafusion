@@ -249,11 +249,7 @@ async fn sql_limit() -> Result<()> {
     let physical_plan = df.create_physical_plan().await.unwrap();
     // when the limit is smaller than the original number of lines
     // we loose all statistics except the for number of rows which becomes the limit
-    let col_stats = schema
-        .fields()
-        .iter()
-        .map(|field| ColumnStatistics::new_with_unbounded_column(field.data_type()))
-        .collect::<Vec<_>>();
+    let col_stats = Statistics::unbounded_column_statistics(&schema);
     assert_eq!(
         Statistics {
             num_rows: Some(5),

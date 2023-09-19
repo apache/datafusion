@@ -508,7 +508,7 @@ mod tests {
         let conf = config_for_projection(
             Arc::clone(&file_schema),
             None,
-            Statistics::new_with_unbounded_columns(file_schema.clone()),
+            Statistics::new_with_unbounded_columns(&file_schema),
             vec![(
                 "date".to_owned(),
                 wrap_partition_type_in_dict(DataType::Utf8),
@@ -617,7 +617,7 @@ mod tests {
                 file_batch.schema().fields().len(),
                 file_batch.schema().fields().len() + 2,
             ]),
-            Statistics::new_with_unbounded_columns(file_batch.schema()),
+            Statistics::new_with_unbounded_columns(&file_batch.schema()),
             partition_cols.clone(),
         );
         let (proj_schema, ..) = conf.project();

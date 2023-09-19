@@ -238,7 +238,7 @@ impl ExecutionPlan for FilterExec {
                 };
             }
         }
-        Statistics::new_with_unbounded_columns(self.schema())
+        Statistics::new_with_unbounded_columns(&self.schema())
     }
 }
 
@@ -609,7 +609,7 @@ mod tests {
         //      a: min=???, max=??? (missing)
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let input = Arc::new(StatisticsExec::new(
-            Statistics::new_with_unbounded_columns(Arc::new(schema.clone())),
+            Statistics::new_with_unbounded_columns(&schema),
             schema.clone(),
         ));
 
@@ -929,7 +929,7 @@ mod tests {
     async fn test_empty_input_statistics() -> Result<()> {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let input = Arc::new(StatisticsExec::new(
-            Statistics::new_with_unbounded_columns(Arc::new(schema.clone())),
+            Statistics::new_with_unbounded_columns(&schema),
             schema,
         ));
         // WHERE a <= 10 AND 0 <= a - 5

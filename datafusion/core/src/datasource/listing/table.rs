@@ -919,7 +919,7 @@ impl ListingTable {
         } else {
             return Ok((
                 vec![],
-                Statistics::new_with_unbounded_columns(self.file_schema.clone()),
+                Statistics::new_with_unbounded_columns(&self.file_schema),
             ));
         };
         // list files (with partitions)
@@ -966,7 +966,7 @@ impl ListingTable {
                     }
                 }
             } else {
-                Statistics::new_with_unbounded_columns(self.file_schema.clone())
+                Statistics::new_with_unbounded_columns(&self.file_schema)
             };
             Ok((part_file, statistics_result)) as Result<(PartitionedFile, Statistics)>
         });

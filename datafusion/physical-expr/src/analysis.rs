@@ -147,20 +147,22 @@ pub fn analyze(
                 })
             })
             .collect();
-    match graph.update_ranges(&mut target_indices_and_boundaries)? {
-        PropagationResult::Success => Ok(shrink_boundaries(
-            expr,
-            graph,
-            target_boundaries,
-            target_expr_and_indices,
-        )),
-        PropagationResult::Infeasible => {
-            Ok(AnalysisContext::new(target_boundaries).with_selectivity(0.0))
-        }
-        PropagationResult::CannotPropagate => {
-            Ok(AnalysisContext::new(target_boundaries).with_selectivity(1.0))
-        }
-    }
+    Ok(
+        match graph.update_ranges(&mut target_indices_and_boundaries)? {
+            PropagationResult::Success => shrink_boundaries(
+                expr,
+                graph,
+                target_boundaries,
+                target_expr_and_indices,
+            )?,
+            PropagationResult::Infeasible => {
+                AnalysisContext::new(target_boundaries).with_selectivity(0.0)
+            }
+            PropagationResult::CannotPropagate => {
+                AnalysisContext::new(target_boundaries).with_selectivity(1.0)
+            }
+        },
+    )
 }
 
 /// If the `PropagationResult` indicates success, this function calculates the
@@ -172,7 +174,7 @@ fn shrink_boundaries(
     mut graph: ExprIntervalGraph,
     mut target_boundaries: Vec<ExprBoundaries>,
     target_expr_and_indices: Vec<(Arc<dyn PhysicalExpr>, usize)>,
-) -> AnalysisContext {
+) -> Result<AnalysisContext> {
     let initial_boundaries = target_boundaries.clone();
     target_expr_and_indices.iter().for_each(|(expr, i)| {
         if let Some(column) = expr.as_any().downcast_ref::<Column>() {
@@ -195,9 +197,9 @@ fn shrink_boundaries(
         &final_result.upper.value,
         &target_boundaries,
         &initial_boundaries,
-    );
+    )?;
 
-    AnalysisContext::new(target_boundaries).with_selectivity(selectivity)
+    Ok(AnalysisContext::new(target_boundaries).with_selectivity(selectivity))
 }
 
 /// This function calculates the filter predicate's selectivity by comparing
@@ -214,20 +216,20 @@ fn calculate_selectivity(
     upper_value: &ScalarValue,
     target_boundaries: &[ExprBoundaries],
     initial_boundaries: &[ExprBoundaries],
-) -> f64 {
+) -> Result<f64> {
     match (lower_value, upper_value) {
-        (ScalarValue::Boolean(Some(true)), ScalarValue::Boolean(Some(true))) => 1.0,
-        (ScalarValue::Boolean(Some(false)), ScalarValue::Boolean(Some(false))) => 0.0,
+        (ScalarValue::Boolean(Some(true)), ScalarValue::Boolean(Some(true))) => Ok(1.0),
+        (ScalarValue::Boolean(Some(false)), ScalarValue::Boolean(Some(false))) => Ok(0.0),
         _ => {
             // Since the intervals are assumed uniform and the values
             // are not correlated, we need to multiply the selectivities
             // of multiple columns to get the overall selectivity.
-            target_boundaries.iter().enumerate().fold(
+            target_boundaries.iter().enumerate().try_fold(
                 1.0,
                 |acc, (i, ExprBoundaries { interval, .. })| {
                     let temp =
-                        cardinality_ratio(&initial_boundaries[i].interval, interval);
-                    acc * temp
+                        cardinality_ratio(&initial_boundaries[i].interval, interval)?;
+                    Ok(acc * temp)
                 },
             )
         }

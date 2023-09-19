@@ -155,7 +155,7 @@ impl FileFormat for JsonFormat {
         table_schema: SchemaRef,
         _object: &ObjectMeta,
     ) -> Result<Statistics> {
-        Ok(Statistics::new_with_unbounded_columns(table_schema))
+        Ok(Statistics::new_with_unbounded_columns(&table_schema))
     }
 
     async fn create_physical_plan(

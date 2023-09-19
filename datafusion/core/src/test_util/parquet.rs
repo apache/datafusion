@@ -148,7 +148,7 @@ impl TestParquetFile {
                 range: None,
                 extensions: None,
             }]],
-            statistics: Statistics::new_with_unbounded_columns(self.schema.clone()),
+            statistics: Statistics::new_with_unbounded_columns(&self.schema),
             projection: None,
             limit: None,
             table_partition_cols: vec![],

@@ -96,7 +96,6 @@ impl CacheAccessor<Path, Arc<Statistics>> for DefaultFileStatisticsCache {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
 
     use crate::cache::cache_unit::DefaultFileStatisticsCache;
     use crate::cache::CacheAccessor;
@@ -121,13 +120,11 @@ mod tests {
 
         cache.put_with_extra(
             &meta.location,
-            Statistics::new_with_unbounded_columns(Arc::new(Schema::new(vec![
-                Field::new(
-                    "test_column",
-                    DataType::Timestamp(TimeUnit::Second, None),
-                    false,
-                ),
-            ])))
+            Statistics::new_with_unbounded_columns(&Schema::new(vec![Field::new(
+                "test_column",
+                DataType::Timestamp(TimeUnit::Second, None),
+                false,
+            )]))
             .into(),
             &meta,
         );

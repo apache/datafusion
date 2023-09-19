@@ -458,7 +458,8 @@ async fn parquet_statistics() -> Result<()> {
     //// NO PROJECTION ////
     let dataframe = ctx.sql("SELECT * FROM t").await?;
     let physical_plan = dataframe.create_physical_plan().await?;
-    assert_eq!(physical_plan.schema().fields().len(), 4);
+    let schema = physical_plan.schema();
+    assert_eq!(schema.fields().len(), 4);
 
     let stat_cols = physical_plan
         .statistics()
@@ -470,27 +471,22 @@ async fn parquet_statistics() -> Result<()> {
     // TODO assert partition column (1,2,3) stats once implemented (#1186)
     assert_eq!(
         stat_cols[1],
-        ColumnStatistics::new_with_unbounded_column(
-            physical_plan.schema().field(1).data_type()
-        ),
+        ColumnStatistics::new_with_unbounded_column(schema.field(1).data_type()),
     );
     assert_eq!(
         stat_cols[2],
-        ColumnStatistics::new_with_unbounded_column(
-            physical_plan.schema().field(2).data_type()
-        ),
+        ColumnStatistics::new_with_unbounded_column(schema.field(2).data_type()),
     );
     assert_eq!(
         stat_cols[3],
-        ColumnStatistics::new_with_unbounded_column(
-            physical_plan.schema().field(3).data_type()
-        ),
+        ColumnStatistics::new_with_unbounded_column(schema.field(3).data_type()),
     );
 
     //// WITH PROJECTION ////
     let dataframe = ctx.sql("SELECT mycol, day FROM t WHERE day='28'").await?;
     let physical_plan = dataframe.create_physical_plan().await?;
-    assert_eq!(physical_plan.schema().fields().len(), 2);
+    let schema = physical_plan.schema();
+    assert_eq!(schema.fields().len(), 2);
 
     let stat_cols = physical_plan
         .statistics()
@@ -502,9 +498,7 @@ async fn parquet_statistics() -> Result<()> {
     // TODO assert partition column stats once implemented (#1186)
     assert_eq!(
         stat_cols[1],
-        ColumnStatistics::new_with_unbounded_column(
-            physical_plan.schema().field(1).data_type()
-        ),
+        ColumnStatistics::new_with_unbounded_column(schema.field(1).data_type()),
     );
 
     Ok(())
