@@ -347,11 +347,6 @@
 <nav id="bd-toc-nav">
     <ul class="visible nav section-nav flex-column">
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#example">
-   Example
-  </a>
- </li>
- <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#installation">
    Installation
   </a>
@@ -379,8 +374,18 @@
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#selecting-files-directly">
-   Selecting files directly
+  <a class="reference internal nav-link" href="#querying-data-from-the-files-directly">
+   Querying data from the files directly
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#example">
+   Example
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#creating-external-tables">
+   Creating external tables
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
@@ -469,43 +474,6 @@
 <p>The DataFusion CLI is a command-line interactive SQL utility for executing
 queries against any supported data files. It is a convenient way to
 try DataFusion’s SQL support with your own data.</p>
-<section id="example">
-<h2>Example<a class="headerlink" href="#example" title="Link to this heading">¶</a></h2>
-<p>Create a CSV file to query.</p>
-<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>$<span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;a,b&quot;</span><span class="w"> </span>&gt;<span class="w"> </span>data.csv
-$<span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;1,2&quot;</span><span class="w"> </span>&gt;&gt;<span class="w"> </span>data.csv
-</pre></div>
-</div>
-<p>Query that single file (the CLI also supports parquet, compressed csv, avro, json and more)</p>
-<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>$<span class="w"> </span>datafusion-cli
-DataFusion<span class="w"> </span>CLI<span class="w"> </span>v17.0.0
-❯<span class="w"> </span><span class="k">select</span><span class="w"> </span>*<span class="w"> </span>from<span class="w"> </span><span class="s1">&#39;data.csv&#39;</span><span class="p">;</span>
-+---+---+
-<span class="p">|</span><span class="w"> </span>a<span class="w"> </span><span class="p">|</span><span class="w"> </span>b<span class="w"> </span><span class="p">|</span>
-+---+---+
-<span class="p">|</span><span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="p">|</span>
-+---+---+
-<span class="m">1</span><span class="w"> </span>row<span class="w"> </span><span class="k">in</span><span class="w"> </span>set.<span class="w"> </span>Query<span class="w"> </span>took<span class="w"> </span><span class="m">0</span>.007<span class="w"> </span>seconds.
-</pre></div>
-</div>
-<p>You can also query directories of files with compatible schemas:</p>
-<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>$<span class="w"> </span>ls<span class="w"> </span>data_dir/
-data.csv<span class="w">   </span>data2.csv
-</pre></div>
-</div>
-<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>$<span class="w"> </span>datafusion-cli
-DataFusion<span class="w"> </span>CLI<span class="w"> </span>v16.0.0
-❯<span class="w"> </span><span class="k">select</span><span class="w"> </span>*<span class="w"> </span>from<span class="w"> </span><span class="s1">&#39;data_dir&#39;</span><span class="p">;</span>
-+---+---+
-<span class="p">|</span><span class="w"> </span>a<span class="w"> </span><span class="p">|</span><span class="w"> </span>b<span class="w"> </span><span class="p">|</span>
-+---+---+
-<span class="p">|</span><span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="p">|</span>
-<span class="p">|</span><span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="p">|</span>
-+---+---+
-<span class="m">2</span><span class="w"> </span>rows<span class="w"> </span><span class="k">in</span><span class="w"> </span>set.<span class="w"> </span>Query<span class="w"> </span>took<span class="w"> </span><span class="m">0</span>.007<span class="w"> </span>seconds.
-</pre></div>
-</div>
-</section>
 <section id="installation">
 <h2>Installation<a class="headerlink" href="#installation" title="Link to this heading">¶</a></h2>
 <section id="install-and-run-using-cargo">
@@ -568,19 +536,72 @@ OPTIONS:
 </pre></div>
 </div>
 </section>
-<section id="selecting-files-directly">
-<h2>Selecting files directly<a class="headerlink" href="#selecting-files-directly" title="Link to this heading">¶</a></h2>
+<section id="querying-data-from-the-files-directly">
+<h2>Querying data from the files directly<a class="headerlink" href="#querying-data-from-the-files-directly" title="Link to this heading">¶</a></h2>
 <p>Files can be queried directly by enclosing the file or
 directory name in single <code class="docutils literal notranslate"><span class="pre">'</span></code> quotes as shown in the example.</p>
+</section>
+<section id="example">
+<h2>Example<a class="headerlink" href="#example" title="Link to this heading">¶</a></h2>
+<p>Create a CSV file to query.</p>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>$<span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;a,b&quot;</span><span class="w"> </span>&gt;<span class="w"> </span>data.csv
+$<span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;1,2&quot;</span><span class="w"> </span>&gt;&gt;<span class="w"> </span>data.csv
+</pre></div>
+</div>
+<p>Query that single file (the CLI also supports parquet, compressed csv, avro, json and more)</p>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>$<span class="w"> </span>datafusion-cli
+DataFusion<span class="w"> </span>CLI<span class="w"> </span>v17.0.0
+❯<span class="w"> </span><span class="k">select</span><span class="w"> </span>*<span class="w"> </span>from<span class="w"> </span><span class="s1">&#39;data.csv&#39;</span><span class="p">;</span>
++---+---+
+<span class="p">|</span><span class="w"> </span>a<span class="w"> </span><span class="p">|</span><span class="w"> </span>b<span class="w"> </span><span class="p">|</span>
++---+---+
+<span class="p">|</span><span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="p">|</span>
++---+---+
+<span class="m">1</span><span class="w"> </span>row<span class="w"> </span><span class="k">in</span><span class="w"> </span>set.<span class="w"> </span>Query<span class="w"> </span>took<span class="w"> </span><span class="m">0</span>.007<span class="w"> </span>seconds.
+</pre></div>
+</div>
+<p>You can also query directories of files with compatible schemas:</p>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>$<span class="w"> </span>ls<span class="w"> </span>data_dir/
+data.csv<span class="w">   </span>data2.csv
+</pre></div>
+</div>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>$<span class="w"> </span>datafusion-cli
+DataFusion<span class="w"> </span>CLI<span class="w"> </span>v16.0.0
+❯<span class="w"> </span><span class="k">select</span><span class="w"> </span>*<span class="w"> </span>from<span class="w"> </span><span class="s1">&#39;data_dir&#39;</span><span class="p">;</span>
++---+---+
+<span class="p">|</span><span class="w"> </span>a<span class="w"> </span><span class="p">|</span><span class="w"> </span>b<span class="w"> </span><span class="p">|</span>
++---+---+
+<span class="p">|</span><span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="p">|</span>
+<span class="p">|</span><span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="p">|</span>
++---+---+
+<span class="m">2</span><span class="w"> </span>rows<span class="w"> </span><span class="k">in</span><span class="w"> </span>set.<span class="w"> </span>Query<span class="w"> </span>took<span class="w"> </span><span class="m">0</span>.007<span class="w"> </span>seconds.
+</pre></div>
+</div>
+</section>
+<section id="creating-external-tables">
+<h2>Creating external tables<a class="headerlink" href="#creating-external-tables" title="Link to this heading">¶</a></h2>
 <p>It is also possible to create a table backed by files by explicitly
-via <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> as shown below.</p>
+via <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> as shown below. Filemask wildcards supported</p>
 </section>
 <section id="registering-parquet-data-sources">
 <h2>Registering Parquet Data Sources<a class="headerlink" href="#registering-parquet-data-sources" title="Link to this heading">¶</a></h2>
-<p>Parquet data sources can be registered by executing a <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> SQL statement. It is not necessary to provide schema information for Parquet files.</p>
+<p>Parquet data sources can be registered by executing a <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> SQL statement. The schema information will be derived automatically.</p>
+<p>Register a single file parquet datasource</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">taxi</span>
 <span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">PARQUET</span>
 <span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;/mnt/nyctaxi/tripdata.parquet&#39;</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>Register a single folder parquet datasource. All files inside must be valid parquet files!</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">taxi</span>
+<span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">PARQUET</span>
+<span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;/mnt/nyctaxi/&#39;</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>Register a single folder parquet datasource by specifying a wildcard for files to read</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">taxi</span>
+<span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">PARQUET</span>
+<span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;/mnt/nyctaxi/*.parquet&#39;</span><span class="p">;</span>
 </pre></div>
 </div>
 </section>
