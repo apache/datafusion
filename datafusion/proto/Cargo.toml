@@ -46,7 +46,7 @@ datafusion = { path = "../core", version = "31.0.0" }
 datafusion-common = { path = "../common", version = "31.0.0" }
 datafusion-expr = { path = "../expr", version = "31.0.0" }
 object_store = { version = "0.7.0" }
-pbjson = { version = "0.5", optional = true }
+pbjson = { version = "0.6", optional = true }
 prost = "0.11.0"
 serde = { version = "1.0", optional = true }
 serde_json = { version = "1.0", optional = true }
