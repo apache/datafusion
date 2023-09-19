@@ -23,49 +23,6 @@ The DataFusion CLI is a command-line interactive SQL utility for executing
 queries against any supported data files. It is a convenient way to
 try DataFusion's SQL support with your own data.
 
-## Example
-
-Create a CSV file to query.
-
-```shell
-$ echo "a,b" > data.csv
-$ echo "1,2" >> data.csv
-```
-
-Query that single file (the CLI also supports parquet, compressed csv, avro, json and more)
-
-```shell
-$ datafusion-cli
-DataFusion CLI v17.0.0
-❯ select * from 'data.csv';
-+---+---+
-| a | b |
-+---+---+
-| 1 | 2 |
-+---+---+
-1 row in set. Query took 0.007 seconds.
-```
-
-You can also query directories of files with compatible schemas:
-
-```shell
-$ ls data_dir/
-data.csv   data2.csv
-```
-
-```shell
-$ datafusion-cli
-DataFusion CLI v16.0.0
-❯ select * from 'data_dir';
-+---+---+
-| a | b |
-+---+---+
-| 3 | 4 |
-| 1 | 2 |
-+---+---+
-2 rows in set. Query took 0.007 seconds.
-```
-
 ## Installation
 
 ### Install and run using Cargo
@@ -131,22 +88,85 @@ OPTIONS:
     -V, --version                           Print version information
 ```
 
-## Selecting files directly
+## Querying data from the files directly
 
 Files can be queried directly by enclosing the file or
 directory name in single `'` quotes as shown in the example.
 
+## Example
+
+Create a CSV file to query.
+
+```shell
+$ echo "a,b" > data.csv
+$ echo "1,2" >> data.csv
+```
+
+Query that single file (the CLI also supports parquet, compressed csv, avro, json and more)
+
+```shell
+$ datafusion-cli
+DataFusion CLI v17.0.0
+❯ select * from 'data.csv';
++---+---+
+| a | b |
++---+---+
+| 1 | 2 |
++---+---+
+1 row in set. Query took 0.007 seconds.
+```
+
+You can also query directories of files with compatible schemas:
+
+```shell
+$ ls data_dir/
+data.csv   data2.csv
+```
+
+```shell
+$ datafusion-cli
+DataFusion CLI v16.0.0
+❯ select * from 'data_dir';
++---+---+
+| a | b |
++---+---+
+| 3 | 4 |
+| 1 | 2 |
++---+---+
+2 rows in set. Query took 0.007 seconds.
+```
+
+## Creating external tables
+
 It is also possible to create a table backed by files by explicitly
-via `CREATE EXTERNAL TABLE` as shown below.
+via `CREATE EXTERNAL TABLE` as shown below. Filemask wildcards supported
 
 ## Registering Parquet Data Sources
 
-Parquet data sources can be registered by executing a `CREATE EXTERNAL TABLE` SQL statement. It is not necessary to provide schema information for Parquet files.
+Parquet data sources can be registered by executing a `CREATE EXTERNAL TABLE` SQL statement. The schema information will be derived automatically.
+
+Register a single file parquet datasource
 
 ```sql
 CREATE EXTERNAL TABLE taxi
 STORED AS PARQUET
 LOCATION '/mnt/nyctaxi/tripdata.parquet';
+```
+
+Register a single folder parquet datasource. All files inside must be valid parquet files!
+
+```sql
+CREATE EXTERNAL TABLE taxi
+STORED AS PARQUET
+LOCATION '/mnt/nyctaxi/';
+```
+
+Register a single folder parquet datasource by specifying a wildcard for files to read
+
+```sql
+CREATE EXTERNAL TABLE taxi
+STORED AS PARQUET
+LOCATION '/mnt/nyctaxi/*.parquet';
 ```
 
 ## Registering CSV Data Sources
