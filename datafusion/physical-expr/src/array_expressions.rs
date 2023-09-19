@@ -1471,18 +1471,18 @@ array_replacement_function!(
 );
 
 macro_rules! to_string {
-    ($ARG:expr, $ARRAY:expr, $DELIMETER:expr, $NULL_STRING:expr, $WITH_NULL_STRING:expr, $ARRAY_TYPE:ident) => {{
+    ($ARG:expr, $ARRAY:expr, $DELIMITER:expr, $NULL_STRING:expr, $WITH_NULL_STRING:expr, $ARRAY_TYPE:ident) => {{
         let arr = downcast_arg!($ARRAY, $ARRAY_TYPE);
         for x in arr {
             match x {
                 Some(x) => {
                     $ARG.push_str(&x.to_string());
-                    $ARG.push_str($DELIMETER);
+                    $ARG.push_str($DELIMITER);
                 }
                 None => {
                     if $WITH_NULL_STRING {
                         $ARG.push_str($NULL_STRING);
-                        $ARG.push_str($DELIMETER);
+                        $ARG.push_str($DELIMITER);
                     }
                 }
             }
@@ -1495,8 +1495,8 @@ macro_rules! to_string {
 pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
     let arr = &args[0];
 
-    let delimeters = as_generic_string_array::<i32>(&args[1])?;
-    let delimeters: Vec<Option<&str>> = delimeters.iter().collect();
+    let delimiters = as_generic_string_array::<i32>(&args[1])?;
+    let delimiters: Vec<Option<&str>> = delimiters.iter().collect();
 
     let mut null_string = String::from("");
     let mut with_null_string = false;
@@ -1510,7 +1510,7 @@ pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
     fn compute_array_to_string(
         arg: &mut String,
         arr: ArrayRef,
-        delimeter: String,
+        delimiter: String,
         null_string: String,
         with_null_string: bool,
     ) -> Result<&mut String> {
@@ -1522,7 +1522,7 @@ pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
                     compute_array_to_string(
                         arg,
                         list_array.value(i),
-                        delimeter.clone(),
+                        delimiter.clone(),
                         null_string.clone(),
                         with_null_string,
                     )?;
@@ -1537,7 +1537,7 @@ pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
                         to_string!(
                             arg,
                             arr,
-                            &delimeter,
+                            &delimiter,
                             &null_string,
                             with_null_string,
                             $ARRAY_TYPE
@@ -1555,19 +1555,19 @@ pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
     match arr.data_type() {
         DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _) => {
             let list_array = arr.as_list::<i32>();
-            for (arr, &delimeter) in list_array.iter().zip(delimeters.iter()) {
-                if let (Some(arr), Some(delimeter)) = (arr, delimeter) {
+            for (arr, &delimiter) in list_array.iter().zip(delimiters.iter()) {
+                if let (Some(arr), Some(delimiter)) = (arr, delimiter) {
                     arg = String::from("");
                     let s = compute_array_to_string(
                         &mut arg,
                         arr,
-                        delimeter.to_string(),
+                        delimiter.to_string(),
                         null_string.clone(),
                         with_null_string,
                     )?
                     .clone();
 
-                    if let Some(s) = s.strip_suffix(delimeter) {
+                    if let Some(s) = s.strip_suffix(delimiter) {
                         res.push(Some(s.to_string()));
                     } else {
                         res.push(Some(s));
@@ -1578,20 +1578,20 @@ pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
             }
         }
         _ => {
-            // delimeter length is 1
-            assert_eq!(delimeters.len(), 1);
-            let delimeter = delimeters[0].unwrap();
+            // delimiter length is 1
+            assert_eq!(delimiters.len(), 1);
+            let delimiter = delimiters[0].unwrap();
             let s = compute_array_to_string(
                 &mut arg,
                 arr.clone(),
-                delimeter.to_string(),
+                delimiter.to_string(),
                 null_string,
                 with_null_string,
             )?
             .clone();
 
             if !s.is_empty() {
-                let s = s.strip_suffix(delimeter).unwrap().to_string();
+                let s = s.strip_suffix(delimiter).unwrap().to_string();
                 res.push(Some(s));
             } else {
                 res.push(Some(s));
@@ -1862,6 +1862,95 @@ pub fn array_has_all(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
     }
     Ok(Arc::new(boolean_builder.finish()))
+}
+
+/// Splits string at occurrences of delimiter and returns an array of parts
+/// string_to_array('abc~@~def~@~ghi', '~@~') = '["abc", "def", "ghi"]'
+pub fn string_to_array<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let string_array = as_generic_string_array::<T>(&args[0])?;
+    let delimiter_array = as_generic_string_array::<T>(&args[1])?;
+
+    let mut list_builder = ListBuilder::new(StringBuilder::with_capacity(
+        string_array.len(),
+        string_array.get_buffer_memory_size(),
+    ));
+
+    match args.len() {
+        2 => {
+            string_array.iter().zip(delimiter_array.iter()).for_each(
+                |(string, delimiter)| {
+                    match (string, delimiter) {
+                        (Some(string), Some("")) => {
+                            list_builder.values().append_value(string);
+                            list_builder.append(true);
+                        }
+                        (Some(string), Some(delimiter)) => {
+                            string.split(delimiter).for_each(|s| {
+                                list_builder.values().append_value(s);
+                            });
+                            list_builder.append(true);
+                        }
+                        (Some(string), None) => {
+                            string.chars().map(|c| c.to_string()).for_each(|c| {
+                                list_builder.values().append_value(c);
+                            });
+                            list_builder.append(true);
+                        }
+                        _ => list_builder.append(false), // null value
+                    }
+                },
+            );
+        }
+
+        3 => {
+            let null_value_array = as_generic_string_array::<T>(&args[2])?;
+            string_array
+                .iter()
+                .zip(delimiter_array.iter())
+                .zip(null_value_array.iter())
+                .for_each(|((string, delimiter), null_value)| {
+                    match (string, delimiter) {
+                        (Some(string), Some("")) => {
+                            if Some(string) == null_value {
+                                list_builder.values().append_null();
+                            } else {
+                                list_builder.values().append_value(string);
+                            }
+                            list_builder.append(true);
+                        }
+                        (Some(string), Some(delimiter)) => {
+                            string.split(delimiter).for_each(|s| {
+                                if Some(s) == null_value {
+                                    list_builder.values().append_null();
+                                } else {
+                                    list_builder.values().append_value(s);
+                                }
+                            });
+                            list_builder.append(true);
+                        }
+                        (Some(string), None) => {
+                            string.chars().map(|c| c.to_string()).for_each(|c| {
+                                if Some(c.as_str()) == null_value {
+                                    list_builder.values().append_null();
+                                } else {
+                                    list_builder.values().append_value(c);
+                                }
+                            });
+                            list_builder.append(true);
+                        }
+                        _ => list_builder.append(false), // null value
+                    }
+                });
+        }
+        _ => {
+            return internal_err!(
+                "Expect string_to_array function to take two or three parameters"
+            )
+        }
+    }
+
+    let list_array = list_builder.finish();
+    Ok(Arc::new(list_array) as ArrayRef)
 }
 
 #[cfg(test)]

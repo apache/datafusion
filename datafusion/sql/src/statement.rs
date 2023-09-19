@@ -576,9 +576,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let schema = table_source.schema();
 
+        let output_schema = DFSchema::try_from(LogicalPlan::describe_schema()).unwrap();
+
         Ok(LogicalPlan::DescribeTable(DescribeTable {
             schema,
-            dummy_schema: DFSchemaRef::new(DFSchema::empty()),
+            output_schema: Arc::new(output_schema),
         }))
     }
 

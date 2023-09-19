@@ -96,7 +96,7 @@ jobs:
         with:
           rust-version: stable
       - name: Run tests (excluding doctests)
-        run: cargo test --lib --tests --bins --features avro,json,dictionary_expressions
+        run: cargo test --lib --tests --bins --features avro,json,dictionary_expressions,backtrace
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
@@ -302,12 +302,13 @@ jobs:
         shell: bash
         run: |
           export PATH=$PATH:$HOME/d/protoc/bin
-          cargo test --lib --tests --bins --features avro,json,dictionary_expressions
+          cargo test --lib --tests --bins --features avro,json,dictionary_expressions,backtrace
           cd datafusion-cli
           cargo test --lib --tests --bins --all-features
         env:
           # do not produce debug symbols to keep memory usage down
           RUSTFLAGS: "-C debuginfo=0"
+          RUST_BACKTRACE: "1"
 
   macos:
     name: cargo test (mac)
@@ -337,12 +338,13 @@ jobs:
       - name: Run tests (excluding doctests)
         shell: bash
         run: |
-          cargo test --lib --tests --bins --features avro,json,dictionary_expressions
+          cargo test --lib --tests --bins --features avro,json,dictionary_expressions,backtrace
           cd datafusion-cli
           cargo test --lib --tests --bins --all-features
         env:
           # do not produce debug symbols to keep memory usage down
           RUSTFLAGS: "-C debuginfo=0"
+          RUST_BACKTRACE: "1"
 
   test-datafusion-pyarrow:
     name: cargo test pyarrow (amd64)

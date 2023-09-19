@@ -36,6 +36,7 @@ path = "src/lib.rs"
 [features]
 # Used to enable the avro format
 avro = ["apache-avro", "num-traits", "datafusion-common/avro"]
+backtrace = ["datafusion-common/backtrace"]
 compression = ["xz2", "bzip2", "flate2", "zstd", "async-compression"]
 crypto_expressions = ["datafusion-physical-expr/crypto_expressions", "datafusion-optimizer/crypto_expressions"]
 default = ["crypto_expressions", "encoding__expressions", "regex_expressions", "unicode_expressions", "compression"]
@@ -57,16 +58,17 @@ arrow = { workspace = true }
 arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
 async-compression = { version = "0.4.0", features = ["bzip2", "gzip", "xz", "zstd", "futures-io", "tokio"], optional = true }
-async-trait = "0.1.41"
+async-trait = "0.1.73"
 bytes = "1.4"
 bzip2 = { version = "0.4.3", optional = true }
-chrono = { version = "0.4.27", default-features = false }
+chrono = { workspace = true }
 dashmap = "5.4.0"
 datafusion-common = { path = "../common", version = "31.0.0", features = ["parquet", "object_store"] }
 datafusion-execution = { path = "../execution", version = "31.0.0" }
 datafusion-expr = { path = "../expr", version = "31.0.0" }
 datafusion-optimizer = { path = "../optimizer", version = "31.0.0", default-features = false }
 datafusion-physical-expr = { path = "../physical-expr", version = "31.0.0", default-features = false }
+datafusion-physical-plan = { path = "../physical-plan", version = "31.0.0", default-features = false }
 datafusion-sql = { path = "../sql", version = "31.0.0" }
 flate2 = { version = "1.0.24", optional = true }
 futures = "0.3"
@@ -105,6 +107,8 @@ env_logger = "0.10"
 half = "2.2.1"
 postgres-protocol = "0.6.4"
 postgres-types = { version = "0.2.4", features = ["derive", "with-chrono-0_4"] }
+rand = { version = "0.8", features = ["small_rng"] }
+rand_distr = "0.4.3"
 regex = "1.5.4"
 rstest = "0.18.0"
 rust_decimal = { version = "1.27.0", features = ["tokio-pg"] }
@@ -157,3 +161,7 @@ name = "sql_query_with_io"
 [[bench]]
 harness = false
 name = "sort"
+
+[[bench]]
+harness = false
+name = "topk_aggregate"

@@ -883,14 +883,14 @@ mod test {
     fn scalar_function() -> Result<()> {
         let empty = empty();
         let lit_expr = lit(10i64);
-        let fun: BuiltinScalarFunction = BuiltinScalarFunction::Abs;
+        let fun: BuiltinScalarFunction = BuiltinScalarFunction::Acos;
         let scalar_function_expr =
             Expr::ScalarFunction(ScalarFunction::new(fun, vec![lit_expr]));
         let plan = LogicalPlan::Projection(Projection::try_new(
             vec![scalar_function_expr],
             empty,
         )?);
-        let expected = "Projection: abs(CAST(Int64(10) AS Float64))\n  EmptyRelation";
+        let expected = "Projection: acos(CAST(Int64(10) AS Float64))\n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)
     }
 

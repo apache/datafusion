@@ -22,7 +22,6 @@ use crate::datasource::{
     listing::{FileRange, PartitionedFile},
     object_store::ObjectStoreUrl,
 };
-use crate::physical_plan::ExecutionPlan;
 use crate::{
     error::{DataFusionError, Result},
     scalar::ScalarValue,
@@ -33,10 +32,7 @@ use arrow::buffer::Buffer;
 use arrow::datatypes::{ArrowNativeType, UInt16Type};
 use arrow_array::{ArrayRef, DictionaryArray, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
-use datafusion_common::{
-    exec_err,
-    tree_node::{TreeNode, VisitRecursion},
-};
+use datafusion_common::exec_err;
 use datafusion_common::{ColumnStatistics, Statistics};
 use datafusion_physical_expr::LexOrdering;
 
@@ -70,22 +66,6 @@ pub fn wrap_partition_type_in_dict(val_type: DataType) -> DataType {
 /// which can wrap the types.
 pub fn wrap_partition_value_in_dict(val: ScalarValue) -> ScalarValue {
     ScalarValue::Dictionary(Box::new(DataType::UInt16), Box::new(val))
-}
-
-/// Get all of the [`PartitionedFile`] to be scanned for an [`ExecutionPlan`]
-pub fn get_scan_files(
-    plan: Arc<dyn ExecutionPlan>,
-) -> Result<Vec<Vec<Vec<PartitionedFile>>>> {
-    let mut collector: Vec<Vec<Vec<PartitionedFile>>> = vec![];
-    plan.apply(&mut |plan| {
-        if let Some(file_scan_config) = plan.file_scan_config() {
-            collector.push(file_scan_config.file_groups.clone());
-            Ok(VisitRecursion::Skip)
-        } else {
-            Ok(VisitRecursion::Continue)
-        }
-    })?;
-    Ok(collector)
 }
 
 /// The base configurations to provide when creating a physical plan for
@@ -347,7 +327,7 @@ impl PartitionColumnProjector {
             // check if user forgot to dict-encode the partition value
             let field = self.projected_schema.field(sidx);
             let expected_data_type = field.data_type();
-            let actual_data_type = partition_value.get_datatype();
+            let actual_data_type = partition_value.data_type();
             if let DataType::Dictionary(key_type, _) = expected_data_type {
                 if !matches!(actual_data_type, DataType::Dictionary(_, _)) {
                     warn!("Partition value for column {} was not dictionary-encoded, applied auto-fix.", field.name());
@@ -448,7 +428,7 @@ fn create_output_array(
                     &mut key_buffer_cache.gen_i8,
                     dict_val,
                     len,
-                    val.get_datatype(),
+                    val.data_type(),
                 );
             }
             DataType::Int16 => {
@@ -456,7 +436,7 @@ fn create_output_array(
                     &mut key_buffer_cache.gen_i16,
                     dict_val,
                     len,
-                    val.get_datatype(),
+                    val.data_type(),
                 );
             }
             DataType::Int32 => {
@@ -464,7 +444,7 @@ fn create_output_array(
                     &mut key_buffer_cache.gen_i32,
                     dict_val,
                     len,
-                    val.get_datatype(),
+                    val.data_type(),
                 );
             }
             DataType::Int64 => {
@@ -472,7 +452,7 @@ fn create_output_array(
                     &mut key_buffer_cache.gen_i64,
                     dict_val,
                     len,
-                    val.get_datatype(),
+                    val.data_type(),
                 );
             }
             DataType::UInt8 => {
@@ -480,7 +460,7 @@ fn create_output_array(
                     &mut key_buffer_cache.gen_u8,
                     dict_val,
                     len,
-                    val.get_datatype(),
+                    val.data_type(),
                 );
             }
             DataType::UInt16 => {
@@ -488,7 +468,7 @@ fn create_output_array(
                     &mut key_buffer_cache.gen_u16,
                     dict_val,
                     len,
-                    val.get_datatype(),
+                    val.data_type(),
                 );
             }
             DataType::UInt32 => {
@@ -496,7 +476,7 @@ fn create_output_array(
                     &mut key_buffer_cache.gen_u32,
                     dict_val,
                     len,
-                    val.get_datatype(),
+                    val.data_type(),
                 );
             }
             DataType::UInt64 => {
@@ -504,7 +484,7 @@ fn create_output_array(
                     &mut key_buffer_cache.gen_u64,
                     dict_val,
                     len,
-                    val.get_datatype(),
+                    val.data_type(),
                 );
             }
             _ => {}
@@ -516,11 +496,10 @@ fn create_output_array(
 
 #[cfg(test)]
 mod tests {
+    use arrow_array::Int32Array;
+
     use super::*;
-    use crate::{
-        test::{build_table_i32, columns},
-        test_util::aggr_test_schema,
-    };
+    use crate::{test::columns, test_util::aggr_test_schema};
 
     #[test]
     fn physical_plan_config_no_projection() {
@@ -795,5 +774,28 @@ mod tests {
             output_ordering: vec![],
             infinite_source: false,
         }
+    }
+
+    /// returns record batch with 3 columns of i32 in memory
+    pub fn build_table_i32(
+        a: (&str, &Vec<i32>),
+        b: (&str, &Vec<i32>),
+        c: (&str, &Vec<i32>),
+    ) -> RecordBatch {
+        let schema = Schema::new(vec![
+            Field::new(a.0, DataType::Int32, false),
+            Field::new(b.0, DataType::Int32, false),
+            Field::new(c.0, DataType::Int32, false),
+        ]);
+
+        RecordBatch::try_new(
+            Arc::new(schema),
+            vec![
+                Arc::new(Int32Array::from(a.1.clone())),
+                Arc::new(Int32Array::from(b.1.clone())),
+                Arc::new(Int32Array::from(c.1.clone())),
+            ],
+        )
+        .unwrap()
     }
 }

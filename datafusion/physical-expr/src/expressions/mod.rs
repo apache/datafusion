@@ -116,7 +116,7 @@ pub(crate) mod tests {
     #[macro_export]
     macro_rules! generic_test_op {
         ($ARRAY:expr, $DATATYPE:expr, $OP:ident, $EXPECTED:expr) => {
-            generic_test_op!($ARRAY, $DATATYPE, $OP, $EXPECTED, $EXPECTED.get_datatype())
+            generic_test_op!($ARRAY, $DATATYPE, $OP, $EXPECTED, $EXPECTED.data_type())
         };
         ($ARRAY:expr, $DATATYPE:expr, $OP:ident, $EXPECTED:expr, $EXPECTED_DATATYPE:expr) => {{
             let schema = Schema::new(vec![Field::new("a", $DATATYPE, true)]);
@@ -212,7 +212,7 @@ pub(crate) mod tests {
                 $DATATYPE2,
                 $OP,
                 $EXPECTED,
-                $EXPECTED.get_datatype()
+                $EXPECTED.data_type()
             )
         };
         ($ARRAY1:expr, $ARRAY2:expr, $DATATYPE1:expr, $DATATYPE2:expr, $OP:ident, $EXPECTED:expr, $EXPECTED_DATATYPE:expr) => {{

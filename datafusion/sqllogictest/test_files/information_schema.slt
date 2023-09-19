@@ -150,6 +150,7 @@ datafusion.execution.aggregate.scalar_update_factor 10
 datafusion.execution.batch_size 8192
 datafusion.execution.coalesce_batches true
 datafusion.execution.collect_statistics false
+datafusion.execution.parquet.allow_single_file_parallelism false
 datafusion.execution.parquet.bloom_filter_enabled false
 datafusion.execution.parquet.bloom_filter_fpp NULL
 datafusion.execution.parquet.bloom_filter_ndv NULL
@@ -183,6 +184,7 @@ datafusion.explain.show_statistics false
 datafusion.optimizer.allow_symmetric_joins_without_pruning true
 datafusion.optimizer.bounded_order_preserving_variants false
 datafusion.optimizer.enable_round_robin_repartition true
+datafusion.optimizer.enable_topk_aggregation true
 datafusion.optimizer.filter_null_join_keys false
 datafusion.optimizer.hash_join_single_partition_threshold 1048576
 datafusion.optimizer.max_passes 3

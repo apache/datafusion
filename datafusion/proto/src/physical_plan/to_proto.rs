@@ -422,10 +422,16 @@ impl TryFrom<&PartitionedFile> for protobuf::PartitionedFile {
     type Error = DataFusionError;
 
     fn try_from(pf: &PartitionedFile) -> Result<Self, Self::Error> {
+        let last_modified = pf.object_meta.last_modified;
+        let last_modified_ns = last_modified.timestamp_nanos_opt().ok_or_else(|| {
+            DataFusionError::Plan(format!(
+                "Invalid timestamp on PartitionedFile::ObjectMeta: {last_modified}"
+            ))
+        })? as u64;
         Ok(protobuf::PartitionedFile {
             path: pf.object_meta.location.as_ref().to_owned(),
             size: pf.object_meta.size as u64,
-            last_modified_ns: pf.object_meta.last_modified.timestamp_nanos() as u64,
+            last_modified_ns,
             partition_values: pf
                 .partition_values
                 .iter()

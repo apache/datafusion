@@ -511,6 +511,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Right => Self::Right,
             ScalarFunction::Rpad => Self::Rpad,
             ScalarFunction::SplitPart => Self::SplitPart,
+            ScalarFunction::StringToArray => Self::StringToArray,
             ScalarFunction::StartsWith => Self::StartsWith,
             ScalarFunction::Strpos => Self::Strpos,
             ScalarFunction::Substr => Self::Substr,
@@ -902,7 +903,7 @@ pub fn parse_i32_to_aggregate_function(value: &i32) -> Result<AggregateFunction,
 fn validate_list_values(field: &Field, values: &[ScalarValue]) -> Result<(), Error> {
     for value in values {
         let field_type = field.data_type();
-        let value_type = value.get_datatype();
+        let value_type = value.data_type();
 
         if field_type != &value_type {
             return Err(proto_error(format!(
