@@ -71,9 +71,6 @@ use crate::physical_plan::{
     Statistics,
 };
 
-/// The number of files to read in parallel when inferring schema
-const SCHEMA_INFERENCE_CONCURRENCY: usize = 32;
-
 /// The Apache Parquet `FileFormat` implementation
 ///
 /// Note it is recommended these are instead configured on the [`ConfigOptions`]
@@ -177,7 +174,7 @@ impl FileFormat for ParquetFormat {
         let schemas: Vec<_> = futures::stream::iter(objects)
             .map(|object| fetch_schema(store.as_ref(), object, self.metadata_size_hint))
             .boxed() // Workaround https://github.com/rust-lang/rust/issues/64552
-            .buffered(SCHEMA_INFERENCE_CONCURRENCY)
+            .buffered(state.config_options().execution.meta_fetch_concurrency)
             .try_collect()
             .await?;
 

@@ -934,38 +934,44 @@ impl ListingTable {
         let file_list = stream::iter(file_list).flatten();
 
         // collect the statistics if required by the config
-        let files = file_list.then(|part_file| async {
-            let part_file = part_file?;
-            let mut statistics_result = Statistics::default();
-            if self.options.collect_stat {
-                let statistics_cache = self.collected_statistics.clone();
-                match statistics_cache.get_with_extra(
-                    &part_file.object_meta.location,
-                    &part_file.object_meta,
-                ) {
-                    Some(statistics) => statistics_result = statistics.as_ref().clone(),
-                    None => {
-                        let statistics = self
-                            .options
-                            .format
-                            .infer_stats(
-                                ctx,
-                                &store,
-                                self.file_schema.clone(),
+        let files = file_list
+            .map(|part_file| async {
+                let part_file = part_file?;
+                let mut statistics_result = Statistics::default();
+                if self.options.collect_stat {
+                    let statistics_cache = self.collected_statistics.clone();
+                    match statistics_cache.get_with_extra(
+                        &part_file.object_meta.location,
+                        &part_file.object_meta,
+                    ) {
+                        Some(statistics) => {
+                            statistics_result = statistics.as_ref().clone()
+                        }
+                        None => {
+                            let statistics = self
+                                .options
+                                .format
+                                .infer_stats(
+                                    ctx,
+                                    &store,
+                                    self.file_schema.clone(),
+                                    &part_file.object_meta,
+                                )
+                                .await?;
+                            statistics_cache.put_with_extra(
+                                &part_file.object_meta.location,
+                                statistics.clone().into(),
                                 &part_file.object_meta,
-                            )
-                            .await?;
-                        statistics_cache.put_with_extra(
-                            &part_file.object_meta.location,
-                            statistics.clone().into(),
-                            &part_file.object_meta,
-                        );
-                        statistics_result = statistics;
+                            );
+                            statistics_result = statistics;
+                        }
                     }
                 }
-            }
-            Ok((part_file, statistics_result)) as Result<(PartitionedFile, Statistics)>
-        });
+                Ok((part_file, statistics_result))
+                    as Result<(PartitionedFile, Statistics)>
+            })
+            .boxed()
+            .buffered(ctx.config_options().execution.meta_fetch_concurrency);
 
         let (files, statistics) =
             get_statistics_with_limit(files, self.schema(), limit).await?;
