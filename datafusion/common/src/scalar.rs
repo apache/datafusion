@@ -2683,35 +2683,6 @@ impl ScalarValue {
     }
 
     /// Only DataType::List is modified
-    /// Try to return values and field of List.
-    pub fn try_from_array_v4(array: &dyn Array, index: usize) -> Result<Self> {
-        // handle NULL value
-        if !array.is_valid(index) {
-            return array.data_type().try_into();
-        }
-
-        match array.data_type() {
-            DataType::List(nested_type) => {
-                let list_array = as_list_array(array)?;
-
-                if list_array.is_null(index) {
-                    return Ok(ScalarValue::ListArr(new_null_array(&DataType::Null, 0)));
-                }
-
-                let nested_array = list_array.value(index);
-                let scalar_vec = (0..nested_array.len())
-                    .map(|i| ScalarValue::try_from_array_v4(&nested_array, i))
-                    .collect::<Result<Vec<_>>>()?;
-
-                let arr =
-                    ScalarValue::list_to_array(&scalar_vec, nested_type.data_type());
-                Ok(ScalarValue::ListArr(arr))
-            }
-            _ => Self::try_from_array(array, index),
-        }
-    }
-
-    /// Only DataType::List is modified
     /// Converts a value in `array` at `index` into a ScalarValue
     pub fn try_from_array_v3(array: &dyn Array, index: usize) -> Result<Self> {
         // handle NULL value
