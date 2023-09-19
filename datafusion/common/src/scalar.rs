@@ -1533,8 +1533,12 @@ impl ScalarValue {
 
                 // Ensure we get listArr here
                 // vec [ i16arr, i16arr, i16arr, ... ] =
+                let list_array = ScalarValue::iter_to_array_list_v2(scalars.clone(), to_type)?;
+                // if scalars.len() > 1 {
                 // println!("scalars: {:?}", scalars);
-                let list_array = ScalarValue::iter_to_array_list_v2(scalars, to_type)?;
+                // println!("list_array: {:?}", list_array);
+
+                // }
                 Arc::new(list_array)
             }
             _ => {
@@ -2645,41 +2649,35 @@ impl ScalarValue {
         }
     }
 
-    pub fn try_from_array_v2(array: &dyn Array, index: usize) -> Result<Vec<Self>> {
-        match array.data_type() {
-            DataType::List(_) => {
-                let list_array = as_list_array(array)?;
-                match list_array.is_null(index) {
-                    true => Ok(vec![]),
-                    false => {
-                        let nested_array = list_array.value(index);
-
-                        let values =
-                            ScalarValue::process_array_to_scalar_vec(&nested_array)?;
-                        let values = values.into_iter().flatten().collect::<Vec<_>>();
-                        Ok(values)
-                    }
-                }
-            }
-            _ => {
-                let scalar = ScalarValue::try_from_array_v3(array, index)?;
-                // Assert not ScalarValue::List
-                if let ScalarValue::List(_, _) = scalar {
-                    _internal_err!("Unexpected ScalarValue::List")
-                } else {
-                    Ok(vec![scalar])
-                }
-            }
-        }
-    }
-
     pub fn process_array_to_scalar_vec(array: &dyn Array) -> Result<Vec<Vec<Self>>> {
         let mut scalars = vec![];
 
         for index in 0..array.len() {
-            let values = ScalarValue::try_from_array_v2(array, index)?;
-            scalars.push(values);
-            // scalars.extend(values);
+            match array.data_type() {
+                DataType::List(_) => {
+                    let list_array = as_list_array(array)?;
+                    match list_array.is_null(index) {
+                        true => scalars.push(vec![]),
+                        false => {
+                            let nested_array = list_array.value(index);
+    
+                            let values =
+                                ScalarValue::process_array_to_scalar_vec(&nested_array)?;
+                            let values = values.into_iter().flatten().collect::<Vec<_>>();
+                            scalars.push(values)
+                        }
+                    }
+                }
+                _ => {
+                    let scalar = ScalarValue::try_from_array_v3(array, index)?;
+                    // Assert not ScalarValue::List
+                    if let ScalarValue::List(_, _) = scalar {
+                        return _internal_err!("Unexpected ScalarValue::List")
+                    } else {
+                        scalars.push(vec![scalar])
+                    }
+                }
+            }
         }
         Ok(scalars)
     }

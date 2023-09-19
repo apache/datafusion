@@ -280,6 +280,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
             .collect::<Result<_>>()?;
 
         // let result = ScalarValue::iter_to_array(results);
+        // println!("results: {:?}", results);
         let result = ScalarValue::iter_to_array_v3(results);
 
         self.adjust_allocation(vec_size_pre, self.states.allocated_size());
