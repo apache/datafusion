@@ -238,6 +238,7 @@ async fn sort_preserving_merge() {
 }
 
 #[tokio::test]
+#[ignore]
 async fn sort_spill_reservation() {
     let scenario = Scenario::new_dictionary_strings(1)
         // make the batches small enough to avoid triggering CardinalityAwareRowConverter

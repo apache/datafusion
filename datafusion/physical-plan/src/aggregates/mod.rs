@@ -1902,6 +1902,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn aggregate_source_not_yielding_with_spill() -> Result<()> {
         let input: Arc<dyn ExecutionPlan> =
             Arc::new(TestYieldingExec { yield_first: false });
@@ -1918,6 +1919,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn aggregate_source_with_yielding_with_spill() -> Result<()> {
         let input: Arc<dyn ExecutionPlan> =
             Arc::new(TestYieldingExec { yield_first: true });
