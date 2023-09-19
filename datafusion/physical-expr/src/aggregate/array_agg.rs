@@ -118,7 +118,6 @@ impl ArrayAggAccumulator {
     }
 }
 
-// TODO: Remove ScalarValue::List in ArrayAggAccumulator
 impl Accumulator for ArrayAggAccumulator {
     // Append value like Int64Array(1,2,3)
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {

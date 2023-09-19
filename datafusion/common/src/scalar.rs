@@ -1236,6 +1236,7 @@ impl ScalarValue {
     }
 
     // Given multiple ListArr(arr), merge them into one ListArray(arr, arr, arr, ...)
+    // non list to list
     pub fn iter_to_array_v4(
         scalars: impl IntoIterator<Item = ScalarValue>,
     ) -> Result<ArrayRef> {
@@ -1321,7 +1322,6 @@ impl ScalarValue {
         }
     }
 
-    // TODO(jayzhan): Remove build_array_list_primitive
     // No ScalarValue::List
     pub fn iter_to_array_v3(
         scalars: impl IntoIterator<Item = ScalarValue>,
