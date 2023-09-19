@@ -395,15 +395,14 @@ impl<'a> ConstEvaluator<'a> {
                         a.len()
                     )
                 } else {
-                    if a.as_list_opt::<i32>().is_none() {
-                        // Non-ListArray
-                        let r = ScalarValue::try_from_array_v3(&a, 0)?;
-                        // println!("evaluate r: {:?}", r);
-                        Ok(r)
-                    } else {
-                        // ListArray
-                        // println!("evaluate a: {:?}", a);
+                    // ListArray or LargeListArray
+                    if a.as_list_opt::<i32>().is_some()
+                        || a.as_list_opt::<i64>().is_some()
+                    {
                         Ok(ScalarValue::ListArr(a))
+                    } else {
+                        // Non-ListArray
+                        ScalarValue::try_from_array_v3(&a, 0)
                     }
                 }
             }

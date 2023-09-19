@@ -44,7 +44,6 @@ use arrow::{
         DECIMAL128_MAX_PRECISION,
     },
 };
-use arrow_array::types::Decimal128Type;
 use arrow_array::{ArrowNativeTypeOp, Scalar};
 
 /// Represents a dynamically typed, nullable single value.
@@ -1533,7 +1532,8 @@ impl ScalarValue {
 
                 // Ensure we get listArr here
                 // vec [ i16arr, i16arr, i16arr, ... ] =
-                let list_array = ScalarValue::iter_to_array_list_v2(scalars.clone(), to_type)?;
+                let list_array =
+                    ScalarValue::iter_to_array_list_v2(scalars.clone(), to_type)?;
                 // if scalars.len() > 1 {
                 // println!("scalars: {:?}", scalars);
                 // println!("list_array: {:?}", list_array);
@@ -2660,7 +2660,7 @@ impl ScalarValue {
                         true => scalars.push(vec![]),
                         false => {
                             let nested_array = list_array.value(index);
-    
+
                             let values =
                                 ScalarValue::process_array_to_scalar_vec(&nested_array)?;
                             let values = values.into_iter().flatten().collect::<Vec<_>>();
@@ -2672,7 +2672,7 @@ impl ScalarValue {
                     let scalar = ScalarValue::try_from_array_v3(array, index)?;
                     // Assert not ScalarValue::List
                     if let ScalarValue::List(_, _) = scalar {
-                        return _internal_err!("Unexpected ScalarValue::List")
+                        return _internal_err!("Unexpected ScalarValue::List");
                     } else {
                         scalars.push(vec![scalar])
                     }
@@ -2692,7 +2692,6 @@ impl ScalarValue {
 
         match array.data_type() {
             DataType::List(_) => {
-                // unreachable!("ListArray should be handled in try_from_array_v2");
                 // Previous implementation considered nested version of list array.
                 // Not sure if it is necessary so it is not implemented, but leave a comment here.
 

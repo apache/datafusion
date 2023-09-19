@@ -42,7 +42,6 @@ use crate::{
     },
     Expr, ExprSchemable, TableSource,
 };
-use arrow::array::new_null_array;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::plan_err;
 use datafusion_common::UnnestOptions;
