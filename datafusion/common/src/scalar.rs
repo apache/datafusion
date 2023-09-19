@@ -2321,7 +2321,7 @@ impl ScalarValue {
             &DataType::LargeUtf8 => {
                 build_list!(LargeStringBuilder, LargeUtf8, values, size)
             }
-            DataType::List(field) => ScalarValue::iter_to_array_list_v3(
+            DataType::List(_) | DataType::Struct(_) => ScalarValue::iter_to_array_list_v3(
                 values.clone(),
                 data_type,
                 DataType::List(Arc::new(Field::new("item", data_type.to_owned(), true))),
@@ -2344,39 +2344,6 @@ impl ScalarValue {
                 Self::wrap_into_list_array(Arc::new(arr))
             }
 
-            DataType::Struct(fields) => {
-                let arr = ScalarValue::iter_to_array_list_v3(
-                    values.clone(),
-                    data_type,
-                    DataType::List(Arc::new(Field::new(
-                        "item",
-                        data_type.to_owned(),
-                        true,
-                    ))),
-                );
-                arr.unwrap()
-                // println!("arr: {:?}", arr);
-
-                // let mut vals = vec![];
-                // let mut field_vec = vec![];
-                // if let Some(values) = values {
-                //     for value in values.iter() {
-                //         if let ScalarValue::Struct(v, f) = value {
-                //             vals.push(v.to_owned());
-                //             field_vec.push(f.to_owned());
-                //         }
-                //     }
-                // }
-
-                // // println!("fields: {:?}", fields);
-                // // println!("vals: {:?}", vals);
-                // // println!("field_vec: {:?}", field_vec);
-
-                // let e = ScalarValue::new_list(values.clone(), data_type.clone());
-                // let arr = e.to_array();
-                // println!("(list to array when struct) arr: {:?}", arr);
-                // return arr;
-            }
             DataType::Null => {
                 let values = values.as_ref().unwrap();
                 let arr = new_null_array(&DataType::Null, values.len());
