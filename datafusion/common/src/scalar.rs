@@ -2266,53 +2266,28 @@ impl ScalarValue {
 
     // Old ScalarValue::List to array of size 1
     pub fn list_to_array(values: &[ScalarValue], data_type: &DataType) -> ArrayRef {
-        let size = 1;
-
-        // TODO: Build Array if Values is None
-        // Int64 => Int64Array[]
-        // List => ListArray
-
-        // let na = new_null_array(
-        //     &DataType::List(Arc::new(Field::new(
-        //         "item",
-        //         DataType::Int64,
-        //         true,
-        //     ))),
-        //     1);
-        //     println!("na: {:?}", na);
-        // ListArray[null]
-
-        let values = &Some(values.to_vec());
-
-        // TODO: Fix build_list too!!
         Arc::new(match data_type {
-            DataType::Boolean => build_list!(BooleanBuilder, Boolean, values, size),
-            DataType::Int8 => build_list!(Int8Builder, Int8, values, size),
-            DataType::Int16 => build_list!(Int16Builder, Int16, values, size),
-            DataType::Int32 => build_list!(Int32Builder, Int32, values, size),
-            DataType::Int64 => build_list!(Int64Builder, Int64, values, size),
-            DataType::UInt8 => build_list!(UInt8Builder, UInt8, values, size),
-            DataType::UInt16 => build_list!(UInt16Builder, UInt16, values, size),
-            DataType::UInt32 => build_list!(UInt32Builder, UInt32, values, size),
-            DataType::UInt64 => build_list!(UInt64Builder, UInt64, values, size),
-            DataType::Utf8 => {
-                if values.is_some() {
-                    build_list!(StringBuilder, Utf8, values, size)
-                } else {
-                    build_list!(StringBuilder, Utf8, values, size)
-                }
+            DataType::Boolean => build_values_list!(BooleanBuilder, Boolean, values, 1),
+            DataType::Int8 => build_values_list!(Int8Builder, Int8, values, 1),
+            DataType::Int16 => build_values_list!(Int16Builder, Int16, values, 1),
+            DataType::Int32 => build_values_list!(Int32Builder, Int32, values, 1),
+            DataType::Int64 => build_values_list!(Int64Builder, Int64, values, 1),
+            DataType::UInt8 => build_values_list!(UInt8Builder, UInt8, values, 1),
+            DataType::UInt16 => build_values_list!(UInt16Builder, UInt16, values, 1),
+            DataType::UInt32 => build_values_list!(UInt32Builder, UInt32, values, 1),
+            DataType::UInt64 => build_values_list!(UInt64Builder, UInt64, values, 1),
+            DataType::Utf8 => build_values_list!(StringBuilder, Utf8, values, 1),
+            DataType::LargeUtf8 => {
+                build_values_list!(LargeStringBuilder, LargeUtf8, values, 1)
             }
-            DataType::Float32 => build_list!(Float32Builder, Float32, values, size),
-            DataType::Float64 => {
-                build_list!(Float64Builder, Float64, values, size)
-            }
+            DataType::Float32 => build_values_list!(Float32Builder, Float32, values, 1),
+            DataType::Float64 => build_values_list!(Float64Builder, Float64, values, 1),
             DataType::Timestamp(unit, tz) => {
-                build_timestamp_list!(unit.clone(), tz.clone(), values, size)
-            }
-            &DataType::LargeUtf8 => {
-                build_list!(LargeStringBuilder, LargeUtf8, values, size)
+                let values = Some(values);
+                build_timestamp_list!(unit.clone(), tz.clone(), values, 1)
             }
             DataType::List(_) | DataType::Struct(_) => {
+                let values = &Some(values.to_vec());
                 ScalarValue::iter_to_array_list_v3(
                     values.clone(),
                     data_type,
@@ -2327,11 +2302,9 @@ impl ScalarValue {
 
             DataType::Decimal128(precision, scale) => {
                 let mut vals = vec![];
-                if let Some(values) = values {
-                    for value in values.iter() {
-                        if let ScalarValue::Decimal128(v, _, _) = value {
-                            vals.push(v.to_owned())
-                        }
+                for value in values.iter() {
+                    if let ScalarValue::Decimal128(v, _, _) = value {
+                        vals.push(v.to_owned())
                     }
                 }
 
@@ -2342,7 +2315,6 @@ impl ScalarValue {
             }
 
             DataType::Null => {
-                let values = values.as_ref().unwrap();
                 let arr = new_null_array(&DataType::Null, values.len());
                 Self::wrap_into_list_array(arr)
             }
