@@ -2526,47 +2526,6 @@ impl ScalarValue {
                 let arrays = std::iter::repeat(arr).take(size).collect::<Vec<_>>();
                 let arr = arrow::compute::concat(arrays.as_slice()).unwrap();
                 arr
-
-                // match arr.data_type() {
-                //     DataType::Int64 => {
-                //         // let a = arr.as_primitive::<Int64Type>() as &dyn Array;
-                //         let a = arr as &dyn Array;
-                //         let arrays = std::iter::repeat(a).take(size).collect::<Vec<_>>();
-                //         let slic = arrays.as_slice();
-                //         let arr = arrow::compute::concat(slic).unwrap();
-                //         return arr;
-                //     }
-                //     DataType::List(_) => {
-                //         let a = arr as &dyn Array;
-                //         let arrays = std::iter::repeat(a).take(size).collect::<Vec<_>>();
-                //         let slic = arrays.as_slice();
-                //         let arr = arrow::compute::concat(slic).unwrap();
-                //         return arr;
-
-                //     }
-                //     _ => panic!("datatpe: {:?}", arr.data_type()),
-                // }
-
-                // merge arr to one.
-                // match arr.data_type() {
-                //     DataType::Int64 => {
-
-                //     }
-                //     _ => {
-                //         let arr = ScalarValue::iter_to_array_list(
-                //             repeat(self.clone()).take(size),
-                //             &DataType::List(Arc::new(Field::new(
-                //                 "item",
-                //                 arr.data_type().clone(),
-                //                 true,
-                //             ))),
-                //         )
-                //         .unwrap();
-
-                //         arr
-
-                //     }
-                // }
             }
             ScalarValue::Date32(e) => {
                 build_array_from_option!(Date32, Date32Array, e, size)
@@ -2760,56 +2719,6 @@ impl ScalarValue {
             // scalars.extend(values);
         }
         Ok(scalars)
-    }
-
-    /// Derived from V4, but return None if null.
-    pub fn try_from_array_v5(array: &dyn Array, index: usize) -> Result<Option<Self>> {
-        // handle NULL value
-        if !array.is_valid(index) {
-            let arr: Result<Self> = array.data_type().try_into();
-            return Ok(Some(arr?));
-        }
-
-        match array.data_type() {
-            DataType::List(nested_type) => {
-                let list_array = as_list_array(array)?;
-                match list_array.is_null(index) {
-                    true => Ok(None),
-                    false => {
-                        let nested_array = list_array.value(index);
-
-                        let mut scalar_vec = vec![];
-                        for i in 0..nested_array.len() {
-                            let scalar =
-                                ScalarValue::try_from_array_v5(&nested_array, i)?;
-                            if let Some(scalar) = scalar {
-                                scalar_vec.push(scalar);
-                            }
-                        }
-
-                        if scalar_vec.is_empty() {
-                            // None
-                            Ok(None)
-                        } else {
-                            let arr = ScalarValue::list_to_array(
-                                &Some(scalar_vec),
-                                nested_type.data_type(),
-                            );
-                            Ok(Some(ScalarValue::ListArr(arr)))
-                        }
-                    }
-                }
-                // if value.is_none() {
-                //     return Ok(None)
-                // }
-                // let arr = ScalarValue::list_to_array(&value, nested_type.data_type());
-                // Ok(Some(ScalarValue::ListArr(arr)))
-            }
-            _ => {
-                let arr = Self::try_from_array(array, index);
-                Ok(Some(arr?))
-            }
-        }
     }
 
     /// Only DataType::List is modified
