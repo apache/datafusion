@@ -2485,6 +2485,52 @@ NULL
 false
 false
 
+query ?
+SELECT string_to_array('abcxxxdef', 'xxx')
+----
+[abc, def]
+
+query ?
+SELECT string_to_array('abc', '')
+----
+[abc]
+
+query ?
+SELECT string_to_array('abc', NULL)
+----
+[a, b, c]
+
+query ?
+SELECT string_to_array('abc def', ' ', 'def')
+----
+[abc, ]
+
+query ?
+select string_to_array(e, ',') from values;
+----
+[Lorem]
+[ipsum]
+[dolor]
+[sit]
+[amet]
+[, ]
+[consectetur]
+[adipiscing]
+NULL
+
+query ?
+select string_to_list(e, 'm') from values;
+----
+[Lore, ]
+[ipsu, ]
+[dolor]
+[sit]
+[a, et]
+[,]
+[consectetur]
+[adipiscing]
+NULL
+
 ### Delete tables
 
 statement ok

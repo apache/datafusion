@@ -63,6 +63,9 @@ pub use table_reference::{OwnedTableReference, ResolvedTableReference, TableRefe
 pub use unnest::UnnestOptions;
 pub use utils::project_schema;
 
+/// Reexport arrow crate
+pub use arrow;
+
 /// Downcast an Arrow Array to a concrete type, return an `DataFusionError::Internal` if the cast is
 /// not possible. In normal usage of DataFusion the downcast should always succeed.
 ///

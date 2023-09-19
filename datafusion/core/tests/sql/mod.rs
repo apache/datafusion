@@ -83,6 +83,7 @@ pub mod arrow_files;
 pub mod create_drop;
 pub mod csv_files;
 pub mod describe;
+pub mod displayable;
 pub mod explain_analyze;
 pub mod expr;
 pub mod group_by;
@@ -634,7 +635,7 @@ pub fn make_partition(sz: i32) -> RecordBatch {
 
 /// Specialised String representation
 fn col_str(column: &ArrayRef, row_index: usize) -> String {
-    if column.is_null(row_index) {
+    if column.data_type() == &DataType::Null || column.is_null(row_index) {
         return "NULL".to_string();
     }
 
