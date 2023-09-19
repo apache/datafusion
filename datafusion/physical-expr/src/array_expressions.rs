@@ -418,10 +418,12 @@ fn array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
     match data_type {
         // empty array
         // TODO: remoe new lsit
-        None => Ok(ColumnarValue::Scalar(ScalarValue::new_list(
-            Some(vec![]),
-            DataType::Null,
-        ))),
+        None => {
+
+            let arr = ScalarValue::list_to_array(&Some(vec![]), &DataType::Null);
+
+            Ok(ColumnarValue::Scalar(ScalarValue::ListArr(arr)))
+         }
         // all nulls, set default data type as int32
         Some(DataType::Null) => {
             let nulls = arrays.len();
