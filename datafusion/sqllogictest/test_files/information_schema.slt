@@ -131,6 +131,12 @@ SET datafusion.execution.target_partitions=7
 statement ok
 SET datafusion.execution.planning_concurrency=13
 
+# meta_fetch_concurrency defaults to num_cores, so set
+# to a known value that is unlikely to be
+# the real number of cores on a system
+statement ok
+SET datafusion.execution.meta_fetch_concurrency=13
+
 # pin the version string for test
 statement ok
 SET datafusion.execution.parquet.created_by=datafusion
@@ -150,6 +156,7 @@ datafusion.execution.aggregate.scalar_update_factor 10
 datafusion.execution.batch_size 8192
 datafusion.execution.coalesce_batches true
 datafusion.execution.collect_statistics false
+datafusion.execution.meta_fetch_concurrency 13
 datafusion.execution.parquet.allow_single_file_parallelism false
 datafusion.execution.parquet.bloom_filter_enabled false
 datafusion.execution.parquet.bloom_filter_fpp NULL

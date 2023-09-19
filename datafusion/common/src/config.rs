@@ -695,6 +695,7 @@ impl ConfigOptions {
         // Normalize for display
         s.execution.target_partitions = 0;
         s.execution.planning_concurrency = 0;
+        s.execution.meta_fetch_concurrency = 0;
 
         let mut docs = "| key | default | description |\n".to_string();
         docs += "|-----|---------|-------------|\n";
