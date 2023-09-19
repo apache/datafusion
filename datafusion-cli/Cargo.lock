@@ -1124,20 +1124,11 @@ version = "31.0.0"
 dependencies = [
  "arrow",
  "arrow-array",
- "async-compression",
- "bytes",
- "bzip2",
  "chrono",
- "flate2",
- "futures",
  "num_cpus",
  "object_store",
  "parquet",
  "sqlparser",
- "tokio",
- "tokio-util",
- "xz2",
- "zstd",
 ]
 
 [[package]]

@@ -24,6 +24,7 @@ pub const DEFAULT_SCHEMA_INFER_MAX_RECORD: usize = 1000;
 pub mod arrow;
 pub mod avro;
 pub mod csv;
+pub mod file_compression_type;
 pub mod json;
 pub mod options;
 pub mod parquet;
