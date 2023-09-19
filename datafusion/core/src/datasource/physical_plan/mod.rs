@@ -577,7 +577,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn schema_adapter_map_schema_with_projection() {
         let table_schema = Arc::new(Schema::new(vec![
             Field::new("c0", DataType::Utf8, true),

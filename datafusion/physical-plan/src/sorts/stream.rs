@@ -24,12 +24,14 @@ use arrow::array::Array;
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
 use arrow::row::{RowConverter, SortField};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::Result;
 use datafusion_execution::memory_pool::MemoryReservation;
 use futures::stream::{Fuse, StreamExt};
 use parking_lot::Mutex;
 use std::collections::{HashMap, VecDeque};
 use std::marker::PhantomData;
+use std::ops::Range;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 
@@ -39,14 +41,22 @@ use super::builder::YieldedSortOrder;
 /// A fallible [`PartitionedStream`] of record batches.
 ///
 /// Each [`Cursor`] and [`RecordBatch`] represents a single record batch.
-pub(crate) type BatchCursorStream<C> =
-    Box<dyn PartitionedStream<Output = Result<(C, RecordBatch)>>>;
+pub(crate) trait BatchCursorStream<C: Cursor>:
+    PartitionedStream + Send + 'static
+{
+    /// Acquire ownership over a subset of the partitioned streams.
+    ///
+    /// Like `Vec::take()`, this removes the indexed positions.
+    fn take_partitions(&mut self, range: Range<usize>) -> Box<Self>
+    where
+        Self: Sized;
+}
 
 /// A [`PartitionedStream`] representing partial record batches (a.k.a. [`BatchCursor`]).
 ///
 /// Each merge node (a `SortPreservingMergeStream` loser tree) will consume a [`CursorStream`].
 pub(crate) type CursorStream<C> =
-    Box<dyn PartitionedStream<Output = Result<BatchCursor<C>>>>;
+    Box<dyn PartitionedStream<Output = Result<BatchCursor<C>>> + Send>;
 
 /// A fallible stream of yielded [`SortOrder`]s is a [`MergeStream`].
 ///
@@ -56,7 +66,7 @@ pub(crate) type CursorStream<C> =
 /// [`YieldedCursorStream`] then converts an output [`MergeStream`]
 /// into an input [`CursorStream`] for the next merge.
 pub(crate) type MergeStream<C> =
-    std::pin::Pin<Box<dyn Send + futures::Stream<Item = Result<YieldedSortOrder<C>>>>>;
+    std::pin::Pin<Box<dyn futures::Stream<Item = Result<YieldedSortOrder<C>>> + Send>>;
 
 /// A [`Stream`](futures::Stream) that has multiple partitions that can
 /// be polled separately but not concurrently
@@ -109,7 +119,7 @@ impl FusedStreams {
 #[derive(Debug)]
 pub struct RowCursorStream {
     /// Converter to convert output of physical expressions
-    converter: RowConverter,
+    converter: Arc<RowConverter>,
     /// The physical expressions to sort by
     column_expressions: Vec<Arc<dyn PhysicalExpr>>,
     /// Input streams
@@ -134,13 +144,22 @@ impl RowCursorStream {
             .collect::<Result<Vec<_>>>()?;
 
         let streams = streams.into_iter().map(|s| s.fuse()).collect();
-        let converter = RowConverter::new(sort_fields)?;
+        let converter = Arc::new(RowConverter::new(sort_fields)?);
         Ok(Self {
             converter,
             reservation,
             column_expressions: expressions.iter().map(|x| x.expr.clone()).collect(),
             streams: FusedStreams(streams),
         })
+    }
+
+    fn new_from_streams(&self, streams: FusedStreams) -> Self {
+        Self {
+            converter: self.converter.clone(),
+            column_expressions: self.column_expressions.clone(),
+            reservation: self.reservation.new_empty(),
+            streams,
+        }
     }
 
     fn convert_batch(&mut self, batch: &RecordBatch) -> Result<RowCursor> {
@@ -181,6 +200,13 @@ impl PartitionedStream for RowCursorStream {
     }
 }
 
+impl<C: Cursor> BatchCursorStream<C> for RowCursorStream {
+    fn take_partitions(&mut self, range: Range<usize>) -> Box<Self> {
+        let streams_slice = self.streams.0.drain(range).collect::<Vec<_>>();
+        Box::new(self.new_from_streams(FusedStreams(streams_slice)))
+    }
+}
+
 /// Specialized stream for sorts on single primitive columns
 pub struct FieldCursorStream<T: FieldArray> {
     /// The physical expressions to sort by
@@ -205,6 +231,14 @@ impl<T: FieldArray> FieldCursorStream<T> {
             sort,
             streams: FusedStreams(streams),
             phantom: Default::default(),
+        }
+    }
+
+    fn new_from_streams(&self, streams: FusedStreams) -> Self {
+        Self {
+            sort: self.sort.clone(),
+            phantom: self.phantom,
+            streams,
         }
     }
 
@@ -237,101 +271,40 @@ impl<T: FieldArray> PartitionedStream for FieldCursorStream<T> {
     }
 }
 
-/// A wrapper around [`CursorStream`] that provides polling of a subset of the partitioned streams.
+impl<T: FieldArray, C: Cursor> BatchCursorStream<C> for FieldCursorStream<T> {
+    fn take_partitions(&mut self, range: Range<usize>) -> Box<Self> {
+        let streams_slice = self.streams.0.drain(range).collect::<Vec<_>>();
+        Box::new(self.new_from_streams(FusedStreams(streams_slice)))
+    }
+}
+
+/// A wrapper around [`CursorStream`] that collects the [`RecordBatch`] per poll,
+/// and only passes along the [`BatchCursor`].
 ///
 /// This is used in the leaf nodes of the cascading merge tree.
-/// To have the same [`CursorStream`] (with the same RowConverter)
-/// be separately polled by multiple leaf nodes.
-pub struct OffsetCursorStream<C: Cursor> {
-    // Input streams. [`BatchTrackingStream`] is a [`CursorStream`].
-    streams: Arc<Mutex<BatchTrackingStream<C>>>,
-    offset: usize,
-    limit: usize,
+pub(crate) struct BatchTrackerStream<
+    C: Cursor,
+    S: BatchCursorStream<C, Output = Result<(C, RecordBatch)>>,
+> {
+    // Partitioned Input stream.
+    streams: Box<S>,
+    record_batch_holder: Arc<BatchTracker>,
 }
 
-impl<C: Cursor> OffsetCursorStream<C> {
-    pub fn new(
-        streams: Arc<Mutex<BatchTrackingStream<C>>>,
-        offset: usize,
-        limit: usize,
-    ) -> Self {
+impl<C: Cursor, S: BatchCursorStream<C, Output = Result<(C, RecordBatch)>>>
+    BatchTrackerStream<C, S>
+{
+    pub fn new(streams: Box<S>, record_batch_holder: Arc<BatchTracker>) -> Self {
         Self {
             streams,
-            offset,
-            limit,
+            record_batch_holder,
         }
     }
 }
 
-impl<C: Cursor> PartitionedStream for OffsetCursorStream<C> {
-    type Output = Result<BatchCursor<C>>;
-
-    fn partitions(&self) -> usize {
-        self.limit - self.offset
-    }
-
-    fn poll_next(
-        &mut self,
-        cx: &mut Context<'_>,
-        stream_idx: usize,
-    ) -> Poll<Option<Self::Output>> {
-        let stream_abs_idx = stream_idx + self.offset;
-        if stream_abs_idx >= self.limit {
-            return Poll::Ready(Some(Err(DataFusionError::Internal(format!(
-                "Invalid stream index {} for offset {} and limit {}",
-                stream_idx, self.offset, self.limit
-            )))));
-        }
-        Poll::Ready(ready!(self.streams.lock().poll_next(cx, stream_abs_idx)))
-    }
-}
-
-impl<C: Cursor> std::fmt::Debug for OffsetCursorStream<C> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("OffsetCursorStream").finish()
-    }
-}
-
-/// Converts a [`BatchCursorStream`] into a [`CursorStream`].
-///
-/// While storing the record batches outside of the cascading merge tree.
-/// Should be used with a Mutex.
-pub struct BatchTrackingStream<C: Cursor> {
-    /// Monotonically increasing batch id
-    monotonic_counter: u64,
-    /// Write once, read many [`RecordBatch`]s
-    batches: HashMap<BatchId, Arc<RecordBatch>, RandomState>,
-    /// Input streams yielding [`Cursor`]s and [`RecordBatch`]es
-    streams: BatchCursorStream<C>,
-    /// Accounts for memory used by buffered batches
-    reservation: MemoryReservation,
-}
-
-impl<C: Cursor> BatchTrackingStream<C> {
-    pub fn new(streams: BatchCursorStream<C>, reservation: MemoryReservation) -> Self {
-        Self {
-            monotonic_counter: 0,
-            batches: HashMap::with_hasher(RandomState::new()),
-            streams,
-            reservation,
-        }
-    }
-
-    pub fn get_batches(&self, batch_ids: &[BatchId]) -> Vec<Arc<RecordBatch>> {
-        batch_ids
-            .iter()
-            .map(|id| self.batches[id].clone())
-            .collect()
-    }
-
-    pub fn remove_batches(&mut self, batch_ids: &[BatchId]) {
-        for id in batch_ids {
-            self.batches.remove(id);
-        }
-    }
-}
-
-impl<C: Cursor> PartitionedStream for BatchTrackingStream<C> {
+impl<C: Cursor + Sync, S: BatchCursorStream<C, Output = Result<(C, RecordBatch)>>>
+    PartitionedStream for BatchTrackerStream<C, S>
+{
     type Output = Result<BatchCursor<C>>;
 
     fn partitions(&self) -> usize {
@@ -345,21 +318,68 @@ impl<C: Cursor> PartitionedStream for BatchTrackingStream<C> {
     ) -> Poll<Option<Self::Output>> {
         Poll::Ready(ready!(self.streams.poll_next(cx, stream_idx)).map(|r| {
             r.and_then(|(cursor, batch)| {
-                self.reservation.try_grow(batch.get_array_memory_size())?;
-                let batch_id = self.monotonic_counter;
-                self.monotonic_counter += 1;
-                self.batches.insert(batch_id, Arc::new(batch));
+                let batch_id = self.record_batch_holder.add_batch(batch)?;
                 Ok(BatchCursor::new(batch_id, cursor))
             })
         }))
     }
 }
 
-impl<C: Cursor> std::fmt::Debug for BatchTrackingStream<C> {
+impl<C: Cursor, S: BatchCursorStream<C, Output = Result<(C, RecordBatch)>>>
+    std::fmt::Debug for BatchTrackerStream<C, S>
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("BatchTrackingStream")
-            .field("num_partitions", &self.partitions())
-            .finish()
+        f.debug_struct("OffsetCursorStream").finish()
+    }
+}
+
+/// Converts a [`BatchCursorStream`] into a [`CursorStream`].
+///
+/// While storing the record batches outside of the cascading merge tree.
+/// Should be used with a Mutex.
+pub struct BatchTracker {
+    /// Monotonically increasing batch id
+    monotonic_counter: AtomicU64,
+    /// Write once, read many [`RecordBatch`]s
+    batches: Mutex<HashMap<BatchId, Arc<RecordBatch>, RandomState>>,
+    /// Accounts for memory used by buffered batches
+    reservation: Mutex<MemoryReservation>,
+}
+
+impl BatchTracker {
+    pub fn new(reservation: MemoryReservation) -> Self {
+        Self {
+            monotonic_counter: AtomicU64::new(0),
+            batches: Mutex::new(HashMap::with_hasher(RandomState::new())),
+            reservation: Mutex::new(reservation),
+        }
+    }
+
+    pub fn add_batch(&self, batch: RecordBatch) -> Result<BatchId> {
+        self.reservation
+            .lock()
+            .try_grow(batch.get_array_memory_size())?;
+        let batch_id = self.monotonic_counter.fetch_add(1, Ordering::Relaxed);
+        self.batches.lock().insert(batch_id, Arc::new(batch));
+        Ok(batch_id)
+    }
+
+    pub fn get_batches(&self, batch_ids: &[BatchId]) -> Vec<Arc<RecordBatch>> {
+        let batches = self.batches.lock();
+        batch_ids.iter().map(|id| batches[id].clone()).collect()
+    }
+
+    pub fn remove_batches(&self, batch_ids: &[BatchId]) {
+        let mut batches = self.batches.lock();
+        for id in batch_ids {
+            batches.remove(id);
+        }
+    }
+}
+
+impl std::fmt::Debug for BatchTracker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BatchTracker").finish()
     }
 }
 

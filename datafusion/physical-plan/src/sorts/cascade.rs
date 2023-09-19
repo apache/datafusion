@@ -20,8 +20,7 @@ use crate::sorts::builder::SortOrder;
 use crate::sorts::cursor::Cursor;
 use crate::sorts::merge::SortPreservingMergeStream;
 use crate::sorts::stream::{
-    BatchCursorStream, BatchTrackingStream, MergeStream, OffsetCursorStream,
-    YieldedCursorStream,
+    BatchCursorStream, BatchTracker, BatchTrackerStream, MergeStream, YieldedCursorStream,
 };
 use crate::stream::ReceiverStream;
 use crate::RecordBatchStream;
@@ -38,6 +37,8 @@ use std::collections::{HashMap, VecDeque};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+
+static MAX_STREAMS_PER_MERGE: usize = 10;
 
 /// Sort preserving cascade stream
 ///
@@ -81,10 +82,14 @@ use std::task::{Context, Poll};
 /// The cascade is built using a series of streams, each with a different purpose:
 ///   * Streams leading into the leaf nodes:
 ///      1. [`BatchCursorStream`] yields the initial cursors and batches. (e.g. a RowCursorStream)
-///      2. [`BatchTrackingStream`] collects the batches, to avoid passing those around. Yields a [`CursorStream`](super::stream::CursorStream).
-///      3. This initial CursorStream is for a number of partitions (e.g. 100).
-///      4. The initial single CursorStream is shared across multiple leaf nodes, using [`OffsetCursorStream`].
-///      5. The total fan-in is always limited to 10. E.g. each leaf node will pull from a dedicated 10 (out of 100) partitions.
+///         * This initial CursorStream is for a number of partitions (e.g. 100).
+///         * only a single BatchCursorStream.
+///      2. [`BatchCursorStream::take_partitions()`] allows us to take a subset of the partitioned streams.
+///         * This enables parallelism of [`BatchCursorStream`] with mutable access (for polling), without locking.
+///         * The total fan-in is always limited to 10. E.g. each leaf node will pull from a dedicated 10 (out of 100) partitions.
+///      3. [`BatchTrackerStream`] is used to collect the record batches from the leaf nodes.
+///         * contains a single, shared using [`BatchTracker`].
+///         * polling of streams is non-blocking.
 ///
 ///   * Streams between merge nodes:
 ///      1. a single [`MergeStream`] is yielded per node.
@@ -106,12 +111,12 @@ pub(crate) struct SortPreservingCascadeStream<C: Cursor> {
 
     /// Batches are collected on first yield from the RowCursorStream
     /// Subsequent merges in cascade all refer to the [`BatchId`]s
-    record_batch_collector: Arc<parking_lot::Mutex<BatchTrackingStream<C>>>,
+    record_batch_collector: Arc<BatchTracker>,
 }
 
 impl<C: Cursor + Unpin + Send + 'static> SortPreservingCascadeStream<C> {
-    pub(crate) fn new(
-        streams: BatchCursorStream<C>,
+    pub(crate) fn new<S: BatchCursorStream<C, Output = Result<(C, RecordBatch)>>>(
+        mut streams: S,
         schema: SchemaRef,
         metrics: BaselineMetrics,
         batch_size: usize,
@@ -120,23 +125,21 @@ impl<C: Cursor + Unpin + Send + 'static> SortPreservingCascadeStream<C> {
     ) -> Self {
         let stream_count = streams.partitions();
 
-        let streams = Arc::new(parking_lot::Mutex::new(BatchTrackingStream::new(
-            streams,
-            reservation.new_empty(),
-        )));
+        let batch_tracker = Arc::new(BatchTracker::new(reservation.new_empty()));
 
-        let max_streams_per_merge = 10;
+        let max_streams_per_merge = MAX_STREAMS_PER_MERGE;
         let mut divided_streams: VecDeque<MergeStream<C>> =
             VecDeque::with_capacity(stream_count / max_streams_per_merge + 1);
 
         // build leaves
-        for stream_offset in (0..stream_count).step_by(max_streams_per_merge) {
-            let limit =
-                std::cmp::min(stream_offset + max_streams_per_merge, stream_count);
+        for stream_idx in (0..stream_count).step_by(max_streams_per_merge) {
+            let limit = std::cmp::min(max_streams_per_merge, stream_count - stream_idx);
 
-            // OffsetCursorStream enables the ability to share the same RowCursorStream across multiple leafnode merges.
-            let streams =
-                OffsetCursorStream::new(Arc::clone(&streams), stream_offset, limit);
+            // divide the BatchCursorStream across multiple leafnode merges.
+            let streams = BatchTrackerStream::new(
+                streams.take_partitions(0..limit),
+                batch_tracker.clone(),
+            );
 
             divided_streams.push_back(spawn_buffered_merge(
                 Box::pin(SortPreservingMergeStream::new(
@@ -185,7 +188,7 @@ impl<C: Cursor + Unpin + Send + 'static> SortPreservingCascadeStream<C> {
                 .expect("must have a root merge stream"),
             schema,
             metrics,
-            record_batch_collector: streams,
+            record_batch_collector: batch_tracker,
         }
     }
 
@@ -212,9 +215,9 @@ impl<C: Cursor + Unpin + Send + 'static> SortPreservingCascadeStream<C> {
             batches_seen.insert(*batch_id, (batch_idx, *row_idx + offset.0 + 1));
         }
 
-        let batch_collecter = self.record_batch_collector.lock();
-        let batches = batch_collecter.get_batches(batches_needed.as_slice());
-        drop(batch_collecter);
+        let batches = self
+            .record_batch_collector
+            .get_batches(batches_needed.as_slice());
 
         // remove record_batches (from the batch tracker) that are fully yielded
         let batches_to_remove = batches
@@ -240,9 +243,8 @@ impl<C: Cursor + Unpin + Send + 'static> SortPreservingCascadeStream<C> {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let mut batch_collecter = self.record_batch_collector.lock();
-        batch_collecter.remove_batches(batches_to_remove.as_slice());
-        drop(batch_collecter);
+        self.record_batch_collector
+            .remove_batches(batches_to_remove.as_slice());
 
         Ok(RecordBatch::try_new(self.schema.clone(), columns)?)
     }

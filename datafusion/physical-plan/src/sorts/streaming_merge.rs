@@ -39,7 +39,7 @@ macro_rules! merge_helper {
     ($t:ty, $sort:ident, $streams:ident, $schema:ident, $tracking_metrics:ident, $batch_size:ident, $fetch:ident, $reservation:ident) => {{
         let streams = FieldCursorStream::<$t>::new($sort, $streams);
         return Ok(Box::pin(SortPreservingCascadeStream::new(
-            Box::new(streams),
+            streams,
             $schema,
             $tracking_metrics,
             $batch_size,
@@ -82,7 +82,7 @@ pub fn streaming_merge(
     )?;
 
     Ok(Box::pin(SortPreservingCascadeStream::new(
-        Box::new(streams),
+        streams,
         schema,
         metrics,
         batch_size,
