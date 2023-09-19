@@ -1452,7 +1452,7 @@ pub mod owned_table_reference {
 pub struct PhysicalPlanNode {
     #[prost(
         oneof = "physical_plan_node::PhysicalPlanType",
-        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22"
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23"
     )]
     pub physical_plan_type: ::core::option::Option<physical_plan_node::PhysicalPlanType>,
 }
@@ -1505,6 +1505,8 @@ pub mod physical_plan_node {
         ),
         #[prost(message, tag = "22")]
         NestedLoopJoin(::prost::alloc::boxed::Box<super::NestedLoopJoinExecNode>),
+        #[prost(message, tag = "23")]
+        Analyze(::prost::alloc::boxed::Box<super::AnalyzeExecNode>),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -1879,6 +1881,18 @@ pub struct ExplainExecNode {
     pub stringified_plans: ::prost::alloc::vec::Vec<StringifiedPlan>,
     #[prost(bool, tag = "3")]
     pub verbose: bool,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AnalyzeExecNode {
+    #[prost(bool, tag = "1")]
+    pub verbose: bool,
+    #[prost(bool, tag = "2")]
+    pub show_statistics: bool,
+    #[prost(message, optional, boxed, tag = "3")]
+    pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(message, optional, tag = "4")]
+    pub schema: ::core::option::Option<Schema>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2379,6 +2393,7 @@ pub enum ScalarFunction {
     Iszero = 114,
     ArrayEmpty = 115,
     ArrayPopBack = 116,
+    StringToArray = 117,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2504,6 +2519,7 @@ impl ScalarFunction {
             ScalarFunction::Iszero => "Iszero",
             ScalarFunction::ArrayEmpty => "ArrayEmpty",
             ScalarFunction::ArrayPopBack => "ArrayPopBack",
+            ScalarFunction::StringToArray => "StringToArray",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2626,6 +2642,7 @@ impl ScalarFunction {
             "Iszero" => Some(Self::Iszero),
             "ArrayEmpty" => Some(Self::ArrayEmpty),
             "ArrayPopBack" => Some(Self::ArrayPopBack),
+            "StringToArray" => Some(Self::StringToArray),
             _ => None,
         }
     }
