@@ -3152,10 +3152,10 @@ impl serde::Serialize for ColumnStats {
         if self.max_value.is_some() {
             len += 1;
         }
-        if self.null_count != 0 {
+        if !self.null_count.is_empty() {
             len += 1;
         }
-        if self.distinct_count != 0 {
+        if !self.distinct_count.is_empty() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.ColumnStats", len)?;
@@ -3165,10 +3165,10 @@ impl serde::Serialize for ColumnStats {
         if let Some(v) = self.max_value.as_ref() {
             struct_ser.serialize_field("maxValue", v)?;
         }
-        if self.null_count != 0 {
+        if !self.null_count.is_empty() {
             struct_ser.serialize_field("nullCount", &self.null_count)?;
         }
-        if self.distinct_count != 0 {
+        if !self.distinct_count.is_empty() {
             struct_ser.serialize_field("distinctCount", &self.distinct_count)?;
         }
         struct_ser.end()
@@ -3264,7 +3264,8 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
                                 return Err(serde::de::Error::duplicate_field("nullCount"));
                             }
                             null_count__ = 
-                                Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                                Some(map.next_value::<Vec<::pbjson::private::NumberDeserialize<_>>>()?
+                                    .into_iter().map(|x| x.0).collect())
                             ;
                         }
                         GeneratedField::DistinctCount => {
@@ -3272,7 +3273,8 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
                                 return Err(serde::de::Error::duplicate_field("distinctCount"));
                             }
                             distinct_count__ = 
-                                Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                                Some(map.next_value::<Vec<::pbjson::private::NumberDeserialize<_>>>()?
+                                    .into_iter().map(|x| x.0).collect())
                             ;
                         }
                     }

@@ -2143,10 +2143,10 @@ pub struct ColumnStats {
     pub min_value: ::core::option::Option<ScalarValue>,
     #[prost(message, optional, tag = "2")]
     pub max_value: ::core::option::Option<ScalarValue>,
-    #[prost(uint32, tag = "3")]
-    pub null_count: u32,
-    #[prost(uint32, tag = "4")]
-    pub distinct_count: u32,
+    #[prost(uint32, repeated, tag = "3")]
+    pub null_count: ::prost::alloc::vec::Vec<u32>,
+    #[prost(uint32, repeated, tag = "4")]
+    pub distinct_count: ::prost::alloc::vec::Vec<u32>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]

@@ -471,8 +471,8 @@ impl From<&ColumnStatistics> for protobuf::ColumnStats {
         protobuf::ColumnStats {
             min_value: cs.min_value.as_ref().map(|m| m.try_into().unwrap()),
             max_value: cs.max_value.as_ref().map(|m| m.try_into().unwrap()),
-            null_count: cs.null_count.map(|n| n as u32).unwrap_or(0),
-            distinct_count: cs.distinct_count.map(|n| n as u32).unwrap_or(0),
+            null_count: cs.null_count.map(|n| vec![n as u32]).unwrap_or(vec![]),
+            distinct_count: cs.distinct_count.map(|n| vec![n as u32]).unwrap_or(vec![]),
         }
     }
 }

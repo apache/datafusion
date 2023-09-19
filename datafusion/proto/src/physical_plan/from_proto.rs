@@ -525,10 +525,18 @@ impl TryFrom<&protobuf::FileGroup> for Vec<PartitionedFile> {
 impl From<&protobuf::ColumnStats> for ColumnStatistics {
     fn from(cs: &protobuf::ColumnStats) -> ColumnStatistics {
         ColumnStatistics {
-            null_count: Some(cs.null_count as usize),
+            null_count: if cs.null_count.is_empty() {
+                None
+            } else {
+                Some(cs.null_count[0] as usize)
+            },
             max_value: cs.max_value.as_ref().map(|m| m.try_into().unwrap()),
             min_value: cs.min_value.as_ref().map(|m| m.try_into().unwrap()),
-            distinct_count: Some(cs.distinct_count as usize),
+            distinct_count: if cs.distinct_count.is_empty() {
+                None
+            } else {
+                Some(cs.distinct_count[0] as usize)
+            },
         }
     }
 }
