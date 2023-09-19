@@ -2286,12 +2286,9 @@ impl ScalarValue {
         // ListArray[null]
 
         if values.is_none() {
-            let arr = new_null_array(&DataType::Null, 1);
+            let arr = new_null_array(&DataType::Null, 0);
             return arr;
         }
-
-        // println!("(list_to_arry) data_type: {:?}", data_type);
-        // println!("(list_to_arry) values: {:?}", values);
 
         // TODO: Fix build_list too!!
         Arc::new(match data_type {
@@ -2321,12 +2318,18 @@ impl ScalarValue {
             &DataType::LargeUtf8 => {
                 build_list!(LargeStringBuilder, LargeUtf8, values, size)
             }
-            DataType::List(_) | DataType::Struct(_) => ScalarValue::iter_to_array_list_v3(
-                values.clone(),
-                data_type,
-                DataType::List(Arc::new(Field::new("item", data_type.to_owned(), true))),
-            )
-            .unwrap(),
+            DataType::List(_) | DataType::Struct(_) => {
+                ScalarValue::iter_to_array_list_v3(
+                    values.clone(),
+                    data_type,
+                    DataType::List(Arc::new(Field::new(
+                        "item",
+                        data_type.to_owned(),
+                        true,
+                    ))),
+                )
+                .unwrap()
+            }
 
             DataType::Decimal128(precision, scale) => {
                 let mut vals = vec![];
@@ -3516,11 +3519,8 @@ impl TryFrom<&DataType> for ScalarValue {
                 index_type.clone(),
                 Box::new(value_type.as_ref().try_into()?),
             ),
-            DataType::List(ref nested_type) => {
-                // println!("nested_type: {:?}", nested_type);
-                let arr = ScalarValue::list_to_array(&None, nested_type.data_type());
-                ScalarValue::ListArr(arr)
-            }
+            DataType::List(_) => ScalarValue::ListArr(new_null_array(&DataType::Null, 0)),
+
             DataType::Struct(fields) => ScalarValue::Struct(None, fields.clone()),
             DataType::Null => ScalarValue::Null,
             _ => {

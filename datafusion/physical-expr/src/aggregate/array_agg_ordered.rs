@@ -30,12 +30,10 @@ use crate::{AggregateExpr, LexOrdering, PhysicalExpr, PhysicalSortExpr};
 
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field};
-use arrow_array::builder::{ListBuilder, StructBuilder, TimestampNanosecondBuilder};
-use arrow_array::cast::as_list_array;
-use arrow_array::{Array, GenericListArray, ListArray, StructArray};
-use arrow_schema::{Fields, SortOptions, TimeUnit};
+use arrow_array::{Array, ListArray};
+use arrow_schema::{Fields, SortOptions};
 use datafusion_common::utils::{compare_rows, get_row_at_idx};
-use datafusion_common::{exec_err, internal_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
 use itertools::izip;
