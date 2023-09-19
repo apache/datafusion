@@ -21,7 +21,6 @@
 //! according to the configuration), this rule increases partition counts in
 //! the physical plan.
 
-use arrow_schema::SchemaRef;
 use std::fmt;
 use std::fmt::Formatter;
 use std::sync::Arc;
@@ -41,12 +40,12 @@ use crate::physical_plan::joins::{
 };
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
-use crate::physical_plan::sorts::sort::{SortExec, SortOptions};
+use crate::physical_plan::sorts::sort::SortOptions;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::physical_plan::union::{can_interleave, InterleaveExec, UnionExec};
 use crate::physical_plan::windows::WindowAggExec;
+use crate::physical_plan::Partitioning;
 use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
-use crate::physical_plan::{DisplayAs, DisplayFormatType, Partitioning};
 
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_expr::logical_plan::JoinType;
@@ -56,11 +55,9 @@ use datafusion_physical_expr::utils::{
     map_columns_before_projection, ordering_satisfy_requirement_concrete,
 };
 use datafusion_physical_expr::{
-    expr_list_eq_strict_order, LexOrderingReq, PhysicalExpr, PhysicalSortExpr,
-    PhysicalSortRequirement,
+    expr_list_eq_strict_order, PhysicalExpr, PhysicalSortRequirement,
 };
 
-use datafusion_common::Statistics;
 use itertools::izip;
 
 /// The `EnforceDistribution` rule ensures that distribution requirements are
@@ -211,14 +208,13 @@ impl PhysicalOptimizerRule for EnforceDistribution {
             })?
         };
 
-        let adjusted = require_top_ordering(adjusted)?;
         let distribution_context = DistributionContext::new(adjusted);
         // Distribution enforcement needs to be applied bottom-up.
         let distribution_context =
             distribution_context.transform_up(&|distribution_context| {
                 ensure_distribution(distribution_context, config)
             })?;
-        remove_top_ordering_req(distribution_context.plan)
+        Ok(distribution_context.plan)
     }
 
     fn name(&self) -> &str {
@@ -1644,179 +1640,6 @@ impl TreeNode for PlanWithKeyRequirements {
     }
 }
 
-/// This functions removes ancillary `SortRequiringExec` from the physical plan.
-fn remove_top_ordering_req(
-    plan: Arc<dyn ExecutionPlan>,
-) -> Result<Arc<dyn ExecutionPlan>> {
-    let new_children = plan
-        .children()
-        .into_iter()
-        .map(|child| remove_top_ordering_req(child))
-        .collect::<Result<Vec<_>>>()?;
-    if plan.as_any().is::<SortRequiringExec>() {
-        Ok(new_children[0].clone())
-    } else {
-        plan.with_new_children(new_children)
-    }
-}
-
-/// This functions adds ancillary `SortRequiringExec` to the the physical plan, so that
-/// global ordering requirement is not lost during optimization
-fn require_top_ordering(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
-    let (new_plan, is_changed) = require_top_ordering_helper(plan)?;
-    if is_changed {
-        Ok(new_plan)
-    } else {
-        // Add SortRequiringExec to the top.
-        Ok(Arc::new(SortRequiringExec::new(
-            new_plan,
-            // there is no ordering requirement
-            None,
-            Distribution::UnspecifiedDistribution,
-        )) as _)
-    }
-}
-
-/// Helper function that adds an ancillary `SortRequiringExec` to the given plan.
-fn require_top_ordering_helper(
-    plan: Arc<dyn ExecutionPlan>,
-) -> Result<(Arc<dyn ExecutionPlan>, bool)> {
-    let mut children = plan.children();
-    // Global ordering defines desired ordering in the final result.
-    if children.len() != 1 {
-        Ok((plan, false))
-    } else if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
-        let req_ordering = sort_exec.output_ordering().unwrap_or(&[]);
-        let req_dist = sort_exec.required_input_distribution()[0].clone();
-        let reqs = PhysicalSortRequirement::from_sort_exprs(req_ordering);
-        Ok((
-            Arc::new(SortRequiringExec::new(plan.clone(), Some(reqs), req_dist)) as _,
-            true,
-        ))
-    } else if let Some(spm) = plan.as_any().downcast_ref::<SortPreservingMergeExec>() {
-        let req_ordering = spm.expr();
-        let reqs = PhysicalSortRequirement::from_sort_exprs(req_ordering);
-        Ok((
-            Arc::new(SortRequiringExec::new(
-                plan.clone(),
-                Some(reqs),
-                Distribution::SinglePartition,
-            )) as _,
-            true,
-        ))
-    } else if plan.maintains_input_order()[0]
-        && plan.required_input_ordering()[0].is_none()
-    {
-        // Keep searching for a `SortExec` as long as ordering is maintained,
-        // and on-the-way operators do not themselves require an ordering.
-        // When an operator requires an ordering, any `SortExec` below can not
-        // be responsible for (i.e. the originator of) the global ordering.
-        let (new_child, is_changed) =
-            require_top_ordering_helper(children.swap_remove(0))?;
-        Ok((plan.with_new_children(vec![new_child])?, is_changed))
-    } else {
-        // Stop searching, there is no global ordering desired for the query.
-        Ok((plan, false))
-    }
-}
-
-/// Ancillary operator that require given ordering
-#[derive(Debug)]
-struct SortRequiringExec {
-    input: Arc<dyn ExecutionPlan>,
-    requirements: Option<LexOrderingReq>,
-    dist_requirement: Distribution,
-}
-
-impl SortRequiringExec {
-    fn new(
-        input: Arc<dyn ExecutionPlan>,
-        requirements: Option<LexOrderingReq>,
-        dist_requirement: Distribution,
-    ) -> Self {
-        Self {
-            input,
-            requirements,
-            dist_requirement,
-        }
-    }
-}
-
-impl DisplayAs for SortRequiringExec {
-    fn fmt_as(
-        &self,
-        _t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        if let Some(requirements) = &self.requirements {
-            let expr: Vec<String> = requirements.iter().map(|e| e.to_string()).collect();
-            write!(f, "SortRequiringExec: [{}]", expr.join(","))
-        } else {
-            write!(f, "SortRequiringExec: [None]")
-        }
-    }
-}
-
-impl ExecutionPlan for SortRequiringExec {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn schema(&self) -> SchemaRef {
-        self.input.schema()
-    }
-
-    fn output_partitioning(&self) -> crate::physical_plan::Partitioning {
-        self.input.output_partitioning()
-    }
-
-    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
-        vec![false]
-    }
-
-    fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![self.dist_requirement.clone()]
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.input.output_ordering()
-    }
-
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
-        vec![self.input.clone()]
-    }
-
-    // model that it requires the output ordering of its input
-    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
-        vec![self.requirements.clone()]
-    }
-
-    fn with_new_children(
-        self: Arc<Self>,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        assert_eq!(children.len(), 1);
-        let child = children.pop().unwrap();
-        Ok(Arc::new(Self::new(
-            child,
-            self.requirements.clone(),
-            self.dist_requirement.clone(),
-        )))
-    }
-
-    fn execute(
-        &self,
-        _partition: usize,
-        _context: Arc<crate::execution::context::TaskContext>,
-    ) -> Result<crate::physical_plan::SendableRecordBatchStream> {
-        unreachable!();
-    }
-
-    fn statistics(&self) -> Statistics {
-        self.input.statistics()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::ops::Deref;
@@ -1826,6 +1649,7 @@ mod tests {
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::datasource::physical_plan::{FileScanConfig, ParquetExec};
     use crate::physical_optimizer::enforce_sorting::EnforceSorting;
+    use crate::physical_optimizer::global_requirements::GlobalRequirements;
     use crate::physical_plan::aggregates::{
         AggregateExec, AggregateMode, PhysicalGroupBy,
     };
@@ -2259,10 +2083,15 @@ mod tests {
             //       `EnforceSorting` and `EnforceDistribution`.
             // TODO: Orthogonalize the tests here just to verify `EnforceDistribution` and create
             //       new tests for the cascade.
+
+            // Add global requirement at the start, of any
+            let optimizer = GlobalRequirements::new_add_mode();
+            let optimized = optimizer.optimize($PLAN.clone(), &config)?;
+
             let optimized = if $FIRST_ENFORCE_DIST {
                 // Run enforce distribution rule first:
                 let optimizer = EnforceDistribution::new();
-                let optimized = optimizer.optimize($PLAN.clone(), &config)?;
+                let optimized = optimizer.optimize(optimized, &config)?;
                 // The rule should be idempotent.
                 // Re-running this rule shouldn't introduce unnecessary operators.
                 let optimizer = EnforceDistribution::new();
@@ -2274,7 +2103,7 @@ mod tests {
             } else {
                 // Run the enforce sorting rule first:
                 let optimizer = EnforceSorting::new();
-                let optimized = optimizer.optimize($PLAN.clone(), &config)?;
+                let optimized = optimizer.optimize(optimized, &config)?;
                 // Run enforce distribution rule:
                 let optimizer = EnforceDistribution::new();
                 let optimized = optimizer.optimize(optimized, &config)?;
@@ -2284,6 +2113,10 @@ mod tests {
                 let optimized = optimizer.optimize(optimized, &config)?;
                 optimized
             };
+
+            // Remove ancillary global requirements at the end
+            let optimizer = GlobalRequirements::new_remove_mode();
+            let optimized = optimizer.optimize(optimized, &config)?;
 
             // Now format correctly
             let plan = displayable(optimized.as_ref()).indent(true).to_string();
