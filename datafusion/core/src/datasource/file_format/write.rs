@@ -24,12 +24,13 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::physical_plan::FileMeta;
 use crate::error::Result;
 use crate::physical_plan::SendableRecordBatchStream;
 
 use arrow_array::RecordBatch;
-use datafusion_common::{exec_err, internal_err, DataFusionError, FileCompressionType};
+use datafusion_common::{exec_err, internal_err, DataFusionError};
 
 use async_trait::async_trait;
 use bytes::Bytes;
