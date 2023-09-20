@@ -55,7 +55,7 @@ use super::{
 };
 
 use arrow::buffer::BooleanBuffer;
-use arrow::compute::{and, eq_dyn, is_null, or_kleene, take, FilterBuilder};
+use arrow::compute::{and, bool_and, eq_dyn, is_null, or_kleene, take, FilterBuilder};
 use arrow::record_batch::RecordBatch;
 use arrow::{
     array::{
@@ -74,7 +74,7 @@ use arrow::{
     },
     util::bit_util,
 };
-use arrow_array::cast::downcast_array;
+use arrow_array::cast::{as_large_list_array, as_list_array, downcast_array};
 use arrow_schema::ArrowError;
 use datafusion_common::cast::{as_dictionary_array, as_string_array};
 use datafusion_common::{DataFusionError, JoinType, Result};
@@ -83,6 +83,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::OrderingEquivalenceProperties;
 
 use ahash::RandomState;
+use arrow_array::{GenericListArray, OffsetSizeTrait};
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 
 type JoinLeftData = (JoinHashMap, RecordBatch, MemoryReservation);
@@ -1128,6 +1129,16 @@ pub fn equal_rows(
                         }
                     }
                 }
+            DataType::List(_) => {
+                let left_array = as_list_array(l);
+                let right_array = as_list_array(r);
+                list_arrays_equal(left_array, left, right_array, right, null_equals_null)
+            }
+            DataType::LargeList(_) => {
+                let left_array = as_large_list_array(l);
+                let right_array = as_large_list_array(r);
+                list_arrays_equal(left_array, left, right_array, right, null_equals_null)
+            }
             other => {
                 // This is internal because we should have caught this before.
                 err = Some(Err(DataFusionError::Internal(format!(
@@ -1203,6 +1214,31 @@ pub fn equal_rows_arr(
         downcast_array(left_filtered.as_ref()),
         downcast_array(right_filtered.as_ref()),
     ))
+}
+
+fn list_arrays_equal<OffsetSize>(
+    left_array: &GenericListArray<OffsetSize>,
+    left_index: usize,
+    right_array: &GenericListArray<OffsetSize>,
+    right_index: usize,
+    null_equals_null: bool,
+) -> bool
+where
+    OffsetSize: OffsetSizeTrait,
+{
+    match (
+        left_array.is_null(left_index),
+        right_array.is_null(right_index),
+    ) {
+        (false, false) => {
+            let left_el = left_array.value(left_index);
+            let right_el = right_array.value(right_index);
+            let eq = eq_dyn(&left_el, &right_el).unwrap();
+            bool_and(&eq).unwrap_or(null_equals_null)
+        }
+        (true, true) => null_equals_null,
+        _ => false,
+    }
 }
 
 impl HashJoinStream {

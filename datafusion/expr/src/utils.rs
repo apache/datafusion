@@ -1229,6 +1229,7 @@ pub fn can_hash(data_type: &DataType) -> bool {
         {
             DataType::is_dictionary_key_type(key_type)
         }
+        DataType::List(_) => true,
         _ => false,
     }
 }
