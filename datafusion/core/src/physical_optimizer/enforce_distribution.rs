@@ -1204,10 +1204,6 @@ fn ensure_distribution(
     dist_context: DistributionContext,
     config: &ConfigOptions,
 ) -> Result<Transformed<DistributionContext>> {
-    let mut dist_context = dist_context;
-    if is_recursive_query(&dist_context.plan) {
-        dist_context.has_recursive_ancestor = true;
-    }
     if dist_context.has_recursive_ancestor {
         return Ok(Transformed::No(dist_context));
     }
@@ -1401,7 +1397,7 @@ fn ensure_distribution(
             plan.with_new_children(new_children)?
         },
         distribution_onwards,
-        has_recursive_ancestor: has_recursive_ancestor || is_recursive_query(&plan),
+        has_recursive_ancestor,
     };
     Ok(Transformed::Yes(new_distribution_context))
 }
@@ -1422,6 +1418,8 @@ struct DistributionContext {
 
 impl DistributionContext {
     /// Creates an empty context.
+    /// Only use this method at the root of the plan.
+    /// All other contexts should be created using `new_descendent`.
     fn new(plan: Arc<dyn ExecutionPlan>) -> Self {
         let length = plan.children().len();
         DistributionContext {
@@ -1431,13 +1429,19 @@ impl DistributionContext {
         }
     }
 
-    fn new_from_plan_with_parent(
-        parent: Arc<dyn ExecutionPlan>,
-        cur_plan: Arc<dyn ExecutionPlan>,
-    ) -> Self {
-        let mut ctx = Self::new(cur_plan);
-        ctx.has_recursive_ancestor =
-            is_recursive_query(&parent) || ctx.has_recursive_ancestor;
+    /// Creates a new context from a descendent plan.
+    /// Importantly, this function propagates the `has_recursive_ancestor` flag.
+    fn new_descendent(&self, descendent_plan: Arc<dyn ExecutionPlan>) -> Self {
+        let mut ctx = Self::new(descendent_plan);
+        ctx.has_recursive_ancestor |= self.has_recursive_ancestor;
+        ctx
+    }
+
+    /// Creates a new context from a descendent context.
+    /// Importantly, this function propagates the `has_recursive_ancestor` flag.
+    fn new_descendent_from_ctx(&self, ctx: Self) -> Self {
+        let mut ctx = ctx;
+        ctx.has_recursive_ancestor |= self.has_recursive_ancestor;
         ctx
     }
 
@@ -1512,7 +1516,6 @@ impl DistributionContext {
                 }
             })
             .collect();
-
         Ok(DistributionContext {
             has_recursive_ancestor: is_recursive_query(&parent_plan),
             plan: with_new_children_if_necessary(parent_plan, children_plans)?.into(),
@@ -1525,15 +1528,7 @@ impl DistributionContext {
         self.plan
             .children()
             .into_iter()
-            .map(|child| {
-                let mut ctx = DistributionContext::new_from_plan_with_parent(
-                    self.plan.clone(),
-                    child,
-                );
-                ctx.has_recursive_ancestor =
-                    self.has_recursive_ancestor || ctx.has_recursive_ancestor;
-                ctx
-            })
+            .map(|child| self.new_descendent(child))
             .collect()
     }
 }
@@ -1565,10 +1560,12 @@ impl TreeNode for DistributionContext {
                 .into_iter()
                 .map(transform)
                 .collect::<Result<Vec<_>>>()?;
-            let mut ctx =
-                DistributionContext::new_from_children_nodes(children_nodes, self.plan)?;
-            ctx.has_recursive_ancestor |= self.has_recursive_ancestor;
-            Ok(ctx)
+
+            DistributionContext::new_from_children_nodes(
+                children_nodes,
+                self.plan.clone(),
+            )
+            .map(|ctx| self.new_descendent_from_ctx(ctx))
         }
     }
 }

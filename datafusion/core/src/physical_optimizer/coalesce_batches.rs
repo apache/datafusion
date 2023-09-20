@@ -55,6 +55,8 @@ struct CoalesceContext {
 }
 
 impl CoalesceContext {
+    /// Only use this method at the root of the plan.
+    /// All other contexts should be created using `new_descendent`.
     fn new(plan: Arc<dyn ExecutionPlan>) -> Self {
         Self {
             has_recursive_ancestor: is_recursive_query(&plan),
@@ -62,6 +64,8 @@ impl CoalesceContext {
         }
     }
 
+    /// Creates a new context for a descendent of this context.
+    /// The descendent will inherit the `has_recursive_ancestor` flag from this context.
     fn new_descendent(&self, descendent_plan: Arc<dyn ExecutionPlan>) -> Self {
         Self {
             has_recursive_ancestor: self.has_recursive_ancestor
@@ -142,14 +146,14 @@ impl PhysicalOptimizerRule for CoalesceBatches {
         config: &ConfigOptions,
     ) -> Result<Arc<dyn crate::physical_plan::ExecutionPlan>> {
         if !config.execution.coalesce_batches {
-            // return Ok(plan);
+            return Ok(plan);
         }
 
         let target_batch_size = config.execution.batch_size;
         let ctx = CoalesceContext::new(plan);
         let CoalesceContext { plan, .. } = ctx.transform_up(&|ctx| {
             if ctx.has_recursive_ancestor {
-                // return Ok(Transformed::No(ctx));
+                return Ok(Transformed::No(ctx));
             }
             let plan_any = ctx.plan.as_any();
             // The goal here is to detect operators that could produce small batches and only
