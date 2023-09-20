@@ -129,6 +129,17 @@ fn scalar_function_type_from_str(name: &str) -> Result<ScalarFunctionType> {
     }
 }
 
+#[inline(always)]
+fn make_mixed_join_condition(
+    join_filter: Option<Expr>,
+    predicate: &Expr,
+) -> Option<Expr> {
+    match &join_filter {
+        Some(filter) => Some(filter.clone().and(predicate.clone())),
+        None => Some(predicate.clone()),
+    }
+}
+
 /// Convert Substrait Plan to DataFusion DataFrame
 pub async fn from_substrait_plan(
     ctx: &mut SessionContext,
@@ -342,7 +353,7 @@ pub async fn from_substrait_rel(
             // certain join types such as semi and anti joins
             let in_join_schema = left.schema().join(right.schema())?;
             // Parse post join filter if exists
-            let join_filter = match &join.post_join_filter {
+            let mut join_filter = match &join.post_join_filter {
                 Some(filter) => {
                     let parsed_filter =
                         from_substrait_rex(filter, &in_join_schema, extensions).await?;
@@ -351,41 +362,62 @@ pub async fn from_substrait_rel(
                 None => None,
             };
             // If join expression exists, parse the `on` condition expression, build join and return
-            // Otherwise, build join with koin filter, without join keys
+            // Otherwise, build join with only the filter, without join keys
             match &join.expression.as_ref() {
                 Some(expr) => {
                     let on =
                         from_substrait_rex(expr, &in_join_schema, extensions).await?;
                     let predicates = split_conjunction(&on);
                     // TODO: collect only one null_eq_null
-                    let join_exprs: Vec<(Column, Column, bool)> = predicates
-                        .iter()
-                        .map(|p| match p {
+                    // The predicates can contain both equal and non-equal ops.
+                    // Since as of datafusion 31.0.0, the equal and non equal join conditions are in separate fields,
+                    // we extract each part as follows:
+                    // - If an equal op is encountered, add the left column, right column and is_null_equal_nulls to `join_on` vector
+                    // - Otherwise we add the expression to join_filters (use conjunction if filter already exists)
+                    let mut join_on: Vec<(Column, Column, bool)> = vec![];
+                    for p in predicates {
+                        match p {
                             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
                                 match (left.as_ref(), right.as_ref()) {
                                     (Expr::Column(l), Expr::Column(r)) => match op {
-                                        Operator::Eq => Ok((l.clone(), r.clone(), false)),
-                                        Operator::IsNotDistinctFrom => {
-                                            Ok((l.clone(), r.clone(), true))
+                                        Operator::Eq => {
+                                            join_on.push((l.clone(), r.clone(), false))
                                         }
-                                        _ => plan_err!("invalid join condition op"),
+                                        Operator::IsNotDistinctFrom => {
+                                            join_on.push((l.clone(), r.clone(), true))
+                                        }
+                                        _ => {
+                                            // If the operator is not a form of an equal operator, add this expression to filter
+                                            join_filter =
+                                                make_mixed_join_condition(join_filter, p);
+                                        }
                                     },
-                                    _ => plan_err!("invalid join condition expression"),
+                                    _ => {
+                                        // If this is not a `col op col` expression, then `and` the expression to filter
+                                        join_filter =
+                                            make_mixed_join_condition(join_filter, p);
+                                    }
                                 }
                             }
-                            _ => plan_err!(
-                                "Non-binary expression is not supported in join condition"
-                            ),
-                        })
-                        .collect::<Result<Vec<_>>>()?;
+                            _ => {
+                                // If this is not a binary expression, then `and` the expression to filter
+                                join_filter = make_mixed_join_condition(join_filter, p);
+                            }
+                        }
+                    }
+
                     let (left_cols, right_cols, null_eq_nulls): (Vec<_>, Vec<_>, Vec<_>) =
-                        itertools::multiunzip(join_exprs);
+                        itertools::multiunzip(join_on);
                     left.join_detailed(
                         right.build()?,
                         join_type,
                         (left_cols, right_cols),
                         join_filter,
-                        null_eq_nulls[0],
+                        if null_eq_nulls.is_empty() {
+                            false // if no equal condition, default null_eq_nulls to false
+                        } else {
+                            null_eq_nulls[0]
+                        },
                     )?
                     .build()
                 }
