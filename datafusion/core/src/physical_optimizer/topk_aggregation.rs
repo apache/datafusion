@@ -51,6 +51,9 @@ impl TopKAggregation {
         if desc != order.options.descending {
             return None;
         }
+        if aggr.group_expr().expr().len() != 1 {
+            return None;
+        }
         let group_key = aggr.group_expr().expr().first()?;
         let kt = group_key.0.data_type(&aggr.input().schema()).ok()?;
         if !kt.is_primitive() && kt != DataType::Utf8 {
@@ -85,8 +88,14 @@ impl TopKAggregation {
         let sort = plan.as_any().downcast_ref::<SortExec>()?;
 
         let children = sort.children();
+        if children.len() != 1 {
+            return None;
+        }
         let child = children.first()?;
         let order = sort.output_ordering()?;
+        if order.len() != 1 {
+            return None;
+        }
         let order = order.first()?;
         let limit = sort.fetch()?;
 

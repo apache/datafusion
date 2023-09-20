@@ -785,6 +785,9 @@ impl AggregateExec {
 
     /// Finds the DataType and SortDirection for this Aggregate, if there is one
     pub fn get_minmax_desc(&self) -> Option<(Field, bool)> {
+        if self.aggr_expr.len() != 1 {
+            return None;
+        }
         let agg_expr = self.aggr_expr.as_slice().first()?;
         if let Some(max) = agg_expr.as_any().downcast_ref::<Max>() {
             Some((max.field().ok()?, true))
