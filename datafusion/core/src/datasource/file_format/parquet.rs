@@ -29,13 +29,12 @@ use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::task::{JoinHandle, JoinSet};
 
+use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use arrow::datatypes::SchemaRef;
 use arrow::datatypes::{Fields, Schema};
 use async_trait::async_trait;
 use bytes::{BufMut, BytesMut};
-use datafusion_common::{
-    exec_err, not_impl_err, plan_err, DataFusionError, FileCompressionType, FileType,
-};
+use datafusion_common::{exec_err, not_impl_err, plan_err, DataFusionError, FileType};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
 use futures::{StreamExt, TryStreamExt};

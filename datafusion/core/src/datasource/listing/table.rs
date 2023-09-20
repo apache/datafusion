@@ -31,6 +31,9 @@ use datafusion_optimizer::utils::conjunction;
 use datafusion_physical_expr::{create_physical_expr, LexOrdering, PhysicalSortExpr};
 use futures::{future, stream, StreamExt, TryStreamExt};
 
+use crate::datasource::file_format::file_compression_type::{
+    FileCompressionType, FileTypeExt,
+};
 use crate::datasource::physical_plan::{FileScanConfig, FileSinkConfig};
 use crate::datasource::{
     file_format::{
@@ -49,7 +52,7 @@ use crate::{
     logical_expr::Expr,
     physical_plan::{empty::EmptyExec, ExecutionPlan, Statistics},
 };
-use datafusion_common::{FileCompressionType, FileType};
+use datafusion_common::FileType;
 use datafusion_execution::cache::cache_manager::FileStatisticsCache;
 use datafusion_execution::cache::cache_unit::DefaultFileStatisticsCache;
 
@@ -986,7 +989,9 @@ mod tests {
     use crate::prelude::*;
     use crate::{
         assert_batches_eq,
-        datasource::file_format::{avro::AvroFormat, parquet::ParquetFormat},
+        datasource::file_format::{
+            avro::AvroFormat, file_compression_type::FileTypeExt, parquet::ParquetFormat,
+        },
         execution::options::ReadOptions,
         logical_expr::{col, lit},
         test::{columns, object_store::register_test_store},
