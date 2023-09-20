@@ -31,7 +31,9 @@ use datafusion_optimizer::utils::conjunction;
 use datafusion_physical_expr::{create_physical_expr, LexOrdering, PhysicalSortExpr};
 use futures::{future, stream, StreamExt, TryStreamExt};
 
-use crate::datasource::physical_plan::{FileScanConfig, FileSinkConfig};
+use crate::datasource::physical_plan::{
+    is_plan_streaming, FileScanConfig, FileSinkConfig,
+};
 use crate::datasource::{
     file_format::{
         arrow::ArrowFormat, avro::AvroFormat, csv::CsvFormat, json::JsonFormat,
@@ -891,7 +893,10 @@ impl TableProvider for ListingTable {
             output_schema: self.schema(),
             table_partition_cols: self.options.table_partition_cols.clone(),
             writer_mode,
-            unbounded_input: self.options().infinite_source,
+            // A plan can produce finite number of rows even if it has unbounded sources, like LIMIT
+            // queries. Thus, we can check if the plan is streaming to ensure file sink input is
+            // unbounded.
+            unbounded_input: is_plan_streaming(&input)?,
             single_file_output: self.options.single_file,
             overwrite,
             file_type_writer_options,
