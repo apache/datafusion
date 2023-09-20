@@ -119,6 +119,13 @@ impl ExecutionPlan for RecursiveQueryExec {
         vec![false, false]
     }
 
+    fn required_input_distribution(&self) -> Vec<datafusion_physical_expr::Distribution> {
+        vec![
+            datafusion_physical_expr::Distribution::SinglePartition,
+            datafusion_physical_expr::Distribution::SinglePartition,
+        ]
+    }
+
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         None
     }
