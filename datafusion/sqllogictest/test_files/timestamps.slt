@@ -1341,3 +1341,121 @@ drop table ts_data_millis
 
 statement ok
 drop table ts_data_secs
+
+
+
+##########
+## Timezone impact on builtin scalar functions
+#
+# server time = +07
+##########
+
+statement ok
+set timezone to '+07';
+
+# postgresql: 2000-01-01 01:00:00+07
+query P
+SELECT date_trunc('hour', TIMESTAMPTZ '2000-01-01T01:01:01') as ts
+----
+2000-01-01T01:00:00+07:00
+
+# postgresql: 2000-01-01 00:00:00+07
+query P
+SELECT date_trunc('day', TIMESTAMPTZ '2000-01-01T01:01:01') as ts
+----
+2000-01-01T00:00:00+07:00
+
+# postgresql: 2000-01-01 08:00:00+07
+query P
+SELECT date_trunc('hour', TIMESTAMPTZ '2000-01-01T01:01:01Z') as ts
+----
+2000-01-01T08:00:00+07:00
+
+# postgresql: 2000-01-01 00:00:00+07
+query P
+SELECT date_trunc('day', TIMESTAMPTZ '2000-01-01T01:01:01Z') as ts
+----
+2000-01-01T00:00:00+07:00
+
+# postgresql:  2022-01-01 00:00:00+07
+query P
+SELECT date_bin('1 day', TIMESTAMPTZ '2022-01-01 20:10:00', TIMESTAMPTZ '2020-01-01')
+----
+2022-01-01T00:00:00+07:00
+
+# postgresql: 2022-01-02 00:00:00+07
+query P
+SELECT date_bin('1 day', TIMESTAMPTZ '2022-01-01 20:10:00Z', TIMESTAMPTZ '2020-01-01')
+----
+2022-01-02T00:00:00+07:00
+
+# postgresql: 1
+query R
+SELECT date_part('hour', TIMESTAMPTZ '2000-01-01T01:01:01') as part
+----
+1
+
+# postgresql: 8
+query R
+SELECT date_part('hour', TIMESTAMPTZ '2000-01-01T01:01:01Z') as part
+----
+8
+
+
+
+##########
+## Timezone impact on builtin scalar functions
+#
+# server time = UTC
+##########
+
+statement ok
+set timezone to '+00';
+
+# postgresql: 2000-01-01T01:00:00+00
+query P
+SELECT date_trunc('hour', TIMESTAMPTZ '2000-01-01T01:01:01') as ts
+----
+2000-01-01T01:00:00Z
+
+# postgresql: 2000-01-01T00:00:00+00
+query P
+SELECT date_trunc('day', TIMESTAMPTZ '2000-01-01T01:01:01') as ts
+----
+2000-01-01T00:00:00Z
+
+# postgresql: 1999-12-31T18:00:00+00
+query P
+SELECT date_trunc('hour', TIMESTAMPTZ '2000-01-01T01:01:01+07') as ts
+----
+1999-12-31T18:00:00Z
+
+# postgresql: 1999-12-31T00:00:00+00
+query P
+SELECT date_trunc('day', TIMESTAMPTZ '2000-01-01T01:01:01+07') as ts
+----
+1999-12-31T00:00:00Z
+
+# postgresql: 2022-01-01 00:00:00+00
+query P
+SELECT date_bin('1 day', TIMESTAMPTZ '2022-01-01 20:10:00', TIMESTAMPTZ '2020-01-01')
+----
+2022-01-01T00:00:00Z
+
+# postgresql: 2021-12-31 00:00:00+00
+query P
+SELECT date_bin('1 day', TIMESTAMPTZ '2022-01-01 01:10:00+07', TIMESTAMPTZ '2020-01-01')
+----
+2021-12-31T00:00:00Z
+
+# postgresql: 1
+query R
+SELECT date_part('hour', TIMESTAMPTZ '2000-01-01T01:01:01') as part
+----
+1
+
+# postgresql: 18
+query R
+SELECT date_part('hour', TIMESTAMPTZ '2000-01-01T01:01:01+07') as part
+----
+18
