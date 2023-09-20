@@ -42,6 +42,7 @@ use datafusion_physical_expr::{
     PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
 };
 
+use itertools::Itertools;
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -785,7 +786,7 @@ impl AggregateExec {
 
     /// Finds the DataType and SortDirection for this Aggregate, if there is one
     pub fn get_minmax_desc(&self) -> Option<(Field, bool)> {
-        let agg_expr = self.aggr_expr.as_slice().first()?;
+        let agg_expr = self.aggr_expr.iter().exactly_one().ok()?;
         if let Some(max) = agg_expr.as_any().downcast_ref::<Max>() {
             Some((max.field().ok()?, true))
         } else if let Some(min) = agg_expr.as_any().downcast_ref::<Min>() {
