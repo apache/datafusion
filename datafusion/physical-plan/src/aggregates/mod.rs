@@ -42,10 +42,10 @@ use datafusion_physical_expr::{
     PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
 };
 
+use itertools::Itertools;
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
-use itertools::Itertools;
 
 mod group_values;
 mod no_grouping;

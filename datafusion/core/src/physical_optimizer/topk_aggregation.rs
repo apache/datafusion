@@ -30,8 +30,8 @@ use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::Result;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::PhysicalSortExpr;
-use std::sync::Arc;
 use itertools::Itertools;
+use std::sync::Arc;
 
 /// An optimizer rule that passes a `limit` hint to aggregations if the whole result is not needed
 pub struct TopKAggregation {}
