@@ -27,7 +27,7 @@ SELECT date_trunc('hour', TIMESTAMPTZ '2000-01-01T01:01:01') as ts
 query P
 SELECT date_trunc('day', TIMESTAMPTZ '2000-01-01T01:01:01') as ts
 ----
-1999-12-31T07:00:00+07:00
+2000-01-01T00:00:00+07:00
 
 # Conclusion: ordering doesn't matter
 # start => trunc => cast to server tz
@@ -49,7 +49,7 @@ SELECT date_trunc('hour', TIMESTAMPTZ '2000-01-01T01:01:01Z') as ts
 query P
 SELECT date_trunc('day', TIMESTAMPTZ '2000-01-01T01:01:01Z') as ts
 ----
-2000-01-01T07:00:00+07:00
+2000-01-01T00:00:00+07:00
 
 # Conclusion: ordering doesn't matter
 # start => add tz => date_bin => cast to server tz
