@@ -31,6 +31,7 @@ use datafusion_common::Result;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::PhysicalSortExpr;
 use std::sync::Arc;
+use itertools::Itertools;
 
 /// An optimizer rule that passes a `limit` hint to aggregations if the whole result is not needed
 pub struct TopKAggregation {}
@@ -51,10 +52,7 @@ impl TopKAggregation {
         if desc != order.options.descending {
             return None;
         }
-        if aggr.group_expr().expr().len() != 1 {
-            return None;
-        }
-        let group_key = aggr.group_expr().expr().first()?;
+        let group_key = aggr.group_expr().expr().iter().exactly_one().ok()?;
         let kt = group_key.0.data_type(&aggr.input().schema()).ok()?;
         if !kt.is_primitive() && kt != DataType::Utf8 {
             return None;
@@ -88,15 +86,9 @@ impl TopKAggregation {
         let sort = plan.as_any().downcast_ref::<SortExec>()?;
 
         let children = sort.children();
-        if children.len() != 1 {
-            return None;
-        }
-        let child = children.first()?;
+        let child = children.iter().exactly_one().ok()?;
         let order = sort.output_ordering()?;
-        if order.len() != 1 {
-            return None;
-        }
-        let order = order.first()?;
+        let order = order.iter().exactly_one().ok()?;
         let limit = sort.fetch()?;
 
         let is_cardinality_preserving = |plan: Arc<dyn ExecutionPlan>| {
