@@ -207,6 +207,39 @@ fn hash_dictionary<K: ArrowDictionaryKeyType>(
     Ok(())
 }
 
+fn hash_list_array<OffsetSize>(
+    array: &GenericListArray<OffsetSize>,
+    random_state: &RandomState,
+    hashes_buffer: &mut [u64],
+) -> Result<()>
+where
+    OffsetSize: OffsetSizeTrait,
+{
+    let values = array.values().clone();
+    let offsets = array.value_offsets();
+    let nulls = array.nulls();
+    let mut values_hashes = vec![0u64; values.len()];
+    create_hashes(&[values], random_state, &mut values_hashes)?;
+    if let Some(nulls) = nulls {
+        for (i, (start, stop)) in offsets.iter().zip(offsets.iter().skip(1)).enumerate() {
+            if nulls.is_valid(i) {
+                let hash = &mut hashes_buffer[i];
+                for j in start.as_usize()..stop.as_usize() {
+                    *hash = combine_hashes(*hash, values_hashes[j]);
+                }
+            }
+        }
+    } else {
+        for (i, (start, stop)) in offsets.iter().zip(offsets.iter().skip(1)).enumerate() {
+            let hash = &mut hashes_buffer[i];
+            for j in start.as_usize()..stop.as_usize() {
+                *hash = combine_hashes(*hash, values_hashes[j]);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Test version of `create_hashes` that produces the same value for
 /// all hashes (to test collisions)
 ///
@@ -293,6 +326,14 @@ pub fn create_hashes<'a>(
             DataType::Dictionary(_, _) => downcast_dictionary_array! {
                 array => hash_dictionary(array, random_state, hashes_buffer, rehash)?,
                 _ => unreachable!()
+            }
+            DataType::List(_) => {
+                let array = as_list_array(array);
+                hash_list_array(array, random_state, hashes_buffer)?;
+            }
+            DataType::LargeList(_) => {
+                let array = as_large_list_array(array);
+                hash_list_array(array, random_state, hashes_buffer)?;
             }
             _ => {
                 // This is internal because we should have caught this before.
@@ -450,6 +491,28 @@ mod tests {
         // different strings should map to different hash values
         assert_ne!(strings[0], strings[2]);
         assert_ne!(dict_hashes[0], dict_hashes[2]);
+    }
+
+    #[test]
+    // Tests actual values of hashes, which are different if forcing collisions
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn create_hashes_for_list_arrays() {
+        let data = vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), None, Some(5)]),
+            Some(vec![Some(3), None, Some(5)]),
+            None,
+            Some(vec![Some(0), Some(1), Some(2)]),
+        ];
+        let list_array =
+            Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(data)) as ArrayRef;
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let mut hashes = vec![0; list_array.len()];
+        create_hashes(&[list_array], &random_state, &mut hashes).unwrap();
+        assert_eq!(hashes[0], hashes[5]);
+        assert_eq!(hashes[1], hashes[4]);
+        assert_eq!(hashes[2], hashes[3]);
     }
 
     #[test]
