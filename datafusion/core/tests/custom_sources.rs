@@ -153,9 +153,9 @@ impl ExecutionPlan for CustomExecutionPlan {
         Ok(Box::pin(TestCustomRecordBatchStream { nb_batch: 1 }))
     }
 
-    fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Result<Statistics> {
         let batch = TEST_CUSTOM_RECORD_BATCH!().unwrap();
-        Statistics {
+        Ok(Statistics {
             is_exact: true,
             num_rows: Some(batch.num_rows()),
             total_byte_size: None,
@@ -176,7 +176,7 @@ impl ExecutionPlan for CustomExecutionPlan {
                     })
                     .collect(),
             ),
-        }
+        })
     }
 }
 

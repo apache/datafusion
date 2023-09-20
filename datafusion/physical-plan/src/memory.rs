@@ -144,12 +144,12 @@ impl ExecutionPlan for MemoryExec {
     }
 
     /// We recompute the statistics dynamically from the arrow metadata as it is pretty cheap to do so
-    fn statistics(&self) -> Statistics {
-        common::compute_record_batch_statistics(
+    fn statistics(&self) -> Result<Statistics> {
+        Ok(common::compute_record_batch_statistics(
             &self.partitions,
             &self.schema,
             self.projection.clone(),
-        )
+        ))
     }
 }
 

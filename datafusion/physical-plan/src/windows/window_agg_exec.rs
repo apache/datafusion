@@ -254,8 +254,8 @@ impl ExecutionPlan for WindowAggExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Statistics {
-        let input_stat = self.input.statistics();
+    fn statistics(&self) -> Result<Statistics> {
+        let input_stat = self.input.statistics()?;
         let win_cols = self.window_expr.len();
         let input_cols = self.input_schema.fields().len();
         // TODO stats: some windowing function will maintain invariants such as min, max...
@@ -274,12 +274,12 @@ impl ExecutionPlan for WindowAggExec {
                 self.schema().field(index + input_cols).data_type(),
             ))
         }
-        Statistics {
+        Ok(Statistics {
             is_exact: input_stat.is_exact,
             num_rows: input_stat.num_rows,
             column_statistics: Some(column_statistics),
             total_byte_size: None,
-        }
+        })
     }
 }
 

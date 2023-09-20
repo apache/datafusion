@@ -239,7 +239,7 @@ impl ExecutionPlan for MockExec {
     }
 
     // Panics if one of the batches is an error
-    fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Result<Statistics> {
         let data: Result<Vec<_>> = self
             .data
             .iter()
@@ -249,9 +249,13 @@ impl ExecutionPlan for MockExec {
             })
             .collect();
 
-        let data = data.unwrap();
+        let data = data?;
 
-        common::compute_record_batch_statistics(&[data], &self.schema, None)
+        Ok(common::compute_record_batch_statistics(
+            &[data],
+            &self.schema,
+            None,
+        ))
     }
 }
 
@@ -369,8 +373,12 @@ impl ExecutionPlan for BarrierExec {
         Ok(builder.build())
     }
 
-    fn statistics(&self) -> Statistics {
-        common::compute_record_batch_statistics(&self.data, &self.schema, None)
+    fn statistics(&self) -> Result<Statistics> {
+        Ok(common::compute_record_batch_statistics(
+            &self.data,
+            &self.schema,
+            None,
+        ))
     }
 }
 
@@ -448,8 +456,8 @@ impl ExecutionPlan for ErrorExec {
         internal_err!("ErrorExec, unsurprisingly, errored in partition {partition}")
     }
 
-    fn statistics(&self) -> Statistics {
-        Statistics::new_with_unbounded_columns(&self.schema())
+    fn statistics(&self) -> Result<Statistics> {
+        Ok(Statistics::new_with_unbounded_columns(&self.schema()))
     }
 }
 
@@ -531,8 +539,8 @@ impl ExecutionPlan for StatisticsExec {
         unimplemented!("This plan only serves for testing statistics")
     }
 
-    fn statistics(&self) -> Statistics {
-        self.stats.clone()
+    fn statistics(&self) -> Result<Statistics> {
+        Ok(self.stats.clone())
     }
 }
 
@@ -625,7 +633,7 @@ impl ExecutionPlan for BlockingExec {
         }))
     }
 
-    fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Result<Statistics> {
         unimplemented!()
     }
 }
@@ -762,7 +770,7 @@ impl ExecutionPlan for PanicExec {
         }))
     }
 
-    fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Result<Statistics> {
         unimplemented!()
     }
 }

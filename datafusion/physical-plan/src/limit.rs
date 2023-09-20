@@ -187,8 +187,8 @@ impl ExecutionPlan for GlobalLimitExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Statistics {
-        let input_stats = self.input.statistics();
+    fn statistics(&self) -> Result<Statistics> {
+        let input_stats = self.input.statistics()?;
         let skip = self.skip;
         // the maximum row number needs to be fetched
         let max_row_num = self
@@ -207,7 +207,7 @@ impl ExecutionPlan for GlobalLimitExec {
             .iter()
             .map(|field| ColumnStatistics::new_with_unbounded_column(field.data_type()))
             .collect::<Vec<_>>();
-        match input_stats {
+        let stats = match input_stats {
             Statistics {
                 num_rows: Some(nr), ..
             } => {
@@ -240,7 +240,8 @@ impl ExecutionPlan for GlobalLimitExec {
                 column_statistics: Some(col_stats),
                 total_byte_size: None,
             },
-        }
+        };
+        Ok(stats)
     }
 }
 
@@ -362,15 +363,15 @@ impl ExecutionPlan for LocalLimitExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Statistics {
-        let input_stats = self.input.statistics();
+    fn statistics(&self) -> Result<Statistics> {
+        let input_stats = self.input.statistics()?;
         let col_stats = self
             .schema()
             .fields()
             .iter()
             .map(|field| ColumnStatistics::new_with_unbounded_column(field.data_type()))
             .collect::<Vec<_>>();
-        match input_stats {
+        let stats = match input_stats {
             // if the input does not reach the limit globally, return input stats
             Statistics {
                 num_rows: Some(nr), ..
@@ -395,7 +396,8 @@ impl ExecutionPlan for LocalLimitExec {
                 column_statistics: Some(col_stats),
                 total_byte_size: None,
             },
-        }
+        };
+        Ok(stats)
     }
 }
 
@@ -765,7 +767,7 @@ mod tests {
         let offset =
             GlobalLimitExec::new(Arc::new(CoalescePartitionsExec::new(csv)), skip, fetch);
 
-        Ok(offset.statistics().num_rows)
+        Ok(offset.statistics()?.num_rows)
     }
 
     async fn row_number_statistics_for_local_limit(
@@ -778,7 +780,7 @@ mod tests {
 
         let offset = LocalLimitExec::new(csv, fetch);
 
-        Ok(offset.statistics().num_rows)
+        Ok(offset.statistics()?.num_rows)
     }
 
     /// Return a RecordBatch with a single array with row_count sz

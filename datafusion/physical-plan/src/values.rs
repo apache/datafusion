@@ -186,9 +186,13 @@ impl ExecutionPlan for ValuesExec {
         )?))
     }
 
-    fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Result<Statistics> {
         let batch = self.data();
-        common::compute_record_batch_statistics(&[batch], &self.schema, None)
+        Ok(common::compute_record_batch_statistics(
+            &[batch],
+            &self.schema,
+            None,
+        ))
     }
 }
 

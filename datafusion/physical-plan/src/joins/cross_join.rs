@@ -257,13 +257,13 @@ impl ExecutionPlan for CrossJoinExec {
         }))
     }
 
-    fn statistics(&self) -> Statistics {
-        stats_cartesian_product(
-            self.left.statistics(),
+    fn statistics(&self) -> Result<Statistics> {
+        Ok(stats_cartesian_product(
+            self.left.statistics()?,
             self.left.schema(),
-            self.right.statistics(),
+            self.right.statistics()?,
             self.right.schema(),
-        )
+        ))
     }
 }
 

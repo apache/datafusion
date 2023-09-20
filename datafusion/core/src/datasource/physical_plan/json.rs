@@ -163,8 +163,8 @@ impl ExecutionPlan for NdJsonExec {
         Ok(Box::pin(stream) as SendableRecordBatchStream)
     }
 
-    fn statistics(&self) -> Statistics {
-        self.projected_statistics.clone()
+    fn statistics(&self) -> Result<Statistics> {
+        Ok(self.projected_statistics.clone())
     }
 
     fn metrics(&self) -> Option<MetricsSet> {

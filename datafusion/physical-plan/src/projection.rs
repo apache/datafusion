@@ -332,12 +332,12 @@ impl ExecutionPlan for ProjectionExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Statistics {
-        stats_projection(
-            self.input.statistics(),
+    fn statistics(&self) -> Result<Statistics> {
+        Ok(stats_projection(
+            self.input.statistics()?,
             self.expr.iter().map(|(e, _)| Arc::clone(e)),
             self.schema.clone(),
-        )
+        ))
     }
 }
 

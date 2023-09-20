@@ -30,9 +30,7 @@ use arrow::array::ArrayRef;
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::longest_consecutive_prefix;
-use datafusion_common::{
-    not_impl_err, plan_err, ColumnStatistics, DataFusionError, Result,
-};
+use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Accumulator;
 use datafusion_physical_expr::{
@@ -1002,7 +1000,7 @@ impl ExecutionPlan for AggregateExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Result<Statistics> {
         // TODO stats: group expressions:
         // - once expressions will be able to compute their own stats, use it here
         // - case where we group by on a column for which with have the `distinct` stat
@@ -1013,20 +1011,20 @@ impl ExecutionPlan for AggregateExec {
             AggregateMode::Final | AggregateMode::FinalPartitioned
                 if self.group_by.expr.is_empty() =>
             {
-                Statistics {
+                Ok(Statistics {
                     num_rows: Some(1),
                     is_exact: true,
                     column_statistics: Some(column_statistics),
                     total_byte_size: None,
-                }
+                })
             }
-            _ => Statistics {
+            _ => Ok(Statistics {
                 // the output row count is surely not larger than its input row count
-                num_rows: self.input.statistics().num_rows,
+                num_rows: self.input.statistics()?.num_rows,
                 is_exact: false,
                 column_statistics: Some(column_statistics),
                 total_byte_size: None,
-            },
+            }),
         }
     }
 }
@@ -1826,9 +1824,13 @@ mod tests {
             Ok(Box::pin(stream))
         }
 
-        fn statistics(&self) -> Statistics {
+        fn statistics(&self) -> Result<Statistics> {
             let (_, batches) = some_data();
-            common::compute_record_batch_statistics(&[batches], &self.schema(), None)
+            Ok(common::compute_record_batch_statistics(
+                &[batches],
+                &self.schema(),
+                None,
+            ))
         }
     }
 

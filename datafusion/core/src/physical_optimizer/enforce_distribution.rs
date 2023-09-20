@@ -1252,7 +1252,7 @@ fn ensure_distribution(
         return Ok(Transformed::No(dist_context));
     }
     // Don't need to apply when the returned row count is not greater than 1:
-    let stats = dist_context.plan.statistics();
+    let stats = dist_context.plan.statistics()?;
     let mut repartition_beneficial_stat = true;
     if stats.is_exact {
         repartition_beneficial_stat =
@@ -1775,7 +1775,7 @@ mod tests {
             unreachable!();
         }
 
-        fn statistics(&self) -> Statistics {
+        fn statistics(&self) -> Result<Statistics> {
             self.input.statistics()
         }
     }

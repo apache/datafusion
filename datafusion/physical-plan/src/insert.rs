@@ -250,8 +250,8 @@ impl ExecutionPlan for FileSinkExec {
         )))
     }
 
-    fn statistics(&self) -> Statistics {
-        Statistics::new_with_unbounded_columns(&self.schema())
+    fn statistics(&self) -> Result<Statistics> {
+        Ok(Statistics::new_with_unbounded_columns(&self.schema()))
     }
 }
 

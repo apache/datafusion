@@ -1048,8 +1048,8 @@ mod tests {
         assert_eq!(exec.output_partitioning().partition_count(), 1);
 
         // test metadata
-        assert_eq!(exec.statistics().num_rows, Some(8));
-        assert_eq!(exec.statistics().total_byte_size, Some(671));
+        assert_eq!(exec.statistics()?.num_rows, Some(8));
+        assert_eq!(exec.statistics()?.total_byte_size, Some(671));
 
         Ok(())
     }
@@ -1071,8 +1071,8 @@ mod tests {
         let table = ListingTable::try_new(config)?;
 
         let exec = table.scan(&state, None, &[], None).await?;
-        assert_eq!(exec.statistics().num_rows, Some(8));
-        assert_eq!(exec.statistics().total_byte_size, Some(671));
+        assert_eq!(exec.statistics()?.num_rows, Some(8));
+        assert_eq!(exec.statistics()?.total_byte_size, Some(671));
 
         Ok(())
     }
@@ -1095,8 +1095,8 @@ mod tests {
         let table = ListingTable::try_new(config)?;
 
         let exec = table.scan(&state, None, &[], None).await?;
-        assert_eq!(exec.statistics().num_rows, None);
-        assert_eq!(exec.statistics().total_byte_size, None);
+        assert_eq!(exec.statistics()?.num_rows, None);
+        assert_eq!(exec.statistics()?.total_byte_size, None);
 
         Ok(())
     }

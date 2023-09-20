@@ -64,13 +64,15 @@ fn should_swap_join_order(left: &dyn ExecutionPlan, right: &dyn ExecutionPlan) -
     // Get the left and right table's total bytes
     // If both the left and right tables contain total_byte_size statistics,
     // use `total_byte_size` to determine `should_swap_join_order`, else use `num_rows`
-    let (left_size, right_size) = match (
-        left.statistics().total_byte_size,
-        right.statistics().total_byte_size,
-    ) {
-        (Some(l), Some(r)) => (Some(l), Some(r)),
-        _ => (left.statistics().num_rows, right.statistics().num_rows),
+    let (left_stats, right_stats) = match (left.statistics(), right.statistics()) {
+        (Ok(left), Ok(right)) => (left, right),
+        _ => return false,
     };
+    let (left_size, right_size) =
+        match (left_stats.total_byte_size, right_stats.total_byte_size) {
+            (Some(l), Some(r)) => (Some(l), Some(r)),
+            _ => (left_stats.num_rows, right_stats.num_rows),
+        };
 
     match (left_size, right_size) {
         (Some(l), Some(r)) => l > r,
@@ -84,9 +86,14 @@ fn supports_collect_by_size(
 ) -> bool {
     // Currently we do not trust the 0 value from stats, due to stats collection might have bug
     // TODO check the logic in datasource::get_statistics_with_limit()
-    if let Some(size) = plan.statistics().total_byte_size {
+    let stats = if let Ok(stats) = plan.statistics() {
+        stats
+    } else {
+        return false;
+    };
+    if let Some(size) = stats.total_byte_size {
         size != 0 && size < collection_size_threshold
-    } else if let Some(row_count) = plan.statistics().num_rows {
+    } else if let Some(row_count) = stats.num_rows {
         row_count != 0 && row_count < collection_size_threshold
     } else {
         false
@@ -734,9 +741,12 @@ mod tests_statistical {
             .downcast_ref::<HashJoinExec>()
             .expect("The type of the plan should not be changed");
 
-        assert_eq!(swapped_join.left().statistics().total_byte_size, Some(10));
         assert_eq!(
-            swapped_join.right().statistics().total_byte_size,
+            swapped_join.left().statistics().unwrap().total_byte_size,
+            Some(10)
+        );
+        assert_eq!(
+            swapped_join.right().statistics().unwrap().total_byte_size,
             Some(100000)
         );
     }
@@ -783,10 +793,13 @@ mod tests_statistical {
             .expect("The type of the plan should not be changed");
 
         assert_eq!(
-            swapped_join.left().statistics().total_byte_size,
+            swapped_join.left().statistics().unwrap().total_byte_size,
             Some(100000)
         );
-        assert_eq!(swapped_join.right().statistics().total_byte_size, Some(10));
+        assert_eq!(
+            swapped_join.right().statistics().unwrap().total_byte_size,
+            Some(10)
+        );
     }
 
     #[tokio::test]
@@ -824,9 +837,12 @@ mod tests_statistical {
 
             assert_eq!(swapped_join.schema().fields().len(), 1);
 
-            assert_eq!(swapped_join.left().statistics().total_byte_size, Some(10));
             assert_eq!(
-                swapped_join.right().statistics().total_byte_size,
+                swapped_join.left().statistics().unwrap().total_byte_size,
+                Some(10)
+            );
+            assert_eq!(
+                swapped_join.right().statistics().unwrap().total_byte_size,
                 Some(100000)
             );
 
@@ -936,9 +952,12 @@ mod tests_statistical {
             .downcast_ref::<HashJoinExec>()
             .expect("The type of the plan should not be changed");
 
-        assert_eq!(swapped_join.left().statistics().total_byte_size, Some(10));
         assert_eq!(
-            swapped_join.right().statistics().total_byte_size,
+            swapped_join.left().statistics().unwrap().total_byte_size,
+            Some(10)
+        );
+        assert_eq!(
+            swapped_join.right().statistics().unwrap().total_byte_size,
             Some(100000)
         );
     }

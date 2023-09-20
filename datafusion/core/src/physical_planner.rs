@@ -2672,7 +2672,7 @@ mod tests {
             unimplemented!("NoOpExecutionPlan::execute");
         }
 
-        fn statistics(&self) -> Statistics {
+        fn statistics(&self) -> Result<Statistics> {
             unimplemented!("NoOpExecutionPlan::statistics");
         }
     }

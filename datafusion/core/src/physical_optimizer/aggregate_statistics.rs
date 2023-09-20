@@ -58,7 +58,7 @@ impl PhysicalOptimizerRule for AggregateStatistics {
                 .as_any()
                 .downcast_ref::<AggregateExec>()
                 .expect("take_optimizable() ensures that this is a AggregateExec");
-            let stats = partial_agg_exec.input().statistics();
+            let stats = partial_agg_exec.input().statistics()?;
             let mut projections = vec![];
             for expr in partial_agg_exec.aggr_expr() {
                 if let Some((non_null_rows, name)) =
@@ -126,8 +126,10 @@ fn take_optimizable(node: &dyn ExecutionPlan) -> Option<Arc<dyn ExecutionPlan>> 
                         && partial_agg_exec.filter_expr().iter().all(|e| e.is_none())
                     {
                         let stats = partial_agg_exec.input().statistics();
-                        if stats.is_exact {
-                            return Some(child);
+                        if let Ok(stats) = stats {
+                            if stats.is_exact {
+                                return Some(child);
+                            }
                         }
                     }
                 }

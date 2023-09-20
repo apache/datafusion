@@ -1122,8 +1122,8 @@ mod tests {
         assert_eq!(tt_batches, 4 /* 8/2 */);
 
         // test metadata
-        assert_eq!(exec.statistics().num_rows, Some(8));
-        assert_eq!(exec.statistics().total_byte_size, Some(671));
+        assert_eq!(exec.statistics()?.num_rows, Some(8));
+        assert_eq!(exec.statistics()?.total_byte_size, Some(671));
 
         Ok(())
     }
@@ -1164,9 +1164,9 @@ mod tests {
             get_exec(&state, "alltypes_plain.parquet", projection, Some(1)).await?;
 
         // note: even if the limit is set, the executor rounds up to the batch size
-        assert_eq!(exec.statistics().num_rows, Some(8));
-        assert_eq!(exec.statistics().total_byte_size, Some(671));
-        assert!(exec.statistics().is_exact);
+        assert_eq!(exec.statistics()?.num_rows, Some(8));
+        assert_eq!(exec.statistics()?.total_byte_size, Some(671));
+        assert!(exec.statistics()?.is_exact);
         let batches = collect(exec, task_ctx).await?;
         assert_eq!(1, batches.len());
         assert_eq!(11, batches[0].num_columns());

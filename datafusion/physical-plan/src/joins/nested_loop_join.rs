@@ -282,7 +282,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Result<Statistics> {
         estimate_join_statistics(
             self.left.clone(),
             self.right.clone(),

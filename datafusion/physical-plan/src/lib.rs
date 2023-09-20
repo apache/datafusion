@@ -187,7 +187,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     }
 
     /// Returns the global output statistics for this `ExecutionPlan` node.
-    fn statistics(&self) -> Statistics;
+    fn statistics(&self) -> Result<Statistics>;
 }
 
 /// Indicate whether a data exchange is needed for the input of `plan`, which will be very helpful

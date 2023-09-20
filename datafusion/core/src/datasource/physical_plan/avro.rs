@@ -154,8 +154,8 @@ impl ExecutionPlan for AvroExec {
         Ok(Box::pin(stream))
     }
 
-    fn statistics(&self) -> Statistics {
-        self.projected_statistics.clone()
+    fn statistics(&self) -> Result<Statistics> {
+        Ok(self.projected_statistics.clone())
     }
 
     fn metrics(&self) -> Option<MetricsSet> {

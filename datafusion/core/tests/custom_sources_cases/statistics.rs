@@ -166,8 +166,8 @@ impl ExecutionPlan for StatisticsValidation {
         unimplemented!("This plan only serves for testing statistics")
     }
 
-    fn statistics(&self) -> Statistics {
-        self.stats.clone()
+    fn statistics(&self) -> Result<Statistics> {
+        Ok(self.stats.clone())
     }
 }
 
@@ -216,7 +216,7 @@ async fn sql_basic() -> Result<()> {
     let physical_plan = df.create_physical_plan().await.unwrap();
 
     // the statistics should be those of the source
-    assert_eq!(stats, physical_plan.statistics());
+    assert_eq!(stats, physical_plan.statistics()?);
 
     Ok(())
 }
@@ -233,7 +233,7 @@ async fn sql_filter() -> Result<()> {
 
     let physical_plan = df.create_physical_plan().await.unwrap();
 
-    let stats = physical_plan.statistics();
+    let stats = physical_plan.statistics()?;
     assert!(!stats.is_exact);
     assert_eq!(stats.num_rows, Some(1));
 
@@ -257,7 +257,7 @@ async fn sql_limit() -> Result<()> {
             column_statistics: Some(col_stats),
             total_byte_size: None
         },
-        physical_plan.statistics()
+        physical_plan.statistics()?
     );
 
     let df = ctx
@@ -266,7 +266,7 @@ async fn sql_limit() -> Result<()> {
         .unwrap();
     let physical_plan = df.create_physical_plan().await.unwrap();
     // when the limit is larger than the original number of lines, statistics remain unchanged
-    assert_eq!(stats, physical_plan.statistics());
+    assert_eq!(stats, physical_plan.statistics()?);
 
     Ok(())
 }
@@ -283,7 +283,7 @@ async fn sql_window() -> Result<()> {
 
     let physical_plan = df.create_physical_plan().await.unwrap();
 
-    let result = physical_plan.statistics();
+    let result = physical_plan.statistics()?;
 
     assert_eq!(stats.num_rows, result.num_rows);
     assert!(result.column_statistics.is_some());

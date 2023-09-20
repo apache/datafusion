@@ -161,11 +161,15 @@ impl ExecutionPlan for EmptyExec {
         )?))
     }
 
-    fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Result<Statistics> {
         let batch = self
             .data()
             .expect("Create empty RecordBatch should not fail");
-        common::compute_record_batch_statistics(&[batch], &self.schema, None)
+        Ok(common::compute_record_batch_statistics(
+            &[batch],
+            &self.schema,
+            None,
+        ))
     }
 }
 

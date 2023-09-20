@@ -264,12 +264,17 @@ impl ExecutionPlan for UnionExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Statistics {
-        self.inputs
+    fn statistics(&self) -> Result<Statistics> {
+        let stats = self
+            .inputs
             .iter()
-            .map(|ep| ep.statistics())
+            .map(|stat| stat.statistics())
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(stats
+            .into_iter()
             .reduce(stats_union)
-            .unwrap_or(Statistics::new_with_unbounded_columns(&self.schema()))
+            .unwrap_or_else(|| Statistics::new_with_unbounded_columns(&self.schema())))
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
@@ -438,12 +443,17 @@ impl ExecutionPlan for InterleaveExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Statistics {
-        self.inputs
+    fn statistics(&self) -> Result<Statistics> {
+        let stats = self
+            .inputs
             .iter()
-            .map(|ep| ep.statistics())
+            .map(|stat| stat.statistics())
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(stats
+            .into_iter()
             .reduce(stats_union)
-            .unwrap_or(Statistics::new_with_unbounded_columns(&self.schema()))
+            .unwrap_or_else(|| Statistics::new_with_unbounded_columns(&self.schema())))
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {

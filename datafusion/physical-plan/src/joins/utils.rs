@@ -724,21 +724,21 @@ pub(crate) fn estimate_join_statistics(
     right: Arc<dyn ExecutionPlan>,
     on: JoinOn,
     join_type: &JoinType,
-) -> Statistics {
-    let left_stats = left.statistics();
-    let right_stats = right.statistics();
+) -> Result<Statistics> {
+    let left_stats = left.statistics()?;
+    let right_stats = right.statistics()?;
 
     let join_stats = estimate_join_cardinality(join_type, left_stats, right_stats, &on);
     let (num_rows, column_statistics) = match join_stats {
         Some(stats) => (Some(stats.num_rows), Some(stats.column_statistics)),
         None => (None, None),
     };
-    Statistics {
+    Ok(Statistics {
         num_rows,
         total_byte_size: None,
         column_statistics,
         is_exact: false,
-    }
+    })
 }
 
 // Estimate the cardinality for the given join with input statistics.

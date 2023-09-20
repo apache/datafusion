@@ -477,9 +477,9 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Result<Statistics> {
         // TODO stats: it is not possible in general to know the output size of joins
-        Statistics::new_with_unbounded_columns(&self.schema())
+        Ok(Statistics::new_with_unbounded_columns(&self.schema()))
     }
 
     fn execute(

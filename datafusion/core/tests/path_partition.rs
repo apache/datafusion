@@ -462,7 +462,7 @@ async fn parquet_statistics() -> Result<()> {
     assert_eq!(schema.fields().len(), 4);
 
     let stat_cols = physical_plan
-        .statistics()
+        .statistics()?
         .column_statistics
         .expect("col stats should be defined");
     assert_eq!(stat_cols.len(), 4);
@@ -489,7 +489,7 @@ async fn parquet_statistics() -> Result<()> {
     assert_eq!(schema.fields().len(), 2);
 
     let stat_cols = physical_plan
-        .statistics()
+        .statistics()?
         .column_statistics
         .expect("col stats should be defined");
     assert_eq!(stat_cols.len(), 2);

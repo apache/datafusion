@@ -408,8 +408,8 @@ mod tests {
         assert_eq!(tt_batches, 6 /* 12/2 */);
 
         // test metadata
-        assert_eq!(exec.statistics().num_rows, None);
-        assert_eq!(exec.statistics().total_byte_size, None);
+        assert_eq!(exec.statistics()?.num_rows, None);
+        assert_eq!(exec.statistics()?.total_byte_size, None);
 
         Ok(())
     }

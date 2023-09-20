@@ -181,9 +181,9 @@ impl ExecutionPlan for AnalyzeExec {
         )))
     }
 
-    fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Result<Statistics> {
         // Statistics an an ANALYZE plan are not relevant
-        Statistics::new_with_unbounded_columns(&self.schema())
+        Ok(Statistics::new_with_unbounded_columns(&self.schema()))
     }
 }
 

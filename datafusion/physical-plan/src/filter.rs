@@ -154,7 +154,9 @@ impl ExecutionPlan for FilterExec {
     }
 
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        let stats = self.statistics();
+        let stats = self
+            .statistics()
+            .expect("Ordering equivalences need to handle the error case of statistics");
         // Add the columns that have only one value (singleton) after filtering to constants.
         if let Some(col_stats) = stats.column_statistics {
             let constants = collect_columns(self.predicate())
@@ -200,18 +202,18 @@ impl ExecutionPlan for FilterExec {
 
     /// The output statistics of a filtering operation can be estimated if the
     /// predicate's selectivity value can be determined for the incoming data.
-    fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Result<Statistics> {
         let predicate = self.predicate();
 
         if check_support(predicate, self.schema()) {
-            let input_stats = self.input.statistics();
+            let input_stats = self.input.statistics()?;
 
             if let Some(column_stats) = input_stats.column_statistics {
                 let num_rows = input_stats.num_rows;
                 let total_byte_size = input_stats.total_byte_size;
                 let input_analysis_ctx =
                     AnalysisContext::from_statistics(&self.input.schema(), &column_stats);
-                let analysis_ctx = analyze(predicate, input_analysis_ctx).unwrap();
+                let analysis_ctx = analyze(predicate, input_analysis_ctx)?;
 
                 let selectivity = analysis_ctx.selectivity.unwrap_or(1.0);
                 let num_rows =
@@ -222,23 +224,23 @@ impl ExecutionPlan for FilterExec {
                 return if let Some(analysis_boundaries) = analysis_ctx.boundaries {
                     let column_statistics =
                         collect_new_statistics(&column_stats, analysis_boundaries);
-                    Statistics {
+                    Ok(Statistics {
                         num_rows,
                         total_byte_size,
                         column_statistics: Some(column_statistics),
                         is_exact: false,
-                    }
+                    })
                 } else {
-                    Statistics {
+                    Ok(Statistics {
                         num_rows,
                         total_byte_size,
                         column_statistics: Some(column_stats.to_vec()),
                         is_exact: false,
-                    }
+                    })
                 };
             }
         }
-        Statistics::new_with_unbounded_columns(&self.schema())
+        Ok(Statistics::new_with_unbounded_columns(&self.schema()))
     }
 }
 
@@ -467,7 +469,7 @@ mod tests {
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input)?);
 
-        let statistics = filter.statistics();
+        let statistics = filter.statistics()?;
         assert_eq!(statistics.num_rows, Some(25));
         assert_eq!(statistics.total_byte_size, Some(25 * bytes_per_row));
         assert_eq!(
@@ -515,7 +517,7 @@ mod tests {
             sub_filter,
         )?);
 
-        let statistics = filter.statistics();
+        let statistics = filter.statistics()?;
         assert_eq!(statistics.num_rows, Some(16));
         assert_eq!(
             statistics.column_statistics,
@@ -576,7 +578,7 @@ mod tests {
             binary(col("a", &schema)?, Operator::GtEq, lit(10i32), &schema)?,
             b_gt_5,
         )?);
-        let statistics = filter.statistics();
+        let statistics = filter.statistics()?;
         // On a uniform distribution, only fifteen rows will satisfy the
         // filter that 'a' proposed (a >= 10 AND a <= 25) (15/100) and only
         // 5 rows will satisfy the filter that 'b' proposed (b > 45) (5/50).
@@ -621,7 +623,7 @@ mod tests {
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input)?);
 
-        let statistics = filter.statistics();
+        let statistics = filter.statistics()?;
         assert_eq!(statistics.num_rows, None);
 
         Ok(())
@@ -695,7 +697,7 @@ mod tests {
         ));
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input)?);
-        let statistics = filter.statistics();
+        let statistics = filter.statistics()?;
         // 0.5 (from a) * 0.333333... (from b) * 0.798387... (from c) ≈ 0.1330...
         // num_rows after ceil => 133.0... => 134
         // total_byte_size after ceil => 532.0... => 533
@@ -788,10 +790,10 @@ mod tests {
             )),
         ));
         // Since filter predicate passes all entries, statistics after filter shouldn't change.
-        let expected = input.statistics().column_statistics;
+        let expected = input.statistics()?.column_statistics;
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input)?);
-        let statistics = filter.statistics();
+        let statistics = filter.statistics()?;
 
         assert_eq!(statistics.num_rows, Some(1000));
         assert_eq!(statistics.total_byte_size, Some(4000));
@@ -845,7 +847,7 @@ mod tests {
         ));
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input)?);
-        let statistics = filter.statistics();
+        let statistics = filter.statistics()?;
 
         assert_eq!(statistics.num_rows, Some(0));
         assert_eq!(statistics.total_byte_size, Some(0));
@@ -902,7 +904,7 @@ mod tests {
         ));
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input)?);
-        let statistics = filter.statistics();
+        let statistics = filter.statistics()?;
 
         assert_eq!(statistics.num_rows, Some(490));
         assert_eq!(statistics.total_byte_size, Some(1960));
@@ -952,7 +954,7 @@ mod tests {
         ));
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input)?);
-        let filter_statistics = filter.statistics();
+        let filter_statistics = filter.statistics()?;
 
         let expected_filter_statistics = Statistics {
             num_rows: None,
