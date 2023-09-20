@@ -442,17 +442,17 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         None
     }
 
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        let left_columns_len = self.left.schema().fields.len();
-        combine_join_equivalence_properties(
-            self.join_type,
-            self.left.equivalence_properties(),
-            self.right.equivalence_properties(),
-            left_columns_len,
-            self.on(),
-            self.schema(),
-        )
-    }
+    // fn equivalence_properties(&self) -> EquivalenceProperties {
+    //     let left_columns_len = self.left.schema().fields.len();
+    //     combine_join_equivalence_properties(
+    //         self.join_type,
+    //         self.left.equivalence_properties(),
+    //         self.right.equivalence_properties(),
+    //         left_columns_len,
+    //         self.on(),
+    //         self.schema(),
+    //     )
+    // }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![self.left.clone(), self.right.clone()]

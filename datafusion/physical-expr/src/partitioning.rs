@@ -20,7 +20,10 @@
 use std::fmt;
 use std::sync::Arc;
 
-use crate::{expr_list_eq_strict_order, EquivalenceProperties, PhysicalExpr};
+use crate::{
+    expr_list_eq_strict_order, EquivalenceProperties, OrderingEquivalenceProperties,
+    PhysicalExpr,
+};
 
 /// Partitioning schemes supported by operators.
 #[derive(Debug, Clone)]
@@ -63,7 +66,7 @@ impl Partitioning {
 
     /// Returns true when the guarantees made by this [[Partitioning]] are sufficient to
     /// satisfy the partitioning scheme mandated by the `required` [[Distribution]]
-    pub fn satisfy<F: FnOnce() -> EquivalenceProperties>(
+    pub fn satisfy<F: FnOnce() -> OrderingEquivalenceProperties>(
         &self,
         required: Distribution,
         equal_properties: F,
@@ -83,7 +86,7 @@ impl Partitioning {
                         // and normalize both exprs based on the eq_properties
                         if !fast_match {
                             let eq_properties = equal_properties();
-                            let eq_classes = eq_properties.classes();
+                            let eq_classes = eq_properties.eq_classes();
                             if !eq_classes.is_empty() {
                                 let normalized_required_exprs = required_exprs
                                     .iter()
@@ -200,19 +203,19 @@ mod tests {
         for distribution in distribution_types {
             let result = (
                 single_partition.satisfy(distribution.clone(), || {
-                    EquivalenceProperties::new(schema.clone())
+                    OrderingEquivalenceProperties::new(schema.clone())
                 }),
                 unspecified_partition.satisfy(distribution.clone(), || {
-                    EquivalenceProperties::new(schema.clone())
+                    OrderingEquivalenceProperties::new(schema.clone())
                 }),
                 round_robin_partition.satisfy(distribution.clone(), || {
-                    EquivalenceProperties::new(schema.clone())
+                    OrderingEquivalenceProperties::new(schema.clone())
                 }),
                 hash_partition1.satisfy(distribution.clone(), || {
-                    EquivalenceProperties::new(schema.clone())
+                    OrderingEquivalenceProperties::new(schema.clone())
                 }),
                 hash_partition2.satisfy(distribution.clone(), || {
-                    EquivalenceProperties::new(schema.clone())
+                    OrderingEquivalenceProperties::new(schema.clone())
                 }),
             );
 

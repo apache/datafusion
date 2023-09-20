@@ -262,7 +262,6 @@ pub(crate) fn replace_with_order_preserving_variants(
         if ordering_satisfy(
             updated_sort_input.output_ordering(),
             plan.output_ordering(),
-            || updated_sort_input.equivalence_properties(),
             || updated_sort_input.ordering_equivalence_properties(),
         ) {
             return Ok(Transformed::Yes(OrderPreservationContext {

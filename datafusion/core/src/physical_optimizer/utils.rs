@@ -109,12 +109,9 @@ pub fn add_sort_above(
     fetch: Option<usize>,
 ) -> Result<()> {
     // If the ordering requirement is already satisfied, do not add a sort.
-    if !ordering_satisfy(
-        node.output_ordering(),
-        Some(&sort_expr),
-        || node.equivalence_properties(),
-        || node.ordering_equivalence_properties(),
-    ) {
+    if !ordering_satisfy(node.output_ordering(), Some(&sort_expr), || {
+        node.ordering_equivalence_properties()
+    }) {
         let new_sort = SortExec::new(sort_expr, node.clone()).with_fetch(fetch);
 
         *node = Arc::new(if node.output_partitioning().partition_count() > 1 {

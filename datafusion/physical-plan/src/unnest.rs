@@ -136,9 +136,9 @@ impl ExecutionPlan for UnnestExec {
         None
     }
 
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        self.input.equivalence_properties()
-    }
+    // fn equivalence_properties(&self) -> EquivalenceProperties {
+    //     self.input.equivalence_properties()
+    // }
 
     fn execute(
         &self,

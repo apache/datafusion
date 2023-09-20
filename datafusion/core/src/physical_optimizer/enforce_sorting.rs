@@ -426,6 +426,14 @@ fn parallelize_sorts(
     }))
 }
 
+fn print_plan(plan: &Arc<dyn ExecutionPlan>) -> () {
+    let formatted = crate::physical_plan::displayable(plan.as_ref())
+        .indent(true)
+        .to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    println!("{:#?}", actual);
+}
+
 /// This function enforces sorting requirements and makes optimizations without
 /// violating these requirements whenever possible.
 fn ensure_sorting(
@@ -438,6 +446,7 @@ fn ensure_sorting(
     let plan = requirements.plan;
     let mut children = plan.children();
     let mut sort_onwards = requirements.sort_onwards;
+    // print_plan(&plan);
     if let Some(result) = analyze_immediate_sort_removal(&plan, &sort_onwards) {
         return Ok(Transformed::Yes(result));
     }
@@ -454,7 +463,6 @@ fn ensure_sorting(
                 if !ordering_satisfy_requirement_concrete(
                     physical_ordering,
                     &required_ordering,
-                    || child.equivalence_properties(),
                     || child.ordering_equivalence_properties(),
                 ) {
                     // Make sure we preserve the ordering requirements:
@@ -517,11 +525,16 @@ fn analyze_immediate_sort_removal(
 ) -> Option<PlanWithCorrespondingSort> {
     if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
         let sort_input = sort_exec.input().clone();
+        // println!("sort input");
+        // print_plan(&sort_input);
+        // println!("sort_input.output_ordering(): {:?}", sort_input.output_ordering());
+        // println!("sort_exec.output_ordering(): {:?}", sort_exec.output_ordering());
+        // println!("sort_input.ordering_equivalence_properties(): {:?}", sort_input.ordering_equivalence_properties());
+
         // If this sort is unnecessary, we should remove it:
         if ordering_satisfy(
             sort_input.output_ordering(),
             sort_exec.output_ordering(),
-            || sort_input.equivalence_properties(),
             || sort_input.ordering_equivalence_properties(),
         ) {
             // Since we know that a `SortExec` has exactly one child,
@@ -807,24 +820,17 @@ fn can_skip_sort(
     };
     let orderby_exprs = convert_to_expr(orderby_keys);
     let physical_ordering_exprs = convert_to_expr(physical_ordering);
-    let equal_properties = || input.equivalence_properties();
     // indices of the order by expressions among input ordering expressions
-    let ob_indices = get_indices_of_matching_exprs(
-        &orderby_exprs,
-        &physical_ordering_exprs,
-        equal_properties,
-    );
+    let ob_indices =
+        get_indices_of_matching_exprs(&orderby_exprs, &physical_ordering_exprs);
     if ob_indices.len() != orderby_exprs.len() {
         // If all order by expressions are not in the input ordering,
         // there is no way to remove a sort -- immediately return:
         return Ok(None);
     }
     // indices of the partition by expressions among input ordering expressions
-    let pb_indices = get_indices_of_matching_exprs(
-        partitionby_exprs,
-        &physical_ordering_exprs,
-        equal_properties,
-    );
+    let pb_indices =
+        get_indices_of_matching_exprs(partitionby_exprs, &physical_ordering_exprs);
     let ordered_merged_indices = merge_and_order_indices(&pb_indices, &ob_indices);
     // Indices of order by columns that doesn't seen in partition by
     // Equivalently (Order by columns) ∖ (Partition by columns) where `∖` represents set difference.
@@ -870,11 +876,8 @@ fn can_skip_sort(
         // All of the partition by columns defines a consecutive range from zero.
         let ordered_range = &ordered_pb_indices[0..first_n];
         let input_pb_exprs = get_at_indices(&physical_ordering_exprs, ordered_range)?;
-        let partially_ordered_indices = get_indices_of_matching_exprs(
-            &input_pb_exprs,
-            partitionby_exprs,
-            equal_properties,
-        );
+        let partially_ordered_indices =
+            get_indices_of_matching_exprs(&input_pb_exprs, partitionby_exprs);
         PartitionSearchMode::PartiallySorted(partially_ordered_indices)
     } else {
         // None of the partition by columns defines a consecutive range from zero.
@@ -2778,6 +2781,538 @@ mod tests {
             "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "      CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC, b@1 ASC], has_header=false",];
         assert_optimized!(expected_input, expected_optimized, physical_plan, false);
+        Ok(())
+    }
+}
+
+mod tmp_tests {
+    use crate::assert_batches_eq;
+    use crate::physical_optimizer::utils::get_plan_string;
+    use crate::physical_plan::{collect, displayable, ExecutionPlan};
+    use crate::prelude::SessionContext;
+    use arrow::util::pretty::print_batches;
+    use datafusion_common::Result;
+    use datafusion_execution::config::SessionConfig;
+    use std::sync::Arc;
+
+    fn print_plan(plan: &Arc<dyn ExecutionPlan>) -> Result<()> {
+        let formatted = displayable(plan.as_ref()).indent(true).to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        println!("{:#?}", actual);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_query() -> Result<()> {
+        let config = SessionConfig::new().with_target_partitions(1);
+        let ctx = SessionContext::with_config(config);
+
+        ctx.sql("CREATE TABLE tab0(col0 INTEGER, col1 INTEGER, col2 INTEGER)")
+            .await?;
+
+        let sql = "SELECT l.col0, LAST_VALUE(r.col1 ORDER BY r.col0) as last_col1
+            FROM tab0 as l
+            JOIN tab0 as r
+            ON l.col0 = r.col0
+            GROUP BY l.col0, l.col1, l.col2
+            ORDER BY l.col0;";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        print_plan(&physical_plan)?;
+        let actual = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+        print_batches(&actual)?;
+
+        let expected_optimized_lines: Vec<&str> = vec![
+            "ProjectionExec: expr=[col0@0 as col0, LAST_VALUE(r.col1) ORDER BY [r.col0 ASC NULLS LAST]@3 as last_col1]",
+            "  AggregateExec: mode=Final, gby=[col0@0 as col0, col1@1 as col1, col2@2 as col2], aggr=[LAST_VALUE(r.col1)], ordering_mode=PartiallyOrdered",
+            "    AggregateExec: mode=Partial, gby=[col0@0 as col0, col1@1 as col1, col2@2 as col2], aggr=[LAST_VALUE(r.col1)], ordering_mode=PartiallyOrdered",
+            "      SortExec: expr=[col0@3 ASC NULLS LAST]",
+            "        CoalesceBatchesExec: target_batch_size=8192",
+            "          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(col0@0, col0@0)]",
+            "            MemoryExec: partitions=1, partition_sizes=[0]",
+            "            MemoryExec: partitions=1, partition_sizes=[0]",
+        ];
+
+        // Get string representation of the plan
+        let actual = get_plan_string(&physical_plan);
+        assert_eq!(
+            expected_optimized_lines, actual,
+            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected_optimized_lines:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_query2() -> Result<()> {
+        let config = SessionConfig::new().with_target_partitions(2);
+        let ctx = SessionContext::with_config(config);
+
+        ctx.sql("CREATE TABLE tab0(col0 INTEGER, col1 INTEGER, col2 INTEGER)")
+            .await?;
+
+        let sql = "SELECT l.col0, LAST_VALUE(r.col1 ORDER BY r.col0) as last_col1
+            FROM tab0 as l
+            JOIN tab0 as r
+            ON l.col0 = r.col0
+            GROUP BY l.col0, l.col1, l.col2
+            ORDER BY l.col0;";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        print_plan(&physical_plan)?;
+        let actual = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+        print_batches(&actual)?;
+
+        let expected_optimized_lines: Vec<&str> = vec![
+            "SortPreservingMergeExec: [col0@0 ASC NULLS LAST]",
+            "  ProjectionExec: expr=[col0@0 as col0, LAST_VALUE(r.col1) ORDER BY [r.col0 ASC NULLS LAST]@3 as last_col1]",
+            "    AggregateExec: mode=FinalPartitioned, gby=[col0@0 as col0, col1@1 as col1, col2@2 as col2], aggr=[LAST_VALUE(r.col1)], ordering_mode=PartiallyOrdered",
+            "      SortExec: expr=[col0@0 ASC NULLS LAST]",
+            "        CoalesceBatchesExec: target_batch_size=8192",
+            "          RepartitionExec: partitioning=Hash([col0@0, col1@1, col2@2], 2), input_partitions=2",
+            "            AggregateExec: mode=Partial, gby=[col0@0 as col0, col1@1 as col1, col2@2 as col2], aggr=[LAST_VALUE(r.col1)], ordering_mode=PartiallyOrdered",
+            "              SortExec: expr=[col0@3 ASC NULLS LAST]",
+            "                CoalesceBatchesExec: target_batch_size=8192",
+            "                  HashJoinExec: mode=Partitioned, join_type=Inner, on=[(col0@0, col0@0)]",
+            "                    CoalesceBatchesExec: target_batch_size=8192",
+            "                      RepartitionExec: partitioning=Hash([col0@0], 2), input_partitions=2",
+            "                        RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+            "                          MemoryExec: partitions=1, partition_sizes=[0]",
+            "                    CoalesceBatchesExec: target_batch_size=8192",
+            "                      RepartitionExec: partitioning=Hash([col0@0], 2), input_partitions=2",
+            "                        RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+            "                          MemoryExec: partitions=1, partition_sizes=[0]",
+        ];
+
+        // Get string representation of the plan
+        let actual = get_plan_string(&physical_plan);
+        assert_eq!(
+            expected_optimized_lines, actual,
+            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected_optimized_lines:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_query3() -> Result<()> {
+        let config = SessionConfig::new().with_target_partitions(1);
+        let ctx = SessionContext::with_config(config);
+
+        ctx.sql(
+            "CREATE EXTERNAL TABLE multiple_ordered_table (
+              a0 INTEGER,
+              a INTEGER,
+              b INTEGER,
+              c INTEGER,
+              d INTEGER
+            )
+            STORED AS CSV
+            WITH HEADER ROW
+            WITH ORDER (a ASC)
+            WITH ORDER (b ASC)
+            WITH ORDER (c ASC)
+            LOCATION '../core/tests/data/window_2.csv'",
+        )
+        .await?;
+
+        let sql = "SELECT (b+a+c) AS result
+            FROM multiple_ordered_table
+            ORDER BY result;";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        print_plan(&physical_plan)?;
+        let actual = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+        print_batches(&actual)?;
+
+        let expected_optimized_lines: Vec<&str> = vec![
+            "ProjectionExec: expr=[b@1 + a@0 + c@2 as result]",
+            "  CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+        ];
+
+        // Get string representation of the plan
+        let actual = get_plan_string(&physical_plan);
+        assert_eq!(
+            expected_optimized_lines, actual,
+            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected_optimized_lines:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_query4() -> Result<()> {
+        let config = SessionConfig::new().with_target_partitions(1);
+        let ctx = SessionContext::with_config(config);
+
+        ctx.sql(
+            "CREATE EXTERNAL TABLE aggregate_test_100 (
+              c1  VARCHAR NOT NULL,
+              c2  TINYINT NOT NULL,
+              c3  SMALLINT NOT NULL,
+              c4  SMALLINT,
+              c5  INT,
+              c6  BIGINT NOT NULL,
+              c7  SMALLINT NOT NULL,
+              c8  INT NOT NULL,
+              c9  BIGINT UNSIGNED NOT NULL,
+              c10 VARCHAR NOT NULL,
+              c11 FLOAT NOT NULL,
+              c12 DOUBLE NOT NULL,
+              c13 VARCHAR NOT NULL
+            )
+            STORED AS CSV
+            WITH HEADER ROW
+            LOCATION '../../testing/data/csv/aggregate_test_100.csv'",
+        )
+        .await?;
+
+        let sql = "SELECT c3,
+            SUM(c9) OVER(ORDER BY c3+c4 DESC, c9 DESC, c2 ASC) as sum1,
+            SUM(c9) OVER(ORDER BY c3+c4 ASC, c9 ASC ) as sum2
+            FROM aggregate_test_100
+            LIMIT 5";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        print_plan(&physical_plan)?;
+        let actual = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+        print_batches(&actual)?;
+
+        let expected_optimized_lines: Vec<&str> = vec![
+            "ProjectionExec: expr=[c3@0 as c3, SUM(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 + aggregate_test_100.c4 DESC NULLS FIRST, aggregate_test_100.c9 DESC NULLS FIRST, aggregate_test_100.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as sum1, SUM(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 + aggregate_test_100.c4 ASC NULLS LAST, aggregate_test_100.c9 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@4 as sum2]",
+            "  GlobalLimitExec: skip=0, fetch=5",
+            "    WindowAggExec: wdw=[SUM(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 + aggregate_test_100.c4 ASC NULLS LAST, aggregate_test_100.c9 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: \"SUM(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 + aggregate_test_100.c4 ASC NULLS LAST, aggregate_test_100.c9 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: CurrentRow, end_bound: Following(Int16(NULL)) }]",
+            "      ProjectionExec: expr=[c3@1 as c3, c4@2 as c4, c9@3 as c9, SUM(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 + aggregate_test_100.c4 DESC NULLS FIRST, aggregate_test_100.c9 DESC NULLS FIRST, aggregate_test_100.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@4 as SUM(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 + aggregate_test_100.c4 DESC NULLS FIRST, aggregate_test_100.c9 DESC NULLS FIRST, aggregate_test_100.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]",
+            "        BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 + aggregate_test_100.c4 DESC NULLS FIRST, aggregate_test_100.c9 DESC NULLS FIRST, aggregate_test_100.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: \"SUM(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 + aggregate_test_100.c4 DESC NULLS FIRST, aggregate_test_100.c9 DESC NULLS FIRST, aggregate_test_100.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int16(NULL)), end_bound: CurrentRow }], mode=[Sorted]",
+            "          SortExec: expr=[c3@1 + c4@2 DESC,c9@3 DESC,c2@0 ASC NULLS LAST]",
+            "            CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3, c4, c9], has_header=true",
+        ];
+
+        // Get string representation of the plan
+        let actual = get_plan_string(&physical_plan);
+        assert_eq!(
+            expected_optimized_lines, actual,
+            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected_optimized_lines:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_query5() -> Result<()> {
+        let config = SessionConfig::new().with_target_partitions(1);
+        let ctx = SessionContext::with_config(config);
+
+        ctx.sql(
+            "CREATE EXTERNAL TABLE annotated_data (
+              a0 INTEGER,
+              a INTEGER,
+              b INTEGER,
+              c INTEGER,
+              d INTEGER
+            )
+            STORED AS CSV
+            WITH HEADER ROW
+            WITH ORDER (a ASC NULLS FIRST, b ASC, c ASC)
+            LOCATION '../core/tests/data/window_2.csv'",
+        )
+        .await?;
+
+        let sql = "SELECT *
+              FROM annotated_data as l_table
+              JOIN (SELECT *, ROW_NUMBER() OVER() as rn1
+                          FROM annotated_data) as r_table
+              ON l_table.a = r_table.a
+              ORDER BY r_table.rn1";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        print_plan(&physical_plan)?;
+        let actual = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+        // print_batches(&actual)?;
+
+        let expected_optimized_lines: Vec<&str> = vec![
+            "CoalesceBatchesExec: target_batch_size=8192",
+            "  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@1, a@1)]",
+            "    CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true",
+            "    ProjectionExec: expr=[a0@0 as a0, a@1 as a, b@2 as b, c@3 as c, d@4 as d, ROW_NUMBER() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@5 as rn1]",
+            "      BoundedWindowAggExec: wdw=[ROW_NUMBER() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: \"ROW_NUMBER() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING\", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)) }], mode=[Sorted]",
+            "        CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true",
+        ];
+
+        // Get string representation of the plan
+        let actual = get_plan_string(&physical_plan);
+        assert_eq!(
+            expected_optimized_lines, actual,
+            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected_optimized_lines:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_query6() -> Result<()> {
+        let config = SessionConfig::new().with_target_partitions(1);
+        let ctx = SessionContext::with_config(config);
+
+        ctx.sql(
+            "CREATE EXTERNAL TABLE annotated_data_finite2 (
+              a0 INTEGER,
+              a INTEGER,
+              b INTEGER,
+              c INTEGER,
+              d INTEGER
+            )
+            STORED AS CSV
+            WITH HEADER ROW
+            WITH ORDER (a ASC, b ASC, c ASC)
+            LOCATION '../core/tests/data/window_2.csv'",
+        )
+        .await?;
+
+        let sql = "SELECT a, b, c,
+                        SUM(c) OVER(PARTITION BY a, d ORDER BY b, c ASC ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING) as sum1,
+                        SUM(c) OVER(PARTITION BY a, d ORDER BY b, c ASC ROWS BETWEEN 1 FOLLOWING AND 5 FOLLOWING) as sum2,
+                        SUM(c) OVER(PARTITION BY d ORDER BY a, b, c ASC ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING) as sum3,
+                        SUM(c) OVER(PARTITION BY d ORDER BY a, b, c ASC ROWS BETWEEN 5 PRECEDING AND 1 PRECEDING) as sum4,
+                        SUM(c) OVER(PARTITION BY a, b ORDER BY c ASC ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING) as sum5,
+                        SUM(c) OVER(PARTITION BY a, b ORDER BY c ASC ROWS BETWEEN 5 PRECEDING AND 5 FOLLOWING) as sum6,
+                        SUM(c) OVER(PARTITION BY b, a ORDER BY c ASC ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING) as sum7,
+                        SUM(c) OVER(PARTITION BY b, a ORDER BY c ASC ROWS BETWEEN 5 PRECEDING AND 5 FOLLOWING) as sum8,
+                        SUM(c) OVER(PARTITION BY a, b, d ORDER BY c ASC ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING) as sum9,
+                        SUM(c) OVER(PARTITION BY a, b, d ORDER BY c ASC ROWS BETWEEN 5 PRECEDING AND CURRENT ROW) as sum10,
+                        SUM(c) OVER(PARTITION BY b, a, d ORDER BY c ASC ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING) as sum11,
+                        SUM(c) OVER(PARTITION BY b, a, d ORDER BY c ASC ROWS BETWEEN CURRENT ROW  AND 1 FOLLOWING) as sum12
+                 FROM annotated_data_finite2
+                 ORDER BY c
+                 LIMIT 5";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        print_plan(&physical_plan)?;
+        let actual = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+        // print_batches(&actual)?;
+
+        let expected_optimized_lines: Vec<&str> = vec![
+            "GlobalLimitExec: skip=0, fetch=5",
+            "  SortExec: fetch=5, expr=[c@2 ASC NULLS LAST]",
+            "    ProjectionExec: expr=[a@1 as a, b@2 as b, c@3 as c, SUM(annotated_data_finite2.c) PARTITION BY [annotated_data_finite2.a, annotated_data_finite2.d] ORDER BY [annotated_data_finite2.b ASC NULLS LAST, annotated_data_finite2.c ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING@9 as sum1, SUM(annotated_data_finite2.c) PARTITION BY [annotated_data_finite2.a, annotated_data_finite2.d] ORDER BY [annotated_data_finite2.b ASC NULLS LAST, annotated_data_finite2.c ASC NULLS LAST] ROWS BETWEEN 1 FOLLOWING AND 5 FOLLOWING@10 as sum2, SUM(annotated_data_finite2.c) PARTITION BY [annotated_data_finite2.d] ORDER BY [annotated_data_finite2.a ASC NULLS LAST, annotated_data_finite2.b ASC NULLS LAST, annotated_data_finite2.c ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING@15 as sum3, SUM(annotated_data_finite2.c) PARTITION BY [annotated_data_finite2.d] ORDER BY [annotated_data_finite2.a ASC NULLS LAST, annotated_data_finite2.b ASC NULLS LAST, annotated_data_finite2.c ASC NULLS LAST] ROWS BETWEEN 5 PRECEDING AND 1 PRECEDING@16 as sum4, SUM(annotated_data_finite2.c) PARTITION BY [annotated_data_finite2.a, annotated_data_finite2.b] ORDER BY [annotated_data_finite2.c ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING@5 as sum5, SUM(annotated_data_finite2.c) PARTITION BY [annotated_data_finite2.a, annotated_data_finite2.b] ORDER BY [annotated_data_finite2.c ASC NULLS LAST] ROWS BETWEEN 5 PRECEDING AND 5 FOLLOWING@6 as sum6, SUM(annotated_data_finite2.c) PARTITION BY [annotated_data_finite2.b, annotated_data_finite2.a] ORDER BY [annotated_data_finite2.c ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING@11 as sum7, SUM(annotated_data_finite2.c) PARTITION BY [annotated_data_finite2.b, annotated_data_finite2.a] ORDER BY [annotated_data_finite2.c ASC NULLS LAST] ROWS BETWEEN 5 PRECEDING AND 5 FOLLOWING@12 as sum8, SUM(annotated_data_finite2.c) PARTITION BY [annotated_data_finite2.a, annotated_data_finite2.b, annotated_data_finite2.d] ORDER BY [annotated_data_finite2.c ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING@7 as sum9, SUM(annotated_data_finite2.c) PARTITION BY [annotated_data_finite2.a, annotated_data_finite2.b, annotated_data_finite2.d] ORDER BY [annotated_data_finite2.c ASC NULLS LAST] ROWS BETWEEN 5 PRECEDING AND CURRENT ROW@8 as sum10, SUM(annotated_data_finite2.c) PARTITION BY [annotated_data_finite2.b, annotated_data_finite2.a, annotated_data_finite2.d] ORDER BY [annotated_data_finite2.c ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING@13 as sum11, SUM(annotated_data_finite2.c) PARTITION BY [annotated_data_finite2.b, annotated_data_finite2.a, annotated_data_finite2.d] ORDER BY [annotated_data_finite2.c ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING@14 as sum12]",
+            "      BoundedWindowAggExec: wdw=[SUM(annotated_data_finite2.c) PARTITION BY [annotated_data_finite2.d] ORDER BY [annotated_data_finite2.a ASC NULLS LAST, annotated_data_finite2.b ASC NULLS LAST, annotated_data_finite2.c ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING: Ok(Field { name: \"SUM(annotated_data_finite2.c) PARTITION BY [annotated_data_finite2.d] ORDER BY [annotated_data_finite2.a ASC NULLS LAST, annotated_data_finite2.b ASC NULLS LAST, annotated_data_finite2.c ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(2)), end_bound: Following(UInt64(1)) }, SUM(annotated_data_finite2.c) PARTITION BY [annotated_data_finite2.d] ORDER BY [annotated_data_finite2.a ASC NULLS LAST, annotated_data_finite2.b ASC NULLS LAST, annotated_data_finite2.c ASC NULLS LAST] ROWS BETWEEN 5 PRECEDING AND 1 PRECEDING: Ok(Field { name: \"SUM(annotated_data_finite2.c) PARTITION BY [annotated_data_finite2.d] ORDER BY [annotated_data_finite2.a ASC NULLS LAST, annotated_data_finite2.b ASC NULLS LAST, annotated_data_finite2.c ASC NULLS LAST] ROWS BETWEEN 5 PRECEDING AND 1 PRECEDING\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(5)), end_bound: Preceding(UInt64(1)) }], mode=[Sorted]",
+            "        SortExec: expr=[d@4 ASC NULLS LAST,a@1 ASC NULLS LAST,b@2 ASC NULLS LAST,c@3 ASC NULLS LAST]",
+            "          BoundedWindowAggExec: wdw=[SUM(annotated_data_finite2.c) PARTITION BY [annotated_data_finite2.b, annotated_data_finite2.a, annotated_data_finite2.d] ORDER BY [annotated_data_finite2.c ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING: Ok(Field { name: \"SUM(annotated_data_finite2.c) PARTITION BY [annotated_data_finite2.b, annotated_data_finite2.a, annotated_data_finite2.d] ORDER BY [annotated_data_finite2.c ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(2)), end_bound: Following(UInt64(1)) }, SUM(annotated_data_finite2.c) PARTITION BY [annotated_data_finite2.b, annotated_data_finite2.a, annotated_data_finite2.d] ORDER BY [annotated_data_finite2.c ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING: Ok(Field { name: \"SUM(annotated_data_finite2.c) PARTITION BY [annotated_data_finite2.b, annotated_data_finite2.a, annotated_data_finite2.d] ORDER BY [annotated_data_finite2.c ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: CurrentRow, end_bound: Following(UInt64(1)) }], mode=[Sorted]",
+            "            SortExec: expr=[b@2 ASC NULLS LAST,a@1 ASC NULLS LAST,d@4 ASC NULLS LAST,c@3 ASC NULLS LAST]",
+            "              BoundedWindowAggExec: wdw=[SUM(annotated_data_finite2.c) PARTITION BY [annotated_data_finite2.b, annotated_data_finite2.a] ORDER BY [annotated_data_finite2.c ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING: Ok(Field { name: \"SUM(annotated_data_finite2.c) PARTITION BY [annotated_data_finite2.b, annotated_data_finite2.a] ORDER BY [annotated_data_finite2.c ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(2)), end_bound: Following(UInt64(1)) }, SUM(annotated_data_finite2.c) PARTITION BY [annotated_data_finite2.b, annotated_data_finite2.a] ORDER BY [annotated_data_finite2.c ASC NULLS LAST] ROWS BETWEEN 5 PRECEDING AND 5 FOLLOWING: Ok(Field { name: \"SUM(annotated_data_finite2.c) PARTITION BY [annotated_data_finite2.b, annotated_data_finite2.a] ORDER BY [annotated_data_finite2.c ASC NULLS LAST] ROWS BETWEEN 5 PRECEDING AND 5 FOLLOWING\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(5)), end_bound: Following(UInt64(5)) }], mode=[Sorted]",
+            "                SortExec: expr=[b@2 ASC NULLS LAST,a@1 ASC NULLS LAST,c@3 ASC NULLS LAST]",
+            "                  BoundedWindowAggExec: wdw=[SUM(annotated_data_finite2.c) PARTITION BY [annotated_data_finite2.a, annotated_data_finite2.d] ORDER BY [annotated_data_finite2.b ASC NULLS LAST, annotated_data_finite2.c ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING: Ok(Field { name: \"SUM(annotated_data_finite2.c) PARTITION BY [annotated_data_finite2.a, annotated_data_finite2.d] ORDER BY [annotated_data_finite2.b ASC NULLS LAST, annotated_data_finite2.c ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(2)), end_bound: Following(UInt64(1)) }, SUM(annotated_data_finite2.c) PARTITION BY [annotated_data_finite2.a, annotated_data_finite2.d] ORDER BY [annotated_data_finite2.b ASC NULLS LAST, annotated_data_finite2.c ASC NULLS LAST] ROWS BETWEEN 1 FOLLOWING AND 5 FOLLOWING: Ok(Field { name: \"SUM(annotated_data_finite2.c) PARTITION BY [annotated_data_finite2.a, annotated_data_finite2.d] ORDER BY [annotated_data_finite2.b ASC NULLS LAST, annotated_data_finite2.c ASC NULLS LAST] ROWS BETWEEN 1 FOLLOWING AND 5 FOLLOWING\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Following(UInt64(1)), end_bound: Following(UInt64(5)) }], mode=[Sorted]",
+            "                    SortExec: expr=[a@1 ASC NULLS LAST,d@4 ASC NULLS LAST,b@2 ASC NULLS LAST,c@3 ASC NULLS LAST]",
+            "                      BoundedWindowAggExec: wdw=[SUM(annotated_data_finite2.c) PARTITION BY [annotated_data_finite2.a, annotated_data_finite2.b, annotated_data_finite2.d] ORDER BY [annotated_data_finite2.c ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING: Ok(Field { name: \"SUM(annotated_data_finite2.c) PARTITION BY [annotated_data_finite2.a, annotated_data_finite2.b, annotated_data_finite2.d] ORDER BY [annotated_data_finite2.c ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(2)), end_bound: Following(UInt64(1)) }, SUM(annotated_data_finite2.c) PARTITION BY [annotated_data_finite2.a, annotated_data_finite2.b, annotated_data_finite2.d] ORDER BY [annotated_data_finite2.c ASC NULLS LAST] ROWS BETWEEN 5 PRECEDING AND CURRENT ROW: Ok(Field { name: \"SUM(annotated_data_finite2.c) PARTITION BY [annotated_data_finite2.a, annotated_data_finite2.b, annotated_data_finite2.d] ORDER BY [annotated_data_finite2.c ASC NULLS LAST] ROWS BETWEEN 5 PRECEDING AND CURRENT ROW\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(5)), end_bound: CurrentRow }], mode=[Sorted]",
+            "                        SortExec: expr=[a@1 ASC NULLS LAST,b@2 ASC NULLS LAST,d@4 ASC NULLS LAST,c@3 ASC NULLS LAST]",
+            "                          BoundedWindowAggExec: wdw=[SUM(annotated_data_finite2.c) PARTITION BY [annotated_data_finite2.a, annotated_data_finite2.b] ORDER BY [annotated_data_finite2.c ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING: Ok(Field { name: \"SUM(annotated_data_finite2.c) PARTITION BY [annotated_data_finite2.a, annotated_data_finite2.b] ORDER BY [annotated_data_finite2.c ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(2)), end_bound: Following(UInt64(1)) }, SUM(annotated_data_finite2.c) PARTITION BY [annotated_data_finite2.a, annotated_data_finite2.b] ORDER BY [annotated_data_finite2.c ASC NULLS LAST] ROWS BETWEEN 5 PRECEDING AND 5 FOLLOWING: Ok(Field { name: \"SUM(annotated_data_finite2.c) PARTITION BY [annotated_data_finite2.a, annotated_data_finite2.b] ORDER BY [annotated_data_finite2.c ASC NULLS LAST] ROWS BETWEEN 5 PRECEDING AND 5 FOLLOWING\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(5)), end_bound: Following(UInt64(5)) }], mode=[Sorted]",
+            "                            ProjectionExec: expr=[CAST(c@2 AS Int64) as CAST(annotated_data_finite2.c AS Int64)annotated_data_finite2.c, a@0 as a, b@1 as b, c@2 as c, d@3 as d]",
+            "                              CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c, d], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true",
+        ];
+
+        // Get string representation of the plan
+        let actual = get_plan_string(&physical_plan);
+        assert_eq!(
+            expected_optimized_lines, actual,
+            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected_optimized_lines:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_query7() -> Result<()> {
+        let config = SessionConfig::new().with_target_partitions(1);
+        let ctx = SessionContext::with_config(config);
+
+        ctx.sql(
+            "CREATE TABLE t1(t1_id INT, t1_name TEXT, t1_int INT) AS VALUES
+            (11, 'a', 1),
+            (22, 'b', 2),
+            (33, 'c', 3),
+            (44, 'd', 4);",
+        )
+        .await?;
+
+        ctx.sql(
+            "CREATE TABLE t2(t2_id INT, t2_name TEXT, t2_int INT) AS VALUES
+            (11, 'z', 3),
+            (22, 'y', 1),
+            (44, 'x', 3),
+            (55, 'w', 3);",
+        )
+        .await?;
+
+        let sql =
+            "SELECT t1_id, (SELECT count(*) FROM t2 WHERE t2.t2_int = t1.t1_int) from t1";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        print_plan(&physical_plan)?;
+        let actual = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+        // print_batches(&actual)?;
+
+        let expected_optimized_lines: Vec<&str> = vec![
+            "ProjectionExec: expr=[t1_id@0 as t1_id, CASE WHEN __always_true@4 IS NULL THEN 0 ELSE COUNT(*)@2 END as COUNT(*)]",
+            "  ProjectionExec: expr=[t1_id@3 as t1_id, t1_int@4 as t1_int, COUNT(*)@0 as COUNT(*), t2_int@1 as t2_int, __always_true@2 as __always_true]",
+            "    CoalesceBatchesExec: target_batch_size=8192",
+            "      HashJoinExec: mode=CollectLeft, join_type=Right, on=[(t2_int@1, t1_int@1)]",
+            "        ProjectionExec: expr=[COUNT(*)@2 as COUNT(*), t2_int@0 as t2_int, __always_true@1 as __always_true]",
+            "          AggregateExec: mode=Final, gby=[t2_int@0 as t2_int, __always_true@1 as __always_true], aggr=[COUNT(*)]",
+            "            AggregateExec: mode=Partial, gby=[t2_int@0 as t2_int, true as __always_true], aggr=[COUNT(*)]",
+            "              MemoryExec: partitions=1, partition_sizes=[1]",
+            "        MemoryExec: partitions=1, partition_sizes=[1]",
+        ];
+
+        // Get string representation of the plan
+        let actual = get_plan_string(&physical_plan);
+        assert_eq!(
+            expected_optimized_lines, actual,
+            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected_optimized_lines:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_query8() -> Result<()> {
+        let config = SessionConfig::new().with_target_partitions(1);
+        let ctx = SessionContext::with_config(config);
+
+        ctx.sql(
+            "CREATE UNBOUNDED EXTERNAL TABLE annotated_data_infinite2 (
+              a0 INTEGER,
+              a INTEGER,
+              b INTEGER,
+              c INTEGER,
+              d INTEGER
+            )
+            STORED AS CSV
+            WITH HEADER ROW
+            WITH ORDER (a ASC, b ASC, c ASC)
+            LOCATION '../core/tests/data/window_2.csv'",
+        )
+        .await?;
+
+        let sql = "SELECT a, d,
+             SUM(c ORDER BY a DESC) as summation1
+             FROM annotated_data_infinite2
+             GROUP BY d, a";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        print_plan(&physical_plan)?;
+        let actual = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+        // print_batches(&actual)?;
+
+        let expected_optimized_lines: Vec<&str> = vec![
+            "ProjectionExec: expr=[a@1 as a, d@0 as d, SUM(annotated_data_infinite2.c) ORDER BY [annotated_data_infinite2.a DESC NULLS FIRST]@2 as summation1]",
+            "  AggregateExec: mode=Single, gby=[d@2 as d, a@0 as a], aggr=[SUM(annotated_data_infinite2.c)], ordering_mode=PartiallyOrdered",
+            "    CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+        ];
+
+        // Get string representation of the plan
+        let actual = get_plan_string(&physical_plan);
+        assert_eq!(
+            expected_optimized_lines, actual,
+            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected_optimized_lines:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_query9() -> Result<()> {
+        let config = SessionConfig::new().with_target_partitions(1);
+        let ctx = SessionContext::with_config(config);
+
+        ctx.sql(
+            "CREATE EXTERNAL TABLE aggregate_test_100 (
+              c1  VARCHAR NOT NULL,
+              c2  TINYINT NOT NULL,
+              c3  SMALLINT NOT NULL,
+              c4  SMALLINT,
+              c5  INT,
+              c6  BIGINT NOT NULL,
+              c7  SMALLINT NOT NULL,
+              c8  INT NOT NULL,
+              c9  INT UNSIGNED NOT NULL,
+              c10 BIGINT UNSIGNED NOT NULL,
+              c11 FLOAT NOT NULL,
+              c12 DOUBLE NOT NULL,
+              c13 VARCHAR NOT NULL
+            )
+            STORED AS CSV
+            WITH HEADER ROW
+            LOCATION '../../testing/data/csv/aggregate_test_100.csv'",
+        )
+        .await?;
+
+        let sql = "WITH indices AS (
+          SELECT 1 AS idx UNION ALL
+          SELECT 2 AS idx UNION ALL
+          SELECT 3 AS idx UNION ALL
+          SELECT 4 AS idx UNION ALL
+          SELECT 5 AS idx
+        )
+        SELECT data.arr[indices.idx] as element, array_length(data.arr) as array_len, dummy
+        FROM (
+          SELECT array_agg(distinct c2) as arr, count(1) as dummy FROM aggregate_test_100
+        ) data
+          CROSS JOIN indices
+        ORDER BY 1";
+
+        // let sql = "SELECT array_agg(distinct c2) as arr, count(1) as dummy FROM aggregate_test_100";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        print_plan(&physical_plan)?;
+        let actual = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+        // print_batches(&actual)?;
+
+        let expected_optimized_lines: Vec<&str> = vec![
+            "SortPreservingMergeExec: [element@0 ASC NULLS LAST]",
+            "  SortExec: expr=[element@0 ASC NULLS LAST]",
+            "    ProjectionExec: expr=[(arr@0).[idx@2] as element, array_length(arr@0) as array_len, dummy@1 as dummy]",
+            "      CrossJoinExec",
+            "        ProjectionExec: expr=[ARRAY_AGG(DISTINCT aggregate_test_100.c2)@0 as arr, COUNT(Int64(1))@1 as dummy]",
+            "          AggregateExec: mode=Single, gby=[], aggr=[ARRAY_AGG(DISTINCT aggregate_test_100.c2), COUNT(Int64(1))]",
+            "            CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2], has_header=true",
+            "        UnionExec",
+            "          ProjectionExec: expr=[1 as idx]",
+            "            EmptyExec: produce_one_row=true",
+            "          ProjectionExec: expr=[2 as idx]",
+            "            EmptyExec: produce_one_row=true",
+            "          ProjectionExec: expr=[3 as idx]",
+            "            EmptyExec: produce_one_row=true",
+            "          ProjectionExec: expr=[4 as idx]",
+            "            EmptyExec: produce_one_row=true",
+            "          ProjectionExec: expr=[5 as idx]",
+            "            EmptyExec: produce_one_row=true",
+        ];
+
+        // Get string representation of the plan
+        let actual = get_plan_string(&physical_plan);
+        assert_eq!(
+            expected_optimized_lines, actual,
+            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected_optimized_lines:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
         Ok(())
     }
 }

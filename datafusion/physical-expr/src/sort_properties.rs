@@ -239,7 +239,6 @@ impl TreeNode for ExprOrdering {
 pub fn update_ordering(
     mut node: ExprOrdering,
     sort_expr: &PhysicalSortExpr,
-    equal_properties: &EquivalenceProperties,
     ordering_equal_properties: &OrderingEquivalenceProperties,
 ) -> Result<Transformed<ExprOrdering>> {
     // If we can directly match a sort expr with the current node, we can set
@@ -260,7 +259,6 @@ pub fn update_ordering(
         node.state = get_indices_of_matching_sort_exprs_with_order_eq(
             &[sort_expr.clone()],
             &[column.clone()],
-            equal_properties,
             ordering_equal_properties,
         )
         .map(|(sort_options, _)| {

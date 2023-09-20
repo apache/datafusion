@@ -365,17 +365,17 @@ impl ExecutionPlan for HashJoinExec {
         Self::maintains_input_order(self.join_type)
     }
 
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        let left_columns_len = self.left.schema().fields.len();
-        combine_join_equivalence_properties(
-            self.join_type,
-            self.left.equivalence_properties(),
-            self.right.equivalence_properties(),
-            left_columns_len,
-            self.on(),
-            self.schema(),
-        )
-    }
+    // fn equivalence_properties(&self) -> EquivalenceProperties {
+    //     let left_columns_len = self.left.schema().fields.len();
+    //     combine_join_equivalence_properties(
+    //         self.join_type,
+    //         self.left.equivalence_properties(),
+    //         self.right.equivalence_properties(),
+    //         left_columns_len,
+    //         self.on(),
+    //         self.schema(),
+    //     )
+    // }
 
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
         combine_join_ordering_equivalence_properties(
@@ -385,7 +385,7 @@ impl ExecutionPlan for HashJoinExec {
             self.schema(),
             &self.maintains_input_order(),
             Some(Self::probe_side()),
-            self.equivalence_properties(),
+            self.on(),
         )
         .unwrap()
     }
@@ -418,6 +418,12 @@ impl ExecutionPlan for HashJoinExec {
         let on_right = self.on.iter().map(|on| on.1.clone()).collect::<Vec<_>>();
         let left_partitions = self.left.output_partitioning().partition_count();
         let right_partitions = self.right.output_partitioning().partition_count();
+
+        // for child in self.children(){
+        //     println!("hash join child ordering_equivalence_properties()\n{:?}", child.ordering_equivalence_properties());
+        // }
+        // println!("hash join self.ordering_equivalence_properties()\n{:?}", self.ordering_equivalence_properties());
+
         if self.mode == PartitionMode::Partitioned && left_partitions != right_partitions
         {
             return internal_err!(

@@ -42,7 +42,7 @@ use datafusion_execution::memory_pool::{
 };
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr::{EquivalenceProperties, OrderingEquivalenceProperties};
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, error, trace};
 use std::any::Any;
@@ -825,8 +825,18 @@ impl ExecutionPlan for SortExec {
         Some(&self.expr)
     }
 
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        self.input.equivalence_properties()
+    // fn equivalence_properties(&self) -> EquivalenceProperties {
+    //     self.input.equivalence_properties()
+    // }
+
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+        let mut input_oeq = self.input.ordering_equivalence_properties();
+        // println!("sort input: {:?}", input_oeq);
+        // let mut res = OrderingEquivalenceProperties::new(self.schema());
+
+        let res = input_oeq.with_reorder(self.expr.to_vec());
+        // println!("sort output: {:?}", res);
+        res
     }
 
     fn with_new_children(

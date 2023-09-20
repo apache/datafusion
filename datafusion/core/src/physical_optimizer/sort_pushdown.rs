@@ -130,12 +130,9 @@ pub(crate) fn pushdown_sorts(
     let err = || DataFusionError::Plan(ERR_MSG.to_string());
     if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
         let mut new_plan = plan.clone();
-        if !ordering_satisfy_requirement(
-            plan.output_ordering(),
-            parent_required,
-            || plan.equivalence_properties(),
-            || plan.ordering_equivalence_properties(),
-        ) {
+        if !ordering_satisfy_requirement(plan.output_ordering(), parent_required, || {
+            plan.ordering_equivalence_properties()
+        }) {
             // If the current plan is a SortExec, modify it to satisfy parent requirements:
             let parent_required_expr = PhysicalSortRequirement::to_sort_exprs(
                 parent_required.ok_or_else(err)?.iter().cloned(),
@@ -163,12 +160,9 @@ pub(crate) fn pushdown_sorts(
         }
     } else {
         // Executors other than SortExec
-        if ordering_satisfy_requirement(
-            plan.output_ordering(),
-            parent_required,
-            || plan.equivalence_properties(),
-            || plan.ordering_equivalence_properties(),
-        ) {
+        if ordering_satisfy_requirement(plan.output_ordering(), parent_required, || {
+            plan.ordering_equivalence_properties()
+        }) {
             // Satisfies parent requirements, immediately return.
             return Ok(Transformed::Yes(SortPushDown {
                 required_ordering: None,
@@ -269,7 +263,6 @@ fn pushdown_requirement_to_children(
             .map(|req| PhysicalSortRequirement::to_sort_exprs(req.to_vec()))
             .as_deref(),
         plan.output_ordering(),
-        || plan.equivalence_properties(),
         || plan.ordering_equivalence_properties(),
             )
         )
@@ -304,20 +297,14 @@ fn determine_children_requirement(
     request_child: Option<&[PhysicalSortRequirement]>,
     child_plan: Arc<dyn ExecutionPlan>,
 ) -> RequirementsCompatibility {
-    if requirements_compatible(
-        request_child,
-        parent_required,
-        || child_plan.ordering_equivalence_properties(),
-        || child_plan.equivalence_properties(),
-    ) {
+    if requirements_compatible(request_child, parent_required, || {
+        child_plan.ordering_equivalence_properties()
+    }) {
         // request child requirements are more specific, no need to push down the parent requirements
         RequirementsCompatibility::Satisfy
-    } else if requirements_compatible(
-        parent_required,
-        request_child,
-        || child_plan.ordering_equivalence_properties(),
-        || child_plan.equivalence_properties(),
-    ) {
+    } else if requirements_compatible(parent_required, request_child, || {
+        child_plan.ordering_equivalence_properties()
+    }) {
         // parent requirements are more specific, adjust the request child requirements and push down the new requirements
         let adjusted = parent_required.map(|r| r.to_vec());
         RequirementsCompatibility::Compatible(adjusted)
@@ -349,7 +336,6 @@ fn try_pushdown_requirements_to_join(
     Ok(ordering_satisfy_requirement(
         new_output_ordering.as_deref(),
         parent_required,
-        || smj.equivalence_properties(),
         || smj.ordering_equivalence_properties(),
     )
     .then(|| {

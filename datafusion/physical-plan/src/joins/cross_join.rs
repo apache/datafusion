@@ -25,6 +25,7 @@ use std::{any::Any, sync::Arc, task::Poll};
 use arrow::datatypes::{Fields, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 
+use crate::joins::utils::combine_join_ordering_equivalence_properties;
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::DisplayAs;
 use crate::{
@@ -34,10 +35,11 @@ use crate::{
     SendableRecordBatchStream, Statistics,
 };
 use async_trait::async_trait;
-use datafusion_common::{plan_err, DataFusionError};
+use datafusion_common::{plan_err, DataFusionError, JoinType};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::OrderingEquivalenceProperties;
 
 use super::utils::{
     adjust_right_output_partitioning, cross_join_equivalence_properties,
@@ -215,14 +217,27 @@ impl ExecutionPlan for CrossJoinExec {
         None
     }
 
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        let left_columns_len = self.left.schema().fields.len();
-        cross_join_equivalence_properties(
-            self.left.equivalence_properties(),
-            self.right.equivalence_properties(),
-            left_columns_len,
+    // fn equivalence_properties(&self) -> EquivalenceProperties {
+    //     let left_columns_len = self.left.schema().fields.len();
+    //     cross_join_equivalence_properties(
+    //         self.left.equivalence_properties(),
+    //         self.right.equivalence_properties(),
+    //         left_columns_len,
+    //         self.schema(),
+    //     )
+    // }
+
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+        combine_join_ordering_equivalence_properties(
+            &JoinType::Full,
+            self.left(),
+            self.right(),
             self.schema(),
+            &[false, false],
+            None,
+            &[],
         )
+        .unwrap()
     }
 
     fn execute(

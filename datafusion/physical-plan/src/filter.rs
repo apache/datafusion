@@ -143,15 +143,15 @@ impl ExecutionPlan for FilterExec {
         vec![true]
     }
 
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        // Combine the equal predicates with the input equivalence properties
-        let mut input_properties = self.input.equivalence_properties();
-        let (equal_pairs, _ne_pairs) = collect_columns_from_predicate(&self.predicate);
-        for new_condition in equal_pairs {
-            input_properties.add_equal_conditions(new_condition)
-        }
-        input_properties
-    }
+    // fn equivalence_properties(&self) -> EquivalenceProperties {
+    //     // Combine the equal predicates with the input equivalence properties
+    //     let mut input_properties = self.input.equivalence_properties();
+    //     let (equal_pairs, _ne_pairs) = collect_columns_from_predicate(&self.predicate);
+    //     for new_condition in equal_pairs {
+    //         input_properties.add_equal_conditions(new_condition)
+    //     }
+    //     input_properties
+    // }
 
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
         let stats = self.statistics();

@@ -61,9 +61,31 @@ impl std::fmt::Display for GetFieldAccessExpr {
 
 impl PartialEq<dyn Any> for GetFieldAccessExpr {
     fn eq(&self, other: &dyn Any) -> bool {
+        // println!("self:{:?}", self);
+        // println!("other:{:?}", other);
         down_cast_any_ref(other)
             .downcast_ref::<Self>()
-            .map(|x| self.eq(x))
+            .map(|x| match (self, x) {
+                (
+                    GetFieldAccessExpr::NamedStructField { name: lhs },
+                    GetFieldAccessExpr::NamedStructField { name: rhs },
+                ) => lhs.eq(rhs),
+                (
+                    GetFieldAccessExpr::ListIndex { key: lhs },
+                    GetFieldAccessExpr::ListIndex { key: rhs },
+                ) => lhs.eq(rhs),
+                (
+                    GetFieldAccessExpr::ListRange {
+                        start: start_lhs,
+                        stop: stop_lhs,
+                    },
+                    GetFieldAccessExpr::ListRange {
+                        start: start_rhs,
+                        stop: stop_rhs,
+                    },
+                ) => start_lhs.eq(start_rhs) && stop_lhs.eq(stop_rhs),
+                (_, _) => false,
+            })
             .unwrap_or(false)
     }
 }
@@ -233,6 +255,7 @@ impl PhysicalExpr for GetIndexedFieldExpr {
 
 impl PartialEq<dyn Any> for GetIndexedFieldExpr {
     fn eq(&self, other: &dyn Any) -> bool {
+        // println!("self:{:?}, other:{:?}", self, other);
         down_cast_any_ref(other)
             .downcast_ref::<Self>()
             .map(|x| self.arg.eq(&x.arg) && self.field.eq(&x.field))

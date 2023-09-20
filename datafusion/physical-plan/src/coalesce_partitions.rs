@@ -100,9 +100,9 @@ impl ExecutionPlan for CoalescePartitionsExec {
         None
     }
 
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        self.input.equivalence_properties()
-    }
+    // fn equivalence_properties(&self) -> EquivalenceProperties {
+    //     self.input.equivalence_properties()
+    // }
 
     fn with_new_children(
         self: Arc<Self>,

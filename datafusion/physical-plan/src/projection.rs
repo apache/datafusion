@@ -44,6 +44,7 @@ use datafusion_physical_expr::{
     project_ordering_equivalence_properties, OrderingEquivalenceProperties,
 };
 
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_physical_expr::utils::find_orderings_of_exprs;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
@@ -62,6 +63,7 @@ pub struct ProjectionExec {
     /// The columns map used to normalize out expressions like Partitioning and PhysicalSortExpr
     /// The key is the column from the input schema and the values are the columns from the output schema
     columns_map: HashMap<Column, Vec<Column>>,
+    source_to_target_mapping: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Expressions' normalized orderings (as given by the output ordering API
@@ -101,6 +103,28 @@ impl ProjectionExec {
 
         // construct a map from the input columns to the output columns of the Projection
         let mut columns_map: HashMap<Column, Vec<Column>> = HashMap::new();
+        let mut source_to_target_mapping = vec![];
+        for (expr_idx, (expression, name)) in expr.iter().enumerate() {
+            let target_expr =
+                Arc::new(Column::new(name, expr_idx)) as Arc<dyn PhysicalExpr>;
+
+            let source_expr = expression.clone().transform_down(&|e| match e
+                .as_any()
+                .downcast_ref::<Column>(
+            ) {
+                Some(col) => {
+                    let idx = col.index();
+                    let matching_input_field = input_schema.field(idx);
+                    let matching_input_column =
+                        Column::new(matching_input_field.name(), idx);
+                    Ok(Transformed::Yes(Arc::new(matching_input_column)))
+                }
+                None => Ok(Transformed::No(e)),
+            })?;
+
+            source_to_target_mapping.push((source_expr, target_expr));
+        }
+        // println!("source_to_target_mapping: {:?}", source_to_target_mapping);
         for (expr_idx, (expression, name)) in expr.iter().enumerate() {
             if let Some(column) = expression.as_any().downcast_ref::<Column>() {
                 // For some executors, logical and physical plan schema fields
@@ -143,12 +167,27 @@ impl ProjectionExec {
         let orderings = find_orderings_of_exprs(
             &expr,
             input.output_ordering(),
-            input.equivalence_properties(),
             input.ordering_equivalence_properties(),
         )?;
 
-        let output_ordering =
-            validate_output_ordering(output_ordering, &orderings, &expr);
+        // println!("source_to_target_mapping:{:?}", source_to_target_mapping);
+        // println!("input.ordering_equivalence_properties():{:?}", input.ordering_equivalence_properties());
+        // println!("ordering_equivalence_properties():{:?}", input
+        //     .ordering_equivalence_properties()
+        //     .project(&columns_map, &source_to_target_mapping, schema.clone()));
+
+        // let output_ordering =
+        //     validate_output_ordering(output_ordering, &orderings, &expr);
+
+        let output_ordering = if let Some(oeq_class) = input
+            .ordering_equivalence_properties()
+            .project(&columns_map, &source_to_target_mapping, schema.clone())
+            .oeq_class()
+        {
+            Some(oeq_class.head().to_vec())
+        } else {
+            None
+        };
 
         Ok(Self {
             expr,
@@ -156,6 +195,7 @@ impl ProjectionExec {
             input,
             output_ordering,
             columns_map,
+            source_to_target_mapping,
             metrics: ExecutionPlanMetricsSet::new(),
             orderings,
         })
@@ -241,6 +281,13 @@ impl ExecutionPlan for ProjectionExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        // let oeq = self.ordering_equivalence_properties();
+        // if let Some(oeq_class) = oeq.oeq_class(){
+        //     Some(oeq_class.head())
+        // } else{
+        //     None
+        // }
+        // oeq.oeq_class().map(|oeq_class| &(oeq_class.head().to_vec()))
         self.output_ordering.as_deref()
     }
 
@@ -249,49 +296,57 @@ impl ExecutionPlan for ProjectionExec {
         vec![true]
     }
 
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        let mut new_properties = EquivalenceProperties::new(self.schema());
-        project_equivalence_properties(
-            self.input.equivalence_properties(),
-            &self.columns_map,
-            &mut new_properties,
-        );
-        new_properties
-    }
+    // fn equivalence_properties(&self) -> EquivalenceProperties {
+    //     let mut new_properties = EquivalenceProperties::new(self.schema());
+    //     project_equivalence_properties(
+    //         self.input.equivalence_properties(),
+    //         &self.columns_map,
+    //         &mut new_properties,
+    //     );
+    //     new_properties
+    // }
+
+    // fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+    //     let mut new_properties = OrderingEquivalenceProperties::new(self.schema());
+    //     if self.output_ordering.is_none() {
+    //         // If there is no output ordering, return an "empty" equivalence set:
+    //         return new_properties;
+    //     }
+    //
+    //     let input_oeq = self.input().ordering_equivalence_properties();
+    //
+    //     project_ordering_equivalence_properties(
+    //         input_oeq,
+    //         &self.columns_map,
+    //         &mut new_properties,
+    //     );
+    //
+    //     if let Some(leading_ordering) = self
+    //         .output_ordering
+    //         .as_ref()
+    //         .map(|output_ordering| &output_ordering[0])
+    //     {
+    //         for order in self.orderings.iter().flatten() {
+    //             if !order.eq(leading_ordering)
+    //                 && !new_properties.satisfies_leading_ordering(order)
+    //             {
+    //                 new_properties.add_ordering_equal_conditions((
+    //                     &vec![leading_ordering.clone()],
+    //                     &vec![order.clone()],
+    //                 ));
+    //             }
+    //         }
+    //     }
+    //
+    //     new_properties
+    // }
 
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        let mut new_properties = OrderingEquivalenceProperties::new(self.schema());
-        if self.output_ordering.is_none() {
-            // If there is no output ordering, return an "empty" equivalence set:
-            return new_properties;
-        }
-
-        let input_oeq = self.input().ordering_equivalence_properties();
-
-        project_ordering_equivalence_properties(
-            input_oeq,
+        self.input.ordering_equivalence_properties().project(
             &self.columns_map,
-            &mut new_properties,
-        );
-
-        if let Some(leading_ordering) = self
-            .output_ordering
-            .as_ref()
-            .map(|output_ordering| &output_ordering[0])
-        {
-            for order in self.orderings.iter().flatten() {
-                if !order.eq(leading_ordering)
-                    && !new_properties.satisfies_leading_ordering(order)
-                {
-                    new_properties.add_equal_conditions((
-                        &vec![leading_ordering.clone()],
-                        &vec![order.clone()],
-                    ));
-                }
-            }
-        }
-
-        new_properties
+            &self.source_to_target_mapping,
+            self.schema(),
+        )
     }
 
     fn with_new_children(
@@ -320,6 +375,16 @@ impl ExecutionPlan for ProjectionExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         trace!("Start ProjectionExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
+        // println!(
+        //     "proj self.input.ordering_equivalence_properties(): {:?}",
+        //     self.input.ordering_equivalence_properties()
+        // );
+        // println!(
+        //     "proj self.ordering_equivalence_properties(): {:?}",
+        //     self.ordering_equivalence_properties()
+        // );
+        // println!("self.source_to_target_mapping: {:?}", self.source_to_target_mapping);
+        // println!("proj self.output ordering: {:?}", self.output_ordering());
         Ok(Box::pin(ProjectionStream {
             schema: self.schema.clone(),
             expr: self.expr.iter().map(|x| x.0.clone()).collect(),

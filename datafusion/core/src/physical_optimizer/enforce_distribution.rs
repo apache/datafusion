@@ -54,7 +54,8 @@ use datafusion_physical_expr::utils::{
     map_columns_before_projection, ordering_satisfy_requirement_concrete,
 };
 use datafusion_physical_expr::{
-    expr_list_eq_strict_order, PhysicalExpr, PhysicalSortRequirement,
+    expr_list_eq_strict_order, OrderingEquivalenceProperties, PhysicalExpr,
+    PhysicalSortRequirement,
 };
 
 use datafusion_common::internal_err;
@@ -447,7 +448,7 @@ where
     )) = try_reorder(
         join_key_pairs.clone(),
         parent_required,
-        &join_plan.equivalence_properties(),
+        &join_plan.ordering_equivalence_properties(),
     ) {
         if !new_positions.is_empty() {
             let new_join_on = new_join_conditions(&left_keys, &right_keys);
@@ -688,8 +689,8 @@ pub(crate) fn reorder_join_keys_to_inputs(
                     join_key_pairs,
                     Some(left.output_partitioning()),
                     Some(right.output_partitioning()),
-                    &left.equivalence_properties(),
-                    &right.equivalence_properties(),
+                    &left.ordering_equivalence_properties(),
+                    &right.ordering_equivalence_properties(),
                 ) {
                     if !new_positions.is_empty() {
                         let new_join_on = new_join_conditions(&left_keys, &right_keys);
@@ -732,8 +733,8 @@ pub(crate) fn reorder_join_keys_to_inputs(
             join_key_pairs,
             Some(left.output_partitioning()),
             Some(right.output_partitioning()),
-            &left.equivalence_properties(),
-            &right.equivalence_properties(),
+            &left.ordering_equivalence_properties(),
+            &right.ordering_equivalence_properties(),
         ) {
             if !new_positions.is_empty() {
                 let new_join_on = new_join_conditions(&left_keys, &right_keys);
@@ -765,8 +766,8 @@ fn reorder_current_join_keys(
     join_keys: JoinKeyPairs,
     left_partition: Option<Partitioning>,
     right_partition: Option<Partitioning>,
-    left_equivalence_properties: &EquivalenceProperties,
-    right_equivalence_properties: &EquivalenceProperties,
+    left_equivalence_properties: &OrderingEquivalenceProperties,
+    right_equivalence_properties: &OrderingEquivalenceProperties,
 ) -> Option<(JoinKeyPairs, Vec<usize>)> {
     match (left_partition, right_partition.clone()) {
         (Some(Partitioning::Hash(left_exprs, _)), _) => {
@@ -791,8 +792,11 @@ fn reorder_current_join_keys(
 fn try_reorder(
     join_keys: JoinKeyPairs,
     expected: &[Arc<dyn PhysicalExpr>],
-    equivalence_properties: &EquivalenceProperties,
+    equivalence_properties: &OrderingEquivalenceProperties,
 ) -> Option<(JoinKeyPairs, Vec<usize>)> {
+    // println!("join_keys:{:?}", join_keys);
+    // println!("expected:{:?}", expected);
+    // println!("equivalence_properties:{:?}", equivalence_properties);
     let mut normalized_expected = vec![];
     let mut normalized_left_keys = vec![];
     let mut normalized_right_keys = vec![];
@@ -803,7 +807,7 @@ fn try_reorder(
         || expr_list_eq_strict_order(expected, &join_keys.right_keys)
     {
         return Some((join_keys, vec![]));
-    } else if !equivalence_properties.classes().is_empty() {
+    } else if !equivalence_properties.eq_classes().is_empty() {
         normalized_expected = expected
             .iter()
             .map(|e| equivalence_properties.normalize_expr(e.clone()))
@@ -824,6 +828,9 @@ fn try_reorder(
             .collect::<Vec<_>>();
         assert_eq!(join_keys.right_keys.len(), normalized_right_keys.len());
 
+        println!("normalized_expected: {:?}", normalized_expected);
+        println!("normalized_left_keys: {:?}", normalized_left_keys);
+        println!("normalized_right_keys: {:?}", normalized_right_keys);
         if expr_list_eq_strict_order(&normalized_expected, &normalized_left_keys)
             || expr_list_eq_strict_order(&normalized_expected, &normalized_right_keys)
         {
@@ -1331,7 +1338,9 @@ fn ensure_distribution(
 
             if !child
                 .output_partitioning()
-                .satisfy(requirement.clone(), || child.equivalence_properties())
+                .satisfy(requirement.clone(), || {
+                    child.ordering_equivalence_properties()
+                })
             {
                 // Satisfy the distribution requirement if it is unmet.
                 match requirement {
@@ -1359,7 +1368,6 @@ fn ensure_distribution(
                 if !ordering_satisfy_requirement_concrete(
                     existing_ordering,
                     required_input_ordering,
-                    || child.equivalence_properties(),
                     || child.ordering_equivalence_properties(),
                 ) || !order_preserving_variants_desirable
                 {

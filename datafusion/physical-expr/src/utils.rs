@@ -140,15 +140,11 @@ pub fn normalize_out_expr_with_columns_map(
 /// Standardized version `vec![d ASC]` is used in subsequent operations.
 fn normalize_sort_exprs(
     sort_exprs: &[PhysicalSortExpr],
-    eq_properties: &EquivalenceProperties,
     ordering_eq_properties: &OrderingEquivalenceProperties,
 ) -> Vec<PhysicalSortExpr> {
     let sort_requirements = PhysicalSortRequirement::from_sort_exprs(sort_exprs.iter());
-    let normalized_exprs = normalize_sort_requirements(
-        &sort_requirements,
-        eq_properties,
-        ordering_eq_properties,
-    );
+    let normalized_exprs =
+        normalize_sort_requirements(&sort_requirements, ordering_eq_properties);
     PhysicalSortRequirement::to_sort_exprs(normalized_exprs)
 }
 
@@ -162,52 +158,40 @@ fn normalize_sort_exprs(
 /// Standardized version `vec![d Some(ASC)]` is used in subsequent operations.
 fn normalize_sort_requirements(
     sort_reqs: &[PhysicalSortRequirement],
-    eq_properties: &EquivalenceProperties,
     ordering_eq_properties: &OrderingEquivalenceProperties,
 ) -> Vec<PhysicalSortRequirement> {
-    let normalized_sort_reqs = eq_properties.normalize_sort_requirements(sort_reqs);
-    ordering_eq_properties.normalize_sort_requirements(&normalized_sort_reqs)
+    // let normalized_sort_reqs = eq_properties.normalize_sort_requirements(sort_reqs);
+    // ordering_eq_properties.normalize_sort_requirements(&normalized_sort_reqs)
+    ordering_eq_properties.normalize_sort_requirements(&sort_reqs)
 }
 
 /// Checks whether given ordering requirements are satisfied by provided [PhysicalSortExpr]s.
-pub fn ordering_satisfy<
-    F: FnOnce() -> EquivalenceProperties,
-    F2: FnOnce() -> OrderingEquivalenceProperties,
->(
+pub fn ordering_satisfy<F2: FnOnce() -> OrderingEquivalenceProperties>(
     provided: Option<&[PhysicalSortExpr]>,
     required: Option<&[PhysicalSortExpr]>,
-    equal_properties: F,
     ordering_equal_properties: F2,
 ) -> bool {
     match (provided, required) {
         (_, None) => true,
         (None, Some(_)) => false,
-        (Some(provided), Some(required)) => ordering_satisfy_concrete(
-            provided,
-            required,
-            equal_properties,
-            ordering_equal_properties,
-        ),
+        (Some(provided), Some(required)) => {
+            ordering_satisfy_concrete(provided, required, ordering_equal_properties)
+        }
     }
 }
 
 /// Checks whether the required [`PhysicalSortExpr`]s are satisfied by the
 /// provided [`PhysicalSortExpr`]s.
-pub fn ordering_satisfy_concrete<
-    F: FnOnce() -> EquivalenceProperties,
-    F2: FnOnce() -> OrderingEquivalenceProperties,
->(
+pub fn ordering_satisfy_concrete<F2: FnOnce() -> OrderingEquivalenceProperties>(
     provided: &[PhysicalSortExpr],
     required: &[PhysicalSortExpr],
-    equal_properties: F,
     ordering_equal_properties: F2,
 ) -> bool {
     let oeq_properties = ordering_equal_properties();
-    let eq_properties = equal_properties();
-    let required_normalized =
-        normalize_sort_exprs(required, &eq_properties, &oeq_properties);
-    let provided_normalized =
-        normalize_sort_exprs(provided, &eq_properties, &oeq_properties);
+    let required_normalized = normalize_sort_exprs(required, &oeq_properties);
+    let provided_normalized = normalize_sort_exprs(provided, &oeq_properties);
+    // println!("required_normalized:{:?}", required_normalized);
+    // println!("provided_normalized:{:?}", provided_normalized);
     if required_normalized.len() > provided_normalized.len() {
         return false;
     }
@@ -219,13 +203,9 @@ pub fn ordering_satisfy_concrete<
 
 /// Checks whether the given [`PhysicalSortRequirement`]s are satisfied by the
 /// provided [`PhysicalSortExpr`]s.
-pub fn ordering_satisfy_requirement<
-    F: FnOnce() -> EquivalenceProperties,
-    F2: FnOnce() -> OrderingEquivalenceProperties,
->(
+pub fn ordering_satisfy_requirement<F2: FnOnce() -> OrderingEquivalenceProperties>(
     provided: Option<&[PhysicalSortExpr]>,
     required: Option<&[PhysicalSortRequirement]>,
-    equal_properties: F,
     ordering_equal_properties: F2,
 ) -> bool {
     match (provided, required) {
@@ -234,7 +214,6 @@ pub fn ordering_satisfy_requirement<
         (Some(provided), Some(required)) => ordering_satisfy_requirement_concrete(
             provided,
             required,
-            equal_properties,
             ordering_equal_properties,
         ),
     }
@@ -243,20 +222,16 @@ pub fn ordering_satisfy_requirement<
 /// Checks whether the given [`PhysicalSortRequirement`]s are satisfied by the
 /// provided [`PhysicalSortExpr`]s.
 pub fn ordering_satisfy_requirement_concrete<
-    F: FnOnce() -> EquivalenceProperties,
     F2: FnOnce() -> OrderingEquivalenceProperties,
 >(
     provided: &[PhysicalSortExpr],
     required: &[PhysicalSortRequirement],
-    equal_properties: F,
     ordering_equal_properties: F2,
 ) -> bool {
     let oeq_properties = ordering_equal_properties();
-    let eq_properties = equal_properties();
-    let required_normalized =
-        normalize_sort_requirements(required, &eq_properties, &oeq_properties);
-    let provided_normalized =
-        normalize_sort_exprs(provided, &eq_properties, &oeq_properties);
+    // let eq_properties = equal_properties();
+    let required_normalized = normalize_sort_requirements(required, &oeq_properties);
+    let provided_normalized = normalize_sort_exprs(provided, &oeq_properties);
     if required_normalized.len() > provided_normalized.len() {
         return false;
     }
@@ -268,14 +243,10 @@ pub fn ordering_satisfy_requirement_concrete<
 
 /// Checks whether the given [`PhysicalSortRequirement`]s are equal or more
 /// specific than the provided [`PhysicalSortRequirement`]s.
-pub fn requirements_compatible<
-    F: FnOnce() -> OrderingEquivalenceProperties,
-    F2: FnOnce() -> EquivalenceProperties,
->(
+pub fn requirements_compatible<F: FnOnce() -> OrderingEquivalenceProperties>(
     provided: Option<&[PhysicalSortRequirement]>,
     required: Option<&[PhysicalSortRequirement]>,
     ordering_equal_properties: F,
-    equal_properties: F2,
 ) -> bool {
     match (provided, required) {
         (_, None) => true,
@@ -284,29 +255,21 @@ pub fn requirements_compatible<
             provided,
             required,
             ordering_equal_properties,
-            equal_properties,
         ),
     }
 }
 
 /// Checks whether the given [`PhysicalSortRequirement`]s are equal or more
 /// specific than the provided [`PhysicalSortRequirement`]s.
-fn requirements_compatible_concrete<
-    F: FnOnce() -> OrderingEquivalenceProperties,
-    F2: FnOnce() -> EquivalenceProperties,
->(
+fn requirements_compatible_concrete<F: FnOnce() -> OrderingEquivalenceProperties>(
     provided: &[PhysicalSortRequirement],
     required: &[PhysicalSortRequirement],
     ordering_equal_properties: F,
-    equal_properties: F2,
 ) -> bool {
     let oeq_properties = ordering_equal_properties();
-    let eq_properties = equal_properties();
 
-    let required_normalized =
-        normalize_sort_requirements(required, &eq_properties, &oeq_properties);
-    let provided_normalized =
-        normalize_sort_requirements(provided, &eq_properties, &oeq_properties);
+    let required_normalized = normalize_sort_requirements(required, &oeq_properties);
+    let provided_normalized = normalize_sort_requirements(provided, &oeq_properties);
     if required_normalized.len() > provided_normalized.len() {
         return false;
     }
@@ -360,15 +323,15 @@ pub fn convert_to_expr<T: Borrow<PhysicalSortExpr>>(
 
 /// This function finds the indices of `targets` within `items`, taking into
 /// account equivalences according to `equal_properties`.
-pub fn get_indices_of_matching_exprs<F: FnOnce() -> EquivalenceProperties>(
+pub fn get_indices_of_matching_exprs(
     targets: &[Arc<dyn PhysicalExpr>],
     items: &[Arc<dyn PhysicalExpr>],
-    equal_properties: F,
 ) -> Vec<usize> {
-    let eq_properties = equal_properties();
-    let normalized_items = eq_properties.normalize_exprs(items);
-    let normalized_targets = eq_properties.normalize_exprs(targets);
-    get_indices_of_exprs_strict(normalized_targets, &normalized_items)
+    // let eq_properties = equal_properties();
+    // let normalized_items = eq_properties.normalize_exprs(items);
+    // let normalized_targets = eq_properties.normalize_exprs(targets);
+    // get_indices_of_exprs_strict(normalized_targets, &normalized_items)
+    get_indices_of_exprs_strict(targets, &items)
 }
 
 /// This function finds the indices of `targets` within `items` using strict
@@ -570,21 +533,16 @@ pub fn reverse_order_bys(order_bys: &[PhysicalSortExpr]) -> Vec<PhysicalSortExpr
 /// Find the finer requirement among `req1` and `req2`
 /// If `None`, this means that `req1` and `req2` are not compatible
 /// e.g there is no requirement that satisfies both
-pub fn get_finer_ordering<
-    'a,
-    F: Fn() -> EquivalenceProperties,
-    F2: Fn() -> OrderingEquivalenceProperties,
->(
+pub fn get_finer_ordering<'a, F2: Fn() -> OrderingEquivalenceProperties>(
     req1: &'a [PhysicalSortExpr],
     req2: &'a [PhysicalSortExpr],
-    eq_properties: F,
     ordering_eq_properties: F2,
 ) -> Option<&'a [PhysicalSortExpr]> {
-    if ordering_satisfy_concrete(req1, req2, &eq_properties, &ordering_eq_properties) {
+    if ordering_satisfy_concrete(req1, req2, &ordering_eq_properties) {
         // Finer requirement is `provided`, since it satisfies the other:
         return Some(req1);
     }
-    if ordering_satisfy_concrete(req2, req1, &eq_properties, &ordering_eq_properties) {
+    if ordering_satisfy_concrete(req2, req1, &ordering_eq_properties) {
         // Finer requirement is `req`, since it satisfies the other:
         return Some(req2);
     }
@@ -663,7 +621,6 @@ fn get_lexicographical_match_indices(
 pub fn get_indices_of_matching_sort_exprs_with_order_eq(
     provided_sorts: &[PhysicalSortExpr],
     required_columns: &[Column],
-    eq_properties: &EquivalenceProperties,
     order_eq_properties: &OrderingEquivalenceProperties,
 ) -> Option<(Vec<SortOptions>, Vec<usize>)> {
     // Create a vector of `PhysicalSortRequirement`s from the required columns:
@@ -677,12 +634,10 @@ pub fn get_indices_of_matching_sort_exprs_with_order_eq(
 
     let normalized_required = normalize_sort_requirements(
         &sort_requirement_on_requirements,
-        eq_properties,
         &OrderingEquivalenceProperties::new(order_eq_properties.schema()),
     );
     let normalized_provided = normalize_sort_requirements(
         &PhysicalSortRequirement::from_sort_exprs(provided_sorts.iter()),
-        eq_properties,
         &OrderingEquivalenceProperties::new(order_eq_properties.schema()),
     );
 
@@ -756,7 +711,6 @@ pub fn get_indices_of_matching_sort_exprs_with_order_eq(
 pub fn find_orderings_of_exprs(
     expr: &[(Arc<dyn PhysicalExpr>, String)],
     input_output_ordering: Option<&[PhysicalSortExpr]>,
-    input_equal_properties: EquivalenceProperties,
     input_ordering_equal_properties: OrderingEquivalenceProperties,
 ) -> Result<Vec<Option<PhysicalSortExpr>>> {
     let mut orderings: Vec<Option<PhysicalSortExpr>> = vec![];
@@ -766,12 +720,7 @@ pub fn find_orderings_of_exprs(
         for (index, (expression, name)) in expr.iter().enumerate() {
             let initial_expr = ExprOrdering::new(expression.clone());
             let transformed = initial_expr.transform_up(&|expr| {
-                update_ordering(
-                    expr,
-                    leading_ordering,
-                    &input_equal_properties,
-                    &input_ordering_equal_properties,
-                )
+                update_ordering(expr, leading_ordering, &input_ordering_equal_properties)
             })?;
             if let Some(SortProperties::Ordered(sort_options)) = transformed.state {
                 orderings.push(Some(PhysicalSortExpr {
@@ -899,7 +848,7 @@ mod tests {
         eq_properties.add_equal_conditions((col_a, col_c));
         let mut ordering_eq_properties =
             OrderingEquivalenceProperties::new(test_schema.clone());
-        ordering_eq_properties.add_equal_conditions((
+        ordering_eq_properties.add_ordering_equal_conditions((
             &vec![PhysicalSortExpr {
                 expr: Arc::new(col_a.clone()),
                 options: option1,
@@ -915,7 +864,7 @@ mod tests {
                 },
             ],
         ));
-        ordering_eq_properties.add_equal_conditions((
+        ordering_eq_properties.add_ordering_equal_conditions((
             &vec![PhysicalSortExpr {
                 expr: Arc::new(col_a.clone()),
                 options: option1,
@@ -1030,14 +979,8 @@ mod tests {
             Arc::new(Column::new("c", 2)),
             Arc::new(Column::new("a", 0)),
         ];
-        assert_eq!(
-            get_indices_of_matching_exprs(&list1, &list2, equal_properties),
-            vec![2, 0, 1]
-        );
-        assert_eq!(
-            get_indices_of_matching_exprs(&list2, &list1, equal_properties),
-            vec![1, 2, 0]
-        );
+        assert_eq!(get_indices_of_matching_exprs(&list1, &list2), vec![2, 0, 1]);
+        assert_eq!(get_indices_of_matching_exprs(&list2, &list1), vec![1, 2, 0]);
     }
 
     #[test]
@@ -1116,18 +1059,12 @@ mod tests {
         ];
         let finer = Some(&finer[..]);
         let empty_schema = &Arc::new(Schema::empty());
-        assert!(ordering_satisfy(
-            finer,
-            crude,
-            || { EquivalenceProperties::new(empty_schema.clone()) },
-            || { OrderingEquivalenceProperties::new(empty_schema.clone()) },
-        ));
-        assert!(!ordering_satisfy(
-            crude,
-            finer,
-            || { EquivalenceProperties::new(empty_schema.clone()) },
-            || { OrderingEquivalenceProperties::new(empty_schema.clone()) },
-        ));
+        assert!(ordering_satisfy(finer, crude, || {
+            OrderingEquivalenceProperties::new(empty_schema.clone())
+        },));
+        assert!(!ordering_satisfy(crude, finer, || {
+            OrderingEquivalenceProperties::new(empty_schema.clone())
+        },));
         Ok(())
     }
 
@@ -1250,12 +1187,7 @@ mod tests {
 
             let required = Some(&required[..]);
             assert_eq!(
-                ordering_satisfy(
-                    provided,
-                    required,
-                    || eq_properties.clone(),
-                    || ordering_eq_properties.clone(),
-                ),
+                ordering_satisfy(provided, required, || ordering_eq_properties.clone(),),
                 expected,
                 "{err_msg}"
             );
@@ -1328,11 +1260,7 @@ mod tests {
             let expected_normalized = convert_to_requirement(&expected_normalized);
 
             assert_eq!(
-                normalize_sort_requirements(
-                    &req,
-                    &eq_properties,
-                    &ordering_eq_properties,
-                ),
+                normalize_sort_requirements(&req, &ordering_eq_properties,),
                 expected_normalized
             );
         }
@@ -1471,7 +1399,7 @@ mod tests {
 
         // Column a and e are ordering equivalent (e.g global ordering of the table can be described both as a ASC and e ASC.)
         let mut ordering_eq_properties = OrderingEquivalenceProperties::new(test_schema);
-        ordering_eq_properties.add_equal_conditions((
+        ordering_eq_properties.add_ordering_equal_conditions((
             &vec![PhysicalSortExpr {
                 expr: Arc::new(col_a.clone()),
                 options: option1,
@@ -1513,7 +1441,6 @@ mod tests {
                 sort_req_d.clone(),
                 sort_req_e.clone(),
             ],
-            || eq_properties.clone(),
             || ordering_eq_properties.clone(),
         ));
 
@@ -1528,7 +1455,6 @@ mod tests {
                 sort_req_d.clone(),
                 sort_req_e.clone(),
             ],
-            || eq_properties.clone(),
             || ordering_eq_properties.clone(),
         ));
 
@@ -1537,7 +1463,6 @@ mod tests {
             &[sort_req_a.clone(), sort_req_b.clone(), sort_req_d.clone()],
             // After normalization would be a ASC, d ASC, b ASC
             &[sort_req_c, sort_req_d, sort_req_a, sort_req_b, sort_req_e,],
-            || eq_properties.clone(),
             || ordering_eq_properties.clone(),
         ));
 
@@ -1657,7 +1582,6 @@ mod tests {
             get_indices_of_matching_sort_exprs_with_order_eq(
                 &provided_sorts,
                 &required_columns,
-                &equal_properties,
                 &ordering_equal_properties,
             ),
             Some((vec![sort_options_not, sort_options], vec![0, 1]))
@@ -1677,7 +1601,7 @@ mod tests {
         let equal_properties = EquivalenceProperties::new(Arc::new(schema.clone()));
         let mut ordering_equal_properties =
             OrderingEquivalenceProperties::new(Arc::new(schema));
-        ordering_equal_properties.add_equal_conditions((
+        ordering_equal_properties.add_ordering_equal_conditions((
             &vec![PhysicalSortExpr {
                 expr: Arc::new(Column::new("c", 2)),
                 options: sort_options,
@@ -1697,7 +1621,6 @@ mod tests {
             get_indices_of_matching_sort_exprs_with_order_eq(
                 &provided_sorts,
                 &required_columns,
-                &equal_properties,
                 &ordering_equal_properties,
             ),
             Some((vec![sort_options_not, sort_options], vec![0, 1]))
@@ -1731,7 +1654,6 @@ mod tests {
             get_indices_of_matching_sort_exprs_with_order_eq(
                 &provided_sorts,
                 &required_columns,
-                &equal_properties,
                 &ordering_equal_properties,
             ),
             None
@@ -1764,7 +1686,7 @@ mod tests {
         }]];
         let oeq_class = OrderingEquivalentClass::new(head, others);
 
-        expected_oeq.add_equal_conditions((
+        expected_oeq.add_ordering_equal_conditions((
             &vec![PhysicalSortExpr {
                 expr: Arc::new(Column::new("b", 1)),
                 options: sort_options,
@@ -1802,7 +1724,6 @@ mod tests {
                 expr: Arc::new(Column::new("b", 1)),
                 options: SortOptions::default(),
             }]),
-            EquivalenceProperties::new(Arc::new(schema.clone())),
             OrderingEquivalenceProperties::new(Arc::new(schema.clone())),
         )?;
 
@@ -1828,7 +1749,6 @@ mod tests {
                 (Arc::new(Column::new("b", 1)), "b_new".to_string()),
             ],
             Some(&[]),
-            EquivalenceProperties::new(Arc::new(schema.clone())),
             OrderingEquivalenceProperties::new(Arc::new(schema)),
         )?;
 

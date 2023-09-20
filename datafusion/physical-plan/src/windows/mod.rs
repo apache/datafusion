@@ -317,17 +317,11 @@ pub(crate) fn get_ordered_partition_by_indices(
 ) -> Vec<usize> {
     let input_ordering = input.output_ordering().unwrap_or(&[]);
     let input_ordering_exprs = convert_to_expr(input_ordering);
-    let equal_properties = || input.equivalence_properties();
-    let input_places = get_indices_of_matching_exprs(
-        &input_ordering_exprs,
-        partition_by_exprs,
-        equal_properties,
-    );
-    let mut partition_places = get_indices_of_matching_exprs(
-        partition_by_exprs,
-        &input_ordering_exprs,
-        equal_properties,
-    );
+    // let equal_properties = || input.equivalence_properties();
+    let input_places =
+        get_indices_of_matching_exprs(&input_ordering_exprs, partition_by_exprs);
+    let mut partition_places =
+        get_indices_of_matching_exprs(partition_by_exprs, &input_ordering_exprs);
     partition_places.sort();
     let first_n = longest_consecutive_prefix(partition_places);
     input_places[0..first_n].to_vec()
@@ -341,7 +335,7 @@ pub(crate) fn window_ordering_equivalence(
     // We need to update the schema, so we can not directly use
     // `input.ordering_equivalence_properties()`.
     let mut builder = OrderingEquivalenceBuilder::new(schema.clone())
-        .with_equivalences(input.equivalence_properties())
+        // .with_equivalences(input.equivalence_properties())
         .with_existing_ordering(input.output_ordering().map(|elem| elem.to_vec()))
         .extend(input.ordering_equivalence_properties());
 
@@ -349,8 +343,7 @@ pub(crate) fn window_ordering_equivalence(
         if let Some(builtin_window_expr) =
             expr.as_any().downcast_ref::<BuiltInWindowExpr>()
         {
-            builtin_window_expr
-                .add_equal_orderings(&mut builder, || input.equivalence_properties());
+            builtin_window_expr.add_equal_orderings(&mut builder);
         }
     }
     builder.build()

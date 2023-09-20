@@ -75,11 +75,7 @@ impl BuiltInWindowExpr {
     /// If `self.expr` doesn't have an ordering, ordering equivalence properties
     /// are not updated. Otherwise, ordering equivalence properties are updated
     /// by the ordering of `self.expr`.
-    pub fn add_equal_orderings<F: FnOnce() -> EquivalenceProperties>(
-        &self,
-        builder: &mut OrderingEquivalenceBuilder,
-        equal_properties: F,
-    ) {
+    pub fn add_equal_orderings(&self, builder: &mut OrderingEquivalenceBuilder) {
         let schema = builder.schema();
         if let Some(fn_res_ordering) = self.expr.get_result_ordering(schema) {
             if self.partition_by.is_empty() {
@@ -98,7 +94,6 @@ impl BuiltInWindowExpr {
                 let pb_indices = get_indices_of_matching_exprs(
                     &self.partition_by,
                     &existing_ordering_exprs,
-                    equal_properties,
                 );
                 // Existing ordering should match exactly with PARTITION BY expressions.
                 // There should be no missing/extra entries in the existing ordering.

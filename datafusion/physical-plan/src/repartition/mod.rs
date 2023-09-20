@@ -457,12 +457,18 @@ impl ExecutionPlan for RepartitionExec {
         }
     }
 
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        self.input.equivalence_properties()
-    }
+    // fn equivalence_properties(&self) -> EquivalenceProperties {
+    //     self.input.equivalence_properties()
+    // }
 
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        self.input.ordering_equivalence_properties()
+        if !self.maintains_input_order()[0] {
+            self.input
+                .ordering_equivalence_properties()
+                .with_empty_ordering_equivalence()
+        } else {
+            self.input.ordering_equivalence_properties()
+        }
     }
 
     fn execute(
