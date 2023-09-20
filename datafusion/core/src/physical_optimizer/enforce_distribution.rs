@@ -59,6 +59,8 @@ use datafusion_physical_plan::windows::{get_best_fitting_window, BoundedWindowAg
 
 use itertools::izip;
 
+use super::utils::is_recursive_query;
+
 /// The `EnforceDistribution` rule ensures that distribution requirements are
 /// met. In doing so, this rule will increase the parallelism in the plan by
 /// introducing repartitioning operators to the physical plan.
@@ -1088,6 +1090,7 @@ fn remove_dist_changing_operators(
     let DistributionContext {
         mut plan,
         mut distribution_onwards,
+        has_recursive_ancestor,
     } = distribution_context;
 
     // Remove any distribution changing operators at the beginning:
@@ -1107,7 +1110,32 @@ fn remove_dist_changing_operators(
     Ok(DistributionContext {
         plan,
         distribution_onwards,
+        has_recursive_ancestor,
     })
+}
+
+/// Changes each child of the `dist_context.plan` such that they no longer
+/// use order preserving variants, if no ordering is required at the output
+/// of the physical plan (there is no global ordering requirement by the query).
+fn update_plan_to_remove_unnecessary_final_order(
+    dist_context: DistributionContext,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let DistributionContext {
+        plan,
+        distribution_onwards,
+        ..
+    } = dist_context;
+    let new_children = izip!(plan.children(), distribution_onwards)
+        .map(|(mut child, mut dist_onward)| {
+            replace_order_preserving_variants(&mut child, &mut dist_onward)?;
+            Ok(child)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if !new_children.is_empty() {
+        plan.with_new_children(new_children)
+    } else {
+        Ok(plan)
+    }
 }
 
 /// Updates the physical plan `input` by using `dist_onward` replace order preserving operator variants
@@ -1176,6 +1204,13 @@ fn ensure_distribution(
     dist_context: DistributionContext,
     config: &ConfigOptions,
 ) -> Result<Transformed<DistributionContext>> {
+    let mut dist_context = dist_context;
+    if is_recursive_query(&dist_context.plan) {
+        dist_context.has_recursive_ancestor = true;
+    }
+    if dist_context.has_recursive_ancestor {
+        return Ok(Transformed::No(dist_context));
+    }
     let target_partitions = config.execution.target_partitions;
     // When `false`, round robin repartition will not be added to increase parallelism
     let enable_round_robin = config.optimizer.enable_round_robin_repartition;
@@ -1196,7 +1231,8 @@ fn ensure_distribution(
     let DistributionContext {
         mut plan,
         mut distribution_onwards,
-    } = remove_dist_changing_operators(dist_context)?;
+        has_recursive_ancestor,
+    } = remove_unnecessary_repartition(dist_context)?;
 
     if let Some(exec) = plan.as_any().downcast_ref::<WindowAggExec>() {
         if let Some(updated_window) = get_best_fitting_window(
@@ -1365,6 +1401,7 @@ fn ensure_distribution(
             plan.with_new_children(new_children)?
         },
         distribution_onwards,
+        has_recursive_ancestor: has_recursive_ancestor || is_recursive_query(&plan),
     };
     Ok(Transformed::Yes(new_distribution_context))
 }
@@ -1379,6 +1416,8 @@ struct DistributionContext {
     /// Keep track of associations for each child of the plan. If `None`,
     /// there is no distribution changing operator in its descendants.
     distribution_onwards: Vec<Option<ExecTree>>,
+    // keep track of whether we've encountered a RecursiveQuery
+    has_recursive_ancestor: bool,
 }
 
 impl DistributionContext {
@@ -1386,9 +1425,20 @@ impl DistributionContext {
     fn new(plan: Arc<dyn ExecutionPlan>) -> Self {
         let length = plan.children().len();
         DistributionContext {
+            has_recursive_ancestor: is_recursive_query(&plan),
             plan,
             distribution_onwards: vec![None; length],
         }
+    }
+
+    fn new_from_plan_with_parent(
+        parent: Arc<dyn ExecutionPlan>,
+        cur_plan: Arc<dyn ExecutionPlan>,
+    ) -> Self {
+        let mut ctx = Self::new(cur_plan);
+        ctx.has_recursive_ancestor =
+            is_recursive_query(&parent) || ctx.has_recursive_ancestor;
+        ctx
     }
 
     /// Constructs a new context from children contexts.
@@ -1410,6 +1460,7 @@ impl DistributionContext {
                     // that change distribution, or preserves the existing
                     // distribution (starting from an operator that change distribution).
                     distribution_onwards,
+                    ..
                 } = context;
                 if plan.children().is_empty() {
                     // Plan has no children, there is nothing to propagate.
@@ -1461,7 +1512,9 @@ impl DistributionContext {
                 }
             })
             .collect();
+
         Ok(DistributionContext {
+            has_recursive_ancestor: is_recursive_query(&parent_plan),
             plan: with_new_children_if_necessary(parent_plan, children_plans)?.into(),
             distribution_onwards,
         })
@@ -1472,7 +1525,15 @@ impl DistributionContext {
         self.plan
             .children()
             .into_iter()
-            .map(DistributionContext::new)
+            .map(|child| {
+                let mut ctx = DistributionContext::new_from_plan_with_parent(
+                    self.plan.clone(),
+                    child,
+                );
+                ctx.has_recursive_ancestor =
+                    self.has_recursive_ancestor || ctx.has_recursive_ancestor;
+                ctx
+            })
             .collect()
     }
 }
@@ -1504,7 +1565,10 @@ impl TreeNode for DistributionContext {
                 .into_iter()
                 .map(transform)
                 .collect::<Result<Vec<_>>>()?;
-            DistributionContext::new_from_children_nodes(children_nodes, self.plan)
+            let mut ctx =
+                DistributionContext::new_from_children_nodes(children_nodes, self.plan)?;
+            ctx.has_recursive_ancestor |= self.has_recursive_ancestor;
+            Ok(ctx)
         }
     }
 }
