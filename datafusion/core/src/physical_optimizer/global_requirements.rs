@@ -148,6 +148,11 @@ impl ExecutionPlan for GlobalRequirementExec {
         vec![self.order_requirement.clone()]
     }
 
+    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
+        // Has single child
+        Ok(children[0])
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
