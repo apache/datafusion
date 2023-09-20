@@ -37,8 +37,7 @@ use crate::joins::hash_join::{build_equal_condition_join_indices, update_hash};
 use crate::joins::hash_join_utils::{
     calculate_filter_expr_intervals, combine_two_batches,
     convert_sort_expr_with_filter_schema, get_pruning_anti_indices,
-    get_pruning_semi_indices, record_visited_indices,
-    PruningJoinHashMap,
+    get_pruning_semi_indices, record_visited_indices, PruningJoinHashMap,
 };
 use crate::joins::StreamJoinPartitionMode;
 use crate::DisplayAs;

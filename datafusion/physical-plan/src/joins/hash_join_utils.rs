@@ -19,13 +19,12 @@
 //! related functionality, used both in join calculations and optimization rules.
 
 use std::collections::{HashMap, VecDeque};
-use std::fmt::{Debug, Formatter};
+use std::fmt::Debug;
 use std::ops::IndexMut;
 use std::sync::Arc;
 use std::{fmt, usize};
 
 use crate::joins::utils::{JoinFilter, JoinSide};
-use crate::ExecutionPlan;
 
 use arrow::compute::concat_batches;
 use arrow::datatypes::{ArrowNativeType, SchemaRef};
@@ -34,13 +33,12 @@ use arrow_array::{ArrowPrimitiveType, NativeAdapter, PrimitiveArray, RecordBatch
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::intervals::{ExprIntervalGraph, Interval, IntervalBound};
+use datafusion_physical_expr::intervals::{Interval, IntervalBound};
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 
 use hashbrown::raw::RawTable;
 use hashbrown::HashSet;
-use parking_lot::Mutex;
 
 // Maps a `u64` hash value based on the build side ["on" values] to a list of indices with this key's value.
 // By allocating a `HashMap` with capacity for *at least* the number of rows for entries at the build side,
