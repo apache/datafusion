@@ -1020,9 +1020,14 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::DateTrunc => Signature::one_of(
                 vec![
                     Exact(vec![Utf8, Timestamp(Nanosecond, None)]),
+                    Exact(vec![Utf8, Timestamp(Nanosecond, Some("+00".into()))]),
+                    Exact(vec![Utf8, Timestamp(Nanosecond, Some("+07".into()))]),
                     Exact(vec![Utf8, Timestamp(Microsecond, None)]),
+                    Exact(vec![Utf8, Timestamp(Microsecond, Some("+00".into()))]),
                     Exact(vec![Utf8, Timestamp(Millisecond, None)]),
+                    Exact(vec![Utf8, Timestamp(Millisecond, Some("+00".into()))]),
                     Exact(vec![Utf8, Timestamp(Second, None)]),
+                    Exact(vec![Utf8, Timestamp(Second, Some("+00".into()))]),
                 ],
                 self.volatility(),
             ),
@@ -1033,6 +1038,16 @@ impl BuiltinScalarFunction {
                             Interval(MonthDayNano),
                             Timestamp(array_type.clone(), None),
                             Timestamp(Nanosecond, None),
+                        ]),
+                        Exact(vec![
+                            Interval(MonthDayNano),
+                            Timestamp(array_type.clone(), Some("+00".into())),
+                            Timestamp(Nanosecond, Some("+00".into())),
+                        ]),
+                        Exact(vec![
+                            Interval(MonthDayNano),
+                            Timestamp(array_type.clone(), Some("+07".into())),
+                            Timestamp(Nanosecond, Some("+07".into())),
                         ]),
                         Exact(vec![
                             Interval(DayTime),
@@ -1063,7 +1078,9 @@ impl BuiltinScalarFunction {
                     Exact(vec![Utf8, Timestamp(Microsecond, None)]),
                     Exact(vec![Utf8, Timestamp(Millisecond, None)]),
                     Exact(vec![Utf8, Timestamp(Nanosecond, None)]),
+                    Exact(vec![Utf8, Timestamp(Nanosecond, Some("+00".into()))]),
                     Exact(vec![Utf8, Timestamp(Nanosecond, Some("+00:00".into()))]),
+                    Exact(vec![Utf8, Timestamp(Nanosecond, Some("+07".into()))]),
                 ],
                 self.volatility(),
             ),

@@ -180,10 +180,16 @@ pub fn can_coerce_from(type_into: &DataType, type_from: &DataType) -> bool {
                 | Float64
                 | Decimal128(_, _)
         ),
-        Timestamp(TimeUnit::Nanosecond, _) => {
+        Timestamp(TimeUnit::Nanosecond, None) => {
             matches!(
                 type_from,
-                Null | Timestamp(_, _) | Date32 | Utf8 | LargeUtf8
+                Null | Timestamp(_, None) | Date32 | Utf8 | LargeUtf8
+            )
+        }
+        Timestamp(TimeUnit::Nanosecond, Some(into_s)) => {
+            matches!(
+                type_from,
+                Timestamp(_, Some(from_s)) if into_s == from_s
             )
         }
         Interval(_) => {
