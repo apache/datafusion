@@ -486,7 +486,7 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             );
         }
         // If `filter_state` and `filter` are both present, then calculate sorted filter expressions
-        // for both sides, and build an expression graph if one is not already built.
+        // for both sides, and build an expression graph.
         let (left_sorted_filter_expr, right_sorted_filter_expr, graph) = match (
             self.left.output_ordering(),
             self.right.output_ordering(),
@@ -500,7 +500,8 @@ impl ExecutionPlan for SymmetricHashJoinExec {
                     left_sort_exprs,
                     right_sort_exprs,
                 )
-                .map(|(left, right, graph)| (Some(left), Some(right), Some(graph)))?
+                .map(|(left, right, graph)| (Some(left), Some(right), Some(graph)))
+                .unwrap_or((None, None, None))
             }
             // If `filter_state` or `filter` is not present, then return None for all three values:
             _ => (None, None, None),
