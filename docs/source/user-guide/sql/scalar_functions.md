@@ -2567,7 +2567,7 @@ arrow_cast(expression, datatype)
   Can be a constant, column, or function, and any combination of arithmetic or
   string operators.
 - **datatype**: [Arrow data type](https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html) name
-  to cast to, as a string. The format is the same as that returned by [`arrow_cast`]
+  to cast to, as a string. The format is the same as that returned by [`arrow_typeof`]
 
 #### Example
 
