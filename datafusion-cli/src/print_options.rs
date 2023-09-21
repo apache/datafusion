@@ -24,31 +24,51 @@ use std::time::Instant;
 pub struct PrintOptions {
     pub format: PrintFormat,
     pub quiet: bool,
+    pub maxrows: Option<usize>,
 }
 
-fn print_timing_info(row_count: usize, now: Instant) {
-    println!(
-        "{} {} in set. Query took {:.3} seconds.\n",
+fn get_timing_info_str(
+    row_count: usize,
+    maxrows_opt: Option<usize>,
+    query_start_time: Instant,
+) -> String {
+    let row_word = if row_count == 1 { "row" } else { "rows" };
+    let maxrows_shown_msg = maxrows_opt
+        .map(|maxrows| {
+            if maxrows < row_count {
+                format!(" ({} shown)", maxrows)
+            } else {
+                String::new()
+            }
+        })
+        .unwrap_or_default();
+
+    format!(
+        "{} {} in set{}. Query took {:.3} seconds.\n",
         row_count,
-        if row_count == 1 { "row" } else { "rows" },
-        now.elapsed().as_secs_f64()
-    );
+        row_word,
+        maxrows_shown_msg,
+        query_start_time.elapsed().as_secs_f64()
+    )
 }
 
 impl PrintOptions {
     /// print the batches to stdout using the specified format
-    pub fn print_batches(&self, batches: &[RecordBatch], now: Instant) -> Result<()> {
-        if batches.is_empty() {
-            if !self.quiet {
-                print_timing_info(0, now);
-            }
-        } else {
-            self.format.print_batches(batches)?;
-            if !self.quiet {
-                let row_count: usize = batches.iter().map(|b| b.num_rows()).sum();
-                print_timing_info(row_count, now);
-            }
+    pub fn print_batches(
+        &self,
+        batches: &[RecordBatch],
+        query_start_time: Instant,
+    ) -> Result<()> {
+        let row_count: usize = batches.iter().map(|b| b.num_rows()).sum();
+        // Elapsed time should not count time for printing batches
+        let timing_info = get_timing_info_str(row_count, self.maxrows, query_start_time);
+
+        self.format.print_batches(batches, self.maxrows)?;
+
+        if !self.quiet {
+            println!("{timing_info}");
         }
+
         Ok(())
     }
 }
