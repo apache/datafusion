@@ -253,9 +253,7 @@ config_namespace! {
         pub sort_in_place_threshold_bytes: usize, default = 1024 * 1024
 
         /// Number of files to read in parallel when inferring schema and statistics
-        ///
-        /// Defaults to the number of CPU cores on the system
-        pub meta_fetch_concurrency: usize, default = num_cpus::get()
+        pub meta_fetch_concurrency: usize, default = 32
     }
 }
 
@@ -695,7 +693,6 @@ impl ConfigOptions {
         // Normalize for display
         s.execution.target_partitions = 0;
         s.execution.planning_concurrency = 0;
-        s.execution.meta_fetch_concurrency = 0;
 
         let mut docs = "| key | default | description |\n".to_string();
         docs += "|-----|---------|-------------|\n";
