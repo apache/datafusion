@@ -1672,6 +1672,7 @@ mod tests {
     use std::ops::Deref;
 
     use super::*;
+    use crate::datasource::file_format::file_compression_type::FileCompressionType;
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::datasource::physical_plan::{FileScanConfig, ParquetExec};
@@ -1694,7 +1695,7 @@ mod tests {
     use crate::physical_plan::sorts::sort::SortExec;
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use datafusion_common::{FileCompressionType, ScalarValue};
+    use datafusion_common::ScalarValue;
     use datafusion_expr::logical_plan::JoinType;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};

@@ -17,6 +17,7 @@
 
 //! Execution plan for reading CSV files
 
+use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::listing::{FileRange, ListingTableUrl};
 use crate::datasource::physical_plan::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
@@ -31,7 +32,6 @@ use crate::physical_plan::{
 };
 use arrow::csv;
 use arrow::datatypes::SchemaRef;
-use datafusion_common::FileCompressionType;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{
     ordering_equivalence_properties_helper, LexOrdering, OrderingEquivalenceProperties,

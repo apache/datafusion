@@ -200,7 +200,8 @@ async fn symmetric_hash_join() {
 
 #[tokio::test]
 async fn sort_preserving_merge() {
-    let partition_size = batches_byte_size(&dict_batches());
+    let scenario = Scenario::new_dictionary_strings(2);
+    let partition_size = scenario.partition_size();
 
     TestCase::new()
     // This query uses the exact same ordering as the input table
@@ -213,7 +214,7 @@ async fn sort_preserving_merge() {
         // provide insufficient memory to merge
         .with_memory_limit(partition_size / 2)
         // two partitions of data, so a merge is required
-        .with_scenario(Scenario::DictionaryStrings(2))
+        .with_scenario(scenario)
         .with_expected_plan(
             // It is important that this plan only has
             // SortPreservingMergeExec (not a Sort which would compete
@@ -238,7 +239,10 @@ async fn sort_preserving_merge() {
 
 #[tokio::test]
 async fn sort_spill_reservation() {
-    let partition_size = batches_byte_size(&dict_batches());
+    let scenario = Scenario::new_dictionary_strings(1)
+        // make the batches small enough to avoid triggering CardinalityAwareRowConverter
+        .with_single_row_batches(true);
+    let partition_size = scenario.partition_size();
 
     let base_config = SessionConfig::new()
         // do not allow the sort to use the 'concat in place' path
@@ -248,30 +252,30 @@ async fn sort_spill_reservation() {
     // purposely sorting data that requires non trivial memory to
     // sort/merge.
     let test = TestCase::new()
-        // This query uses a different order than the input table to
-        // force a sort. It also needs to have multiple columns to
-        // force RowFormat / interner that makes merge require
-        // substantial memory
+    // This query uses a different order than the input table to
+    // force a sort. It also needs to have multiple columns to
+    // force RowFormat / interner that makes merge require
+    // substantial memory
         .with_query("select * from t ORDER BY a , b DESC")
-        // enough memory to sort if we don't try to merge it all at once
+    // enough memory to sort if we don't try to merge it all at once
         .with_memory_limit(partition_size)
-        // use a single partiton so only a sort is needed
-        .with_scenario(Scenario::DictionaryStrings(1))
+    // use a single partiton so only a sort is needed
+        .with_scenario(scenario)
         .with_disk_manager_config(DiskManagerConfig::NewOs)
         .with_expected_plan(
             // It is important that this plan only has a SortExec, not
             // also merge, so we can ensure the sort could finish
             // given enough merging memory
             &[
-    "+---------------+--------------------------------------------------------------------------------------------------------+",
-    "| plan_type     | plan                                                                                                   |",
-    "+---------------+--------------------------------------------------------------------------------------------------------+",
-    "| logical_plan  | Sort: t.a ASC NULLS LAST, t.b DESC NULLS FIRST                                                         |",
-    "|               |   TableScan: t projection=[a, b]                                                                       |",
-    "| physical_plan | SortExec: expr=[a@0 ASC NULLS LAST,b@1 DESC]                                                           |",
-    "|               |   MemoryExec: partitions=1, partition_sizes=[5], output_ordering=a@0 ASC NULLS LAST,b@1 ASC NULLS LAST |",
-    "|               |                                                                                                        |",
-    "+---------------+--------------------------------------------------------------------------------------------------------+",
+                "+---------------+----------------------------------------------------------------------------------------------------------+",
+                "| plan_type     | plan                                                                                                     |",
+                "+---------------+----------------------------------------------------------------------------------------------------------+",
+                "| logical_plan  | Sort: t.a ASC NULLS LAST, t.b DESC NULLS FIRST                                                           |",
+                "|               |   TableScan: t projection=[a, b]                                                                         |",
+                "| physical_plan | SortExec: expr=[a@0 ASC NULLS LAST,b@1 DESC]                                                             |",
+                "|               |   MemoryExec: partitions=1, partition_sizes=[245], output_ordering=a@0 ASC NULLS LAST,b@1 ASC NULLS LAST |",
+                "|               |                                                                                                          |",
+                "+---------------+----------------------------------------------------------------------------------------------------------+",
             ]
         );
 
@@ -471,11 +475,48 @@ enum Scenario {
     /// [`StreamingTable`]
     AccessLogStreaming,
 
-    /// N partitions of of sorted, dictionary encoded strings
-    DictionaryStrings(usize),
+    /// N partitions of of sorted, dictionary encoded strings.
+    DictionaryStrings {
+        partitions: usize,
+        /// If true, splits all input batches into 1 row each
+        single_row_batches: bool,
+    },
 }
 
 impl Scenario {
+    /// Create a new DictionaryStrings scenario with the number of partitions
+    fn new_dictionary_strings(partitions: usize) -> Self {
+        Self::DictionaryStrings {
+            partitions,
+            single_row_batches: false,
+        }
+    }
+
+    /// Should the input be split into 1 row batches?
+    fn with_single_row_batches(mut self, val: bool) -> Self {
+        if let Self::DictionaryStrings {
+            single_row_batches, ..
+        } = &mut self
+        {
+            *single_row_batches = val;
+        } else {
+            panic!("Scenario does not support single row batches");
+        }
+        self
+    }
+
+    /// return the size, in bytes, of each partition
+    fn partition_size(&self) -> usize {
+        if let Self::DictionaryStrings {
+            single_row_batches, ..
+        } = self
+        {
+            batches_byte_size(&maybe_split_batches(dict_batches(), *single_row_batches))
+        } else {
+            panic!("Scenario does not support partition size");
+        }
+    }
+
     /// return a TableProvider with data for the test
     fn table(&self) -> Arc<dyn TableProvider> {
         match self {
@@ -500,11 +541,17 @@ impl Scenario {
                 .with_infinite_table(true);
                 Arc::new(table)
             }
-            Self::DictionaryStrings(num_partitions) => {
+            Self::DictionaryStrings {
+                partitions,
+                single_row_batches,
+            } => {
                 use datafusion::physical_expr::expressions::col;
-                let batches: Vec<Vec<_>> = std::iter::repeat(dict_batches())
-                    .take(*num_partitions)
-                    .collect();
+                let batches: Vec<Vec<_>> = std::iter::repeat(maybe_split_batches(
+                    dict_batches(),
+                    *single_row_batches,
+                ))
+                .take(*partitions)
+                .collect();
 
                 let schema = batches[0][0].schema();
                 let options = SortOptions {
@@ -544,7 +591,7 @@ impl Scenario {
                 // first
                 Some(vec![Arc::new(JoinSelection::new())])
             }
-            Self::DictionaryStrings(_) => {
+            Self::DictionaryStrings { .. } => {
                 // Use default rules
                 None
             }
@@ -556,6 +603,29 @@ fn access_log_batches() -> Vec<RecordBatch> {
     AccessLogGenerator::new()
         .with_row_limit(1000)
         .with_max_batch_size(50)
+        .collect()
+}
+
+/// If `one_row_batches` is true, then returns new record batches that
+/// are one row in size
+fn maybe_split_batches(
+    batches: Vec<RecordBatch>,
+    one_row_batches: bool,
+) -> Vec<RecordBatch> {
+    if !one_row_batches {
+        return batches;
+    }
+
+    batches
+        .into_iter()
+        .flat_map(|mut batch| {
+            let mut batches = vec![];
+            while batch.num_rows() > 1 {
+                batches.push(batch.slice(0, 1));
+                batch = batch.slice(1, batch.num_rows() - 1);
+            }
+            batches
+        })
         .collect()
 }
 

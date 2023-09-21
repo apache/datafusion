@@ -224,6 +224,10 @@ impl ExecutionPlan for FileSinkExec {
         }))
     }
 
+    fn unbounded_output(&self, _children: &[bool]) -> Result<bool> {
+        Ok(_children[0])
+    }
+
     /// Execute the plan and return a stream of `RecordBatch`es for
     /// the specified partition.
     fn execute(

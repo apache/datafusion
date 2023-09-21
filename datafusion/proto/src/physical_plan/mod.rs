@@ -21,12 +21,14 @@ use std::sync::Arc;
 
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::physical_plan::{AvroExec, CsvExec, ParquetExec};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::WindowFrame;
 use datafusion::physical_plan::aggregates::{create_aggregate_expr, AggregateMode};
 use datafusion::physical_plan::aggregates::{AggregateExec, PhysicalGroupBy};
+use datafusion::physical_plan::analyze::AnalyzeExec;
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::empty::EmptyExec;
@@ -46,7 +48,6 @@ use datafusion::physical_plan::windows::{create_window_expr, WindowAggExec};
 use datafusion::physical_plan::{
     udaf, AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, WindowExpr,
 };
-use datafusion_common::FileCompressionType;
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use prost::bytes::BufMut;
 use prost::Message;
@@ -778,6 +779,20 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     &join_type.into(),
                 )?))
             }
+            PhysicalPlanType::Analyze(analyze) => {
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan(
+                    &analyze.input,
+                    registry,
+                    runtime,
+                    extension_codec,
+                )?;
+                Ok(Arc::new(AnalyzeExec::new(
+                    analyze.verbose,
+                    analyze.show_statistics,
+                    input,
+                    Arc::new(analyze.schema.as_ref().unwrap().try_into()?),
+                )))
+            }
         }
     }
 
@@ -822,6 +837,21 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         input: Some(Box::new(input)),
                         expr,
                         expr_name,
+                    },
+                ))),
+            })
+        } else if let Some(exec) = plan.downcast_ref::<AnalyzeExec>() {
+            let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
+                exec.input().to_owned(),
+                extension_codec,
+            )?;
+            Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::Analyze(Box::new(
+                    protobuf::AnalyzeExecNode {
+                        verbose: exec.verbose(),
+                        show_statistics: exec.show_statistics(),
+                        input: Some(Box::new(input)),
+                        schema: Some(exec.schema().as_ref().try_into()?),
                     },
                 ))),
             })
@@ -1391,6 +1421,7 @@ mod roundtrip_tests {
     use datafusion::physical_expr::expressions::{cast, in_list};
     use datafusion::physical_expr::ScalarFunctionExpr;
     use datafusion::physical_plan::aggregates::PhysicalGroupBy;
+    use datafusion::physical_plan::analyze::AnalyzeExec;
     use datafusion::physical_plan::expressions::{like, BinaryExpr, GetIndexedFieldExpr};
     use datafusion::physical_plan::functions::make_scalar_function;
     use datafusion::physical_plan::projection::ProjectionExec;
@@ -1804,12 +1835,12 @@ mod roundtrip_tests {
         let execution_props = ExecutionProps::new();
 
         let fun_expr = functions::create_physical_fun(
-            &BuiltinScalarFunction::Abs,
+            &BuiltinScalarFunction::Acos,
             &execution_props,
         )?;
 
         let expr = ScalarFunctionExpr::new(
-            "abs",
+            "acos",
             fun_expr,
             vec![col("a", &schema)?],
             &DataType::Int64,
@@ -1946,7 +1977,7 @@ mod roundtrip_tests {
         ];
 
         let schema = Schema::new(fields);
-        let input = Arc::new(EmptyExec::new(false, Arc::new(schema.clone())));
+        let input = Arc::new(EmptyExec::new(true, Arc::new(schema.clone())));
 
         let col_arg = col("arg", &schema)?;
         let col_key = col("key", &schema)?;
@@ -1992,5 +2023,20 @@ mod roundtrip_tests {
         )?);
 
         roundtrip_test(plan)
+    }
+
+    #[test]
+    fn rountrip_analyze() -> Result<()> {
+        let field_a = Field::new("plan_type", DataType::Utf8, false);
+        let field_b = Field::new("plan", DataType::Utf8, false);
+        let schema = Schema::new(vec![field_a, field_b]);
+        let input = Arc::new(EmptyExec::new(true, Arc::new(schema.clone())));
+
+        roundtrip_test(Arc::new(AnalyzeExec::new(
+            false,
+            false,
+            input,
+            Arc::new(schema),
+        )))
     }
 }

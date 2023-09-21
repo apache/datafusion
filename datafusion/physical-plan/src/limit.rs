@@ -154,6 +154,10 @@ impl ExecutionPlan for GlobalLimitExec {
         )))
     }
 
+    fn unbounded_output(&self, _children: &[bool]) -> Result<bool> {
+        Ok(false)
+    }
+
     fn execute(
         &self,
         partition: usize,
@@ -328,6 +332,10 @@ impl ExecutionPlan for LocalLimitExec {
 
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
         self.input.ordering_equivalence_properties()
+    }
+
+    fn unbounded_output(&self, _children: &[bool]) -> Result<bool> {
+        Ok(false)
     }
 
     fn with_new_children(

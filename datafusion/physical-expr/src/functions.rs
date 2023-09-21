@@ -171,6 +171,11 @@ pub fn create_physical_expr(
                 )))))
             })
         }
+        BuiltinScalarFunction::Abs => {
+            let input_data_type = input_phy_exprs[0].data_type(input_schema)?;
+            let abs_fun = math_expressions::create_abs_function(&input_data_type)?;
+            Arc::new(move |args| make_scalar_function(abs_fun)(args))
+        }
         // These don't need args and input schema
         _ => create_physical_fun(fun, execution_props)?,
     };
@@ -360,7 +365,6 @@ pub fn create_physical_fun(
 ) -> Result<ScalarFunctionImplementation> {
     Ok(match fun {
         // math functions
-        BuiltinScalarFunction::Abs => Arc::new(math_expressions::abs),
         BuiltinScalarFunction::Acos => Arc::new(math_expressions::acos),
         BuiltinScalarFunction::Asin => Arc::new(math_expressions::asin),
         BuiltinScalarFunction::Atan => Arc::new(math_expressions::atan),
@@ -796,6 +800,21 @@ pub fn create_physical_fun(
                 internal_err!("Unsupported data type {other:?} for function split_part")
             }
         }),
+        BuiltinScalarFunction::StringToArray => {
+            Arc::new(|args| match args[0].data_type() {
+                DataType::Utf8 => {
+                    make_scalar_function(array_expressions::string_to_array::<i32>)(args)
+                }
+                DataType::LargeUtf8 => {
+                    make_scalar_function(array_expressions::string_to_array::<i64>)(args)
+                }
+                other => {
+                    internal_err!(
+                        "Unsupported data type {other:?} for function string_to_array"
+                    )
+                }
+            })
+        }
         BuiltinScalarFunction::StartsWith => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
                 make_scalar_function(string_expressions::starts_with::<i32>)(args)

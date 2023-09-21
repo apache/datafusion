@@ -67,19 +67,19 @@ CREATE TABLE small_floats(
 ## abs
 
 # abs scalar function
-query RRR rowsort
+query III rowsort
 select abs(64), abs(0), abs(-64);
 ----
 64 0 64
 
 # abs scalar nulls
-query R rowsort
+query ? rowsort
 select abs(null);
 ----
 NULL
 
 # abs with columns
-query RRR rowsort
+query III rowsort
 select abs(a), abs(b), abs(c) from signed_integers;
 ----
 1 100 567

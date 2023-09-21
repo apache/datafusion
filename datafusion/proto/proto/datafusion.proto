@@ -599,6 +599,7 @@ enum ScalarFunction {
   Iszero = 114;
   ArrayEmpty = 115;
   ArrayPopBack = 116;
+  StringToArray = 117;
 }
 
 message ScalarFunctionNode {
@@ -1110,6 +1111,7 @@ message PhysicalPlanNode {
     ExplainExecNode explain = 20;
     SortPreservingMergeExecNode sort_preserving_merge = 21;
     NestedLoopJoinExecNode nested_loop_join = 22;
+    AnalyzeExecNode analyze = 23;
   }
 }
 
@@ -1343,6 +1345,13 @@ message ExplainExecNode {
   Schema schema = 1;
   repeated StringifiedPlan stringified_plans = 2;
   bool verbose = 3;
+}
+
+message AnalyzeExecNode {
+  bool verbose = 1;
+  bool show_statistics = 2;
+  PhysicalPlanNode input = 3;
+  Schema schema = 4;
 }
 
 message CrossJoinExecNode {
