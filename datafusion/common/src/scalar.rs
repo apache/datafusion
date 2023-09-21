@@ -757,8 +757,7 @@ impl ScalarValue {
             Some(v) => {
                 let array = PrimitiveArray::<T>::new(vec![v].into(), None)
                     .with_data_type(d.clone());
-                // Self::try_from_array_v3(&array, 0).unwrap()
-                Self::try_from_array(&array, 0).unwrap()
+                Self::try_from_array_v3(&array, 0).unwrap()
             }
         }
     }
@@ -1341,7 +1340,7 @@ impl ScalarValue {
         };
 
         // Merge Vec of ListArray(PrimitiveArray() ...) to LitArray(PA(), PA(), PA() ...)
-        macro_rules! merge_list_arrays_to_one {
+        macro_rules! build_list_of_primitive_array {
             ($ARRAY_TY:ty) => {{
                 let data = scalars
                     .into_iter()
@@ -1371,7 +1370,7 @@ impl ScalarValue {
             }};
         }
 
-        macro_rules! build_array_list_string {
+        macro_rules! build_list_of_string_array {
             ($BUILDER:ident, $STRING_ARRAY:ident) => {{
                 let mut builder = ListBuilder::new($BUILDER::new());
                 for scalar in scalars.into_iter() {
@@ -1410,50 +1409,53 @@ impl ScalarValue {
 
         let array: ArrayRef = match &data_type {
             DataType::List(fields) if fields.data_type() == &DataType::Int8 => {
-                merge_list_arrays_to_one!(Int8Type)
+                build_list_of_primitive_array!(Int8Type)
             }
             DataType::List(fields) if fields.data_type() == &DataType::Int16 => {
-                merge_list_arrays_to_one!(Int16Type)
+                build_list_of_primitive_array!(Int16Type)
             }
             DataType::List(fields) if fields.data_type() == &DataType::Int32 => {
-                merge_list_arrays_to_one!(Int32Type)
+                build_list_of_primitive_array!(Int32Type)
             }
             DataType::List(fields) if fields.data_type() == &DataType::Int64 => {
-                merge_list_arrays_to_one!(Int64Type)
+                build_list_of_primitive_array!(Int64Type)
             }
             DataType::List(fields) if fields.data_type() == &DataType::UInt8 => {
-                merge_list_arrays_to_one!(UInt8Type)
+                build_list_of_primitive_array!(UInt8Type)
             }
             DataType::List(fields) if fields.data_type() == &DataType::UInt16 => {
-                merge_list_arrays_to_one!(UInt16Type)
+                build_list_of_primitive_array!(UInt16Type)
             }
             DataType::List(fields) if fields.data_type() == &DataType::UInt32 => {
-                merge_list_arrays_to_one!(UInt32Type)
+                build_list_of_primitive_array!(UInt32Type)
             }
             DataType::List(fields) if fields.data_type() == &DataType::UInt64 => {
-                merge_list_arrays_to_one!(UInt64Type)
+                build_list_of_primitive_array!(UInt64Type)
             }
             DataType::List(fields) if fields.data_type() == &DataType::Float32 => {
-                merge_list_arrays_to_one!(Float32Type)
+                build_list_of_primitive_array!(Float32Type)
             }
             DataType::List(fields) if fields.data_type() == &DataType::Float64 => {
-                merge_list_arrays_to_one!(Float64Type)
+                build_list_of_primitive_array!(Float64Type)
             }
             DataType::List(fields) if fields.data_type() == &DataType::Utf8 => {
-                build_array_list_string!(StringBuilder, as_string_array)
+                build_list_of_string_array!(StringBuilder, as_string_array)
             }
             DataType::List(fields) if fields.data_type() == &DataType::LargeUtf8 => {
-                build_array_list_string!(LargeStringBuilder, as_largestring_array)
+                build_list_of_string_array!(LargeStringBuilder, as_largestring_array)
             }
             DataType::List(field) => {
                 // Fallback case handling homogeneous lists with any ScalarValue element type
                 let scalars: Vec<_> = scalars.into_iter().collect();
+                // println!("scalars: {:?}", scalars);
                 let to_type = data_type.to_owned();
 
                 // Ensure we get listArr here
                 // vec [ i16arr, i16arr, i16arr, ... ] =
                 let list_array =
                     ScalarValue::iter_to_array_list_v2(scalars.clone(), to_type)?;
+
+                // println!("list_array: {:?}", list_array);
                 // if scalars.len() > 1 {
                 // println!("scalars: {:?}", scalars);
                 // println!("list_array: {:?}", list_array);
@@ -1951,7 +1953,6 @@ impl ScalarValue {
                     // ScalarValue::iter_to_array(values)?
 
                     // println!("(iter_to_array_list_v3) values: {:?}", values);
-
                     let arr = ScalarValue::iter_to_array_v3(values)?;
                     // println!("(iter_to_array_list_v3) arr: {:?}", arr);
                     arr
@@ -2026,24 +2027,17 @@ impl ScalarValue {
 
                     // Element is null
                     valid.append(false);
-                    continue;
-                }
+                } else {
+                    let list_arr = as_list_array(&arr);
+                    let arr = list_arr.values().to_owned();
 
-                let list_arr = as_list_array(&arr);
-                let arr = list_arr.values().to_owned();
+                    let arr_len = arr.len();
 
-                let arr_len = arr.len();
-
-                // Add new offset index
-                flat_len += arr_len as i32;
-                offsets.append_value(flat_len);
-
-                // Element is valid
-                if arr_len > 0 {
+                    // Add new offset index
+                    flat_len += arr_len as i32;
+                    offsets.append_value(flat_len);
                     elements.push(arr);
                     valid.append(true);
-                } else {
-                    valid.append(false);
                 }
             } else if let ScalarValue::List(_, _) = scalar {
                 panic!("No List")
