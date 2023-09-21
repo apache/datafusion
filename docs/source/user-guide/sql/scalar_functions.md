@@ -2572,9 +2572,9 @@ arrow_cast(expression, datatype)
 #### Example
 
 ```
-❯ select arrow_cast(-5, 'Int8') as a, 
-  arrow_cast('foo', 'Dictionary(Int32, Utf8)') as b,  
-  arrow_cast('bar', 'LargeUtf8') as c, 
+❯ select arrow_cast(-5, 'Int8') as a,
+  arrow_cast('foo', 'Dictionary(Int32, Utf8)') as b,
+  arrow_cast('bar', 'LargeUtf8') as c,
   arrow_cast('2023-01-02T12:53:02', 'Timestamp(Microsecond, Some("+08:00"))') as d
   ;
 +----+-----+-----+---------------------------+
