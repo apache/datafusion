@@ -67,8 +67,9 @@ impl CoalesceContext {
     /// Creates a new context for a descendent of this context.
     /// The descendent will inherit the `has_recursive_ancestor` flag from this context.
     fn new_descendent(&self, descendent_plan: Arc<dyn ExecutionPlan>) -> Self {
+        let ancestor = self;
         Self {
-            has_recursive_ancestor: self.has_recursive_ancestor
+            has_recursive_ancestor: ancestor.has_recursive_ancestor
                 || is_recursive_query(&descendent_plan),
             plan: descendent_plan,
         }

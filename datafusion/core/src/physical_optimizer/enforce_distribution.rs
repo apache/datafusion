@@ -1432,16 +1432,20 @@ impl DistributionContext {
     /// Creates a new context from a descendent plan.
     /// Importantly, this function propagates the `has_recursive_ancestor` flag.
     fn new_descendent(&self, descendent_plan: Arc<dyn ExecutionPlan>) -> Self {
-        let mut ctx = Self::new(descendent_plan);
-        ctx.has_recursive_ancestor |= self.has_recursive_ancestor;
-        ctx
+        let ancestor = self;
+
+        let mut new_ctx = Self::new(descendent_plan);
+        new_ctx.has_recursive_ancestor |= ancestor.has_recursive_ancestor;
+        new_ctx
     }
 
     /// Creates a new context from a descendent context.
     /// Importantly, this function propagates the `has_recursive_ancestor` flag.
     fn new_descendent_from_ctx(&self, ctx: Self) -> Self {
+        let ancestor = self;
+
         let mut ctx = ctx;
-        ctx.has_recursive_ancestor |= self.has_recursive_ancestor;
+        ctx.has_recursive_ancestor |= ancestor.has_recursive_ancestor;
         ctx
     }
 
