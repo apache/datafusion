@@ -24,7 +24,9 @@ use crate::utils::collect_columns;
 use crate::PhysicalExpr;
 
 use arrow::datatypes::Schema;
-use datafusion_common::{ColumnStatistics, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    internal_err, ColumnStatistics, DataFusionError, Result, ScalarValue,
+};
 
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -89,13 +91,11 @@ impl ExprBoundaries {
         Self {
             column: Column::new(&col, index),
             interval: Interval::new(
-                IntervalBound::new(
+                IntervalBound::new_closed(
                     stats.min_value.clone().unwrap_or(ScalarValue::Null),
-                    false,
                 ),
-                IntervalBound::new(
+                IntervalBound::new_closed(
                     stats.max_value.clone().unwrap_or(ScalarValue::Null),
-                    false,
                 ),
             ),
             distinct_count: stats.distinct_count,
@@ -189,18 +189,18 @@ fn shrink_boundaries(
     })?;
     let final_result = graph.get_interval(*root_index);
 
+    // If during selectivity calculation we encounter an error, use 1.0 as cardinality estimate
+    // safest estimate(e.q largest possible value).
     let selectivity = calculate_selectivity(
         &final_result.lower.value,
         &final_result.upper.value,
         &target_boundaries,
         &initial_boundaries,
-    )?;
+    )
+    .unwrap_or(1.0);
 
     if !(0.0..=1.0).contains(&selectivity) {
-        return Err(DataFusionError::Internal(format!(
-            "Selectivity is out of limit: {}",
-            selectivity
-        )));
+        return internal_err!("Selectivity is out of limit: {}", selectivity);
     }
 
     Ok(AnalysisContext::new(target_boundaries).with_selectivity(selectivity))

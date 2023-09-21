@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use datafusion_common::plan_err;
 use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{BuiltinScalarFunction, Expr};
@@ -60,11 +61,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     expr,
                     substring_from: None,
                     substring_for: None,
+                    special: false,
                 };
 
-                return Err(DataFusionError::Plan(format!(
-                    "Substring without for/from is not valid {orig_sql:?}"
-                )));
+                return plan_err!("Substring without for/from is not valid {orig_sql:?}");
             }
         };
 

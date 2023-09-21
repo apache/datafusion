@@ -17,6 +17,7 @@
 
 //! This module provides a builder for creating LogicalPlans
 
+use crate::dml::{CopyOptions, CopyTo};
 use crate::expr::Alias;
 use crate::expr_rewriter::{
     coerce_plan_expr_for_schema, normalize_col,
@@ -40,10 +41,12 @@ use crate::{
     Expr, ExprSchemable, TableSource,
 };
 use arrow::datatypes::{DataType, Schema, SchemaRef};
+use datafusion_common::plan_err;
+use datafusion_common::UnnestOptions;
 use datafusion_common::{
     display::ToStringifiedPlan, Column, DFField, DFSchema, DFSchemaRef, DataFusionError,
-    FunctionalDependencies, OwnedTableReference, Result, ScalarValue, TableReference,
-    ToDFSchema,
+    FileType, FunctionalDependencies, OwnedTableReference, Result, ScalarValue,
+    TableReference, ToDFSchema,
 };
 use std::any::Any;
 use std::cmp::Ordering;
@@ -128,13 +131,11 @@ impl LogicalPlanBuilder {
     /// If the values include params/binders such as $1, $2, $3, etc, then the `param_data_types` should be provided.
     pub fn values(mut values: Vec<Vec<Expr>>) -> Result<Self> {
         if values.is_empty() {
-            return Err(DataFusionError::Plan("Values list cannot be empty".into()));
+            return plan_err!("Values list cannot be empty");
         }
         let n_cols = values[0].len();
         if n_cols == 0 {
-            return Err(DataFusionError::Plan(
-                "Values list cannot be zero length".into(),
-            ));
+            return plan_err!("Values list cannot be zero length");
         }
         let empty_schema = DFSchema::empty();
         let mut field_types: Vec<Option<DataType>> = Vec::with_capacity(n_cols);
@@ -145,12 +146,12 @@ impl LogicalPlanBuilder {
         let mut nulls: Vec<(usize, usize)> = Vec::new();
         for (i, row) in values.iter().enumerate() {
             if row.len() != n_cols {
-                return Err(DataFusionError::Plan(format!(
+                return plan_err!(
                     "Inconsistent data length across values list: got {} values in row {} but expected {}",
                     row.len(),
                     i,
                     n_cols
-                )));
+                );
             }
             field_types = row
                 .iter()
@@ -163,8 +164,7 @@ impl LogicalPlanBuilder {
                         let data_type = expr.get_type(&empty_schema)?;
                         if let Some(prev_data_type) = &field_types[j] {
                             if prev_data_type != &data_type {
-                                let err = format!("Inconsistent data type across values list at row {i} column {j}");
-                                return Err(DataFusionError::Plan(err));
+                                return plan_err!("Inconsistent data type across values list at row {i} column {j}");
                             }
                         }
                         Ok(Some(data_type))
@@ -233,17 +233,42 @@ impl LogicalPlanBuilder {
         Self::scan_with_filters(table_name, table_source, projection, vec![])
     }
 
+    /// Create a [CopyTo] for copying the contents of this builder to the specified file(s)
+    pub fn copy_to(
+        input: LogicalPlan,
+        output_url: String,
+        file_format: FileType,
+        single_file_output: bool,
+        copy_options: CopyOptions,
+    ) -> Result<Self> {
+        Ok(Self::from(LogicalPlan::Copy(CopyTo {
+            input: Arc::new(input),
+            output_url,
+            file_format,
+            single_file_output,
+            copy_options,
+        })))
+    }
+
     /// Create a [DmlStatement] for inserting the contents of this builder into the named table
     pub fn insert_into(
         input: LogicalPlan,
         table_name: impl Into<OwnedTableReference>,
         table_schema: &Schema,
+        overwrite: bool,
     ) -> Result<Self> {
         let table_schema = table_schema.clone().to_dfschema_ref()?;
+
+        let op = if overwrite {
+            WriteOp::InsertOverwrite
+        } else {
+            WriteOp::InsertInto
+        };
+
         Ok(Self::from(LogicalPlan::Dml(DmlStatement {
             table_name: table_name.into(),
             table_schema,
-            op: WriteOp::Insert,
+            op,
             input: Arc::new(input),
         })))
     }
@@ -258,9 +283,7 @@ impl LogicalPlanBuilder {
         let table_name = table_name.into();
 
         if table_name.table().is_empty() {
-            return Err(DataFusionError::Plan(
-                "table_name cannot be empty".to_string(),
-            ));
+            return plan_err!("table_name cannot be empty");
         }
 
         let schema = table_source.schema();
@@ -505,9 +528,7 @@ impl LogicalPlanBuilder {
             .map(|col| col.flat_name())
             .collect::<String>();
 
-        Err(DataFusionError::Plan(format!(
-            "For SELECT DISTINCT, ORDER BY expressions {missing_col_names} must appear in select list",
-        )))
+        plan_err!("For SELECT DISTINCT, ORDER BY expressions {missing_col_names} must appear in select list")
     }
 
     /// Apply a sort
@@ -572,15 +593,8 @@ impl LogicalPlanBuilder {
 
     /// Apply a union, removing duplicate rows
     pub fn union_distinct(self, plan: LogicalPlan) -> Result<Self> {
-        // unwrap top-level Distincts, to avoid duplication
-        let left_plan: LogicalPlan = match self.plan {
-            LogicalPlan::Distinct(Distinct { input }) => (*input).clone(),
-            _ => self.plan,
-        };
-        let right_plan: LogicalPlan = match plan {
-            LogicalPlan::Distinct(Distinct { input }) => (*input).clone(),
-            _ => plan,
-        };
+        let left_plan: LogicalPlan = self.plan;
+        let right_plan: LogicalPlan = plan;
 
         Ok(Self::from(LogicalPlan::Distinct(Distinct {
             input: Arc::new(union(left_plan, right_plan)?),
@@ -633,9 +647,7 @@ impl LogicalPlanBuilder {
         null_equals_null: bool,
     ) -> Result<Self> {
         if join_keys.0.len() != join_keys.1.len() {
-            return Err(DataFusionError::Plan(
-                "left_keys and right_keys were not the same length".to_string(),
-            ));
+            return plan_err!("left_keys and right_keys were not the same length");
         }
 
         let filter = if let Some(expr) = filter {
@@ -653,7 +665,7 @@ impl LogicalPlanBuilder {
             join_keys
                 .0
                 .into_iter()
-                .zip(join_keys.1.into_iter())
+                .zip(join_keys.1)
                 .map(|(l, r)| {
                     let l = l.into();
                     let r = r.into();
@@ -730,7 +742,7 @@ impl LogicalPlanBuilder {
 
         let on = left_keys
             .into_iter()
-            .zip(right_keys.into_iter())
+            .zip(right_keys)
             .map(|(l, r)| (Expr::Column(l), Expr::Column(r)))
             .collect();
         let join_schema =
@@ -765,7 +777,7 @@ impl LogicalPlanBuilder {
             .map(|c| Self::normalize(&right, c))
             .collect::<Result<_>>()?;
 
-        let on: Vec<(_, _)> = left_keys.into_iter().zip(right_keys.into_iter()).collect();
+        let on: Vec<(_, _)> = left_keys.into_iter().zip(right_keys).collect();
         let join_schema =
             build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
         let mut join_on: Vec<(Expr, Expr)> = vec![];
@@ -931,9 +943,9 @@ impl LogicalPlanBuilder {
         let right_len = right_plan.schema().fields().len();
 
         if left_len != right_len {
-            return Err(DataFusionError::Plan(format!(
+            return plan_err!(
                 "INTERSECT/EXCEPT query must have the same number of columns. Left is {left_len} and right is {right_len}."
-            )));
+            );
         }
 
         let join_keys = left_plan
@@ -979,9 +991,7 @@ impl LogicalPlanBuilder {
         filter: Option<Expr>,
     ) -> Result<Self> {
         if equi_exprs.0.len() != equi_exprs.1.len() {
-            return Err(DataFusionError::Plan(
-                "left_keys and right_keys were not the same length".to_string(),
-            ));
+            return plan_err!("left_keys and right_keys were not the same length");
         }
 
         let join_key_pairs = equi_exprs
@@ -1037,6 +1047,19 @@ impl LogicalPlanBuilder {
     /// Unnest the given column.
     pub fn unnest_column(self, column: impl Into<Column>) -> Result<Self> {
         Ok(Self::from(unnest(self.plan, column.into())?))
+    }
+
+    /// Unnest the given column given [`UnnestOptions`]
+    pub fn unnest_column_with_options(
+        self,
+        column: impl Into<Column>,
+        options: UnnestOptions,
+    ) -> Result<Self> {
+        Ok(Self::from(unnest_with_options(
+            self.plan,
+            column.into(),
+            options,
+        )?))
     }
 }
 
@@ -1124,12 +1147,10 @@ pub(crate) fn validate_unique_names<'a>(
                 Ok(())
             },
             Some((existing_position, existing_expr)) => {
-                Err(DataFusionError::Plan(
-                    format!("{node_name} require unique expression names \
+                plan_err!("{node_name} require unique expression names \
                              but the expression \"{existing_expr}\" at position {existing_position} and \"{expr}\" \
-                             at position {position} have the same name. Consider aliasing (\"AS\") one of them.",
+                             at position {position} have the same name. Consider aliasing (\"AS\") one of them."
                             )
-                ))
             }
         }
     })
@@ -1168,9 +1189,8 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
     // check union plan length same.
     let right_col_num = right_plan.schema().fields().len();
     if right_col_num != left_col_num {
-        return Err(DataFusionError::Plan(format!(
-            "Union queries must have the same number of columns, (left is {left_col_num}, right is {right_col_num})")
-        ));
+        return plan_err!(
+            "Union queries must have the same number of columns, (left is {left_col_num}, right is {right_col_num})");
     }
 
     // create union schema
@@ -1223,7 +1243,7 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
         .collect::<Result<Vec<_>>>()?;
 
     if inputs.is_empty() {
-        return Err(DataFusionError::Plan("Empty UNION".to_string()));
+        return plan_err!("Empty UNION");
     }
 
     Ok(LogicalPlan::Union(Union {
@@ -1384,8 +1404,17 @@ impl TableSource for LogicalTableSource {
     }
 }
 
-/// Create an unnest plan.
+/// Create a [`LogicalPlan::Unnest`] plan
 pub fn unnest(input: LogicalPlan, column: Column) -> Result<LogicalPlan> {
+    unnest_with_options(input, column, UnnestOptions::new())
+}
+
+/// Create a [`LogicalPlan::Unnest`] plan with options
+pub fn unnest_with_options(
+    input: LogicalPlan,
+    column: Column,
+    options: UnnestOptions,
+) -> Result<LogicalPlan> {
     let unnest_field = input.schema().field_from_column(&column)?;
 
     // Extract the type of the nested field in the list.
@@ -1428,6 +1457,7 @@ pub fn unnest(input: LogicalPlan, column: Column) -> Result<LogicalPlan> {
         input: Arc::new(input),
         column: unnested_field.qualified_column(),
         schema,
+        options,
     }))
 }
 
@@ -1491,7 +1521,7 @@ mod tests {
         let err =
             LogicalPlanBuilder::scan("", table_source(&schema), projection).unwrap_err();
         assert_eq!(
-            err.to_string(),
+            err.strip_backtrace(),
             "Error during planning: table_name cannot be empty"
         );
     }
@@ -1592,13 +1622,16 @@ mod tests {
             .union_distinct(plan.build()?)?
             .build()?;
 
-        // output has only one union
         let expected = "\
         Distinct:\
         \n  Union\
-        \n    TableScan: employee_csv projection=[state, salary]\
-        \n    TableScan: employee_csv projection=[state, salary]\
-        \n    TableScan: employee_csv projection=[state, salary]\
+        \n    Distinct:\
+        \n      Union\
+        \n        Distinct:\
+        \n          Union\
+        \n            TableScan: employee_csv projection=[state, salary]\
+        \n            TableScan: employee_csv projection=[state, salary]\
+        \n        TableScan: employee_csv projection=[state, salary]\
         \n    TableScan: employee_csv projection=[state, salary]";
 
         assert_eq!(expected, format!("{plan:?}"));
@@ -1617,8 +1650,8 @@ mod tests {
         let err_msg1 = plan1.clone().union(plan2.clone().build()?).unwrap_err();
         let err_msg2 = plan1.union_distinct(plan2.build()?).unwrap_err();
 
-        assert_eq!(err_msg1.to_string(), expected);
-        assert_eq!(err_msg2.to_string(), expected);
+        assert_eq!(err_msg1.strip_backtrace(), expected);
+        assert_eq!(err_msg2.strip_backtrace(), expected);
 
         Ok(())
     }
@@ -1747,9 +1780,7 @@ mod tests {
                 assert_eq!("id", &name);
                 Ok(())
             }
-            _ => Err(DataFusionError::Plan(
-                "Plan should have returned an DataFusionError::SchemaError".to_string(),
-            )),
+            _ => plan_err!("Plan should have returned an DataFusionError::SchemaError"),
         }
     }
 
@@ -1776,9 +1807,7 @@ mod tests {
                 assert_eq!("state", &name);
                 Ok(())
             }
-            _ => Err(DataFusionError::Plan(
-                "Plan should have returned an DataFusionError::SchemaError".to_string(),
-            )),
+            _ => plan_err!("Plan should have returned an DataFusionError::SchemaError"),
         }
     }
 
@@ -1846,7 +1875,7 @@ mod tests {
             LogicalPlanBuilder::intersect(plan1.build()?, plan2.build()?, true)
                 .unwrap_err();
 
-        assert_eq!(err_msg1.to_string(), expected);
+        assert_eq!(err_msg1.strip_backtrace(), expected);
 
         Ok(())
     }

@@ -31,12 +31,14 @@ pub mod functions;
 pub mod hash_utils;
 pub mod intervals;
 pub mod math_expressions;
+mod partitioning;
 mod physical_expr;
 pub mod planner;
 #[cfg(feature = "regex_expressions")]
 pub mod regex_expressions;
 mod scalar_function;
 mod sort_expr;
+pub mod sort_properties;
 pub mod string_expressions;
 pub mod struct_expressions;
 pub mod tree_node;
@@ -52,21 +54,23 @@ pub use aggregate::groups_accumulator::{
 };
 pub use aggregate::AggregateExpr;
 pub use analysis::{analyze, AnalysisContext, ExprBoundaries};
-
 pub use equivalence::{
+    add_offset_to_lex_ordering, ordering_equivalence_properties_helper,
     project_equivalence_properties, project_ordering_equivalence_properties,
     EquivalenceProperties, EquivalentClass, OrderingEquivalenceProperties,
     OrderingEquivalentClass,
 };
-pub use physical_expr::{PhysicalExpr, PhysicalExprRef};
+
+pub use partitioning::{Distribution, Partitioning};
+pub use physical_expr::{physical_exprs_contains, PhysicalExpr, PhysicalExprRef};
 pub use planner::create_physical_expr;
 pub use scalar_function::ScalarFunctionExpr;
 pub use sort_expr::{
     LexOrdering, LexOrderingRef, LexOrderingReq, PhysicalSortExpr,
     PhysicalSortRequirement,
 };
+pub use sort_properties::update_ordering;
 pub use utils::{
     expr_list_eq_any_order, expr_list_eq_strict_order,
-    normalize_expr_with_equivalence_properties, normalize_out_expr_with_columns_map,
-    reverse_order_bys, split_conjunction,
+    normalize_out_expr_with_columns_map, reverse_order_bys, split_conjunction,
 };

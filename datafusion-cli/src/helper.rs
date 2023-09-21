@@ -18,8 +18,10 @@
 //! Helper that helps with interactive editing, including multi-line parsing and validation,
 //! and auto-completion for file name during creating external table.
 
+use datafusion::common::sql_err;
 use datafusion::error::DataFusionError;
 use datafusion::sql::parser::{DFParser, Statement};
+use datafusion::sql::sqlparser::dialect::dialect_from_str;
 use datafusion::sql::sqlparser::parser::ParserError;
 use rustyline::completion::Completer;
 use rustyline::completion::FilenameCompleter;
@@ -34,12 +36,25 @@ use rustyline::Context;
 use rustyline::Helper;
 use rustyline::Result;
 
-#[derive(Default)]
 pub struct CliHelper {
     completer: FilenameCompleter,
+    dialect: String,
 }
 
 impl CliHelper {
+    pub fn new(dialect: &str) -> Self {
+        Self {
+            completer: FilenameCompleter::new(),
+            dialect: dialect.into(),
+        }
+    }
+
+    pub fn set_dialect(&mut self, dialect: &str) {
+        if dialect != self.dialect {
+            self.dialect = dialect.to_string();
+        }
+    }
+
     fn validate_input(&self, input: &str) -> Result<ValidationResult> {
         if let Some(sql) = input.strip_suffix(';') {
             let sql = match unescape_input(sql) {
@@ -50,12 +65,20 @@ impl CliHelper {
                     ))))
                 }
             };
-            match DFParser::parse_sql(&sql) {
+
+            let dialect = match dialect_from_str(&self.dialect) {
+                Some(dialect) => dialect,
+                None => {
+                    return Ok(ValidationResult::Invalid(Some(format!(
+                        "  🤔 Invalid dialect: {}",
+                        self.dialect
+                    ))))
+                }
+            };
+
+            match DFParser::parse_sql_with_dialect(&sql, dialect.as_ref()) {
                 Ok(statements) if statements.is_empty() => Ok(ValidationResult::Invalid(
                     Some("  🤔 You entered an empty statement".to_string()),
-                )),
-                Ok(statements) if statements.len() > 1 => Ok(ValidationResult::Invalid(
-                    Some("  🤔 You entered more than one statement".to_string()),
                 )),
                 Ok(_statements) => Ok(ValidationResult::Valid(None)),
                 Err(err) => Ok(ValidationResult::Invalid(Some(format!(
@@ -68,6 +91,12 @@ impl CliHelper {
         } else {
             Ok(ValidationResult::Incomplete)
         }
+    }
+}
+
+impl Default for CliHelper {
+    fn default() -> Self {
+        Self::new("generic")
     }
 }
 
@@ -134,9 +163,10 @@ pub fn unescape_input(input: &str) -> datafusion::error::Result<String> {
                     't' => '\t',
                     '\\' => '\\',
                     _ => {
-                        return Err(DataFusionError::SQL(ParserError::TokenizerError(
-                            format!("unsupported escape char: '\\{}'", next_char),
-                        )))
+                        return sql_err!(ParserError::TokenizerError(format!(
+                            "unsupported escape char: '\\{}'",
+                            next_char
+                        ),))
                     }
                 });
             }
@@ -220,6 +250,26 @@ mod tests {
             &validator,
         )?;
         assert!(matches!(result, ValidationResult::Invalid(Some(_))));
+
+        Ok(())
+    }
+
+    #[test]
+    fn sql_dialect() -> Result<()> {
+        let mut validator = CliHelper::default();
+
+        // shoule be invalid in generic dialect
+        let result =
+            readline_direct(Cursor::new(r"select 1 # 2;".as_bytes()), &validator)?;
+        assert!(
+            matches!(result, ValidationResult::Invalid(Some(e)) if e.contains("Invalid statement"))
+        );
+
+        // valid in postgresql dialect
+        validator.set_dialect("postgresql");
+        let result =
+            readline_direct(Cursor::new(r"select 1 # 2;".as_bytes()), &validator)?;
+        assert!(matches!(result, ValidationResult::Valid(None)));
 
         Ok(())
     }

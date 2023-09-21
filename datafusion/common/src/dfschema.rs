@@ -812,8 +812,8 @@ mod tests {
         // lookup with unqualified name "t1.c0"
         let err = schema.index_of_column(&col).unwrap_err();
         assert_eq!(
-            err.to_string(),
-            "Schema error: No field named \"t1.c0\". Valid fields are t1.c0, t1.c1.",
+            err.strip_backtrace(),
+            "Schema error: No field named \"t1.c0\". Valid fields are t1.c0, t1.c1."
         );
         Ok(())
     }
@@ -832,8 +832,8 @@ mod tests {
         // lookup with unqualified name "t1.c0"
         let err = schema.index_of_column(&col).unwrap_err();
         assert_eq!(
-            err.to_string(),
-            "Schema error: No field named \"t1.c0\". Valid fields are t1.\"CapitalColumn\", t1.\"field.with.period\".",
+            err.strip_backtrace(),
+            "Schema error: No field named \"t1.c0\". Valid fields are t1.\"CapitalColumn\", t1.\"field.with.period\"."
         );
         Ok(())
     }
@@ -916,8 +916,8 @@ mod tests {
         let right = DFSchema::try_from(test_schema_1())?;
         let join = left.join(&right);
         assert_eq!(
-            join.unwrap_err().to_string(),
-            "Schema error: Schema contains duplicate unqualified field name c0",
+            join.unwrap_err().strip_backtrace(),
+            "Schema error: Schema contains duplicate unqualified field name c0"
         );
         Ok(())
     }
@@ -993,12 +993,12 @@ mod tests {
 
         let col = Column::from_qualified_name("t1.c0");
         let err = schema.index_of_column(&col).unwrap_err();
-        assert_eq!(err.to_string(), "Schema error: No field named t1.c0.");
+        assert_eq!(err.strip_backtrace(), "Schema error: No field named t1.c0.");
 
         // the same check without qualifier
         let col = Column::from_name("c0");
         let err = schema.index_of_column(&col).err().unwrap();
-        assert_eq!("Schema error: No field named c0.", err.to_string());
+        assert_eq!(err.strip_backtrace(), "Schema error: No field named c0.");
     }
 
     #[test]

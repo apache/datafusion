@@ -28,7 +28,8 @@ use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::plan_err;
+use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
 /// Represents the column at a given index in a RecordBatch
@@ -124,10 +125,10 @@ impl Column {
         if self.index < input_schema.fields.len() {
             Ok(())
         } else {
-            Err(DataFusionError::Internal(format!(
+            internal_err!(
                 "PhysicalExpr Column references column '{}' at index {} (zero-based) but input schema only has {} columns: {:?}",
                 self.name,
-                self.index, input_schema.fields.len(), input_schema.fields().iter().map(|f| f.name().clone()).collect::<Vec<String>>())))
+                self.index, input_schema.fields.len(), input_schema.fields().iter().map(|f| f.name().clone()).collect::<Vec<String>>())
         }
     }
 }
@@ -175,9 +176,7 @@ impl PhysicalExpr for UnKnownColumn {
 
     /// Evaluate the expression
     fn evaluate(&self, _batch: &RecordBatch) -> Result<ColumnarValue> {
-        Err(DataFusionError::Plan(
-            "UnKnownColumn::evaluate() should not be called".to_owned(),
-        ))
+        plan_err!("UnKnownColumn::evaluate() should not be called")
     }
 
     fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
@@ -227,22 +226,20 @@ mod test {
     fn out_of_bounds_data_type() {
         let schema = Schema::new(vec![Field::new("foo", DataType::Utf8, true)]);
         let col = Column::new("id", 9);
-        let error = col.data_type(&schema).expect_err("error");
-        assert_eq!("Internal error: PhysicalExpr Column references column 'id' at index 9 (zero-based) \
-            but input schema only has 1 columns: [\"foo\"]. This was likely caused by a bug in \
-            DataFusion's code and we would welcome that you file an bug report in our issue tracker",
-           &format!("{error}"))
+        let error = col.data_type(&schema).expect_err("error").strip_backtrace();
+        assert!("Internal error: PhysicalExpr Column references column 'id' at index 9 (zero-based) \
+            but input schema only has 1 columns: [\"foo\"].\nThis was likely caused by a bug in \
+            DataFusion's code and we would welcome that you file an bug report in our issue tracker".starts_with(&error))
     }
 
     #[test]
     fn out_of_bounds_nullable() {
         let schema = Schema::new(vec![Field::new("foo", DataType::Utf8, true)]);
         let col = Column::new("id", 9);
-        let error = col.nullable(&schema).expect_err("error");
-        assert_eq!("Internal error: PhysicalExpr Column references column 'id' at index 9 (zero-based) \
-            but input schema only has 1 columns: [\"foo\"]. This was likely caused by a bug in \
-            DataFusion's code and we would welcome that you file an bug report in our issue tracker",
-                   &format!("{error}"))
+        let error = col.nullable(&schema).expect_err("error").strip_backtrace();
+        assert!("Internal error: PhysicalExpr Column references column 'id' at index 9 (zero-based) \
+            but input schema only has 1 columns: [\"foo\"].\nThis was likely caused by a bug in \
+            DataFusion's code and we would welcome that you file an bug report in our issue tracker".starts_with(&error))
     }
 
     #[test]
@@ -251,11 +248,10 @@ mod test {
         let data: StringArray = vec!["data"].into();
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(data)])?;
         let col = Column::new("id", 9);
-        let error = col.evaluate(&batch).expect_err("error");
-        assert_eq!("Internal error: PhysicalExpr Column references column 'id' at index 9 (zero-based) \
-            but input schema only has 1 columns: [\"foo\"]. This was likely caused by a bug in \
-            DataFusion's code and we would welcome that you file an bug report in our issue tracker",
-                   &format!("{error}"));
+        let error = col.evaluate(&batch).expect_err("error").strip_backtrace();
+        assert!("Internal error: PhysicalExpr Column references column 'id' at index 9 (zero-based) \
+            but input schema only has 1 columns: [\"foo\"].\nThis was likely caused by a bug in \
+            DataFusion's code and we would welcome that you file an bug report in our issue tracker".starts_with(&error));
         Ok(())
     }
 }

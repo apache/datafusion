@@ -23,7 +23,7 @@ use super::{ExprSimplifier, SimplifyContext};
 use crate::utils::merge_schema;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{DFSchema, DFSchemaRef, Result};
-use datafusion_expr::{logical_plan::LogicalPlan, utils::from_plan};
+use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_physical_expr::execution_props::ExecutionProps;
 
 /// Optimizer Pass that simplifies [`LogicalPlan`]s by rewriting
@@ -93,7 +93,7 @@ impl SimplifyExpressions {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        from_plan(plan, &expr, &new_inputs)
+        plan.with_new_exprs(expr, &new_inputs)
     }
 }
 
@@ -473,8 +473,8 @@ mod tests {
         let expected = format!(
             "Projection: TimestampNanosecond({}, Some(\"+00:00\")) AS now(), TimestampNanosecond({}, Some(\"+00:00\")) AS t2\
             \n  TableScan: test",
-            time.timestamp_nanos(),
-            time.timestamp_nanos()
+            time.timestamp_nanos_opt().unwrap(),
+            time.timestamp_nanos_opt().unwrap()
         );
 
         assert_eq!(expected, actual);

@@ -18,7 +18,7 @@
 [package]
 name = "datafusion-execution"
 description = "Execution configuration support for DataFusion query engine"
-keywords = [ "arrow", "query", "sql" ]
+keywords = ["arrow", "query", "sql"]
 version = { workspace = true }
 edition = { workspace = true }
 readme = { workspace = true }
@@ -33,12 +33,15 @@ name = "datafusion_execution"
 path = "src/lib.rs"
 
 [dependencies]
+arrow = { workspace = true }
+chrono = { version = "0.4", default-features = false }
 dashmap = "5.4.0"
-datafusion-common = { path = "../common", version = "28.0.0" }
-datafusion-expr = { path = "../expr", version = "28.0.0" }
+datafusion-common = { path = "../common", version = "31.0.0" }
+datafusion-expr = { path = "../expr", version = "31.0.0" }
+futures = "0.3"
 hashbrown = { version = "0.14", features = ["raw"] }
 log = "^0.4"
-object_store = "0.6.1"
+object_store = "0.7.0"
 parking_lot = "0.12"
 rand = "0.8"
 tempfile = "3"

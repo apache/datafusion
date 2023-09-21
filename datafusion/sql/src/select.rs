@@ -24,8 +24,10 @@ use crate::utils::{
     resolve_columns, resolve_positions_to_exprs,
 };
 
+use datafusion_common::Column;
 use datafusion_common::{
-    get_target_functional_dependencies, DFSchemaRef, DataFusionError, Result,
+    get_target_functional_dependencies, not_impl_err, plan_err, DFSchemaRef,
+    DataFusionError, Result,
 };
 use datafusion_expr::expr::Alias;
 use datafusion_expr::expr_rewriter::{
@@ -39,7 +41,9 @@ use datafusion_expr::utils::{
 use datafusion_expr::{
     Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning,
 };
-use sqlparser::ast::{Distinct, Expr as SQLExpr, WildcardAdditionalOptions, WindowType};
+use sqlparser::ast::{
+    Distinct, Expr as SQLExpr, ReplaceSelectItem, WildcardAdditionalOptions, WindowType,
+};
 use sqlparser::ast::{NamedWindowDefinition, Select, SelectItem, TableWithJoins};
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -51,19 +55,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<LogicalPlan> {
         // check for unsupported syntax first
         if !select.cluster_by.is_empty() {
-            return Err(DataFusionError::NotImplemented("CLUSTER BY".to_string()));
+            return not_impl_err!("CLUSTER BY");
         }
         if !select.lateral_views.is_empty() {
-            return Err(DataFusionError::NotImplemented("LATERAL VIEWS".to_string()));
+            return not_impl_err!("LATERAL VIEWS");
         }
         if select.qualify.is_some() {
-            return Err(DataFusionError::NotImplemented("QUALIFY".to_string()));
+            return not_impl_err!("QUALIFY");
         }
         if select.top.is_some() {
-            return Err(DataFusionError::NotImplemented("TOP".to_string()));
+            return not_impl_err!("TOP");
         }
         if !select.sort_by.is_empty() {
-            return Err(DataFusionError::NotImplemented("SORT BY".to_string()));
+            return not_impl_err!("SORT BY");
         }
 
         // process `from` clause
@@ -170,8 +174,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             )?
         } else {
             match having_expr_opt {
-                Some(having_expr) => return Err(DataFusionError::Plan(
-                    format!("HAVING clause references: {having_expr} must appear in the GROUP BY clause or be used in an aggregate function"))),
+                Some(having_expr) => return plan_err!("HAVING clause references: {having_expr} must appear in the GROUP BY clause or be used in an aggregate function"),
                 None => (plan, select_exprs, having_expr_opt)
             }
         };
@@ -209,9 +212,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .distinct
             .map(|distinct| match distinct {
                 Distinct::Distinct => Ok(true),
-                Distinct::On(_) => Err(DataFusionError::NotImplemented(
-                    "DISTINCT ON Exprs not supported".to_string(),
-                )),
+                Distinct::On(_) => not_impl_err!("DISTINCT ON Exprs not supported"),
             })
             .transpose()?
             .unwrap_or(false);
@@ -358,22 +359,47 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Self::check_wildcard_options(&options)?;
 
                 if empty_from {
-                    return Err(DataFusionError::Plan(
-                        "SELECT * with no tables specified is not valid".to_string(),
-                    ));
+                    return plan_err!("SELECT * with no tables specified is not valid");
                 }
                 // do not expand from outer schema
-                expand_wildcard(plan.schema().as_ref(), plan, Some(options))
+                let expanded_exprs =
+                    expand_wildcard(plan.schema().as_ref(), plan, Some(&options))?;
+                // If there is a REPLACE statement, replace that column with the given
+                // replace expression. Column name remains the same.
+                if let Some(replace) = options.opt_replace {
+                    self.replace_columns(
+                        plan,
+                        empty_from,
+                        planner_context,
+                        expanded_exprs,
+                        replace,
+                    )
+                } else {
+                    Ok(expanded_exprs)
+                }
             }
             SelectItem::QualifiedWildcard(ref object_name, options) => {
                 Self::check_wildcard_options(&options)?;
                 let qualifier = format!("{object_name}");
                 // do not expand from outer schema
-                expand_qualified_wildcard(
+                let expanded_exprs = expand_qualified_wildcard(
                     &qualifier,
                     plan.schema().as_ref(),
-                    Some(options),
-                )
+                    Some(&options),
+                )?;
+                // If there is a REPLACE statement, replace that column with the given
+                // replace expression. Column name remains the same.
+                if let Some(replace) = options.opt_replace {
+                    self.replace_columns(
+                        plan,
+                        empty_from,
+                        planner_context,
+                        expanded_exprs,
+                        replace,
+                    )
+                } else {
+                    Ok(expanded_exprs)
+                }
             }
         }
     }
@@ -384,16 +410,52 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             opt_exclude: _opt_exclude,
             opt_except: _opt_except,
             opt_rename,
-            opt_replace,
+            opt_replace: _opt_replace,
         } = options;
 
-        if opt_rename.is_some() || opt_replace.is_some() {
+        if opt_rename.is_some() {
             Err(DataFusionError::NotImplemented(
-                "wildcard * with RENAME or REPLACE not supported ".to_string(),
+                "wildcard * with RENAME not supported ".to_string(),
             ))
         } else {
             Ok(())
         }
+    }
+
+    /// If there is a REPLACE statement in the projected expression in the form of
+    /// "REPLACE (some_column_within_an_expr AS some_column)", this function replaces
+    /// that column with the given replace expression. Column name remains the same.
+    /// Multiple REPLACEs are also possible with comma separations.
+    fn replace_columns(
+        &self,
+        plan: &LogicalPlan,
+        empty_from: bool,
+        planner_context: &mut PlannerContext,
+        mut exprs: Vec<Expr>,
+        replace: ReplaceSelectItem,
+    ) -> Result<Vec<Expr>> {
+        for expr in exprs.iter_mut() {
+            if let Expr::Column(Column { name, .. }) = expr {
+                if let Some(item) = replace
+                    .items
+                    .iter()
+                    .find(|item| item.column_name.value == *name)
+                {
+                    let new_expr = self.sql_select_to_rex(
+                        SelectItem::UnnamedExpr(item.expr.clone()),
+                        plan,
+                        empty_from,
+                        planner_context,
+                    )?[0]
+                        .clone();
+                    *expr = Expr::Alias(Alias {
+                        expr: Box::new(new_expr),
+                        name: name.clone(),
+                    });
+                }
+            }
+        }
+        Ok(exprs)
     }
 
     /// Wrap a plan in a projection
@@ -521,10 +583,10 @@ fn check_conflicting_windows(window_defs: &[NamedWindowDefinition]) -> Result<()
     for (i, window_def_i) in window_defs.iter().enumerate() {
         for window_def_j in window_defs.iter().skip(i + 1) {
             if window_def_i.0 == window_def_j.0 {
-                return Err(DataFusionError::Plan(format!(
+                return plan_err!(
                     "The window {} is defined multiple times!",
                     window_def_i.0
-                )));
+                );
             }
         }
     }
@@ -553,9 +615,7 @@ fn match_window_definitions(
             }
             // All named windows must be defined with a WindowSpec.
             if let Some(WindowType::NamedWindow(ident)) = &f.over {
-                return Err(DataFusionError::Plan(format!(
-                    "The window {ident} is not defined!"
-                )));
+                return plan_err!("The window {ident} is not defined!");
             }
         }
     }

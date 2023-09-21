@@ -17,14 +17,17 @@
 
 //! DataFusion execution configuration and runtime structures
 
+pub mod cache;
 pub mod config;
 pub mod disk_manager;
 pub mod memory_pool;
 pub mod object_store;
 pub mod registry;
 pub mod runtime_env;
+mod stream;
 mod task;
 
 pub use disk_manager::DiskManager;
 pub use registry::FunctionRegistry;
+pub use stream::{RecordBatchStream, SendableRecordBatchStream};
 pub use task::TaskContext;

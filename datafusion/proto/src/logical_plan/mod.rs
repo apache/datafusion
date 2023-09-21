@@ -38,9 +38,10 @@ use datafusion::{
     datasource::{provider_as_source, source_as_provider},
     prelude::SessionContext,
 };
+use datafusion_common::not_impl_err;
 use datafusion_common::{
-    context, parsers::CompressionTypeVariant, DataFusionError, OwnedTableReference,
-    Result,
+    context, internal_err, parsers::CompressionTypeVariant, DataFusionError,
+    OwnedTableReference, Result,
 };
 use datafusion_expr::logical_plan::DdlStatement;
 use datafusion_expr::DropView;
@@ -132,15 +133,11 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
         _inputs: &[LogicalPlan],
         _ctx: &SessionContext,
     ) -> Result<Extension> {
-        Err(DataFusionError::NotImplemented(
-            "LogicalExtensionCodec is not provided".to_string(),
-        ))
+        not_impl_err!("LogicalExtensionCodec is not provided")
     }
 
     fn try_encode(&self, _node: &Extension, _buf: &mut Vec<u8>) -> Result<()> {
-        Err(DataFusionError::NotImplemented(
-            "LogicalExtensionCodec is not provided".to_string(),
-        ))
+        not_impl_err!("LogicalExtensionCodec is not provided")
     }
 
     fn try_decode_table_provider(
@@ -149,9 +146,7 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
         _schema: SchemaRef,
         _ctx: &SessionContext,
     ) -> Result<Arc<dyn TableProvider>> {
-        Err(DataFusionError::NotImplemented(
-            "LogicalExtensionCodec is not provided".to_string(),
-        ))
+        not_impl_err!("LogicalExtensionCodec is not provided")
     }
 
     fn try_encode_table_provider(
@@ -159,9 +154,7 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
         _node: Arc<dyn TableProvider>,
         _buf: &mut Vec<u8>,
     ) -> Result<()> {
-        Err(DataFusionError::NotImplemented(
-            "LogicalExtensionCodec is not provided".to_string(),
-        ))
+        not_impl_err!("LogicalExtensionCodec is not provided")
     }
 }
 
@@ -225,11 +218,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let values: Vec<Vec<Expr>> = if values.values_list.is_empty() {
                     Ok(Vec::new())
                 } else if values.values_list.len() % n_cols != 0 {
-                    Err(DataFusionError::Internal(format!(
+                    internal_err!(
                         "Invalid values list length, expect {} to be divisible by {}",
                         values.values_list.len(),
                         n_cols
-                    )))
+                    )
                 } else {
                     values
                         .values_list
@@ -394,7 +387,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                         .with_listing_options(options)
                         .with_schema(Arc::new(schema));
 
-                let provider = ListingTable::try_new(config)?;
+                let provider = ListingTable::try_new(config)?.with_cache(
+                    ctx.state()
+                        .runtime_env()
+                        .cache_manager
+                        .get_file_statistic_cache(),
+                );
 
                 let table_name = from_owned_table_reference(
                     scan.table_name.as_ref(),
@@ -503,9 +501,7 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                 let file_type = create_extern_table.file_type.as_str();
                 if ctx.table_factory(file_type).is_none() {
-                    Err(DataFusionError::Internal(format!(
-                        "No TableProviderFactory for file type: {file_type}"
-                    )))?
+                    internal_err!("No TableProviderFactory for file type: {file_type}")?
                 }
 
                 let mut order_exprs = vec![];
@@ -1089,9 +1085,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
-            LogicalPlan::Subquery(_) => Err(DataFusionError::NotImplemented(
-                "LogicalPlan serde is not yet implemented for subqueries".to_string(),
-            )),
+            LogicalPlan::Subquery(_) => {
+                not_impl_err!("LogicalPlan serde is not yet implemented for subqueries")
+            }
             LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }) => {
                 let input: protobuf::LogicalPlanNode =
                     protobuf::LogicalPlanNode::try_from_logical_plan(
@@ -1172,9 +1168,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         PartitionMethod::RoundRobin(*partition_count as u64)
                     }
                     Partitioning::DistributeBy(_) => {
-                        return Err(DataFusionError::NotImplemented(
-                            "DistributeBy".to_string(),
-                        ))
+                        return not_impl_err!("DistributeBy")
                     }
                 };
 
@@ -1429,6 +1423,9 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::Dml(_) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for Dml",
             )),
+            LogicalPlan::Copy(_) => Err(proto_error(
+                "LogicalPlan serde is not yet implemented for Copy",
+            )),
             LogicalPlan::DescribeTable(_) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for DescribeTable",
             )),
@@ -1462,7 +1459,10 @@ mod roundtrip_tests {
         create_udf, CsvReadOptions, SessionConfig, SessionContext,
     };
     use datafusion::test_util::{TestTableFactory, TestTableProvider};
-    use datafusion_common::{DFSchemaRef, DataFusionError, Result, ScalarValue};
+    use datafusion_common::{
+        internal_err, not_impl_err, plan_err, DFField, DFSchema, DFSchemaRef,
+        DataFusionError, Result, ScalarValue,
+    };
     use datafusion_expr::expr::{
         self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, Like, ScalarFunction,
         ScalarUDF, Sort,
@@ -1548,15 +1548,11 @@ mod roundtrip_tests {
             _inputs: &[LogicalPlan],
             _ctx: &SessionContext,
         ) -> Result<Extension> {
-            Err(DataFusionError::NotImplemented(
-                "No extension codec provided".to_string(),
-            ))
+            not_impl_err!("No extension codec provided")
         }
 
         fn try_encode(&self, _node: &Extension, _buf: &mut Vec<u8>) -> Result<()> {
-            Err(DataFusionError::NotImplemented(
-                "No extension codec provided".to_string(),
-            ))
+            not_impl_err!("No extension codec provided")
         }
 
         fn try_decode_table_provider(
@@ -1811,14 +1807,10 @@ mod roundtrip_tests {
                         node: Arc::new(node),
                     })
                 } else {
-                    Err(DataFusionError::Internal(
-                        "invalid plan, no expr".to_string(),
-                    ))
+                    internal_err!("invalid plan, no expr")
                 }
             } else {
-                Err(DataFusionError::Internal(
-                    "invalid plan, no input".to_string(),
-                ))
+                internal_err!("invalid plan, no input")
             }
         }
 
@@ -1837,9 +1829,7 @@ mod roundtrip_tests {
 
                 Ok(())
             } else {
-                Err(DataFusionError::Internal(
-                    "unsupported plan type".to_string(),
-                ))
+                internal_err!("unsupported plan type")
             }
         }
 
@@ -1849,9 +1839,7 @@ mod roundtrip_tests {
             _schema: SchemaRef,
             _ctx: &SessionContext,
         ) -> Result<Arc<dyn TableProvider>> {
-            Err(DataFusionError::Internal(
-                "unsupported plan type".to_string(),
-            ))
+            internal_err!("unsupported plan type")
         }
 
         fn try_encode_table_provider(
@@ -1859,9 +1847,7 @@ mod roundtrip_tests {
             _node: Arc<dyn TableProvider>,
             _buf: &mut Vec<u8>,
         ) -> Result<()> {
-            Err(DataFusionError::Internal(
-                "unsupported plan type".to_string(),
-            ))
+            internal_err!("unsupported plan type")
         }
     }
 
@@ -2387,6 +2373,35 @@ mod roundtrip_tests {
     }
 
     #[test]
+    fn roundtrip_dfschema() {
+        let dfschema = DFSchema::new_with_metadata(
+            vec![
+                DFField::new_unqualified("a", DataType::Int64, false),
+                DFField::new(Some("t"), "b", DataType::Decimal128(15, 2), true)
+                    .with_metadata(HashMap::from([(
+                        String::from("k1"),
+                        String::from("v1"),
+                    )])),
+            ],
+            HashMap::from([
+                (String::from("k2"), String::from("v2")),
+                (String::from("k3"), String::from("v3")),
+            ]),
+        )
+        .unwrap();
+        let proto_dfschema: super::protobuf::DfSchema = (&dfschema).try_into().unwrap();
+        let returned_dfschema: DFSchema = (&proto_dfschema).try_into().unwrap();
+        assert_eq!(dfschema, returned_dfschema);
+
+        let arc_dfschema = Arc::new(dfschema.clone());
+        let proto_dfschema: super::protobuf::DfSchema =
+            (&arc_dfschema).try_into().unwrap();
+        let returned_arc_dfschema: DFSchemaRef = proto_dfschema.try_into().unwrap();
+        assert_eq!(arc_dfschema, returned_arc_dfschema);
+        assert_eq!(dfschema, *returned_arc_dfschema);
+    }
+
+    #[test]
     fn roundtrip_not() {
         let test_expr = Expr::Not(Box::new(lit(1.0_f32)));
 
@@ -2434,6 +2449,8 @@ mod roundtrip_tests {
             let ctx = SessionContext::new();
             roundtrip_expr_test(test_expr, ctx);
         }
+        test(Operator::ArrowAt);
+        test(Operator::AtArrow);
         test(Operator::StringConcat);
         test(Operator::RegexNotIMatch);
         test(Operator::RegexNotMatch);
@@ -2913,11 +2930,11 @@ mod roundtrip_tests {
 
         fn return_type(arg_types: &[DataType]) -> Result<Arc<DataType>> {
             if arg_types.len() != 1 {
-                return Err(DataFusionError::Plan(format!(
+                return plan_err!(
                     "dummy_udwf expects 1 argument, got {}: {:?}",
                     arg_types.len(),
                     arg_types
-                )));
+                );
             }
             Ok(Arc::new(arg_types[0].clone()))
         }

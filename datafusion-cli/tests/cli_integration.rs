@@ -33,6 +33,10 @@ fn init() {
     ["--command", "select 1", "--format", "json", "-q"],
     "[{\"Int64(1)\":1}]\n"
 )]
+#[case::exec_multiple_statements(
+    ["--command", "select 1; select 2;", "--format", "json", "-q"],
+    "[{\"Int64(1)\":1}]\n[{\"Int64(2)\":2}]\n"
+)]
 #[case::exec_from_files(
     ["--file", "tests/data/sql.txt", "--format", "json", "-q"],
     "[{\"Int64(1)\":1}]\n"

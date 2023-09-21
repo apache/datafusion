@@ -21,7 +21,7 @@ use arrow::compute::kernels::sort::SortColumn;
 use arrow::compute::SortOptions;
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::window_state::{
     PartitionBatchState, WindowAggState, WindowFrameContext,
 };
@@ -97,10 +97,7 @@ pub trait WindowExpr: Send + Sync + Debug {
         _partition_batches: &PartitionBatches,
         _window_agg_state: &mut PartitionWindowAggStates,
     ) -> Result<()> {
-        Err(DataFusionError::Internal(format!(
-            "evaluate_stateful is not implemented for {}",
-            self.name()
-        )))
+        internal_err!("evaluate_stateful is not implemented for {}", self.name())
     }
 
     /// Expressions that's from the window function's partition by clause, empty if absent
@@ -254,7 +251,7 @@ pub trait AggregateWindowExpr: WindowExpr {
             let out_type = field.data_type();
             Ok(new_empty_array(out_type))
         } else {
-            ScalarValue::iter_to_array(row_wise_results.into_iter())
+            ScalarValue::iter_to_array(row_wise_results)
         }
     }
 }

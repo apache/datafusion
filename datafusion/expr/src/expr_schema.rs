@@ -17,15 +17,19 @@
 
 use super::{Between, Expr, Like};
 use crate::expr::{
-    AggregateFunction, AggregateUDF, Alias, BinaryExpr, Cast, GetIndexedField, InList,
-    InSubquery, Placeholder, ScalarFunction, ScalarUDF, Sort, TryCast, WindowFunction,
+    AggregateFunction, AggregateUDF, Alias, BinaryExpr, Cast, GetFieldAccess,
+    GetIndexedField, InList, InSubquery, Placeholder, ScalarFunction, ScalarUDF, Sort,
+    TryCast, WindowFunction,
 };
-use crate::field_util::get_indexed_field;
+use crate::field_util::GetFieldAccessSchema;
 use crate::type_coercion::binary::get_result_type;
 use crate::{LogicalPlan, Projection, Subquery};
 use arrow::compute::can_cast_types;
-use arrow::datatypes::DataType;
-use datafusion_common::{Column, DFField, DFSchema, DataFusionError, ExprSchema, Result};
+use arrow::datatypes::{DataType, Field};
+use datafusion_common::{
+    internal_err, plan_err, Column, DFField, DFSchema, DataFusionError, ExprSchema,
+    Result,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -73,7 +77,7 @@ impl ExprSchemable for Expr {
             Expr::Column(c) => Ok(schema.data_type(c)?.clone()),
             Expr::OuterReferenceColumn(ty, _) => Ok(ty.clone()),
             Expr::ScalarVariable(ty, _) => Ok(ty.clone()),
-            Expr::Literal(l) => Ok(l.get_datatype()),
+            Expr::Literal(l) => Ok(l.data_type()),
             Expr::Case(case) => case.when_then_expr[0].1.get_type(schema),
             Expr::Cast(Cast { data_type, .. })
             | Expr::TryCast(TryCast { data_type, .. }) => Ok(data_type.clone()),
@@ -89,6 +93,7 @@ impl ExprSchemable for Expr {
                     .iter()
                     .map(|e| e.get_type(schema))
                     .collect::<Result<Vec<_>>>()?;
+
                 fun.return_type(&data_types)
             }
             Expr::WindowFunction(WindowFunction { fun, args, .. }) => {
@@ -145,18 +150,15 @@ impl ExprSchemable for Expr {
                 // Wildcard do not really have a type and do not appear in projections
                 Ok(DataType::Null)
             }
-            Expr::QualifiedWildcard { .. } => Err(DataFusionError::Internal(
+            Expr::QualifiedWildcard { .. } => internal_err!(
                 "QualifiedWildcard expressions are not valid in a logical query plan"
-                    .to_owned(),
-            )),
+            ),
             Expr::GroupingSet(_) => {
                 // grouping sets do not really have a type and do not appear in projections
                 Ok(DataType::Null)
             }
-            Expr::GetIndexedField(GetIndexedField { key, expr }) => {
-                let data_type = expr.get_type(schema)?;
-
-                get_indexed_field(&data_type, key).map(|x| x.data_type().clone())
+            Expr::GetIndexedField(GetIndexedField { expr, field }) => {
+                field_for_index(expr, field, schema).map(|x| x.data_type().clone())
             }
         }
     }
@@ -257,16 +259,14 @@ impl ExprSchemable for Expr {
             | Expr::SimilarTo(Like { expr, pattern, .. }) => {
                 Ok(expr.nullable(input_schema)? || pattern.nullable(input_schema)?)
             }
-            Expr::Wildcard => Err(DataFusionError::Internal(
-                "Wildcard expressions are not valid in a logical query plan".to_owned(),
-            )),
-            Expr::QualifiedWildcard { .. } => Err(DataFusionError::Internal(
+            Expr::Wildcard => internal_err!(
+                "Wildcard expressions are not valid in a logical query plan"
+            ),
+            Expr::QualifiedWildcard { .. } => internal_err!(
                 "QualifiedWildcard expressions are not valid in a logical query plan"
-                    .to_owned(),
-            )),
-            Expr::GetIndexedField(GetIndexedField { key, expr }) => {
-                let data_type = expr.get_type(input_schema)?;
-                get_indexed_field(&data_type, key).map(|x| x.is_nullable())
+            ),
+            Expr::GetIndexedField(GetIndexedField { expr, field }) => {
+                field_for_index(expr, field, input_schema).map(|x| x.is_nullable())
             }
             Expr::GroupingSet(_) => {
                 // grouping sets do not really have the concept of nullable and do not appear
@@ -330,11 +330,31 @@ impl ExprSchemable for Expr {
                 _ => Ok(Expr::Cast(Cast::new(Box::new(self), cast_to_type.clone()))),
             }
         } else {
-            Err(DataFusionError::Plan(format!(
-                "Cannot automatically convert {this_type:?} to {cast_to_type:?}"
-            )))
+            plan_err!("Cannot automatically convert {this_type:?} to {cast_to_type:?}")
         }
     }
+}
+
+/// return the schema [`Field`] for the type referenced by `get_indexed_field`
+fn field_for_index<S: ExprSchema>(
+    expr: &Expr,
+    field: &GetFieldAccess,
+    schema: &S,
+) -> Result<Field> {
+    let expr_dt = expr.get_type(schema)?;
+    match field {
+        GetFieldAccess::NamedStructField { name } => {
+            GetFieldAccessSchema::NamedStructField { name: name.clone() }
+        }
+        GetFieldAccess::ListIndex { key } => GetFieldAccessSchema::ListIndex {
+            key_dt: key.get_type(schema)?,
+        },
+        GetFieldAccess::ListRange { start, stop } => GetFieldAccessSchema::ListRange {
+            start_dt: start.get_type(schema)?,
+            stop_dt: stop.get_type(schema)?,
+        },
+    }
+    .get_accessed_field(&expr_dt)
 }
 
 /// cast subquery in InSubquery/ScalarSubquery to a given type.
@@ -552,7 +572,7 @@ mod tests {
     impl ExprSchema for MockExprSchema {
         fn nullable(&self, _col: &Column) -> Result<bool> {
             if self.error_on_nullable {
-                Err(DataFusionError::Internal("nullable error".into()))
+                internal_err!("nullable error")
             } else {
                 Ok(self.nullable)
             }

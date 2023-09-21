@@ -1,0 +1,246 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# set variable to value
+statement ok
+set datafusion.catalog.information_schema = true
+
+statement ok
+SET datafusion.execution.batch_size to 1
+
+query TT
+SHOW datafusion.execution.batch_size
+----
+datafusion.execution.batch_size 1
+
+# set variable to value with equal sign
+
+statement ok
+set datafusion.catalog.information_schema = true
+
+statement ok
+SET datafusion.execution.batch_size = 1
+
+query TT
+SHOW datafusion.execution.batch_size
+----
+datafusion.execution.batch_size 1
+
+# set variable to value with single quoted string
+statement ok
+set datafusion.catalog.information_schema = true
+
+statement ok
+SET datafusion.execution.batch_size to '1'
+
+query TT
+SHOW datafusion.execution.batch_size
+----
+datafusion.execution.batch_size 1
+
+# set variable to value case insensitive
+statement ok
+set datafusion.catalog.information_schema = true
+
+statement ok
+SET datafusion.EXECUTION.batch_size to '1'
+
+query TT
+SHOW datafusion.execution.batch_size
+----
+datafusion.execution.batch_size 1
+
+# set variable unknown variable
+statement error DataFusion error: External error: could not find config namespace for key "aabbcc"
+SET aabbcc to '1'
+
+# set bool variable
+statement ok
+set datafusion.catalog.information_schema = true
+
+statement ok
+SET datafusion.execution.coalesce_batches to true
+
+query TT
+SHOW datafusion.execution.coalesce_batches
+----
+datafusion.execution.coalesce_batches true
+
+statement ok
+SET datafusion.execution.coalesce_batches to 'false'
+
+query TT
+SHOW datafusion.execution.coalesce_batches
+----
+datafusion.execution.coalesce_batches false
+
+# set bool variable bad value
+
+statement ok
+set datafusion.catalog.information_schema = true
+
+statement error DataFusion error: Error parsing 1 as bool
+SET datafusion.execution.coalesce_batches to 1
+
+statement error DataFusion error: Error parsing abc as bool
+SET datafusion.execution.coalesce_batches to abc
+
+# set u64 variable
+statement ok
+set datafusion.catalog.information_schema = true
+
+statement ok
+SET datafusion.execution.batch_size to 0
+
+query TT
+SHOW datafusion.execution.batch_size
+----
+datafusion.execution.batch_size 0
+
+statement ok
+SET datafusion.execution.batch_size to '1'
+
+query TT
+SHOW datafusion.execution.batch_size
+----
+datafusion.execution.batch_size 1
+
+statement ok
+SET datafusion.execution.batch_size to +2
+
+query TT
+SHOW datafusion.execution.batch_size
+----
+datafusion.execution.batch_size 2
+
+# set u64 variable bad value
+
+statement ok
+set datafusion.catalog.information_schema = true
+
+statement error DataFusion error: Error parsing -1 as usize
+SET datafusion.execution.batch_size to -1
+
+statement error DataFusion error: Error parsing abc as usize
+SET datafusion.execution.batch_size to abc
+
+statement error External error: invalid digit found in string
+SET datafusion.execution.batch_size to 0.1
+
+# set time zone
+statement ok
+set datafusion.catalog.information_schema = true
+
+statement ok
+SET datafusion.execution.time_zone = '+08:00'
+
+query TT
+SHOW datafusion.execution.time_zone
+----
+datafusion.execution.time_zone +08:00
+
+# set time zone with alias variable name
+statement ok
+set datafusion.catalog.information_schema = true
+
+statement ok
+SET TIME ZONE = '+08:00'
+
+query TT
+SHOW TIME ZONE
+----
+datafusion.execution.time_zone +08:00
+
+statement ok
+SET TIMEZONE = '+07:00'
+
+query TT
+SHOW TIMEZONE
+----
+datafusion.execution.time_zone +07:00
+
+# set time zone good time zone format
+statement ok
+set datafusion.catalog.information_schema = true
+
+statement ok
+SET TIME ZONE = '+08:00'
+
+query P
+SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ
+----
+2000-01-01T00:00:00+08:00
+
+statement ok
+SET TIME ZONE = '-08:00'
+
+query P
+SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ
+----
+2000-01-01T00:00:00-08:00
+
+statement ok
+SET TIME ZONE = '+0800'
+
+query P
+SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ
+----
+2000-01-01T00:00:00+08:00
+
+statement ok
+SET TIME ZONE = '+08'
+
+query P
+SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ
+----
+2000-01-01T00:00:00+08:00
+
+# set time zone bad time zone format
+statement ok
+set datafusion.catalog.information_schema = true
+
+statement ok
+SET TIME ZONE = '+08:00:00'
+
+statement error Arrow error: Parser error: Invalid timezone "\+08:00:00": '\+08:00:00' is not a valid timezone
+SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ
+
+statement ok
+SET TIME ZONE = '08:00'
+
+statement error Arrow error: Parser error: Invalid timezone "08:00": '08:00' is not a valid timezone
+SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ
+
+statement ok
+SET TIME ZONE = '08'
+
+statement error Arrow error: Parser error: Invalid timezone "08": '08' is not a valid timezone
+SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ
+
+statement ok
+SET TIME ZONE = 'Asia/Taipei'
+
+query P
+SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ
+----
+2000-01-01T00:00:00+08:00
+
+statement ok
+SET TIME ZONE = 'Asia/Taipei2'
+
+statement error Arrow error: Parser error: Invalid timezone "Asia/Taipei2": 'Asia/Taipei2' is not a valid timezone
+SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ

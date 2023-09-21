@@ -19,7 +19,9 @@ use std::sync::Arc;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
-use datafusion_common::{Constraints, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    not_impl_err, plan_err, sql_err, Constraints, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::{
     CreateMemoryTable, DdlStatement, Expr, LogicalPlan, LogicalPlanBuilder,
 };
@@ -52,18 +54,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // Process CTEs from top to bottom
             // do not allow self-references
             if with.recursive {
-                return Err(DataFusionError::NotImplemented(
-                    "Recursive CTEs are not supported".to_string(),
-                ));
+                return not_impl_err!("Recursive CTEs are not supported");
             }
 
             for cte in with.cte_tables {
                 // A `WITH` block can't use the same name more than once
                 let cte_name = self.normalizer.normalize(cte.alias.name.clone());
                 if planner_context.contains_cte(&cte_name) {
-                    return Err(DataFusionError::SQL(ParserError(format!(
+                    return sql_err!(ParserError(format!(
                         "WITH query name {cte_name:?} specified more than once"
-                    ))));
+                    )));
                 }
                 // create logical plan & pass backreferencing CTEs
                 // CTE expr don't need extend outer_query_schema
@@ -117,15 +117,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             )? {
                 Expr::Literal(ScalarValue::Int64(Some(s))) => {
                     if s < 0 {
-                        return Err(DataFusionError::Plan(format!(
-                            "Offset must be >= 0, '{s}' was provided."
-                        )));
+                        return plan_err!("Offset must be >= 0, '{s}' was provided.");
                     }
                     Ok(s as usize)
                 }
-                _ => Err(DataFusionError::Plan(
-                    "Unexpected expression in OFFSET clause".to_string(),
-                )),
+                _ => plan_err!("Unexpected expression in OFFSET clause"),
             }?,
             _ => 0,
         };
@@ -142,9 +138,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     Expr::Literal(ScalarValue::Int64(Some(n))) if n >= 0 => {
                         Ok(n as usize)
                     }
-                    _ => Err(DataFusionError::Plan(
-                        "LIMIT must not be negative".to_string(),
-                    )),
+                    _ => plan_err!("LIMIT must not be negative"),
                 }?;
                 Some(n)
             }

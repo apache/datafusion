@@ -94,7 +94,7 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
     let running_source = Arc::new(
         MemoryExec::try_new(&[input1.clone()], schema.clone(), None)
             .unwrap()
-            .with_sort_information(sort_keys),
+            .with_sort_information(vec![sort_keys]),
     );
 
     let aggregate_expr = vec![Arc::new(Sum::new(
@@ -211,7 +211,7 @@ pub(crate) fn make_staggered_batches<const STREAM: bool>(
     let input1 = Int64Array::from_iter_values(input123.clone().into_iter().map(|k| k.0));
     let input2 = Int64Array::from_iter_values(input123.clone().into_iter().map(|k| k.1));
     let input3 = Int64Array::from_iter_values(input123.clone().into_iter().map(|k| k.2));
-    let input4 = Int64Array::from_iter_values(input4.into_iter());
+    let input4 = Int64Array::from_iter_values(input4);
 
     // split into several record batches
     let mut remainder = RecordBatch::try_from_iter(vec![

@@ -1,9 +1,9 @@
 select
     o_year,
-    cast(cast(sum(case
-                      when nation = 'BRAZIL' then volume
-                      else 0
-        end) as decimal(12,2)) / cast(sum(volume) as decimal(12,2)) as decimal(15,2)) as mkt_share
+    sum(case
+            when nation = 'BRAZIL' then volume
+            else 0
+        end) / sum(volume) as mkt_share
 from
     (
         select

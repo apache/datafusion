@@ -107,7 +107,7 @@ mod sp_repartition_fuzz_tests {
         let running_source = Arc::new(
             MemoryExec::try_new(&[input1.clone()], schema.clone(), None)
                 .unwrap()
-                .with_sort_information(sort_keys.clone()),
+                .with_sort_information(vec![sort_keys.clone()]),
         );
         let hash_exprs = vec![col("c", &schema).unwrap()];
 
@@ -140,7 +140,7 @@ mod sp_repartition_fuzz_tests {
         Arc::new(
             RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(2))
                 .unwrap()
-                .with_preserve_order(),
+                .with_preserve_order(true),
         )
     }
 
@@ -159,7 +159,7 @@ mod sp_repartition_fuzz_tests {
         Arc::new(
             RepartitionExec::try_new(input, Partitioning::Hash(hash_expr, 2))
                 .unwrap()
-                .with_preserve_order(),
+                .with_preserve_order(true),
         )
     }
 

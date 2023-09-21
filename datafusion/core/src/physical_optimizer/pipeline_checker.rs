@@ -26,8 +26,8 @@ use crate::physical_plan::joins::SymmetricHashJoinExec;
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 use datafusion_common::config::OptimizerOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
-use datafusion_common::DataFusionError;
-use datafusion_physical_expr::intervals::{check_support, is_datatype_supported};
+use datafusion_common::{plan_err, DataFusionError};
+use datafusion_physical_expr::intervals::utils::{check_support, is_datatype_supported};
 use std::sync::Arc;
 
 /// The PipelineChecker rule rejects non-runnable query plans that use
@@ -142,7 +142,7 @@ pub fn check_finiteness_requirements(
         {
             const MSG: &str = "Join operation cannot operate on a non-prunable stream without enabling \
                                the 'allow_symmetric_joins_without_pruning' configuration flag";
-            return Err(DataFusionError::Plan(MSG.to_owned()));
+            return plan_err!("{}", MSG);
         }
     }
     input

@@ -31,33 +31,36 @@ use arrow::datatypes::{
 };
 use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{
-    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result,
-    ScalarValue,
+    internal_err, Column, DFField, DFSchema, DFSchemaRef, DataFusionError,
+    OwnedTableReference, Result, ScalarValue,
 };
-use datafusion_expr::expr::{Alias, Placeholder};
 use datafusion_expr::{
-    abs, acos, acosh, array, array_append, array_concat, array_dims, array_fill,
+    abs, acos, acosh, array, array_append, array_concat, array_dims, array_element,
     array_has, array_has_all, array_has_any, array_length, array_ndims, array_position,
     array_positions, array_prepend, array_remove, array_remove_all, array_remove_n,
-    array_replace, array_replace_all, array_replace_n, array_to_string, ascii, asin,
-    asinh, atan, atan2, atanh, bit_length, btrim, cardinality, cbrt, ceil,
-    character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, cosh, cot,
-    current_date, current_time, date_bin, date_part, date_trunc, degrees, digest, exp,
+    array_repeat, array_replace, array_replace_all, array_replace_n, array_slice,
+    array_to_string, ascii, asin, asinh, atan, atan2, atanh, bit_length, btrim,
+    cardinality, cbrt, ceil, character_length, chr, coalesce, concat_expr,
+    concat_ws_expr, cos, cosh, cot, current_date, current_time, date_bin, date_part,
+    date_trunc, degrees, digest, exp,
     expr::{self, InList, Sort, WindowFunction},
-    factorial, floor, from_unixtime, gcd, lcm, left, ln, log, log10, log2,
+    factorial, floor, from_unixtime, gcd, isnan, iszero, lcm, left, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
-    lower, lpad, ltrim, md5, now, nullif, octet_length, pi, power, radians, random,
-    regexp_match, regexp_replace, repeat, replace, reverse, right, round, rpad, rtrim,
-    sha224, sha256, sha384, sha512, signum, sin, sinh, split_part, sqrt, starts_with,
-    strpos, substr, substring, tan, tanh, to_hex, to_timestamp_micros,
-    to_timestamp_millis, to_timestamp_seconds, translate, trim, trim_array, trunc, upper,
-    uuid,
+    lower, lpad, ltrim, md5, nanvl, now, nullif, octet_length, pi, power, radians,
+    random, regexp_match, regexp_replace, repeat, replace, reverse, right, round, rpad,
+    rtrim, sha224, sha256, sha384, sha512, signum, sin, sinh, split_part, sqrt,
+    starts_with, strpos, substr, substring, tan, tanh, to_hex, to_timestamp_micros,
+    to_timestamp_millis, to_timestamp_seconds, translate, trim, trunc, upper, uuid,
     window_frame::regularize,
     AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction,
-    Case, Cast, Expr, GetIndexedField, GroupingSet,
+    Case, Cast, Expr, GetFieldAccess, GetIndexedField, GroupingSet,
     GroupingSet::GroupingSets,
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
+};
+use datafusion_expr::{
+    array_empty, array_pop_back,
+    expr::{Alias, Placeholder},
 };
 use std::sync::Arc;
 
@@ -452,26 +455,30 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ToTimestamp => Self::ToTimestamp,
             ScalarFunction::ArrayAppend => Self::ArrayAppend,
             ScalarFunction::ArrayConcat => Self::ArrayConcat,
+            ScalarFunction::ArrayEmpty => Self::ArrayEmpty,
             ScalarFunction::ArrayHasAll => Self::ArrayHasAll,
             ScalarFunction::ArrayHasAny => Self::ArrayHasAny,
             ScalarFunction::ArrayHas => Self::ArrayHas,
             ScalarFunction::ArrayDims => Self::ArrayDims,
-            ScalarFunction::ArrayFill => Self::ArrayFill,
+            ScalarFunction::ArrayElement => Self::ArrayElement,
+            ScalarFunction::Flatten => Self::Flatten,
             ScalarFunction::ArrayLength => Self::ArrayLength,
             ScalarFunction::ArrayNdims => Self::ArrayNdims,
+            ScalarFunction::ArrayPopBack => Self::ArrayPopBack,
             ScalarFunction::ArrayPosition => Self::ArrayPosition,
             ScalarFunction::ArrayPositions => Self::ArrayPositions,
             ScalarFunction::ArrayPrepend => Self::ArrayPrepend,
+            ScalarFunction::ArrayRepeat => Self::ArrayRepeat,
             ScalarFunction::ArrayRemove => Self::ArrayRemove,
             ScalarFunction::ArrayRemoveN => Self::ArrayRemoveN,
             ScalarFunction::ArrayRemoveAll => Self::ArrayRemoveAll,
             ScalarFunction::ArrayReplace => Self::ArrayReplace,
             ScalarFunction::ArrayReplaceN => Self::ArrayReplaceN,
             ScalarFunction::ArrayReplaceAll => Self::ArrayReplaceAll,
+            ScalarFunction::ArraySlice => Self::ArraySlice,
             ScalarFunction::ArrayToString => Self::ArrayToString,
             ScalarFunction::Cardinality => Self::Cardinality,
             ScalarFunction::Array => Self::MakeArray,
-            ScalarFunction::TrimArray => Self::TrimArray,
             ScalarFunction::NullIf => Self::NullIf,
             ScalarFunction::DatePart => Self::DatePart,
             ScalarFunction::DateTrunc => Self::DateTrunc,
@@ -504,6 +511,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Right => Self::Right,
             ScalarFunction::Rpad => Self::Rpad,
             ScalarFunction::SplitPart => Self::SplitPart,
+            ScalarFunction::StringToArray => Self::StringToArray,
             ScalarFunction::StartsWith => Self::StartsWith,
             ScalarFunction::Strpos => Self::Strpos,
             ScalarFunction::Substr => Self::Substr,
@@ -522,6 +530,9 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::StructFun => Self::Struct,
             ScalarFunction::FromUnixtime => Self::FromUnixtime,
             ScalarFunction::Atan2 => Self::Atan2,
+            ScalarFunction::Nanvl => Self::Nanvl,
+            ScalarFunction::Isnan => Self::Isnan,
+            ScalarFunction::Iszero => Self::Iszero,
             ScalarFunction::ArrowTypeof => Self::ArrowTypeof,
         }
     }
@@ -549,6 +560,15 @@ impl From<protobuf::AggregateFunction> for AggregateFunction {
             protobuf::AggregateFunction::Stddev => Self::Stddev,
             protobuf::AggregateFunction::StddevPop => Self::StddevPop,
             protobuf::AggregateFunction::Correlation => Self::Correlation,
+            protobuf::AggregateFunction::RegrSlope => Self::RegrSlope,
+            protobuf::AggregateFunction::RegrIntercept => Self::RegrIntercept,
+            protobuf::AggregateFunction::RegrCount => Self::RegrCount,
+            protobuf::AggregateFunction::RegrR2 => Self::RegrR2,
+            protobuf::AggregateFunction::RegrAvgx => Self::RegrAvgx,
+            protobuf::AggregateFunction::RegrAvgy => Self::RegrAvgy,
+            protobuf::AggregateFunction::RegrSxx => Self::RegrSXX,
+            protobuf::AggregateFunction::RegrSyy => Self::RegrSYY,
+            protobuf::AggregateFunction::RegrSxy => Self::RegrSXY,
             protobuf::AggregateFunction::ApproxPercentileCont => {
                 Self::ApproxPercentileCont
             }
@@ -883,7 +903,7 @@ pub fn parse_i32_to_aggregate_function(value: &i32) -> Result<AggregateFunction,
 fn validate_list_values(field: &Field, values: &[ScalarValue]) -> Result<(), Error> {
     for value in values {
         let field_type = field.data_type();
-        let value_type = value.get_datatype();
+        let value_type = value.data_type();
 
         if field_type != &value_type {
             return Err(proto_error(format!(
@@ -929,18 +949,48 @@ pub fn parse_expr(
                 })
                 .expect("Binary expression could not be reduced to a single expression."))
         }
-        ExprType::GetIndexedField(field) => {
-            let key = field
-                .key
-                .as_ref()
-                .ok_or_else(|| Error::required("value"))?
-                .try_into()?;
-
-            let expr = parse_required_expr(field.expr.as_deref(), registry, "expr")?;
+        ExprType::GetIndexedField(get_indexed_field) => {
+            let expr =
+                parse_required_expr(get_indexed_field.expr.as_deref(), registry, "expr")?;
+            let field = match &get_indexed_field.field {
+                Some(protobuf::get_indexed_field::Field::NamedStructField(
+                    named_struct_field,
+                )) => GetFieldAccess::NamedStructField {
+                    name: named_struct_field
+                        .name
+                        .as_ref()
+                        .ok_or_else(|| Error::required("value"))?
+                        .try_into()?,
+                },
+                Some(protobuf::get_indexed_field::Field::ListIndex(list_index)) => {
+                    GetFieldAccess::ListIndex {
+                        key: Box::new(parse_required_expr(
+                            list_index.key.as_deref(),
+                            registry,
+                            "key",
+                        )?),
+                    }
+                }
+                Some(protobuf::get_indexed_field::Field::ListRange(list_range)) => {
+                    GetFieldAccess::ListRange {
+                        start: Box::new(parse_required_expr(
+                            list_range.start.as_deref(),
+                            registry,
+                            "start",
+                        )?),
+                        stop: Box::new(parse_required_expr(
+                            list_range.stop.as_deref(),
+                            registry,
+                            "stop",
+                        )?),
+                    }
+                }
+                None => return Err(proto_error("Field must not be None")),
+            };
 
             Ok(Expr::GetIndexedField(GetIndexedField::new(
                 Box::new(expr),
-                key,
+                field,
             )))
         }
         ExprType::Column(column) => Ok(Expr::Column(column.into())),
@@ -1224,6 +1274,9 @@ pub fn parse_expr(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                 )),
+                ScalarFunction::ArrayPopBack => {
+                    Ok(array_pop_back(parse_expr(&args[0], registry)?))
+                }
                 ScalarFunction::ArrayPrepend => Ok(array_prepend(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
@@ -1246,16 +1299,16 @@ pub fn parse_expr(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                 )),
-                ScalarFunction::ArrayFill => Ok(array_fill(
-                    parse_expr(&args[0], registry)?,
-                    parse_expr(&args[1], registry)?,
-                )),
                 ScalarFunction::ArrayPosition => Ok(array_position(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                     parse_expr(&args[2], registry)?,
                 )),
                 ScalarFunction::ArrayPositions => Ok(array_positions(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
+                ScalarFunction::ArrayRepeat => Ok(array_repeat(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                 )),
@@ -1288,6 +1341,11 @@ pub fn parse_expr(
                     parse_expr(&args[1], registry)?,
                     parse_expr(&args[2], registry)?,
                 )),
+                ScalarFunction::ArraySlice => Ok(array_slice(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                    parse_expr(&args[2], registry)?,
+                )),
                 ScalarFunction::ArrayToString => Ok(array_to_string(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
@@ -1295,16 +1353,19 @@ pub fn parse_expr(
                 ScalarFunction::Cardinality => {
                     Ok(cardinality(parse_expr(&args[0], registry)?))
                 }
-                ScalarFunction::TrimArray => Ok(trim_array(
-                    parse_expr(&args[0], registry)?,
-                    parse_expr(&args[1], registry)?,
-                )),
                 ScalarFunction::ArrayLength => Ok(array_length(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                 )),
                 ScalarFunction::ArrayDims => {
                     Ok(array_dims(parse_expr(&args[0], registry)?))
+                }
+                ScalarFunction::ArrayElement => Ok(array_element(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
+                ScalarFunction::ArrayEmpty => {
+                    Ok(array_empty(parse_expr(&args[0], registry)?))
                 }
                 ScalarFunction::ArrayNdims => {
                     Ok(array_ndims(parse_expr(&args[0], registry)?))
@@ -1526,6 +1587,12 @@ pub fn parse_expr(
                 ScalarFunction::CurrentDate => Ok(current_date()),
                 ScalarFunction::CurrentTime => Ok(current_time()),
                 ScalarFunction::Cot => Ok(cot(parse_expr(&args[0], registry)?)),
+                ScalarFunction::Nanvl => Ok(nanvl(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
+                ScalarFunction::Isnan => Ok(isnan(parse_expr(&args[0], registry)?)),
+                ScalarFunction::Iszero => Ok(iszero(parse_expr(&args[0], registry)?)),
                 _ => Err(proto_error(
                     "Protobuf deserialization error: Unsupported scalar function",
                 )),
@@ -1594,9 +1661,7 @@ fn parse_escape_char(s: &str) -> Result<Option<char>> {
     match s.len() {
         0 => Ok(None),
         1 => Ok(s.chars().next()),
-        _ => Err(DataFusionError::Internal(
-            "Invalid length for escape char".to_string(),
-        )),
+        _ => internal_err!("Invalid length for escape char"),
     }
 }
 
@@ -1634,6 +1699,8 @@ pub fn from_proto_binary_op(op: &str) -> Result<Operator, Error> {
         "RegexNotIMatch" => Ok(Operator::RegexNotIMatch),
         "RegexNotMatch" => Ok(Operator::RegexNotMatch),
         "StringConcat" => Ok(Operator::StringConcat),
+        "AtArrow" => Ok(Operator::AtArrow),
+        "ArrowAt" => Ok(Operator::ArrowAt),
         other => Err(proto_error(format!(
             "Unsupported binary operator '{other:?}'"
         ))),

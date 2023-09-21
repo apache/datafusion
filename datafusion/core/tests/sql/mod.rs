@@ -40,6 +40,7 @@ use datafusion::{
 };
 use datafusion::{execution::context::SessionContext, physical_plan::displayable};
 use datafusion_common::cast::as_float64_array;
+use datafusion_common::plan_err;
 use datafusion_common::{assert_contains, assert_not_contains};
 use datafusion_expr::Volatility;
 use object_store::path::Path;
@@ -81,6 +82,8 @@ pub mod arrow_files;
 #[cfg(feature = "avro")]
 pub mod create_drop;
 pub mod csv_files;
+pub mod describe;
+pub mod displayable;
 pub mod explain_analyze;
 pub mod expr;
 pub mod group_by;
@@ -95,6 +98,7 @@ pub mod projection;
 pub mod references;
 pub mod repartition;
 pub mod select;
+mod sql_api;
 pub mod subqueries;
 pub mod timestamp;
 pub mod udf;
@@ -405,10 +409,7 @@ async fn register_tpch_csv_data(
             DataType::Decimal128(_, _) => {
                 cols.push(Box::new(Decimal128Builder::with_capacity(records.len())))
             }
-            _ => {
-                let msg = format!("Not implemented: {}", field.data_type());
-                Err(DataFusionError::Plan(msg))?
-            }
+            _ => plan_err!("Not implemented: {}", field.data_type())?,
         }
     }
 
@@ -446,10 +447,7 @@ async fn register_tpch_csv_data(
                     let value_i128 = val.parse::<i128>().unwrap();
                     sb.append_value(value_i128);
                 }
-                _ => Err(DataFusionError::Plan(format!(
-                    "Not implemented: {}",
-                    field.data_type()
-                )))?,
+                _ => plan_err!("Not implemented: {}", field.data_type())?,
             }
         }
     }
@@ -637,7 +635,7 @@ pub fn make_partition(sz: i32) -> RecordBatch {
 
 /// Specialised String representation
 fn col_str(column: &ArrayRef, row_index: usize) -> String {
-    if column.is_null(row_index) {
+    if column.data_type() == &DataType::Null || column.is_null(row_index) {
         return "NULL".to_string();
     }
 

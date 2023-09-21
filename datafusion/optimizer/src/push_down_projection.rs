@@ -26,7 +26,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 use arrow::error::Result as ArrowResult;
 use datafusion_common::ScalarValue::UInt8;
 use datafusion_common::{
-    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ToDFSchema,
+    plan_err, Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ToDFSchema,
 };
 use datafusion_expr::expr::{AggregateFunction, Alias};
 use datafusion_expr::utils::exprlist_to_fields;
@@ -443,9 +443,7 @@ fn get_expr(columns: &HashSet<Column>, schema: &DFSchemaRef) -> Result<Vec<Expr>
         })
         .collect::<Vec<Expr>>();
     if columns.len() != expr.len() {
-        Err(DataFusionError::Plan(format!(
-            "required columns can't push down, columns: {columns:?}"
-        )))
+        plan_err!("required columns can't push down, columns: {columns:?}")
     } else {
         Ok(expr)
     }

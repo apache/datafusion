@@ -17,6 +17,15 @@
 
 //! Planner for [`LogicalPlan`] to [`ExecutionPlan`]
 
+use crate::datasource::file_format::arrow::ArrowFormat;
+use crate::datasource::file_format::avro::AvroFormat;
+use crate::datasource::file_format::csv::CsvFormat;
+use crate::datasource::file_format::json::JsonFormat;
+use crate::datasource::file_format::parquet::ParquetFormat;
+use crate::datasource::file_format::write::FileWriterMode;
+use crate::datasource::file_format::FileFormat;
+use crate::datasource::listing::ListingTableUrl;
+use crate::datasource::physical_plan::FileSinkConfig;
 use crate::datasource::source_as_provider;
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_expr::utils::generate_sort_key;
@@ -28,7 +37,13 @@ use crate::logical_expr::{
     CrossJoin, Expr, LogicalPlan, Partitioning as LogicalPartitioning, PlanType,
     Repartition, Union, UserDefinedLogicalNode,
 };
+use crate::physical_plan::memory::MemoryExec;
+use arrow_array::builder::StringBuilder;
+use arrow_array::RecordBatch;
 use datafusion_common::display::ToStringifiedPlan;
+use datafusion_common::file_options::FileTypeWriterOptions;
+use datafusion_common::FileType;
+use datafusion_expr::dml::{CopyOptions, CopyTo};
 
 use crate::logical_expr::{Limit, Values};
 use crate::physical_expr::create_physical_expr;
@@ -62,14 +77,17 @@ use crate::{
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
-use datafusion_common::{DFSchema, ScalarValue};
+use datafusion_common::{
+    exec_err, internal_err, not_impl_err, plan_err, DFSchema, ScalarValue,
+};
 use datafusion_expr::expr::{
     self, AggregateFunction, AggregateUDF, Alias, Between, BinaryExpr, Cast,
-    GetIndexedField, GroupingSet, InList, Like, ScalarUDF, TryCast, WindowFunction,
+    GetFieldAccess, GetIndexedField, GroupingSet, InList, Like, ScalarUDF, TryCast,
+    WindowFunction,
 };
 use datafusion_expr::expr_rewriter::{unalias, unnormalize_cols};
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
-use datafusion_expr::{DmlStatement, StringifiedPlan, WriteOp};
+use datafusion_expr::{DescribeTable, DmlStatement, StringifiedPlan, WriteOp};
 use datafusion_expr::{WindowFrame, WindowFrameBound};
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_sql::utils::window_expr_common_partition_keys;
@@ -181,9 +199,22 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             let expr = create_physical_name(expr, false)?;
             Ok(format!("{expr} IS NOT UNKNOWN"))
         }
-        Expr::GetIndexedField(GetIndexedField { key, expr }) => {
+        Expr::GetIndexedField(GetIndexedField { expr, field }) => {
             let expr = create_physical_name(expr, false)?;
-            Ok(format!("{expr}[{key}]"))
+            let name = match field {
+                GetFieldAccess::NamedStructField { name } => format!("{expr}[{name}]"),
+                GetFieldAccess::ListIndex { key } => {
+                    let key = create_physical_name(key, false)?;
+                    format!("{expr}[{key}]")
+                }
+                GetFieldAccess::ListRange { start, stop } => {
+                    let start = create_physical_name(start, false)?;
+                    let stop = create_physical_name(stop, false)?;
+                    format!("{expr}[{start}:{stop}]")
+                }
+            };
+
+            Ok(name)
         }
         Expr::ScalarFunction(func) => {
             create_function_physical_name(&func.fun.to_string(), false, &func.args)
@@ -208,14 +239,10 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         }) => {
             // TODO: Add support for filter and order by in AggregateUDF
             if filter.is_some() {
-                return Err(DataFusionError::Execution(
-                    "aggregate expression with filter is not supported".to_string(),
-                ));
+                return exec_err!("aggregate expression with filter is not supported");
             }
             if order_by.is_some() {
-                return Err(DataFusionError::Execution(
-                    "aggregate expression with order_by is not supported".to_string(),
-                ));
+                return exec_err!("aggregate expression with order_by is not supported");
             }
             let mut names = Vec::with_capacity(args.len());
             for e in args {
@@ -267,15 +294,15 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                 Ok(format!("{expr} IN ({list:?})"))
             }
         }
-        Expr::Exists { .. } => Err(DataFusionError::NotImplemented(
-            "EXISTS is not yet supported in the physical plan".to_string(),
-        )),
-        Expr::InSubquery(_) => Err(DataFusionError::NotImplemented(
-            "IN subquery is not yet supported in the physical plan".to_string(),
-        )),
-        Expr::ScalarSubquery(_) => Err(DataFusionError::NotImplemented(
-            "Scalar subqueries are not yet supported in the physical plan".to_string(),
-        )),
+        Expr::Exists { .. } => {
+            not_impl_err!("EXISTS is not yet supported in the physical plan")
+        }
+        Expr::InSubquery(_) => {
+            not_impl_err!("IN subquery is not yet supported in the physical plan")
+        }
+        Expr::ScalarSubquery(_) => {
+            not_impl_err!("Scalar subqueries are not yet supported in the physical plan")
+        }
         Expr::Between(Between {
             expr,
             negated,
@@ -332,21 +359,19 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                 Ok(format!("{expr} SIMILAR TO {pattern}{escape}"))
             }
         }
-        Expr::Sort { .. } => Err(DataFusionError::Internal(
-            "Create physical name does not support sort expression".to_string(),
-        )),
-        Expr::Wildcard => Err(DataFusionError::Internal(
-            "Create physical name does not support wildcard".to_string(),
-        )),
-        Expr::QualifiedWildcard { .. } => Err(DataFusionError::Internal(
-            "Create physical name does not support qualified wildcard".to_string(),
-        )),
-        Expr::Placeholder(_) => Err(DataFusionError::Internal(
-            "Create physical name does not support placeholder".to_string(),
-        )),
-        Expr::OuterReferenceColumn(_, _) => Err(DataFusionError::Internal(
-            "Create physical name does not support OuterReferenceColumn".to_string(),
-        )),
+        Expr::Sort { .. } => {
+            internal_err!("Create physical name does not support sort expression")
+        }
+        Expr::Wildcard => internal_err!("Create physical name does not support wildcard"),
+        Expr::QualifiedWildcard { .. } => {
+            internal_err!("Create physical name does not support qualified wildcard")
+        }
+        Expr::Placeholder(_) => {
+            internal_err!("Create physical name does not support placeholder")
+        }
+        Expr::OuterReferenceColumn(_, _) => {
+            internal_err!("Create physical name does not support OuterReferenceColumn")
+        }
     }
 }
 
@@ -530,9 +555,60 @@ impl DefaultPhysicalPlanner {
                     let unaliased: Vec<Expr> = filters.into_iter().map(unalias).collect();
                     source.scan(session_state, projection.as_ref(), &unaliased, *fetch).await
                 }
+                LogicalPlan::Copy(CopyTo{
+                    input,
+                    output_url,
+                    file_format,
+                    single_file_output,
+                    copy_options,
+                }) => {
+                    let input_exec = self.create_initial_plan(input, session_state).await?;
+
+                    // TODO: make this behavior configurable via options (should copy to create path/file as needed?)
+                    // TODO: add additional configurable options for if existing files should be overwritten or
+                    // appended to
+                    let parsed_url = ListingTableUrl::parse_create_local_if_not_exists(output_url, !*single_file_output)?;
+                    let object_store_url = parsed_url.object_store();
+
+                    let schema: Schema = (**input.schema()).clone().into();
+
+                    let file_type_writer_options = match copy_options{
+                        CopyOptions::SQLOptions(statement_options) => {
+                            FileTypeWriterOptions::build(
+                                file_format,
+                                session_state.config_options(),
+                                statement_options)?
+                        },
+                        CopyOptions::WriterOptions(writer_options) => *writer_options.clone()
+                    };
+
+                    // Set file sink related options
+                    let config = FileSinkConfig {
+                        object_store_url,
+                        table_paths: vec![parsed_url],
+                        file_groups: vec![],
+                        output_schema: Arc::new(schema),
+                        table_partition_cols: vec![],
+                        unbounded_input: false,
+                        writer_mode: FileWriterMode::PutMultipart,
+                        single_file_output: *single_file_output,
+                        overwrite: false,
+                        file_type_writer_options
+                    };
+
+                    let sink_format: Arc<dyn FileFormat> = match file_format {
+                        FileType::CSV => Arc::new(CsvFormat::default()),
+                        FileType::PARQUET => Arc::new(ParquetFormat::default()),
+                        FileType::JSON => Arc::new(JsonFormat::default()),
+                        FileType::AVRO => Arc::new(AvroFormat {} ),
+                        FileType::ARROW => Arc::new(ArrowFormat {}),
+                    };
+
+                    sink_format.create_writer_physical_plan(input_exec, session_state, config).await
+                }
                 LogicalPlan::Dml(DmlStatement {
                     table_name,
-                    op: WriteOp::Insert,
+                    op: WriteOp::InsertInto,
                     input,
                     ..
                 }) => {
@@ -540,11 +616,28 @@ impl DefaultPhysicalPlanner {
                     let schema = session_state.schema_for_ref(table_name)?;
                     if let Some(provider) = schema.table(name).await {
                         let input_exec = self.create_initial_plan(input, session_state).await?;
-                        provider.insert_into(session_state, input_exec).await
+                        provider.insert_into(session_state, input_exec, false).await
                     } else {
-                        return Err(DataFusionError::Execution(format!(
+                        return exec_err!(
                             "Table '{table_name}' does not exist"
-                        )));
+                        );
+                    }
+                }
+                LogicalPlan::Dml(DmlStatement {
+                    table_name,
+                    op: WriteOp::InsertOverwrite,
+                    input,
+                    ..
+                }) => {
+                    let name = table_name.table();
+                    let schema = session_state.schema_for_ref(table_name)?;
+                    if let Some(provider) = schema.table(name).await {
+                        let input_exec = self.create_initial_plan(input, session_state).await?;
+                        provider.insert_into(session_state, input_exec, true).await
+                    } else {
+                        return exec_err!(
+                            "Table '{table_name}' does not exist"
+                        );
                     }
                 }
                 LogicalPlan::Values(Values {
@@ -575,9 +668,9 @@ impl DefaultPhysicalPlanner {
                     input, window_expr, ..
                 }) => {
                     if window_expr.is_empty() {
-                        return Err(DataFusionError::Internal(
-                            "Impossibly got empty window expression".to_owned(),
-                        ));
+                        return internal_err!(
+                            "Impossibly got empty window expression"
+                        );
                     }
 
                     let input_exec = self.create_initial_plan(input, session_state).await?;
@@ -700,14 +793,14 @@ impl DefaultPhysicalPlanner {
                         })
                         .collect::<Result<Vec<_>>>()?;
 
-                    let (aggregates, filters, order_bys) : (Vec<_>, Vec<_>, Vec<_>) = multiunzip(agg_filter.into_iter());
+                    let (aggregates, filters, order_bys) : (Vec<_>, Vec<_>, Vec<_>) = multiunzip(agg_filter);
 
                     let initial_aggr = Arc::new(AggregateExec::try_new(
                         AggregateMode::Partial,
                         groups.clone(),
                         aggregates.clone(),
                         filters.clone(),
-                        order_bys.clone(),
+                        order_bys,
                         input_exec,
                         physical_input_schema.clone(),
                     )?);
@@ -718,6 +811,14 @@ impl DefaultPhysicalPlanner {
                     let can_repartition = !groups.is_empty()
                         && session_state.config().target_partitions() > 1
                         && session_state.config().repartition_aggregations();
+
+                    // Some aggregators may be modified during initialization for
+                    // optimization purposes. For example, a FIRST_VALUE may turn
+                    // into a LAST_VALUE with the reverse ordering requirement.
+                    // To reflect such changes to subsequent stages, use the updated
+                    // `AggregateExpr`/`PhysicalSortExpr` objects.
+                    let updated_aggregates = initial_aggr.aggr_expr().to_vec();
+                    let updated_order_bys = initial_aggr.order_by_expr().to_vec();
 
                     let (initial_aggr, next_partition_mode): (
                         Arc<dyn ExecutionPlan>,
@@ -742,9 +843,9 @@ impl DefaultPhysicalPlanner {
                     Ok(Arc::new(AggregateExec::try_new(
                         next_partition_mode,
                         final_grouping_set,
-                        aggregates,
+                        updated_aggregates,
                         filters,
-                        order_bys,
+                        updated_order_bys,
                         initial_aggr,
                         physical_input_schema.clone(),
                     )?))
@@ -852,7 +953,7 @@ impl DefaultPhysicalPlanner {
                             Partitioning::Hash(runtime_expr, *n)
                         }
                         LogicalPartitioning::DistributeBy(_) => {
-                            return Err(DataFusionError::NotImplemented("Physical plan does not support DistributeBy partitioning".to_string()));
+                            return not_impl_err!("Physical plan does not support DistributeBy partitioning");
                         }
                     };
                     Ok(Arc::new(RepartitionExec::try_new(
@@ -1048,7 +1149,7 @@ impl DefaultPhysicalPlanner {
                         // Sort-Merge join support currently is experimental
                         if join_filter.is_some() {
                             // TODO SortMergeJoinExec need to support join filter
-                            Err(DataFusionError::NotImplemented("SortMergeJoinExec does not support join_filter now.".to_string()))
+                            not_impl_err!("SortMergeJoinExec does not support join_filter now.")
                         } else {
                             let join_on_len = join_on.len();
                             Ok(Arc::new(SortMergeJoinExec::try_new(
@@ -1125,12 +1226,12 @@ impl DefaultPhysicalPlanner {
 
                     Ok(Arc::new(GlobalLimitExec::new(input, *skip, *fetch)))
                 }
-                LogicalPlan::Unnest(Unnest { input, column, schema }) => {
+                LogicalPlan::Unnest(Unnest { input, column, schema, options }) => {
                     let input = self.create_initial_plan(input, session_state).await?;
                     let column_exec = schema.index_of_column(column)
                         .map(|idx| Column::new(&column.name, idx))?;
                     let schema = SchemaRef::new(schema.as_ref().to_owned().into());
-                    Ok(Arc::new(UnnestExec::new(input, column_exec, schema)))
+                    Ok(Arc::new(UnnestExec::new(input, column_exec, schema, options.clone())))
                 }
                 LogicalPlan::Ddl(ddl) => {
                     // There is no default plan for DDl statements --
@@ -1138,47 +1239,46 @@ impl DefaultPhysicalPlanner {
                     // the appropriate table can be registered with
                     // the context)
                     let name = ddl.name();
-                    Err(DataFusionError::NotImplemented(
-                        format!("Unsupported logical plan: {name}")
-                    ))
+                    not_impl_err!(
+                        "Unsupported logical plan: {name}"
+                    )
                 }
                 LogicalPlan::Prepare(_) => {
                     // There is no default plan for "PREPARE" -- it must be
                     // handled at a higher level (so that the appropriate
                     // statement can be prepared)
-                    Err(DataFusionError::NotImplemented(
-                        "Unsupported logical plan: Prepare".to_string(),
-                    ))
+                    not_impl_err!(
+                        "Unsupported logical plan: Prepare"
+                    )
                 }
                 LogicalPlan::Dml(_) => {
                     // DataFusion is a read-only query engine, but also a library, so consumers may implement this
-                    Err(DataFusionError::NotImplemented(
-                        "Unsupported logical plan: Dml".to_string(),
-                    ))
+                    not_impl_err!(
+                        "Unsupported logical plan: Dml"
+                    )
                 }
                 LogicalPlan::Statement(statement) => {
                     // DataFusion is a read-only query engine, but also a library, so consumers may implement this
                     let name = statement.name();
-                    Err(DataFusionError::NotImplemented(
-                        format!("Unsupported logical plan: Statement({name})")
-                    ))
+                    not_impl_err!(
+                        "Unsupported logical plan: Statement({name})"
+                    )
                 }
-                LogicalPlan::DescribeTable(_) => {
-                    Err(DataFusionError::Internal(
-                        "Unsupported logical plan: DescribeTable must be root of the plan".to_string(),
-                    ))
+                LogicalPlan::DescribeTable(DescribeTable { schema, output_schema}) => {
+                    let output_schema: Schema = output_schema.as_ref().into();
+                    self.plan_describe(schema.clone(), Arc::new(output_schema))
                 }
-                LogicalPlan::Explain(_) => Err(DataFusionError::Internal(
-                    "Unsupported logical plan: Explain must be root of the plan".to_string(),
-                )),
+                LogicalPlan::Explain(_) => internal_err!(
+                    "Unsupported logical plan: Explain must be root of the plan"
+                ),
                 LogicalPlan::Distinct(_) => {
-                    Err(DataFusionError::Internal(
-                        "Unsupported logical plan: Distinct should be replaced to Aggregate".to_string(),
-                    ))
+                    internal_err!(
+                        "Unsupported logical plan: Distinct should be replaced to Aggregate"
+                    )
                 }
-                LogicalPlan::Analyze(_) => Err(DataFusionError::Internal(
-                    "Unsupported logical plan: Analyze must be root of the plan".to_string(),
-                )),
+                LogicalPlan::Analyze(_) => internal_err!(
+                    "Unsupported logical plan: Analyze must be root of the plan"
+                ),
                 LogicalPlan::Extension(e) => {
                     let physical_inputs = self.create_initial_plan_multi(e.node.inputs(), session_state).await?;
 
@@ -1198,19 +1298,20 @@ impl DefaultPhysicalPlanner {
                         ).await?;
                     }
 
-                    let plan = maybe_plan.ok_or_else(|| DataFusionError::Plan(format!(
-                        "No installed planner was able to convert the custom node to an execution plan: {:?}", e.node
-                    )))?;
+                    let plan = match maybe_plan {
+                        Some(v) => Ok(v),
+                        _ => plan_err!("No installed planner was able to convert the custom node to an execution plan: {:?}", e.node)
+                    }?;
 
                     // Ensure the ExecutionPlan's schema matches the
                     // declared logical schema to catch and warn about
                     // logic errors when creating user defined plans.
                     if !e.node.schema().matches_arrow_schema(&plan.schema()) {
-                        Err(DataFusionError::Plan(format!(
+                        plan_err!(
                             "Extension planner for {:?} created an ExecutionPlan with mismatched schema. \
                             LogicalPlan schema: {:?}, ExecutionPlan schema: {:?}",
                             e.node, e.node.schema(), plan.schema()
-                        )))
+                        )
                     } else {
                         Ok(plan)
                     }
@@ -1547,10 +1648,10 @@ pub fn create_window_expr_with_name(
                 })
                 .collect::<Result<Vec<_>>>()?;
             if !is_window_valid(window_frame) {
-                return Err(DataFusionError::Plan(format!(
+                return plan_err!(
                         "Invalid window frame: start bound ({}) cannot be larger than end bound ({})",
                         window_frame.start_bound, window_frame.end_bound
-                    )));
+                    );
             }
 
             let window_frame = Arc::new(window_frame.clone());
@@ -1564,9 +1665,7 @@ pub fn create_window_expr_with_name(
                 physical_input_schema,
             )
         }
-        other => Err(DataFusionError::Plan(format!(
-            "Invalid window expression '{other:?}'"
-        ))),
+        other => plan_err!("Invalid window expression '{other:?}'"),
     }
 }
 
@@ -1708,9 +1807,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 udaf::create_aggregate_expr(fun, &args, physical_input_schema, name);
             Ok((agg_expr?, filter, order_by))
         }
-        other => Err(DataFusionError::Internal(format!(
-            "Invalid aggregate expression '{other:?}'"
-        ))),
+        other => internal_err!("Invalid aggregate expression '{other:?}'"),
     }
 }
 
@@ -1762,9 +1859,7 @@ pub fn create_physical_sort_expr(
             },
         })
     } else {
-        Err(DataFusionError::Internal(
-            "Expects a sort expression".to_string(),
-        ))
+        internal_err!("Expects a sort expression")
     }
 }
 
@@ -1800,6 +1895,7 @@ impl DefaultPhysicalPlanner {
                     Ok(input) => {
                         stringified_plans.push(
                             displayable(input.as_ref())
+                                .set_show_statistics(config.show_statistics)
                                 .to_stringified(e.verbose, InitialPhysicalPlan),
                         );
 
@@ -1811,12 +1907,14 @@ impl DefaultPhysicalPlanner {
                                 let plan_type = OptimizedPhysicalPlan { optimizer_name };
                                 stringified_plans.push(
                                     displayable(plan)
+                                        .set_show_statistics(config.show_statistics)
                                         .to_stringified(e.verbose, plan_type),
                                 );
                             },
                         ) {
                             Ok(input) => stringified_plans.push(
                                 displayable(input.as_ref())
+                                    .set_show_statistics(config.show_statistics)
                                     .to_stringified(e.verbose, FinalPhysicalPlan),
                             ),
                             Err(DataFusionError::Context(optimizer_name, e)) => {
@@ -1840,7 +1938,13 @@ impl DefaultPhysicalPlanner {
         } else if let LogicalPlan::Analyze(a) = logical_plan {
             let input = self.create_physical_plan(&a.input, session_state).await?;
             let schema = SchemaRef::new((*a.schema).clone().into());
-            Ok(Some(Arc::new(AnalyzeExec::new(a.verbose, input, schema))))
+            let show_statistics = session_state.config_options().explain.show_statistics;
+            Ok(Some(Arc::new(AnalyzeExec::new(
+                a.verbose,
+                show_statistics,
+                input,
+                schema,
+            ))))
         } else {
             Ok(None)
         }
@@ -1900,6 +2004,43 @@ impl DefaultPhysicalPlanner {
         );
         trace!("Detailed optimized physical plan:\n{:?}", new_plan);
         Ok(new_plan)
+    }
+
+    // return an record_batch which describes a table's schema.
+    fn plan_describe(
+        &self,
+        table_schema: Arc<Schema>,
+        output_schema: Arc<Schema>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let mut column_names = StringBuilder::new();
+        let mut data_types = StringBuilder::new();
+        let mut is_nullables = StringBuilder::new();
+        for (_, field) in table_schema.fields().iter().enumerate() {
+            column_names.append_value(field.name());
+
+            // "System supplied type" --> Use debug format of the datatype
+            let data_type = field.data_type();
+            data_types.append_value(format!("{data_type:?}"));
+
+            // "YES if the column is possibly nullable, NO if it is known not nullable. "
+            let nullable_str = if field.is_nullable() { "YES" } else { "NO" };
+            is_nullables.append_value(nullable_str);
+        }
+
+        let record_batch = RecordBatch::try_new(
+            output_schema,
+            vec![
+                Arc::new(column_names.finish()),
+                Arc::new(data_types.finish()),
+                Arc::new(is_nullables.finish()),
+            ],
+        )?;
+
+        let schema = record_batch.schema();
+        let partitions = vec![vec![record_batch]];
+        let projection = None;
+        let mem_exec = MemoryExec::try_new(&partitions, schema, projection)?;
+        Ok(Arc::new(mem_exec))
     }
 }
 
@@ -2424,7 +2565,7 @@ mod tests {
             _physical_inputs: &[Arc<dyn ExecutionPlan>],
             _session_state: &SessionState,
         ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-            Err(DataFusionError::Internal("BOOM".to_string()))
+            internal_err!("BOOM")
         }
     }
     /// An example extension node that doesn't do anything
@@ -2608,7 +2749,7 @@ mod tests {
 
         let plan = plan(&logical_plan).await.unwrap();
 
-        let expected_graph = r###"
+        let expected_graph = r#"
 // Begin DataFusion GraphViz Plan,
 // display it online here: https://dreampuf.github.io/GraphvizOnline
 
@@ -2618,10 +2759,33 @@ digraph {
     1 -> 2 [arrowhead=none, arrowtail=normal, dir=back]
 }
 // End DataFusion GraphViz Plan
-"###;
+"#;
 
         let generated_graph = format!("{}", displayable(&*plan).graphviz());
 
         assert_eq!(expected_graph, generated_graph);
+    }
+
+    #[tokio::test]
+    async fn test_display_graphviz_with_statistics() {
+        let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+
+        let logical_plan = scan_empty(Some("employee"), &schema, None)
+            .unwrap()
+            .project(vec![col("id") + lit(2)])
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let plan = plan(&logical_plan).await.unwrap();
+
+        let expected_tooltip = ", tooltip=\"statistics=[";
+
+        let generated_graph = format!(
+            "{}",
+            displayable(&*plan).set_show_statistics(true).graphviz()
+        );
+
+        assert_contains!(generated_graph, expected_tooltip);
     }
 }

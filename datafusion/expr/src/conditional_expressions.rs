@@ -19,7 +19,7 @@
 use crate::expr::Case;
 use crate::{expr_schema::ExprSchemable, Expr};
 use arrow::datatypes::DataType;
-use datafusion_common::{DFSchema, DataFusionError, Result};
+use datafusion_common::{plan_err, DFSchema, DataFusionError, Result};
 use std::collections::HashSet;
 
 /// Currently supported types by the coalesce function.
@@ -102,9 +102,9 @@ impl CaseBuilder {
         } else {
             let unique_types: HashSet<&DataType> = then_types.iter().collect();
             if unique_types.len() != 1 {
-                return Err(DataFusionError::Plan(format!(
+                return plan_err!(
                     "CASE expression 'then' values had multiple data types: {unique_types:?}"
-                )));
+                );
             }
         }
 

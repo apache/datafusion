@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::{EmptyRelation, JoinType, Projection, Union};
 use std::sync::Arc;
@@ -156,9 +156,7 @@ fn binary_plan_children_is_empty(plan: &LogicalPlan) -> Result<(bool, bool)> {
             };
             Ok((left_empty, right_empty))
         }
-        _ => Err(DataFusionError::Plan(
-            "plan just can have two child".to_string(),
-        )),
+        _ => plan_err!("plan just can have two child"),
     }
 }
 
@@ -177,9 +175,7 @@ fn empty_child(plan: &LogicalPlan) -> Result<Option<LogicalPlan>> {
             }
             _ => Ok(None),
         },
-        _ => Err(DataFusionError::Plan(
-            "plan just can have one child".to_string(),
-        )),
+        _ => plan_err!("plan just can have one child"),
     }
 }
 

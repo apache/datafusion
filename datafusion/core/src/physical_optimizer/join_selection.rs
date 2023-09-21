@@ -38,6 +38,7 @@ use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::ExecutionPlan;
 
 use arrow_schema::Schema;
+use datafusion_common::internal_err;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{DataFusionError, JoinType};
 use datafusion_physical_expr::expressions::Column;
@@ -537,18 +538,16 @@ fn swap_join_according_to_unboundedness(
         (
             _,
             JoinType::Right | JoinType::RightSemi | JoinType::RightAnti | JoinType::Full,
-        ) => Err(DataFusionError::Internal(format!(
-            "{join_type} join cannot be swapped for unbounded input."
-        ))),
+        ) => internal_err!("{join_type} join cannot be swapped for unbounded input."),
         (PartitionMode::Partitioned, _) => {
             swap_hash_join(hash_join, PartitionMode::Partitioned)
         }
         (PartitionMode::CollectLeft, _) => {
             swap_hash_join(hash_join, PartitionMode::CollectLeft)
         }
-        (PartitionMode::Auto, _) => Err(DataFusionError::Internal(
-            "Auto is not acceptable for unbounded input here.".to_string(),
-        )),
+        (PartitionMode::Auto, _) => {
+            internal_err!("Auto is not acceptable for unbounded input here.")
+        }
     }
 }
 
@@ -580,14 +579,14 @@ fn apply_subrules(
 
 #[cfg(test)]
 mod tests_statistical {
+    use super::*;
     use crate::{
         physical_plan::{
             displayable, joins::PartitionMode, ColumnStatistics, Statistics,
         },
-        test::exec::StatisticsExec,
+        test::StatisticsExec,
     };
 
-    use super::*;
     use std::sync::Arc;
 
     use arrow::datatypes::{DataType, Field, Schema};
@@ -1176,7 +1175,7 @@ mod tests_statistical {
 mod util_tests {
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Column, NegativeExpr};
-    use datafusion_physical_expr::intervals::check_support;
+    use datafusion_physical_expr::intervals::utils::check_support;
     use datafusion_physical_expr::PhysicalExpr;
     use std::sync::Arc;
 

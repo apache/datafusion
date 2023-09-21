@@ -31,19 +31,28 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion_common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter};
-use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    exec_err, internal_err, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::expr::{InList, InSubquery, ScalarFunction};
 use datafusion_expr::{
     and, expr, lit, or, BinaryExpr, BuiltinScalarFunction, Case, ColumnarValue, Expr,
     Like, Volatility,
 };
-use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
+use datafusion_physical_expr::{
+    create_physical_expr, execution_props::ExecutionProps, intervals::NullableInterval,
+};
 
 use crate::simplify_expressions::SimplifyInfo;
+
+use crate::simplify_expressions::guarantees::GuaranteeRewriter;
 
 /// This structure handles API for expression simplification
 pub struct ExprSimplifier<S> {
     info: S,
+    /// Guarantees about the values of columns. This is provided by the user
+    /// in [ExprSimplifier::with_guarantees()].
+    guarantees: Vec<(Expr, NullableInterval)>,
 }
 
 pub const THRESHOLD_INLINE_INLIST: usize = 3;
@@ -55,7 +64,10 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     ///
     /// [`SimplifyContext`]: crate::simplify_expressions::context::SimplifyContext
     pub fn new(info: S) -> Self {
-        Self { info }
+        Self {
+            info,
+            guarantees: vec![],
+        }
     }
 
     /// Simplifies this [`Expr`]`s as much as possible, evaluating
@@ -119,6 +131,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         let mut simplifier = Simplifier::new(&self.info);
         let mut const_evaluator = ConstEvaluator::try_new(self.info.execution_props())?;
         let mut or_in_list_simplifier = OrInListSimplifier::new();
+        let mut guarantee_rewriter = GuaranteeRewriter::new(&self.guarantees);
 
         // TODO iterate until no changes are made during rewrite
         // (evaluating constants can enable new simplifications and
@@ -127,6 +140,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         expr.rewrite(&mut const_evaluator)?
             .rewrite(&mut simplifier)?
             .rewrite(&mut or_in_list_simplifier)?
+            .rewrite(&mut guarantee_rewriter)?
             // run both passes twice to try an minimize simplifications that we missed
             .rewrite(&mut const_evaluator)?
             .rewrite(&mut simplifier)
@@ -146,6 +160,65 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         let mut expr_rewrite = TypeCoercionRewriter { schema };
 
         expr.rewrite(&mut expr_rewrite)
+    }
+
+    /// Input guarantees about the values of columns.
+    ///
+    /// The guarantees can simplify expressions. For example, if a column `x` is
+    /// guaranteed to be `3`, then the expression `x > 1` can be replaced by the
+    /// literal `true`.
+    ///
+    /// The guarantees are provided as a `Vec<(Expr, NullableInterval)>`,
+    /// where the [Expr] is a column reference and the [NullableInterval]
+    /// is an interval representing the known possible values of that column.
+    ///
+    /// ```rust
+    /// use arrow::datatypes::{DataType, Field, Schema};
+    /// use datafusion_expr::{col, lit, Expr};
+    /// use datafusion_common::{Result, ScalarValue, ToDFSchema};
+    /// use datafusion_physical_expr::execution_props::ExecutionProps;
+    /// use datafusion_physical_expr::intervals::{Interval, NullableInterval};
+    /// use datafusion_optimizer::simplify_expressions::{
+    ///     ExprSimplifier, SimplifyContext};
+    ///
+    /// let schema = Schema::new(vec![
+    ///   Field::new("x", DataType::Int64, false),
+    ///   Field::new("y", DataType::UInt32, false),
+    ///   Field::new("z", DataType::Int64, false),
+    ///   ])
+    ///   .to_dfschema_ref().unwrap();
+    ///
+    /// // Create the simplifier
+    /// let props = ExecutionProps::new();
+    /// let context = SimplifyContext::new(&props)
+    ///    .with_schema(schema);
+    ///
+    /// // Expression: (x >= 3) AND (y + 2 < 10) AND (z > 5)
+    /// let expr_x = col("x").gt_eq(lit(3_i64));
+    /// let expr_y = (col("y") + lit(2_u32)).lt(lit(10_u32));
+    /// let expr_z = col("z").gt(lit(5_i64));
+    /// let expr = expr_x.and(expr_y).and(expr_z.clone());
+    ///
+    /// let guarantees = vec![
+    ///    // x ∈ [3, 5]
+    ///    (
+    ///        col("x"),
+    ///        NullableInterval::NotNull {
+    ///            values: Interval::make(Some(3_i64), Some(5_i64), (false, false)),
+    ///        }
+    ///    ),
+    ///    // y = 3
+    ///    (col("y"), NullableInterval::from(ScalarValue::UInt32(Some(3)))),
+    /// ];
+    /// let simplifier = ExprSimplifier::new(context).with_guarantees(guarantees);
+    /// let output = simplifier.simplify(expr).unwrap();
+    /// // Expression becomes: true AND true AND (z > 5), which simplifies to
+    /// // z > 5.
+    /// assert_eq!(output, expr_z);
+    /// ```
+    pub fn with_guarantees(mut self, guarantees: Vec<(Expr, NullableInterval)>) -> Self {
+        self.guarantees = guarantees;
+        self
     }
 }
 
@@ -208,9 +281,7 @@ impl<'a> TreeNodeRewriter for ConstEvaluator<'a> {
         match self.can_evaluate.pop() {
             Some(true) => Ok(Expr::Literal(self.evaluate_to_scalar(expr)?)),
             Some(false) => Ok(expr),
-            _ => Err(DataFusionError::Internal(
-                "Failed to pop can_evaluate".to_string(),
-            )),
+            _ => internal_err!("Failed to pop can_evaluate"),
         }
     }
 }
@@ -317,10 +388,10 @@ impl<'a> ConstEvaluator<'a> {
         match col_val {
             ColumnarValue::Array(a) => {
                 if a.len() != 1 {
-                    Err(DataFusionError::Execution(format!(
+                    exec_err!(
                         "Could not evaluate the expression, found a result of length {}",
                         a.len()
-                    )))
+                    )
                 } else {
                     Ok(ScalarValue::try_from_array(&a, 0)?)
                 }
@@ -412,7 +483,9 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             }) if list.len() == 1
                 && matches!(list.first(), Some(Expr::ScalarSubquery { .. })) =>
             {
-                let Expr::ScalarSubquery(subquery) = list.remove(0) else { unreachable!() };
+                let Expr::ScalarSubquery(subquery) = list.remove(0) else {
+                    unreachable!()
+                };
                 Expr::InSubquery(InSubquery::new(expr, subquery, negated))
             }
 
@@ -668,18 +741,28 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 right: _,
             }) if is_null(&left) => *left,
 
-            // A * 0 --> 0 (if A is not null)
+            // A * 0 --> 0 (if A is not null and not floating, since NAN * 0 -> NAN)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Multiply,
                 right,
-            }) if !info.nullable(&left)? && is_zero(&right) => *right,
-            // 0 * A --> 0 (if A is not null)
+            }) if !info.nullable(&left)?
+                && !info.get_data_type(&left)?.is_floating()
+                && is_zero(&right) =>
+            {
+                *right
+            }
+            // 0 * A --> 0 (if A is not null and not floating, since 0 * NAN -> NAN)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Multiply,
                 right,
-            }) if !info.nullable(&right)? && is_zero(&left) => *left,
+            }) if !info.nullable(&right)?
+                && !info.get_data_type(&right)?.is_floating()
+                && is_zero(&left) =>
+            {
+                *left
+            }
 
             //
             // Rules for Divide
@@ -703,20 +786,16 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: Divide,
                 right,
             }) if is_null(&right) => *right,
-            // 0 / 0 -> null
+            // A / 0 -> DivideByZero Error if A is not null and not floating
+            // (float / 0 -> inf | -inf | NAN)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Divide,
                 right,
-            }) if is_zero(&left) && is_zero(&right) => {
-                Expr::Literal(ScalarValue::Int32(None))
-            }
-            // A / 0 -> DivideByZero Error
-            Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: Divide,
-                right,
-            }) if !info.nullable(&left)? && is_zero(&right) => {
+            }) if !info.nullable(&left)?
+                && !info.get_data_type(&left)?.is_floating()
+                && is_zero(&right) =>
+            {
                 return Err(DataFusionError::ArrowError(ArrowError::DivideByZero));
             }
 
@@ -736,19 +815,33 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: Modulo,
                 right: _,
             }) if is_null(&left) => *left,
-            // A % 1 --> 0
+            // A % 1 --> 0 (if A is not nullable and not floating, since NAN % 1 --> NAN)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Modulo,
                 right,
-            }) if !info.nullable(&left)? && is_one(&right) => lit(0),
-            // A % 0 --> DivideByZero Error
+            }) if !info.nullable(&left)?
+                && !info.get_data_type(&left)?.is_floating()
+                && is_one(&right) =>
+            {
+                lit(0)
+            }
+            // A % 0 --> DivideByZero Error (if A is not floating and not null)
+            // A % 0 --> NAN (if A is floating and not null)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Modulo,
                 right,
             }) if !info.nullable(&left)? && is_zero(&right) => {
-                return Err(DataFusionError::ArrowError(ArrowError::DivideByZero));
+                match info.get_data_type(&left)? {
+                    DataType::Float32 => lit(f32::NAN),
+                    DataType::Float64 => lit(f64::NAN),
+                    _ => {
+                        return Err(DataFusionError::ArrowError(
+                            ArrowError::DivideByZero,
+                        ));
+                    }
+                }
             }
 
             //
@@ -1217,7 +1310,9 @@ mod tests {
     use datafusion_common::{assert_contains, cast::as_int32_array, DFField, ToDFSchema};
     use datafusion_expr::*;
     use datafusion_physical_expr::{
-        execution_props::ExecutionProps, functions::make_scalar_function,
+        execution_props::ExecutionProps,
+        functions::make_scalar_function,
+        intervals::{Interval, NullableInterval},
     };
 
     // ------------------------------
@@ -1662,7 +1757,7 @@ mod tests {
 
     #[test]
     fn test_simplify_divide_zero_by_zero() {
-        // 0 / 0 -> null
+        // 0 / 0 -> DivideByZero
         let expr = lit(0) / lit(0);
         let err = try_simplify(expr).unwrap_err();
 
@@ -2499,10 +2594,43 @@ mod tests {
             col("c1")
                 .in_list(vec![lit("foo"), lit("bar"), lit("baz"), lit("qux")], false),
         );
+        assert_change(
+            regex_match(col("c1"), lit("^(fo_o)$")),
+            col("c1").eq(lit("fo_o")),
+        );
+        assert_change(
+            regex_match(col("c1"), lit("^(fo_o)$")),
+            col("c1").eq(lit("fo_o")),
+        );
+        assert_change(
+            regex_match(col("c1"), lit("^(fo_o|ba_r)$")),
+            col("c1").eq(lit("fo_o")).or(col("c1").eq(lit("ba_r"))),
+        );
+        assert_change(
+            regex_not_match(col("c1"), lit("^(fo_o|ba_r)$")),
+            col("c1")
+                .not_eq(lit("fo_o"))
+                .and(col("c1").not_eq(lit("ba_r"))),
+        );
+        assert_change(
+            regex_match(col("c1"), lit("^(fo_o|ba_r|ba_z)$")),
+            ((col("c1").eq(lit("fo_o"))).or(col("c1").eq(lit("ba_r"))))
+                .or(col("c1").eq(lit("ba_z"))),
+        );
+        assert_change(
+            regex_match(col("c1"), lit("^(fo_o|ba_r|baz|qu_x)$")),
+            col("c1").in_list(
+                vec![lit("fo_o"), lit("ba_r"), lit("baz"), lit("qu_x")],
+                false,
+            ),
+        );
 
         // regular expressions that mismatch captured literals
         assert_no_change(regex_match(col("c1"), lit("(foo|bar)")));
         assert_no_change(regex_match(col("c1"), lit("(foo|bar)*")));
+        assert_no_change(regex_match(col("c1"), lit("(fo_o|b_ar)")));
+        assert_no_change(regex_match(col("c1"), lit("(foo|ba_r)*")));
+        assert_no_change(regex_match(col("c1"), lit("(fo_o|ba_r)*")));
         assert_no_change(regex_match(col("c1"), lit("^(foo|bar)*")));
         assert_no_change(regex_match(col("c1"), lit("^foo|bar$")));
         assert_no_change(regex_match(col("c1"), lit("^(foo)(bar)$")));
@@ -2646,6 +2774,19 @@ mod tests {
 
     fn simplify(expr: Expr) -> Expr {
         try_simplify(expr).unwrap()
+    }
+
+    fn simplify_with_guarantee(
+        expr: Expr,
+        guarantees: Vec<(Expr, NullableInterval)>,
+    ) -> Expr {
+        let schema = expr_test_schema();
+        let execution_props = ExecutionProps::new();
+        let simplifier = ExprSimplifier::new(
+            SimplifyContext::new(&execution_props).with_schema(schema),
+        )
+        .with_guarantees(guarantees);
+        simplifier.simplify(expr).unwrap()
     }
 
     fn expr_test_schema() -> DFSchemaRef {
@@ -3110,5 +3251,90 @@ mod tests {
 
         let expr = not_ilike(null, "%");
         assert_eq!(simplify(expr), lit_bool_null());
+    }
+
+    #[test]
+    fn test_simplify_with_guarantee() {
+        // (c3 >= 3) AND (c4 + 2 < 10 OR (c1 NOT IN ("a", "b")))
+        let expr_x = col("c3").gt(lit(3_i64));
+        let expr_y = (col("c4") + lit(2_u32)).lt(lit(10_u32));
+        let expr_z = col("c1").in_list(vec![lit("a"), lit("b")], true);
+        let expr = expr_x.clone().and(expr_y.clone().or(expr_z));
+
+        // All guaranteed null
+        let guarantees = vec![
+            (col("c3"), NullableInterval::from(ScalarValue::Int64(None))),
+            (col("c4"), NullableInterval::from(ScalarValue::UInt32(None))),
+            (col("c1"), NullableInterval::from(ScalarValue::Utf8(None))),
+        ];
+
+        let output = simplify_with_guarantee(expr.clone(), guarantees);
+        assert_eq!(output, lit_bool_null());
+
+        // All guaranteed false
+        let guarantees = vec![
+            (
+                col("c3"),
+                NullableInterval::NotNull {
+                    values: Interval::make(Some(0_i64), Some(2_i64), (false, false)),
+                },
+            ),
+            (
+                col("c4"),
+                NullableInterval::from(ScalarValue::UInt32(Some(9))),
+            ),
+            (
+                col("c1"),
+                NullableInterval::from(ScalarValue::Utf8(Some("a".to_string()))),
+            ),
+        ];
+        let output = simplify_with_guarantee(expr.clone(), guarantees);
+        assert_eq!(output, lit(false));
+
+        // Guaranteed false or null -> no change.
+        let guarantees = vec![
+            (
+                col("c3"),
+                NullableInterval::MaybeNull {
+                    values: Interval::make(Some(0_i64), Some(2_i64), (false, false)),
+                },
+            ),
+            (
+                col("c4"),
+                NullableInterval::MaybeNull {
+                    values: Interval::make(Some(9_u32), Some(9_u32), (false, false)),
+                },
+            ),
+            (
+                col("c1"),
+                NullableInterval::NotNull {
+                    values: Interval::make(Some("d"), Some("f"), (false, false)),
+                },
+            ),
+        ];
+        let output = simplify_with_guarantee(expr.clone(), guarantees);
+        assert_eq!(&output, &expr_x);
+
+        // Sufficient true guarantees
+        let guarantees = vec![
+            (
+                col("c3"),
+                NullableInterval::from(ScalarValue::Int64(Some(9))),
+            ),
+            (
+                col("c4"),
+                NullableInterval::from(ScalarValue::UInt32(Some(3))),
+            ),
+        ];
+        let output = simplify_with_guarantee(expr.clone(), guarantees);
+        assert_eq!(output, lit(true));
+
+        // Only partially simplify
+        let guarantees = vec![(
+            col("c4"),
+            NullableInterval::from(ScalarValue::UInt32(Some(3))),
+        )];
+        let output = simplify_with_guarantee(expr.clone(), guarantees);
+        assert_eq!(&output, &expr_x);
     }
 }

@@ -68,6 +68,7 @@ use arrow::{
 };
 use datafusion::{
     common::cast::{as_int64_array, as_string_array},
+    common::internal_err,
     common::DFSchemaRef,
     error::{DataFusionError, Result},
     execution::{
@@ -219,10 +220,8 @@ async fn topk_query() -> Result<()> {
 async fn topk_plan() -> Result<()> {
     let mut ctx = setup_table(make_topk_context()).await?;
 
-    let mut expected = vec![
-        "| logical_plan after topk                               | TopK: k=3                                                                     |",
-        "|                                                       |   TableScan: sales projection=[customer_id,revenue]                                  |",
-    ].join("\n");
+    let mut expected = ["| logical_plan after topk                               | TopK: k=3                                                                     |",
+        "|                                                       |   TableScan: sales projection=[customer_id,revenue]                                  |"].join("\n");
 
     let explain_query = format!("EXPLAIN VERBOSE {QUERY}");
     let actual_output = exec_sql(&mut ctx, &explain_query).await?;
@@ -480,9 +479,7 @@ impl ExecutionPlan for TopKExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         if 0 != partition {
-            return Err(DataFusionError::Internal(format!(
-                "TopKExec invalid partition {partition}"
-            )));
+            return internal_err!("TopKExec invalid partition {partition}");
         }
 
         Ok(Box::pin(TopKReader {

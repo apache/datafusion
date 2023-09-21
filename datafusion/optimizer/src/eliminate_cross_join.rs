@@ -20,13 +20,13 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::{utils, OptimizerConfig, OptimizerRule};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_expr::expr::{BinaryExpr, Expr};
 use datafusion_expr::logical_plan::{
     CrossJoin, Filter, Join, JoinConstraint, JoinType, LogicalPlan, Projection,
 };
 use datafusion_expr::utils::{can_hash, find_valid_equijoin_key_pair};
-use datafusion_expr::{and, build_join_schema, or, ExprSchemable, Operator};
+use datafusion_expr::{build_join_schema, ExprSchemable, Operator};
 
 #[derive(Default)]
 pub struct EliminateCrossJoin;
@@ -60,30 +60,23 @@ impl OptimizerRule for EliminateCrossJoin {
 
                 let mut possible_join_keys: Vec<(Expr, Expr)> = vec![];
                 let mut all_inputs: Vec<LogicalPlan> = vec![];
-                match &input {
-                    LogicalPlan::Join(join) if (join.join_type == JoinType::Inner) => {
-                        // The filter of inner join will lost, skip this rule.
-                        // issue: https://github.com/apache/arrow-datafusion/issues/4844
-                        if join.filter.is_some() {
-                            return Ok(None);
-                        }
-
-                        flatten_join_inputs(
-                            &input,
-                            &mut possible_join_keys,
-                            &mut all_inputs,
-                        )?;
-                    }
-                    LogicalPlan::CrossJoin(_) => {
-                        flatten_join_inputs(
-                            &input,
-                            &mut possible_join_keys,
-                            &mut all_inputs,
-                        )?;
-                    }
+                let did_flat_successfully = match &input {
+                    LogicalPlan::Join(Join {
+                        join_type: JoinType::Inner,
+                        ..
+                    })
+                    | LogicalPlan::CrossJoin(_) => try_flatten_join_inputs(
+                        &input,
+                        &mut possible_join_keys,
+                        &mut all_inputs,
+                    )?,
                     _ => {
                         return utils::optimize_children(self, plan, config);
                     }
+                };
+
+                if !did_flat_successfully {
+                    return Ok(None);
                 }
 
                 let predicate = &filter.predicate;
@@ -137,13 +130,20 @@ impl OptimizerRule for EliminateCrossJoin {
     }
 }
 
-fn flatten_join_inputs(
+/// Recursively accumulate possible_join_keys and inputs from inner joins (including cross joins).
+/// Returns a boolean indicating whether the flattening was successful.
+fn try_flatten_join_inputs(
     plan: &LogicalPlan,
     possible_join_keys: &mut Vec<(Expr, Expr)>,
     all_inputs: &mut Vec<LogicalPlan>,
-) -> Result<()> {
+) -> Result<bool> {
     let children = match plan {
-        LogicalPlan::Join(join) => {
+        LogicalPlan::Join(join) if join.join_type == JoinType::Inner => {
+            if join.filter.is_some() {
+                // The filter of inner join will lost, skip this rule.
+                // issue: https://github.com/apache/arrow-datafusion/issues/4844
+                return Ok(false);
+            }
             possible_join_keys.extend(join.on.clone());
             let left = &*(join.left);
             let right = &*(join.right);
@@ -155,28 +155,25 @@ fn flatten_join_inputs(
             vec![left, right]
         }
         _ => {
-            return Err(DataFusionError::Plan(
-                "flatten_join_inputs just can call join/cross_join".to_string(),
-            ));
+            return plan_err!("flatten_join_inputs just can call join/cross_join");
         }
     };
 
     for child in children.iter() {
         match *child {
-            LogicalPlan::Join(left_join) => {
-                if left_join.join_type == JoinType::Inner {
-                    flatten_join_inputs(child, possible_join_keys, all_inputs)?;
-                } else {
-                    all_inputs.push((*child).clone());
+            LogicalPlan::Join(Join {
+                join_type: JoinType::Inner,
+                ..
+            })
+            | LogicalPlan::CrossJoin(_) => {
+                if !try_flatten_join_inputs(child, possible_join_keys, all_inputs)? {
+                    return Ok(false);
                 }
-            }
-            LogicalPlan::CrossJoin(_) => {
-                flatten_join_inputs(child, possible_join_keys, all_inputs)?;
             }
             _ => all_inputs.push((*child).clone()),
         }
     }
-    Ok(())
+    Ok(true)
 }
 
 fn find_inner_join(
@@ -197,13 +194,10 @@ fn find_inner_join(
             )?;
 
             // Save join keys
-            match key_pair {
-                Some((valid_l, valid_r)) => {
-                    if can_hash(&valid_l.get_type(left_input.schema())?) {
-                        join_keys.push((valid_l, valid_r));
-                    }
+            if let Some((valid_l, valid_r)) = key_pair {
+                if can_hash(&valid_l.get_type(left_input.schema())?) {
+                    join_keys.push((valid_l, valid_r));
                 }
-                _ => continue,
             }
         }
 
@@ -298,39 +292,33 @@ fn remove_join_expressions(
     join_keys: &HashSet<(Expr, Expr)>,
 ) -> Result<Option<Expr>> {
     match expr {
-        Expr::BinaryExpr(BinaryExpr { left, op, right }) => match op {
-            Operator::Eq => {
-                if join_keys.contains(&(*left.clone(), *right.clone()))
-                    || join_keys.contains(&(*right.clone(), *left.clone()))
-                {
-                    Ok(None)
-                } else {
-                    Ok(Some(expr.clone()))
+        Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+            match op {
+                Operator::Eq => {
+                    if join_keys.contains(&(*left.clone(), *right.clone()))
+                        || join_keys.contains(&(*right.clone(), *left.clone()))
+                    {
+                        Ok(None)
+                    } else {
+                        Ok(Some(expr.clone()))
+                    }
                 }
-            }
-            Operator::And => {
-                let l = remove_join_expressions(left, join_keys)?;
-                let r = remove_join_expressions(right, join_keys)?;
-                match (l, r) {
-                    (Some(ll), Some(rr)) => Ok(Some(and(ll, rr))),
-                    (Some(ll), _) => Ok(Some(ll)),
-                    (_, Some(rr)) => Ok(Some(rr)),
-                    _ => Ok(None),
+                // Fix for issue#78 join predicates from inside of OR expr also pulled up properly.
+                Operator::And | Operator::Or => {
+                    let l = remove_join_expressions(left, join_keys)?;
+                    let r = remove_join_expressions(right, join_keys)?;
+                    match (l, r) {
+                        (Some(ll), Some(rr)) => Ok(Some(Expr::BinaryExpr(
+                            BinaryExpr::new(Box::new(ll), *op, Box::new(rr)),
+                        ))),
+                        (Some(ll), _) => Ok(Some(ll)),
+                        (_, Some(rr)) => Ok(Some(rr)),
+                        _ => Ok(None),
+                    }
                 }
+                _ => Ok(Some(expr.clone())),
             }
-            // Fix for issue#78 join predicates from inside of OR expr also pulled up properly.
-            Operator::Or => {
-                let l = remove_join_expressions(left, join_keys)?;
-                let r = remove_join_expressions(right, join_keys)?;
-                match (l, r) {
-                    (Some(ll), Some(rr)) => Ok(Some(or(ll, rr))),
-                    (Some(ll), _) => Ok(Some(ll)),
-                    (_, Some(rr)) => Ok(Some(rr)),
-                    _ => Ok(None),
-                }
-            }
-            _ => Ok(Some(expr.clone())),
-        },
+        }
         _ => Ok(Some(expr.clone())),
     }
 }
@@ -363,6 +351,12 @@ mod tests {
         );
 
         assert_eq!(plan.schema(), optimized_plan.schema())
+    }
+
+    fn assert_optimization_rule_fails(plan: &LogicalPlan) {
+        let rule = EliminateCrossJoin::new();
+        let optimized_plan = rule.try_optimize(plan, &OptimizerContext::new()).unwrap();
+        assert!(optimized_plan.is_none());
     }
 
     #[test]
@@ -529,6 +523,30 @@ mod tests {
             "    TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]",
         ];
         assert_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    /// See https://github.com/apache/arrow-datafusion/issues/7530
+    fn eliminate_cross_not_possible_nested_inner_join_with_filter() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+        let t3 = test_table_scan_with_name("t3")?;
+
+        // could not eliminate to inner join with filter
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t3,
+                JoinType::Inner,
+                (vec!["t1.a"], vec!["t3.a"]),
+                Some(col("t1.a").gt(lit(20u32))),
+            )?
+            .join(t2, JoinType::Inner, (vec!["t1.a"], vec!["t2.a"]), None)?
+            .filter(col("t1.a").gt(lit(15u32)))?
+            .build()?;
+
+        assert_optimization_rule_fails(&plan);
 
         Ok(())
     }

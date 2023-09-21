@@ -18,7 +18,7 @@
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_expr::{AggregateUDF, LogicalPlan, ScalarUDF, TableSource, WindowUDF};
 use datafusion_optimizer::analyzer::Analyzer;
 use datafusion_optimizer::optimizer::Optimizer;
@@ -70,7 +70,7 @@ fn subquery_filter_with_cast() -> Result<()> {
     \n  Inner Join:  Filter: CAST(test.col_int32 AS Float64) > __scalar_sq_1.AVG(test.col_int32)\
     \n    TableScan: test projection=[col_int32]\
     \n    SubqueryAlias: __scalar_sq_1\
-    \n      Aggregate: groupBy=[[]], aggr=[[AVG(test.col_int32)]]\
+    \n      Aggregate: groupBy=[[]], aggr=[[AVG(CAST(test.col_int32 AS Float64))]]\
     \n        Projection: test.col_int32\
     \n          Filter: test.col_utf8 >= Utf8(\"2002-05-08\") AND test.col_utf8 <= Utf8(\"2002-05-13\")\
     \n            TableScan: test projection=[col_int32, col_utf8]";
@@ -211,7 +211,7 @@ fn concat_literals() -> Result<()> {
         FROM test";
     let plan = test_sql(sql)?;
     let expected =
-        "Projection: concat(Utf8(\"1\"), CAST(test.col_int32 AS Utf8), Utf8(\"0hello\"), test.col_utf8, Utf8(\"123.4\")) AS col\
+        "Projection: concat(Utf8(\"true\"), CAST(test.col_int32 AS Utf8), Utf8(\"falsehello\"), test.col_utf8, Utf8(\"123.4\")) AS col\
         \n  TableScan: test projection=[col_int32, col_utf8]";
     assert_eq!(expected, format!("{plan:?}"));
     Ok(())
@@ -224,7 +224,7 @@ fn concat_ws_literals() -> Result<()> {
         FROM test";
     let plan = test_sql(sql)?;
     let expected =
-        "Projection: concat_ws(Utf8(\"-\"), Utf8(\"1\"), CAST(test.col_int32 AS Utf8), Utf8(\"0-hello\"), test.col_utf8, Utf8(\"12--3.4\")) AS col\
+        "Projection: concat_ws(Utf8(\"-\"), Utf8(\"true\"), CAST(test.col_int32 AS Utf8), Utf8(\"false-hello\"), test.col_utf8, Utf8(\"12--3.4\")) AS col\
         \n  TableScan: test projection=[col_int32, col_utf8]";
     assert_eq!(expected, format!("{plan:?}"));
     Ok(())
@@ -345,7 +345,7 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
 
     // hard code the return value of now()
     let ts = NaiveDateTime::from_timestamp_opt(1666615693, 0).unwrap();
-    let now_time = DateTime::<Utc>::from_utc(ts, Utc);
+    let now_time = DateTime::<Utc>::from_naive_utc_and_offset(ts, Utc);
     let config = OptimizerContext::new()
         .with_skip_failing_rules(false)
         .with_query_execution_start_time(now_time);
@@ -392,7 +392,7 @@ impl ContextProvider for MySchemaProvider {
                 schema: Arc::new(schema),
             }))
         } else {
-            Err(DataFusionError::Plan("table does not exist".to_string()))
+            plan_err!("table does not exist")
         }
     }
 
