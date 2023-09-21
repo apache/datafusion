@@ -1579,6 +1579,11 @@ impl fmt::Display for DistributionContext {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let plan_string = get_plan_string(&self.plan);
         write!(f, "plan: {:?}", plan_string)?;
+        write!(
+            f,
+            "has_recursive_ancestor: {:?}",
+            self.has_recursive_ancestor,
+        )?;
         for (idx, child) in self.distribution_onwards.iter().enumerate() {
             if let Some(child) = child {
                 write!(f, "idx:{:?}, exec_tree:{}", idx, child)?;

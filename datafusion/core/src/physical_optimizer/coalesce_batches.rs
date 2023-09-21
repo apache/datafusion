@@ -126,7 +126,6 @@ impl TreeNode for CoalesceContext {
     }
 }
 
-/// implement Display method for `DistributionContext` struct.
 impl fmt::Display for CoalesceContext {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let plan_string = get_plan_string(&self.plan);
