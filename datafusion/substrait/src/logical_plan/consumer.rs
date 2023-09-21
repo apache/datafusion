@@ -342,6 +342,12 @@ pub async fn from_substrait_rel(
             }
         }
         Some(RelType::Join(join)) => {
+            if join.post_join_filter.is_some() {
+                return not_impl_err!(
+                    "JoinRel with post_join_filter is not yet supported"
+                );
+            }
+
             let left = LogicalPlanBuilder::from(
                 from_substrait_rel(ctx, join.left.as_ref().unwrap(), extensions).await?,
             );
@@ -352,15 +358,7 @@ pub async fn from_substrait_rel(
             // The join condition expression needs full input schema and not the output schema from join since we lose columns from
             // certain join types such as semi and anti joins
             let in_join_schema = left.schema().join(right.schema())?;
-            // Parse post join filter if exists
-            let mut join_filter = match &join.post_join_filter {
-                Some(filter) => {
-                    let parsed_filter =
-                        from_substrait_rex(filter, &in_join_schema, extensions).await?;
-                    Some(parsed_filter.as_ref().clone())
-                }
-                None => None,
-            };
+            let mut join_filter: Option<Expr> = None;
             // If join expression exists, parse the `on` condition expression, build join and return
             // Otherwise, build join with only the filter, without join keys
             match &join.expression.as_ref() {
@@ -373,7 +371,7 @@ pub async fn from_substrait_rel(
                     // Since as of datafusion 31.0.0, the equal and non equal join conditions are in separate fields,
                     // we extract each part as follows:
                     // - If an equal op is encountered, add the left column, right column and is_null_equal_nulls to `join_on` vector
-                    // - Otherwise we add the expression to join_filters (use conjunction if filter already exists)
+                    // - Otherwise we add the expression to join_filter (use conjunction if filter already exists)
                     let mut join_on: Vec<(Column, Column, bool)> = vec![];
                     for p in predicates {
                         match p {
@@ -421,17 +419,7 @@ pub async fn from_substrait_rel(
                     )?
                     .build()
                 }
-                None => match &join_filter {
-                    Some(_) => left
-                        .join(
-                            right.build()?,
-                            join_type,
-                            (Vec::<Column>::new(), Vec::<Column>::new()),
-                            join_filter,
-                        )?
-                        .build(),
-                    None => plan_err!("Join without join keys require a valid filter"),
-                },
+                None => plan_err!("JoinRel without join condition is not allowed"),
             }
         }
         Some(RelType::Read(read)) => match &read.as_ref().read_type {
