@@ -23,7 +23,7 @@ use crate::{AggregateExpr, PhysicalExpr};
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field};
 use arrow_array::cast::AsArray;
-use arrow_array::Array;
+use arrow_array::{Array, new_empty_array, new_null_array};
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_expr::Accumulator;
@@ -104,7 +104,7 @@ impl PartialEq<dyn Any> for ArrayAgg {
 
 #[derive(Debug)]
 pub(crate) struct ArrayAggAccumulator {
-    values: Vec<ScalarValue>,
+    arr_vec: Vec<ArrayRef>,
     datatype: DataType,
 }
 
@@ -112,7 +112,7 @@ impl ArrayAggAccumulator {
     /// new array_agg accumulator based on given item data type
     pub fn try_new(datatype: &DataType) -> Result<Self> {
         Ok(Self {
-            values: vec![],
+            arr_vec: vec![],
             datatype: datatype.clone(),
         })
     }
@@ -125,8 +125,7 @@ impl Accumulator for ArrayAggAccumulator {
             return Ok(());
         }
         assert!(values.len() == 1, "array_agg can only take 1 param!");
-        let arr = &values[0];
-        self.values.push(ScalarValue::ListArr(arr.to_owned()));
+        self.arr_vec.push(values[0].clone());
         Ok(())
     }
 
@@ -138,13 +137,16 @@ impl Accumulator for ArrayAggAccumulator {
         assert!(states.len() == 1, "array_agg states must be singleton!");
         let arr = &states[0];
 
-        (0..arr.len()).try_for_each(|index| {
+        (0..arr.len()).for_each(|index| {
             if let Some(arr) = arr.as_list_opt::<i32>() {
-                let a = arr.value(index);
-                self.values.push(ScalarValue::ListArr(a))
+                let sub_arr = arr.value(index);
+                self.arr_vec.push(sub_arr);
             }
-            Ok(())
-        })
+        });
+
+        
+
+        Ok(())
     }
 
     fn state(&self) -> Result<Vec<ScalarValue>> {
@@ -153,20 +155,28 @@ impl Accumulator for ArrayAggAccumulator {
 
     fn evaluate(&self) -> Result<ScalarValue> {
         // Transform Vec<ListArr> to ListArr
-        if self.values.is_empty() {
+
+        let element_arrays: Vec<&dyn Array> =
+            self.arr_vec.iter().map(|a| a.as_ref()).collect();
+
+        if element_arrays.is_empty() {
             let arr = ScalarValue::list_to_array(&[], &self.datatype);
             return Ok(ScalarValue::ListArr(arr));
         }
+        
+        let concated_array = arrow::compute::concat(&element_arrays)?;
+        let list_array = ScalarValue::wrap_into_list_array(concated_array);
 
-        let e_arr = ScalarValue::iter_to_array_v4(self.values.clone())?;
-        Ok(ScalarValue::ListArr(e_arr))
+        Ok(ScalarValue::ListArr(Arc::new(list_array)))
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self) + ScalarValue::size_of_vec(&self.values)
-            - std::mem::size_of_val(&self.values)
-            + self.datatype.size()
-            - std::mem::size_of_val(&self.datatype)
+        // TODO:Get size of ArrayRef
+        0
+        // std::mem::size_of_val(self) + ScalarValue::size_of_vec(&self.arr_vec)
+        //     - std::mem::size_of_val(&self.arr_vec)
+        //     + self.datatype.size()
+        //     - std::mem::size_of_val(&self.datatype)
     }
 }
 

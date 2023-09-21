@@ -1234,93 +1234,6 @@ impl ScalarValue {
         Scalar::new(self.to_array_of_size(1))
     }
 
-    // Given multiple ListArr(arr), merge them into one ListArray(arr, arr, arr, ...)
-    // non list to list
-    pub fn iter_to_array_v4(
-        scalars: impl IntoIterator<Item = ScalarValue>,
-    ) -> Result<ArrayRef> {
-        let mut scalars = scalars.into_iter().peekable();
-
-        // figure out the type based on the first element
-        let data_type = match scalars.peek() {
-            None => {
-                return _internal_err!(
-                    "Empty iterator passed to ScalarValue::iter_to_array"
-                );
-            }
-            Some(sv) => sv.data_type(),
-        };
-
-        match &data_type {
-            DataType::Utf8 => {
-                let mut builder = ListBuilder::new(StringBuilder::new());
-                for scalar in scalars {
-                    if let ScalarValue::ListArr(arr) = scalar {
-                        let str_arr = arr.as_string::<i32>();
-                        for item in str_arr.iter() {
-                            if let Some(s) = item {
-                                builder.values().append_value(s);
-                            } else {
-                                builder.values().append_null();
-                            }
-                        }
-                    } else {
-                        panic!("Not expected scalar: {:?}", scalar);
-                    }
-                }
-                builder.append(true);
-                let arr = Arc::new(builder.finish());
-                Ok(arr)
-            }
-            DataType::Null => {
-                let mut builder = ListBuilder::new(NullBuilder::new());
-                for scalar in scalars {
-                    if let ScalarValue::ListArr(arr) = scalar {
-                        let null_arr = arr.as_any().downcast_ref::<NullArray>().unwrap();
-                        for _ in 0..null_arr.len() {
-                            builder.values().append_null();
-                        }
-                    } else {
-                        panic!("Not expected scalar: {:?}", scalar);
-                    }
-                }
-                builder.append(true);
-                let arr = Arc::new(builder.finish());
-                Ok(arr)
-            }
-            DataType::List(_) => {
-                let mut elements = vec![];
-
-                for scalar in scalars {
-                    if let ScalarValue::ListArr(arr) = scalar {
-                        elements.push(arr);
-                    } else {
-                        panic!("Not expected scalar: {:?}", scalar);
-                    }
-                }
-
-                let element_arrays: Vec<&dyn Array> =
-                    elements.iter().map(|a| a.as_ref()).collect();
-
-                // println!("element_arrays: {:?}", element_arrays);
-
-                let arr = arrow::compute::concat(&element_arrays)?;
-                // println!("aVrr: {:?}", arr);
-                // println!("arr.len: {:?}", arr.len());
-
-                let offsets = OffsetBuffer::from_lengths([arr.len()]);
-                let field = Arc::new(Field::new("item", arr.data_type().clone(), true));
-                let arr = ListArray::new(field, offsets, arr, None);
-                let arr = Arc::new(arr);
-
-                Ok(arr)
-            }
-            data_type => {
-                _not_impl_err!("iter_to_array_v4 for data_type: {:?}", data_type)
-            }
-        }
-    }
-
     // No ScalarValue::List
     pub fn iter_to_array_v3(
         scalars: impl IntoIterator<Item = ScalarValue>,
@@ -1463,6 +1376,7 @@ impl ScalarValue {
                 // }
                 Arc::new(list_array)
             }
+            
             _ => {
                 return Self::iter_to_array(scalars);
             }
@@ -2171,7 +2085,9 @@ impl ScalarValue {
             .unwrap()
     }
 
-    fn wrap_into_list_array(arr: ArrayRef) -> ListArray {
+    /// Wrap an array into a ListArray
+    /// e.g. arr: PrimitiveArray<Int32Type> -> ListArray<PritimiveArray<Int32Type>>
+    pub fn wrap_into_list_array(arr: ArrayRef) -> ListArray {
         let offsets = OffsetBuffer::from_lengths([arr.len()]);
         ListArray::new(
             Arc::new(Field::new("item", arr.data_type().to_owned(), true)),
@@ -3632,54 +3548,6 @@ mod tests {
     use crate::cast::{as_string_array, as_uint32_array, as_uint64_array};
 
     use super::*;
-
-    #[test]
-    fn test_iter_to_array_v4() {
-        let str_arr1 =
-            Arc::new(StringArray::from(vec![Some("hello"), Some("world")])) as ArrayRef;
-        let str_arr2 = Arc::new(StringArray::from(vec![Some("datafusion"), Some("rust")]))
-            as ArrayRef;
-
-        let scalars = vec![
-            ScalarValue::ListArr(str_arr1),
-            ScalarValue::ListArr(str_arr2),
-        ];
-
-        // let arr = ScalarValue::iter_to_array_v4(scalars);
-        // println!("arr: {:?}", arr);
-
-        let nullarr = new_null_array(&DataType::Null, 1);
-        println!("nullarr: {:?}", nullarr);
-        let scalars = vec![
-            ScalarValue::ListArr(nullarr.clone()),
-            ScalarValue::ListArr(nullarr),
-        ];
-        let arr = ScalarValue::iter_to_array_v4(scalars);
-        println!("arr: {:?}", arr);
-
-        let arr1 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
-            Some(1),
-            Some(2),
-            Some(3),
-        ])]);
-        let arr2 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(None)]);
-        let arr3 =
-            ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![None])]);
-        let arr4 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
-            Some(4),
-            Some(5),
-        ])]);
-        println!("arr2: {:?}", arr2);
-        println!("arr3: {:?}", arr3);
-        let scalars = vec![
-            ScalarValue::ListArr(Arc::new(arr1)),
-            ScalarValue::ListArr(Arc::new(arr2)),
-            ScalarValue::ListArr(Arc::new(arr3)),
-            ScalarValue::ListArr(Arc::new(arr4)),
-        ];
-        let arr = ScalarValue::iter_to_array_v4(scalars);
-        println!("arr: {:?}", arr);
-    }
 
     #[test]
     fn make_null_array() {
