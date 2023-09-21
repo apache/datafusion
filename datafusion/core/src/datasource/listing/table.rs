@@ -943,7 +943,7 @@ impl ListingTable {
         let files = file_list
             .map(|part_file| async {
                 let part_file = part_file?;
-                let mut statistics_result = if self.options.collect_stat {
+                let statistics_result = if self.options.collect_stat {
                     let statistics_cache = self.collected_statistics.clone();
                     match statistics_cache.get_with_extra(
                         &part_file.object_meta.location,
