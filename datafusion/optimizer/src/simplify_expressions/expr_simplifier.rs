@@ -402,7 +402,7 @@ impl<'a> ConstEvaluator<'a> {
                         Ok(ScalarValue::ListArr(a))
                     } else {
                         // Non-ListArray
-                        ScalarValue::try_from_array_v3(&a, 0)
+                        ScalarValue::try_from_array(&a, 0)
                     }
                 }
             }

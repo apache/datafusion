@@ -28,6 +28,7 @@
 //! [Facebook's Folly TDigest]: https://github.com/facebook/folly/blob/main/folly/stats/TDigest.h
 
 use arrow::datatypes::DataType;
+use arrow_array::cast::as_list_array;
 use arrow_array::types::Float64Type;
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::Result;
@@ -603,8 +604,12 @@ impl TDigest {
             v => panic!("invalid max_size type {v:?}"),
         };
 
+
+
         let centroids: Vec<_> = match &state[5] {
-            ScalarValue::ListArr(arr) if *arr.data_type() == DataType::Float64 => {
+            ScalarValue::ListArr(arr) => {
+                let list_array = as_list_array(arr);
+                let arr = list_array.values();
                 let f64arr = as_primitive_array::<Float64Type>(arr).unwrap();
                 f64arr
                     .values()

@@ -219,6 +219,7 @@ impl Accumulator for DistinctCountAccumulator {
         (0..arr.len()).try_for_each(|index| {
             if !arr.is_null(index) {
                 let scalar = ScalarValue::try_from_array(arr, index)?;
+                // let scalar = ScalarValue::try_from_array(arr, index)?;
                 self.values.insert(scalar);
             }
             Ok(())

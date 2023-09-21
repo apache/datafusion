@@ -757,7 +757,7 @@ impl ScalarValue {
             Some(v) => {
                 let array = PrimitiveArray::<T>::new(vec![v].into(), None)
                     .with_data_type(d.clone());
-                Self::try_from_array_v3(&array, 0).unwrap()
+                Self::try_from_array(&array, 0).unwrap()
             }
         }
     }
@@ -2582,7 +2582,7 @@ impl ScalarValue {
                     }
                 }
                 _ => {
-                    let scalar = ScalarValue::try_from_array_v3(array, index)?;
+                    let scalar = ScalarValue::try_from_array(array, index)?;
                     // Assert not ScalarValue::List
                     if let ScalarValue::List(_, _) = scalar {
                         return _internal_err!("Unexpected ScalarValue::List");
@@ -2593,26 +2593,6 @@ impl ScalarValue {
             }
         }
         Ok(scalars)
-    }
-
-    /// Only DataType::List is modified
-    /// Converts a value in `array` at `index` into a ScalarValue
-    pub fn try_from_array_v3(array: &dyn Array, index: usize) -> Result<Self> {
-        // handle NULL value
-        if !array.is_valid(index) {
-            return array.data_type().try_into();
-        }
-
-        match array.data_type() {
-            DataType::List(_) => {
-                // Previous implementation considered nested version of list array.
-                // Not sure if it is necessary so it is not implemented, but leave a comment here.
-
-                let list_arr = as_list_array(array);
-                Ok(ScalarValue::ListArr(list_arr.value(index)))
-            }
-            _ => Self::try_from_array(array, index),
-        }
     }
 
     /// Converts a value in `array` at `index` into a ScalarValue
@@ -2651,19 +2631,49 @@ impl ScalarValue {
             }
             DataType::Utf8 => typed_cast!(array, index, StringArray, Utf8),
             DataType::LargeUtf8 => typed_cast!(array, index, LargeStringArray, LargeUtf8),
+            // DataType::List(_) => {
+            //     // Previous implementation considered nested version of list array.
+            //     // Not sure if it is necessary so it is not implemented, but leave a comment here.
+
+            //     println!("array: {:?}", array);
+            //     let list_arr = as_list_array(array);
+            //     ScalarValue::ListArr(list_arr.value(index))
+            // }
             DataType::List(nested_type) => {
                 let list_array = as_list_array(array);
-                let value = match list_array.is_null(index) {
-                    true => None,
+                match list_array.is_null(index) {
+                    true => {
+                        ScalarValue::ListArr(new_null_array(nested_type.data_type(), 0))
+                    }
                     false => {
                         let nested_array = list_array.value(index);
                         let scalar_vec = (0..nested_array.len())
                             .map(|i| ScalarValue::try_from_array(&nested_array, i))
                             .collect::<Result<Vec<_>>>()?;
-                        Some(scalar_vec)
+
+                        let arr = ScalarValue::list_to_array(&scalar_vec, nested_array.data_type());
+                        ScalarValue::ListArr(arr)
                     }
-                };
-                ScalarValue::new_list(value, nested_type.data_type().clone())
+                }
+
+                // let list_array = as_list_array(array);
+                // // println!("list_array: {:?}", list_array.value(index));
+                // let value = match list_array.is_null(index) {
+                //     true => None,
+                //     false => {
+                //         let nested_array = list_array.value(index);
+                //         let scalar_vec = (0..nested_array.len())
+                //             .map(|i| ScalarValue::try_from_array(&nested_array, i))
+                //             .collect::<Result<Vec<_>>>()?;
+                //         Some(scalar_vec)
+                //     }
+                // };
+                // let sv = ScalarValue::new_list(value, nested_type.data_type().clone());
+                // // println!("sv: {:?}", sv);
+                // let arr = sv.to_array();
+                // // println!("arr: {:?}", arr);
+                // // sv
+                // ScalarValue::ListArr(arr)
             }
             DataType::Date32 => {
                 typed_cast!(array, index, Date32Array, Date32)

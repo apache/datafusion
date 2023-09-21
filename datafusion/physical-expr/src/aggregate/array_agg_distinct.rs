@@ -134,7 +134,7 @@ impl Accumulator for DistinctArrayAggAccumulator {
         let array = &values[0];
         (0..array.len()).try_for_each(|i| {
             if !array.is_null(i) {
-                self.values.insert(ScalarValue::try_from_array_v3(array, i)?);
+                self.values.insert(ScalarValue::try_from_array(array, i)?);
             }
             Ok(())
         })
@@ -163,7 +163,6 @@ impl Accumulator for DistinctArrayAggAccumulator {
 
     fn evaluate(&self) -> Result<ScalarValue> {
         let values: Vec<ScalarValue> = self.values.iter().cloned().collect();
-        println!("aggacc values: {:?}", values);
         let arr = ScalarValue::list_to_array(&values, &self.datatype);
         Ok(ScalarValue::ListArr(arr))
     }

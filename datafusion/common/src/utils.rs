@@ -77,8 +77,8 @@ pub fn get_row_at_idx(columns: &[ArrayRef], idx: usize) -> Result<Vec<ScalarValu
     columns
         .iter()
         // TODO:
-        // .map(|arr| ScalarValue::try_from_array_v3(arr, idx))
         .map(|arr| ScalarValue::try_from_array(arr, idx))
+        // .map(|arr| ScalarValue::try_from_array(arr, idx))
         .collect()
 }
 
