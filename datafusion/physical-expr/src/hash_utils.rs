@@ -224,16 +224,16 @@ where
         for (i, (start, stop)) in offsets.iter().zip(offsets.iter().skip(1)).enumerate() {
             if nulls.is_valid(i) {
                 let hash = &mut hashes_buffer[i];
-                for j in start.as_usize()..stop.as_usize() {
-                    *hash = combine_hashes(*hash, values_hashes[j]);
+                for values_hash in &values_hashes[start.as_usize()..stop.as_usize()] {
+                    *hash = combine_hashes(*hash, *values_hash);
                 }
             }
         }
     } else {
         for (i, (start, stop)) in offsets.iter().zip(offsets.iter().skip(1)).enumerate() {
             let hash = &mut hashes_buffer[i];
-            for j in start.as_usize()..stop.as_usize() {
-                *hash = combine_hashes(*hash, values_hashes[j]);
+            for values_hash in &values_hashes[start.as_usize()..stop.as_usize()] {
+                *hash = combine_hashes(*hash, *values_hash);
             }
         }
     }
