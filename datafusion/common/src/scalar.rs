@@ -1068,7 +1068,7 @@ impl ScalarValue {
     pub fn get_array(&self) -> Result<&ArrayRef> {
         match self {
             ScalarValue::ListArr(arr) => Ok(arr),
-            _ => return _internal_err!("ScalarValue is not a ListArr"),
+            _ => _internal_err!("ScalarValue is not a ListArr"),
         }
     }
 
@@ -1238,8 +1238,6 @@ impl ScalarValue {
     pub fn iter_to_array_v3(
         scalars: impl IntoIterator<Item = ScalarValue>,
     ) -> Result<ArrayRef> {
-        let scalars = scalars.into_iter().collect::<Vec<_>>();
-
         let mut scalars = scalars.into_iter().peekable();
 
         // figure out the type based on the first element
@@ -1359,13 +1357,11 @@ impl ScalarValue {
             }
             DataType::List(_) => {
                 // Fallback case handling homogeneous lists with any ScalarValue element type
-                let scalars: Vec<_> = scalars.into_iter().collect();
-
                 // TODO: Rewrite iter_to_array_list_v2
 
                 // Ensure we get listArr here
                 // vec [ i16arr, i16arr, i16arr, ... ] =
-                let list_array = ScalarValue::iter_to_array_list_v2(scalars.clone())?;
+                let list_array = ScalarValue::iter_to_array_list_v2(scalars)?;
                 Arc::new(list_array)
             }
 
@@ -1844,13 +1840,12 @@ impl ScalarValue {
         values: &[ScalarValue],
         data_type: &DataType,
     ) -> Result<GenericListArray<i32>> {
-        let mut elements: Vec<ArrayRef> = Vec::new();
+        let mut elements: Vec<ArrayRef> = vec![];
         let mut offsets = vec![];
 
         if values.is_empty() {
             offsets.push(0);
-        }
-        else {
+        } else {
             let arr = ScalarValue::iter_to_array_v3(values.to_vec())?;
             offsets.push(arr.len());
             elements.push(arr);
@@ -1860,7 +1855,8 @@ impl ScalarValue {
         let flat_array = if elements.is_empty() {
             new_empty_array(data_type)
         } else {
-            let element_arrays: Vec<&dyn Array> = elements.iter().map(|a| a.as_ref()).collect();
+            let element_arrays: Vec<&dyn Array> =
+                elements.iter().map(|a| a.as_ref()).collect();
             arrow::compute::concat(&element_arrays)?
         };
 
@@ -1878,7 +1874,7 @@ impl ScalarValue {
     fn iter_to_array_list_v2(
         scalars: impl IntoIterator<Item = ScalarValue>,
     ) -> Result<GenericListArray<i32>> {
-        let mut elements: Vec<ArrayRef> = Vec::new();
+        let mut elements: Vec<ArrayRef> = vec![];
         let mut valid = BooleanBufferBuilder::new(0);
         let mut offsets = vec![];
 
@@ -3489,142 +3485,6 @@ mod tests {
     use crate::cast::{as_string_array, as_uint32_array, as_uint64_array};
 
     use super::*;
-
-    #[test]
-    fn make_null_array() {
-        let data_type =
-            DataType::List(Arc::new(Field::new("item", DataType::Int64, true)));
-        let data_type =
-            DataType::List(Arc::new(Field::new("item", data_type.clone(), true)));
-
-        let p = Int64Array::from(vec![None]);
-        // println!("p: {:?}", p);
-
-        let mut builder = ListBuilder::new(Int64Builder::new());
-        // builder.values().append_null();
-        builder.values().append_option(None);
-        builder.append(true);
-        let arr = builder.finish();
-        let (field, offsets, values, nulls) = arr.clone().into_parts();
-        let data_type = DataType::List(Arc::new(Field::new(
-            field.name(),
-            field.data_type().to_owned(),
-            field.is_nullable(),
-        )));
-        let field = Arc::new(Field::new("item", data_type, true));
-
-        let arr = ListArray::new(field, offsets, Arc::new(arr.clone()), nulls);
-        println!("arr: {:?}", arr);
-
-        let arr = new_null_array(&DataType::Utf8, 1);
-        println!("arr: {:?}", arr);
-
-        // let field = Arc::new(Field::new(
-        //     field.name(),
-        //     field.data_type().to_owned(),
-        //     field.is_nullable(),
-        // ));
-        // let list_data_type = DataType::List(field);
-        // let field = Arc::new(Field::new("item", list_data_type, true));
-
-        // let arr = ListArray::new(field, offsets, Arc::new(arr), nulls);
-        // println!("(list_to_arry) arr: {:?}", arr);
-    }
-
-    #[test]
-    fn merge_string_arrays() {
-        let mut builder = ListBuilder::new(StringBuilder::new());
-        builder.values().append_value("hello");
-        builder.values().append_value("world");
-        builder.append(true);
-        let arr1 = builder.finish();
-        println!("arr1: {:?}", arr1);
-
-        let mut builder = ListBuilder::new(StringBuilder::new());
-        builder.values().append_value("my");
-        builder.values().append_value("girl");
-        builder.append(true);
-        let arr2 = builder.finish();
-        println!("arr2: {:?}", arr2);
-
-        let mut builder = ListBuilder::new(StringBuilder::new());
-        builder.values().append_value("my");
-        builder.values().append_value("girl");
-        builder.append(true);
-        builder.values().append_value("hour l");
-        builder.values().append_value("wweek");
-        builder.append(true);
-        println!("builder: {:?}", builder.finish());
-    }
-
-    #[test]
-    fn test_null() {
-        // Vec<Option<Vec<Option<i65>>>>
-        let data: Vec<Option<Vec<Option<i32>>>> = vec![
-            // Some(vec![Some(0), Some(1), Some(2)]),
-            None,
-            // Some(vec![Some(3), None, Some(5)]),
-            // Some(vec![Some(6), Some(7)]),
-        ];
-        let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
-        println!("{:?}", list_array);
-
-        let data: Vec<Option<Vec<Option<i32>>>> = vec![
-            // Some(vec![Some(0), Some(1), Some(2)]),
-            // None,
-            Some(vec![None]),
-            // Some(vec![Some(3), None, Some(5)]),
-            // Some(vec![Some(6), Some(7)]),
-        ];
-        let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
-        println!("{:?}", list_array);
-
-        let arr = new_null_array(&DataType::Null, 1);
-        println!("arr: {:?}", arr);
-        let arr = new_null_array(
-            &DataType::List(Arc::new(Field::new("item", DataType::Null, true))),
-            1,
-        );
-        println!("arr: {:?}", arr);
-    }
-
-    #[test]
-    fn merge_arrays() {
-        let size = 2;
-        let arr1 = &(Arc::new(Int64Array::from(vec![1, 2, 3])) as ArrayRef);
-        // let arr2 = arr1.clone();
-        // // let arr2 = Int64Array::from(vec![4, 5, 6]);
-        // let arr = arrow::compute::concat(&[&arr1, &arr2]).unwrap();
-        // println!("arr: {:?}", arr);
-        let a = arr1 as &dyn Array;
-        let arrays = std::iter::repeat(a).take(size).collect::<Vec<_>>();
-        let slic = arrays.as_slice();
-        let arr = arrow::compute::concat(slic).unwrap();
-        println!("arr: {:?}", arr);
-        let data = vec![
-            Some(vec![Some(0), Some(1), Some(2)]),
-            //    None,
-            //    Some(vec![Some(3), None, Some(5)]),
-            //    Some(vec![Some(6), Some(7)]),
-        ];
-        let list_array = ListArray::from_iter_primitive::<Int64Type, _, _>(data);
-        let arr1 = &(Arc::new(list_array) as ArrayRef);
-        let a = arr1 as &dyn Array;
-        let arrays = std::iter::repeat(a).take(size).collect::<Vec<_>>();
-        let slic = arrays.as_slice();
-        let arr = arrow::compute::concat(slic).unwrap();
-        println!("arr: {:?}", arr);
-
-        // let list_array2 = list_array.clone();
-        // let arr = arrow::compute::concat(&[&list_array, &list_array2]).unwrap();
-        // println!("arr: {:?}", arr);
-    }
-
-    #[test]
-    fn test_nullarr() {
-        let a = new_null_array(&DataType::Null, 1);
-        println!("a: {:?}", a);
-    }
 
     #[test]
     fn scalar_add_trait_test() -> Result<()> {
