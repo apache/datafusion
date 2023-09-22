@@ -36,6 +36,7 @@ use crate::{error::Result, scalar::ScalarValue};
 
 use super::PartitionedFile;
 use crate::datasource::listing::ListingTableUrl;
+use crate::execution::context::SessionState;
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_common::{Column, DFField, DFSchema, DataFusionError};
 use datafusion_expr::expr::ScalarUDF;
@@ -315,6 +316,7 @@ async fn prune_partitions(
 /// `filters` might contain expressions that can be resolved only at the
 /// file level (e.g. Parquet row group pruning).
 pub async fn pruned_partition_list<'a>(
+    ctx: &'a SessionState,
     store: &'a dyn ObjectStore,
     table_path: &'a ListingTableUrl,
     filters: &'a [Expr],
@@ -497,6 +499,7 @@ mod tests {
         ]);
         let filter = Expr::eq(col("mypartition"), lit("val1"));
         let pruned = pruned_partition_list(
+            &state,
             store.as_ref(),
             &ListingTableUrl::parse("file:///tablepath/").unwrap(),
             &[filter],
@@ -532,7 +535,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_pruned_partition_list_multi() {
-        let store = make_test_store(&[
+        let (store, state) = make_test_store_and_state(&[
             ("tablepath/part1=p1v1/file.parquet", 100),
             ("tablepath/part1=p1v2/part2=p2v1/file1.parquet", 100),
             ("tablepath/part1=p1v2/part2=p2v1/file2.parquet", 100),
@@ -544,6 +547,7 @@ mod tests {
         // filter3 cannot be resolved at partition pruning
         let filter3 = Expr::eq(col("part2"), col("other"));
         let pruned = pruned_partition_list(
+            &state,
             store.as_ref(),
             &ListingTableUrl::parse("file:///tablepath/").unwrap(),
             &[filter1, filter2, filter3],

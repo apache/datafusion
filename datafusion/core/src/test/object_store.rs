@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 //! Object store implementation used for testing
+use crate::execution::context::SessionState;
 use crate::prelude::SessionContext;
 use futures::FutureExt;
 use object_store::{memory::InMemory, path::Path, ObjectMeta, ObjectStore};
@@ -25,11 +26,11 @@ use url::Url;
 pub fn register_test_store(ctx: &SessionContext, files: &[(&str, u64)]) {
     let url = Url::parse("test://").unwrap();
     ctx.runtime_env()
-        .register_object_store(&url, make_test_store(files));
+        .register_object_store(&url, make_test_store_and_state(files).0);
 }
 
 /// Create a test object store with the provided files
-pub fn make_test_store(files: &[(&str, u64)]) -> Arc<dyn ObjectStore> {
+pub fn make_test_store_and_state(files: &[(&str, u64)]) -> (Arc<InMemory>, SessionState) {
     let memory = InMemory::new();
 
     for (name, size) in files {
@@ -40,7 +41,7 @@ pub fn make_test_store(files: &[(&str, u64)]) -> Arc<dyn ObjectStore> {
             .unwrap();
     }
 
-    Arc::new(memory)
+    (Arc::new(memory), SessionState::default())
 }
 
 /// Helper method to fetch the file size and date at given path and create a `ObjectMeta`
