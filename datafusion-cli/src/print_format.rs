@@ -16,6 +16,7 @@
 // under the License.
 
 //! Print format variants
+use crate::print_options::MaxRows;
 use arrow::csv::writer::WriterBuilder;
 use arrow::json::{ArrayWriter, LineDelimitedWriter};
 use arrow::util::pretty::pretty_format_batches_with_options;
@@ -89,43 +90,46 @@ fn keep_only_maxrows(s: &str, maxrows: usize) -> String {
 
 fn format_batches_with_maxrows(
     batches: &[RecordBatch],
-    maxrows_opt: Option<usize>,
+    maxrows: MaxRows,
 ) -> Result<String> {
-    if let Some(maxrows) = maxrows_opt {
-        // Only format enough batches for maxrows
-        let mut filtered_batches = Vec::new();
-        let mut batches = batches;
-        let row_count: usize = batches.iter().map(|b| b.num_rows()).sum();
-        if row_count > maxrows {
-            let mut accumulated_rows = 0;
+    match maxrows {
+        MaxRows::Limited(maxrows) => {
+            // Only format enough batches for maxrows
+            let mut filtered_batches = Vec::new();
+            let mut batches = batches;
+            let row_count: usize = batches.iter().map(|b| b.num_rows()).sum();
+            if row_count > maxrows {
+                let mut accumulated_rows = 0;
 
-            for batch in batches {
-                filtered_batches.push(batch.clone());
-                if accumulated_rows + batch.num_rows() > maxrows {
-                    break;
+                for batch in batches {
+                    filtered_batches.push(batch.clone());
+                    if accumulated_rows + batch.num_rows() > maxrows {
+                        break;
+                    }
+                    accumulated_rows += batch.num_rows();
                 }
-                accumulated_rows += batch.num_rows();
+
+                batches = &filtered_batches;
             }
 
-            batches = &filtered_batches;
+            let mut formatted = format!(
+                "{}",
+                pretty_format_batches_with_options(batches, &DEFAULT_FORMAT_OPTIONS)?,
+            );
+
+            if row_count > maxrows {
+                formatted = keep_only_maxrows(&formatted, maxrows);
+            }
+
+            Ok(formatted)
         }
-
-        let mut formatted = format!(
-            "{}",
-            pretty_format_batches_with_options(batches, &DEFAULT_FORMAT_OPTIONS)?,
-        );
-
-        if row_count > maxrows {
-            formatted = keep_only_maxrows(&formatted, maxrows);
+        MaxRows::Unlimited => {
+            // maxrows not specified, print all rows
+            Ok(format!(
+                "{}",
+                pretty_format_batches_with_options(batches, &DEFAULT_FORMAT_OPTIONS)?,
+            ))
         }
-
-        Ok(formatted)
-    } else {
-        // maxrows not specified, print all rows
-        Ok(format!(
-            "{}",
-            pretty_format_batches_with_options(batches, &DEFAULT_FORMAT_OPTIONS)?,
-        ))
     }
 }
 
@@ -134,11 +138,7 @@ impl PrintFormat {
     /// `maxrows` option is only used for `Table` format:
     ///     If `maxrows` is Some(n), then at most n rows will be displayed
     ///     If `maxrows` is None, then every row will be displayed
-    pub fn print_batches(
-        &self,
-        batches: &[RecordBatch],
-        maxrows: Option<usize>,
-    ) -> Result<()> {
+    pub fn print_batches(&self, batches: &[RecordBatch], maxrows: MaxRows) -> Result<()> {
         if batches.is_empty() {
             return Ok(());
         }
@@ -147,7 +147,7 @@ impl PrintFormat {
             Self::Csv => println!("{}", print_batches_with_sep(batches, b',')?),
             Self::Tsv => println!("{}", print_batches_with_sep(batches, b'\t')?),
             Self::Table => {
-                if maxrows == Some(0) {
+                if maxrows == MaxRows::Limited(0) {
                     return Ok(());
                 }
                 println!("{}", format_batches_with_maxrows(batches, maxrows)?,)
@@ -275,21 +275,21 @@ mod tests {
             "+---+",
         ].join("\n");
 
-        let no_limit = format_batches_with_maxrows(&[batch.clone()], None)?;
+        let no_limit = format_batches_with_maxrows(&[batch.clone()], MaxRows::Unlimited)?;
         assert_eq!(all_rows_expected, no_limit);
 
         let maxrows_less_than_actual =
-            format_batches_with_maxrows(&[batch.clone()], Some(1))?;
+            format_batches_with_maxrows(&[batch.clone()], MaxRows::Limited(1))?;
         assert_eq!(one_row_expected, maxrows_less_than_actual);
         let maxrows_more_than_actual =
-            format_batches_with_maxrows(&[batch.clone()], Some(5))?;
+            format_batches_with_maxrows(&[batch.clone()], MaxRows::Limited(5))?;
         assert_eq!(all_rows_expected, maxrows_more_than_actual);
         let maxrows_equals_actual =
-            format_batches_with_maxrows(&[batch.clone()], Some(3))?;
+            format_batches_with_maxrows(&[batch.clone()], MaxRows::Limited(3))?;
         assert_eq!(all_rows_expected, maxrows_equals_actual);
         let multi_batches = format_batches_with_maxrows(
             &[batch.clone(), batch.clone(), batch.clone()],
-            Some(5),
+            MaxRows::Limited(5),
         )?;
         assert_eq!(multi_batches_expected, multi_batches);
 

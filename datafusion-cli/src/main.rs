@@ -23,7 +23,10 @@ use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::prelude::SessionContext;
 use datafusion_cli::catalog::DynamicFileCatalog;
 use datafusion_cli::{
-    exec, print_format::PrintFormat, print_options::PrintOptions, DATAFUSION_CLI_VERSION,
+    exec,
+    print_format::PrintFormat,
+    print_options::{MaxRows, PrintOptions},
+    DATAFUSION_CLI_VERSION,
 };
 use mimalloc::MiMalloc;
 use std::collections::HashMap;
@@ -126,9 +129,9 @@ struct Args {
     #[clap(
         long,
         help = "The max number of rows to display for 'Table' format\n[default: 40] [possible values: numbers(0/10/...), inf(no limit)]",
-        validator(is_valid_maxrows)
+        default_value = "40"
     )]
-    maxrows: Option<String>,
+    maxrows: MaxRows,
 }
 
 #[tokio::main]
@@ -186,10 +189,7 @@ pub async fn main() -> Result<()> {
     let mut print_options = PrintOptions {
         format: args.format,
         quiet: args.quiet,
-        maxrows: match args.maxrows {
-            Some(maxrows_str) => extract_maxrows(&maxrows_str).unwrap(),
-            None => Some(40), // set default value
-        },
+        maxrows: args.maxrows,
     };
 
     let commands = args.command;
@@ -261,25 +261,6 @@ fn is_valid_memory_pool_size(size: &str) -> Result<(), String> {
     match extract_memory_pool_size(size) {
         Ok(_) => Ok(()),
         Err(e) => Err(e),
-    }
-}
-
-fn is_valid_maxrows(maxrows: &str) -> Result<(), String> {
-    extract_maxrows(maxrows).map(|_| ())
-}
-
-// If returned Ok(None), then no limit on max rows to display
-fn extract_maxrows(maxrows: &str) -> Result<Option<usize>, String> {
-    if maxrows.to_lowercase() == "inf"
-        || maxrows.to_lowercase() == "infinite"
-        || maxrows.to_lowercase() == "none"
-    {
-        Ok(None)
-    } else {
-        match maxrows.parse::<usize>() {
-        Ok(nrows)  => Ok(Some(nrows)),
-        _ => Err(format!("Invalid maxrows {}. Valid inputs are natural numbers or \'inf\' for no limit.", maxrows)),
-    }
     }
 }
 

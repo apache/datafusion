@@ -18,36 +18,68 @@
 use crate::print_format::PrintFormat;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::error::Result;
+use std::fmt::{Display, Formatter};
+use std::str::FromStr;
 use std::time::Instant;
+
+#[derive(Debug, Clone, PartialEq, Copy)]
+pub enum MaxRows {
+    /// show all rows in the output
+    Unlimited,
+    /// Only show n rows
+    Limited(usize),
+}
+
+impl FromStr for MaxRows {
+    type Err = String;
+
+    fn from_str(maxrows: &str) -> Result<Self, Self::Err> {
+        if maxrows.to_lowercase() == "inf"
+            || maxrows.to_lowercase() == "infinite"
+            || maxrows.to_lowercase() == "none"
+        {
+            Ok(Self::Unlimited)
+        } else {
+            match maxrows.parse::<usize>() {
+                Ok(nrows)  => Ok(Self::Limited(nrows)),
+                _ => Err(format!("Invalid maxrows {}. Valid inputs are natural numbers or \'none\', \'inf\', or \'infinite\' for no limit.", maxrows)),
+            }
+        }
+    }
+}
+
+impl Display for MaxRows {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unlimited => write!(f, "unlimited"),
+            Self::Limited(max_rows) => write!(f, "at most {max_rows}"),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct PrintOptions {
     pub format: PrintFormat,
     pub quiet: bool,
-    pub maxrows: Option<usize>,
+    pub maxrows: MaxRows,
 }
 
 fn get_timing_info_str(
     row_count: usize,
-    maxrows_opt: Option<usize>,
+    maxrows: MaxRows,
     query_start_time: Instant,
 ) -> String {
     let row_word = if row_count == 1 { "row" } else { "rows" };
-    let maxrows_shown_msg = maxrows_opt
-        .map(|maxrows| {
-            if maxrows < row_count {
-                format!(" ({} shown)", maxrows)
-            } else {
-                String::new()
-            }
-        })
-        .unwrap_or_default();
+    let nrows_shown_msg = match maxrows {
+        MaxRows::Limited(nrows) if nrows < row_count => format!(" ({} shown)", nrows),
+        _ => String::new(),
+    };
 
     format!(
         "{} {} in set{}. Query took {:.3} seconds.\n",
         row_count,
         row_word,
-        maxrows_shown_msg,
+        nrows_shown_msg,
         query_start_time.elapsed().as_secs_f64()
     )
 }
