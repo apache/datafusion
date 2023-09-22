@@ -21,7 +21,6 @@ use arrow::{
     datatypes::{DataType, TimeUnit},
 };
 use datafusion_common::{plan_err, DataFusionError, Result};
-use std::str::FromStr;
 
 /// Performs type coercion for function arguments.
 ///
@@ -219,12 +218,9 @@ fn coerced_from<'a>(
         Utf8 | LargeUtf8 => Some(type_into),
         Null if can_cast_types(type_from, type_into) => Some(type_into),
 
-        // timestamp coercions, with timezone, accept the type_from timezone if valid
+        // Coerce to consistent timezones, if the `type_from` timezone exists.
         Timestamp(TimeUnit::Nanosecond, Some(_))
-            if matches!(
-                type_from,
-                Timestamp(TimeUnit::Nanosecond, Some(from_tz)) if arrow_array::timezone::Tz::from_str(from_tz).is_ok()
-            ) =>
+            if matches!(type_from, Timestamp(TimeUnit::Nanosecond, Some(_))) =>
         {
             Some(type_from)
         }
