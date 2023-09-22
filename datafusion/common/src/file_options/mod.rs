@@ -22,6 +22,7 @@ pub mod avro_writer;
 pub mod csv_writer;
 pub mod file_type;
 pub mod json_writer;
+#[cfg(feature = "parquet")]
 pub mod parquet_writer;
 pub(crate) mod parse_utils;
 
@@ -37,10 +38,12 @@ use crate::{
     DataFusionError, FileType, Result,
 };
 
+#[cfg(feature = "parquet")]
+use self::parquet_writer::ParquetWriterOptions;
+
 use self::{
     arrow_writer::ArrowWriterOptions, avro_writer::AvroWriterOptions,
     csv_writer::CsvWriterOptions, json_writer::JsonWriterOptions,
-    parquet_writer::ParquetWriterOptions,
 };
 
 /// Represents a single arbitrary setting in a
@@ -145,6 +148,7 @@ impl StatementOptions {
 /// plus any DataFusion specific writing options (e.g. CSV compression)
 #[derive(Clone, Debug)]
 pub enum FileTypeWriterOptions {
+    #[cfg(feature = "parquet")]
     Parquet(ParquetWriterOptions),
     CSV(CsvWriterOptions),
     JSON(JsonWriterOptions),
@@ -164,6 +168,7 @@ impl FileTypeWriterOptions {
         let options = (config_defaults, statement_options);
 
         let file_type_write_options = match file_type {
+            #[cfg(feature = "parquet")]
             FileType::PARQUET => {
                 FileTypeWriterOptions::Parquet(ParquetWriterOptions::try_from(options)?)
             }
@@ -193,6 +198,7 @@ impl FileTypeWriterOptions {
         let options = (config_defaults, &empty_statement);
 
         let file_type_write_options = match file_type {
+            #[cfg(feature = "parquet")]
             FileType::PARQUET => {
                 FileTypeWriterOptions::Parquet(ParquetWriterOptions::try_from(options)?)
             }
@@ -215,6 +221,7 @@ impl FileTypeWriterOptions {
 
     /// Tries to extract ParquetWriterOptions from this FileTypeWriterOptions enum.
     /// Returns an error if a different type from parquet is set.
+    #[cfg(feature = "parquet")]
     pub fn try_into_parquet(&self) -> Result<&ParquetWriterOptions> {
         match self {
             FileTypeWriterOptions::Parquet(opt) => Ok(opt),
@@ -281,6 +288,7 @@ impl Display for FileTypeWriterOptions {
             FileTypeWriterOptions::Avro(_) => "AvroWriterOptions",
             FileTypeWriterOptions::CSV(_) => "CsvWriterOptions",
             FileTypeWriterOptions::JSON(_) => "JsonWriterOptions",
+            #[cfg(feature = "parquet")]
             FileTypeWriterOptions::Parquet(_) => "ParquetWriterOptions",
         };
         write!(f, "{}", name)
