@@ -35,7 +35,7 @@ arrow = {workspace = true}
 async-trait = "0.1.41"
 bigdecimal = "0.4.1"
 datafusion = {path = "../core", version = "31.0.0"}
-datafusion-common = {path = "../common", version = "31.0.0"}
+datafusion-common = {path = "../common", version = "31.0.0", default-features = false}
 half = "2.2.1"
 itertools = "0.11"
 object_store = "0.7.0"
