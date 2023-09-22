@@ -66,22 +66,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let p = str.len() - 1;
                 let s = str.len() - i - 1;
                 let str = str.replace('.', "");
-                let n = str.parse::<i128>().map_err(|_| {
-                    DataFusionError::from(ParserError(format!(
-                        "Cannot parse {str} as i128 when building decimal"
-                    )))
-                })?;
+                let n = parse_decimal_128_without_scale(&str)?;
                 Ok(Expr::Literal(ScalarValue::Decimal128(
                     Some(n),
                     p as u8,
                     s as i8,
                 )))
             } else {
-                let number = n.parse::<i128>().map_err(|_| {
-                    DataFusionError::from(ParserError(format!(
-                        "Cannot parse {n} as i128 when building decimal"
-                    )))
-                })?;
+                let number = parse_decimal_128_without_scale(str)?;
                 Ok(Expr::Literal(ScalarValue::Decimal128(Some(number), 38, 0)))
             }
         } else {
@@ -392,6 +384,23 @@ const fn try_decode_hex_char(c: u8) -> Option<u8> {
         b'0'..=b'9' => Some(c - b'0'),
         _ => None,
     }
+}
+
+fn parse_decimal_128_without_scale(s: &str) -> Result<i128> {
+    let number = s.parse::<i128>().map_err(|e| {
+        DataFusionError::from(ParserError(format!(
+            "Cannot parse {s} as i128 when building decimal: {e}"
+        )))
+    })?;
+
+    const MAX_DECIMAL_128_VALUE: i128 = 10_i128.pow(38) - 1;
+    if number > MAX_DECIMAL_128_VALUE {
+        return Err(DataFusionError::from(ParserError(format!(
+            "Cannot parse {s} as i128 when building decimal: precision overflow"
+        ))));
+    }
+
+    Ok(number)
 }
 
 #[cfg(test)]
