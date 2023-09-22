@@ -1463,6 +1463,74 @@ SELECT date_part('hour', TIMESTAMPTZ '2000-01-01T01:01:01+07') as part
 
 
 ##########
+## Timezone impact on builtin scalar functions
+#
+# irregular offsets
+##########
+
+query P rowsort
+SELECT date_trunc('hour', TIMESTAMPTZ '2000-01-01T00:00:00+00:45') as ts_irregular_offset
+ UNION ALL
+SELECT date_trunc('hour', TIMESTAMPTZ '2000-01-01T00:00:00+00:30') as ts_irregular_offset
+ UNION ALL
+SELECT date_trunc('hour', TIMESTAMPTZ '2000-01-01T00:00:00+00:15') as ts_irregular_offset
+ UNION ALL
+SELECT date_trunc('hour', TIMESTAMPTZ '2000-01-01T00:00:00-00:15') as ts_irregular_offset
+ UNION ALL
+SELECT date_trunc('hour', TIMESTAMPTZ '2000-01-01T00:00:00-00:30') as ts_irregular_offset
+ UNION ALL
+SELECT date_trunc('hour', TIMESTAMPTZ '2000-01-01T00:00:00-00:45') as ts_irregular_offset
+----
+1999-12-31T23:00:00Z
+1999-12-31T23:00:00Z
+1999-12-31T23:00:00Z
+2000-01-01T00:00:00Z
+2000-01-01T00:00:00Z
+2000-01-01T00:00:00Z
+
+query P rowsort
+SELECT date_bin('1 day', TIMESTAMPTZ '2022-01-01 00:00:00+00:30', TIMESTAMPTZ '2020-01-01') as ts_irregular_offset
+ UNION ALL
+SELECT date_bin('1 day', TIMESTAMPTZ '2022-01-01 00:00:00+00:15', TIMESTAMPTZ '2020-01-01') as ts_irregular_offset
+ UNION ALL
+SELECT date_bin('1 day', TIMESTAMPTZ '2022-01-01 00:00:00-00:15', TIMESTAMPTZ '2020-01-01') as ts_irregular_offset
+ UNION ALL
+SELECT date_bin('1 day', TIMESTAMPTZ '2022-01-01 00:00:00-00:30', TIMESTAMPTZ '2020-01-01') as ts_irregular_offset
+----
+2021-12-31T00:00:00Z
+2021-12-31T00:00:00Z
+2022-01-01T00:00:00Z
+2022-01-01T00:00:00Z
+
+query P rowsort
+SELECT date_bin('1 hour', TIMESTAMPTZ '2022-01-01 00:00:00+01:15', TIMESTAMPTZ '2020-01-01') as ts_irregular_offset
+ UNION ALL
+SELECT date_bin('1 hour', TIMESTAMPTZ '2022-01-01 00:00:00+00:45', TIMESTAMPTZ '2020-01-01') as ts_irregular_offset
+ UNION ALL
+SELECT date_bin('1 hour', TIMESTAMPTZ '2022-01-01 00:00:00+00:30', TIMESTAMPTZ '2020-01-01') as ts_irregular_offset
+ UNION ALL
+SELECT date_bin('1 hour', TIMESTAMPTZ '2022-01-01 00:00:00+00:15', TIMESTAMPTZ '2020-01-01') as ts_irregular_offset
+ UNION ALL
+SELECT date_bin('1 hour', TIMESTAMPTZ '2022-01-01 00:00:00-00:15', TIMESTAMPTZ '2020-01-01') as ts_irregular_offset
+ UNION ALL
+SELECT date_bin('1 hour', TIMESTAMPTZ '2022-01-01 00:00:00-00:30', TIMESTAMPTZ '2020-01-01') as ts_irregular_offset
+ UNION ALL
+SELECT date_bin('1 hour', TIMESTAMPTZ '2022-01-01 00:00:00-00:45', TIMESTAMPTZ '2020-01-01') as ts_irregular_offset
+ UNION ALL
+SELECT date_bin('1 hour', TIMESTAMPTZ '2022-01-01 00:00:00-01:15', TIMESTAMPTZ '2020-01-01') as ts_irregular_offset
+----
+2021-12-31T22:00:00Z
+2021-12-31T23:00:00Z
+2021-12-31T23:00:00Z
+2021-12-31T23:00:00Z
+2022-01-01T00:00:00Z
+2022-01-01T00:00:00Z
+2022-01-01T00:00:00Z
+2022-01-01T01:00:00Z
+
+
+
+##########
 ## Timezone acceptance bounds
 #
 # standard formats
@@ -1585,3 +1653,28 @@ SELECT TIMESTAMPTZ '2022-01-01 01:10:00 America/Los Angeles' as ts_geo
 
 statement error
 SELECT TIMESTAMPTZ 'Sat, 1 Jan 2022 01:10:00 GMT' as rfc1123
+
+
+
+##########
+## Timezone acceptance bounds
+#
+# daylight savings
+##########
+
+# will not accept daylight savings designations as geo abv (because not accepting geo abv)
+# postgresql: accepts
+statement error
+SELECT TIMESTAMPTZ '2023-03-12 02:00:00 EDT'
+
+# ok to use geo longform
+query P
+SELECT TIMESTAMPTZ '2023-03-11 02:00:00 America/Los_Angeles' as ts_geo
+----
+2023-03-11T10:00:00Z
+
+# will error if provide geo longform with time not possible due to daylight savings
+# Arrow error: Parser error: Error parsing timestamp from '2023-03-12 02:00:00 America/Los_Angeles': error computing timezone offset
+# postgresql: accepts
+statement error
+SELECT TIMESTAMPTZ '2023-03-12 02:00:00 America/Los_Angeles' as ts_geo
