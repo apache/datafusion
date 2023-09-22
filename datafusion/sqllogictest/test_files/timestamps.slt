@@ -1627,7 +1627,7 @@ SELECT TIMESTAMPTZ '2022-01-01 01:10:00 GMT' as ts_gmt
 statement error
 SELECT TIMESTAMPTZ '2022-01-01 01:10:00 GMT-1' as ts_gmt_offset
 
-# will not accept non-GMT geo abv
+# will not accept non-GMT geo abbr
 # postgresql: accepts
 statement error
 SELECT TIMESTAMPTZ '2022-01-01 01:10:00 AEST'
@@ -1662,7 +1662,7 @@ SELECT TIMESTAMPTZ 'Sat, 1 Jan 2022 01:10:00 GMT' as rfc1123
 # daylight savings
 ##########
 
-# will not accept daylight savings designations as geo abv (because not accepting geo abv)
+# will not accept daylight savings designations as geo abbr (because not accepting geo abbr)
 # postgresql: accepts
 statement error
 SELECT TIMESTAMPTZ '2023-03-12 02:00:00 EDT'
