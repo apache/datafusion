@@ -844,10 +844,13 @@ mod tests {
             nulls_first: true,
         };
         let test_schema = create_test_schema()?;
-        let mut eq_properties = EquivalenceProperties::new(test_schema.clone());
-        eq_properties.add_equal_conditions((col_a, col_c));
+        let col_a_expr = Arc::new(col_a.clone()) as _;
+        let col_c_expr = Arc::new(col_c.clone()) as _;
+        // let mut eq_properties = EquivalenceProperties::new(test_schema.clone());
+        // eq_properties.add_equal_conditions((col_a, col_c));
         let mut ordering_eq_properties =
             OrderingEquivalenceProperties::new(test_schema.clone());
+        ordering_eq_properties.add_equal_conditions((&col_a_expr, &col_c_expr));
         ordering_eq_properties.add_ordering_equal_conditions((
             &vec![PhysicalSortExpr {
                 expr: Arc::new(col_a.clone()),
