@@ -29,13 +29,12 @@ use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::task::{JoinHandle, JoinSet};
 
+use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use arrow::datatypes::SchemaRef;
 use arrow::datatypes::{Fields, Schema};
 use async_trait::async_trait;
 use bytes::{BufMut, BytesMut};
-use datafusion_common::{
-    exec_err, not_impl_err, plan_err, DataFusionError, FileCompressionType, FileType,
-};
+use datafusion_common::{exec_err, not_impl_err, plan_err, DataFusionError, FileType};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
 use futures::{StreamExt, TryStreamExt};
@@ -70,9 +69,6 @@ use crate::physical_plan::{
     Accumulator, DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream,
     Statistics,
 };
-
-/// The number of files to read in parallel when inferring schema
-const SCHEMA_INFERENCE_CONCURRENCY: usize = 32;
 
 /// The Apache Parquet `FileFormat` implementation
 ///
@@ -177,7 +173,7 @@ impl FileFormat for ParquetFormat {
         let schemas: Vec<_> = futures::stream::iter(objects)
             .map(|object| fetch_schema(store.as_ref(), object, self.metadata_size_hint))
             .boxed() // Workaround https://github.com/rust-lang/rust/issues/64552
-            .buffered(SCHEMA_INFERENCE_CONCURRENCY)
+            .buffered(state.config_options().execution.meta_fetch_concurrency)
             .try_collect()
             .await?;
 

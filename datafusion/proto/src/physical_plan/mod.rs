@@ -21,10 +21,10 @@ use std::sync::Arc;
 
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::physical_plan::{AvroExec, CsvExec, ParquetExec};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
-use datafusion::logical_expr::WindowFrame;
 use datafusion::physical_plan::aggregates::{create_aggregate_expr, AggregateMode};
 use datafusion::physical_plan::aggregates::{AggregateExec, PhysicalGroupBy};
 use datafusion::physical_plan::analyze::AnalyzeExec;
@@ -43,11 +43,12 @@ use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion::physical_plan::union::UnionExec;
-use datafusion::physical_plan::windows::{create_window_expr, WindowAggExec};
+use datafusion::physical_plan::windows::{
+    BoundedWindowAggExec, PartitionSearchMode, WindowAggExec,
+};
 use datafusion::physical_plan::{
     udaf, AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, WindowExpr,
 };
-use datafusion_common::FileCompressionType;
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use prost::bytes::BufMut;
 use prost::Message;
@@ -61,8 +62,10 @@ use crate::protobuf::physical_aggregate_expr_node::AggregateFunction;
 use crate::protobuf::physical_expr_node::ExprType;
 use crate::protobuf::physical_plan_node::PhysicalPlanType;
 use crate::protobuf::repartition_exec_node::PartitionMethod;
-use crate::protobuf::{self, PhysicalPlanNode};
+use crate::protobuf::{self, window_agg_exec_node, PhysicalPlanNode};
 use crate::{convert_required, into_required};
+
+use self::from_proto::parse_physical_window_expr;
 
 pub mod from_proto;
 pub mod to_proto;
@@ -288,59 +291,60 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         )
                     })?
                     .clone();
-                let physical_schema: SchemaRef =
-                    SchemaRef::new((&input_schema).try_into()?);
+                let input_schema: SchemaRef = SchemaRef::new((&input_schema).try_into()?);
 
                 let physical_window_expr: Vec<Arc<dyn WindowExpr>> = window_agg
                     .window_expr
                     .iter()
-                    .zip(window_agg.window_expr_name.iter())
-                    .map(|(expr, name)| {
-                        let expr_type = expr.expr_type.as_ref().ok_or_else(|| {
-                            proto_error("Unexpected empty window physical expression")
-                        })?;
-
-                        match expr_type {
-                            ExprType::WindowExpr(window_node) => {
-                                let window_node_expr = window_node
-                                    .expr
-                                    .as_ref()
-                                    .map(|e| {
-                                        parse_physical_expr(
-                                            e.as_ref(),
-                                            registry,
-                                            &physical_schema,
-                                        )
-                                    })
-                                    .transpose()?
-                                    .ok_or_else(|| {
-                                        proto_error(
-                                            "missing window_node expr expression"
-                                                .to_string(),
-                                        )
-                                    })?;
-
-                                Ok(create_window_expr(
-                                    &convert_required!(window_node.window_function)?,
-                                    name.to_owned(),
-                                    &[window_node_expr],
-                                    &[],
-                                    &[],
-                                    Arc::new(WindowFrame::new(false)),
-                                    &physical_schema,
-                                )?)
-                            }
-                            _ => internal_err!("Invalid expression for WindowAggrExec"),
-                        }
+                    .map(|window_expr| {
+                        parse_physical_window_expr(
+                            window_expr,
+                            registry,
+                            input_schema.as_ref(),
+                        )
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                //todo fill partition keys and sort keys
-                Ok(Arc::new(WindowAggExec::try_new(
-                    physical_window_expr,
-                    input,
-                    Arc::new((&input_schema).try_into()?),
-                    vec![],
-                )?))
+
+                let partition_keys = window_agg
+                    .partition_keys
+                    .iter()
+                    .map(|expr| {
+                        parse_physical_expr(expr, registry, input.schema().as_ref())
+                    })
+                    .collect::<Result<Vec<Arc<dyn PhysicalExpr>>>>()?;
+
+                if let Some(partition_search_mode) =
+                    window_agg.partition_search_mode.as_ref()
+                {
+                    let partition_search_mode = match partition_search_mode {
+                        window_agg_exec_node::PartitionSearchMode::Linear(_) => {
+                            PartitionSearchMode::Linear
+                        }
+                        window_agg_exec_node::PartitionSearchMode::PartiallySorted(
+                            protobuf::PartiallySortedPartitionSearchMode { columns },
+                        ) => PartitionSearchMode::PartiallySorted(
+                            columns.iter().map(|c| *c as usize).collect(),
+                        ),
+                        window_agg_exec_node::PartitionSearchMode::Sorted(_) => {
+                            PartitionSearchMode::Sorted
+                        }
+                    };
+
+                    Ok(Arc::new(BoundedWindowAggExec::try_new(
+                        physical_window_expr,
+                        input,
+                        input_schema,
+                        partition_keys,
+                        partition_search_mode,
+                    )?))
+                } else {
+                    Ok(Arc::new(WindowAggExec::try_new(
+                        physical_window_expr,
+                        input,
+                        input_schema,
+                        partition_keys,
+                    )?))
+                }
             }
             PhysicalPlanType::Aggregate(hash_agg) => {
                 let input: Arc<dyn ExecutionPlan> = into_physical_plan(
@@ -1304,6 +1308,88 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     },
                 ))),
             })
+        } else if let Some(exec) = plan.downcast_ref::<WindowAggExec>() {
+            let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
+                exec.input().to_owned(),
+                extension_codec,
+            )?;
+
+            let input_schema = protobuf::Schema::try_from(exec.input_schema().as_ref())?;
+
+            let window_expr =
+                exec.window_expr()
+                    .iter()
+                    .map(|e| e.clone().try_into())
+                    .collect::<Result<Vec<protobuf::PhysicalWindowExprNode>>>()?;
+
+            let partition_keys = exec
+                .partition_keys
+                .iter()
+                .map(|e| e.clone().try_into())
+                .collect::<Result<Vec<protobuf::PhysicalExprNode>>>()?;
+
+            Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::Window(Box::new(
+                    protobuf::WindowAggExecNode {
+                        input: Some(Box::new(input)),
+                        window_expr,
+                        input_schema: Some(input_schema),
+                        partition_keys,
+                        partition_search_mode: None,
+                    },
+                ))),
+            })
+        } else if let Some(exec) = plan.downcast_ref::<BoundedWindowAggExec>() {
+            let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
+                exec.input().to_owned(),
+                extension_codec,
+            )?;
+
+            let input_schema = protobuf::Schema::try_from(exec.input_schema().as_ref())?;
+
+            let window_expr =
+                exec.window_expr()
+                    .iter()
+                    .map(|e| e.clone().try_into())
+                    .collect::<Result<Vec<protobuf::PhysicalWindowExprNode>>>()?;
+
+            let partition_keys = exec
+                .partition_keys
+                .iter()
+                .map(|e| e.clone().try_into())
+                .collect::<Result<Vec<protobuf::PhysicalExprNode>>>()?;
+
+            let partition_search_mode = match &exec.partition_search_mode {
+                PartitionSearchMode::Linear => {
+                    window_agg_exec_node::PartitionSearchMode::Linear(
+                        protobuf::EmptyMessage {},
+                    )
+                }
+                PartitionSearchMode::PartiallySorted(columns) => {
+                    window_agg_exec_node::PartitionSearchMode::PartiallySorted(
+                        protobuf::PartiallySortedPartitionSearchMode {
+                            columns: columns.iter().map(|c| *c as u64).collect(),
+                        },
+                    )
+                }
+                PartitionSearchMode::Sorted => {
+                    window_agg_exec_node::PartitionSearchMode::Sorted(
+                        protobuf::EmptyMessage {},
+                    )
+                }
+            };
+
+            Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::Window(Box::new(
+                    protobuf::WindowAggExecNode {
+                        input: Some(Box::new(input)),
+                        window_expr,
+                        input_schema: Some(input_schema),
+                        partition_keys,
+                        partition_search_mode: Some(partition_search_mode),
+                    },
+                ))),
+            })
         } else {
             let mut buf: Vec<u8> = vec![];
             match extension_codec.try_encode(plan_clone.clone(), &mut buf) {
@@ -1419,12 +1505,18 @@ mod roundtrip_tests {
     use datafusion::logical_expr::{BuiltinScalarFunction, Volatility};
     use datafusion::physical_expr::expressions::GetFieldAccessExpr;
     use datafusion::physical_expr::expressions::{cast, in_list};
+    use datafusion::physical_expr::window::SlidingAggregateWindowExpr;
     use datafusion::physical_expr::ScalarFunctionExpr;
     use datafusion::physical_plan::aggregates::PhysicalGroupBy;
     use datafusion::physical_plan::analyze::AnalyzeExec;
-    use datafusion::physical_plan::expressions::{like, BinaryExpr, GetIndexedFieldExpr};
+    use datafusion::physical_plan::expressions::{
+        like, BinaryExpr, GetIndexedFieldExpr, NthValue, Sum,
+    };
     use datafusion::physical_plan::functions::make_scalar_function;
     use datafusion::physical_plan::projection::ProjectionExec;
+    use datafusion::physical_plan::windows::{
+        BuiltInWindowExpr, PlainAggregateWindowExpr, WindowAggExec,
+    };
     use datafusion::physical_plan::{functions, udaf};
     use datafusion::{
         arrow::{
@@ -1453,7 +1545,7 @@ mod roundtrip_tests {
     use datafusion_common::Result;
     use datafusion_expr::{
         Accumulator, AccumulatorFactoryFunction, AggregateUDF, ReturnTypeFunction,
-        Signature, StateTypeFunction,
+        Signature, StateTypeFunction, WindowFrame, WindowFrameBound,
     };
 
     fn roundtrip_test(exec_plan: Arc<dyn ExecutionPlan>) -> Result<()> {
@@ -1604,6 +1696,77 @@ mod roundtrip_tests {
             )?))?;
         }
         Ok(())
+    }
+
+    #[test]
+    fn roundtrip_window() -> Result<()> {
+        let field_a = Field::new("a", DataType::Int64, false);
+        let field_b = Field::new("b", DataType::Int64, false);
+        let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+
+        let window_frame = WindowFrame {
+            units: datafusion_expr::WindowFrameUnits::Range,
+            start_bound: WindowFrameBound::Preceding(ScalarValue::Int64(None)),
+            end_bound: WindowFrameBound::CurrentRow,
+        };
+
+        let builtin_window_expr = Arc::new(BuiltInWindowExpr::new(
+            Arc::new(NthValue::first(
+                "FIRST_VALUE(a) PARTITION BY [b] ORDER BY [a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW",
+                col("a", &schema)?,
+                DataType::Int64,
+            )),
+            &[col("b", &schema)?],
+            &[PhysicalSortExpr {
+                expr: col("a", &schema)?,
+                options: SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                },
+            }],
+            Arc::new(window_frame),
+        ));
+
+        let plain_aggr_window_expr = Arc::new(PlainAggregateWindowExpr::new(
+            Arc::new(Avg::new(
+                cast(col("b", &schema)?, &schema, DataType::Float64)?,
+                "AVG(b)".to_string(),
+                DataType::Float64,
+            )),
+            &[],
+            &[],
+            Arc::new(WindowFrame::new(false)),
+        ));
+
+        let window_frame = WindowFrame {
+            units: datafusion_expr::WindowFrameUnits::Range,
+            start_bound: WindowFrameBound::CurrentRow,
+            end_bound: WindowFrameBound::Preceding(ScalarValue::Int64(None)),
+        };
+
+        let sliding_aggr_window_expr = Arc::new(SlidingAggregateWindowExpr::new(
+            Arc::new(Sum::new(
+                cast(col("a", &schema)?, &schema, DataType::Float64)?,
+                "SUM(a) RANGE BETWEEN CURRENT ROW AND UNBOUNDED PRECEEDING",
+                DataType::Float64,
+            )),
+            &[],
+            &[],
+            Arc::new(window_frame),
+        ));
+
+        let input = Arc::new(EmptyExec::new(false, schema.clone()));
+
+        roundtrip_test(Arc::new(WindowAggExec::try_new(
+            vec![
+                builtin_window_expr,
+                plain_aggr_window_expr,
+                sliding_aggr_window_expr,
+            ],
+            input,
+            schema.clone(),
+            vec![col("b", &schema)?],
+        )?))
     }
 
     #[test]

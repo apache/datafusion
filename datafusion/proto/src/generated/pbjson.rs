@@ -13834,6 +13834,100 @@ impl<'de> serde::Deserialize<'de> for PartialTableReference {
         deserializer.deserialize_struct("datafusion.PartialTableReference", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for PartiallySortedPartitionSearchMode {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.columns.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.PartiallySortedPartitionSearchMode", len)?;
+        if !self.columns.is_empty() {
+            struct_ser.serialize_field("columns", &self.columns.iter().map(ToString::to_string).collect::<Vec<_>>())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for PartiallySortedPartitionSearchMode {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "columns",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Columns,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "columns" => Ok(GeneratedField::Columns),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = PartiallySortedPartitionSearchMode;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.PartiallySortedPartitionSearchMode")
+            }
+
+            fn visit_map<V>(self, mut map: V) -> std::result::Result<PartiallySortedPartitionSearchMode, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut columns__ = None;
+                while let Some(k) = map.next_key()? {
+                    match k {
+                        GeneratedField::Columns => {
+                            if columns__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("columns"));
+                            }
+                            columns__ = 
+                                Some(map.next_value::<Vec<::pbjson::private::NumberDeserialize<_>>>()?
+                                    .into_iter().map(|x| x.0).collect())
+                            ;
+                        }
+                    }
+                }
+                Ok(PartiallySortedPartitionSearchMode {
+                    columns: columns__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.PartiallySortedPartitionSearchMode", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for PartitionMode {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -17515,15 +17609,39 @@ impl serde::Serialize for PhysicalWindowExprNode {
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;
-        if self.expr.is_some() {
+        if !self.args.is_empty() {
+            len += 1;
+        }
+        if !self.partition_by.is_empty() {
+            len += 1;
+        }
+        if !self.order_by.is_empty() {
+            len += 1;
+        }
+        if self.window_frame.is_some() {
+            len += 1;
+        }
+        if !self.name.is_empty() {
             len += 1;
         }
         if self.window_function.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalWindowExprNode", len)?;
-        if let Some(v) = self.expr.as_ref() {
-            struct_ser.serialize_field("expr", v)?;
+        if !self.args.is_empty() {
+            struct_ser.serialize_field("args", &self.args)?;
+        }
+        if !self.partition_by.is_empty() {
+            struct_ser.serialize_field("partitionBy", &self.partition_by)?;
+        }
+        if !self.order_by.is_empty() {
+            struct_ser.serialize_field("orderBy", &self.order_by)?;
+        }
+        if let Some(v) = self.window_frame.as_ref() {
+            struct_ser.serialize_field("windowFrame", v)?;
+        }
+        if !self.name.is_empty() {
+            struct_ser.serialize_field("name", &self.name)?;
         }
         if let Some(v) = self.window_function.as_ref() {
             match v {
@@ -17549,7 +17667,14 @@ impl<'de> serde::Deserialize<'de> for PhysicalWindowExprNode {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
-            "expr",
+            "args",
+            "partition_by",
+            "partitionBy",
+            "order_by",
+            "orderBy",
+            "window_frame",
+            "windowFrame",
+            "name",
             "aggr_function",
             "aggrFunction",
             "built_in_function",
@@ -17558,7 +17683,11 @@ impl<'de> serde::Deserialize<'de> for PhysicalWindowExprNode {
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
-            Expr,
+            Args,
+            PartitionBy,
+            OrderBy,
+            WindowFrame,
+            Name,
             AggrFunction,
             BuiltInFunction,
         }
@@ -17582,7 +17711,11 @@ impl<'de> serde::Deserialize<'de> for PhysicalWindowExprNode {
                         E: serde::de::Error,
                     {
                         match value {
-                            "expr" => Ok(GeneratedField::Expr),
+                            "args" => Ok(GeneratedField::Args),
+                            "partitionBy" | "partition_by" => Ok(GeneratedField::PartitionBy),
+                            "orderBy" | "order_by" => Ok(GeneratedField::OrderBy),
+                            "windowFrame" | "window_frame" => Ok(GeneratedField::WindowFrame),
+                            "name" => Ok(GeneratedField::Name),
                             "aggrFunction" | "aggr_function" => Ok(GeneratedField::AggrFunction),
                             "builtInFunction" | "built_in_function" => Ok(GeneratedField::BuiltInFunction),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
@@ -17604,15 +17737,43 @@ impl<'de> serde::Deserialize<'de> for PhysicalWindowExprNode {
                 where
                     V: serde::de::MapAccess<'de>,
             {
-                let mut expr__ = None;
+                let mut args__ = None;
+                let mut partition_by__ = None;
+                let mut order_by__ = None;
+                let mut window_frame__ = None;
+                let mut name__ = None;
                 let mut window_function__ = None;
                 while let Some(k) = map.next_key()? {
                     match k {
-                        GeneratedField::Expr => {
-                            if expr__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("expr"));
+                        GeneratedField::Args => {
+                            if args__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("args"));
                             }
-                            expr__ = map.next_value()?;
+                            args__ = Some(map.next_value()?);
+                        }
+                        GeneratedField::PartitionBy => {
+                            if partition_by__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("partitionBy"));
+                            }
+                            partition_by__ = Some(map.next_value()?);
+                        }
+                        GeneratedField::OrderBy => {
+                            if order_by__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("orderBy"));
+                            }
+                            order_by__ = Some(map.next_value()?);
+                        }
+                        GeneratedField::WindowFrame => {
+                            if window_frame__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("windowFrame"));
+                            }
+                            window_frame__ = map.next_value()?;
+                        }
+                        GeneratedField::Name => {
+                            if name__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("name"));
+                            }
+                            name__ = Some(map.next_value()?);
                         }
                         GeneratedField::AggrFunction => {
                             if window_function__.is_some() {
@@ -17629,7 +17790,11 @@ impl<'de> serde::Deserialize<'de> for PhysicalWindowExprNode {
                     }
                 }
                 Ok(PhysicalWindowExprNode {
-                    expr: expr__,
+                    args: args__.unwrap_or_default(),
+                    partition_by: partition_by__.unwrap_or_default(),
+                    order_by: order_by__.unwrap_or_default(),
+                    window_frame: window_frame__,
+                    name: name__.unwrap_or_default(),
                     window_function: window_function__,
                 })
             }
@@ -23374,10 +23539,13 @@ impl serde::Serialize for WindowAggExecNode {
         if !self.window_expr.is_empty() {
             len += 1;
         }
-        if !self.window_expr_name.is_empty() {
+        if self.input_schema.is_some() {
             len += 1;
         }
-        if self.input_schema.is_some() {
+        if !self.partition_keys.is_empty() {
+            len += 1;
+        }
+        if self.partition_search_mode.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.WindowAggExecNode", len)?;
@@ -23387,11 +23555,24 @@ impl serde::Serialize for WindowAggExecNode {
         if !self.window_expr.is_empty() {
             struct_ser.serialize_field("windowExpr", &self.window_expr)?;
         }
-        if !self.window_expr_name.is_empty() {
-            struct_ser.serialize_field("windowExprName", &self.window_expr_name)?;
-        }
         if let Some(v) = self.input_schema.as_ref() {
             struct_ser.serialize_field("inputSchema", v)?;
+        }
+        if !self.partition_keys.is_empty() {
+            struct_ser.serialize_field("partitionKeys", &self.partition_keys)?;
+        }
+        if let Some(v) = self.partition_search_mode.as_ref() {
+            match v {
+                window_agg_exec_node::PartitionSearchMode::Linear(v) => {
+                    struct_ser.serialize_field("linear", v)?;
+                }
+                window_agg_exec_node::PartitionSearchMode::PartiallySorted(v) => {
+                    struct_ser.serialize_field("partiallySorted", v)?;
+                }
+                window_agg_exec_node::PartitionSearchMode::Sorted(v) => {
+                    struct_ser.serialize_field("sorted", v)?;
+                }
+            }
         }
         struct_ser.end()
     }
@@ -23406,18 +23587,25 @@ impl<'de> serde::Deserialize<'de> for WindowAggExecNode {
             "input",
             "window_expr",
             "windowExpr",
-            "window_expr_name",
-            "windowExprName",
             "input_schema",
             "inputSchema",
+            "partition_keys",
+            "partitionKeys",
+            "linear",
+            "partially_sorted",
+            "partiallySorted",
+            "sorted",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Input,
             WindowExpr,
-            WindowExprName,
             InputSchema,
+            PartitionKeys,
+            Linear,
+            PartiallySorted,
+            Sorted,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -23441,8 +23629,11 @@ impl<'de> serde::Deserialize<'de> for WindowAggExecNode {
                         match value {
                             "input" => Ok(GeneratedField::Input),
                             "windowExpr" | "window_expr" => Ok(GeneratedField::WindowExpr),
-                            "windowExprName" | "window_expr_name" => Ok(GeneratedField::WindowExprName),
                             "inputSchema" | "input_schema" => Ok(GeneratedField::InputSchema),
+                            "partitionKeys" | "partition_keys" => Ok(GeneratedField::PartitionKeys),
+                            "linear" => Ok(GeneratedField::Linear),
+                            "partiallySorted" | "partially_sorted" => Ok(GeneratedField::PartiallySorted),
+                            "sorted" => Ok(GeneratedField::Sorted),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -23464,8 +23655,9 @@ impl<'de> serde::Deserialize<'de> for WindowAggExecNode {
             {
                 let mut input__ = None;
                 let mut window_expr__ = None;
-                let mut window_expr_name__ = None;
                 let mut input_schema__ = None;
+                let mut partition_keys__ = None;
+                let mut partition_search_mode__ = None;
                 while let Some(k) = map.next_key()? {
                     match k {
                         GeneratedField::Input => {
@@ -23480,25 +23672,47 @@ impl<'de> serde::Deserialize<'de> for WindowAggExecNode {
                             }
                             window_expr__ = Some(map.next_value()?);
                         }
-                        GeneratedField::WindowExprName => {
-                            if window_expr_name__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("windowExprName"));
-                            }
-                            window_expr_name__ = Some(map.next_value()?);
-                        }
                         GeneratedField::InputSchema => {
                             if input_schema__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("inputSchema"));
                             }
                             input_schema__ = map.next_value()?;
                         }
+                        GeneratedField::PartitionKeys => {
+                            if partition_keys__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("partitionKeys"));
+                            }
+                            partition_keys__ = Some(map.next_value()?);
+                        }
+                        GeneratedField::Linear => {
+                            if partition_search_mode__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("linear"));
+                            }
+                            partition_search_mode__ = map.next_value::<::std::option::Option<_>>()?.map(window_agg_exec_node::PartitionSearchMode::Linear)
+;
+                        }
+                        GeneratedField::PartiallySorted => {
+                            if partition_search_mode__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("partiallySorted"));
+                            }
+                            partition_search_mode__ = map.next_value::<::std::option::Option<_>>()?.map(window_agg_exec_node::PartitionSearchMode::PartiallySorted)
+;
+                        }
+                        GeneratedField::Sorted => {
+                            if partition_search_mode__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("sorted"));
+                            }
+                            partition_search_mode__ = map.next_value::<::std::option::Option<_>>()?.map(window_agg_exec_node::PartitionSearchMode::Sorted)
+;
+                        }
                     }
                 }
                 Ok(WindowAggExecNode {
                     input: input__,
                     window_expr: window_expr__.unwrap_or_default(),
-                    window_expr_name: window_expr_name__.unwrap_or_default(),
                     input_schema: input_schema__,
+                    partition_keys: partition_keys__.unwrap_or_default(),
+                    partition_search_mode: partition_search_mode__,
                 })
             }
         }
