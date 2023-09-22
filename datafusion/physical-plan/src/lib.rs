@@ -23,8 +23,8 @@ use self::metrics::MetricsSet;
 use self::{
     coalesce_partitions::CoalescePartitionsExec, display::DisplayableExecutionPlan,
 };
-use datafusion_common::Result;
 pub use datafusion_common::{internal_err, ColumnStatistics, Statistics};
+use datafusion_common::{plan_err, Result};
 use datafusion_physical_expr::PhysicalSortExpr;
 pub use visitor::{accept, visit_execution_plan, ExecutionPlanVisitor};
 
@@ -74,7 +74,11 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// If the plan does not support pipelining, but its input(s) are
     /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, _children: &[bool]) -> Result<bool> {
-        Ok(false)
+        if _children.iter().any(|&x| x) {
+            plan_err!("Plan does not support infinite stream from its children")
+        } else {
+            Ok(false)
+        }
     }
 
     /// If the output of this operator within each partition is sorted,

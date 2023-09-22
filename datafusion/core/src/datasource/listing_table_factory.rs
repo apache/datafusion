@@ -30,6 +30,7 @@ use datafusion_expr::CreateExternalTable;
 use crate::datasource::file_format::arrow::ArrowFormat;
 use crate::datasource::file_format::avro::AvroFormat;
 use crate::datasource::file_format::csv::CsvFormat;
+use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::json::JsonFormat;
 use crate::datasource::file_format::parquet::ParquetFormat;
 use crate::datasource::file_format::FileFormat;
@@ -39,7 +40,7 @@ use crate::datasource::listing::{
 use crate::datasource::provider::TableProviderFactory;
 use crate::datasource::TableProvider;
 use crate::execution::context::SessionState;
-use datafusion_common::{FileCompressionType, FileType};
+use datafusion_common::FileType;
 
 use super::listing::ListingTableInsertMode;
 
