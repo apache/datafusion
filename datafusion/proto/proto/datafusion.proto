@@ -1183,7 +1183,11 @@ message PhysicalWindowExprNode {
     BuiltInWindowFunction built_in_function = 2;
     // udaf = 3
   }
-  PhysicalExprNode expr = 4;
+  repeated PhysicalExprNode args = 4;
+  repeated PhysicalExprNode partition_by = 5;
+  repeated PhysicalSortExprNode order_by = 6;
+  WindowFrame window_frame = 7;
+  string name = 8;
 }
 
 message PhysicalIsNull {
@@ -1388,11 +1392,21 @@ enum AggregateMode {
   SINGLE_PARTITIONED = 4;
 }
 
+message PartiallySortedPartitionSearchMode {
+  repeated uint64 columns = 6;
+}
+
 message WindowAggExecNode {
   PhysicalPlanNode input = 1;
-  repeated PhysicalExprNode window_expr = 2;
-  repeated string window_expr_name = 3;
+  repeated PhysicalWindowExprNode window_expr = 2;
   Schema input_schema = 4;
+  repeated PhysicalExprNode partition_keys = 5;
+  // Set optional to `None` for `BoundedWindowAggExec`.
+  oneof partition_search_mode {
+    EmptyMessage linear = 7;
+    PartiallySortedPartitionSearchMode partially_sorted = 8;
+    EmptyMessage sorted = 9;
+  }
 }
 
 message MaybeFilter {
