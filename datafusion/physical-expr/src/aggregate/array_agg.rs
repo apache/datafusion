@@ -144,8 +144,6 @@ impl Accumulator for ArrayAggAccumulator {
             }
         });
 
-        
-
         Ok(())
     }
 
@@ -163,7 +161,7 @@ impl Accumulator for ArrayAggAccumulator {
             let arr = ScalarValue::list_to_array(&[], &self.datatype);
             return Ok(ScalarValue::ListArr(arr));
         }
-        
+
         let concated_array = arrow::compute::concat(&element_arrays)?;
         let list_array = ScalarValue::wrap_into_list_array(concated_array);
 

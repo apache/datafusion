@@ -604,8 +604,6 @@ impl TDigest {
             v => panic!("invalid max_size type {v:?}"),
         };
 
-
-
         let centroids: Vec<_> = match &state[5] {
             ScalarValue::ListArr(arr) => {
                 let list_array = as_list_array(arr);

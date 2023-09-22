@@ -1365,11 +1365,10 @@ impl ScalarValue {
 
                 // Ensure we get listArr here
                 // vec [ i16arr, i16arr, i16arr, ... ] =
-                let list_array =
-                    ScalarValue::iter_to_array_list_v2(scalars.clone())?;
+                let list_array = ScalarValue::iter_to_array_list_v2(scalars.clone())?;
                 Arc::new(list_array)
             }
-            
+
             _ => {
                 return Self::iter_to_array(scalars);
             }
@@ -1842,69 +1841,36 @@ impl ScalarValue {
 
     // V3 is the version that arguments are values and field instead of ScalarValue::List
     fn iter_to_array_list_v3(
-        values: Option<Vec<ScalarValue>>,
+        values: &[ScalarValue],
         data_type: &DataType,
-        to_type: DataType,
     ) -> Result<GenericListArray<i32>> {
-        let mut offsets = Int32Array::builder(0);
-        offsets.append_value(0);
-
         let mut elements: Vec<ArrayRef> = Vec::new();
-        let mut valid = BooleanBufferBuilder::new(0);
-        let mut flat_len = 0i32;
+        let mut offsets = vec![];
 
-        match values {
-            Some(values) => {
-                let element_array = if !values.is_empty() {
-                    // TODO(jayzhan): convert this to no old list version
-                    // ScalarValue::iter_to_array(values)?
-
-                    // println!("(iter_to_array_list_v3) values: {:?}", values);
-                    let arr = ScalarValue::iter_to_array_v3(values)?;
-                    // println!("(iter_to_array_list_v3) arr: {:?}", arr);
-                    arr
-                } else {
-                    arrow::array::new_empty_array(data_type)
-                };
-
-                // Add new offset index
-                flat_len += element_array.len() as i32;
-                offsets.append_value(flat_len);
-
-                elements.push(element_array);
-
-                // Element is valid
-                valid.append(true);
-            }
-            None => {
-                // Repeat previous offset index
-                offsets.append_value(flat_len);
-
-                // Element is null
-                valid.append(false);
-            }
+        if values.is_empty() {
+            offsets.push(0);
+        }
+        else {
+            let arr = ScalarValue::iter_to_array_v3(values.to_vec())?;
+            offsets.push(arr.len());
+            elements.push(arr);
         }
 
         // Concatenate element arrays to create single flat array
-        let element_arrays: Vec<&dyn Array> =
-            elements.iter().map(|a| a.as_ref()).collect();
-        let flat_array = match arrow::compute::concat(&element_arrays) {
-            Ok(flat_array) => flat_array,
-            Err(err) => return Err(DataFusionError::ArrowError(err)),
+        let flat_array = if elements.is_empty() {
+            new_empty_array(data_type)
+        } else {
+            let element_arrays: Vec<&dyn Array> = elements.iter().map(|a| a.as_ref()).collect();
+            arrow::compute::concat(&element_arrays)?
         };
 
-        // Build ListArray using ArrayData so we can specify a flat inner array, and offset indices
-        let offsets_array = offsets.finish();
-        let buffer = valid.finish();
-        let child_data = flat_array.to_data();
+        let list_array = ListArray::new(
+            Arc::new(Field::new("item", flat_array.data_type().to_owned(), true)),
+            OffsetBuffer::<i32>::from_lengths(offsets),
+            flat_array,
+            None,
+        );
 
-        let array_data = ArrayDataBuilder::new(to_type)
-            .len(offsets_array.len() - 1)
-            .nulls(Some(NullBuffer::new(buffer)))
-            .add_buffer(offsets_array.values().inner().clone())
-            .add_child_data(child_data);
-
-        let list_array = ListArray::from(array_data.build()?);
         Ok(list_array)
     }
 
@@ -2102,17 +2068,7 @@ impl ScalarValue {
                 build_timestamp_list!(unit.clone(), tz.clone(), values, 1)
             }
             DataType::List(_) | DataType::Struct(_) => {
-                let values = &Some(values.to_vec());
-                ScalarValue::iter_to_array_list_v3(
-                    values.clone(),
-                    data_type,
-                    DataType::List(Arc::new(Field::new(
-                        "item",
-                        data_type.to_owned(),
-                        true,
-                    ))),
-                )
-                .unwrap()
+                ScalarValue::iter_to_array_list_v3(values, data_type).unwrap()
             }
 
             DataType::Decimal128(precision, scale) => {
@@ -2549,7 +2505,10 @@ impl ScalarValue {
                             .map(|i| ScalarValue::try_from_array(&nested_array, i))
                             .collect::<Result<Vec<_>>>()?;
 
-                        let arr = ScalarValue::list_to_array(&scalar_vec, nested_array.data_type());
+                        let arr = ScalarValue::list_to_array(
+                            &scalar_vec,
+                            nested_array.data_type(),
+                        );
                         ScalarValue::ListArr(arr)
                     }
                 }
