@@ -28,7 +28,7 @@ use std::usize;
 use crate::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder};
 use crate::SchemaRef;
 use crate::{
-    ColumnStatistics, EquivalenceProperties, ExecutionPlan, Partitioning, Statistics,
+    ColumnStatistics, ExecutionPlan, Partitioning, Statistics,
 };
 
 use arrow::array::{
@@ -45,7 +45,7 @@ use datafusion_common::{
 };
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{
-    add_offset_to_lex_ordering, EquivalentClass, LexOrdering, LexOrderingRef,
+    add_offset_to_lex_ordering, LexOrdering, LexOrderingRef,
     OrderingEquivalenceProperties, OrderingEquivalentClass, PhysicalExpr,
     PhysicalSortExpr,
 };
@@ -230,57 +230,57 @@ pub fn calculate_join_output_ordering(
     Ok((!output_ordering.is_empty()).then_some(output_ordering))
 }
 
-/// Combine equivalence properties of the given join inputs.
-pub fn combine_join_equivalence_properties(
-    join_type: JoinType,
-    left_properties: EquivalenceProperties,
-    right_properties: EquivalenceProperties,
-    left_columns_len: usize,
-    on: &[(Column, Column)],
-    schema: SchemaRef,
-) -> EquivalenceProperties {
-    let mut new_properties = EquivalenceProperties::new(schema);
-    match join_type {
-        JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
-            new_properties.extend(left_properties.classes().to_vec());
-            let new_right_properties = right_properties
-                .classes()
-                .iter()
-                .map(|prop| {
-                    let new_head = Column::new(
-                        prop.head().name(),
-                        left_columns_len + prop.head().index(),
-                    );
-                    let new_others = prop
-                        .others()
-                        .iter()
-                        .map(|col| {
-                            Column::new(col.name(), left_columns_len + col.index())
-                        })
-                        .collect::<Vec<_>>();
-                    EquivalentClass::new(new_head, new_others)
-                })
-                .collect::<Vec<_>>();
-
-            new_properties.extend(new_right_properties);
-        }
-        JoinType::LeftSemi | JoinType::LeftAnti => {
-            new_properties.extend(left_properties.classes().to_vec())
-        }
-        JoinType::RightSemi | JoinType::RightAnti => {
-            new_properties.extend(right_properties.classes().to_vec())
-        }
-    }
-
-    if join_type == JoinType::Inner {
-        on.iter().for_each(|(column1, column2)| {
-            let new_column2 =
-                Column::new(column2.name(), left_columns_len + column2.index());
-            new_properties.add_equal_conditions((column1, &new_column2))
-        })
-    }
-    new_properties
-}
+// /// Combine equivalence properties of the given join inputs.
+// pub fn combine_join_equivalence_properties(
+//     join_type: JoinType,
+//     left_properties: EquivalenceProperties,
+//     right_properties: EquivalenceProperties,
+//     left_columns_len: usize,
+//     on: &[(Column, Column)],
+//     schema: SchemaRef,
+// ) -> EquivalenceProperties {
+//     let mut new_properties = EquivalenceProperties::new(schema);
+//     match join_type {
+//         JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
+//             new_properties.extend(left_properties.classes().to_vec());
+//             let new_right_properties = right_properties
+//                 .classes()
+//                 .iter()
+//                 .map(|prop| {
+//                     let new_head = Column::new(
+//                         prop.head().name(),
+//                         left_columns_len + prop.head().index(),
+//                     );
+//                     let new_others = prop
+//                         .others()
+//                         .iter()
+//                         .map(|col| {
+//                             Column::new(col.name(), left_columns_len + col.index())
+//                         })
+//                         .collect::<Vec<_>>();
+//                     EquivalentClass::new(new_head, new_others)
+//                 })
+//                 .collect::<Vec<_>>();
+//
+//             new_properties.extend(new_right_properties);
+//         }
+//         JoinType::LeftSemi | JoinType::LeftAnti => {
+//             new_properties.extend(left_properties.classes().to_vec())
+//         }
+//         JoinType::RightSemi | JoinType::RightAnti => {
+//             new_properties.extend(right_properties.classes().to_vec())
+//         }
+//     }
+//
+//     if join_type == JoinType::Inner {
+//         on.iter().for_each(|(column1, column2)| {
+//             let new_column2 =
+//                 Column::new(column2.name(), left_columns_len + column2.index());
+//             new_properties.add_equal_conditions((column1, &new_column2))
+//         })
+//     }
+//     new_properties
+// }
 
 // /// Combine equivalence properties of the given join inputs.
 // pub fn combine_join_equivalence_properties2(
@@ -333,32 +333,32 @@ pub fn combine_join_equivalence_properties(
 //     new_properties
 // }
 
-/// Calculate equivalence properties for the given cross join operation.
-pub fn cross_join_equivalence_properties(
-    left_properties: EquivalenceProperties,
-    right_properties: EquivalenceProperties,
-    left_columns_len: usize,
-    schema: SchemaRef,
-) -> EquivalenceProperties {
-    let mut new_properties = EquivalenceProperties::new(schema);
-    new_properties.extend(left_properties.classes().to_vec());
-    let new_right_properties = right_properties
-        .classes()
-        .iter()
-        .map(|prop| {
-            let new_head =
-                Column::new(prop.head().name(), left_columns_len + prop.head().index());
-            let new_others = prop
-                .others()
-                .iter()
-                .map(|col| Column::new(col.name(), left_columns_len + col.index()))
-                .collect::<Vec<_>>();
-            EquivalentClass::new(new_head, new_others)
-        })
-        .collect::<Vec<_>>();
-    new_properties.extend(new_right_properties);
-    new_properties
-}
+// /// Calculate equivalence properties for the given cross join operation.
+// pub fn cross_join_equivalence_properties(
+//     left_properties: EquivalenceProperties,
+//     right_properties: EquivalenceProperties,
+//     left_columns_len: usize,
+//     schema: SchemaRef,
+// ) -> EquivalenceProperties {
+//     let mut new_properties = EquivalenceProperties::new(schema);
+//     new_properties.extend(left_properties.classes().to_vec());
+//     let new_right_properties = right_properties
+//         .classes()
+//         .iter()
+//         .map(|prop| {
+//             let new_head =
+//                 Column::new(prop.head().name(), left_columns_len + prop.head().index());
+//             let new_others = prop
+//                 .others()
+//                 .iter()
+//                 .map(|col| Column::new(col.name(), left_columns_len + col.index()))
+//                 .collect::<Vec<_>>();
+//             EquivalentClass::new(new_head, new_others)
+//         })
+//         .collect::<Vec<_>>();
+//     new_properties.extend(new_right_properties);
+//     new_properties
+// }
 
 /// Update right table ordering equivalences so that:
 /// - They point to valid indices at the output of the join schema, and

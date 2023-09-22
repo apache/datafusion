@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::equivalence::{EquivalenceProperties, OrderingEquivalenceProperties};
+use crate::equivalence::{ OrderingEquivalenceProperties};
 use crate::expressions::{BinaryExpr, Column, UnKnownColumn};
 use crate::sort_properties::{ExprOrdering, SortProperties};
 use crate::update_ordering;

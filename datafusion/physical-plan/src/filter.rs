@@ -30,7 +30,7 @@ use super::{
 
 use crate::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
-    Column, DisplayFormatType, EquivalenceProperties, ExecutionPlan, Partitioning,
+    Column, DisplayFormatType,  ExecutionPlan, Partitioning,
 };
 
 use arrow::compute::filter_record_batch;

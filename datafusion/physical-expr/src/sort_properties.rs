@@ -20,7 +20,7 @@ use std::{ops::Neg, sync::Arc};
 use crate::expressions::Column;
 use crate::utils::get_indices_of_matching_sort_exprs_with_order_eq;
 use crate::{
-    EquivalenceProperties, OrderingEquivalenceProperties, PhysicalExpr, PhysicalSortExpr,
+    OrderingEquivalenceProperties, PhysicalExpr, PhysicalSortExpr,
 };
 
 use arrow_schema::SortOptions;

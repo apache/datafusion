@@ -330,7 +330,7 @@ use datafusion_physical_expr::expressions::Column;
 pub use datafusion_physical_expr::window::WindowExpr;
 pub use datafusion_physical_expr::{AggregateExpr, PhysicalExpr};
 pub use datafusion_physical_expr::{Distribution, Partitioning};
-use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortRequirement};
+use datafusion_physical_expr::{ PhysicalSortRequirement};
 
 pub mod aggregates;
 pub mod analyze;

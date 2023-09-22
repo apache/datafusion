@@ -35,166 +35,166 @@ use std::hash::Hash;
 use std::ops::Range;
 use std::sync::Arc;
 
-/// Represents a collection of [`EquivalentClass`] (equivalences
-/// between columns in relations)
-///
-/// This is used to represent:
-///
-/// 1. Equality conditions (like `A=B`), when `T` = [`Column`]
-#[derive(Debug, Clone)]
-pub struct EquivalenceProperties {
-    classes: Vec<EquivalentClass<Column>>,
-    schema: SchemaRef,
-}
-
-impl EquivalenceProperties {
-    pub fn new(schema: SchemaRef) -> Self {
-        EquivalenceProperties {
-            classes: vec![],
-            schema,
-        }
-    }
-
-    /// return the set of equivalences
-    pub fn classes(&self) -> &[EquivalentClass<Column>] {
-        &self.classes
-    }
-
-    pub fn schema(&self) -> SchemaRef {
-        self.schema.clone()
-    }
-
-    /// Add the [`EquivalentClass`] from `iter` to this list
-    pub fn extend<I: IntoIterator<Item = EquivalentClass<Column>>>(&mut self, iter: I) {
-        for ec in iter {
-            self.classes.push(ec)
-        }
-    }
-
-    /// Adds new equal conditions into the EquivalenceProperties. New equal
-    /// conditions usually come from equality predicates in a join/filter.
-    pub fn add_equal_conditions(&mut self, new_conditions: (&Column, &Column)) {
-        let mut idx1: Option<usize> = None;
-        let mut idx2: Option<usize> = None;
-        for (idx, class) in self.classes.iter_mut().enumerate() {
-            let contains_first = class.contains(new_conditions.0);
-            let contains_second = class.contains(new_conditions.1);
-            match (contains_first, contains_second) {
-                (true, false) => {
-                    class.insert(new_conditions.1.clone());
-                    idx1 = Some(idx);
-                }
-                (false, true) => {
-                    class.insert(new_conditions.0.clone());
-                    idx2 = Some(idx);
-                }
-                (true, true) => {
-                    idx1 = Some(idx);
-                    idx2 = Some(idx);
-                    break;
-                }
-                (false, false) => {}
-            }
-        }
-
-        match (idx1, idx2) {
-            (Some(idx_1), Some(idx_2)) if idx_1 != idx_2 => {
-                // need to merge the two existing EquivalentClasses
-                let second_eq_class = self.classes.get(idx_2).unwrap().clone();
-                let first_eq_class = self.classes.get_mut(idx_1).unwrap();
-                for prop in second_eq_class.iter() {
-                    if !first_eq_class.contains(prop) {
-                        first_eq_class.insert(prop.clone());
-                    }
-                }
-                self.classes.remove(idx_2);
-            }
-            (None, None) => {
-                // adding new pairs
-                self.classes.push(EquivalentClass::<Column>::new(
-                    new_conditions.0.clone(),
-                    vec![new_conditions.1.clone()],
-                ));
-            }
-            _ => {}
-        }
-    }
-
-    /// Normalizes physical expression according to `EquivalentClass`es inside `self.classes`.
-    /// expression is replaced with `EquivalentClass::head` expression if it is among `EquivalentClass::others`.
-    pub fn normalize_expr(&self, expr: Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalExpr> {
-        expr.clone()
-            .transform(&|expr| {
-                let normalized_form =
-                    expr.as_any().downcast_ref::<Column>().and_then(|column| {
-                        for class in &self.classes {
-                            if class.contains(column) {
-                                return Some(Arc::new(class.head().clone()) as _);
-                            }
-                        }
-                        None
-                    });
-                Ok(if let Some(normalized_form) = normalized_form {
-                    Transformed::Yes(normalized_form)
-                } else {
-                    Transformed::No(expr)
-                })
-            })
-            .unwrap_or(expr)
-    }
-
-    /// This function applies the \[`normalize_expr`]
-    /// function for all expression in `exprs` and returns a vector of
-    /// normalized physical expressions.
-    pub fn normalize_exprs(
-        &self,
-        exprs: &[Arc<dyn PhysicalExpr>],
-    ) -> Vec<Arc<dyn PhysicalExpr>> {
-        exprs
-            .iter()
-            .map(|expr| self.normalize_expr(expr.clone()))
-            .collect::<Vec<_>>()
-    }
-
-    /// This function normalizes `sort_requirement` according to `EquivalenceClasses` in the `self`.
-    /// If the given sort requirement doesn't belong to equivalence set inside
-    /// `self`, it returns `sort_requirement` as is.
-    pub fn normalize_sort_requirement(
-        &self,
-        mut sort_requirement: PhysicalSortRequirement,
-    ) -> PhysicalSortRequirement {
-        sort_requirement.expr = self.normalize_expr(sort_requirement.expr);
-        sort_requirement
-    }
-
-    /// This function applies the \[`normalize_sort_requirement`]
-    /// function for all sort requirements in `sort_reqs` and returns a vector of
-    /// normalized sort expressions.
-    pub fn normalize_sort_requirements(
-        &self,
-        sort_reqs: &[PhysicalSortRequirement],
-    ) -> Vec<PhysicalSortRequirement> {
-        let normalized_sort_reqs = sort_reqs
-            .iter()
-            .map(|sort_req| self.normalize_sort_requirement(sort_req.clone()))
-            .collect::<Vec<_>>();
-        collapse_vec(normalized_sort_reqs)
-    }
-
-    /// Similar to the \[`normalize_sort_requirements`] this function normalizes
-    /// sort expressions in `sort_exprs` and returns a vector of
-    /// normalized sort expressions.
-    pub fn normalize_sort_exprs(
-        &self,
-        sort_exprs: &[PhysicalSortExpr],
-    ) -> Vec<PhysicalSortExpr> {
-        let sort_requirements =
-            PhysicalSortRequirement::from_sort_exprs(sort_exprs.iter());
-        let normalized_sort_requirement =
-            self.normalize_sort_requirements(&sort_requirements);
-        PhysicalSortRequirement::to_sort_exprs(normalized_sort_requirement)
-    }
-}
+// /// Represents a collection of [`EquivalentClass`] (equivalences
+// /// between columns in relations)
+// ///
+// /// This is used to represent:
+// ///
+// /// 1. Equality conditions (like `A=B`), when `T` = [`Column`]
+// #[derive(Debug, Clone)]
+// pub struct EquivalenceProperties {
+//     classes: Vec<EquivalentClass<Column>>,
+//     schema: SchemaRef,
+// }
+//
+// impl EquivalenceProperties {
+//     pub fn new(schema: SchemaRef) -> Self {
+//         EquivalenceProperties {
+//             classes: vec![],
+//             schema,
+//         }
+//     }
+//
+//     /// return the set of equivalences
+//     pub fn classes(&self) -> &[EquivalentClass<Column>] {
+//         &self.classes
+//     }
+//
+//     pub fn schema(&self) -> SchemaRef {
+//         self.schema.clone()
+//     }
+//
+//     /// Add the [`EquivalentClass`] from `iter` to this list
+//     pub fn extend<I: IntoIterator<Item = EquivalentClass<Column>>>(&mut self, iter: I) {
+//         for ec in iter {
+//             self.classes.push(ec)
+//         }
+//     }
+//
+//     /// Adds new equal conditions into the EquivalenceProperties. New equal
+//     /// conditions usually come from equality predicates in a join/filter.
+//     pub fn add_equal_conditions(&mut self, new_conditions: (&Column, &Column)) {
+//         let mut idx1: Option<usize> = None;
+//         let mut idx2: Option<usize> = None;
+//         for (idx, class) in self.classes.iter_mut().enumerate() {
+//             let contains_first = class.contains(new_conditions.0);
+//             let contains_second = class.contains(new_conditions.1);
+//             match (contains_first, contains_second) {
+//                 (true, false) => {
+//                     class.insert(new_conditions.1.clone());
+//                     idx1 = Some(idx);
+//                 }
+//                 (false, true) => {
+//                     class.insert(new_conditions.0.clone());
+//                     idx2 = Some(idx);
+//                 }
+//                 (true, true) => {
+//                     idx1 = Some(idx);
+//                     idx2 = Some(idx);
+//                     break;
+//                 }
+//                 (false, false) => {}
+//             }
+//         }
+//
+//         match (idx1, idx2) {
+//             (Some(idx_1), Some(idx_2)) if idx_1 != idx_2 => {
+//                 // need to merge the two existing EquivalentClasses
+//                 let second_eq_class = self.classes.get(idx_2).unwrap().clone();
+//                 let first_eq_class = self.classes.get_mut(idx_1).unwrap();
+//                 for prop in second_eq_class.iter() {
+//                     if !first_eq_class.contains(prop) {
+//                         first_eq_class.insert(prop.clone());
+//                     }
+//                 }
+//                 self.classes.remove(idx_2);
+//             }
+//             (None, None) => {
+//                 // adding new pairs
+//                 self.classes.push(EquivalentClass::<Column>::new(
+//                     new_conditions.0.clone(),
+//                     vec![new_conditions.1.clone()],
+//                 ));
+//             }
+//             _ => {}
+//         }
+//     }
+//
+//     /// Normalizes physical expression according to `EquivalentClass`es inside `self.classes`.
+//     /// expression is replaced with `EquivalentClass::head` expression if it is among `EquivalentClass::others`.
+//     pub fn normalize_expr(&self, expr: Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalExpr> {
+//         expr.clone()
+//             .transform(&|expr| {
+//                 let normalized_form =
+//                     expr.as_any().downcast_ref::<Column>().and_then(|column| {
+//                         for class in &self.classes {
+//                             if class.contains(column) {
+//                                 return Some(Arc::new(class.head().clone()) as _);
+//                             }
+//                         }
+//                         None
+//                     });
+//                 Ok(if let Some(normalized_form) = normalized_form {
+//                     Transformed::Yes(normalized_form)
+//                 } else {
+//                     Transformed::No(expr)
+//                 })
+//             })
+//             .unwrap_or(expr)
+//     }
+//
+//     /// This function applies the \[`normalize_expr`]
+//     /// function for all expression in `exprs` and returns a vector of
+//     /// normalized physical expressions.
+//     pub fn normalize_exprs(
+//         &self,
+//         exprs: &[Arc<dyn PhysicalExpr>],
+//     ) -> Vec<Arc<dyn PhysicalExpr>> {
+//         exprs
+//             .iter()
+//             .map(|expr| self.normalize_expr(expr.clone()))
+//             .collect::<Vec<_>>()
+//     }
+//
+//     /// This function normalizes `sort_requirement` according to `EquivalenceClasses` in the `self`.
+//     /// If the given sort requirement doesn't belong to equivalence set inside
+//     /// `self`, it returns `sort_requirement` as is.
+//     pub fn normalize_sort_requirement(
+//         &self,
+//         mut sort_requirement: PhysicalSortRequirement,
+//     ) -> PhysicalSortRequirement {
+//         sort_requirement.expr = self.normalize_expr(sort_requirement.expr);
+//         sort_requirement
+//     }
+//
+//     /// This function applies the \[`normalize_sort_requirement`]
+//     /// function for all sort requirements in `sort_reqs` and returns a vector of
+//     /// normalized sort expressions.
+//     pub fn normalize_sort_requirements(
+//         &self,
+//         sort_reqs: &[PhysicalSortRequirement],
+//     ) -> Vec<PhysicalSortRequirement> {
+//         let normalized_sort_reqs = sort_reqs
+//             .iter()
+//             .map(|sort_req| self.normalize_sort_requirement(sort_req.clone()))
+//             .collect::<Vec<_>>();
+//         collapse_vec(normalized_sort_reqs)
+//     }
+//
+//     /// Similar to the \[`normalize_sort_requirements`] this function normalizes
+//     /// sort expressions in `sort_exprs` and returns a vector of
+//     /// normalized sort expressions.
+//     pub fn normalize_sort_exprs(
+//         &self,
+//         sort_exprs: &[PhysicalSortExpr],
+//     ) -> Vec<PhysicalSortExpr> {
+//         let sort_requirements =
+//             PhysicalSortRequirement::from_sort_exprs(sort_exprs.iter());
+//         let normalized_sort_requirement =
+//             self.normalize_sort_requirements(&sort_requirements);
+//         PhysicalSortRequirement::to_sort_exprs(normalized_sort_requirement)
+//     }
+// }
 
 /// `OrderingEquivalenceProperties` keeps track of columns that describe the
 /// global ordering of the schema. These columns are not necessarily same; e.g.
@@ -893,23 +893,23 @@ impl OrderingEquivalentClass {
         Ok(OrderingEquivalentClass::new(head, others))
     }
 
-    /// This function normalizes `OrderingEquivalenceProperties` according to `eq_properties`.
-    /// More explicitly, it makes sure that expressions in `oeq_class` are head entries
-    /// in `eq_properties`, replacing any non-head entries with head entries if necessary.
-    pub fn normalize_with_equivalence_properties(
-        &self,
-        eq_properties: &EquivalenceProperties,
-    ) -> OrderingEquivalentClass {
-        let head = eq_properties.normalize_sort_exprs(self.head());
-
-        let others = self
-            .others()
-            .iter()
-            .map(|other| eq_properties.normalize_sort_exprs(other))
-            .collect();
-
-        EquivalentClass::new(head, others)
-    }
+    // /// This function normalizes `OrderingEquivalenceProperties` according to `eq_properties`.
+    // /// More explicitly, it makes sure that expressions in `oeq_class` are head entries
+    // /// in `eq_properties`, replacing any non-head entries with head entries if necessary.
+    // pub fn normalize_with_equivalence_properties(
+    //     &self,
+    //     eq_properties: &EquivalenceProperties,
+    // ) -> OrderingEquivalentClass {
+    //     let head = eq_properties.normalize_sort_exprs(self.head());
+    //
+    //     let others = self
+    //         .others()
+    //         .iter()
+    //         .map(|other| eq_properties.normalize_sort_exprs(other))
+    //         .collect();
+    //
+    //     EquivalentClass::new(head, others)
+    // }
 
     /// Prefix with existing ordering.
     pub fn prefix_ordering_equivalent_class_with_existing_ordering(
@@ -970,7 +970,7 @@ impl OrderingEquivalentClass {
 /// This is a builder object facilitating incremental construction
 /// for ordering equivalences.
 pub struct OrderingEquivalenceBuilder {
-    eq_properties: EquivalenceProperties,
+    // eq_properties: EquivalenceProperties,
     ordering_eq_properties: OrderingEquivalenceProperties,
     existing_ordering: Vec<PhysicalSortExpr>,
     schema: SchemaRef,
@@ -978,10 +978,10 @@ pub struct OrderingEquivalenceBuilder {
 
 impl OrderingEquivalenceBuilder {
     pub fn new(schema: SchemaRef) -> Self {
-        let eq_properties = EquivalenceProperties::new(schema.clone());
+        // let eq_properties = EquivalenceProperties::new(schema.clone());
         let ordering_eq_properties = OrderingEquivalenceProperties::new(schema.clone());
         Self {
-            eq_properties,
+            // eq_properties,
             ordering_eq_properties,
             existing_ordering: vec![],
             schema,
@@ -1007,10 +1007,10 @@ impl OrderingEquivalenceBuilder {
         self
     }
 
-    pub fn with_equivalences(mut self, new_eq_properties: EquivalenceProperties) -> Self {
-        self.eq_properties = new_eq_properties;
-        self
-    }
+    // pub fn with_equivalences(mut self, new_eq_properties: EquivalenceProperties) -> Self {
+    //     self.eq_properties = new_eq_properties;
+    //     self
+    // }
 
     pub fn add_equal_conditions(
         &mut self,
@@ -1019,9 +1019,9 @@ impl OrderingEquivalenceBuilder {
         let mut normalized_out_ordering = vec![];
         for item in &self.existing_ordering {
             // To account for ordering equivalences, first normalize the expression:
-            let normalized = self.eq_properties.normalize_expr(item.expr.clone());
+            // let normalized = self.eq_properties.normalize_expr(item.expr.clone());
             normalized_out_ordering.push(PhysicalSortExpr {
-                expr: normalized,
+                expr: item.expr.clone(),
                 options: item.options,
             });
         }
@@ -1065,65 +1065,65 @@ fn get_alias_column(
         .find_map(|(column, columns)| column.eq(col).then(|| columns[0].clone()))
 }
 
-/// This function applies the given projection to the given equivalence
-/// properties to compute the resulting (projected) equivalence properties; e.g.
-/// 1) Adding an alias, which can introduce additional equivalence properties,
-///    as in Projection(a, a as a1, a as a2).
-/// 2) Truncate the [`EquivalentClass`]es that are not in the output schema.
-pub fn project_equivalence_properties(
-    input_eq: EquivalenceProperties,
-    alias_map: &HashMap<Column, Vec<Column>>,
-    output_eq: &mut EquivalenceProperties,
-) {
-    // Get schema and fields of projection output
-    let schema = output_eq.schema();
-    let fields = schema.fields();
-
-    let mut eq_classes = input_eq.classes().to_vec();
-    for (column, columns) in alias_map {
-        let mut find_match = false;
-        for class in eq_classes.iter_mut() {
-            // If `self.head` is invalidated in the new schema, update head
-            // with this change `self.head` is not randomly assigned by one of the entries from `self.others`
-            if is_column_invalid_in_new_schema(&class.head, fields) {
-                if let Some(alias_col) = get_alias_column(&class.head, alias_map) {
-                    class.head = alias_col;
-                }
-            }
-            if class.contains(column) {
-                for col in columns {
-                    class.insert(col.clone());
-                }
-                find_match = true;
-                break;
-            }
-        }
-        if !find_match {
-            eq_classes.push(EquivalentClass::new(column.clone(), columns.clone()));
-        }
-    }
-
-    // Prune columns that are no longer in the schema from equivalences.
-    for class in eq_classes.iter_mut() {
-        let columns_to_remove = class
-            .iter()
-            .filter(|column| is_column_invalid_in_new_schema(column, fields))
-            .cloned()
-            .collect::<Vec<_>>();
-        for column in columns_to_remove {
-            class.remove(&column);
-        }
-    }
-
-    eq_classes.retain(|props| {
-        props.len() > 1
-            &&
-            // A column should not give an equivalence with itself.
-             !(props.len() == 2 && props.head.eq(props.others().iter().next().unwrap()))
-    });
-
-    output_eq.extend(eq_classes);
-}
+// /// This function applies the given projection to the given equivalence
+// /// properties to compute the resulting (projected) equivalence properties; e.g.
+// /// 1) Adding an alias, which can introduce additional equivalence properties,
+// ///    as in Projection(a, a as a1, a as a2).
+// /// 2) Truncate the [`EquivalentClass`]es that are not in the output schema.
+// pub fn project_equivalence_properties(
+//     input_eq: EquivalenceProperties,
+//     alias_map: &HashMap<Column, Vec<Column>>,
+//     output_eq: &mut EquivalenceProperties,
+// ) {
+//     // Get schema and fields of projection output
+//     let schema = output_eq.schema();
+//     let fields = schema.fields();
+//
+//     let mut eq_classes = input_eq.classes().to_vec();
+//     for (column, columns) in alias_map {
+//         let mut find_match = false;
+//         for class in eq_classes.iter_mut() {
+//             // If `self.head` is invalidated in the new schema, update head
+//             // with this change `self.head` is not randomly assigned by one of the entries from `self.others`
+//             if is_column_invalid_in_new_schema(&class.head, fields) {
+//                 if let Some(alias_col) = get_alias_column(&class.head, alias_map) {
+//                     class.head = alias_col;
+//                 }
+//             }
+//             if class.contains(column) {
+//                 for col in columns {
+//                     class.insert(col.clone());
+//                 }
+//                 find_match = true;
+//                 break;
+//             }
+//         }
+//         if !find_match {
+//             eq_classes.push(EquivalentClass::new(column.clone(), columns.clone()));
+//         }
+//     }
+//
+//     // Prune columns that are no longer in the schema from equivalences.
+//     for class in eq_classes.iter_mut() {
+//         let columns_to_remove = class
+//             .iter()
+//             .filter(|column| is_column_invalid_in_new_schema(column, fields))
+//             .cloned()
+//             .collect::<Vec<_>>();
+//         for column in columns_to_remove {
+//             class.remove(&column);
+//         }
+//     }
+//
+//     eq_classes.retain(|props| {
+//         props.len() > 1
+//             &&
+//             // A column should not give an equivalence with itself.
+//              !(props.len() == 2 && props.head.eq(props.others().iter().next().unwrap()))
+//     });
+//
+//     output_eq.extend(eq_classes);
+// }
 
 /// This function applies the given projection to the given ordering
 /// equivalence properties to compute the resulting (projected) ordering

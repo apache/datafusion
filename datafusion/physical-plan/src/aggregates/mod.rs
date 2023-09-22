@@ -22,22 +22,19 @@ use crate::aggregates::{
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::{
-    displayable, DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan,
+    displayable, DisplayFormatType, Distribution, ExecutionPlan,
     Partitioning, SendableRecordBatchStream, Statistics,
 };
 
 use arrow::array::ArrayRef;
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::utils::longest_consecutive_prefix;
 use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Accumulator;
 use datafusion_physical_expr::{
-    equivalence::project_equivalence_properties,
     expressions::Column,
     normalize_out_expr_with_columns_map, physical_exprs_contains, reverse_order_bys,
-    utils::{convert_to_expr, get_indices_of_matching_exprs},
     AggregateExpr, LexOrdering, LexOrderingReq, OrderingEquivalenceProperties,
     PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
 };

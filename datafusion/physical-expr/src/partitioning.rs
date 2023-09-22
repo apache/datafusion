@@ -21,7 +21,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::{
-    expr_list_eq_strict_order, EquivalenceProperties, OrderingEquivalenceProperties,
+    expr_list_eq_strict_order, OrderingEquivalenceProperties,
     PhysicalExpr,
 };
 

@@ -30,7 +30,7 @@ use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::DisplayAs;
 use crate::{
     coalesce_batches::concat_batches, coalesce_partitions::CoalescePartitionsExec,
-    ColumnStatistics, DisplayFormatType, Distribution, EquivalenceProperties,
+    ColumnStatistics, DisplayFormatType, Distribution,
     ExecutionPlan, Partitioning, PhysicalSortExpr, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
@@ -42,7 +42,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::OrderingEquivalenceProperties;
 
 use super::utils::{
-    adjust_right_output_partitioning, cross_join_equivalence_properties,
+    adjust_right_output_partitioning,
     BuildProbeJoinMetrics, OnceAsync, OnceFut,
 };
 

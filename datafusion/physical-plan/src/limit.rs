@@ -23,7 +23,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::{
-    DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan, Partitioning,
+    DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
 };
 
 use super::expressions::PhysicalSortExpr;

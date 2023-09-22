@@ -2786,7 +2786,6 @@ mod tests {
 }
 
 mod tmp_tests {
-    use crate::assert_batches_eq;
     use crate::physical_optimizer::utils::get_plan_string;
     use crate::physical_plan::{collect, displayable, ExecutionPlan};
     use crate::prelude::SessionContext;

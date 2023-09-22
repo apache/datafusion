@@ -26,7 +26,7 @@ use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::stream::{ObservedStream, RecordBatchReceiverStream};
 use super::{DisplayAs, SendableRecordBatchStream, Statistics};
 
-use crate::{DisplayFormatType, EquivalenceProperties, ExecutionPlan, Partitioning};
+use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{internal_err, DataFusionError, Result};

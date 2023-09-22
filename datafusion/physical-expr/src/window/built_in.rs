@@ -28,7 +28,7 @@ use crate::expressions::PhysicalSortExpr;
 use crate::utils::{convert_to_expr, get_indices_of_matching_exprs};
 use crate::window::window_expr::{get_orderby_values, WindowFn};
 use crate::window::{PartitionBatches, PartitionWindowAggStates, WindowState};
-use crate::{reverse_order_bys, EquivalenceProperties, PhysicalExpr};
+use crate::{reverse_order_bys, PhysicalExpr};
 use arrow::array::{new_empty_array, ArrayRef};
 use arrow::compute::SortOptions;
 use arrow::datatypes::Field;

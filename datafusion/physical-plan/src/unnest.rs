@@ -38,7 +38,7 @@ use std::time::Instant;
 use std::{any::Any, sync::Arc};
 
 use crate::{
-    expressions::Column, DisplayFormatType, Distribution, EquivalenceProperties,
+    expressions::Column, DisplayFormatType, Distribution,
     ExecutionPlan, Partitioning, PhysicalExpr, PhysicalSortExpr, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };

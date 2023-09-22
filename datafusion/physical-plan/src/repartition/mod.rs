@@ -30,7 +30,7 @@ use crate::metrics::BaselineMetrics;
 use crate::repartition::distributor_channels::{channels, partition_aware_channels};
 use crate::sorts::streaming_merge;
 use crate::{
-    DisplayFormatType, EquivalenceProperties, ExecutionPlan, Partitioning, Statistics,
+    DisplayFormatType, ExecutionPlan, Partitioning, Statistics,
 };
 
 use self::distributor_channels::{DistributionReceiver, DistributionSender};

@@ -34,7 +34,7 @@ use arrow::datatypes::SchemaRef;
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{
-    EquivalenceProperties, OrderingEquivalenceProperties, PhysicalSortRequirement,
+    OrderingEquivalenceProperties, PhysicalSortRequirement,
 };
 
 use log::{debug, trace};

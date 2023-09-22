@@ -24,7 +24,7 @@ use crate::windows::{
     calc_requirements, get_ordered_partition_by_indices, window_ordering_equivalence,
 };
 use crate::{
-    ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, EquivalenceProperties,
+    ColumnStatistics, DisplayAs, DisplayFormatType, Distribution,
     ExecutionPlan, Partitioning, PhysicalExpr, RecordBatchStream,
     SendableRecordBatchStream, Statistics, WindowExpr,
 };

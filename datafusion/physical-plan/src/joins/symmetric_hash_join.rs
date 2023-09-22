@@ -49,12 +49,12 @@ use crate::{
         hash_join_utils::SortedFilterExpr,
         utils::{
             build_batch_from_indices, build_join_schema, check_join_is_valid,
-            combine_join_equivalence_properties, partitioned_join_output_partitioning,
+             partitioned_join_output_partitioning,
             ColumnIndex, JoinFilter, JoinOn, JoinSide,
         },
     },
     metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
-    DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan, Partitioning,
+    DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 

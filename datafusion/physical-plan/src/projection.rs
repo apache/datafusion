@@ -30,7 +30,7 @@ use super::expressions::{Column, PhysicalSortExpr};
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream, Statistics};
 use crate::{
-    ColumnStatistics, DisplayFormatType, EquivalenceProperties, ExecutionPlan,
+    ColumnStatistics, DisplayFormatType, ExecutionPlan,
     Partitioning, PhysicalExpr,
 };
 
@@ -40,8 +40,7 @@ use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::expressions::{Literal, UnKnownColumn};
 use datafusion_physical_expr::{
-    normalize_out_expr_with_columns_map, project_equivalence_properties,
-    project_ordering_equivalence_properties, OrderingEquivalenceProperties,
+    normalize_out_expr_with_columns_map,  OrderingEquivalenceProperties,
 };
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
