@@ -1961,6 +1961,17 @@ GROUP BY ALL;
 1 0 12
 2 0 13
 
+query IIR rowsort
+SELECT sub.col1, sub.col0, sub."AVG(tab3.col2)" AS avg_col2
+FROM (
+  SELECT col1, AVG(col2), col0 FROM tab3 GROUP BY ALL
+) AS sub
+GROUP BY ALL;
+----
+1 0 11
+2 0 14
+NULL 1 10
+
 query IIII rowsort
 SELECT col0, col1, COUNT(col2), SUM(col3) FROM tab3 GROUP BY ALL
 ----
