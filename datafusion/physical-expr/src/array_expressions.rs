@@ -417,23 +417,16 @@ fn array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
 
     match data_type {
         // empty array
-        // TODO: remoe new lsit
         None => {
-            let arr = ScalarValue::list_to_array(&[], &DataType::Null);
-
-            Ok(ColumnarValue::Scalar(ScalarValue::ListArr(arr)))
+            let null_arr = new_null_array(&DataType::Null, 0);
+            let list_arr = Arc::new(ScalarValue::wrap_into_list_array(null_arr));
+            Ok(ColumnarValue::Scalar(ScalarValue::ListArr(list_arr)))
         }
         // all nulls, set default data type as int32
         Some(DataType::Null) => {
-            let nulls = arrays.len();
-            let null_arr = Int32Array::from(vec![None; nulls]);
-            let field = Arc::new(Field::new("item", DataType::Int32, true));
-            let offsets = OffsetBuffer::from_lengths([nulls]);
-            let values = Arc::new(null_arr) as ArrayRef;
-            let nulls = None;
-            Ok(ColumnarValue::Array(Arc::new(ListArray::new(
-                field, offsets, values, nulls,
-            ))))
+            let null_arr = new_null_array(&DataType::Int32, arrays.len());
+            let list_arr = Arc::new(ScalarValue::wrap_into_list_array(null_arr));
+            Ok(ColumnarValue::Array(list_arr))
         }
         Some(data_type) => Ok(ColumnarValue::Array(array_array(
             arrays.as_slice(),

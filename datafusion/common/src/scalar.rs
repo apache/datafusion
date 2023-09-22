@@ -2031,6 +2031,7 @@ impl ScalarValue {
 
     /// Wrap an array into a ListArray
     /// e.g. arr: PrimitiveArray<Int32Type> -> ListArray<PritimiveArray<Int32Type>>
+    /// TODO: Move this to array utils
     pub fn wrap_into_list_array(arr: ArrayRef) -> ListArray {
         let offsets = OffsetBuffer::from_lengths([arr.len()]);
         ListArray::new(
@@ -2433,12 +2434,7 @@ impl ScalarValue {
                 }
                 _ => {
                     let scalar = ScalarValue::try_from_array(array, index)?;
-                    // Assert not ScalarValue::List
-                    if let ScalarValue::List(_, _) = scalar {
-                        return _internal_err!("Unexpected ScalarValue::List");
-                    } else {
-                        scalars.push(vec![scalar])
-                    }
+                    scalars.push(vec![scalar])
                 }
             }
         }

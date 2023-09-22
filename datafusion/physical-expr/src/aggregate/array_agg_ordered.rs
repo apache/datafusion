@@ -288,7 +288,7 @@ impl OrderSensitiveArrayAggAccumulator {
         // in_data is Vec<ScalarValue> where ScalarValue does not include ScalarValue::List
         for in_data in array_agg.into_iter() {
             let ordering = in_data.into_iter().map(|struct_vals| {
-                    if let ScalarValue::Struct(Some(orderings), _fields) = struct_vals {
+                    if let ScalarValue::Struct(Some(orderings), _) = struct_vals {
                         Ok(orderings)
                     } else {
                         exec_err!(
