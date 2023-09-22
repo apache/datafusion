@@ -2566,12 +2566,28 @@ arrow_cast(expression, datatype)
 - **expression**: Expression to cast.
   Can be a constant, column, or function, and any combination of arithmetic or
   string operators.
-- **datatype**: [Arrow data type](https://arrow.apache.org/datafusion/user-guide/sql/data_types.html)
-  to cast to.
+- **datatype**: [Arrow data type](https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html) name
+  to cast to, as a string. The format is the same as that returned by [`arrow_typeof`]
+
+#### Example
+
+```
+❯ select arrow_cast(-5, 'Int8') as a,
+  arrow_cast('foo', 'Dictionary(Int32, Utf8)') as b,
+  arrow_cast('bar', 'LargeUtf8') as c,
+  arrow_cast('2023-01-02T12:53:02', 'Timestamp(Microsecond, Some("+08:00"))') as d
+  ;
++----+-----+-----+---------------------------+
+| a  | b   | c   | d                         |
++----+-----+-----+---------------------------+
+| -5 | foo | bar | 2023-01-02T12:53:02+08:00 |
++----+-----+-----+---------------------------+
+1 row in set. Query took 0.001 seconds.
+```
 
 ### `arrow_typeof`
 
-Returns the underlying Arrow data type of the expression:
+Returns the name of the underlying [Arrow data type](https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html) of the expression:
 
 ```
 arrow_typeof(expression)
@@ -2582,3 +2598,15 @@ arrow_typeof(expression)
 - **expression**: Expression to evaluate.
   Can be a constant, column, or function, and any combination of arithmetic or
   string operators.
+
+#### Example
+
+```
+❯ select arrow_typeof('foo'), arrow_typeof(1);
++---------------------------+------------------------+
+| arrow_typeof(Utf8("foo")) | arrow_typeof(Int64(1)) |
++---------------------------+------------------------+
+| Utf8                      | Int64                  |
++---------------------------+------------------------+
+1 row in set. Query took 0.001 seconds.
+```

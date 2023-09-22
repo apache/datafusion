@@ -2848,6 +2848,11 @@
        Arguments
       </a>
      </li>
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#id156">
+       Example
+      </a>
+     </li>
     </ul>
    </li>
    <li class="toc-h3 nav-item toc-entry">
@@ -2860,8 +2865,13 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id156">
+      <a class="reference internal nav-link" href="#id157">
        Arguments
+      </a>
+     </li>
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#id158">
+       Example
       </a>
      </li>
     </ul>
@@ -5609,24 +5619,52 @@ Can be a constant, column, or function, and any combination of string operators.
 <li><p><strong>expression</strong>: Expression to cast.
 Can be a constant, column, or function, and any combination of arithmetic or
 string operators.</p></li>
-<li><p><strong>datatype</strong>: <a class="reference external" href="https://arrow.apache.org/datafusion/user-guide/sql/data_types.html">Arrow data type</a>
-to cast to.</p></li>
+<li><p><strong>datatype</strong>: <a class="reference external" href="https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html">Arrow data type</a> name
+to cast to, as a string. The format is the same as that returned by [<code class="docutils literal notranslate"><span class="pre">arrow_typeof</span></code>]</p></li>
 </ul>
+</section>
+<section id="id156">
+<h4>Example<a class="headerlink" href="#id156" title="Link to this heading">¶</a></h4>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select arrow_cast(-5, &#39;Int8&#39;) as a,
+  arrow_cast(&#39;foo&#39;, &#39;Dictionary(Int32, Utf8)&#39;) as b,
+  arrow_cast(&#39;bar&#39;, &#39;LargeUtf8&#39;) as c,
+  arrow_cast(&#39;2023-01-02T12:53:02&#39;, &#39;Timestamp(Microsecond, Some(&quot;+08:00&quot;))&#39;) as d
+  ;
++----+-----+-----+---------------------------+
+| a  | b   | c   | d                         |
++----+-----+-----+---------------------------+
+| -5 | foo | bar | 2023-01-02T12:53:02+08:00 |
++----+-----+-----+---------------------------+
+1 row in set. Query took 0.001 seconds.
+</pre></div>
+</div>
 </section>
 </section>
 <section id="arrow-typeof">
 <h3><code class="docutils literal notranslate"><span class="pre">arrow_typeof</span></code><a class="headerlink" href="#arrow-typeof" title="Link to this heading">¶</a></h3>
-<p>Returns the underlying Arrow data type of the expression:</p>
+<p>Returns the name of the underlying <a class="reference external" href="https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html">Arrow data type</a> of the expression:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">arrow_typeof</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="id156">
-<h4>Arguments<a class="headerlink" href="#id156" title="Link to this heading">¶</a></h4>
+<section id="id157">
+<h4>Arguments<a class="headerlink" href="#id157" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to evaluate.
 Can be a constant, column, or function, and any combination of arithmetic or
 string operators.</p></li>
 </ul>
+</section>
+<section id="id158">
+<h4>Example<a class="headerlink" href="#id158" title="Link to this heading">¶</a></h4>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select arrow_typeof(&#39;foo&#39;), arrow_typeof(1);
++---------------------------+------------------------+
+| arrow_typeof(Utf8(&quot;foo&quot;)) | arrow_typeof(Int64(1)) |
++---------------------------+------------------------+
+| Utf8                      | Int64                  |
++---------------------------+------------------------+
+1 row in set. Query took 0.001 seconds.
+</pre></div>
+</div>
 </section>
 </section>
 </section>
