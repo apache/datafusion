@@ -493,22 +493,20 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             &self.filter,
         ) {
             (Some(left_sort_exprs), Some(right_sort_exprs), Some(filter)) => {
-                prepare_sorted_exprs(
+                let (left, right, graph) = prepare_sorted_exprs(
                     filter,
                     &self.left,
                     &self.right,
                     left_sort_exprs,
                     right_sort_exprs,
-                )
-                .map(|(left, right, graph)| (Some(left), Some(right), Some(graph)))
-                .unwrap_or((None, None, None))
+                )?;
+                (Some(left), Some(right), Some(graph))
             }
             // If `filter_state` or `filter` is not present, then return None for all three values:
             _ => (None, None, None),
         };
 
-        let on_left = self.on.iter().map(|on| on.0.clone()).collect::<Vec<_>>();
-        let on_right = self.on.iter().map(|on| on.1.clone()).collect::<Vec<_>>();
+        let (on_left, on_right) = self.on.iter().cloned().unzip();
 
         let left_side_joiner =
             OneSideHashJoiner::new(JoinSide::Left, on_left, self.left.schema());
