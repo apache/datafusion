@@ -2036,7 +2036,7 @@ impl ScalarValue {
         ListArray::new(
             Arc::new(Field::new("item", arr.data_type().to_owned(), true)),
             offsets,
-            Arc::new(arr),
+            arr,
             None,
         )
     }
