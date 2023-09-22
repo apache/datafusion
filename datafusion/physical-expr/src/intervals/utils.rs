@@ -57,7 +57,7 @@ pub fn check_support(expr: &Arc<dyn PhysicalExpr>, schema: SchemaRef) -> bool {
             return false;
         }
     } else if let Some(cast) = expr_any.downcast_ref::<CastExpr>() {
-        check_support(&cast.children()[0], schema)
+        check_support(cast.expr(), schema)
     } else {
         false
     }

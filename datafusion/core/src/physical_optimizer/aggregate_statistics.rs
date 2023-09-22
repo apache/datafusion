@@ -53,7 +53,7 @@ impl PhysicalOptimizerRule for AggregateStatistics {
         plan: Arc<dyn ExecutionPlan>,
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if let Some(partial_agg_exec) = take_optimizable(&*plan) {
+        if let Some(partial_agg_exec) = take_optimizable(&*plan)? {
             let partial_agg_exec = partial_agg_exec
                 .as_any()
                 .downcast_ref::<AggregateExec>()
@@ -111,7 +111,7 @@ impl PhysicalOptimizerRule for AggregateStatistics {
 /// If this is the case, return a ref to the partial `AggregateExec`, else `None`.
 /// We would have preferred to return a casted ref to AggregateExec but the recursion requires
 /// the `ExecutionPlan.children()` method that returns an owned reference.
-fn take_optimizable(node: &dyn ExecutionPlan) -> Option<Arc<dyn ExecutionPlan>> {
+fn take_optimizable(node: &dyn ExecutionPlan) -> Result<Option<Arc<dyn ExecutionPlan>>> {
     if let Some(final_agg_exec) = node.as_any().downcast_ref::<AggregateExec>() {
         if final_agg_exec.mode() == &AggregateMode::Final
             && final_agg_exec.group_expr().is_empty()
@@ -125,11 +125,9 @@ fn take_optimizable(node: &dyn ExecutionPlan) -> Option<Arc<dyn ExecutionPlan>> 
                         && partial_agg_exec.group_expr().is_empty()
                         && partial_agg_exec.filter_expr().iter().all(|e| e.is_none())
                     {
-                        let stats = partial_agg_exec.input().statistics();
-                        if let Ok(stats) = stats {
-                            if stats.is_exact {
-                                return Some(child);
-                            }
+                        let stats = partial_agg_exec.input().statistics()?;
+                        if stats.is_exact {
+                            return Ok(Some(child));
                         }
                     }
                 }
@@ -141,7 +139,7 @@ fn take_optimizable(node: &dyn ExecutionPlan) -> Option<Arc<dyn ExecutionPlan>> 
             }
         }
     }
-    None
+    Ok(None)
 }
 
 /// If this agg_expr is a count that is defined in the statistics, return it
@@ -224,6 +222,9 @@ fn take_optimizable_min(
                 } = &col_stats[col_expr.index()]
                 {
                     // Exclude the unbounded case
+                    // As safest estimate, -inf, and + inf is used as bound of the column
+                    // If minimum is -inf, it is not exact. Hence we shouldn't do optimization
+                    // based on this statistic
                     if !val.is_null() {
                         return Some((val.clone(), casted_expr.name().to_string()));
                     }

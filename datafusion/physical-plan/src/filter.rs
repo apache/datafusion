@@ -205,42 +205,45 @@ impl ExecutionPlan for FilterExec {
     fn statistics(&self) -> Result<Statistics> {
         let predicate = self.predicate();
 
-        if check_support(predicate, self.schema()) {
-            let input_stats = self.input.statistics()?;
-
-            if let Some(column_stats) = input_stats.column_statistics {
-                let num_rows = input_stats.num_rows;
-                let total_byte_size = input_stats.total_byte_size;
-                let input_analysis_ctx =
-                    AnalysisContext::from_statistics(&self.input.schema(), &column_stats);
-                let analysis_ctx = analyze(predicate, input_analysis_ctx)?;
-
-                let selectivity = analysis_ctx.selectivity.unwrap_or(1.0);
-                let num_rows =
-                    num_rows.map(|num| (num as f64 * selectivity).ceil() as usize);
-                let total_byte_size = total_byte_size
-                    .map(|size| (size as f64 * selectivity).ceil() as usize);
-
-                return if let Some(analysis_boundaries) = analysis_ctx.boundaries {
-                    let column_statistics =
-                        collect_new_statistics(&column_stats, analysis_boundaries);
-                    Ok(Statistics {
-                        num_rows,
-                        total_byte_size,
-                        column_statistics: Some(column_statistics),
-                        is_exact: false,
-                    })
-                } else {
-                    Ok(Statistics {
-                        num_rows,
-                        total_byte_size,
-                        column_statistics: Some(column_stats.to_vec()),
-                        is_exact: false,
-                    })
-                };
-            }
+        if !check_support(predicate, self.schema()) {
+            return Ok(Statistics::new_with_unbounded_columns(&self.schema()));
         }
-        Ok(Statistics::new_with_unbounded_columns(&self.schema()))
+        let input_stats = self.input.statistics()?;
+
+        let column_stats = if let Some(column_stats) = input_stats.column_statistics {
+            column_stats
+        } else {
+            Statistics::unbounded_column_statistics(&self.input.schema())
+        };
+
+        let num_rows = input_stats.num_rows;
+        let total_byte_size = input_stats.total_byte_size;
+        let input_analysis_ctx =
+            AnalysisContext::from_statistics(&self.input.schema(), &column_stats);
+        let analysis_ctx = analyze(predicate, input_analysis_ctx)?;
+
+        let selectivity = analysis_ctx.selectivity.unwrap_or(1.0);
+        let num_rows = num_rows.map(|num| (num as f64 * selectivity).ceil() as usize);
+        let total_byte_size =
+            total_byte_size.map(|size| (size as f64 * selectivity).ceil() as usize);
+
+        if let Some(analysis_boundaries) = analysis_ctx.boundaries {
+            let column_statistics =
+                collect_new_statistics(&column_stats, analysis_boundaries);
+            Ok(Statistics {
+                num_rows,
+                total_byte_size,
+                column_statistics: Some(column_statistics),
+                is_exact: false,
+            })
+        } else {
+            Ok(Statistics {
+                num_rows,
+                total_byte_size,
+                column_statistics: Some(column_stats.to_vec()),
+                is_exact: false,
+            })
+        }
     }
 }
 

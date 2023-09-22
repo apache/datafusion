@@ -60,23 +60,23 @@ impl JoinSelection {
 // TODO: We need some performance test for Right Semi/Right Join swap to Left Semi/Left Join in case that the right side is smaller but not much smaller.
 // TODO: In PrestoSQL, the optimizer flips join sides only if one side is much smaller than the other by more than SIZE_DIFFERENCE_THRESHOLD times, by default is is 8 times.
 /// Checks statistics for join swap.
-fn should_swap_join_order(left: &dyn ExecutionPlan, right: &dyn ExecutionPlan) -> bool {
+fn should_swap_join_order(
+    left: &dyn ExecutionPlan,
+    right: &dyn ExecutionPlan,
+) -> Result<bool> {
     // Get the left and right table's total bytes
     // If both the left and right tables contain total_byte_size statistics,
     // use `total_byte_size` to determine `should_swap_join_order`, else use `num_rows`
-    let (left_stats, right_stats) = match (left.statistics(), right.statistics()) {
-        (Ok(left), Ok(right)) => (left, right),
-        _ => return false,
-    };
-    let (left_size, right_size) =
-        match (left_stats.total_byte_size, right_stats.total_byte_size) {
-            (Some(l), Some(r)) => (Some(l), Some(r)),
-            _ => (left_stats.num_rows, right_stats.num_rows),
-        };
-
-    match (left_size, right_size) {
-        (Some(l), Some(r)) => l > r,
-        _ => false,
+    let left_stats = left.statistics()?;
+    let right_stats = right.statistics()?;
+    // First compare `total_byte_size` of left and right side,
+    // if information in this field is insufficient fallback to the `num_rows`
+    match (left_stats.total_byte_size, right_stats.total_byte_size) {
+        (Some(l), Some(r)) => Ok(l > r),
+        _ => match (left_stats.num_rows, right_stats.num_rows) {
+            (Some(l), Some(r)) => Ok(l > r),
+            _ => Ok(false),
+        },
     }
 }
 
@@ -301,7 +301,7 @@ fn try_collect_left(
     };
     match (left_can_collect, right_can_collect) {
         (true, true) => {
-            if should_swap_join_order(&**left, &**right)
+            if should_swap_join_order(&**left, &**right)?
                 && supports_swap(*hash_join.join_type())
             {
                 Ok(Some(swap_hash_join(hash_join, PartitionMode::CollectLeft)?))
@@ -340,7 +340,7 @@ fn try_collect_left(
 fn partitioned_hash_join(hash_join: &HashJoinExec) -> Result<Arc<dyn ExecutionPlan>> {
     let left = hash_join.left();
     let right = hash_join.right();
-    if should_swap_join_order(&**left, &**right) && supports_swap(*hash_join.join_type())
+    if should_swap_join_order(&**left, &**right)? && supports_swap(*hash_join.join_type())
     {
         swap_hash_join(hash_join, PartitionMode::Partitioned)
     } else {
@@ -380,7 +380,7 @@ fn statistical_join_selection_subrule(
             PartitionMode::Partitioned => {
                 let left = hash_join.left();
                 let right = hash_join.right();
-                if should_swap_join_order(&**left, &**right)
+                if should_swap_join_order(&**left, &**right)?
                     && supports_swap(*hash_join.join_type())
                 {
                     swap_hash_join(hash_join, PartitionMode::Partitioned).map(Some)?
@@ -392,7 +392,7 @@ fn statistical_join_selection_subrule(
     } else if let Some(cross_join) = plan.as_any().downcast_ref::<CrossJoinExec>() {
         let left = cross_join.left();
         let right = cross_join.right();
-        if should_swap_join_order(&**left, &**right) {
+        if should_swap_join_order(&**left, &**right)? {
             let new_join = CrossJoinExec::new(Arc::clone(right), Arc::clone(left));
             // TODO avoid adding ProjectionExec again and again, only adding Final Projection
             let proj: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(

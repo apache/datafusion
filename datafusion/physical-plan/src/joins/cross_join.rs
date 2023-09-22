@@ -289,63 +289,40 @@ fn stats_cartesian_product(
         .zip(right_stats.total_byte_size)
         .map(|(a, b)| 2 * a * b);
 
-    let left_col_count = left_schema.fields().len();
-    let right_col_count = right_schema.fields().len();
-    // calculate column stats
-    let column_statistics =
-        // complete the column statistics if they are missing only on one side
-        match (left_stats.column_statistics, right_stats.column_statistics) {
-            (None, None) => {
-                let mut left_stats= vec![];
-                            let mut right_stats= vec![];
-                for index in 0..left_col_count{
-                    left_stats.push(ColumnStatistics::new_with_unbounded_column(left_schema.field(index).data_type()));
-                }
-                for index in 0..right_col_count{
-                    right_stats.push(ColumnStatistics::new_with_unbounded_column(right_schema.field(index).data_type()));
-                }
-                Some((left_stats,right_stats))
-            },
-            (None, Some(right_col_stat)) => {
-                         let mut left_stats= vec![];
-                for index in 0..left_col_count{
-                    left_stats.push(ColumnStatistics::new_with_unbounded_column(left_schema.field(index).data_type()));
-                }
-                Some((left_stats, right_col_stat))
-                },
-            (Some(left_col_stat), None) => {
-                         let mut right_stats= vec![];
-                for index in 0..right_col_count{
-                    right_stats.push(ColumnStatistics::new_with_unbounded_column(right_schema.field(index).data_type()));
-                }
-                Some((left_col_stat, right_stats))
-                },
-            (Some(left_col_stat), Some(right_col_stat)) => {
-                Some((left_col_stat, right_col_stat))
-            }
-        }
-        .map(|(left_col_stats, right_col_stats)| {
-            // the null counts must be multiplied by the row counts of the other side (if defined)
-            // Min, max and distinct_count on the other hand are invariants.
-            left_col_stats.into_iter().map(|s| ColumnStatistics{
-                null_count: s.null_count.zip(right_row_count).map(|(a, b)| a * b),
-                distinct_count: s.distinct_count,
-                min_value: s.min_value,
-                max_value: s.max_value,
-            }).chain(
-            right_col_stats.into_iter().map(|s| ColumnStatistics{
-                null_count: s.null_count.zip(left_row_count).map(|(a, b)| a * b),
-                distinct_count: s.distinct_count,
-                min_value: s.min_value,
-                max_value: s.max_value,
-            })).collect()
-        });
+    let left_col_stats = if let Some(left_col_stats) = left_stats.column_statistics {
+        left_col_stats
+    } else {
+        Statistics::unbounded_column_statistics(&left_schema)
+    };
+    let right_col_stats = if let Some(right_col_stats) = right_stats.column_statistics {
+        right_col_stats
+    } else {
+        Statistics::unbounded_column_statistics(&right_schema)
+    };
+
+    // the null counts must be multiplied by the row counts of the other side (if defined)
+    // Min, max and distinct_count on the other hand are invariants.
+    let cross_join_stats = left_col_stats
+        .into_iter()
+        .map(|s| ColumnStatistics {
+            null_count: s.null_count.zip(right_row_count).map(|(a, b)| a * b),
+            distinct_count: s.distinct_count,
+            min_value: s.min_value,
+            max_value: s.max_value,
+        })
+        .chain(right_col_stats.into_iter().map(|s| ColumnStatistics {
+            null_count: s.null_count.zip(left_row_count).map(|(a, b)| a * b),
+            distinct_count: s.distinct_count,
+            min_value: s.min_value,
+            max_value: s.max_value,
+        }))
+        .collect();
 
     Statistics {
         is_exact,
         num_rows,
         total_byte_size,
-        column_statistics,
+        column_statistics: Some(cross_join_stats),
     }
 }
 

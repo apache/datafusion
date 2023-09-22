@@ -261,8 +261,9 @@ impl<'a, 'b> ExecutionPlanVisitor for IndentVisitor<'a, 'b> {
                 }
             }
         }
-        if self.show_statistics && plan.statistics().is_ok() {
-            write!(self.f, ", statistics=[{}]", plan.statistics().unwrap())?;
+        let stats = plan.statistics().map_err(|_e| fmt::Error)?;
+        if self.show_statistics {
+            write!(self.f, ", statistics=[{}]", stats)?;
         }
         writeln!(self.f)?;
         self.indent += 1;
@@ -341,8 +342,9 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
             }
         };
 
-        let statistics = if self.show_statistics && plan.statistics().is_ok() {
-            format!("statistics=[{}]", plan.statistics().unwrap())
+        let stats = plan.statistics().map_err(|_e| fmt::Error)?;
+        let statistics = if self.show_statistics {
+            format!("statistics=[{}]", stats)
         } else {
             "".to_string()
         };

@@ -33,7 +33,7 @@ use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream, Statistics}
 use arrow::array::ArrayRef;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
-use datafusion_common::{internal_err, ColumnStatistics, DataFusionError, Result};
+use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::OrderingEquivalenceProperties;
 
@@ -205,12 +205,7 @@ impl ExecutionPlan for GlobalLimitExec {
                 }
             })
             .unwrap_or(usize::MAX);
-        let col_stats = self
-            .schema()
-            .fields()
-            .iter()
-            .map(|field| ColumnStatistics::new_with_unbounded_column(field.data_type()))
-            .collect::<Vec<_>>();
+        let col_stats = Statistics::unbounded_column_statistics(&self.schema());
         let stats = match input_stats {
             Statistics {
                 num_rows: Some(nr), ..
@@ -373,12 +368,7 @@ impl ExecutionPlan for LocalLimitExec {
 
     fn statistics(&self) -> Result<Statistics> {
         let input_stats = self.input.statistics()?;
-        let col_stats = self
-            .schema()
-            .fields()
-            .iter()
-            .map(|field| ColumnStatistics::new_with_unbounded_column(field.data_type()))
-            .collect::<Vec<_>>();
+        let col_stats = Statistics::unbounded_column_statistics(&self.schema());
         let stats = match input_stats {
             // if the input does not reach the limit globally, return input stats
             Statistics {
