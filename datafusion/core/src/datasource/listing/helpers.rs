@@ -327,7 +327,8 @@ pub async fn pruned_partition_list<'a>(
     if partition_cols.is_empty() {
         return Ok(Box::pin(
             table_path
-                .list_all_files(store, file_extension)
+                .list_all_files(ctx, store, file_extension)
+                .await?
                 .map_ok(|object_meta| object_meta.into()),
         ));
     }
@@ -424,7 +425,7 @@ mod tests {
     use futures::StreamExt;
 
     use crate::logical_expr::{case, col, lit};
-    use crate::test::object_store::make_test_store;
+    use crate::test::object_store::make_test_store_and_state;
 
     use super::*;
 
@@ -470,12 +471,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_pruned_partition_list_empty() {
-        let store = make_test_store(&[
+        let (store, state) = make_test_store_and_state(&[
             ("tablepath/mypartition=val1/notparquetfile", 100),
             ("tablepath/file.parquet", 100),
         ]);
         let filter = Expr::eq(col("mypartition"), lit("val1"));
         let pruned = pruned_partition_list(
+            &state,
             store.as_ref(),
             &ListingTableUrl::parse("file:///tablepath/").unwrap(),
             &[filter],
@@ -492,7 +494,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_pruned_partition_list() {
-        let store = make_test_store(&[
+        let (store, state) = make_test_store_and_state(&[
             ("tablepath/mypartition=val1/file.parquet", 100),
             ("tablepath/mypartition=val2/file.parquet", 100),
             ("tablepath/mypartition=val1/other=val3/file.parquet", 100),
