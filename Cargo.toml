@@ -24,6 +24,7 @@ members = [
     "datafusion/execution",
     "datafusion/optimizer",
     "datafusion/physical-expr",
+    "datafusion/physical-plan",
     "datafusion/proto",
     "datafusion/proto/gen",
     "datafusion/sql",
@@ -43,14 +44,15 @@ license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/apache/arrow-datafusion"
 rust-version = "1.70"
-version = "30.0.0"
+version = "31.0.0"
 
 [workspace.dependencies]
 sqlparser = { git = "https://github.com/synnada-ai/sqlparser-rs", branch = "feature/groupby-all", features = [
     "visitor",
 ] }
 
-arrow = { version = "46.0.0", features = ["prettyprint", "dyn_cmp_dict"] }
+
+[profile.release]arrow = { version = "46.0.0", features = ["prettyprint", "dyn_cmp_dict"] }
 arrow-array = { version = "46.0.0", default-features = false, features = [
     "chrono-tz",
 ] }
@@ -58,7 +60,8 @@ arrow-buffer = { version = "46.0.0", default-features = false }
 arrow-flight = { version = "46.0.0", features = ["flight-sql-experimental"] }
 arrow-schema = { version = "46.0.0", default-features = false }
 parquet = { version = "46.0.0", features = ["arrow", "async", "object_store"] }
-[profile.release]
+sqlparser = { version = "0.37.0", features = ["visitor"] }
+chrono = { version = "0.4.31", default-features = false }
 codegen-units = 1
 lto = true
 

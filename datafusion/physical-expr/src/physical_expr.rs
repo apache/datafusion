@@ -181,3 +181,14 @@ pub fn down_cast_any_ref(any: &dyn Any) -> &dyn Any {
         any
     }
 }
+
+/// It is similar to contains method of vector.
+/// Finds whether `expr` is among `physical_exprs`.
+pub fn physical_exprs_contains(
+    physical_exprs: &[Arc<dyn PhysicalExpr>],
+    expr: &Arc<dyn PhysicalExpr>,
+) -> bool {
+    physical_exprs
+        .iter()
+        .any(|physical_expr| physical_expr.eq(expr))
+}

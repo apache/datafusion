@@ -22,10 +22,11 @@ use crate::{DFSchema, DFSchemaRef, DataFusionError, JoinType, Result};
 use sqlparser::ast::TableConstraint;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
+use std::ops::Deref;
 
 /// This object defines a constraint on a table.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum Constraint {
+pub enum Constraint {
     /// Columns with the given indices form a composite primary key (they are
     /// jointly unique and not nullable):
     PrimaryKey(Vec<usize>),
@@ -121,6 +122,14 @@ impl Display for Constraints {
         } else {
             write!(f, "")
         }
+    }
+}
+
+impl Deref for Constraints {
+    type Target = [Constraint];
+
+    fn deref(&self) -> &Self::Target {
+        self.inner.as_slice()
     }
 }
 
@@ -517,4 +526,21 @@ fn add_offset_to_vec<T: Copy + std::ops::Add<Output = T>>(
     offset: T,
 ) -> Vec<T> {
     in_data.iter().map(|&item| item + offset).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn constraints_iter() {
+        let constraints = Constraints::new(vec![
+            Constraint::PrimaryKey(vec![10]),
+            Constraint::Unique(vec![20]),
+        ]);
+        let mut iter = constraints.iter();
+        assert_eq!(iter.next(), Some(&Constraint::PrimaryKey(vec![10])));
+        assert_eq!(iter.next(), Some(&Constraint::Unique(vec![20])));
+        assert_eq!(iter.next(), None);
+    }
 }

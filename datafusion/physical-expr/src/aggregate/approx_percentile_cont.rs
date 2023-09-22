@@ -147,7 +147,7 @@ fn validate_input_percentile_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<f64> {
         ScalarValue::Float64(Some(q)) => *q,
         got => return not_impl_err!(
             "Percentile value for 'APPROX_PERCENTILE_CONT' must be Float32 or Float64 literal (got data type {})",
-            got.get_datatype()
+            got.data_type()
         )
     };
 
@@ -182,7 +182,7 @@ fn validate_input_max_size_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<usize> {
         ScalarValue::Int8(Some(q)) if *q > 0 => *q as usize,
         got => return not_impl_err!(
             "Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be UInt > 0 literal (got data type {}).",
-            got.get_datatype()
+            got.data_type()
         )
     };
     Ok(max_size)

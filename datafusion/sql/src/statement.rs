@@ -32,7 +32,7 @@ use datafusion_common::{
     DFSchemaRef, DataFusionError, ExprSchema, OwnedTableReference, Result,
     SchemaReference, TableReference, ToDFSchema,
 };
-use datafusion_expr::dml::CopyTo;
+use datafusion_expr::dml::{CopyOptions, CopyTo};
 use datafusion_expr::expr::Placeholder;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
 use datafusion_expr::logical_plan::builder::project;
@@ -576,9 +576,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let schema = table_source.schema();
 
+        let output_schema = DFSchema::try_from(LogicalPlan::describe_schema()).unwrap();
+
         Ok(LogicalPlan::DescribeTable(DescribeTable {
             schema,
-            dummy_schema: DFSchemaRef::new(DFSchema::empty()),
+            output_schema: Arc::new(output_schema),
         }))
     }
 
@@ -617,12 +619,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // COPY defaults to outputting a single file if not otherwise specified
         let single_file_output = single_file_output.unwrap_or(true);
 
+        let copy_options = CopyOptions::SQLOptions(statement_options);
+
         Ok(LogicalPlan::Copy(CopyTo {
             input: Arc::new(input),
             output_url: statement.target,
             file_format,
             single_file_output,
-            statement_options,
+            copy_options,
         }))
     }
 
@@ -679,11 +683,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             options,
         } = statement;
 
-        if file_type != "CSV"
-            && file_type != "JSON"
+        if (file_type == "PARQUET" || file_type == "AVRO" || file_type == "ARROW")
             && file_compression_type != CompressionTypeVariant::UNCOMPRESSED
         {
-            plan_err!("File compression type can be specified for CSV/JSON files.")?;
+            plan_err!(
+                "File compression type cannot be set for PARQUET, AVRO, or ARROW files."
+            )?;
         }
 
         let schema = self.build_schema(columns)?;

@@ -37,10 +37,13 @@ use crate::logical_expr::{
     CrossJoin, Expr, LogicalPlan, Partitioning as LogicalPartitioning, PlanType,
     Repartition, Union, UserDefinedLogicalNode,
 };
+use crate::physical_plan::memory::MemoryExec;
+use arrow_array::builder::StringBuilder;
+use arrow_array::RecordBatch;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::file_options::FileTypeWriterOptions;
 use datafusion_common::FileType;
-use datafusion_expr::dml::CopyTo;
+use datafusion_expr::dml::{CopyOptions, CopyTo};
 
 use crate::logical_expr::{Limit, Values};
 use crate::physical_expr::create_physical_expr;
@@ -84,7 +87,7 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::expr_rewriter::{unalias, unnormalize_cols};
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
-use datafusion_expr::{DmlStatement, StringifiedPlan, WriteOp};
+use datafusion_expr::{DescribeTable, DmlStatement, StringifiedPlan, WriteOp};
 use datafusion_expr::{WindowFrame, WindowFrameBound};
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_sql::utils::window_expr_common_partition_keys;
@@ -557,7 +560,7 @@ impl DefaultPhysicalPlanner {
                     output_url,
                     file_format,
                     single_file_output,
-                    statement_options,
+                    copy_options,
                 }) => {
                     let input_exec = self.create_initial_plan(input, session_state).await?;
 
@@ -569,10 +572,15 @@ impl DefaultPhysicalPlanner {
 
                     let schema: Schema = (**input.schema()).clone().into();
 
-                    let file_type_writer_options = FileTypeWriterOptions::build(
-                        file_format,
-                        session_state.config_options(),
-                        statement_options)?;
+                    let file_type_writer_options = match copy_options{
+                        CopyOptions::SQLOptions(statement_options) => {
+                            FileTypeWriterOptions::build(
+                                file_format,
+                                session_state.config_options(),
+                                statement_options)?
+                        },
+                        CopyOptions::WriterOptions(writer_options) => *writer_options.clone()
+                    };
 
                     // Set file sink related options
                     let config = FileSinkConfig {
@@ -581,6 +589,7 @@ impl DefaultPhysicalPlanner {
                         file_groups: vec![],
                         output_schema: Arc::new(schema),
                         table_partition_cols: vec![],
+                        unbounded_input: false,
                         writer_mode: FileWriterMode::PutMultipart,
                         single_file_output: *single_file_output,
                         overwrite: false,
@@ -808,8 +817,8 @@ impl DefaultPhysicalPlanner {
                     // into a LAST_VALUE with the reverse ordering requirement.
                     // To reflect such changes to subsequent stages, use the updated
                     // `AggregateExpr`/`PhysicalSortExpr` objects.
-                    let updated_aggregates = initial_aggr.aggr_expr.clone();
-                    let updated_order_bys = initial_aggr.order_by_expr.clone();
+                    let updated_aggregates = initial_aggr.aggr_expr().to_vec();
+                    let updated_order_bys = initial_aggr.order_by_expr().to_vec();
 
                     let (initial_aggr, next_partition_mode): (
                         Arc<dyn ExecutionPlan>,
@@ -1255,10 +1264,9 @@ impl DefaultPhysicalPlanner {
                         "Unsupported logical plan: Statement({name})"
                     )
                 }
-                LogicalPlan::DescribeTable(_) => {
-                    internal_err!(
-                        "Unsupported logical plan: DescribeTable must be root of the plan"
-                    )
+                LogicalPlan::DescribeTable(DescribeTable { schema, output_schema}) => {
+                    let output_schema: Schema = output_schema.as_ref().into();
+                    self.plan_describe(schema.clone(), Arc::new(output_schema))
                 }
                 LogicalPlan::Explain(_) => internal_err!(
                     "Unsupported logical plan: Explain must be root of the plan"
@@ -1887,6 +1895,7 @@ impl DefaultPhysicalPlanner {
                     Ok(input) => {
                         stringified_plans.push(
                             displayable(input.as_ref())
+                                .set_show_statistics(config.show_statistics)
                                 .to_stringified(e.verbose, InitialPhysicalPlan),
                         );
 
@@ -1898,12 +1907,14 @@ impl DefaultPhysicalPlanner {
                                 let plan_type = OptimizedPhysicalPlan { optimizer_name };
                                 stringified_plans.push(
                                     displayable(plan)
+                                        .set_show_statistics(config.show_statistics)
                                         .to_stringified(e.verbose, plan_type),
                                 );
                             },
                         ) {
                             Ok(input) => stringified_plans.push(
                                 displayable(input.as_ref())
+                                    .set_show_statistics(config.show_statistics)
                                     .to_stringified(e.verbose, FinalPhysicalPlan),
                             ),
                             Err(DataFusionError::Context(optimizer_name, e)) => {
@@ -1927,7 +1938,13 @@ impl DefaultPhysicalPlanner {
         } else if let LogicalPlan::Analyze(a) = logical_plan {
             let input = self.create_physical_plan(&a.input, session_state).await?;
             let schema = SchemaRef::new((*a.schema).clone().into());
-            Ok(Some(Arc::new(AnalyzeExec::new(a.verbose, input, schema))))
+            let show_statistics = session_state.config_options().explain.show_statistics;
+            Ok(Some(Arc::new(AnalyzeExec::new(
+                a.verbose,
+                show_statistics,
+                input,
+                schema,
+            ))))
         } else {
             Ok(None)
         }
@@ -1987,6 +2004,43 @@ impl DefaultPhysicalPlanner {
         );
         trace!("Detailed optimized physical plan:\n{:?}", new_plan);
         Ok(new_plan)
+    }
+
+    // return an record_batch which describes a table's schema.
+    fn plan_describe(
+        &self,
+        table_schema: Arc<Schema>,
+        output_schema: Arc<Schema>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let mut column_names = StringBuilder::new();
+        let mut data_types = StringBuilder::new();
+        let mut is_nullables = StringBuilder::new();
+        for (_, field) in table_schema.fields().iter().enumerate() {
+            column_names.append_value(field.name());
+
+            // "System supplied type" --> Use debug format of the datatype
+            let data_type = field.data_type();
+            data_types.append_value(format!("{data_type:?}"));
+
+            // "YES if the column is possibly nullable, NO if it is known not nullable. "
+            let nullable_str = if field.is_nullable() { "YES" } else { "NO" };
+            is_nullables.append_value(nullable_str);
+        }
+
+        let record_batch = RecordBatch::try_new(
+            output_schema,
+            vec![
+                Arc::new(column_names.finish()),
+                Arc::new(data_types.finish()),
+                Arc::new(is_nullables.finish()),
+            ],
+        )?;
+
+        let schema = record_batch.schema();
+        let partitions = vec![vec![record_batch]];
+        let projection = None;
+        let mem_exec = MemoryExec::try_new(&partitions, schema, projection)?;
+        Ok(Arc::new(mem_exec))
     }
 }
 
@@ -2710,5 +2764,28 @@ digraph {
         let generated_graph = format!("{}", displayable(&*plan).graphviz());
 
         assert_eq!(expected_graph, generated_graph);
+    }
+
+    #[tokio::test]
+    async fn test_display_graphviz_with_statistics() {
+        let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+
+        let logical_plan = scan_empty(Some("employee"), &schema, None)
+            .unwrap()
+            .project(vec![col("id") + lit(2)])
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let plan = plan(&logical_plan).await.unwrap();
+
+        let expected_tooltip = ", tooltip=\"statistics=[";
+
+        let generated_graph = format!(
+            "{}",
+            displayable(&*plan).set_show_statistics(true).graphviz()
+        );
+
+        assert_contains!(generated_graph, expected_tooltip);
     }
 }

@@ -21,7 +21,10 @@ use crate::{AggregateExpr, PhysicalSortExpr};
 use arrow::array::ArrayRef;
 use arrow::datatypes::{MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PRECISION};
 use arrow_array::cast::AsArray;
-use arrow_array::types::Decimal128Type;
+use arrow_array::types::{
+    Decimal128Type, TimestampMicrosecondType, TimestampMillisecondType,
+    TimestampNanosecondType, TimestampSecondType,
+};
 use arrow_schema::{DataType, Field};
 use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr::Accumulator;
@@ -126,6 +129,30 @@ pub fn adjust_output_array(
                 .as_primitive::<Decimal128Type>()
                 .clone()
                 .with_precision_and_scale(*p, *s)?,
+        ) as ArrayRef,
+        DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, tz) => Arc::new(
+            array
+                .as_primitive::<TimestampNanosecondType>()
+                .clone()
+                .with_timezone_opt(tz.clone()),
+        ),
+        DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, tz) => Arc::new(
+            array
+                .as_primitive::<TimestampMicrosecondType>()
+                .clone()
+                .with_timezone_opt(tz.clone()),
+        ),
+        DataType::Timestamp(arrow_schema::TimeUnit::Millisecond, tz) => Arc::new(
+            array
+                .as_primitive::<TimestampMillisecondType>()
+                .clone()
+                .with_timezone_opt(tz.clone()),
+        ),
+        DataType::Timestamp(arrow_schema::TimeUnit::Second, tz) => Arc::new(
+            array
+                .as_primitive::<TimestampSecondType>()
+                .clone()
+                .with_timezone_opt(tz.clone()),
         ),
         // no adjustment needed for other arrays
         _ => array,

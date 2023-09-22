@@ -38,6 +38,7 @@ use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
 use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore};
 
 use super::{FileFormat, DEFAULT_SCHEMA_INFER_MAX_RECORD};
+use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::write::{
     create_writer, stateless_serialize_and_write_files, BatchSerializer, FileWriterMode,
 };
@@ -49,7 +50,6 @@ use crate::execution::context::SessionState;
 use crate::physical_plan::insert::{DataSink, FileSinkExec};
 use crate::physical_plan::{DisplayAs, DisplayFormatType, Statistics};
 use crate::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
-use datafusion_common::FileCompressionType;
 use rand::distributions::{Alphanumeric, DistString};
 
 /// Character Separated Value `FileFormat` implementation.
@@ -432,6 +432,14 @@ impl BatchSerializer for CsvSerializer {
         self.header = false;
         Ok(Bytes::from(self.buffer.drain(..).collect::<Vec<u8>>()))
     }
+
+    fn duplicate(&mut self) -> Result<Box<dyn BatchSerializer>> {
+        let new_self = CsvSerializer::new()
+            .with_builder(self.builder.clone())
+            .with_header(self.header);
+        self.header = false;
+        Ok(Box::new(new_self))
+    }
 }
 
 /// Implements [`DataSink`] for writing to a CSV file.
@@ -579,6 +587,7 @@ impl DataSink for CsvSink {
             serializers,
             writers,
             self.config.single_file_output,
+            self.config.unbounded_input,
         )
         .await
     }
@@ -590,6 +599,7 @@ mod tests {
     use super::*;
     use crate::arrow::util::pretty;
     use crate::assert_batches_eq;
+    use crate::datasource::file_format::file_compression_type::FileCompressionType;
     use crate::datasource::file_format::test_util::VariableStream;
     use crate::datasource::listing::ListingOptions;
     use crate::physical_plan::collect;
@@ -600,7 +610,6 @@ mod tests {
     use chrono::DateTime;
     use datafusion_common::cast::as_string_array;
     use datafusion_common::internal_err;
-    use datafusion_common::FileCompressionType;
     use datafusion_common::FileType;
     use datafusion_common::GetExt;
     use datafusion_expr::{col, lit};

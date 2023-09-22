@@ -51,6 +51,7 @@ use crate::physical_plan::{DisplayAs, DisplayFormatType, Statistics};
 
 use super::FileFormat;
 use super::FileScanConfig;
+use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::write::{
     create_writer, stateless_serialize_and_write_files, BatchSerializer, FileWriterMode,
 };
@@ -60,7 +61,6 @@ use crate::datasource::physical_plan::NdJsonExec;
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::ExecutionPlan;
-use datafusion_common::FileCompressionType;
 
 /// New line delimited JSON `FileFormat` implementation.
 #[derive(Debug)]
@@ -221,6 +221,10 @@ impl BatchSerializer for JsonSerializer {
         //drop(writer);
         Ok(Bytes::from(self.buffer.drain(..).collect::<Vec<u8>>()))
     }
+
+    fn duplicate(&mut self) -> Result<Box<dyn BatchSerializer>> {
+        Ok(Box::new(JsonSerializer::new()))
+    }
 }
 
 /// Implements [`DataSink`] for writing to a Json file.
@@ -364,6 +368,7 @@ impl DataSink for JsonSink {
             serializers,
             writers,
             self.config.single_file_output,
+            self.config.unbounded_input,
         )
         .await
     }

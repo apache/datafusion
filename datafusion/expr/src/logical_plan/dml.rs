@@ -21,7 +21,8 @@ use std::{
 };
 
 use datafusion_common::{
-    file_options::StatementOptions, DFSchemaRef, FileType, OwnedTableReference,
+    file_options::StatementOptions, DFSchemaRef, FileType, FileTypeWriterOptions,
+    OwnedTableReference,
 };
 
 use crate::LogicalPlan;
@@ -40,7 +41,47 @@ pub struct CopyTo {
     /// to which each output partition is written to its own output file
     pub single_file_output: bool,
     /// Arbitrary options as tuples
-    pub statement_options: StatementOptions,
+    pub copy_options: CopyOptions,
+}
+
+/// When the logical plan is constructed from SQL, CopyOptions
+/// will contain arbitrary string tuples which must be parsed into
+/// FileTypeWriterOptions. When the logical plan is constructed directly
+/// from rust code (such as via the DataFrame API), FileTypeWriterOptions
+/// can be provided directly, avoiding the run time cost and fallibility of
+/// parsing string based options.
+#[derive(Clone)]
+pub enum CopyOptions {
+    /// Holds StatementOptions parsed from a SQL statement
+    SQLOptions(StatementOptions),
+    /// Holds FileTypeWriterOptions directly provided
+    WriterOptions(Box<FileTypeWriterOptions>),
+}
+
+impl PartialEq for CopyOptions {
+    fn eq(&self, other: &CopyOptions) -> bool {
+        match self {
+            Self::SQLOptions(statement1) => match other {
+                Self::SQLOptions(statement2) => statement1.eq(statement2),
+                Self::WriterOptions(_) => false,
+            },
+            Self::WriterOptions(_) => false,
+        }
+    }
+}
+
+impl Eq for CopyOptions {}
+
+impl std::hash::Hash for CopyOptions {
+    fn hash<H>(&self, hasher: &mut H)
+    where
+        H: std::hash::Hasher,
+    {
+        match self {
+            Self::SQLOptions(statement) => statement.hash(hasher),
+            Self::WriterOptions(_) => (),
+        }
+    }
 }
 
 /// The operator that modifies the content of a database (adapted from
