@@ -19,12 +19,9 @@
 
 use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
 
-use crate::{
-    config::ConfigOptions,
-    DataFusionError, Result,
-};
+use crate::{config::ConfigOptions, DataFusionError, Result};
 
-use super::{StatementOptions};
+use super::StatementOptions;
 
 use parquet::{
     basic::{BrotliLevel, GzipLevel, ZstdLevel},

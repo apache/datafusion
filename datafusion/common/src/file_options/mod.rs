@@ -34,8 +34,7 @@ use std::{
 };
 
 use crate::{
-    file_options::parse_utils::parse_boolean_string,
-    config::ConfigOptions,
+    config::ConfigOptions, file_options::parse_utils::parse_boolean_string,
     DataFusionError, FileType, Result,
 };
 
