@@ -1361,7 +1361,7 @@ impl ScalarValue {
                                     primitive_arr.into_iter().collect::<Vec<Option<_>>>(),
                                 )
                             }
-                        },
+                        }
                         sv => panic!(
                             "Inconsistent types in ScalarValue::iter_to_array. \
                                 Expected {:?}, got {:?}",
@@ -1394,7 +1394,6 @@ impl ScalarValue {
                                 }
                             }
                             builder.append(true);
-                            
                         }
                         sv => {
                             return _internal_err!(
@@ -3320,37 +3319,46 @@ mod tests {
     #[test]
     fn iter_to_array_primitive_test() {
         let scalars = vec![
-            ScalarValue::ListArr(Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(
-                vec![
-                    Some(vec![Some(1), Some(2), Some(3)])
-                ]
-            ))),
-            ScalarValue::ListArr(Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(
-                vec![
-                    Some(vec![Some(4), Some(5)])
-                ]
-            )))
+            ScalarValue::ListArr(Arc::new(ListArray::from_iter_primitive::<
+                Int64Type,
+                _,
+                _,
+            >(vec![Some(vec![
+                Some(1),
+                Some(2),
+                Some(3),
+            ])]))),
+            ScalarValue::ListArr(Arc::new(ListArray::from_iter_primitive::<
+                Int64Type,
+                _,
+                _,
+            >(vec![Some(vec![
+                Some(4),
+                Some(5),
+            ])]))),
         ];
 
         let array = ScalarValue::iter_to_array(scalars).unwrap();
         let list_array = as_list_array(&array);
-        let expected = ListArray::from_iter_primitive::<Int64Type, _, _>(
-            vec![
-                    Some(vec![Some(1), Some(2), Some(3)]),
-                    Some(vec![Some(4), Some(5)])
-            ]
-        );
+        let expected = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+            Some(vec![Some(1), Some(2), Some(3)]),
+            Some(vec![Some(4), Some(5)]),
+        ]);
         assert_eq!(list_array, &expected);
     }
 
     #[test]
     fn iter_to_array_string_test() {
-        let arr1 = ScalarValue::wrap_into_list_array(Arc::new(StringArray::from(vec!["foo", "bar", "baz"])));
-        let arr2 = ScalarValue::wrap_into_list_array(Arc::new(StringArray::from(vec!["rust", "world"])));
+        let arr1 = ScalarValue::wrap_into_list_array(Arc::new(StringArray::from(vec![
+            "foo", "bar", "baz",
+        ])));
+        let arr2 = ScalarValue::wrap_into_list_array(Arc::new(StringArray::from(vec![
+            "rust", "world",
+        ])));
 
         let scalars = vec![
             ScalarValue::ListArr(Arc::new(arr1)),
-            ScalarValue::ListArr(Arc::new(arr2))
+            ScalarValue::ListArr(Arc::new(arr2)),
         ];
 
         let array = ScalarValue::iter_to_array(scalars).unwrap();
