@@ -281,7 +281,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
 
         // let result = ScalarValue::iter_to_array(results);
         // println!("results: {:?}", results);
-        let result = ScalarValue::iter_to_array_v3(results);
+        let result = ScalarValue::iter_to_array(results);
 
         self.adjust_allocation(vec_size_pre, self.states.allocated_size());
 
@@ -314,7 +314,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
         // create an array for each intermediate column
         let arrays = results
             .into_iter()
-            .map(ScalarValue::iter_to_array_v3)
+            .map(ScalarValue::iter_to_array)
             .collect::<Result<Vec<_>>>()?;
 
         // double check each array has the same length (aka the

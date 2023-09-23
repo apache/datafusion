@@ -1234,144 +1234,6 @@ impl ScalarValue {
         Scalar::new(self.to_array_of_size(1))
     }
 
-    // No ScalarValue::List
-    pub fn iter_to_array_v3(
-        scalars: impl IntoIterator<Item = ScalarValue>,
-    ) -> Result<ArrayRef> {
-        let mut scalars = scalars.into_iter().peekable();
-
-        // figure out the type based on the first element
-        let data_type = match scalars.peek() {
-            None => {
-                return _internal_err!(
-                    "Empty iterator passed to ScalarValue::iter_to_array"
-                );
-            }
-            Some(sv) => sv.data_type(),
-        };
-
-        // Merge Vec of ListArray(PrimitiveArray() ...) to LitArray(PA(), PA(), PA() ...)
-        macro_rules! build_list_of_primitive_array {
-            ($ARRAY_TY:ty) => {{
-                let data = scalars
-                    .into_iter()
-                    .map(|sv| match sv {
-                        ScalarValue::ListArr(arr) => {
-                            if arr.as_any().downcast_ref::<NullArray>().is_some() {
-                                None
-                            } else {
-                                let list_arr = arr.as_list::<i32>();
-                                let primitive_arr =
-                                    list_arr.values().as_primitive::<$ARRAY_TY>();
-                                Some(
-                                    primitive_arr.into_iter().collect::<Vec<Option<_>>>(),
-                                )
-                            }
-                        }
-                        _ => {
-                            panic!(
-                                "Inconsistent types in ScalarValue::iter_to_array. \
-                                Expected ListArr, got {:?}",
-                                sv
-                            )
-                        }
-                    })
-                    .collect::<Vec<_>>();
-                Arc::new(ListArray::from_iter_primitive::<$ARRAY_TY, _, _>(data))
-            }};
-        }
-
-        macro_rules! build_list_of_string_array {
-            ($BUILDER:ident, $STRING_ARRAY:ident) => {{
-                let mut builder = ListBuilder::new($BUILDER::new());
-                for scalar in scalars.into_iter() {
-                    match scalar {
-                        ScalarValue::ListArr(arr) => {
-                            if arr.as_any().downcast_ref::<NullArray>().is_some() {
-                                builder.append(false);
-                                continue;
-                            }
-
-                            let list_arr = as_list_array(&arr);
-                            let string_arr = $STRING_ARRAY(list_arr.values());
-
-                            for v in string_arr.iter() {
-                                if let Some(v) = v {
-                                    builder.values().append_value(v);
-                                } else {
-                                    builder.values().append_null();
-                                }
-                            }
-                            builder.append(true);
-                        }
-                        sv => {
-                            return _internal_err!(
-                                "Inconsistent types in ScalarValue::iter_to_array. \
-                                    Expected List, got {:?}",
-                                sv
-                            )
-                        }
-                    }
-                }
-                let arr = builder.finish();
-                Arc::new(arr)
-            }};
-        }
-
-        let array: ArrayRef = match &data_type {
-            DataType::List(fields) if fields.data_type() == &DataType::Int8 => {
-                build_list_of_primitive_array!(Int8Type)
-            }
-            DataType::List(fields) if fields.data_type() == &DataType::Int16 => {
-                build_list_of_primitive_array!(Int16Type)
-            }
-            DataType::List(fields) if fields.data_type() == &DataType::Int32 => {
-                build_list_of_primitive_array!(Int32Type)
-            }
-            DataType::List(fields) if fields.data_type() == &DataType::Int64 => {
-                build_list_of_primitive_array!(Int64Type)
-            }
-            DataType::List(fields) if fields.data_type() == &DataType::UInt8 => {
-                build_list_of_primitive_array!(UInt8Type)
-            }
-            DataType::List(fields) if fields.data_type() == &DataType::UInt16 => {
-                build_list_of_primitive_array!(UInt16Type)
-            }
-            DataType::List(fields) if fields.data_type() == &DataType::UInt32 => {
-                build_list_of_primitive_array!(UInt32Type)
-            }
-            DataType::List(fields) if fields.data_type() == &DataType::UInt64 => {
-                build_list_of_primitive_array!(UInt64Type)
-            }
-            DataType::List(fields) if fields.data_type() == &DataType::Float32 => {
-                build_list_of_primitive_array!(Float32Type)
-            }
-            DataType::List(fields) if fields.data_type() == &DataType::Float64 => {
-                build_list_of_primitive_array!(Float64Type)
-            }
-            DataType::List(fields) if fields.data_type() == &DataType::Utf8 => {
-                build_list_of_string_array!(StringBuilder, as_string_array)
-            }
-            DataType::List(fields) if fields.data_type() == &DataType::LargeUtf8 => {
-                build_list_of_string_array!(LargeStringBuilder, as_largestring_array)
-            }
-            DataType::List(_) => {
-                // Fallback case handling homogeneous lists with any ScalarValue element type
-                // TODO: Rewrite iter_to_array_list_v2
-
-                // Ensure we get listArr here
-                // vec [ i16arr, i16arr, i16arr, ... ] =
-                let list_array = ScalarValue::iter_to_array_list_v2(scalars)?;
-                Arc::new(list_array)
-            }
-
-            _ => {
-                return Self::iter_to_array(scalars);
-            }
-        };
-        Ok(array)
-    }
-
     /// Converts an iterator of references [`ScalarValue`] into an [`ArrayRef`]
     /// corresponding to those values. For example,
     ///
@@ -1488,17 +1350,18 @@ impl ScalarValue {
             ($ARRAY_TY:ident, $SCALAR_TY:ident, $NATIVE_TYPE:ident) => {{
                 Arc::new(ListArray::from_iter_primitive::<$ARRAY_TY, _, _>(
                     scalars.into_iter().map(|x| match x {
-                        ScalarValue::List(xs, _) => xs.map(|x| {
-                            x.iter().map(|x| match x {
-                                ScalarValue::$SCALAR_TY(i) => *i,
-                                sv => panic!(
-                                    "Inconsistent types in ScalarValue::iter_to_array. \
-                                        Expected {:?}, got {:?}",
-                                    data_type, sv
-                                ),
-                            })
-                            .collect::<Vec<Option<$NATIVE_TYPE>>>()
-                        }),
+                        ScalarValue::ListArr(arr) => {
+                            if arr.as_any().downcast_ref::<NullArray>().is_some() {
+                                None
+                            } else {
+                                let list_arr = arr.as_list::<i32>();
+                                let primitive_arr =
+                                    list_arr.values().as_primitive::<$ARRAY_TY>();
+                                Some(
+                                    primitive_arr.into_iter().collect::<Vec<Option<_>>>(),
+                                )
+                            }
+                        },
                         sv => panic!(
                             "Inconsistent types in ScalarValue::iter_to_array. \
                                 Expected {:?}, got {:?}",
@@ -1510,32 +1373,28 @@ impl ScalarValue {
         }
 
         macro_rules! build_array_list_string {
-            ($BUILDER:ident, $SCALAR_TY:ident) => {{
+            ($BUILDER:ident, $STRING_ARRAY:ident) => {{
                 let mut builder = ListBuilder::new($BUILDER::new());
                 for scalar in scalars.into_iter() {
                     match scalar {
-                        ScalarValue::List(Some(xs), _) => {
-                            for s in xs {
-                                match s {
-                                    ScalarValue::$SCALAR_TY(Some(val)) => {
-                                        builder.values().append_value(val);
-                                    }
-                                    ScalarValue::$SCALAR_TY(None) => {
-                                        builder.values().append_null();
-                                    }
-                                    sv => {
-                                        return _internal_err!(
-                                            "Inconsistent types in ScalarValue::iter_to_array. \
-                                                Expected Utf8, got {:?}",
-                                            sv
-                                        )
-                                    }
+                        ScalarValue::ListArr(arr) => {
+                            if arr.as_any().downcast_ref::<NullArray>().is_some() {
+                                builder.append(false);
+                                continue;
+                            }
+
+                            let list_arr = as_list_array(&arr);
+                            let string_arr = $STRING_ARRAY(list_arr.values());
+
+                            for v in string_arr.iter() {
+                                if let Some(v) = v {
+                                    builder.values().append_value(v);
+                                } else {
+                                    builder.values().append_null();
                                 }
                             }
                             builder.append(true);
-                        }
-                        ScalarValue::List(None, _) => {
-                            builder.append(false);
+                            
                         }
                         sv => {
                             return _internal_err!(
@@ -1655,14 +1514,14 @@ impl ScalarValue {
                 build_array_list_primitive!(Float64Type, Float64, f64)
             }
             DataType::List(fields) if fields.data_type() == &DataType::Utf8 => {
-                build_array_list_string!(StringBuilder, Utf8)
+                build_array_list_string!(StringBuilder, as_string_array)
             }
             DataType::List(fields) if fields.data_type() == &DataType::LargeUtf8 => {
-                build_array_list_string!(LargeStringBuilder, LargeUtf8)
+                build_array_list_string!(LargeStringBuilder, as_largestring_array)
             }
             DataType::List(_) => {
                 // Fallback case handling homogeneous lists with any ScalarValue element type
-                let list_array = ScalarValue::iter_to_array_list(scalars, &data_type)?;
+                let list_array = ScalarValue::iter_to_array_list_v2(scalars)?;
                 Arc::new(list_array)
             }
             DataType::Struct(fields) => {
@@ -1846,7 +1705,7 @@ impl ScalarValue {
         if values.is_empty() {
             offsets.push(0);
         } else {
-            let arr = ScalarValue::iter_to_array_v3(values.to_vec())?;
+            let arr = ScalarValue::iter_to_array(values.to_vec())?;
             offsets.push(arr.len());
             elements.push(arr);
         }
@@ -1880,10 +1739,6 @@ impl ScalarValue {
 
         for scalar in scalars {
             if let ScalarValue::ListArr(arr) = scalar {
-                // Previous arr is built with ListArray (iter_to_array_v3), we need to the inner array here.
-                // TODO: Maybe we can construct ListArr without ListArray, then we can avoid this step.
-                //
-
                 // NullArray(1)
                 if arr.as_any().downcast_ref::<NullArray>().is_some() {
                     // Repeat previous offset index
@@ -3461,6 +3316,62 @@ mod tests {
     use crate::cast::{as_string_array, as_uint32_array, as_uint64_array};
 
     use super::*;
+
+    #[test]
+    fn iter_to_array_primitive_test() {
+        let scalars = vec![
+            ScalarValue::ListArr(Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(
+                vec![
+                    Some(vec![Some(1), Some(2), Some(3)])
+                ]
+            ))),
+            ScalarValue::ListArr(Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(
+                vec![
+                    Some(vec![Some(4), Some(5)])
+                ]
+            )))
+        ];
+
+        let array = ScalarValue::iter_to_array(scalars).unwrap();
+        let list_array = as_list_array(&array);
+        let expected = ListArray::from_iter_primitive::<Int64Type, _, _>(
+            vec![
+                    Some(vec![Some(1), Some(2), Some(3)]),
+                    Some(vec![Some(4), Some(5)])
+            ]
+        );
+        assert_eq!(list_array, &expected);
+    }
+
+    #[test]
+    fn iter_to_array_string_test() {
+        let arr1 = ScalarValue::wrap_into_list_array(Arc::new(StringArray::from(vec!["foo", "bar", "baz"])));
+        let arr2 = ScalarValue::wrap_into_list_array(Arc::new(StringArray::from(vec!["rust", "world"])));
+
+        let scalars = vec![
+            ScalarValue::ListArr(Arc::new(arr1)),
+            ScalarValue::ListArr(Arc::new(arr2))
+        ];
+
+        let array = ScalarValue::iter_to_array(scalars).unwrap();
+        let result = as_list_array(&array);
+
+        // build expected array
+        let string_builder = StringBuilder::with_capacity(5, 25);
+        let mut list_of_string_builder = ListBuilder::new(string_builder);
+
+        list_of_string_builder.values().append_value("foo");
+        list_of_string_builder.values().append_value("bar");
+        list_of_string_builder.values().append_value("baz");
+        list_of_string_builder.append(true);
+
+        list_of_string_builder.values().append_value("rust");
+        list_of_string_builder.values().append_value("world");
+        list_of_string_builder.append(true);
+        let expected = list_of_string_builder.finish();
+
+        assert_eq!(result, &expected);
+    }
 
     #[test]
     fn scalar_add_trait_test() -> Result<()> {

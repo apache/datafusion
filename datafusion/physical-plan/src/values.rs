@@ -66,7 +66,6 @@ impl ValuesExec {
                 (0..n_row)
                     .map(|i| {
                         let r = data[i][j].evaluate(&batch);
-                        // println!("r: {:?}", r);
 
                         match r {
                             Ok(ColumnarValue::Scalar(scalar)) => Ok(scalar),
@@ -82,11 +81,7 @@ impl ValuesExec {
                         }
                     })
                     .collect::<Result<Vec<_>>>()
-                    .and_then(|x| {
-                        let res = ScalarValue::iter_to_array_v3(x);
-                        res
-                    })
-                // .and_then(ScalarValue::iter_to_array_v3)
+                    .and_then(ScalarValue::iter_to_array)
             })
             .collect::<Result<Vec<_>>>()?;
         let batch = RecordBatch::try_new(schema.clone(), arr)?;

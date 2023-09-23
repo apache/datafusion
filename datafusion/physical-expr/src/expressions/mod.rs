@@ -244,7 +244,6 @@ pub(crate) mod tests {
         agg: Arc<dyn AggregateExpr>,
     ) -> Result<ScalarValue> {
         let mut accum = agg.create_accumulator()?;
-        println!("(aggregate) accum: {:?}", accum);
         let expr = agg.expressions();
         let values = expr
             .iter()
@@ -252,7 +251,6 @@ pub(crate) mod tests {
             .map(|r| r.map(|v| v.into_array(batch.num_rows())))
             .collect::<Result<Vec<_>>>()?;
         accum.update_batch(&values)?;
-        println!("after ub accum: {:?}", accum);
         accum.evaluate()
     }
 
