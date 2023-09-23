@@ -960,11 +960,7 @@ impl ScalarValue {
                 Arc::new(Field::new("item", field.data_type().clone(), true)),
                 *length,
             ),
-            ScalarValue::List(_, field) => DataType::List(Arc::new(Field::new(
-                "item",
-                field.data_type().clone(),
-                true,
-            ))),
+            ScalarValue::List(_, _) => todo!("List data type is not supported yet"),
             ScalarValue::ListArr(arr) => arr.data_type().to_owned(),
             ScalarValue::Date32(_) => DataType::Date32,
             ScalarValue::Date64(_) => DataType::Date64,
@@ -1112,7 +1108,7 @@ impl ScalarValue {
             ScalarValue::FixedSizeBinary(_, v) => v.is_none(),
             ScalarValue::LargeBinary(v) => v.is_none(),
             ScalarValue::Fixedsizelist(v, ..) => v.is_none(),
-            ScalarValue::List(v, _) => v.is_none(),
+            ScalarValue::List(_, _) => todo!("is_null for list"),
             ScalarValue::ListArr(arr) => arr.len() == arr.null_count(),
             ScalarValue::Date32(v) => v.is_none(),
             ScalarValue::Date64(v) => v.is_none(),
@@ -1911,7 +1907,6 @@ impl ScalarValue {
         })
     }
 
-    /// TODO(jayzhan): Remove all ScalarValue::List
     /// Converts a scalar value into an array of `size` rows.
     pub fn to_array_of_size(&self, size: usize) -> ArrayRef {
         match self {
@@ -2034,39 +2029,7 @@ impl ScalarValue {
             ScalarValue::Fixedsizelist(..) => {
                 unimplemented!("FixedSizeList is not supported yet")
             }
-            ScalarValue::List(values, field) => Arc::new(match field.data_type() {
-                DataType::Boolean => build_list!(BooleanBuilder, Boolean, values, size),
-                DataType::Int8 => build_list!(Int8Builder, Int8, values, size),
-                DataType::Int16 => build_list!(Int16Builder, Int16, values, size),
-                DataType::Int32 => build_list!(Int32Builder, Int32, values, size),
-                DataType::Int64 => build_list!(Int64Builder, Int64, values, size),
-                DataType::UInt8 => build_list!(UInt8Builder, UInt8, values, size),
-                DataType::UInt16 => build_list!(UInt16Builder, UInt16, values, size),
-                DataType::UInt32 => build_list!(UInt32Builder, UInt32, values, size),
-                DataType::UInt64 => build_list!(UInt64Builder, UInt64, values, size),
-                DataType::Utf8 => build_list!(StringBuilder, Utf8, values, size),
-                DataType::Float32 => build_list!(Float32Builder, Float32, values, size),
-                DataType::Float64 => build_list!(Float64Builder, Float64, values, size),
-                DataType::Timestamp(unit, tz) => {
-                    build_timestamp_list!(unit.clone(), tz.clone(), values, size)
-                }
-                &DataType::LargeUtf8 => {
-                    build_list!(LargeStringBuilder, LargeUtf8, values, size)
-                }
-                _ => {
-                    let arr = ScalarValue::iter_to_array_list(
-                        repeat(self.clone()).take(size),
-                        &DataType::List(Arc::new(Field::new(
-                            "item",
-                            field.data_type().clone(),
-                            true,
-                        ))),
-                    )
-                    .unwrap();
-
-                    arr
-                }
-            }),
+            ScalarValue::List(_, _) => todo!("REMOVE"),
             ScalarValue::ListArr(arr) => {
                 let arr = arr.as_ref();
                 let arrays = std::iter::repeat(arr).take(size).collect::<Vec<_>>();
