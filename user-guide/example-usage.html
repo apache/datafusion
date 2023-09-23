@@ -411,6 +411,11 @@
    Optimized Configuration
   </a>
  </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#enable-backtraces">
+   Enable backtraces
+  </a>
+ </li>
 </ul>
 
 </nav>
@@ -463,8 +468,9 @@
 <p>Even <a class="reference internal" href="#../../../datafusion-examples"><span class="xref myst"><code class="docutils literal notranslate"><span class="pre">more</span> <span class="pre">code</span> <span class="pre">examples</span></code></span></a> attached to the project</p>
 <section id="update-cargo-toml">
 <h2>Update <code class="docutils literal notranslate"><span class="pre">Cargo.toml</span></code><a class="headerlink" href="#update-cargo-toml" title="Link to this heading">¶</a></h2>
-<p>Add the following to your <code class="docutils literal notranslate"><span class="pre">Cargo.toml</span></code> file:</p>
-<div class="highlight-toml notranslate"><div class="highlight"><pre><span></span><span class="n">datafusion</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;26&quot;</span>
+<p>Find latest available Datafusion version on <a class="reference external" href="https://crates.io/crates/datafusion">DataFusion’s
+crates.io</a> page. Add the dependency to your <code class="docutils literal notranslate"><span class="pre">Cargo.toml</span></code> file:</p>
+<div class="highlight-toml notranslate"><div class="highlight"><pre><span></span><span class="n">datafusion</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;31&quot;</span>
 <span class="n">tokio</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;1.0&quot;</span>
 </pre></div>
 </div>
@@ -652,6 +658,36 @@ with <code class="docutils literal notranslate"><span class="pre">native</span><
 <div class="highlight-shell notranslate"><div class="highlight"><pre><span></span><span class="nv">RUSTFLAGS</span><span class="o">=</span><span class="s1">&#39;-C target-cpu=native&#39;</span><span class="w"> </span>cargo<span class="w"> </span>+nightly<span class="w"> </span>run<span class="w"> </span>--release
 </pre></div>
 </div>
+</section>
+<section id="enable-backtraces">
+<h2>Enable backtraces<a class="headerlink" href="#enable-backtraces" title="Link to this heading">¶</a></h2>
+<p>By default Datafusion returns errors as a plain message. There is option to enable more verbose details about the error,
+like error backtrace. To enable a backtrace you need to add Datafusion <code class="docutils literal notranslate"><span class="pre">backtrace</span></code> feature to your <code class="docutils literal notranslate"><span class="pre">Cargo.toml</span></code> file:</p>
+<div class="highlight-toml notranslate"><div class="highlight"><pre><span></span><span class="n">datafusion</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;31.0.0&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">features</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s">&quot;backtrace&quot;</span><span class="p">]}</span>
+</pre></div>
+</div>
+<p>Set environment [<code class="docutils literal notranslate"><span class="pre">variables</span></code>] https://doc.rust-lang.org/std/backtrace/index.html#environment-variables</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">RUST_BACKTRACE</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>./target/debug/datafusion-cli
+DataFusion<span class="w"> </span>CLI<span class="w"> </span>v31.0.0
+❯<span class="w"> </span><span class="k">select</span><span class="w"> </span>row_numer<span class="o">()</span><span class="w"> </span>over<span class="w"> </span><span class="o">(</span>partition<span class="w"> </span>by<span class="w"> </span>a<span class="w"> </span>order<span class="w"> </span>by<span class="w"> </span>a<span class="o">)</span><span class="w"> </span>from<span class="w"> </span><span class="o">(</span><span class="k">select</span><span class="w"> </span><span class="m">1</span><span class="w"> </span>a<span class="o">)</span><span class="p">;</span>
+Error<span class="w"> </span>during<span class="w"> </span>planning:<span class="w"> </span>Invalid<span class="w"> </span><span class="k">function</span><span class="w"> </span><span class="s1">&#39;row_numer&#39;</span>.
+Did<span class="w"> </span>you<span class="w"> </span>mean<span class="w"> </span><span class="s1">&#39;ROW_NUMBER&#39;</span>?
+
+backtrace:<span class="w">    </span><span class="m">0</span>:<span class="w"> </span>std::backtrace_rs::backtrace::libunwind::trace
+<span class="w">             </span>at<span class="w"> </span>/rustc/5680fa18feaa87f3ff04063800aec256c3d4b4be/library/std/src/../../backtrace/src/backtrace/libunwind.rs:93:5
+<span class="w">   </span><span class="m">1</span>:<span class="w"> </span>std::backtrace_rs::backtrace::trace_unsynchronized
+<span class="w">             </span>at<span class="w"> </span>/rustc/5680fa18feaa87f3ff04063800aec256c3d4b4be/library/std/src/../../backtrace/src/backtrace/mod.rs:66:5
+<span class="w">   </span><span class="m">2</span>:<span class="w"> </span>std::backtrace::Backtrace::create
+<span class="w">             </span>at<span class="w"> </span>/rustc/5680fa18feaa87f3ff04063800aec256c3d4b4be/library/std/src/backtrace.rs:332:13
+<span class="w">   </span><span class="m">3</span>:<span class="w"> </span>std::backtrace::Backtrace::capture
+<span class="w">             </span>at<span class="w"> </span>/rustc/5680fa18feaa87f3ff04063800aec256c3d4b4be/library/std/src/backtrace.rs:298:9
+<span class="w">   </span><span class="m">4</span>:<span class="w"> </span>datafusion_common::error::DataFusionError::get_back_trace
+<span class="w">             </span>at<span class="w"> </span>/arrow-datafusion/datafusion/common/src/error.rs:436:30
+<span class="w">   </span><span class="m">5</span>:<span class="w"> </span>datafusion_sql::expr::function::&lt;impl<span class="w"> </span>datafusion_sql::planner::SqlToRel&lt;S&gt;&gt;::sql_function_to_expr
+<span class="w">   </span>............
+</pre></div>
+</div>
+<p>Note: The backtrace wrapped into systems calls, so some steps on top of the backtrace can be ignored</p>
 </section>
 </section>
 
