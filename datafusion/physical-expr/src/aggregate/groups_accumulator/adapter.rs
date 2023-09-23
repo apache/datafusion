@@ -17,8 +17,6 @@
 
 //! Adapter that makes [`GroupsAccumulator`] out of [`Accumulator`]
 
-use core::panic;
-
 use super::{EmitTo, GroupsAccumulator};
 use arrow::{
     array::{AsArray, UInt32Builder},
@@ -279,8 +277,6 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
             })
             .collect::<Result<_>>()?;
 
-        // let result = ScalarValue::iter_to_array(results);
-        // println!("results: {:?}", results);
         let result = ScalarValue::iter_to_array(results);
 
         self.adjust_allocation(vec_size_pre, self.states.allocated_size());
@@ -296,18 +292,12 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
         // which we need to form into columns
         let mut results: Vec<Vec<ScalarValue>> = vec![];
 
-        // Currently, states is processed row by row, can we process it in batch?
         for state in states {
             self.free_allocation(state.size());
             let accumulator_state = state.accumulator.state()?;
             results.resize_with(accumulator_state.len(), Vec::new);
             for (idx, state_val) in accumulator_state.into_iter().enumerate() {
-                // TODO(jayzhan )Remove this assertion
-                if let ScalarValue::List(_, _) = &state_val {
-                    panic!("state_val: {:?}", state_val);
-                } else {
-                    results[idx].push(state_val);
-                }
+                results[idx].push(state_val);
             }
         }
 

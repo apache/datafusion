@@ -25,12 +25,15 @@ use super::utils::*;
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use crate::simplify_expressions::regex::simplify_regex_expr;
 use arrow::{
-    array::{new_null_array, AsArray},
+    array::new_null_array,
     datatypes::{DataType, Field, Schema},
     error::ArrowError,
     record_batch::RecordBatch,
 };
-use datafusion_common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter};
+use datafusion_common::{
+    cast::{as_large_list_array, as_list_array},
+    tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter},
+};
 use datafusion_common::{
     exec_err, internal_err, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
@@ -384,9 +387,7 @@ impl<'a> ConstEvaluator<'a> {
             &self.input_batch.schema(),
             self.execution_props,
         )?;
-        // println!("phys_expr: {:?}", phys_expr);
         let col_val = phys_expr.evaluate(&self.input_batch)?;
-        // println!("col_val: {:?}", col_val);
         match col_val {
             ColumnarValue::Array(a) => {
                 if a.len() != 1 {
@@ -395,10 +396,7 @@ impl<'a> ConstEvaluator<'a> {
                         a.len()
                     )
                 } else {
-                    // ListArray or LargeListArray
-                    if a.as_list_opt::<i32>().is_some()
-                        || a.as_list_opt::<i64>().is_some()
-                    {
+                    if as_list_array(&a).is_ok() || as_large_list_array(&a).is_ok() {
                         Ok(ScalarValue::ListArr(a))
                     } else {
                         // Non-ListArray

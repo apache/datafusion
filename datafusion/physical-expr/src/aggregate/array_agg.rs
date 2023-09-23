@@ -22,8 +22,8 @@ use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field};
-use arrow_array::cast::AsArray;
 use arrow_array::Array;
+use datafusion_common::cast::as_list_array;
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_expr::Accumulator;
@@ -137,14 +137,11 @@ impl Accumulator for ArrayAggAccumulator {
         assert!(states.len() == 1, "array_agg states must be singleton!");
         let arr = &states[0];
 
-        (0..arr.len()).for_each(|index| {
-            if let Some(arr) = arr.as_list_opt::<i32>() {
-                let sub_arr = arr.value(index);
-                self.values.push(sub_arr);
-            }
-        });
-
-        Ok(())
+        (0..arr.len()).try_for_each(|index| {
+            let arr = as_list_array(&arr)?;
+            self.values.push(arr.value(index));
+            Ok(())
+        })
     }
 
     fn state(&self) -> Result<Vec<ScalarValue>> {
@@ -169,12 +166,15 @@ impl Accumulator for ArrayAggAccumulator {
     }
 
     fn size(&self) -> usize {
-        // TODO:Get size of ArrayRef
-        0
-        // std::mem::size_of_val(self) + ScalarValue::size_of_vec(&self.arr_vec)
-        //     - std::mem::size_of_val(&self.arr_vec)
-        //     + self.datatype.size()
-        //     - std::mem::size_of_val(&self.datatype)
+        std::mem::size_of_val(self)
+            + (std::mem::size_of::<ArrayRef>() * self.values.capacity())
+            + self
+                .values
+                .iter()
+                .map(|arr| arr.get_array_memory_size())
+                .sum::<usize>()
+            + self.datatype.size()
+            - std::mem::size_of_val(&self.datatype)
     }
 }
 

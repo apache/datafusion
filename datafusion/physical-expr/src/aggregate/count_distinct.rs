@@ -25,6 +25,8 @@ use arrow_array::types::UInt32Type;
 use arrow_array::types::UInt64Type;
 use arrow_array::types::UInt8Type;
 use arrow_array::ListArray;
+use datafusion_common::not_impl_err;
+use datafusion_common::DataFusionError;
 
 use std::any::Any;
 use std::fmt::Debug;
@@ -200,17 +202,16 @@ impl Accumulator for DistinctCountAccumulator {
             DataType::UInt64 => {
                 build_a_list_array_from_scalar_value_vec!(UInt64Type, UInt64)
             }
-
             _ => {
-                panic!(
-                    "Inconsistent types in ScalarValue::iter_to_array. \
-                    Expected List, got {:?}",
+                return not_impl_err!(
+                    "Unsupported data type for DistinctCountAccumulator: {:?}",
                     self.state_data_type
                 )
             }
         };
         Ok(vec![ScalarValue::ListArr(arr)])
     }
+
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         if values.is_empty() {
             return Ok(());
@@ -219,12 +220,12 @@ impl Accumulator for DistinctCountAccumulator {
         (0..arr.len()).try_for_each(|index| {
             if !arr.is_null(index) {
                 let scalar = ScalarValue::try_from_array(arr, index)?;
-                // let scalar = ScalarValue::try_from_array(arr, index)?;
                 self.values.insert(scalar);
             }
             Ok(())
         })
     }
+
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         if states.is_empty() {
             return Ok(());

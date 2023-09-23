@@ -314,7 +314,6 @@ impl OrderSensitiveArrayAggAccumulator {
             .collect();
         let struct_type = DataType::Struct(Fields::from(fields));
 
-        // let values = &Some(orderings);
         let arr = ScalarValue::list_to_array(&orderings, &struct_type);
         Ok(ScalarValue::ListArr(arr))
     }
