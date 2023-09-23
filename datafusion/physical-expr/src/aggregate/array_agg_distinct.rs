@@ -184,6 +184,7 @@ mod tests {
     use arrow::array::{ArrayRef, Int32Array};
     use arrow::datatypes::{DataType, Schema};
     use arrow::record_batch::RecordBatch;
+    use datafusion_common::DataFusionError;
 
     fn compare_list_contents(expected: ScalarValue, actual: ScalarValue) -> Result<()> {
         match (expected, actual) {

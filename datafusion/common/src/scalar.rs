@@ -577,28 +577,6 @@ macro_rules! typed_cast {
     }};
 }
 
-// keep until https://github.com/apache/arrow-rs/issues/2054 is finished
-macro_rules! build_list {
-    ($VALUE_BUILDER_TY:ident, $SCALAR_TY:ident, $VALUES:expr, $SIZE:expr) => {{
-        match $VALUES {
-            // the return on the macro is necessary, to short-circuit and return ArrayRef
-            None => {
-                return new_null_array(
-                    &DataType::List(Arc::new(Field::new(
-                        "item",
-                        DataType::$SCALAR_TY,
-                        true,
-                    ))),
-                    $SIZE,
-                )
-            }
-            Some(values) => {
-                build_values_list!($VALUE_BUILDER_TY, $SCALAR_TY, values, $SIZE)
-            }
-        }
-    }};
-}
-
 macro_rules! build_timestamp_list {
     ($TIME_UNIT:expr, $TIME_ZONE:expr, $VALUES:expr, $SIZE:expr) => {{
         match $VALUES {
@@ -1481,7 +1459,7 @@ impl ScalarValue {
             }
             DataType::List(_) => {
                 // Fallback case handling homogeneous lists with any ScalarValue element type
-                let list_array = ScalarValue::iter_to_array_list_v2(scalars)?;
+                let list_array = ScalarValue::iter_to_array_list(scalars)?;
                 Arc::new(list_array)
             }
             DataType::Struct(fields) => {
@@ -1690,7 +1668,7 @@ impl ScalarValue {
     }
 
     // V2 accepts ScalarValue::ListArr only, no list
-    fn iter_to_array_list_v2(
+    fn iter_to_array_list(
         scalars: impl IntoIterator<Item = ScalarValue>,
     ) -> Result<GenericListArray<i32>> {
         let mut elements: Vec<ArrayRef> = vec![];
@@ -1744,70 +1722,6 @@ impl ScalarValue {
             Some(NullBuffer::new(buffer)),
         );
 
-        Ok(list_array)
-    }
-
-    fn iter_to_array_list(
-        scalars: impl IntoIterator<Item = ScalarValue>,
-        data_type: &DataType,
-    ) -> Result<GenericListArray<i32>> {
-        let mut offsets = Int32Array::builder(0);
-        offsets.append_value(0);
-
-        let mut elements: Vec<ArrayRef> = Vec::new();
-        let mut valid = BooleanBufferBuilder::new(0);
-        let mut flat_len = 0i32;
-        for scalar in scalars {
-            if let ScalarValue::List(values, field) = scalar {
-                match values {
-                    Some(values) => {
-                        let element_array = if !values.is_empty() {
-                            ScalarValue::iter_to_array(values)?
-                        } else {
-                            arrow::array::new_empty_array(field.data_type())
-                        };
-
-                        // Add new offset index
-                        flat_len += element_array.len() as i32;
-                        offsets.append_value(flat_len);
-
-                        elements.push(element_array);
-
-                        // Element is valid
-                        valid.append(true);
-                    }
-                    None => {
-                        // Repeat previous offset index
-                        offsets.append_value(flat_len);
-
-                        // Element is null
-                        valid.append(false);
-                    }
-                }
-            } else {
-                return _internal_err!(
-                    "v1 Expected ScalarValue::List element. Received {scalar:?}"
-                );
-            }
-        }
-
-        // Concatenate element arrays to create single flat array
-        let element_arrays: Vec<&dyn Array> =
-            elements.iter().map(|a| a.as_ref()).collect();
-        let flat_array = match arrow::compute::concat(&element_arrays) {
-            Ok(flat_array) => flat_array,
-            Err(err) => return Err(DataFusionError::ArrowError(err)),
-        };
-
-        // Build ListArray using ArrayData so we can specify a flat inner array, and offset indices
-        let offsets_array = offsets.finish();
-        let array_data = ArrayDataBuilder::new(data_type.clone())
-            .len(offsets_array.len() - 1)
-            .nulls(Some(NullBuffer::new(valid.finish())))
-            .add_buffer(offsets_array.values().inner().clone())
-            .add_child_data(flat_array.to_data());
-
-        let list_array = ListArray::from(array_data.build()?);
         Ok(list_array)
     }
 

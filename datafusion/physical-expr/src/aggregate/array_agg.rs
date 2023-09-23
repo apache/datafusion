@@ -188,6 +188,7 @@ mod tests {
     use arrow::array::Int32Array;
     use arrow::datatypes::*;
     use arrow::record_batch::RecordBatch;
+    use datafusion_common::DataFusionError;
     use datafusion_common::Result;
 
     #[test]
