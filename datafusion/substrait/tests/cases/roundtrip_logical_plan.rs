@@ -721,7 +721,7 @@ async fn function_extension_info(sql: &str) -> Result<(Vec<String>, Vec<u32>)> {
 }
 
 async fn create_context() -> Result<SessionContext> {
-    let state = SessionState::with_config_rt(
+    let state = SessionState::new_with_config_rt(
         SessionConfig::default(),
         Arc::new(RuntimeEnv::default()),
     )

@@ -155,7 +155,7 @@ fn create_join_context(
     column_right: &str,
     repartition_joins: bool,
 ) -> Result<SessionContext> {
-    let ctx = SessionContext::with_config(
+    let ctx = SessionContext::new_with_config(
         SessionConfig::new()
             .with_repartition_joins(repartition_joins)
             .with_target_partitions(2)
@@ -210,7 +210,7 @@ fn create_left_semi_anti_join_context_with_null_ids(
     column_right: &str,
     repartition_joins: bool,
 ) -> Result<SessionContext> {
-    let ctx = SessionContext::with_config(
+    let ctx = SessionContext::new_with_config(
         SessionConfig::new()
             .with_repartition_joins(repartition_joins)
             .with_target_partitions(2)
@@ -577,7 +577,8 @@ async fn create_ctx_with_partition(
     tmp_dir: &TempDir,
     partition_count: usize,
 ) -> Result<SessionContext> {
-    let ctx = SessionContext::with_config(SessionConfig::new().with_target_partitions(8));
+    let ctx =
+        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(8));
 
     let schema = populate_csv_partitions(tmp_dir, partition_count, ".csv")?;
 

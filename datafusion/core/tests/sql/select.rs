@@ -408,7 +408,8 @@ async fn sort_on_window_null_string() -> Result<()> {
     ])
     .unwrap();
 
-    let ctx = SessionContext::with_config(SessionConfig::new().with_target_partitions(1));
+    let ctx =
+        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(1));
     ctx.register_batch("test", batch)?;
 
     let sql =
@@ -591,7 +592,7 @@ async fn boolean_literal() -> Result<()> {
 #[tokio::test]
 async fn unprojected_filter() {
     let config = SessionConfig::new();
-    let ctx = SessionContext::with_config(config);
+    let ctx = SessionContext::new_with_config(config);
     let df = ctx.read_table(table_with_sequence(1, 3).unwrap()).unwrap();
 
     let df = df

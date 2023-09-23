@@ -1355,7 +1355,7 @@ mod tests {
     macro_rules! assert_optimized {
         ($EXPECTED_PLAN_LINES: expr, $EXPECTED_OPTIMIZED_PLAN_LINES: expr, $PLAN: expr, $REPARTITION_SORTS: expr) => {
             let config = SessionConfig::new().with_repartition_sorts($REPARTITION_SORTS);
-            let session_ctx = SessionContext::with_config(config);
+            let session_ctx = SessionContext::new_with_config(config);
             let state = session_ctx.state();
 
             let physical_plan = $PLAN;

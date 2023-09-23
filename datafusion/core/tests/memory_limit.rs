@@ -414,7 +414,7 @@ impl TestCase {
         let runtime = RuntimeEnv::new(rt_config).unwrap();
 
         // Configure execution
-        let state = SessionState::with_config_rt(config, Arc::new(runtime));
+        let state = SessionState::new_with_config_rt(config, Arc::new(runtime));
         let state = match scenario.rules() {
             Some(rules) => state.with_physical_optimizer_rules(rules),
             None => state,

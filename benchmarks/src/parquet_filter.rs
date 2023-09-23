@@ -144,7 +144,7 @@ impl RunOpt {
                 ));
                 for i in 0..self.common.iterations {
                     let config = self.common.update_config(scan_options.config());
-                    let ctx = SessionContext::with_config(config);
+                    let ctx = SessionContext::new_with_config(config);
 
                     let (rows, elapsed) = exec_scan(
                         &ctx,

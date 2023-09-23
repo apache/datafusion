@@ -24,7 +24,7 @@ use datafusion_physical_plan::displayable;
 async fn teset_displayable() {
     // Hard code target_partitions as it appears in the RepartitionExec output
     let config = SessionConfig::new().with_target_partitions(3);
-    let ctx = SessionContext::with_config(config);
+    let ctx = SessionContext::new_with_config(config);
 
     // register the a table
     ctx.register_csv("example", "tests/data/example.csv", CsvReadOptions::new())

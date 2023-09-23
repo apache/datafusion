@@ -26,7 +26,7 @@ async fn create_custom_table() -> Result<()> {
     let cfg = RuntimeConfig::new();
     let env = RuntimeEnv::new(cfg).unwrap();
     let ses = SessionConfig::new();
-    let mut state = SessionState::with_config_rt(ses, Arc::new(env));
+    let mut state = SessionState::new_with_config_rt(ses, Arc::new(env));
     state
         .table_factories_mut()
         .insert("DELTATABLE".to_string(), Arc::new(TestTableFactory {}));
@@ -48,7 +48,7 @@ async fn create_external_table_with_ddl() -> Result<()> {
     let cfg = RuntimeConfig::new();
     let env = RuntimeEnv::new(cfg).unwrap();
     let ses = SessionConfig::new();
-    let mut state = SessionState::with_config_rt(ses, Arc::new(env));
+    let mut state = SessionState::new_with_config_rt(ses, Arc::new(env));
     state
         .table_factories_mut()
         .insert("MOCKTABLE".to_string(), Arc::new(TestTableFactory {}));

@@ -1372,7 +1372,7 @@ mod tests {
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {
         let config = SessionConfig::new().with_batch_size(2);
-        let session_ctx = SessionContext::with_config(config);
+        let session_ctx = SessionContext::new_with_config(config);
         let state = session_ctx.state();
         let task_ctx = state.task_ctx();
         let projection = None;
@@ -1400,7 +1400,7 @@ mod tests {
     #[tokio::test]
     async fn capture_bytes_scanned_metric() -> Result<()> {
         let config = SessionConfig::new().with_batch_size(2);
-        let session = SessionContext::with_config(config);
+        let session = SessionContext::new_with_config(config);
         let ctx = session.state();
 
         // Read the full file
