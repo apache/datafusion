@@ -217,7 +217,5 @@ mod tests {
             cache.get(&meta.location).unwrap().get(0).unwrap().clone(),
             meta.clone()
         );
-
-        ()
     }
 }
