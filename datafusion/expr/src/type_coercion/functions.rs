@@ -120,7 +120,7 @@ fn maybe_data_types(
             new_type.push(current_type.clone())
         } else {
             // attempt to coerce
-            if can_coerce_from(valid_type, current_type) {
+            if let Some(valid_type) = coerced_from(valid_type, current_type) {
                 new_type.push(valid_type.clone())
             } else {
                 // not possible
@@ -136,62 +136,97 @@ fn maybe_data_types(
 ///
 /// See the module level documentation for more detail on coercion.
 pub fn can_coerce_from(type_into: &DataType, type_from: &DataType) -> bool {
-    use self::DataType::*;
-
     if type_into == type_from {
         return true;
     }
-    // Null can convert to most of types
+    if let Some(coerced) = coerced_from(type_into, type_from) {
+        return coerced == type_into;
+    }
+    false
+}
+
+fn coerced_from<'a>(
+    type_into: &'a DataType,
+    type_from: &'a DataType,
+) -> Option<&'a DataType> {
+    use self::DataType::*;
+
     match type_into {
-        Int8 => matches!(type_from, Null | Int8),
-        Int16 => matches!(type_from, Null | Int8 | Int16 | UInt8),
-        Int32 => matches!(type_from, Null | Int8 | Int16 | Int32 | UInt8 | UInt16),
-        Int64 => matches!(
-            type_from,
-            Null | Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32
-        ),
-        UInt8 => matches!(type_from, Null | UInt8),
-        UInt16 => matches!(type_from, Null | UInt8 | UInt16),
-        UInt32 => matches!(type_from, Null | UInt8 | UInt16 | UInt32),
-        UInt64 => matches!(type_from, Null | UInt8 | UInt16 | UInt32 | UInt64),
-        Float32 => matches!(
-            type_from,
-            Null | Int8
-                | Int16
-                | Int32
-                | Int64
-                | UInt8
-                | UInt16
-                | UInt32
-                | UInt64
-                | Float32
-        ),
-        Float64 => matches!(
-            type_from,
-            Null | Int8
-                | Int16
-                | Int32
-                | Int64
-                | UInt8
-                | UInt16
-                | UInt32
-                | UInt64
-                | Float32
-                | Float64
-                | Decimal128(_, _)
-        ),
-        Timestamp(TimeUnit::Nanosecond, _) => {
-            matches!(
+        // coerced into type_into
+        Int8 if matches!(type_from, Null | Int8) => Some(type_into),
+        Int16 if matches!(type_from, Null | Int8 | Int16 | UInt8) => Some(type_into),
+        Int32 if matches!(type_from, Null | Int8 | Int16 | Int32 | UInt8 | UInt16) => {
+            Some(type_into)
+        }
+        Int64
+            if matches!(
                 type_from,
-                Null | Timestamp(_, _) | Date32 | Utf8 | LargeUtf8
-            )
+                Null | Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32
+            ) =>
+        {
+            Some(type_into)
         }
-        Interval(_) => {
-            matches!(type_from, Utf8 | LargeUtf8)
+        UInt8 if matches!(type_from, Null | UInt8) => Some(type_into),
+        UInt16 if matches!(type_from, Null | UInt8 | UInt16) => Some(type_into),
+        UInt32 if matches!(type_from, Null | UInt8 | UInt16 | UInt32) => Some(type_into),
+        UInt64 if matches!(type_from, Null | UInt8 | UInt16 | UInt32 | UInt64) => {
+            Some(type_into)
         }
-        Utf8 | LargeUtf8 => true,
-        Null => can_cast_types(type_from, type_into),
-        _ => false,
+        Float32
+            if matches!(
+                type_from,
+                Null | Int8
+                    | Int16
+                    | Int32
+                    | Int64
+                    | UInt8
+                    | UInt16
+                    | UInt32
+                    | UInt64
+                    | Float32
+            ) =>
+        {
+            Some(type_into)
+        }
+        Float64
+            if matches!(
+                type_from,
+                Null | Int8
+                    | Int16
+                    | Int32
+                    | Int64
+                    | UInt8
+                    | UInt16
+                    | UInt32
+                    | UInt64
+                    | Float32
+                    | Float64
+                    | Decimal128(_, _)
+            ) =>
+        {
+            Some(type_into)
+        }
+        Timestamp(TimeUnit::Nanosecond, None)
+            if matches!(
+                type_from,
+                Null | Timestamp(_, None) | Date32 | Utf8 | LargeUtf8
+            ) =>
+        {
+            Some(type_into)
+        }
+        Interval(_) if matches!(type_from, Utf8 | LargeUtf8) => Some(type_into),
+        Utf8 | LargeUtf8 => Some(type_into),
+        Null if can_cast_types(type_from, type_into) => Some(type_into),
+
+        // Coerce to consistent timezones, if the `type_from` timezone exists.
+        Timestamp(TimeUnit::Nanosecond, Some(_))
+            if matches!(type_from, Timestamp(TimeUnit::Nanosecond, Some(_))) =>
+        {
+            Some(type_from)
+        }
+
+        // cannot coerce
+        _ => None,
     }
 }
 
