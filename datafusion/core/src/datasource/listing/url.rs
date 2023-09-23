@@ -204,7 +204,8 @@ impl ListingTableUrl {
                 Some(cache) => {
                     if let Some(res) = cache.get(&self.prefix) {
                         debug!("Hit list all files cache");
-                        futures::stream::iter(res.to_vec().into_iter().map(Ok)).boxed()
+                        futures::stream::iter(res.as_ref().clone().into_iter().map(Ok))
+                            .boxed()
                     } else {
                         let list_res = store.list(Some(&self.prefix)).await;
                         let vec = list_res?.try_collect::<Vec<ObjectMeta>>().await?;
