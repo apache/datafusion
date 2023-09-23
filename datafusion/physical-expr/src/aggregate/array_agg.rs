@@ -23,7 +23,7 @@ use crate::{AggregateExpr, PhysicalExpr};
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field};
 use arrow_array::cast::AsArray;
-use arrow_array::Array;
+use arrow_array::{Array, new_null_array};
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_expr::Accumulator;
@@ -104,7 +104,7 @@ impl PartialEq<dyn Any> for ArrayAgg {
 
 #[derive(Debug)]
 pub(crate) struct ArrayAggAccumulator {
-    arr_vec: Vec<ArrayRef>,
+    values: Vec<ArrayRef>,
     datatype: DataType,
 }
 
@@ -112,7 +112,7 @@ impl ArrayAggAccumulator {
     /// new array_agg accumulator based on given item data type
     pub fn try_new(datatype: &DataType) -> Result<Self> {
         Ok(Self {
-            arr_vec: vec![],
+            values: vec![],
             datatype: datatype.clone(),
         })
     }
@@ -125,7 +125,7 @@ impl Accumulator for ArrayAggAccumulator {
             return Ok(());
         }
         assert!(values.len() == 1, "array_agg can only take 1 param!");
-        self.arr_vec.push(values[0].clone());
+        self.values.push(values[0].clone());
         Ok(())
     }
 
@@ -140,7 +140,7 @@ impl Accumulator for ArrayAggAccumulator {
         (0..arr.len()).for_each(|index| {
             if let Some(arr) = arr.as_list_opt::<i32>() {
                 let sub_arr = arr.value(index);
-                self.arr_vec.push(sub_arr);
+                self.values.push(sub_arr);
             }
         });
 
@@ -155,7 +155,7 @@ impl Accumulator for ArrayAggAccumulator {
         // Transform Vec<ListArr> to ListArr
 
         let element_arrays: Vec<&dyn Array> =
-            self.arr_vec.iter().map(|a| a.as_ref()).collect();
+            self.values.iter().map(|a| a.as_ref()).collect();
 
         if element_arrays.is_empty() {
             let arr = ScalarValue::list_to_array(&[], &self.datatype);

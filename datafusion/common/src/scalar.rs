@@ -2042,7 +2042,7 @@ impl ScalarValue {
         )
     }
 
-    // Old ScalarValue::List to array of size 1
+    /// Converts Vec<ScalaValue> to ArrayRef, simplified version of ScalarValue::to_array
     pub fn list_to_array(values: &[ScalarValue], data_type: &DataType) -> ArrayRef {
         Arc::new(match data_type {
             DataType::Boolean => build_values_list!(BooleanBuilder, Boolean, values, 1),
@@ -2067,7 +2067,6 @@ impl ScalarValue {
             DataType::List(_) | DataType::Struct(_) => {
                 ScalarValue::iter_to_array_list_v3(values, data_type).unwrap()
             }
-
             DataType::Decimal128(precision, scale) => {
                 let mut vals = vec![];
                 for value in values.iter() {
@@ -2477,14 +2476,6 @@ impl ScalarValue {
             }
             DataType::Utf8 => typed_cast!(array, index, StringArray, Utf8),
             DataType::LargeUtf8 => typed_cast!(array, index, LargeStringArray, LargeUtf8),
-            // DataType::List(_) => {
-            //     // Previous implementation considered nested version of list array.
-            //     // Not sure if it is necessary so it is not implemented, but leave a comment here.
-
-            //     println!("array: {:?}", array);
-            //     let list_arr = as_list_array(array);
-            //     ScalarValue::ListArr(list_arr.value(index))
-            // }
             DataType::List(nested_type) => {
                 let list_array = as_list_array(array);
                 match list_array.is_null(index) {
@@ -2504,25 +2495,28 @@ impl ScalarValue {
                         ScalarValue::ListArr(arr)
                     }
                 }
+            }
+            // TODO: Add test for this
+            DataType::FixedSizeList(nested_type, _len) => {
+                let list_array = as_fixed_size_list_array(array)?;
 
-                // let list_array = as_list_array(array);
-                // // println!("list_array: {:?}", list_array.value(index));
-                // let value = match list_array.is_null(index) {
-                //     true => None,
-                //     false => {
-                //         let nested_array = list_array.value(index);
-                //         let scalar_vec = (0..nested_array.len())
-                //             .map(|i| ScalarValue::try_from_array(&nested_array, i))
-                //             .collect::<Result<Vec<_>>>()?;
-                //         Some(scalar_vec)
-                //     }
-                // };
-                // let sv = ScalarValue::new_list(value, nested_type.data_type().clone());
-                // // println!("sv: {:?}", sv);
-                // let arr = sv.to_array();
-                // // println!("arr: {:?}", arr);
-                // // sv
-                // ScalarValue::ListArr(arr)
+                match list_array.is_null(index) {
+                    true => {
+                        ScalarValue::ListArr(new_null_array(nested_type.data_type(), 0))
+                    }
+                    false => {
+                        let nested_array = list_array.value(index);
+                        let scalar_vec = (0..nested_array.len())
+                            .map(|i| ScalarValue::try_from_array(&nested_array, i))
+                            .collect::<Result<Vec<_>>>()?;
+
+                        let arr = ScalarValue::list_to_array(
+                            &scalar_vec,
+                            nested_array.data_type(),
+                        );
+                        ScalarValue::ListArr(arr)
+                    }
+                }
             }
             DataType::Date32 => {
                 typed_cast!(array, index, Date32Array, Date32)
@@ -2610,20 +2604,6 @@ impl ScalarValue {
                     field_values.push(col_scalar);
                 }
                 Self::Struct(Some(field_values), fields.clone())
-            }
-            DataType::FixedSizeList(nested_type, _len) => {
-                let list_array = as_fixed_size_list_array(array)?;
-                let value = match list_array.is_null(index) {
-                    true => None,
-                    false => {
-                        let nested_array = list_array.value(index);
-                        let scalar_vec = (0..nested_array.len())
-                            .map(|i| ScalarValue::try_from_array(&nested_array, i))
-                            .collect::<Result<Vec<_>>>()?;
-                        Some(scalar_vec)
-                    }
-                };
-                ScalarValue::new_list(value, nested_type.data_type().clone())
             }
             DataType::FixedSizeBinary(_) => {
                 let array = as_fixed_size_binary_array(array)?;
