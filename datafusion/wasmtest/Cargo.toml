@@ -28,10 +28,9 @@ authors = { workspace = true }
 rust-version = "1.70"
 
 [lib]
-crate-type = [ "cdylib", "rlib",]
+crate-type = [ "cdylib", "rlib", ]
 
 [dependencies]
-wasm-bindgen = "0.2.87"
 
 # The `console_error_panic_hook` crate provides better debugging of panics by
 # logging them with `console.error`. This is great for development, but requires
@@ -39,11 +38,13 @@ wasm-bindgen = "0.2.87"
 # code size when deploying.
 console_error_panic_hook = { version = "0.1.1", optional = true }
 
-# getrandom must be compiled with js feature
-getrandom = { version = "0.2.8", features = ["js"]}
-
-datafusion-common = { path = "../common", version = "31.0.0" , default-features = false }
+datafusion-common = { path = "../common", version = "31.0.0", default-features = false }
 datafusion-expr = { path = "../expr" }
 datafusion-optimizer = { path = "../optimizer" }
 datafusion-physical-expr = { path = "../physical-expr" }
 datafusion-sql = { path = "../sql" }
+
+# getrandom must be compiled with js feature
+getrandom = { version = "0.2.8", features = ["js"] }
+parquet = { version = "47.0.0", default-features = false }
+wasm-bindgen = "0.2.87"
