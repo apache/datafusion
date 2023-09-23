@@ -30,8 +30,9 @@ use crate::{AggregateExpr, LexOrdering, PhysicalExpr, PhysicalSortExpr};
 
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field};
-use arrow_array::{Array, ListArray};
+use arrow_array::Array;
 use arrow_schema::{Fields, SortOptions};
+use datafusion_common::cast::as_list_array;
 use datafusion_common::utils::{compare_rows, get_row_at_idx};
 use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
@@ -202,7 +203,7 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         // For each `ScalarValue` inside ARRAY_AGG list, we will receive a `Vec<ScalarValue>` that stores
         // values received from its ordering requirement expression. (This information is necessary for during merging).
         let agg_orderings = &states[1];
-        if agg_orderings.as_any().is::<ListArray>() {
+        if as_list_array(agg_orderings).is_ok() {
             // Stores ARRAY_AGG results coming from each partition
             let mut partition_values = vec![];
             // Stores ordering requirement expression results coming from each partition
@@ -212,16 +213,17 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
             partition_values.push(self.values.clone());
             partition_ordering_values.push(self.ordering_values.clone());
 
+            let array_agg_res =
+                ScalarValue::process_array_to_scalar_vec(array_agg_values)?;
+            for v in array_agg_res.into_iter() {
+                partition_values.push(v);
+            }
+
             let orderings = ScalarValue::process_array_to_scalar_vec(agg_orderings)?;
             // Ordering requirement expression values for each entry in the ARRAY_AGG list
             let other_ordering_values = self.convert_array_agg_to_orderings(orderings)?;
             for v in other_ordering_values.into_iter() {
                 partition_ordering_values.push(v);
-            }
-            let array_agg_res =
-                ScalarValue::process_array_to_scalar_vec(array_agg_values)?;
-            for v in array_agg_res.into_iter() {
-                partition_values.push(v);
             }
 
             let sort_options = self

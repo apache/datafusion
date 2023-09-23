@@ -126,7 +126,6 @@ pub trait Accumulator: Send + Sync + Debug {
     ///  `n`, and this function should return
     /// a vector of two values, sum and n.
     ///
-    /// TODO: Update this comment
     /// Note that [`ScalarValue::List`] can be used to pass multiple
     /// values if the number of intermediate values is not known at
     /// planning time (e.g. for `MEDIAN`)

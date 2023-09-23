@@ -2277,11 +2277,10 @@ impl ScalarValue {
                         true => scalars.push(vec![]),
                         false => {
                             let nested_array = list_array.value(index);
-
                             let values =
                                 ScalarValue::process_array_to_scalar_vec(&nested_array)?;
                             let values = values.into_iter().flatten().collect::<Vec<_>>();
-                            scalars.push(values)
+                            scalars.push(values);
                         }
                     }
                 }
