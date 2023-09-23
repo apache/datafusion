@@ -17,6 +17,7 @@
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow::compute::kernels::cast_utils::parse_interval_month_day_nano;
+use arrow::datatypes::DECIMAL128_MAX_PRECISION;
 use arrow_schema::DataType;
 use datafusion_common::{
     not_impl_err, plan_err, DFSchema, DataFusionError, Result, ScalarValue,
@@ -74,7 +75,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 )))
             } else {
                 let number = parse_decimal_128_without_scale(str)?;
-                Ok(Expr::Literal(ScalarValue::Decimal128(Some(number), 38, 0)))
+                Ok(Expr::Literal(ScalarValue::Decimal128(
+                    Some(number),
+                    str.len() as u8,
+                    0,
+                )))
             }
         } else {
             n.parse::<f64>().map(lit).map_err(|_| {
@@ -393,8 +398,8 @@ fn parse_decimal_128_without_scale(s: &str) -> Result<i128> {
         )))
     })?;
 
-    const MAX_DECIMAL_128_VALUE: i128 = 10_i128.pow(38) - 1;
-    if number > MAX_DECIMAL_128_VALUE {
+    const DECIMAL128_MAX_VALUE: i128 = 10_i128.pow(DECIMAL128_MAX_PRECISION as u32) - 1;
+    if number > DECIMAL128_MAX_VALUE {
         return Err(DataFusionError::from(ParserError(format!(
             "Cannot parse {s} as i128 when building decimal: precision overflow"
         ))));
