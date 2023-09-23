@@ -437,7 +437,6 @@ fn array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
 
 /// `make_array` SQL function
 pub fn make_array(arrays: &[ArrayRef]) -> Result<ArrayRef> {
-    // println!("(make_array) arrays: {:?}", arrays);
     let values: Vec<ColumnarValue> = arrays
         .iter()
         .map(|x| ColumnarValue::Array(x.clone()))

@@ -23,7 +23,7 @@ use crate::{AggregateExpr, PhysicalExpr};
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field};
 use arrow_array::cast::AsArray;
-use arrow_array::{Array, new_null_array};
+use arrow_array::Array;
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_expr::Accumulator;
