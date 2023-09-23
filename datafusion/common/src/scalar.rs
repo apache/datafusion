@@ -965,27 +965,7 @@ impl ScalarValue {
                 field.data_type().clone(),
                 true,
             ))),
-            ScalarValue::ListArr(arr) => {
-                let data_type = arr.data_type();
-
-                data_type.to_owned()
-
-                // DataType::List(Arc::new(Field::new(
-                //     "item",
-                //     data_type.to_owned(),
-                //     true,
-                // )))
-
-                // if let DataType::List(field) = arr.data_type() {
-                //     DataType::List(Arc::new(Field::new(
-                //         "array",
-                //         field.data_type().to_owned(),
-                //         field.is_nullable(),
-                //     )))
-                // } else {
-                //     arr.data_type().to_owned()
-                // }
-            }
+            ScalarValue::ListArr(arr) => arr.data_type().to_owned(),
             ScalarValue::Date32(_) => DataType::Date32,
             ScalarValue::Date64(_) => DataType::Date64,
             ScalarValue::Time32Second(_) => DataType::Time32(TimeUnit::Second),
@@ -1064,14 +1044,6 @@ impl ScalarValue {
         }
     }
 
-    /// Get Array if the value is a [`ScalarValue::ListArr`]
-    pub fn get_array(&self) -> Result<&ArrayRef> {
-        match self {
-            ScalarValue::ListArr(arr) => Ok(arr),
-            _ => _internal_err!("ScalarValue is not a ListArr"),
-        }
-    }
-
     /// Wrapping addition of `ScalarValue`
     ///
     /// NB: operating on `ScalarValue` directly is not efficient, performance sensitive code
@@ -1141,12 +1113,7 @@ impl ScalarValue {
             ScalarValue::LargeBinary(v) => v.is_none(),
             ScalarValue::Fixedsizelist(v, ..) => v.is_none(),
             ScalarValue::List(v, _) => v.is_none(),
-            ScalarValue::ListArr(arr) => {
-                let len = arr.len();
-                let null_count = arr.null_count();
-                null_count == len
-                // todo!("ScalarValue::ListArr.is_null() not implemented")
-            }
+            ScalarValue::ListArr(arr) => arr.len() == arr.null_count(),
             ScalarValue::Date32(v) => v.is_none(),
             ScalarValue::Date64(v) => v.is_none(),
             ScalarValue::Time32Second(v) => v.is_none(),
@@ -1268,8 +1235,6 @@ impl ScalarValue {
     pub fn iter_to_array(
         scalars: impl IntoIterator<Item = ScalarValue>,
     ) -> Result<ArrayRef> {
-        let scalars = scalars.into_iter().collect::<Vec<_>>();
-
         let mut scalars = scalars.into_iter().peekable();
 
         // figure out the type based on the first element
@@ -1292,7 +1257,7 @@ impl ScalarValue {
                             Ok(v)
                         } else {
                             _internal_err!(
-                                "(v1) Inconsistent types in ScalarValue::iter_to_array. \
+                                "Inconsistent types in ScalarValue::iter_to_array. \
                                     Expected {:?}, got {:?}",
                                 data_type, sv
                             )
@@ -1354,7 +1319,7 @@ impl ScalarValue {
                             if arr.as_any().downcast_ref::<NullArray>().is_some() {
                                 None
                             } else {
-                                let list_arr = arr.as_list::<i32>();
+                                let list_arr = as_list_array(&arr);
                                 let primitive_arr =
                                     list_arr.values().as_primitive::<$ARRAY_TY>();
                                 Some(
@@ -1693,7 +1658,7 @@ impl ScalarValue {
         Ok(array)
     }
 
-    // V3 is the version that arguments are values and field instead of ScalarValue::List
+    // V3 is the version that arguments are values and data_type instead of ScalarValue::List
     fn iter_to_array_list_v3(
         values: &[ScalarValue],
         data_type: &DataType,
@@ -2069,9 +2034,6 @@ impl ScalarValue {
             ScalarValue::Fixedsizelist(..) => {
                 unimplemented!("FixedSizeList is not supported yet")
             }
-            // ScalarValue::List(values, field) => {
-            //     panic!("no list");
-            // }
             ScalarValue::List(values, field) => Arc::new(match field.data_type() {
                 DataType::Boolean => build_list!(BooleanBuilder, Boolean, values, size),
                 DataType::Int8 => build_list!(Int8Builder, Int8, values, size),
@@ -2266,6 +2228,7 @@ impl ScalarValue {
         }
     }
 
+    /// Retrieve ScalarValue for each row in `array`
     pub fn process_array_to_scalar_vec(array: &dyn Array) -> Result<Vec<Vec<Self>>> {
         let mut scalars = vec![];
 
