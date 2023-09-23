@@ -250,7 +250,7 @@ fn make_topk_context() -> SessionContext {
     let state = SessionState::new_with_config_rt(config, runtime)
         .with_query_planner(Arc::new(TopKQueryPlanner {}))
         .add_optimizer_rule(Arc::new(TopKOptimizerRule {}));
-    SessionContext::with_state(state)
+    SessionContext::new_with_state(state)
 }
 
 // ------ The implementation of the TopK code follows -----

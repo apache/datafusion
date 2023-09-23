@@ -420,7 +420,7 @@ impl TestCase {
             None => state,
         };
 
-        let ctx = SessionContext::with_state(state);
+        let ctx = SessionContext::new_with_state(state);
         ctx.register_table("t", table).expect("registering table");
 
         let query = query.expect("Test error: query not specified");

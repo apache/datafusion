@@ -726,7 +726,7 @@ async fn create_context() -> Result<SessionContext> {
         Arc::new(RuntimeEnv::default()),
     )
     .with_serializer_registry(Arc::new(MockSerializerRegistry));
-    let ctx = SessionContext::with_state(state);
+    let ctx = SessionContext::new_with_state(state);
     let mut explicit_options = CsvReadOptions::new();
     let schema = Schema::new(vec![
         Field::new("a", DataType::Int64, true),
