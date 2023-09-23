@@ -28,7 +28,7 @@ authors = { workspace = true }
 rust-version = "1.70"
 
 [lib]
-crate-type = [ "cdylib", "rlib", ]
+crate-type = ["cdylib", "rlib",]
 
 [dependencies]
 
