@@ -508,6 +508,14 @@ impl WindowFunction {
             window_frame,
         }
     }
+
+    pub fn nullable(&self) -> bool {
+        use window_function::WindowFunction as F;
+        match &self.fun {
+            F::BuiltInWindowFunction(f) => f.nullable(),
+            F::AggregateFunction(_) | F::WindowUDF(_) | F::AggregateUDF(_) => true,
+        }
+    }
 }
 
 // Exists expression.

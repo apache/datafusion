@@ -114,19 +114,35 @@ pub enum BuiltInWindowFunction {
 
 impl BuiltInWindowFunction {
     fn name(&self) -> &str {
-        use BuiltInWindowFunction::*;
+        use BuiltInWindowFunction as F;
         match self {
-            RowNumber => "ROW_NUMBER",
-            Rank => "RANK",
-            DenseRank => "DENSE_RANK",
-            PercentRank => "PERCENT_RANK",
-            CumeDist => "CUME_DIST",
-            Ntile => "NTILE",
-            Lag => "LAG",
-            Lead => "LEAD",
-            FirstValue => "FIRST_VALUE",
-            LastValue => "LAST_VALUE",
-            NthValue => "NTH_VALUE",
+            F::RowNumber => "ROW_NUMBER",
+            F::Rank => "RANK",
+            F::DenseRank => "DENSE_RANK",
+            F::PercentRank => "PERCENT_RANK",
+            F::CumeDist => "CUME_DIST",
+            F::Ntile => "NTILE",
+            F::Lag => "LAG",
+            F::Lead => "LEAD",
+            F::FirstValue => "FIRST_VALUE",
+            F::LastValue => "LAST_VALUE",
+            F::NthValue => "NTH_VALUE",
+        }
+    }
+
+    // these values need to stay in sync with the `field` value defined on the physical expressions
+    pub fn nullable(&self) -> bool {
+        use BuiltInWindowFunction as F;
+        match self {
+            F::RowNumber | F::Ntile | F::Rank | F::CumeDist => false,
+            // the rest are assumed to be nullable
+            F::DenseRank
+            | F::PercentRank
+            | F::Lag
+            | F::Lead
+            | F::FirstValue
+            | F::LastValue
+            | F::NthValue => true,
         }
     }
 }
@@ -179,6 +195,15 @@ impl WindowFunction {
             }
         }
     }
+
+    // pub fn field(&self) {
+    //     match self {
+    //         WindowFunction::AggregateFunction(fun) => fun.field(),
+    //         WindowFunction::BuiltInWindowFunction(fun) => fun.field(),
+    //         WindowFunction::AggregateUDF(fun) => fun.field(),
+    //         WindowFunction::WindowUDF(fun) => fun.field(),
+    //     }
+    // }
 }
 
 /// Returns the datatype of the built-in window function
