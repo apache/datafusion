@@ -43,6 +43,12 @@ pub struct Regr {
     expr_x: Arc<dyn PhysicalExpr>,
 }
 
+impl Regr {
+    pub fn get_regr_type(&self) -> RegrType {
+        self.regr_type.clone()
+    }
+}
+
 #[derive(Debug, Clone)]
 #[allow(clippy::upper_case_acronyms)]
 pub enum RegrType {
