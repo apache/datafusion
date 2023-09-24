@@ -154,7 +154,13 @@ async fn get_listing_table(
     opt: &ListingOptions,
 ) -> ListingTable {
     let schema = opt
-        .infer_schema(&SessionState::default(), table_path)
+        .infer_schema(
+            &SessionState::with_config_rt(
+                SessionConfig::default(),
+                Arc::new(RuntimeEnv::default()),
+            ),
+            table_path,
+        )
         .await
         .unwrap();
     let config1 = ListingTableConfig::new(table_path.clone())

@@ -1405,15 +1405,6 @@ pub fn default_session_builder(config: SessionConfig) -> SessionState {
     SessionState::with_config_rt(config, Arc::new(RuntimeEnv::default()))
 }
 
-impl Default for SessionState {
-    fn default() -> Self {
-        SessionState::with_config_rt(
-            SessionConfig::default(),
-            Arc::new(RuntimeEnv::default()),
-        )
-    }
-}
-
 impl SessionState {
     /// Returns new [`SessionState`] using the provided
     /// [`SessionConfig`] and [`RuntimeEnv`].

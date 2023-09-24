@@ -17,6 +17,8 @@
 //! Object store implementation used for testing
 use crate::execution::context::SessionState;
 use crate::prelude::SessionContext;
+use datafusion_execution::config::SessionConfig;
+use datafusion_execution::runtime_env::RuntimeEnv;
 use futures::FutureExt;
 use object_store::{memory::InMemory, path::Path, ObjectMeta, ObjectStore};
 use std::sync::Arc;
@@ -41,7 +43,13 @@ pub fn make_test_store_and_state(files: &[(&str, u64)]) -> (Arc<InMemory>, Sessi
             .unwrap();
     }
 
-    (Arc::new(memory), SessionState::default())
+    (
+        Arc::new(memory),
+        SessionState::with_config_rt(
+            SessionConfig::default(),
+            Arc::new(RuntimeEnv::default()),
+        ),
+    )
 }
 
 /// Helper method to fetch the file size and date at given path and create a `ObjectMeta`
