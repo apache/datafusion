@@ -195,15 +195,6 @@ impl WindowFunction {
             }
         }
     }
-
-    // pub fn field(&self) {
-    //     match self {
-    //         WindowFunction::AggregateFunction(fun) => fun.field(),
-    //         WindowFunction::BuiltInWindowFunction(fun) => fun.field(),
-    //         WindowFunction::AggregateUDF(fun) => fun.field(),
-    //         WindowFunction::WindowUDF(fun) => fun.field(),
-    //     }
-    // }
 }
 
 /// Returns the datatype of the built-in window function
