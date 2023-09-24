@@ -1746,7 +1746,6 @@ impl ScalarValue {
         Ok(list_array)
     }
 
-    // V2 accepts ScalarValue::ListArr only, no list
     fn iter_to_array_list(
         scalars: impl IntoIterator<Item = ScalarValue>,
     ) -> Result<GenericListArray<i32>> {
@@ -4381,24 +4380,28 @@ mod tests {
         ));
 
         // Define primitive list scalars
-        let l0 = ScalarValue::List(
-            Some(vec![
-                ScalarValue::from(1i32),
-                ScalarValue::from(2i32),
-                ScalarValue::from(3i32),
-            ]),
-            Arc::new(Field::new("item", DataType::Int32, false)),
-        );
-
-        let l1 = ScalarValue::List(
-            Some(vec![ScalarValue::from(4i32), ScalarValue::from(5i32)]),
-            Arc::new(Field::new("item", DataType::Int32, false)),
-        );
-
-        let l2 = ScalarValue::List(
-            Some(vec![ScalarValue::from(6i32)]),
-            Arc::new(Field::new("item", DataType::Int32, false)),
-        );
+        let l0 = ScalarValue::ListArr(Arc::new(ListArray::from_iter_primitive::<
+            Int32Type,
+            _,
+            _,
+        >(vec![Some(vec![
+            Some(1),
+            Some(2),
+            Some(3),
+        ])])));
+        let l1 = ScalarValue::ListArr(Arc::new(ListArray::from_iter_primitive::<
+            Int32Type,
+            _,
+            _,
+        >(vec![Some(vec![
+            Some(4),
+            Some(5),
+        ])])));
+        let l2 = ScalarValue::ListArr(Arc::new(ListArray::from_iter_primitive::<
+            Int32Type,
+            _,
+            _,
+        >(vec![Some(vec![Some(6)])])));
 
         // Define struct scalars
         let s0 = ScalarValue::from(vec![
@@ -4438,12 +4441,16 @@ mod tests {
         assert_eq!(array, &expected);
 
         // Define list-of-structs scalars
-        let nl0 =
-            ScalarValue::new_list(Some(vec![s0.clone(), s1.clone()]), s0.data_type());
 
-        let nl1 = ScalarValue::new_list(Some(vec![s2]), s0.data_type());
+        let nl0_array = ScalarValue::iter_to_array(vec![s0.clone(), s1.clone()]).unwrap();
+        let nl0 = ScalarValue::ListArr(Arc::new(wrap_into_list_array(nl0_array)));
 
-        let nl2 = ScalarValue::new_list(Some(vec![s1]), s0.data_type());
+        let nl1_array = ScalarValue::iter_to_array(vec![s2.clone()]).unwrap();
+        let nl1 = ScalarValue::ListArr(Arc::new(wrap_into_list_array(nl1_array)));
+
+        let nl2_array = ScalarValue::iter_to_array(vec![s1.clone()]).unwrap();
+        let nl2 = ScalarValue::ListArr(Arc::new(wrap_into_list_array(nl2_array)));
+
         // iter_to_array for list-of-struct
         let array = ScalarValue::iter_to_array(vec![nl0, nl1, nl2]).unwrap();
         let array = as_list_array(&array);
@@ -4569,47 +4576,62 @@ mod tests {
     #[test]
     fn test_nested_lists() {
         // Define inner list scalars
-        let l1 = ScalarValue::new_list(
-            Some(vec![
-                ScalarValue::new_list(
-                    Some(vec![
-                        ScalarValue::from(1i32),
-                        ScalarValue::from(2i32),
-                        ScalarValue::from(3i32),
-                    ]),
-                    DataType::Int32,
-                ),
-                ScalarValue::new_list(
-                    Some(vec![ScalarValue::from(4i32), ScalarValue::from(5i32)]),
-                    DataType::Int32,
-                ),
-            ]),
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+        let a1 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+            Some(1),
+            Some(2),
+            Some(3),
+        ])]);
+        let a2 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+            Some(4),
+            Some(5),
+        ])]);
+        let l1 = ListArray::new(
+            Arc::new(Field::new(
+                "item",
+                DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+                true,
+            )),
+            OffsetBuffer::<i32>::from_lengths([1, 1]),
+            arrow::compute::concat(&[&a1, &a2]).unwrap(),
+            None,
         );
 
-        let l2 = ScalarValue::new_list(
-            Some(vec![
-                ScalarValue::new_list(
-                    Some(vec![ScalarValue::from(6i32)]),
-                    DataType::Int32,
-                ),
-                ScalarValue::new_list(
-                    Some(vec![ScalarValue::from(7i32), ScalarValue::from(8i32)]),
-                    DataType::Int32,
-                ),
-            ]),
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+        let a1 =
+            ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![Some(6)])]);
+        let a2 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+            Some(7),
+            Some(8),
+        ])]);
+        let l2 = ListArray::new(
+            Arc::new(Field::new(
+                "item",
+                DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+                true,
+            )),
+            OffsetBuffer::<i32>::from_lengths([1, 1]),
+            arrow::compute::concat(&[&a1, &a2]).unwrap(),
+            None,
         );
 
-        let l3 = ScalarValue::new_list(
-            Some(vec![ScalarValue::new_list(
-                Some(vec![ScalarValue::from(9i32)]),
-                DataType::Int32,
-            )]),
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+        let a1 =
+            ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![Some(9)])]);
+        let l3 = ListArray::new(
+            Arc::new(Field::new(
+                "item",
+                DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+                true,
+            )),
+            OffsetBuffer::<i32>::from_lengths([1]),
+            arrow::compute::concat(&[&a1]).unwrap(),
+            None,
         );
 
-        let array = ScalarValue::iter_to_array(vec![l1, l2, l3]).unwrap();
+        let array = ScalarValue::iter_to_array(vec![
+            ScalarValue::ListArr(Arc::new(l1)),
+            ScalarValue::ListArr(Arc::new(l2)),
+            ScalarValue::ListArr(Arc::new(l3)),
+        ])
+        .unwrap();
         let array = as_list_array(&array);
 
         // Construct expected array with array builders
@@ -5160,7 +5182,10 @@ mod tests {
     #[test]
     fn test_build_timestamp_millisecond_list() {
         let values = vec![ScalarValue::TimestampMillisecond(Some(1), None)];
-        let arr = ScalarValue::list_to_array(&values, &DataType::Timestamp(TimeUnit::Millisecond, None));
+        let arr = ScalarValue::list_to_array(
+            &values,
+            &DataType::Timestamp(TimeUnit::Millisecond, None),
+        );
         assert_eq!(1, arr.len());
     }
 
