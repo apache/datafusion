@@ -26,6 +26,7 @@ use arrow_array::Array;
 use datafusion_common::cast::as_list_array;
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
+use datafusion_common::utils::wrap_into_list_array;
 use datafusion_expr::Accumulator;
 use std::any::Any;
 use std::sync::Arc;
@@ -160,7 +161,7 @@ impl Accumulator for ArrayAggAccumulator {
         }
 
         let concated_array = arrow::compute::concat(&element_arrays)?;
-        let list_array = ScalarValue::wrap_into_list_array(concated_array);
+        let list_array = wrap_into_list_array(concated_array);
 
         Ok(ScalarValue::ListArr(Arc::new(list_array)))
     }

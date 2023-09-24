@@ -29,6 +29,7 @@ use crate::cast::{
     as_fixed_size_binary_array, as_fixed_size_list_array, as_struct_array,
 };
 use crate::error::{DataFusionError, Result, _internal_err, _not_impl_err};
+use crate::utils::wrap_into_list_array;
 use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::compute::kernels::numeric::*;
 use arrow::datatypes::{i256, FieldRef, Fields, SchemaBuilder};
@@ -1589,6 +1590,81 @@ impl ScalarValue {
         Ok(array)
     }
 
+    /// Build a list array from non-list and non-null scalars
+    pub fn build_a_list_array_from_scalars(scalars: Vec<ScalarValue>, data_type: &DataType) -> Result<ArrayRef> {
+        macro_rules! build_a_list_array_from_scalars {
+            ($ARRAY_TY:ty, $SCALAR_TY:ident) => {{
+                let s = scalars
+                    .into_iter()
+                    .map(|sv| match sv {
+                        ScalarValue::$SCALAR_TY(Some(x)) => Some(x),
+                        _ => {
+                            panic!(
+                                "Inconsistent types in ScalarValue::iter_to_array. \
+                                Expected List, got {:?}",
+                                sv
+                            )
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                Arc::new(ListArray::from_iter_primitive::<$ARRAY_TY, _, _>(vec![
+                    Some(s),
+                ]))
+            }};
+        }
+
+        let arr = match data_type {
+            DataType::Int8 => {
+                build_a_list_array_from_scalars!(Int8Type, Int8)
+            }
+            DataType::Int16 => {
+                build_a_list_array_from_scalars!(Int16Type, Int16)
+            }
+            DataType::Int32 => {
+                build_a_list_array_from_scalars!(Int32Type, Int32)
+            }
+            DataType::Int64 => {
+                build_a_list_array_from_scalars!(Int64Type, Int64)
+            }
+            DataType::UInt8 => {
+                build_a_list_array_from_scalars!(UInt8Type, UInt8)
+            }
+            DataType::UInt16 => {
+                build_a_list_array_from_scalars!(UInt16Type, UInt16)
+            }
+            DataType::UInt32 => {
+                build_a_list_array_from_scalars!(UInt32Type, UInt32)
+            }
+            DataType::UInt64 => {
+                build_a_list_array_from_scalars!(UInt64Type, UInt64)
+            }
+            DataType::Float32 => {
+                build_a_list_array_from_scalars!(Float32Type, Float32)
+            }
+            DataType::Float64 => {
+                build_a_list_array_from_scalars!(Float64Type, Float64)
+            }
+            DataType::Utf8 => {
+                let mut strings = Vec::with_capacity(scalars.len());
+                for scalar in scalars.into_iter() {
+                    if let ScalarValue::Utf8(v) = scalar {
+                        strings.push(v);
+                    }
+                }
+                let arr = StringArray::from(strings);
+                let list_arr = wrap_into_list_array(Arc::new(arr));
+                Arc::new(list_arr)
+            }
+            _ => {
+                return _not_impl_err!(
+                    "Unsupported data type for DistinctCountAccumulator: {:?}",
+                    data_type
+                )
+            }
+        };
+        Ok(arr)
+    }
+
     fn iter_to_null_array(scalars: impl IntoIterator<Item = ScalarValue>) -> ArrayRef {
         let length =
             scalars
@@ -1758,19 +1834,6 @@ impl ScalarValue {
             .unwrap()
     }
 
-    /// Wrap an array into a ListArray
-    /// e.g. arr: PrimitiveArray<Int32Type> -> ListArray<PritimiveArray<Int32Type>>
-    /// TODO: Move this to array utils
-    pub fn wrap_into_list_array(arr: ArrayRef) -> ListArray {
-        let offsets = OffsetBuffer::from_lengths([arr.len()]);
-        ListArray::new(
-            Arc::new(Field::new("item", arr.data_type().to_owned(), true)),
-            offsets,
-            arr,
-            None,
-        )
-    }
-
     /// Converts Vec<ScalaValue> to ArrayRef, simplified version of ScalarValue::to_array
     pub fn list_to_array(values: &[ScalarValue], data_type: &DataType) -> ArrayRef {
         Arc::new(match data_type {
@@ -1807,12 +1870,12 @@ impl ScalarValue {
                 let arr = Decimal128Array::from(vals)
                     .with_precision_and_scale(*precision, *scale)
                     .unwrap();
-                Self::wrap_into_list_array(Arc::new(arr))
+                wrap_into_list_array(Arc::new(arr))
             }
 
             DataType::Null => {
                 let arr = new_null_array(&DataType::Null, values.len());
-                Self::wrap_into_list_array(arr)
+                wrap_into_list_array(arr)
             }
             _ => panic!(
                 "Unsupported data type {:?} for ScalarValue::list_to_array",
@@ -3156,6 +3219,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn build_a_list_array_from_scalars_primitive_test() {
+        let scalars = vec![
+            ScalarValue::Int32(Some(1)),
+            ScalarValue::Int32(Some(2)),
+            ScalarValue::Int32(Some(3)),
+        ];
+
+        let array = ScalarValue::build_a_list_array_from_scalars(scalars, &DataType::Int32).unwrap();
+        let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2), Some(3)]),
+        ]);
+        let result = as_list_array(&array);
+        assert_eq!(result, &expected);
+    }
+
+    #[test]
+    fn build_a_list_array_from_scalars_string_test() {
+        let scalars = vec![
+            ScalarValue::Utf8(Some(String::from("rust"))),
+            ScalarValue::Utf8(Some(String::from("arrow"))),
+            ScalarValue::Utf8(Some(String::from("data-fusion"))),
+        ];
+
+        let array = ScalarValue::build_a_list_array_from_scalars(scalars, &DataType::Utf8).unwrap();
+        let expected = wrap_into_list_array(Arc::new(StringArray::from(vec!["rust", "arrow", "data-fusion"])));
+        let result = as_list_array(&array);
+        assert_eq!(result, &expected);
+    }
+
+    #[test]
     fn iter_to_array_primitive_test() {
         let scalars = vec![
             ScalarValue::ListArr(Arc::new(ListArray::from_iter_primitive::<
@@ -3188,10 +3281,10 @@ mod tests {
 
     #[test]
     fn iter_to_array_string_test() {
-        let arr1 = ScalarValue::wrap_into_list_array(Arc::new(StringArray::from(vec![
+        let arr1 = wrap_into_list_array(Arc::new(StringArray::from(vec![
             "foo", "bar", "baz",
         ])));
-        let arr2 = ScalarValue::wrap_into_list_array(Arc::new(StringArray::from(vec![
+        let arr2 = wrap_into_list_array(Arc::new(StringArray::from(vec![
             "rust", "world",
         ])));
 

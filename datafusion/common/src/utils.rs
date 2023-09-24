@@ -19,10 +19,12 @@
 
 use crate::{DataFusionError, Result, ScalarValue};
 use arrow::array::{ArrayRef, PrimitiveArray};
+use arrow::buffer::OffsetBuffer;
 use arrow::compute;
 use arrow::compute::{partition, SortColumn, SortOptions};
-use arrow::datatypes::{SchemaRef, UInt32Type};
+use arrow::datatypes::{SchemaRef, UInt32Type, Field};
 use arrow::record_batch::RecordBatch;
+use arrow_array::ListArray;
 use sqlparser::ast::Ident;
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
@@ -332,6 +334,19 @@ pub fn longest_consecutive_prefix<T: Borrow<usize>>(
         count += 1;
     }
     count
+}
+
+
+/// Wrap an array into a ListArray
+/// e.g. arr: PrimitiveArray<Int32Type> -> ListArray<PritimiveArray<Int32Type>>
+pub fn wrap_into_list_array(arr: ArrayRef) -> ListArray {
+    let offsets = OffsetBuffer::from_lengths([arr.len()]);
+    ListArray::new(
+        Arc::new(Field::new("item", arr.data_type().to_owned(), true)),
+        offsets,
+        arr,
+        None,
+    )
 }
 
 /// An extension trait for smart pointers. Provides an interface to get a

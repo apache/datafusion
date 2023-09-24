@@ -22,6 +22,7 @@ use arrow::buffer::OffsetBuffer;
 use arrow::compute;
 use arrow::datatypes::{DataType, Field, UInt64Type};
 use arrow_buffer::NullBuffer;
+use datafusion_common::utils::wrap_into_list_array;
 use core::any::type_name;
 use datafusion_common::cast::{as_generic_string_array, as_int64_array, as_list_array};
 use datafusion_common::{exec_err, internal_err, not_impl_err, plan_err, ScalarValue};
@@ -419,13 +420,13 @@ fn array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
         // empty array
         None => {
             let null_arr = new_null_array(&DataType::Null, 0);
-            let list_arr = Arc::new(ScalarValue::wrap_into_list_array(null_arr));
+            let list_arr = Arc::new(wrap_into_list_array(null_arr));
             Ok(ColumnarValue::Scalar(ScalarValue::ListArr(list_arr)))
         }
         // all nulls, set default data type as int32
         Some(DataType::Null) => {
             let null_arr = new_null_array(&DataType::Int32, arrays.len());
-            let list_arr = Arc::new(ScalarValue::wrap_into_list_array(null_arr));
+            let list_arr = Arc::new(wrap_into_list_array(null_arr));
             Ok(ColumnarValue::Array(list_arr))
         }
         Some(data_type) => Ok(ColumnarValue::Array(array_array(
