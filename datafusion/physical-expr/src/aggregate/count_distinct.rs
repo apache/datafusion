@@ -204,6 +204,7 @@ mod tests {
     };
     use arrow::datatypes::DataType;
     use datafusion_common::internal_err;
+    use datafusion_common::DataFusionError;
 
     macro_rules! state_to_vec {
         ($LIST:expr, $DATA_TYPE:ident, $PRIM_TY:ty) => {{

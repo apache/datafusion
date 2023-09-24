@@ -1837,7 +1837,7 @@ impl ScalarValue {
             .unwrap()
     }
 
-    /// Converts Vec<ScalaValue> to ArrayRef, simplified version of ScalarValue::to_array
+    /// Converts `Vec<ScalaValue>` to ArrayRef, simplified version of ScalarValue::to_array
     pub fn list_to_array(values: &[ScalarValue], data_type: &DataType) -> ArrayRef {
         Arc::new(match data_type {
             DataType::Boolean => build_values_list!(BooleanBuilder, Boolean, values, 1),
@@ -3605,30 +3605,21 @@ mod tests {
 
     #[test]
     fn scalar_list_null_to_array() {
-        let list_array_ref = ScalarValue::List(
-            None,
-            Arc::new(Field::new("item", DataType::UInt64, false)),
-        )
-        .to_array();
+        let list_array_ref = ScalarValue::list_to_array(&[], &DataType::UInt64);
         let list_array = as_list_array(&list_array_ref);
 
-        assert!(list_array.is_null(0));
         assert_eq!(list_array.len(), 1);
         assert_eq!(list_array.values().len(), 0);
     }
 
     #[test]
     fn scalar_list_to_array() -> Result<()> {
-        let list_array_ref = ScalarValue::List(
-            Some(vec![
-                ScalarValue::UInt64(Some(100)),
-                ScalarValue::UInt64(None),
-                ScalarValue::UInt64(Some(101)),
-            ]),
-            Arc::new(Field::new("item", DataType::UInt64, false)),
-        )
-        .to_array();
-
+        let values = vec![
+            ScalarValue::UInt64(Some(100)),
+            ScalarValue::UInt64(None),
+            ScalarValue::UInt64(Some(101)),
+        ];
+        let list_array_ref = ScalarValue::list_to_array(&values, &DataType::UInt64);
         let list_array = as_list_array(&list_array_ref);
         assert_eq!(list_array.len(), 1);
         assert_eq!(list_array.values().len(), 3);
@@ -5169,12 +5160,8 @@ mod tests {
     #[test]
     fn test_build_timestamp_millisecond_list() {
         let values = vec![ScalarValue::TimestampMillisecond(Some(1), None)];
-        let ts_list = ScalarValue::new_list(
-            Some(values),
-            DataType::Timestamp(TimeUnit::Millisecond, None),
-        );
-        let list = ts_list.to_array_of_size(1);
-        assert_eq!(1, list.len());
+        let arr = ScalarValue::list_to_array(&values, &DataType::Timestamp(TimeUnit::Millisecond, None));
+        assert_eq!(1, arr.len());
     }
 
     fn get_random_timestamps(sample_size: u64) -> Vec<ScalarValue> {

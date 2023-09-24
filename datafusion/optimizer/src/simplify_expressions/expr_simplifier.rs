@@ -395,13 +395,11 @@ impl<'a> ConstEvaluator<'a> {
                         "Could not evaluate the expression, found a result of length {}",
                         a.len()
                     )
+                } else if as_list_array(&a).is_ok() || as_large_list_array(&a).is_ok() {
+                    Ok(ScalarValue::ListArr(a))
                 } else {
-                    if as_list_array(&a).is_ok() || as_large_list_array(&a).is_ok() {
-                        Ok(ScalarValue::ListArr(a))
-                    } else {
-                        // Non-ListArray
-                        ScalarValue::try_from_array(&a, 0)
-                    }
+                    // Non-ListArray
+                    ScalarValue::try_from_array(&a, 0)
                 }
             }
             ColumnarValue::Scalar(s) => Ok(s),
@@ -3267,7 +3265,7 @@ mod tests {
         let expr_x = col("c3").gt(lit(3_i64));
         let expr_y = (col("c4") + lit(2_u32)).lt(lit(10_u32));
         let expr_z = col("c1").in_list(vec![lit("a"), lit("b")], true);
-        let expr = expr_x.clone().and(expr_y.clone().or(expr_z));
+        let expr = expr_x.clone().and(expr_y.or(expr_z));
 
         // All guaranteed null
         let guarantees = vec![
@@ -3342,7 +3340,7 @@ mod tests {
             col("c4"),
             NullableInterval::from(ScalarValue::UInt32(Some(3))),
         )];
-        let output = simplify_with_guarantee(expr.clone(), guarantees);
+        let output = simplify_with_guarantee(expr, guarantees);
         assert_eq!(&output, &expr_x);
     }
 }
