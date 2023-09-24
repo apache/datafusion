@@ -144,7 +144,8 @@ impl DistinctCountAccumulator {
 impl Accumulator for DistinctCountAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
         let scalars = self.values.iter().cloned().collect::<Vec<_>>();
-        let arr = ScalarValue::build_a_list_array_from_scalars(scalars, &self.state_data_type)?;
+        let arr =
+            ScalarValue::build_a_list_array_from_scalars(scalars, &self.state_data_type)?;
         Ok(vec![ScalarValue::ListArr(arr)])
     }
 

@@ -1591,7 +1591,10 @@ impl ScalarValue {
     }
 
     /// Build a list array from non-list and non-null scalars
-    pub fn build_a_list_array_from_scalars(scalars: Vec<ScalarValue>, data_type: &DataType) -> Result<ArrayRef> {
+    pub fn build_a_list_array_from_scalars(
+        scalars: Vec<ScalarValue>,
+        data_type: &DataType,
+    ) -> Result<ArrayRef> {
         macro_rules! build_a_list_array_from_scalars {
             ($ARRAY_TY:ty, $SCALAR_TY:ident) => {{
                 let s = scalars
@@ -3226,10 +3229,15 @@ mod tests {
             ScalarValue::Int32(Some(3)),
         ];
 
-        let array = ScalarValue::build_a_list_array_from_scalars(scalars, &DataType::Int32).unwrap();
-        let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
-            Some(vec![Some(1), Some(2), Some(3)]),
-        ]);
+        let array =
+            ScalarValue::build_a_list_array_from_scalars(scalars, &DataType::Int32)
+                .unwrap();
+        let expected =
+            ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+                Some(1),
+                Some(2),
+                Some(3),
+            ])]);
         let result = as_list_array(&array);
         assert_eq!(result, &expected);
     }
@@ -3242,8 +3250,14 @@ mod tests {
             ScalarValue::Utf8(Some(String::from("data-fusion"))),
         ];
 
-        let array = ScalarValue::build_a_list_array_from_scalars(scalars, &DataType::Utf8).unwrap();
-        let expected = wrap_into_list_array(Arc::new(StringArray::from(vec!["rust", "arrow", "data-fusion"])));
+        let array =
+            ScalarValue::build_a_list_array_from_scalars(scalars, &DataType::Utf8)
+                .unwrap();
+        let expected = wrap_into_list_array(Arc::new(StringArray::from(vec![
+            "rust",
+            "arrow",
+            "data-fusion",
+        ])));
         let result = as_list_array(&array);
         assert_eq!(result, &expected);
     }
@@ -3281,12 +3295,10 @@ mod tests {
 
     #[test]
     fn iter_to_array_string_test() {
-        let arr1 = wrap_into_list_array(Arc::new(StringArray::from(vec![
-            "foo", "bar", "baz",
-        ])));
-        let arr2 = wrap_into_list_array(Arc::new(StringArray::from(vec![
-            "rust", "world",
-        ])));
+        let arr1 =
+            wrap_into_list_array(Arc::new(StringArray::from(vec!["foo", "bar", "baz"])));
+        let arr2 =
+            wrap_into_list_array(Arc::new(StringArray::from(vec!["rust", "world"])));
 
         let scalars = vec![
             ScalarValue::ListArr(Arc::new(arr1)),

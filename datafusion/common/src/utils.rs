@@ -22,7 +22,7 @@ use arrow::array::{ArrayRef, PrimitiveArray};
 use arrow::buffer::OffsetBuffer;
 use arrow::compute;
 use arrow::compute::{partition, SortColumn, SortOptions};
-use arrow::datatypes::{SchemaRef, UInt32Type, Field};
+use arrow::datatypes::{Field, SchemaRef, UInt32Type};
 use arrow::record_batch::RecordBatch;
 use arrow_array::ListArray;
 use sqlparser::ast::Ident;
@@ -335,7 +335,6 @@ pub fn longest_consecutive_prefix<T: Borrow<usize>>(
     }
     count
 }
-
 
 /// Wrap an array into a ListArray
 /// e.g. arr: PrimitiveArray<Int32Type> -> ListArray<PritimiveArray<Int32Type>>
