@@ -24,7 +24,6 @@ use apache_avro::types::Value;
 use apache_avro::Schema as AvroSchema;
 use arrow::datatypes::{Field, UnionFields};
 use std::collections::HashMap;
-use std::convert::TryFrom;
 use std::sync::Arc;
 
 /// Converts an avro schema to an arrow schema
@@ -137,15 +136,7 @@ fn schema_to_field_with_props(
                 .collect();
             DataType::Struct(fields?)
         }
-        AvroSchema::Enum(EnumSchema { symbols, name, .. }) => {
-            return Ok(Field::new_dict(
-                name.fullname(None),
-                index_type(symbols.len()),
-                false,
-                0,
-                false,
-            ))
-        }
+        AvroSchema::Enum(EnumSchema { .. }) => DataType::Utf8,
         AvroSchema::Fixed(FixedSchema { size, .. }) => {
             DataType::FixedSizeBinary(*size as i32)
         }
@@ -232,18 +223,6 @@ fn default_field_name(dt: &DataType) -> &str {
         }
         DataType::Decimal128(_, _) => "decimal",
         DataType::Decimal256(_, _) => "decimal",
-    }
-}
-
-fn index_type(len: usize) -> DataType {
-    if len <= usize::from(u8::MAX) {
-        DataType::Int8
-    } else if len <= usize::from(u16::MAX) {
-        DataType::Int16
-    } else if usize::try_from(u32::MAX).map(|i| len < i).unwrap_or(false) {
-        DataType::Int32
-    } else {
-        DataType::Int64
     }
 }
 
