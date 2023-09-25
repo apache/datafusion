@@ -1020,9 +1020,13 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::DateTrunc => Signature::one_of(
                 vec![
                     Exact(vec![Utf8, Timestamp(Nanosecond, None)]),
+                    Exact(vec![Utf8, Timestamp(Nanosecond, Some("+TZ".into()))]),
                     Exact(vec![Utf8, Timestamp(Microsecond, None)]),
+                    Exact(vec![Utf8, Timestamp(Microsecond, Some("+TZ".into()))]),
                     Exact(vec![Utf8, Timestamp(Millisecond, None)]),
+                    Exact(vec![Utf8, Timestamp(Millisecond, Some("+TZ".into()))]),
                     Exact(vec![Utf8, Timestamp(Second, None)]),
+                    Exact(vec![Utf8, Timestamp(Second, Some("+TZ".into()))]),
                 ],
                 self.volatility(),
             ),
@@ -1035,15 +1039,36 @@ impl BuiltinScalarFunction {
                             Timestamp(Nanosecond, None),
                         ]),
                         Exact(vec![
+                            Interval(MonthDayNano),
+                            Timestamp(array_type.clone(), Some("+TZ".into())),
+                            Timestamp(Nanosecond, Some("+TZ".into())),
+                        ]),
+                        Exact(vec![
                             Interval(DayTime),
                             Timestamp(array_type.clone(), None),
                             Timestamp(Nanosecond, None),
                         ]),
                         Exact(vec![
+                            Interval(DayTime),
+                            Timestamp(array_type.clone(), Some("+TZ".into())),
+                            Timestamp(Nanosecond, Some("+TZ".into())),
+                        ]),
+                        Exact(vec![
                             Interval(MonthDayNano),
                             Timestamp(array_type.clone(), None),
                         ]),
-                        Exact(vec![Interval(DayTime), Timestamp(array_type, None)]),
+                        Exact(vec![
+                            Interval(MonthDayNano),
+                            Timestamp(array_type.clone(), Some("+TZ".into())),
+                        ]),
+                        Exact(vec![
+                            Interval(DayTime),
+                            Timestamp(array_type.clone(), None),
+                        ]),
+                        Exact(vec![
+                            Interval(DayTime),
+                            Timestamp(array_type, Some("+TZ".into())),
+                        ]),
                     ]
                 };
 
@@ -1060,10 +1085,13 @@ impl BuiltinScalarFunction {
                     Exact(vec![Utf8, Date32]),
                     Exact(vec![Utf8, Date64]),
                     Exact(vec![Utf8, Timestamp(Second, None)]),
+                    Exact(vec![Utf8, Timestamp(Second, Some("+TZ".into()))]),
                     Exact(vec![Utf8, Timestamp(Microsecond, None)]),
+                    Exact(vec![Utf8, Timestamp(Microsecond, Some("+TZ".into()))]),
                     Exact(vec![Utf8, Timestamp(Millisecond, None)]),
+                    Exact(vec![Utf8, Timestamp(Millisecond, Some("+TZ".into()))]),
                     Exact(vec![Utf8, Timestamp(Nanosecond, None)]),
-                    Exact(vec![Utf8, Timestamp(Nanosecond, Some("+00:00".into()))]),
+                    Exact(vec![Utf8, Timestamp(Nanosecond, Some("+TZ".into()))]),
                 ],
                 self.volatility(),
             ),

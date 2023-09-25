@@ -65,7 +65,6 @@ jobs:
       - name: Check workspace in debug mode
         run: cargo check
 
-      # Note: this does not include dictionary_expressions to reduce codegen
       - name: Check workspace with all features
         run: cargo check --workspace --benches --features avro,json
       - name: Check Cargo.lock for datafusion-cli
@@ -96,7 +95,7 @@ jobs:
         with:
           rust-version: stable
       - name: Run tests (excluding doctests)
-        run: cargo test --lib --tests --bins --features avro,json,dictionary_expressions,backtrace
+        run: cargo test --lib --tests --bins --features avro,json,backtrace
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
@@ -177,7 +176,6 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      # Note: this does not include dictionary_expressions to reduce codegen
       - name: Run doctests
         run: |
           cargo test --doc --features avro,json
@@ -205,6 +203,29 @@ jobs:
           cargo doc --document-private-items --no-deps --workspace
           cd datafusion-cli
           cargo doc --document-private-items --no-deps
+
+  linux-wasm-pack:
+    name: build with wasm-pack
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache Cargo
+        uses: actions/cache@v3
+        with:
+          path: /github/home/.cargo
+          # this key equals the ones on `linux-build-lib` for re-use
+          key: cargo-cache-
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: stable
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+      - name: Build with wasm-pack
+        working-directory: ./datafusion/wasmtest
+        run: wasm-pack build --dev
 
   # verify that the benchmark queries return the correct results
   verify-benchmark-results:
@@ -302,7 +323,7 @@ jobs:
         shell: bash
         run: |
           export PATH=$PATH:$HOME/d/protoc/bin
-          cargo test --lib --tests --bins --features avro,json,dictionary_expressions,backtrace
+          cargo test --lib --tests --bins --features avro,json,backtrace
           cd datafusion-cli
           cargo test --lib --tests --bins --all-features
         env:
@@ -338,7 +359,7 @@ jobs:
       - name: Run tests (excluding doctests)
         shell: bash
         run: |
-          cargo test --lib --tests --bins --features avro,json,dictionary_expressions,backtrace
+          cargo test --lib --tests --bins --features avro,json,backtrace
           cd datafusion-cli
           cargo test --lib --tests --bins --all-features
         env:
