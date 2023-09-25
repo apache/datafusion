@@ -251,6 +251,9 @@ config_namespace! {
         /// and sorted in a single RecordBatch rather than sorted in
         /// batches and merged.
         pub sort_in_place_threshold_bytes: usize, default = 1024 * 1024
+
+        /// Number of files to read in parallel when inferring schema and statistics
+        pub meta_fetch_concurrency: usize, default = 32
     }
 }
 
@@ -353,6 +356,15 @@ config_namespace! {
         /// Sets bloom filter number of distinct values. If NULL, uses
         /// default parquet writer setting
         pub bloom_filter_ndv: Option<u64>, default = None
+
+        /// Controls whether DataFusion will attempt to speed up writing
+        /// large parquet files by first writing multiple smaller files
+        /// and then stitching them together into a single large file.
+        /// This will result in faster write speeds, but higher memory usage.
+        /// Also currently unsupported are bloom filters and column indexes
+        /// when single_file_parallelism is enabled.
+        pub allow_single_file_parallelism: bool, default = false
+
     }
 }
 

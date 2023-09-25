@@ -22,13 +22,34 @@ use std::{
     sync::Arc,
 };
 
-use datafusion::physical_plan::expressions::{CastExpr, TryCastExpr};
-use datafusion::physical_plan::ColumnStatistics;
 use datafusion::physical_plan::{
     expressions::{
-        CaseExpr, InListExpr, IsNotNullExpr, IsNullExpr, NegativeExpr, NotExpr,
+        ApproxDistinct, ApproxMedian, ApproxPercentileCont,
+        ApproxPercentileContWithWeight, ArrayAgg, Correlation, Covariance, CovariancePop,
+        DistinctArrayAgg, DistinctBitXor, DistinctSum, FirstValue, Grouping, LastValue,
+        Median, OrderSensitiveArrayAgg, Regr, RegrType, Stddev, StddevPop, Variance,
+        VariancePop,
     },
-    Statistics,
+    windows::BuiltInWindowExpr,
+    ColumnStatistics,
+};
+use datafusion::{
+    physical_expr::window::NthValueKind,
+    physical_plan::{
+        expressions::{
+            CaseExpr, CumeDist, InListExpr, IsNotNullExpr, IsNullExpr, NegativeExpr,
+            NotExpr, NthValue, Ntile, Rank, RankType, RowNumber, WindowShift,
+        },
+        Statistics,
+    },
+};
+use datafusion::{
+    physical_expr::window::SlidingAggregateWindowExpr,
+    physical_plan::{
+        expressions::{CastExpr, TryCastExpr},
+        windows::PlainAggregateWindowExpr,
+        WindowExpr,
+    },
 };
 
 use datafusion::datasource::listing::{FileRange, PartitionedFile};
@@ -42,7 +63,7 @@ use datafusion::physical_plan::expressions::{
 };
 use datafusion::physical_plan::{AggregateExpr, PhysicalExpr};
 
-use crate::protobuf;
+use crate::protobuf::{self, physical_window_expr_node};
 use crate::protobuf::{
     physical_aggregate_expr_node, PhysicalSortExprNode, PhysicalSortExprNodeCollection,
     ScalarValue,
@@ -58,9 +79,6 @@ impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
     type Error = DataFusionError;
 
     fn try_from(a: Arc<dyn AggregateExpr>) -> Result<Self, Self::Error> {
-        use datafusion::physical_plan::expressions;
-        use protobuf::AggregateFunction;
-
         let expressions: Vec<protobuf::PhysicalExprNode> = a
             .expressions()
             .iter()
@@ -74,117 +92,30 @@ impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
             .map(|e| e.clone().try_into())
             .collect::<Result<Vec<_>>>()?;
 
-        let mut distinct = false;
-        let aggr_function = if a.as_any().downcast_ref::<Avg>().is_some() {
-            Ok(AggregateFunction::Avg.into())
-        } else if a.as_any().downcast_ref::<Sum>().is_some() {
-            Ok(AggregateFunction::Sum.into())
-        } else if a.as_any().downcast_ref::<Count>().is_some() {
-            Ok(AggregateFunction::Count.into())
-        } else if a.as_any().downcast_ref::<BitAnd>().is_some() {
-            Ok(AggregateFunction::BitAnd.into())
-        } else if a.as_any().downcast_ref::<BitOr>().is_some() {
-            Ok(AggregateFunction::BitOr.into())
-        } else if a.as_any().downcast_ref::<BitXor>().is_some() {
-            Ok(AggregateFunction::BitXor.into())
-        } else if a.as_any().downcast_ref::<BoolAnd>().is_some() {
-            Ok(AggregateFunction::BoolAnd.into())
-        } else if a.as_any().downcast_ref::<BoolOr>().is_some() {
-            Ok(AggregateFunction::BoolOr.into())
-        } else if a.as_any().downcast_ref::<DistinctCount>().is_some() {
-            distinct = true;
-            Ok(AggregateFunction::Count.into())
-        } else if a.as_any().downcast_ref::<Min>().is_some() {
-            Ok(AggregateFunction::Min.into())
-        } else if a.as_any().downcast_ref::<Max>().is_some() {
-            Ok(AggregateFunction::Max.into())
-        } else if a
-            .as_any()
-            .downcast_ref::<expressions::ApproxDistinct>()
-            .is_some()
-        {
-            Ok(AggregateFunction::ApproxDistinct.into())
-        } else if a.as_any().downcast_ref::<expressions::ArrayAgg>().is_some() {
-            Ok(AggregateFunction::ArrayAgg.into())
-        } else if a.as_any().downcast_ref::<expressions::Variance>().is_some() {
-            Ok(AggregateFunction::Variance.into())
-        } else if a
-            .as_any()
-            .downcast_ref::<expressions::VariancePop>()
-            .is_some()
-        {
-            Ok(AggregateFunction::VariancePop.into())
-        } else if a
-            .as_any()
-            .downcast_ref::<expressions::Covariance>()
-            .is_some()
-        {
-            Ok(AggregateFunction::Covariance.into())
-        } else if a
-            .as_any()
-            .downcast_ref::<expressions::CovariancePop>()
-            .is_some()
-        {
-            Ok(AggregateFunction::CovariancePop.into())
-        } else if a.as_any().downcast_ref::<expressions::Stddev>().is_some() {
-            Ok(AggregateFunction::Stddev.into())
-        } else if a
-            .as_any()
-            .downcast_ref::<expressions::StddevPop>()
-            .is_some()
-        {
-            Ok(AggregateFunction::StddevPop.into())
-        } else if a
-            .as_any()
-            .downcast_ref::<expressions::Correlation>()
-            .is_some()
-        {
-            Ok(AggregateFunction::Correlation.into())
-        } else if a
-            .as_any()
-            .downcast_ref::<expressions::ApproxPercentileCont>()
-            .is_some()
-        {
-            Ok(AggregateFunction::ApproxPercentileCont.into())
-        } else if a
-            .as_any()
-            .downcast_ref::<expressions::ApproxPercentileContWithWeight>()
-            .is_some()
-        {
-            Ok(AggregateFunction::ApproxPercentileContWithWeight.into())
-        } else if a
-            .as_any()
-            .downcast_ref::<expressions::ApproxMedian>()
-            .is_some()
-        {
-            Ok(AggregateFunction::ApproxMedian.into())
-        } else if a.as_any().is::<expressions::FirstValue>() {
-            Ok(AggregateFunction::FirstValueAgg.into())
-        } else if a.as_any().is::<expressions::LastValue>() {
-            Ok(AggregateFunction::LastValueAgg.into())
-        } else {
-            if let Some(a) = a.as_any().downcast_ref::<AggregateFunctionExpr>() {
-                return Ok(protobuf::PhysicalExprNode {
+        if let Some(a) = a.as_any().downcast_ref::<AggregateFunctionExpr>() {
+            return Ok(protobuf::PhysicalExprNode {
                     expr_type: Some(protobuf::physical_expr_node::ExprType::AggregateExpr(
                         protobuf::PhysicalAggregateExprNode {
                             aggregate_function: Some(physical_aggregate_expr_node::AggregateFunction::UserDefinedAggrFunction(a.fun().name.clone())),
                             expr: expressions,
                             ordering_req,
-                            distinct,
+                            distinct: false,
                         },
                     )),
                 });
-            }
+        }
 
-            not_impl_err!("Aggregate function not supported: {a:?}")
-        }?;
+        let AggrFn {
+            inner: aggr_function,
+            distinct,
+        } = aggr_expr_to_aggr_fn(a.as_ref())?;
 
         Ok(protobuf::PhysicalExprNode {
             expr_type: Some(protobuf::physical_expr_node::ExprType::AggregateExpr(
                 protobuf::PhysicalAggregateExprNode {
                     aggregate_function: Some(
                         physical_aggregate_expr_node::AggregateFunction::AggrFunction(
-                            aggr_function,
+                            aggr_function as i32,
                         ),
                     ),
                     expr: expressions,
@@ -194,6 +125,253 @@ impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
             )),
         })
     }
+}
+
+impl TryFrom<Arc<dyn WindowExpr>> for protobuf::PhysicalWindowExprNode {
+    type Error = DataFusionError;
+
+    fn try_from(
+        window_expr: Arc<dyn WindowExpr>,
+    ) -> std::result::Result<Self, Self::Error> {
+        let expr = window_expr.as_any();
+
+        let mut args = window_expr.expressions().to_vec();
+        let window_frame = window_expr.get_window_frame();
+
+        let window_function = if let Some(built_in_window_expr) =
+            expr.downcast_ref::<BuiltInWindowExpr>()
+        {
+            let expr = built_in_window_expr.get_built_in_func_expr();
+            let built_in_fn_expr = expr.as_any();
+
+            let builtin_fn = if built_in_fn_expr.downcast_ref::<RowNumber>().is_some() {
+                protobuf::BuiltInWindowFunction::RowNumber
+            } else if let Some(rank_expr) = built_in_fn_expr.downcast_ref::<Rank>() {
+                match rank_expr.get_type() {
+                    RankType::Basic => protobuf::BuiltInWindowFunction::Rank,
+                    RankType::Dense => protobuf::BuiltInWindowFunction::DenseRank,
+                    RankType::Percent => protobuf::BuiltInWindowFunction::PercentRank,
+                }
+            } else if built_in_fn_expr.downcast_ref::<CumeDist>().is_some() {
+                protobuf::BuiltInWindowFunction::CumeDist
+            } else if let Some(ntile_expr) = built_in_fn_expr.downcast_ref::<Ntile>() {
+                args.insert(
+                    0,
+                    Arc::new(Literal::new(datafusion_common::ScalarValue::Int64(Some(
+                        ntile_expr.get_n() as i64,
+                    )))),
+                );
+                protobuf::BuiltInWindowFunction::Ntile
+            } else if let Some(window_shift_expr) =
+                built_in_fn_expr.downcast_ref::<WindowShift>()
+            {
+                args.insert(
+                    1,
+                    Arc::new(Literal::new(datafusion_common::ScalarValue::Int64(Some(
+                        window_shift_expr.get_shift_offset(),
+                    )))),
+                );
+                if let Some(default_value) = window_shift_expr.get_default_value() {
+                    args.insert(2, Arc::new(Literal::new(default_value)));
+                }
+                if window_shift_expr.get_shift_offset() >= 0 {
+                    protobuf::BuiltInWindowFunction::Lag
+                } else {
+                    protobuf::BuiltInWindowFunction::Lead
+                }
+            } else if let Some(nth_value_expr) =
+                built_in_fn_expr.downcast_ref::<NthValue>()
+            {
+                match nth_value_expr.get_kind() {
+                    NthValueKind::First => protobuf::BuiltInWindowFunction::FirstValue,
+                    NthValueKind::Last => protobuf::BuiltInWindowFunction::LastValue,
+                    NthValueKind::Nth(n) => {
+                        args.insert(
+                            1,
+                            Arc::new(Literal::new(
+                                datafusion_common::ScalarValue::Int64(Some(n as i64)),
+                            )),
+                        );
+                        protobuf::BuiltInWindowFunction::NthValue
+                    }
+                }
+            } else {
+                return not_impl_err!("BuiltIn function not supported: {expr:?}");
+            };
+
+            physical_window_expr_node::WindowFunction::BuiltInFunction(builtin_fn as i32)
+        } else if let Some(plain_aggr_window_expr) =
+            expr.downcast_ref::<PlainAggregateWindowExpr>()
+        {
+            let AggrFn { inner, distinct } = aggr_expr_to_aggr_fn(
+                plain_aggr_window_expr.get_aggregate_expr().as_ref(),
+            )?;
+
+            if distinct {
+                // TODO
+                return not_impl_err!(
+                    "Distinct aggregate functions not supported in window expressions"
+                );
+            }
+
+            if !window_frame.start_bound.is_unbounded() {
+                return Err(DataFusionError::Internal(format!("Invalid PlainAggregateWindowExpr = {window_expr:?} with WindowFrame = {window_frame:?}")));
+            }
+
+            physical_window_expr_node::WindowFunction::AggrFunction(inner as i32)
+        } else if let Some(sliding_aggr_window_expr) =
+            expr.downcast_ref::<SlidingAggregateWindowExpr>()
+        {
+            let AggrFn { inner, distinct } = aggr_expr_to_aggr_fn(
+                sliding_aggr_window_expr.get_aggregate_expr().as_ref(),
+            )?;
+
+            if distinct {
+                // TODO
+                return not_impl_err!(
+                    "Distinct aggregate functions not supported in window expressions"
+                );
+            }
+
+            if window_frame.start_bound.is_unbounded() {
+                return Err(DataFusionError::Internal(format!("Invalid SlidingAggregateWindowExpr = {window_expr:?} with WindowFrame = {window_frame:?}")));
+            }
+
+            physical_window_expr_node::WindowFunction::AggrFunction(inner as i32)
+        } else {
+            return not_impl_err!("WindowExpr not supported: {window_expr:?}");
+        };
+
+        let args = args
+            .into_iter()
+            .map(|e| e.try_into())
+            .collect::<Result<Vec<protobuf::PhysicalExprNode>>>()?;
+
+        let partition_by = window_expr
+            .partition_by()
+            .iter()
+            .map(|p| p.clone().try_into())
+            .collect::<Result<Vec<protobuf::PhysicalExprNode>>>()?;
+
+        let order_by = window_expr
+            .order_by()
+            .iter()
+            .map(|o| o.clone().try_into())
+            .collect::<Result<Vec<protobuf::PhysicalSortExprNode>>>()?;
+
+        let window_frame: protobuf::WindowFrame = window_frame
+            .as_ref()
+            .try_into()
+            .map_err(|e| DataFusionError::Internal(format!("{e}")))?;
+
+        let name = window_expr.name().to_string();
+
+        Ok(protobuf::PhysicalWindowExprNode {
+            args,
+            partition_by,
+            order_by,
+            window_frame: Some(window_frame),
+            window_function: Some(window_function),
+            name,
+        })
+    }
+}
+
+struct AggrFn {
+    inner: protobuf::AggregateFunction,
+    distinct: bool,
+}
+
+fn aggr_expr_to_aggr_fn(expr: &dyn AggregateExpr) -> Result<AggrFn> {
+    let aggr_expr = expr.as_any();
+    let mut distinct = false;
+
+    let inner = if aggr_expr.downcast_ref::<Count>().is_some() {
+        protobuf::AggregateFunction::Count
+    } else if aggr_expr.downcast_ref::<DistinctCount>().is_some() {
+        distinct = true;
+        protobuf::AggregateFunction::Count
+    } else if aggr_expr.downcast_ref::<Grouping>().is_some() {
+        protobuf::AggregateFunction::Grouping
+    } else if aggr_expr.downcast_ref::<BitAnd>().is_some() {
+        protobuf::AggregateFunction::BitAnd
+    } else if aggr_expr.downcast_ref::<BitOr>().is_some() {
+        protobuf::AggregateFunction::BitOr
+    } else if aggr_expr.downcast_ref::<BitXor>().is_some() {
+        protobuf::AggregateFunction::BitXor
+    } else if aggr_expr.downcast_ref::<DistinctBitXor>().is_some() {
+        distinct = true;
+        protobuf::AggregateFunction::BitXor
+    } else if aggr_expr.downcast_ref::<BoolAnd>().is_some() {
+        protobuf::AggregateFunction::BoolAnd
+    } else if aggr_expr.downcast_ref::<BoolOr>().is_some() {
+        protobuf::AggregateFunction::BoolOr
+    } else if aggr_expr.downcast_ref::<Sum>().is_some() {
+        protobuf::AggregateFunction::Sum
+    } else if aggr_expr.downcast_ref::<DistinctSum>().is_some() {
+        distinct = true;
+        protobuf::AggregateFunction::Sum
+    } else if aggr_expr.downcast_ref::<ApproxDistinct>().is_some() {
+        protobuf::AggregateFunction::ApproxDistinct
+    } else if aggr_expr.downcast_ref::<ArrayAgg>().is_some() {
+        protobuf::AggregateFunction::ArrayAgg
+    } else if aggr_expr.downcast_ref::<DistinctArrayAgg>().is_some() {
+        distinct = true;
+        protobuf::AggregateFunction::ArrayAgg
+    } else if aggr_expr.downcast_ref::<OrderSensitiveArrayAgg>().is_some() {
+        protobuf::AggregateFunction::ArrayAgg
+    } else if aggr_expr.downcast_ref::<Min>().is_some() {
+        protobuf::AggregateFunction::Min
+    } else if aggr_expr.downcast_ref::<Max>().is_some() {
+        protobuf::AggregateFunction::Max
+    } else if aggr_expr.downcast_ref::<Avg>().is_some() {
+        protobuf::AggregateFunction::Avg
+    } else if aggr_expr.downcast_ref::<Variance>().is_some() {
+        protobuf::AggregateFunction::Variance
+    } else if aggr_expr.downcast_ref::<VariancePop>().is_some() {
+        protobuf::AggregateFunction::VariancePop
+    } else if aggr_expr.downcast_ref::<Covariance>().is_some() {
+        protobuf::AggregateFunction::Covariance
+    } else if aggr_expr.downcast_ref::<CovariancePop>().is_some() {
+        protobuf::AggregateFunction::CovariancePop
+    } else if aggr_expr.downcast_ref::<Stddev>().is_some() {
+        protobuf::AggregateFunction::Stddev
+    } else if aggr_expr.downcast_ref::<StddevPop>().is_some() {
+        protobuf::AggregateFunction::StddevPop
+    } else if aggr_expr.downcast_ref::<Correlation>().is_some() {
+        protobuf::AggregateFunction::Correlation
+    } else if let Some(regr_expr) = aggr_expr.downcast_ref::<Regr>() {
+        match regr_expr.get_regr_type() {
+            RegrType::Slope => protobuf::AggregateFunction::RegrSlope,
+            RegrType::Intercept => protobuf::AggregateFunction::RegrIntercept,
+            RegrType::Count => protobuf::AggregateFunction::RegrCount,
+            RegrType::R2 => protobuf::AggregateFunction::RegrR2,
+            RegrType::AvgX => protobuf::AggregateFunction::RegrAvgx,
+            RegrType::AvgY => protobuf::AggregateFunction::RegrAvgy,
+            RegrType::SXX => protobuf::AggregateFunction::RegrSxx,
+            RegrType::SYY => protobuf::AggregateFunction::RegrSyy,
+            RegrType::SXY => protobuf::AggregateFunction::RegrSxy,
+        }
+    } else if aggr_expr.downcast_ref::<ApproxPercentileCont>().is_some() {
+        protobuf::AggregateFunction::ApproxPercentileCont
+    } else if aggr_expr
+        .downcast_ref::<ApproxPercentileContWithWeight>()
+        .is_some()
+    {
+        protobuf::AggregateFunction::ApproxPercentileContWithWeight
+    } else if aggr_expr.downcast_ref::<ApproxMedian>().is_some() {
+        protobuf::AggregateFunction::ApproxMedian
+    } else if aggr_expr.downcast_ref::<Median>().is_some() {
+        protobuf::AggregateFunction::Median
+    } else if aggr_expr.downcast_ref::<FirstValue>().is_some() {
+        protobuf::AggregateFunction::FirstValueAgg
+    } else if aggr_expr.downcast_ref::<LastValue>().is_some() {
+        protobuf::AggregateFunction::LastValueAgg
+    } else {
+        return not_impl_err!("Aggregate function not supported: {expr:?}");
+    };
+
+    Ok(AggrFn { inner, distinct })
 }
 
 impl TryFrom<Arc<dyn PhysicalExpr>> for protobuf::PhysicalExprNode {

@@ -17,6 +17,7 @@
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow::compute::kernels::cast_utils::parse_interval_month_day_nano;
+use arrow::datatypes::DECIMAL128_MAX_PRECISION;
 use arrow_schema::DataType;
 use datafusion_common::{
     not_impl_err, plan_err, DFSchema, DataFusionError, Result, ScalarValue,
@@ -66,23 +67,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let p = str.len() - 1;
                 let s = str.len() - i - 1;
                 let str = str.replace('.', "");
-                let n = str.parse::<i128>().map_err(|_| {
-                    DataFusionError::from(ParserError(format!(
-                        "Cannot parse {str} as i128 when building decimal"
-                    )))
-                })?;
+                let n = parse_decimal_128_without_scale(&str)?;
                 Ok(Expr::Literal(ScalarValue::Decimal128(
                     Some(n),
                     p as u8,
                     s as i8,
                 )))
             } else {
-                let number = n.parse::<i128>().map_err(|_| {
-                    DataFusionError::from(ParserError(format!(
-                        "Cannot parse {n} as i128 when building decimal"
-                    )))
-                })?;
-                Ok(Expr::Literal(ScalarValue::Decimal128(Some(number), 38, 0)))
+                let number = parse_decimal_128_without_scale(str)?;
+                Ok(Expr::Literal(ScalarValue::Decimal128(
+                    Some(number),
+                    str.len() as u8,
+                    0,
+                )))
             }
         } else {
             n.parse::<f64>().map(lit).map_err(|_| {
@@ -392,6 +389,23 @@ const fn try_decode_hex_char(c: u8) -> Option<u8> {
         b'0'..=b'9' => Some(c - b'0'),
         _ => None,
     }
+}
+
+fn parse_decimal_128_without_scale(s: &str) -> Result<i128> {
+    let number = s.parse::<i128>().map_err(|e| {
+        DataFusionError::from(ParserError(format!(
+            "Cannot parse {s} as i128 when building decimal: {e}"
+        )))
+    })?;
+
+    const DECIMAL128_MAX_VALUE: i128 = 10_i128.pow(DECIMAL128_MAX_PRECISION as u32) - 1;
+    if number > DECIMAL128_MAX_VALUE {
+        return Err(DataFusionError::from(ParserError(format!(
+            "Cannot parse {s} as i128 when building decimal: precision overflow"
+        ))));
+    }
+
+    Ok(number)
 }
 
 #[cfg(test)]

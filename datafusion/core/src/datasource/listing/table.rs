@@ -31,7 +31,12 @@ use datafusion_optimizer::utils::conjunction;
 use datafusion_physical_expr::{create_physical_expr, LexOrdering, PhysicalSortExpr};
 use futures::{future, stream, StreamExt, TryStreamExt};
 
-use crate::datasource::physical_plan::{FileScanConfig, FileSinkConfig};
+use crate::datasource::file_format::file_compression_type::{
+    FileCompressionType, FileTypeExt,
+};
+use crate::datasource::physical_plan::{
+    is_plan_streaming, FileScanConfig, FileSinkConfig,
+};
 use crate::datasource::{
     file_format::{
         arrow::ArrowFormat, avro::AvroFormat, csv::CsvFormat, json::JsonFormat,
@@ -49,7 +54,7 @@ use crate::{
     logical_expr::Expr,
     physical_plan::{empty::EmptyExec, ExecutionPlan, Statistics},
 };
-use datafusion_common::{FileCompressionType, FileType};
+use datafusion_common::FileType;
 use datafusion_execution::cache::cache_manager::FileStatisticsCache;
 use datafusion_execution::cache::cache_unit::DefaultFileStatisticsCache;
 
@@ -891,7 +896,13 @@ impl TableProvider for ListingTable {
             output_schema: self.schema(),
             table_partition_cols: self.options.table_partition_cols.clone(),
             writer_mode,
-            unbounded_input: self.options().infinite_source,
+            // A plan can produce finite number of rows even if it has unbounded sources, like LIMIT
+            // queries. Thus, we can check if the plan is streaming to ensure file sink input is
+            // unbounded. When `unbounded_input` flag is `true` for sink, we occasionally call `yield_now`
+            // to consume data at the input. When `unbounded_input` flag is `false` (e.g non-streaming data),
+            // all of the data at the input is sink after execution finishes. See discussion for rationale:
+            // https://github.com/apache/arrow-datafusion/pull/7610#issuecomment-1728979918
+            unbounded_input: is_plan_streaming(&input)?,
             single_file_output: self.options.single_file,
             overwrite,
             file_type_writer_options,
@@ -934,38 +945,44 @@ impl ListingTable {
         let file_list = stream::iter(file_list).flatten();
 
         // collect the statistics if required by the config
-        let files = file_list.then(|part_file| async {
-            let part_file = part_file?;
-            let mut statistics_result = Statistics::default();
-            if self.options.collect_stat {
-                let statistics_cache = self.collected_statistics.clone();
-                match statistics_cache.get_with_extra(
-                    &part_file.object_meta.location,
-                    &part_file.object_meta,
-                ) {
-                    Some(statistics) => statistics_result = statistics.as_ref().clone(),
-                    None => {
-                        let statistics = self
-                            .options
-                            .format
-                            .infer_stats(
-                                ctx,
-                                &store,
-                                self.file_schema.clone(),
+        let files = file_list
+            .map(|part_file| async {
+                let part_file = part_file?;
+                let mut statistics_result = Statistics::default();
+                if self.options.collect_stat {
+                    let statistics_cache = self.collected_statistics.clone();
+                    match statistics_cache.get_with_extra(
+                        &part_file.object_meta.location,
+                        &part_file.object_meta,
+                    ) {
+                        Some(statistics) => {
+                            statistics_result = statistics.as_ref().clone()
+                        }
+                        None => {
+                            let statistics = self
+                                .options
+                                .format
+                                .infer_stats(
+                                    ctx,
+                                    &store,
+                                    self.file_schema.clone(),
+                                    &part_file.object_meta,
+                                )
+                                .await?;
+                            statistics_cache.put_with_extra(
+                                &part_file.object_meta.location,
+                                statistics.clone().into(),
                                 &part_file.object_meta,
-                            )
-                            .await?;
-                        statistics_cache.put_with_extra(
-                            &part_file.object_meta.location,
-                            statistics.clone().into(),
-                            &part_file.object_meta,
-                        );
-                        statistics_result = statistics;
+                            );
+                            statistics_result = statistics;
+                        }
                     }
                 }
-            }
-            Ok((part_file, statistics_result)) as Result<(PartitionedFile, Statistics)>
-        });
+                Ok((part_file, statistics_result))
+                    as Result<(PartitionedFile, Statistics)>
+            })
+            .boxed()
+            .buffered(ctx.config_options().execution.meta_fetch_concurrency);
 
         let (files, statistics) =
             get_statistics_with_limit(files, self.schema(), limit).await?;
@@ -986,7 +1003,9 @@ mod tests {
     use crate::prelude::*;
     use crate::{
         assert_batches_eq,
-        datasource::file_format::{avro::AvroFormat, parquet::ParquetFormat},
+        datasource::file_format::{
+            avro::AvroFormat, file_compression_type::FileTypeExt, parquet::ParquetFormat,
+        },
         execution::options::ReadOptions,
         logical_expr::{col, lit},
         test::{columns, object_store::register_test_store},

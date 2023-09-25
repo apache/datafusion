@@ -42,7 +42,7 @@ unicode_expressions = ["datafusion-physical-expr/unicode_expressions"]
 arrow = { workspace = true }
 async-trait = "0.1.41"
 chrono = { workspace = true }
-datafusion-common = { path = "../common", version = "31.0.0" }
+datafusion-common = { path = "../common", version = "31.0.0", default-features = false }
 datafusion-expr = { path = "../expr", version = "31.0.0" }
 datafusion-physical-expr = { path = "../physical-expr", version = "31.0.0", default-features = false }
 hashbrown = { version = "0.14", features = ["raw"] }

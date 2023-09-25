@@ -40,7 +40,7 @@ arrow-buffer = { workspace = true }
 arrow-schema = { workspace = true }
 async-trait = "0.1.41"
 chrono = { version = "0.4.23", default-features = false }
-datafusion-common = { path = "../common", version = "31.0.0" }
+datafusion-common = { path = "../common", version = "31.0.0", default-features = false }
 datafusion-execution = { path = "../execution", version = "31.0.0" }
 datafusion-expr = { path = "../expr", version = "31.0.0" }
 datafusion-physical-expr = { path = "../physical-expr", version = "31.0.0" }
@@ -54,10 +54,10 @@ once_cell = "1.18.0"
 parking_lot = "0.12"
 pin-project-lite = "^0.2.7"
 rand = "0.8"
-rstest = "0.18.0"
-tempfile = "3"
+tokio = { version = "1.28", features = ["sync", "fs", "parking_lot"] }
+uuid = { version = "^1.2", features = ["v4"] }
 
-#[dev-dependencies]
+[dev-dependencies]
+rstest = "0.18.0"
 termtree = "0.4.1"
 tokio = { version = "1.28", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }
-uuid = { version = "^1.2", features = ["v4"] }
