@@ -1349,7 +1349,7 @@ impl QueryPlanner for DefaultQueryPlanner {
 }
 
 /// Execution context for registering data sources and executing queries.
-/// See [`SessionContext`] for a higher level API..
+/// See [`SessionContext`] for a higher level API.
 ///
 /// Note that there is no `Default` or `new()` for SessionState,
 /// to avoid accidentally running queries or other operations without passing through
