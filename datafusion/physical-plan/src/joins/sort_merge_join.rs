@@ -390,6 +390,7 @@ impl ExecutionPlan for SortMergeJoinExec {
             self.right.clone(),
             self.on.clone(),
             &self.join_type,
+            &self.schema,
         )
     }
 }

@@ -606,9 +606,9 @@ mod tests_statistical {
             Statistics {
                 num_rows: Some(10),
                 total_byte_size: Some(100000),
-                column_statistics: Some(vec![
-                    ColumnStatistics::new_with_unbounded_column(&DataType::Int32),
-                ]),
+                column_statistics: vec![ColumnStatistics::new_with_unbounded_column(
+                    &DataType::Int32,
+                )],
                 is_exact: false,
             },
             Schema::new(vec![Field::new("big_col", DataType::Int32, false)]),
@@ -618,9 +618,9 @@ mod tests_statistical {
             Statistics {
                 num_rows: Some(100000),
                 total_byte_size: Some(10),
-                column_statistics: Some(vec![
-                    ColumnStatistics::new_with_unbounded_column(&DataType::Int32),
-                ]),
+                column_statistics: vec![ColumnStatistics::new_with_unbounded_column(
+                    &DataType::Int32,
+                )],
                 is_exact: false,
             },
             Schema::new(vec![Field::new("small_col", DataType::Int32, false)]),
@@ -637,13 +637,13 @@ mod tests_statistical {
         min: Option<u64>,
         max: Option<u64>,
         distinct_count: Option<usize>,
-    ) -> Option<Vec<ColumnStatistics>> {
-        Some(vec![ColumnStatistics {
+    ) -> Vec<ColumnStatistics> {
+        vec![ColumnStatistics {
             distinct_count,
             min_value: min.map(|size| ScalarValue::UInt64(Some(size))),
             max_value: max.map(|size| ScalarValue::UInt64(Some(size))),
             ..Default::default()
-        }])
+        }]
     }
 
     /// Returns three plans with statistics of (min, max, distinct_count)
@@ -1003,9 +1003,9 @@ mod tests_statistical {
             Statistics {
                 num_rows: Some(10000000),
                 total_byte_size: Some(10000000),
-                column_statistics: Some(vec![
-                    ColumnStatistics::new_with_unbounded_column(&DataType::Int32),
-                ]),
+                column_statistics: vec![ColumnStatistics::new_with_unbounded_column(
+                    &DataType::Int32,
+                )],
                 is_exact: false,
             },
             Schema::new(vec![Field::new("big_col", DataType::Int32, false)]),
@@ -1015,9 +1015,9 @@ mod tests_statistical {
             Statistics {
                 num_rows: Some(10),
                 total_byte_size: Some(10),
-                column_statistics: Some(vec![
-                    ColumnStatistics::new_with_unbounded_column(&DataType::Int32),
-                ]),
+                column_statistics: vec![ColumnStatistics::new_with_unbounded_column(
+                    &DataType::Int32,
+                )],
                 is_exact: false,
             },
             Schema::new(vec![Field::new("small_col", DataType::Int32, false)]),
@@ -1027,9 +1027,9 @@ mod tests_statistical {
             Statistics {
                 num_rows: None,
                 total_byte_size: None,
-                column_statistics: Some(vec![
-                    ColumnStatistics::new_with_unbounded_column(&DataType::Int32),
-                ]),
+                column_statistics: vec![ColumnStatistics::new_with_unbounded_column(
+                    &DataType::Int32,
+                )],
                 is_exact: false,
             },
             Schema::new(vec![Field::new("empty_col", DataType::Int32, false)]),
@@ -1090,9 +1090,9 @@ mod tests_statistical {
             Statistics {
                 num_rows: Some(10000000),
                 total_byte_size: Some(10000000),
-                column_statistics: Some(vec![
-                    ColumnStatistics::new_with_unbounded_column(&DataType::Int32),
-                ]),
+                column_statistics: vec![ColumnStatistics::new_with_unbounded_column(
+                    &DataType::Int32,
+                )],
                 is_exact: false,
             },
             Schema::new(vec![Field::new("big_col1", DataType::Int32, false)]),
@@ -1102,9 +1102,9 @@ mod tests_statistical {
             Statistics {
                 num_rows: Some(20000000),
                 total_byte_size: Some(20000000),
-                column_statistics: Some(vec![
-                    ColumnStatistics::new_with_unbounded_column(&DataType::Int32),
-                ]),
+                column_statistics: vec![ColumnStatistics::new_with_unbounded_column(
+                    &DataType::Int32,
+                )],
                 is_exact: false,
             },
             Schema::new(vec![Field::new("big_col2", DataType::Int32, false)]),
@@ -1114,9 +1114,9 @@ mod tests_statistical {
             Statistics {
                 num_rows: None,
                 total_byte_size: None,
-                column_statistics: Some(vec![
-                    ColumnStatistics::new_with_unbounded_column(&DataType::Int32),
-                ]),
+                column_statistics: vec![ColumnStatistics::new_with_unbounded_column(
+                    &DataType::Int32,
+                )],
                 is_exact: false,
             },
             Schema::new(vec![Field::new("empty_col", DataType::Int32, false)]),

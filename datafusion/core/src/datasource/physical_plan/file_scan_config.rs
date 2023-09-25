@@ -132,13 +132,7 @@ impl FileScanConfig {
             if idx < self.file_schema.fields().len() {
                 let field = self.file_schema.field(idx).clone();
                 table_fields.push(field.clone());
-                if let Some(file_cols_stats) = &self.statistics.column_statistics {
-                    table_cols_stats.push(file_cols_stats[idx].clone())
-                } else {
-                    table_cols_stats.push(ColumnStatistics::new_with_unbounded_column(
-                        field.data_type(),
-                    ))
-                }
+                table_cols_stats.push(self.statistics.column_statistics[idx].clone())
             } else {
                 let partition_idx = idx - self.file_schema.fields().len();
                 let name = &self.table_partition_cols[partition_idx].0;
@@ -154,7 +148,7 @@ impl FileScanConfig {
             is_exact: self.statistics.is_exact,
             // TODO correct byte size?
             total_byte_size: None,
-            column_statistics: Some(table_cols_stats),
+            column_statistics: table_cols_stats,
         };
 
         let table_schema = Arc::new(
@@ -523,10 +517,7 @@ mod tests {
             "partition columns are the last columns"
         );
         assert_eq!(
-            proj_statistics
-                .column_statistics
-                .expect("projection creates column statistics")
-                .len(),
+            proj_statistics.column_statistics.len(),
             file_schema.fields().len() + 1
         );
         // TODO implement tests for partition column statistics once implemented
@@ -548,14 +539,12 @@ mod tests {
                 num_rows: Some(10),
                 // assign the column index to distinct_count to help assert
                 // the source statistic after the projection
-                column_statistics: Some(
-                    (0..file_schema.fields().len())
-                        .map(|i| ColumnStatistics {
-                            distinct_count: Some(i),
-                            ..Default::default()
-                        })
-                        .collect(),
-                ),
+                column_statistics: (0..file_schema.fields().len())
+                    .map(|i| ColumnStatistics {
+                        distinct_count: Some(i),
+                        ..Default::default()
+                    })
+                    .collect(),
                 total_byte_size: None,
                 is_exact: false,
             },
@@ -570,9 +559,7 @@ mod tests {
             columns(&proj_schema),
             vec!["date".to_owned(), "c1".to_owned()]
         );
-        let proj_stat_cols = proj_statistics
-            .column_statistics
-            .expect("projection creates column statistics");
+        let proj_stat_cols = proj_statistics.column_statistics;
         assert_eq!(proj_stat_cols.len(), 2);
         // TODO implement tests for proj_stat_cols[0] once partition column
         // statistics are implemented

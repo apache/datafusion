@@ -399,24 +399,22 @@ fn stats_projection(
     schema: SchemaRef,
 ) -> Statistics {
     let inner_exprs = exprs.collect::<Vec<_>>();
-    let column_statistics = stats.column_statistics.map(|input_col_stats| {
-        inner_exprs
-            .clone()
-            .into_iter()
-            .enumerate()
-            .map(|(index, e)| {
-                if let Some(col) = e.as_any().downcast_ref::<Column>() {
-                    input_col_stats[col.index()].clone()
-                } else {
-                    // TODO stats: estimate more statistics from expressions
-                    // (expressions should compute their statistics themselves)
-                    ColumnStatistics::new_with_unbounded_column(
-                        schema.field(index).data_type(),
-                    )
-                }
-            })
-            .collect()
-    });
+    let column_statistics = inner_exprs
+        .clone()
+        .into_iter()
+        .enumerate()
+        .map(|(index, e)| {
+            if let Some(col) = e.as_any().downcast_ref::<Column>() {
+                stats.column_statistics[col.index()].clone()
+            } else {
+                // TODO stats: estimate more statistics from expressions
+                // (expressions should compute their statistics themselves)
+                ColumnStatistics::new_with_unbounded_column(
+                    schema.field(index).data_type(),
+                )
+            }
+        })
+        .collect();
 
     let primitive_row_size = inner_exprs
         .into_iter()
@@ -537,7 +535,7 @@ mod tests {
             is_exact: true,
             num_rows: Some(5),
             total_byte_size: Some(23),
-            column_statistics: Some(vec![
+            column_statistics: vec![
                 ColumnStatistics {
                     distinct_count: Some(5),
                     max_value: Some(ScalarValue::Int64(Some(21))),
@@ -556,7 +554,7 @@ mod tests {
                     min_value: Some(ScalarValue::Float32(Some(0.1))),
                     null_count: None,
                 },
-            ]),
+            ],
         }
     }
 
@@ -582,7 +580,7 @@ mod tests {
             is_exact: true,
             num_rows: Some(5),
             total_byte_size: Some(23),
-            column_statistics: Some(vec![
+            column_statistics: vec![
                 ColumnStatistics {
                     distinct_count: Some(1),
                     max_value: Some(ScalarValue::Utf8(Some(String::from("x")))),
@@ -595,7 +593,7 @@ mod tests {
                     min_value: Some(ScalarValue::Int64(Some(-4))),
                     null_count: Some(0),
                 },
-            ]),
+            ],
         };
 
         assert_eq!(result, expected);
@@ -617,7 +615,7 @@ mod tests {
             is_exact: true,
             num_rows: Some(5),
             total_byte_size: Some(60),
-            column_statistics: Some(vec![
+            column_statistics: vec![
                 ColumnStatistics {
                     distinct_count: None,
                     max_value: Some(ScalarValue::Float32(Some(1.1))),
@@ -630,7 +628,7 @@ mod tests {
                     min_value: Some(ScalarValue::Int64(Some(-4))),
                     null_count: Some(0),
                 },
-            ]),
+            ],
         };
 
         assert_eq!(result, expected);

@@ -555,14 +555,9 @@ async fn fetch_statistics(
     }
 
     let column_stats = if has_statistics {
-        Some(get_col_stats(
-            &table_schema,
-            null_counts,
-            &mut max_values,
-            &mut min_values,
-        ))
+        get_col_stats(&table_schema, null_counts, &mut max_values, &mut min_values)
     } else {
-        None
+        Statistics::unbounded_column_statistics(&table_schema)
     };
 
     let statistics = Statistics {
@@ -1166,15 +1161,15 @@ mod tests {
             fetch_statistics(store.as_ref(), schema.clone(), &meta[0], None).await?;
 
         assert_eq!(stats.num_rows, Some(3));
-        let c1_stats = &stats.column_statistics.as_ref().expect("missing c1 stats")[0];
-        let c2_stats = &stats.column_statistics.as_ref().expect("missing c2 stats")[1];
+        let c1_stats = &stats.column_statistics[0];
+        let c2_stats = &stats.column_statistics[1];
         assert_eq!(c1_stats.null_count, Some(1));
         assert_eq!(c2_stats.null_count, Some(3));
 
         let stats = fetch_statistics(store.as_ref(), schema, &meta[1], None).await?;
         assert_eq!(stats.num_rows, Some(3));
-        let c1_stats = &stats.column_statistics.as_ref().expect("missing c1 stats")[0];
-        let c2_stats = &stats.column_statistics.as_ref().expect("missing c2 stats")[1];
+        let c1_stats = &stats.column_statistics[0];
+        let c2_stats = &stats.column_statistics[1];
         assert_eq!(c1_stats.null_count, Some(3));
         assert_eq!(c2_stats.null_count, Some(1));
         assert_eq!(c2_stats.max_value, Some(ScalarValue::Int64(Some(2))));
@@ -1315,8 +1310,8 @@ mod tests {
                 .await?;
 
         assert_eq!(stats.num_rows, Some(3));
-        let c1_stats = &stats.column_statistics.as_ref().expect("missing c1 stats")[0];
-        let c2_stats = &stats.column_statistics.as_ref().expect("missing c2 stats")[1];
+        let c1_stats = &stats.column_statistics[0];
+        let c2_stats = &stats.column_statistics[1];
         assert_eq!(c1_stats.null_count, Some(1));
         assert_eq!(c2_stats.null_count, Some(3));
 
@@ -1348,8 +1343,8 @@ mod tests {
         .await?;
 
         assert_eq!(stats.num_rows, Some(3));
-        let c1_stats = &stats.column_statistics.as_ref().expect("missing c1 stats")[0];
-        let c2_stats = &stats.column_statistics.as_ref().expect("missing c2 stats")[1];
+        let c1_stats = &stats.column_statistics[0];
+        let c2_stats = &stats.column_statistics[1];
         assert_eq!(c1_stats.null_count, Some(1));
         assert_eq!(c2_stats.null_count, Some(3));
 

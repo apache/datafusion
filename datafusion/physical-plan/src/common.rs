@@ -164,7 +164,7 @@ pub fn compute_record_batch_statistics(
     Statistics {
         num_rows: Some(nb_rows),
         total_byte_size: Some(total_byte_size),
-        column_statistics: Some(column_statistics),
+        column_statistics,
         is_exact: true,
     }
 }
@@ -702,7 +702,7 @@ mod tests {
             is_exact: true,
             num_rows: Some(3),
             total_byte_size: Some(464), // this might change a bit if the way we compute the size changes
-            column_statistics: Some(vec![
+            column_statistics: vec![
                 ColumnStatistics {
                     distinct_count: None,
                     max_value: Some(ScalarValue::Float32(None)),
@@ -715,7 +715,7 @@ mod tests {
                     min_value: Some(ScalarValue::Float64(None)),
                     null_count: Some(0),
                 },
-            ]),
+            ],
         };
 
         // Prevent test flakiness due to undefined / changing implementation details

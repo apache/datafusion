@@ -46,13 +46,10 @@ struct StatisticsValidation {
 
 impl StatisticsValidation {
     fn new(stats: Statistics, schema: SchemaRef) -> Self {
-        assert!(
-            stats
-                .column_statistics
-                .as_ref()
-                .map(|cols| cols.len() == schema.fields().len())
-                .unwrap_or(true),
-            "if defined, the column statistics vector length should be the number of fields"
+        assert_eq!(
+            stats.column_statistics.len(),
+            schema.fields().len(),
+            "the column statistics vector length should be the number of fields"
         );
         Self { stats, schema }
     }
@@ -94,10 +91,10 @@ impl TableProvider for StatisticsValidation {
 
         let current_stat = self.stats.clone();
 
-        let proj_col_stats = current_stat
-            .column_statistics
-            .map(|col_stat| projection.iter().map(|i| col_stat[*i].clone()).collect());
-
+        let proj_col_stats = projection
+            .iter()
+            .map(|i| current_stat.column_statistics[*i].clone())
+            .collect();
         Ok(Arc::new(Self::new(
             Statistics {
                 is_exact: current_stat.is_exact,
@@ -185,7 +182,7 @@ fn fully_defined() -> (Statistics, Schema) {
             num_rows: Some(13),
             is_exact: true,
             total_byte_size: None, // ignore byte size for now
-            column_statistics: Some(vec![
+            column_statistics: vec![
                 ColumnStatistics {
                     distinct_count: Some(2),
                     max_value: Some(ScalarValue::Int32(Some(1023))),
@@ -198,7 +195,7 @@ fn fully_defined() -> (Statistics, Schema) {
                     min_value: Some(ScalarValue::Int64(Some(-6783))),
                     null_count: Some(5),
                 },
-            ]),
+            ],
         },
         Schema::new(vec![
             Field::new("c1", DataType::Int32, false),
@@ -254,7 +251,7 @@ async fn sql_limit() -> Result<()> {
         Statistics {
             num_rows: Some(5),
             is_exact: true,
-            column_statistics: Some(col_stats),
+            column_statistics: col_stats,
             total_byte_size: None
         },
         physical_plan.statistics()?
@@ -286,10 +283,9 @@ async fn sql_window() -> Result<()> {
     let result = physical_plan.statistics()?;
 
     assert_eq!(stats.num_rows, result.num_rows);
-    assert!(result.column_statistics.is_some());
-    let col_stats = result.column_statistics.unwrap();
+    let col_stats = result.column_statistics;
     assert_eq!(2, col_stats.len());
-    assert_eq!(stats.column_statistics.unwrap()[1], col_stats[0]);
+    assert_eq!(stats.column_statistics[1], col_stats[0]);
 
     Ok(())
 }

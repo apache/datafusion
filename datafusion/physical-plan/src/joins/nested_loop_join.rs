@@ -288,6 +288,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
             self.right.clone(),
             vec![],
             &self.join_type,
+            &self.schema,
         )
     }
 }

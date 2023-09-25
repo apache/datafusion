@@ -260,9 +260,7 @@ impl ExecutionPlan for CrossJoinExec {
     fn statistics(&self) -> Result<Statistics> {
         Ok(stats_cartesian_product(
             self.left.statistics()?,
-            self.left.schema(),
             self.right.statistics()?,
-            self.right.schema(),
         ))
     }
 }
@@ -270,9 +268,7 @@ impl ExecutionPlan for CrossJoinExec {
 /// [left/right]_col_count are required in case the column statistics are None
 fn stats_cartesian_product(
     left_stats: Statistics,
-    left_schema: SchemaRef,
     right_stats: Statistics,
-    right_schema: SchemaRef,
 ) -> Statistics {
     let left_row_count = left_stats.num_rows;
     let right_row_count = right_stats.num_rows;
@@ -289,16 +285,8 @@ fn stats_cartesian_product(
         .zip(right_stats.total_byte_size)
         .map(|(a, b)| 2 * a * b);
 
-    let left_col_stats = if let Some(left_col_stats) = left_stats.column_statistics {
-        left_col_stats
-    } else {
-        Statistics::unbounded_column_statistics(&left_schema)
-    };
-    let right_col_stats = if let Some(right_col_stats) = right_stats.column_statistics {
-        right_col_stats
-    } else {
-        Statistics::unbounded_column_statistics(&right_schema)
-    };
+    let left_col_stats = left_stats.column_statistics;
+    let right_col_stats = right_stats.column_statistics;
 
     // the null counts must be multiplied by the row counts of the other side (if defined)
     // Min, max and distinct_count on the other hand are invariants.
@@ -322,7 +310,7 @@ fn stats_cartesian_product(
         is_exact,
         num_rows,
         total_byte_size,
-        column_statistics: Some(cross_join_stats),
+        column_statistics: cross_join_stats,
     }
 }
 
@@ -454,7 +442,6 @@ mod tests {
     use super::*;
     use crate::common;
     use crate::test::build_table_scan_i32;
-    use arrow_schema::{DataType, Field};
     use datafusion_common::{assert_batches_sorted_eq, assert_contains};
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 
@@ -483,7 +470,7 @@ mod tests {
             is_exact: true,
             num_rows: Some(left_row_count),
             total_byte_size: Some(left_bytes),
-            column_statistics: Some(vec![
+            column_statistics: vec![
                 ColumnStatistics {
                     distinct_count: Some(5),
                     max_value: Some(ScalarValue::Int64(Some(21))),
@@ -496,40 +483,28 @@ mod tests {
                     min_value: Some(ScalarValue::Utf8(Some(String::from("a")))),
                     null_count: Some(3),
                 },
-            ]),
+            ],
         };
 
         let right = Statistics {
             is_exact: true,
             num_rows: Some(right_row_count),
             total_byte_size: Some(right_bytes),
-            column_statistics: Some(vec![ColumnStatistics {
+            column_statistics: vec![ColumnStatistics {
                 distinct_count: Some(3),
                 max_value: Some(ScalarValue::Int64(Some(12))),
                 min_value: Some(ScalarValue::Int64(Some(0))),
                 null_count: Some(2),
-            }]),
+            }],
         };
 
-        let result = stats_cartesian_product(
-            left,
-            Arc::new(Schema::new(vec![
-                Field::new("a", DataType::Int32, false),
-                Field::new("b", DataType::Int32, false),
-                Field::new("c", DataType::Int32, false),
-            ])),
-            right,
-            Arc::new(Schema::new(vec![
-                Field::new("a", DataType::Int32, false),
-                Field::new("b", DataType::Int32, false),
-            ])),
-        );
+        let result = stats_cartesian_product(left, right);
 
         let expected = Statistics {
             is_exact: true,
             num_rows: Some(left_row_count * right_row_count),
             total_byte_size: Some(2 * left_bytes * right_bytes),
-            column_statistics: Some(vec![
+            column_statistics: vec![
                 ColumnStatistics {
                     distinct_count: Some(5),
                     max_value: Some(ScalarValue::Int64(Some(21))),
@@ -548,7 +523,7 @@ mod tests {
                     min_value: Some(ScalarValue::Int64(Some(0))),
                     null_count: Some(2 * left_row_count),
                 },
-            ]),
+            ],
         };
 
         assert_eq!(result, expected);
@@ -562,7 +537,7 @@ mod tests {
             is_exact: true,
             num_rows: Some(left_row_count),
             total_byte_size: Some(23),
-            column_statistics: Some(vec![
+            column_statistics: vec![
                 ColumnStatistics {
                     distinct_count: Some(5),
                     max_value: Some(ScalarValue::Int64(Some(21))),
@@ -575,40 +550,28 @@ mod tests {
                     min_value: Some(ScalarValue::Utf8(Some(String::from("a")))),
                     null_count: Some(3),
                 },
-            ]),
+            ],
         };
 
         let right = Statistics {
             is_exact: true,
             num_rows: None,        // not defined!
             total_byte_size: None, // not defined!
-            column_statistics: Some(vec![ColumnStatistics {
+            column_statistics: vec![ColumnStatistics {
                 distinct_count: Some(3),
                 max_value: Some(ScalarValue::Int64(Some(12))),
                 min_value: Some(ScalarValue::Int64(Some(0))),
                 null_count: Some(2),
-            }]),
+            }],
         };
 
-        let result = stats_cartesian_product(
-            left,
-            Arc::new(Schema::new(vec![
-                Field::new("a", DataType::Int32, false),
-                Field::new("b", DataType::Int32, false),
-                Field::new("c", DataType::Int32, false),
-            ])),
-            right,
-            Arc::new(Schema::new(vec![
-                Field::new("a", DataType::Int32, false),
-                Field::new("b", DataType::Int32, false),
-            ])),
-        );
+        let result = stats_cartesian_product(left, right);
 
         let expected = Statistics {
             is_exact: true,
             num_rows: None,
             total_byte_size: None,
-            column_statistics: Some(vec![
+            column_statistics: vec![
                 ColumnStatistics {
                     distinct_count: Some(5),
                     max_value: Some(ScalarValue::Int64(Some(21))),
@@ -627,7 +590,7 @@ mod tests {
                     min_value: Some(ScalarValue::Int64(Some(0))),
                     null_count: Some(2 * left_row_count),
                 },
-            ]),
+            ],
         };
 
         assert_eq!(result, expected);

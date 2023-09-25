@@ -461,10 +461,7 @@ async fn parquet_statistics() -> Result<()> {
     let schema = physical_plan.schema();
     assert_eq!(schema.fields().len(), 4);
 
-    let stat_cols = physical_plan
-        .statistics()?
-        .column_statistics
-        .expect("col stats should be defined");
+    let stat_cols = physical_plan.statistics()?.column_statistics;
     assert_eq!(stat_cols.len(), 4);
     // stats for the first col are read from the parquet file
     assert_eq!(stat_cols[0].null_count, Some(3));
@@ -488,10 +485,7 @@ async fn parquet_statistics() -> Result<()> {
     let schema = physical_plan.schema();
     assert_eq!(schema.fields().len(), 2);
 
-    let stat_cols = physical_plan
-        .statistics()?
-        .column_statistics
-        .expect("col stats should be defined");
+    let stat_cols = physical_plan.statistics()?.column_statistics;
     assert_eq!(stat_cols.len(), 2);
     // stats for the first col are read from the parquet file
     assert_eq!(stat_cols[0].null_count, Some(1));

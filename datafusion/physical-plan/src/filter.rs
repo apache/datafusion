@@ -158,17 +158,13 @@ impl ExecutionPlan for FilterExec {
             .statistics()
             .expect("Ordering equivalences need to handle the error case of statistics");
         // Add the columns that have only one value (singleton) after filtering to constants.
-        if let Some(col_stats) = stats.column_statistics {
-            let constants = collect_columns(self.predicate())
-                .into_iter()
-                .filter(|column| col_stats[column.index()].is_singleton())
-                .map(|column| Arc::new(column) as Arc<dyn PhysicalExpr>)
-                .collect::<Vec<_>>();
-            let filter_oeq = self.input.ordering_equivalence_properties();
-            filter_oeq.with_constants(constants)
-        } else {
-            self.input.ordering_equivalence_properties()
-        }
+        let constants = collect_columns(self.predicate())
+            .into_iter()
+            .filter(|column| stats.column_statistics[column.index()].is_singleton())
+            .map(|column| Arc::new(column) as Arc<dyn PhysicalExpr>)
+            .collect::<Vec<_>>();
+        let filter_oeq = self.input.ordering_equivalence_properties();
+        filter_oeq.with_constants(constants)
     }
 
     fn with_new_children(
@@ -210,16 +206,12 @@ impl ExecutionPlan for FilterExec {
         }
         let input_stats = self.input.statistics()?;
 
-        let column_stats = if let Some(column_stats) = input_stats.column_statistics {
-            column_stats
-        } else {
-            Statistics::unbounded_column_statistics(&self.input.schema())
-        };
-
         let num_rows = input_stats.num_rows;
         let total_byte_size = input_stats.total_byte_size;
-        let input_analysis_ctx =
-            AnalysisContext::from_statistics(&self.input.schema(), &column_stats);
+        let input_analysis_ctx = AnalysisContext::from_statistics(
+            &self.input.schema(),
+            &input_stats.column_statistics,
+        );
         let analysis_ctx = analyze(predicate, input_analysis_ctx)?;
 
         let selectivity = analysis_ctx.selectivity.unwrap_or(1.0);
@@ -228,19 +220,21 @@ impl ExecutionPlan for FilterExec {
             total_byte_size.map(|size| (size as f64 * selectivity).ceil() as usize);
 
         if let Some(analysis_boundaries) = analysis_ctx.boundaries {
-            let column_statistics =
-                collect_new_statistics(&column_stats, analysis_boundaries);
+            let column_statistics = collect_new_statistics(
+                &input_stats.column_statistics,
+                analysis_boundaries,
+            );
             Ok(Statistics {
                 num_rows,
                 total_byte_size,
-                column_statistics: Some(column_statistics),
+                column_statistics,
                 is_exact: false,
             })
         } else {
             Ok(Statistics {
                 num_rows,
                 total_byte_size,
-                column_statistics: Some(column_stats.to_vec()),
+                column_statistics: input_stats.column_statistics,
                 is_exact: false,
             })
         }
@@ -454,11 +448,11 @@ mod tests {
             Statistics {
                 num_rows: Some(100),
                 total_byte_size: Some(100 * bytes_per_row),
-                column_statistics: Some(vec![ColumnStatistics {
+                column_statistics: vec![ColumnStatistics {
                     min_value: Some(ScalarValue::Int32(Some(1))),
                     max_value: Some(ScalarValue::Int32(Some(100))),
                     ..Default::default()
-                }]),
+                }],
                 is_exact: false,
             },
             schema.clone(),
@@ -477,11 +471,11 @@ mod tests {
         assert_eq!(statistics.total_byte_size, Some(25 * bytes_per_row));
         assert_eq!(
             statistics.column_statistics,
-            Some(vec![ColumnStatistics {
+            vec![ColumnStatistics {
                 min_value: Some(ScalarValue::Int32(Some(1))),
                 max_value: Some(ScalarValue::Int32(Some(25))),
                 ..Default::default()
-            }])
+            }]
         );
 
         Ok(())
@@ -495,11 +489,11 @@ mod tests {
         let input = Arc::new(StatisticsExec::new(
             Statistics {
                 num_rows: Some(100),
-                column_statistics: Some(vec![ColumnStatistics {
+                column_statistics: vec![ColumnStatistics {
                     min_value: Some(ScalarValue::Int32(Some(1))),
                     max_value: Some(ScalarValue::Int32(Some(100))),
                     ..Default::default()
-                }]),
+                }],
                 is_exact: false,
                 total_byte_size: None,
             },
@@ -524,11 +518,11 @@ mod tests {
         assert_eq!(statistics.num_rows, Some(16));
         assert_eq!(
             statistics.column_statistics,
-            Some(vec![ColumnStatistics {
+            vec![ColumnStatistics {
                 min_value: Some(ScalarValue::Int32(Some(10))),
                 max_value: Some(ScalarValue::Int32(Some(25))),
                 ..Default::default()
-            }])
+            }]
         );
 
         Ok(())
@@ -546,7 +540,7 @@ mod tests {
         let input = Arc::new(StatisticsExec::new(
             Statistics {
                 num_rows: Some(100),
-                column_statistics: Some(vec![
+                column_statistics: vec![
                     ColumnStatistics {
                         min_value: Some(ScalarValue::Int32(Some(1))),
                         max_value: Some(ScalarValue::Int32(Some(100))),
@@ -557,7 +551,7 @@ mod tests {
                         max_value: Some(ScalarValue::Int32(Some(50))),
                         ..Default::default()
                     },
-                ]),
+                ],
                 is_exact: false,
                 total_byte_size: None,
             },
@@ -591,7 +585,7 @@ mod tests {
         assert_eq!(statistics.num_rows, Some(2));
         assert_eq!(
             statistics.column_statistics,
-            Some(vec![
+            vec![
                 ColumnStatistics {
                     min_value: Some(ScalarValue::Int32(Some(10))),
                     max_value: Some(ScalarValue::Int32(Some(25))),
@@ -602,7 +596,7 @@ mod tests {
                     max_value: Some(ScalarValue::Int32(Some(50))),
                     ..Default::default()
                 }
-            ])
+            ]
         );
 
         Ok(())
@@ -647,7 +641,7 @@ mod tests {
             Statistics {
                 num_rows: Some(1000),
                 total_byte_size: Some(4000),
-                column_statistics: Some(vec![
+                column_statistics: vec![
                     ColumnStatistics {
                         min_value: Some(ScalarValue::Int32(Some(1))),
                         max_value: Some(ScalarValue::Int32(Some(100))),
@@ -663,7 +657,7 @@ mod tests {
                         max_value: Some(ScalarValue::Float32(Some(1100.0))),
                         ..Default::default()
                     },
-                ]),
+                ],
                 is_exact: false,
             },
             schema,
@@ -725,7 +719,7 @@ mod tests {
         ];
         let _ = exp_col_stats
             .into_iter()
-            .zip(statistics.column_statistics.unwrap())
+            .zip(statistics.column_statistics)
             .map(|(expected, actual)| {
                 if actual.min_value.clone().unwrap().data_type().is_floating() {
                     // Windows rounds arithmetic operation results differently for floating point numbers.
@@ -762,7 +756,7 @@ mod tests {
             Statistics {
                 num_rows: Some(1000),
                 total_byte_size: Some(4000),
-                column_statistics: Some(vec![
+                column_statistics: vec![
                     ColumnStatistics {
                         min_value: Some(ScalarValue::Int32(Some(1))),
                         max_value: Some(ScalarValue::Int32(Some(100))),
@@ -773,7 +767,7 @@ mod tests {
                         max_value: Some(ScalarValue::Int32(Some(3))),
                         ..Default::default()
                     },
-                ]),
+                ],
                 is_exact: false,
             },
             schema,
@@ -818,7 +812,7 @@ mod tests {
             Statistics {
                 num_rows: Some(1000),
                 total_byte_size: Some(4000),
-                column_statistics: Some(vec![
+                column_statistics: vec![
                     ColumnStatistics {
                         min_value: Some(ScalarValue::Int32(Some(1))),
                         max_value: Some(ScalarValue::Int32(Some(100))),
@@ -829,7 +823,7 @@ mod tests {
                         max_value: Some(ScalarValue::Int32(Some(3))),
                         ..Default::default()
                     },
-                ]),
+                ],
                 is_exact: false,
             },
             schema,
@@ -856,7 +850,7 @@ mod tests {
         assert_eq!(statistics.total_byte_size, Some(0));
         assert_eq!(
             statistics.column_statistics,
-            Some(vec![
+            vec![
                 ColumnStatistics {
                     min_value: Some(ScalarValue::Int32(Some(1))),
                     max_value: Some(ScalarValue::Int32(Some(100))),
@@ -867,7 +861,7 @@ mod tests {
                     max_value: Some(ScalarValue::Int32(Some(3))),
                     ..Default::default()
                 },
-            ])
+            ]
         );
 
         Ok(())
@@ -883,7 +877,7 @@ mod tests {
             Statistics {
                 num_rows: Some(1000),
                 total_byte_size: Some(4000),
-                column_statistics: Some(vec![
+                column_statistics: vec![
                     ColumnStatistics {
                         min_value: Some(ScalarValue::Int32(Some(1))),
                         max_value: Some(ScalarValue::Int32(Some(100))),
@@ -894,7 +888,7 @@ mod tests {
                         max_value: Some(ScalarValue::Int32(Some(100))),
                         ..Default::default()
                     },
-                ]),
+                ],
                 is_exact: false,
             },
             schema,
@@ -913,7 +907,7 @@ mod tests {
         assert_eq!(statistics.total_byte_size, Some(1960));
         assert_eq!(
             statistics.column_statistics,
-            Some(vec![
+            vec![
                 ColumnStatistics {
                     min_value: Some(ScalarValue::Int32(Some(1))),
                     max_value: Some(ScalarValue::Int32(Some(49))),
@@ -924,7 +918,7 @@ mod tests {
                     max_value: Some(ScalarValue::Int32(Some(100))),
                     ..Default::default()
                 },
-            ])
+            ]
         );
 
         Ok(())
@@ -962,12 +956,12 @@ mod tests {
         let expected_filter_statistics = Statistics {
             num_rows: None,
             total_byte_size: None,
-            column_statistics: Some(vec![ColumnStatistics {
+            column_statistics: vec![ColumnStatistics {
                 null_count: None,
                 min_value: Some(ScalarValue::Int32(Some(5))),
                 max_value: Some(ScalarValue::Int32(Some(10))),
                 distinct_count: None,
-            }]),
+            }],
             is_exact: false,
         };
 

@@ -63,35 +63,34 @@ pub async fn get_statistics_with_limit(
         } else {
             file_stats.total_byte_size
         };
-        if let Some(vec) = &file_stats.column_statistics {
-            has_statistics = true;
-            for (i, cs) in vec.iter().enumerate() {
-                null_counts[i] += cs.null_count.unwrap_or(0);
 
-                if let Some(max_value) = &mut max_values[i] {
-                    if let Some(file_max) = cs.max_value.clone() {
-                        match max_value.update_batch(&[file_max.to_array()]) {
-                            Ok(_) => {}
-                            Err(_) => {
-                                max_values[i] = None;
-                            }
+        has_statistics = true;
+        for (i, cs) in file_stats.column_statistics.iter().enumerate() {
+            null_counts[i] += cs.null_count.unwrap_or(0);
+
+            if let Some(max_value) = &mut max_values[i] {
+                if let Some(file_max) = cs.max_value.clone() {
+                    match max_value.update_batch(&[file_max.to_array()]) {
+                        Ok(_) => {}
+                        Err(_) => {
+                            max_values[i] = None;
                         }
-                    } else {
-                        max_values[i] = None;
                     }
+                } else {
+                    max_values[i] = None;
                 }
+            }
 
-                if let Some(min_value) = &mut min_values[i] {
-                    if let Some(file_min) = cs.min_value.clone() {
-                        match min_value.update_batch(&[file_min.to_array()]) {
-                            Ok(_) => {}
-                            Err(_) => {
-                                min_values[i] = None;
-                            }
+            if let Some(min_value) = &mut min_values[i] {
+                if let Some(file_min) = cs.min_value.clone() {
+                    match min_value.update_batch(&[file_min.to_array()]) {
+                        Ok(_) => {}
+                        Err(_) => {
+                            min_values[i] = None;
                         }
-                    } else {
-                        min_values[i] = None;
                     }
+                } else {
+                    min_values[i] = None;
                 }
             }
         }
@@ -112,14 +111,9 @@ pub async fn get_statistics_with_limit(
     }
 
     let column_stats = if has_statistics {
-        Some(get_col_stats(
-            &file_schema,
-            null_counts,
-            &mut max_values,
-            &mut min_values,
-        ))
+        get_col_stats(&file_schema, null_counts, &mut max_values, &mut min_values)
     } else {
-        None
+        Statistics::unbounded_column_statistics(&file_schema)
     };
 
     let statistics = Statistics {

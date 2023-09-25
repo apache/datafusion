@@ -308,12 +308,8 @@ pub struct StatisticsExec {
 }
 impl StatisticsExec {
     pub fn new(stats: Statistics, schema: Schema) -> Self {
-        assert!(
-            stats
-                .column_statistics
-                .as_ref()
-                .map(|cols| cols.len() == schema.fields().len())
-                .unwrap_or(true),
+        assert_eq!(
+            stats.column_statistics.len(), schema.fields().len(),
             "if defined, the column statistics vector length should be the number of fields"
         );
         Self {

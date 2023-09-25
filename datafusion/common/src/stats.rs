@@ -33,7 +33,7 @@ pub struct Statistics {
     /// total bytes of the table rows
     pub total_byte_size: Option<usize>,
     /// Statistics on a column level
-    pub column_statistics: Option<Vec<ColumnStatistics>>,
+    pub column_statistics: Vec<ColumnStatistics>,
     /// If true, any field that is `Some(..)` is the actual value in the data provided by the operator (it is not
     /// an estimate). Any or all other fields might still be None, in which case no information is known.
     /// if false, any field that is `Some(..)` may contain an inexact estimate and may not be the actual value.
@@ -48,7 +48,7 @@ impl Statistics {
         Self {
             num_rows: None,
             total_byte_size: None,
-            column_statistics: Some(Statistics::unbounded_column_statistics(schema)),
+            column_statistics: Statistics::unbounded_column_statistics(schema),
             is_exact: false,
         }
     }

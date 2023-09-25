@@ -336,15 +336,8 @@ impl ExecutionPlan for BoundedWindowAggExec {
         let input_cols = self.input_schema.fields().len();
         // TODO stats: some windowing function will maintain invariants such as min, max...
         let mut column_statistics = Vec::with_capacity(win_cols + input_cols);
-        if let Some(input_col_stats) = input_stat.column_statistics {
-            column_statistics.extend(input_col_stats);
-        } else {
-            for index in 0..input_cols {
-                column_statistics.push(ColumnStatistics::new_with_unbounded_column(
-                    self.schema().field(index).data_type(),
-                ))
-            }
-        }
+        // copy stats of the input to the beginning of the schema.
+        column_statistics.extend(input_stat.column_statistics);
         for index in 0..win_cols {
             column_statistics.push(ColumnStatistics::new_with_unbounded_column(
                 self.schema().field(index + input_cols).data_type(),
@@ -353,7 +346,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
         Ok(Statistics {
             is_exact: input_stat.is_exact,
             num_rows: input_stat.num_rows,
-            column_statistics: Some(column_statistics),
+            column_statistics,
             total_byte_size: None,
         })
     }

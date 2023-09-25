@@ -627,11 +627,7 @@ impl TryFrom<&protobuf::Statistics> for Statistics {
                 Some(s.total_byte_size as usize)
             },
             // No column statistic (None) is encoded with empty array
-            column_statistics: if column_statistics.is_empty() {
-                None
-            } else {
-                Some(column_statistics)
-            },
+            column_statistics,
             is_exact: s.is_exact,
         })
     }

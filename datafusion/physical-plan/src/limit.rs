@@ -215,7 +215,7 @@ impl ExecutionPlan for GlobalLimitExec {
                     Statistics {
                         num_rows: Some(0),
                         is_exact: input_stats.is_exact,
-                        column_statistics: Some(col_stats),
+                        column_statistics: col_stats,
                         total_byte_size: None,
                     }
                 } else if nr <= max_row_num {
@@ -227,7 +227,7 @@ impl ExecutionPlan for GlobalLimitExec {
                     Statistics {
                         num_rows: Some(max_row_num),
                         is_exact: input_stats.is_exact,
-                        column_statistics: Some(col_stats),
+                        column_statistics: col_stats,
                         total_byte_size: None,
                     }
                 }
@@ -236,7 +236,7 @@ impl ExecutionPlan for GlobalLimitExec {
                 // the result output row number will always be no greater than the limit number
                 num_rows: Some(max_row_num),
                 is_exact: false,
-                column_statistics: Some(col_stats),
+                column_statistics: col_stats,
                 total_byte_size: None,
             },
         };
@@ -384,14 +384,14 @@ impl ExecutionPlan for LocalLimitExec {
                 // this is not actually exact, but will be when GlobalLimit is applied
                 // TODO stats: find a more explicit way to vehiculate this information
                 is_exact: input_stats.is_exact,
-                column_statistics: Some(col_stats),
+                column_statistics: col_stats,
                 total_byte_size: None,
             },
             _ => Statistics {
                 // the result output row number will always be no greater than the limit number
                 num_rows: Some(self.fetch * self.output_partitioning().partition_count()),
                 is_exact: false,
-                column_statistics: Some(col_stats),
+                column_statistics: col_stats,
                 total_byte_size: None,
             },
         };

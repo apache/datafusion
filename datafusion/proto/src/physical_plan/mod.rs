@@ -1951,13 +1951,11 @@ mod roundtrip_tests {
 
     #[test]
     fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
         let scan_config = FileScanConfig {
             object_store_url: ObjectStoreUrl::local_filesystem(),
-            file_schema: Arc::new(Schema::new(vec![Field::new(
-                "col",
-                DataType::Utf8,
-                false,
-            )])),
+            file_schema: schema.clone(),
             file_groups: vec![vec![PartitionedFile::new(
                 "/path/to/file.parquet".to_string(),
                 1024,
@@ -1965,7 +1963,7 @@ mod roundtrip_tests {
             statistics: Statistics {
                 num_rows: Some(100),
                 total_byte_size: Some(1024),
-                column_statistics: None,
+                column_statistics: Statistics::unbounded_column_statistics(&schema),
                 is_exact: false,
             },
             projection: None,

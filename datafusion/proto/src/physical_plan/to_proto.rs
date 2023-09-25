@@ -658,10 +658,7 @@ impl From<&ColumnStatistics> for protobuf::ColumnStats {
 impl From<&Statistics> for protobuf::Statistics {
     fn from(s: &Statistics) -> protobuf::Statistics {
         let none_value = -1_i64;
-        let column_stats = match &s.column_statistics {
-            None => vec![],
-            Some(column_stats) => column_stats.iter().map(|s| s.into()).collect(),
-        };
+        let column_stats = s.column_statistics.iter().map(|s| s.into()).collect();
         protobuf::Statistics {
             num_rows: s.num_rows.map(|n| n as i64).unwrap_or(none_value),
             total_byte_size: s.total_byte_size.map(|n| n as i64).unwrap_or(none_value),

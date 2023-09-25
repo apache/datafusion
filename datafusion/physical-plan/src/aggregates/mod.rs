@@ -1015,7 +1015,7 @@ impl ExecutionPlan for AggregateExec {
                 Ok(Statistics {
                     num_rows: Some(1),
                     is_exact: true,
-                    column_statistics: Some(column_statistics),
+                    column_statistics,
                     total_byte_size: None,
                 })
             }
@@ -1023,7 +1023,7 @@ impl ExecutionPlan for AggregateExec {
                 // the output row count is surely not larger than its input row count
                 num_rows: self.input.statistics()?.num_rows,
                 is_exact: false,
-                column_statistics: Some(column_statistics),
+                column_statistics,
                 total_byte_size: None,
             }),
         }

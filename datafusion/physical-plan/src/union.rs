@@ -597,15 +597,12 @@ fn stats_union(mut left: Statistics, right: Statistics) -> Statistics {
         .total_byte_size
         .zip(right.total_byte_size)
         .map(|(a, b)| a + b);
-    left.column_statistics =
-        left.column_statistics
-            .zip(right.column_statistics)
-            .map(|(a, b)| {
-                a.into_iter()
-                    .zip(b)
-                    .map(|(ca, cb)| col_stats_union(ca, cb))
-                    .collect()
-            });
+    left.column_statistics = left
+        .column_statistics
+        .into_iter()
+        .zip(right.column_statistics)
+        .map(|(a, b)| col_stats_union(a, b))
+        .collect::<Vec<_>>();
     left
 }
 
@@ -643,7 +640,7 @@ mod tests {
             is_exact: true,
             num_rows: Some(5),
             total_byte_size: Some(23),
-            column_statistics: Some(vec![
+            column_statistics: vec![
                 ColumnStatistics {
                     distinct_count: Some(5),
                     max_value: Some(ScalarValue::Int64(Some(21))),
@@ -662,14 +659,14 @@ mod tests {
                     min_value: Some(ScalarValue::Float32(Some(0.1))),
                     null_count: None,
                 },
-            ]),
+            ],
         };
 
         let right = Statistics {
             is_exact: true,
             num_rows: Some(7),
             total_byte_size: Some(29),
-            column_statistics: Some(vec![
+            column_statistics: vec![
                 ColumnStatistics {
                     distinct_count: Some(3),
                     max_value: Some(ScalarValue::Int64(Some(34))),
@@ -688,7 +685,7 @@ mod tests {
                     min_value: None,
                     null_count: None,
                 },
-            ]),
+            ],
         };
 
         let result = stats_union(left, right);
@@ -696,7 +693,7 @@ mod tests {
             is_exact: true,
             num_rows: Some(12),
             total_byte_size: Some(52),
-            column_statistics: Some(vec![
+            column_statistics: vec![
                 ColumnStatistics {
                     distinct_count: None,
                     max_value: Some(ScalarValue::Int64(Some(34))),
@@ -715,7 +712,7 @@ mod tests {
                     min_value: None,
                     null_count: None,
                 },
-            ]),
+            ],
         };
 
         assert_eq!(result, expected);

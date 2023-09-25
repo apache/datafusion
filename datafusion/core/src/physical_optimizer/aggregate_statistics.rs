@@ -174,9 +174,9 @@ fn take_optimizable_column_count(
     agg_expr: &dyn AggregateExpr,
     stats: &Statistics,
 ) -> Option<(ScalarValue, String)> {
-    if let (Some(num_rows), Some(col_stats), Some(casted_expr)) = (
+    let col_stats = &stats.column_statistics;
+    if let (Some(num_rows), Some(casted_expr)) = (
         stats.num_rows,
-        &stats.column_statistics,
         agg_expr.as_any().downcast_ref::<expressions::Count>(),
     ) {
         if casted_expr.expressions().len() == 1 {
@@ -206,10 +206,8 @@ fn take_optimizable_min(
     agg_expr: &dyn AggregateExpr,
     stats: &Statistics,
 ) -> Option<(ScalarValue, String)> {
-    if let (Some(col_stats), Some(casted_expr)) = (
-        &stats.column_statistics,
-        agg_expr.as_any().downcast_ref::<expressions::Min>(),
-    ) {
+    let col_stats = &stats.column_statistics;
+    if let Some(casted_expr) = agg_expr.as_any().downcast_ref::<expressions::Min>() {
         if casted_expr.expressions().len() == 1 {
             // TODO optimize with exprs other than Column
             if let Some(col_expr) = casted_expr.expressions()[0]
@@ -240,10 +238,8 @@ fn take_optimizable_max(
     agg_expr: &dyn AggregateExpr,
     stats: &Statistics,
 ) -> Option<(ScalarValue, String)> {
-    if let (Some(col_stats), Some(casted_expr)) = (
-        &stats.column_statistics,
-        agg_expr.as_any().downcast_ref::<expressions::Max>(),
-    ) {
+    let col_stats = &stats.column_statistics;
+    if let Some(casted_expr) = agg_expr.as_any().downcast_ref::<expressions::Max>() {
         if casted_expr.expressions().len() == 1 {
             // TODO optimize with exprs other than Column
             if let Some(col_expr) = casted_expr.expressions()[0]

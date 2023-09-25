@@ -159,23 +159,22 @@ impl ExecutionPlan for CustomExecutionPlan {
             is_exact: true,
             num_rows: Some(batch.num_rows()),
             total_byte_size: None,
-            column_statistics: Some(
-                self.projection
-                    .clone()
-                    .unwrap_or_else(|| (0..batch.columns().len()).collect())
-                    .iter()
-                    .map(|i| ColumnStatistics {
-                        null_count: Some(batch.column(*i).null_count()),
-                        min_value: Some(ScalarValue::Int32(aggregate::min(
-                            as_primitive_array::<Int32Type>(batch.column(*i)).unwrap(),
-                        ))),
-                        max_value: Some(ScalarValue::Int32(aggregate::max(
-                            as_primitive_array::<Int32Type>(batch.column(*i)).unwrap(),
-                        ))),
-                        ..Default::default()
-                    })
-                    .collect(),
-            ),
+            column_statistics: self
+                .projection
+                .clone()
+                .unwrap_or_else(|| (0..batch.columns().len()).collect())
+                .iter()
+                .map(|i| ColumnStatistics {
+                    null_count: Some(batch.column(*i).null_count()),
+                    min_value: Some(ScalarValue::Int32(aggregate::min(
+                        as_primitive_array::<Int32Type>(batch.column(*i)).unwrap(),
+                    ))),
+                    max_value: Some(ScalarValue::Int32(aggregate::max(
+                        as_primitive_array::<Int32Type>(batch.column(*i)).unwrap(),
+                    ))),
+                    ..Default::default()
+                })
+                .collect(),
         })
     }
 }

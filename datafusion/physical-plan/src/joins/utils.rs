@@ -726,14 +726,15 @@ pub(crate) fn estimate_join_statistics(
     right: Arc<dyn ExecutionPlan>,
     on: JoinOn,
     join_type: &JoinType,
+    schema: &Schema,
 ) -> Result<Statistics> {
     let left_stats = left.statistics()?;
     let right_stats = right.statistics()?;
 
     let join_stats = estimate_join_cardinality(join_type, left_stats, right_stats, &on);
     let (num_rows, column_statistics) = match join_stats {
-        Some(stats) => (Some(stats.num_rows), Some(stats.column_statistics)),
-        None => (None, None),
+        Some(stats) => (Some(stats.num_rows), stats.column_statistics),
+        None => (None, Statistics::unbounded_column_statistics(schema)),
     };
     Ok(Statistics {
         num_rows,
@@ -757,8 +758,8 @@ fn estimate_join_cardinality(
 
             // Take the left_col_stats and right_col_stats using the index
             // obtained from index() method of the each element of 'on'.
-            let all_left_col_stats = left_stats.column_statistics?;
-            let all_right_col_stats = right_stats.column_statistics?;
+            let all_left_col_stats = left_stats.column_statistics;
+            let all_right_col_stats = right_stats.column_statistics;
             let (left_col_stats, right_col_stats) = on
                 .iter()
                 .map(|(left, right)| {
@@ -1543,7 +1544,7 @@ mod tests {
 
     fn create_stats(
         num_rows: Option<usize>,
-        column_stats: Option<Vec<ColumnStatistics>>,
+        column_stats: Vec<ColumnStatistics>,
         is_exact: bool,
     ) -> Statistics {
         Statistics {
@@ -1727,8 +1728,8 @@ mod tests {
             let join_on = vec![(Column::new("a", 0), Column::new("b", 0))];
             let partial_join_stats = estimate_join_cardinality(
                 &join_type,
-                create_stats(Some(left_num_rows), Some(left_col_stats.clone()), false),
-                create_stats(Some(right_num_rows), Some(right_col_stats.clone()), false),
+                create_stats(Some(left_num_rows), left_col_stats.clone(), false),
+                create_stats(Some(right_num_rows), right_col_stats.clone(), false),
                 &join_on,
             );
 
@@ -1840,8 +1841,8 @@ mod tests {
 
             let partial_join_stats = estimate_join_cardinality(
                 &join_type,
-                create_stats(Some(1000), Some(left_col_stats.clone()), false),
-                create_stats(Some(2000), Some(right_col_stats.clone()), false),
+                create_stats(Some(1000), left_col_stats.clone(), false),
+                create_stats(Some(2000), right_col_stats.clone(), false),
                 &join_on,
             )
             .unwrap();
@@ -1905,8 +1906,8 @@ mod tests {
         for (join_type, expected_num_rows) in cases {
             let partial_join_stats = estimate_join_cardinality(
                 &join_type,
-                create_stats(Some(1000), Some(left_col_stats.clone()), true),
-                create_stats(Some(2000), Some(right_col_stats.clone()), true),
+                create_stats(Some(1000), left_col_stats.clone(), true),
+                create_stats(Some(2000), right_col_stats.clone(), true),
                 &join_on,
             )
             .unwrap();
