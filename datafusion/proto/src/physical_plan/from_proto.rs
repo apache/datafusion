@@ -31,6 +31,8 @@ use datafusion::logical_expr::window_function::WindowFunction;
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{in_list, LikeExpr};
 use datafusion::physical_plan::expressions::{GetFieldAccessExpr, GetIndexedFieldExpr};
+use datafusion::physical_plan::windows::create_window_expr;
+use datafusion::physical_plan::WindowExpr;
 use datafusion::physical_plan::{
     expressions::{
         BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, Literal,
@@ -82,6 +84,61 @@ pub fn parse_physical_sort_expr(
     } else {
         Err(proto_error("Unexpected empty physical expression"))
     }
+}
+
+/// Parses a physical window expr from a protobuf.
+///
+/// # Arguments
+///
+/// * `proto` - Input proto with physical window exprression node.
+/// * `name` - Name of the window expression.
+/// * `registry` - A registry knows how to build logical expressions out of user-defined function' names
+/// * `input_schema` - The Arrow schema for the input, used for determining expression data types
+///                    when performing type coercion.
+pub fn parse_physical_window_expr(
+    proto: &protobuf::PhysicalWindowExprNode,
+    registry: &dyn FunctionRegistry,
+    input_schema: &Schema,
+) -> Result<Arc<dyn WindowExpr>> {
+    let window_node_expr = proto
+        .args
+        .iter()
+        .map(|e| parse_physical_expr(e, registry, input_schema))
+        .collect::<Result<Vec<_>>>()?;
+
+    let partition_by = proto
+        .partition_by
+        .iter()
+        .map(|p| parse_physical_expr(p, registry, input_schema))
+        .collect::<Result<Vec<_>>>()?;
+
+    let order_by = proto
+        .order_by
+        .iter()
+        .map(|o| parse_physical_sort_expr(o, registry, input_schema))
+        .collect::<Result<Vec<_>>>()?;
+
+    let window_frame = proto
+        .window_frame
+        .as_ref()
+        .map(|wf| wf.clone().try_into())
+        .transpose()
+        .map_err(|e| DataFusionError::Internal(format!("{e}")))?
+        .ok_or_else(|| {
+            DataFusionError::Internal(
+                "Missing required field 'window_frame' in protobuf".to_string(),
+            )
+        })?;
+
+    create_window_expr(
+        &convert_required!(proto.window_function)?,
+        proto.name.clone(),
+        &window_node_expr,
+        &partition_by,
+        &order_by,
+        Arc::new(window_frame),
+        input_schema,
+    )
 }
 
 /// Parses a physical expression from a protobuf.
