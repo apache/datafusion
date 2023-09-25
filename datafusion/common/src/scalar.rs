@@ -2198,6 +2198,15 @@ impl ScalarValue {
         Ok(scalars)
     }
 
+    // TODO: Support more types after other ScalarValue is wrapped with ArrayRef
+    /// Get raw data (inner array) inside ScalarValue
+    pub fn raw_data(&self) -> Result<ArrayRef> {
+        match self {
+            ScalarValue::ListArr(arr) => Ok(arr.to_owned()),
+            _ => _internal_err!("ScalarValue is not a list"),
+        }
+    }
+
     /// Converts a value in `array` at `index` into a ScalarValue
     pub fn try_from_array(array: &dyn Array, index: usize) -> Result<Self> {
         // handle NULL value
