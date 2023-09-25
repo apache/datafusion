@@ -65,7 +65,6 @@ jobs:
       - name: Check workspace in debug mode
         run: cargo check
 
-      # Note: this does not include dictionary_expressions to reduce codegen
       - name: Check workspace with all features
         run: cargo check --workspace --benches --features avro,json
       - name: Check Cargo.lock for datafusion-cli
@@ -96,7 +95,7 @@ jobs:
         with:
           rust-version: stable
       - name: Run tests (excluding doctests)
-        run: cargo test --lib --tests --bins --features avro,json,dictionary_expressions,backtrace
+        run: cargo test --lib --tests --bins --features avro,json,backtrace
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
@@ -177,7 +176,6 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      # Note: this does not include dictionary_expressions to reduce codegen
       - name: Run doctests
         run: |
           cargo test --doc --features avro,json
@@ -302,7 +300,7 @@ jobs:
         shell: bash
         run: |
           export PATH=$PATH:$HOME/d/protoc/bin
-          cargo test --lib --tests --bins --features avro,json,dictionary_expressions,backtrace
+          cargo test --lib --tests --bins --features avro,json,backtrace
           cd datafusion-cli
           cargo test --lib --tests --bins --all-features
         env:
@@ -338,7 +336,7 @@ jobs:
       - name: Run tests (excluding doctests)
         shell: bash
         run: |
-          cargo test --lib --tests --bins --features avro,json,dictionary_expressions,backtrace
+          cargo test --lib --tests --bins --features avro,json,backtrace
           cd datafusion-cli
           cargo test --lib --tests --bins --all-features
         env:
