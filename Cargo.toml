@@ -47,7 +47,7 @@ rust-version = "1.70"
 version = "31.0.0"
 
 [workspace.dependencies]
-arrow = { version = "46.0.0", features = ["prettyprint", "dyn_cmp_dict"] }
+arrow = { version = "47.0.0", features = ["prettyprint", "dyn_cmp_dict"] }
 arrow-array = { version = "46.0.0", default-features = false, features = [
     "chrono-tz",
 ] }
