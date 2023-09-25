@@ -27,9 +27,7 @@ use std::usize;
 
 use crate::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder};
 use crate::SchemaRef;
-use crate::{
-    ColumnStatistics, ExecutionPlan, Partitioning, Statistics,
-};
+use crate::{ColumnStatistics, ExecutionPlan, Partitioning, Statistics};
 
 use arrow::array::{
     downcast_array, new_null_array, Array, BooleanBufferBuilder, UInt32Array,
@@ -1379,6 +1377,7 @@ mod tests {
     use arrow::{datatypes::DataType, error::ArrowError};
     use arrow_schema::SortOptions;
     use datafusion_common::ScalarValue;
+    use datafusion_physical_expr::expressions::col;
     use std::pin::Pin;
 
     fn check(left: &[Column], right: &[Column], on: &[(Column, Column)]) -> Result<()> {
@@ -1944,37 +1943,45 @@ mod tests {
             .map(|name| Field::new(name, DataType::Int32, true))
             .collect();
 
-        let mut join_eq_properties =
-            EquivalenceProperties::new(Arc::new(Schema::new(fields)));
-        join_eq_properties
-            .add_equal_conditions((&Column::new("a", 0), &Column::new("x", 4)));
-        join_eq_properties
-            .add_equal_conditions((&Column::new("d", 3), &Column::new("w", 7)));
+        let schema = Schema::new(fields);
+        let col_a_expr = col("a", &schema)?;
+        let col_d_expr = col("d", &schema)?;
+        let col_x_expr = col("x", &schema)?;
+        let col_y_expr = col("y", &schema)?;
+        let col_z_expr = col("z", &schema)?;
+        let col_w_expr = col("w", &schema)?;
 
+        let mut join_eq_properties = OrderingEquivalenceProperties::new(Arc::new(schema));
+        join_eq_properties.add_equal_conditions((&col_a_expr, &col_x_expr));
+        join_eq_properties.add_equal_conditions((&col_d_expr, &col_w_expr));
+
+        // println!("join_eq_properties: {:?}", join_eq_properties);
         let result = get_updated_right_ordering_equivalent_class(
             &join_type,
             &right_oeq_class,
             left_columns_len,
         )?;
+        join_eq_properties.extend(Some(result));
+        let result = join_eq_properties.oeq_class().unwrap();
 
         let expected = OrderingEquivalentClass::new(
             vec![
                 PhysicalSortExpr {
-                    expr: Arc::new(Column::new("a", 0)),
+                    expr: col_a_expr,
                     options,
                 },
                 PhysicalSortExpr {
-                    expr: Arc::new(Column::new("y", 5)),
+                    expr: col_y_expr,
                     options,
                 },
             ],
             vec![vec![
                 PhysicalSortExpr {
-                    expr: Arc::new(Column::new("z", 6)),
+                    expr: col_z_expr,
                     options,
                 },
                 PhysicalSortExpr {
-                    expr: Arc::new(Column::new("d", 3)),
+                    expr: col_d_expr,
                     options,
                 },
             ]],

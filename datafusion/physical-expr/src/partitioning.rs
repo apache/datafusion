@@ -20,10 +20,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use crate::{
-    expr_list_eq_strict_order, OrderingEquivalenceProperties,
-    PhysicalExpr,
-};
+use crate::{expr_list_eq_strict_order, OrderingEquivalenceProperties, PhysicalExpr};
 
 /// Partitioning schemes supported by operators.
 #[derive(Debug, Clone)]

@@ -29,7 +29,7 @@ use crate::sort_properties::{ExprOrdering, SortProperties};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::utils::longest_consecutive_prefix;
 use datafusion_common::{JoinType, Result};
-use itertools::izip;
+use itertools::{enumerate, izip};
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::ops::Range;
@@ -241,6 +241,7 @@ impl OrderingEquivalenceProperties {
             } else {
                 self.oeq_class = Some(other);
             }
+            self.normalize_state();
         }
     }
 
@@ -273,18 +274,52 @@ impl OrderingEquivalenceProperties {
         new_conditions: (&Arc<dyn PhysicalExpr>, &Arc<dyn PhysicalExpr>),
     ) {
         let (first, second) = new_conditions;
-        let mut added_to_existing_equalities = false;
-        self.eq_classes.iter_mut().for_each(|eq_class| {
-            if physical_exprs_contains(eq_class, first)
-                && !physical_exprs_contains(eq_class, second)
-            {
-                eq_class.push(second.clone());
-                added_to_existing_equalities = true;
+        let mut first_group = None;
+        let mut second_group = None;
+        for (group_idx, eq_class) in self.eq_classes.iter().enumerate() {
+            if physical_exprs_contains(eq_class, first) {
+                first_group = Some(group_idx);
             }
-        });
-        if !added_to_existing_equalities && !first.eq(second) {
-            self.eq_classes.push(vec![first.clone(), second.clone()]);
+            if physical_exprs_contains(eq_class, second) {
+                second_group = Some(group_idx);
+            }
         }
+        match (first_group, second_group) {
+            (Some(first_group_idx), Some(second_group_idx)) => {
+                // We should bridge these groups
+                if first_group_idx != second_group_idx {
+                    let other_class = self.eq_classes[second_group_idx].clone();
+                    self.eq_classes[first_group_idx].extend(other_class);
+                    self.eq_classes.remove(second_group_idx);
+                }
+            }
+            (Some(group_idx), None) => {
+                self.eq_classes[group_idx].push(second.clone());
+            }
+            (None, Some(group_idx)) => {
+                self.eq_classes[group_idx].push(first.clone());
+            }
+            (None, None) => {
+                self.eq_classes.push(vec![first.clone(), second.clone()]);
+            }
+        }
+        self.normalize_state();
+    }
+
+    /// Normalizes state according to equivalent classes
+    fn normalize_state(&mut self) {
+        let mut new_oeq_class = self.oeq_class.clone();
+        if let Some(oeq_class) = &mut new_oeq_class {
+            // println!("oeq_class: {:?}", oeq_class);
+            oeq_class.head = self.normalize_sort_exprs(&oeq_class.head);
+            oeq_class.others = oeq_class
+                .others
+                .iter()
+                .map(|item| self.normalize_sort_exprs(item))
+                .collect();
+            // println!("oeq_class: {:?}", oeq_class);
+        }
+        self.oeq_class = new_oeq_class;
     }
 
     /// Add physical expression that have constant value to the `self.constants`
@@ -1573,39 +1608,51 @@ mod tests {
             Field::new("y", DataType::Int64, true),
         ]));
 
-        let mut eq_properties = EquivalenceProperties::new(schema);
-        let new_condition = (&Column::new("a", 0), &Column::new("b", 1));
-        eq_properties.add_equal_conditions(new_condition);
-        assert_eq!(eq_properties.classes().len(), 1);
+        let mut eq_properties = OrderingEquivalenceProperties::new(schema);
+        let col_a_expr = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+        let col_b_expr = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
+        let col_c_expr = Arc::new(Column::new("c", 2)) as Arc<dyn PhysicalExpr>;
+        let col_x_expr = Arc::new(Column::new("x", 3)) as Arc<dyn PhysicalExpr>;
+        let col_y_expr = Arc::new(Column::new("y", 4)) as Arc<dyn PhysicalExpr>;
 
-        let new_condition = (&Column::new("b", 1), &Column::new("a", 0));
+        let new_condition = (&col_a_expr, &col_b_expr);
         eq_properties.add_equal_conditions(new_condition);
-        assert_eq!(eq_properties.classes().len(), 1);
-        assert_eq!(eq_properties.classes()[0].len(), 2);
-        assert!(eq_properties.classes()[0].contains(&Column::new("a", 0)));
-        assert!(eq_properties.classes()[0].contains(&Column::new("b", 1)));
+        assert_eq!(eq_properties.eq_classes().len(), 1);
 
-        let new_condition = (&Column::new("b", 1), &Column::new("c", 2));
+        let new_condition = (&col_b_expr, &col_a_expr);
         eq_properties.add_equal_conditions(new_condition);
-        assert_eq!(eq_properties.classes().len(), 1);
-        assert_eq!(eq_properties.classes()[0].len(), 3);
-        assert!(eq_properties.classes()[0].contains(&Column::new("a", 0)));
-        assert!(eq_properties.classes()[0].contains(&Column::new("b", 1)));
-        assert!(eq_properties.classes()[0].contains(&Column::new("c", 2)));
+        assert_eq!(eq_properties.eq_classes().len(), 1);
+        let eq_class = &eq_properties.eq_classes()[0];
+        assert_eq!(eq_class.len(), 2);
+        assert!(physical_exprs_contains(eq_class, &col_a_expr));
+        assert!(physical_exprs_contains(eq_class, &col_b_expr));
 
-        let new_condition = (&Column::new("x", 3), &Column::new("y", 4));
+        let new_condition = (&col_b_expr, &col_c_expr);
         eq_properties.add_equal_conditions(new_condition);
-        assert_eq!(eq_properties.classes().len(), 2);
+        assert_eq!(eq_properties.eq_classes().len(), 1);
+        let eq_class = &eq_properties.eq_classes()[0];
+        assert_eq!(eq_class.len(), 3);
+        assert!(physical_exprs_contains(eq_class, &col_a_expr));
+        assert!(physical_exprs_contains(eq_class, &col_b_expr));
+        assert!(physical_exprs_contains(eq_class, &col_c_expr));
 
-        let new_condition = (&Column::new("x", 3), &Column::new("a", 0));
+        // This is a new set of equality. Hence equivalent class count should be 2.
+        let new_condition = (&col_x_expr, &col_y_expr);
         eq_properties.add_equal_conditions(new_condition);
-        assert_eq!(eq_properties.classes().len(), 1);
-        assert_eq!(eq_properties.classes()[0].len(), 5);
-        assert!(eq_properties.classes()[0].contains(&Column::new("a", 0)));
-        assert!(eq_properties.classes()[0].contains(&Column::new("b", 1)));
-        assert!(eq_properties.classes()[0].contains(&Column::new("c", 2)));
-        assert!(eq_properties.classes()[0].contains(&Column::new("x", 3)));
-        assert!(eq_properties.classes()[0].contains(&Column::new("y", 4)));
+        assert_eq!(eq_properties.eq_classes().len(), 2);
+
+        // This equality bridges distinct equality sets.
+        // Hence equivalent class count should decrease from 2 to 1.
+        let new_condition = (&col_x_expr, &col_a_expr);
+        eq_properties.add_equal_conditions(new_condition);
+        assert_eq!(eq_properties.eq_classes().len(), 1);
+        let eq_class = &eq_properties.eq_classes()[0];
+        assert_eq!(eq_class.len(), 5);
+        assert!(physical_exprs_contains(eq_class, &col_a_expr));
+        assert!(physical_exprs_contains(eq_class, &col_b_expr));
+        assert!(physical_exprs_contains(eq_class, &col_c_expr));
+        assert!(physical_exprs_contains(eq_class, &col_x_expr));
+        assert!(physical_exprs_contains(eq_class, &col_y_expr));
 
         Ok(())
     }
@@ -1618,10 +1665,14 @@ mod tests {
             Field::new("c", DataType::Int64, true),
         ]));
 
-        let mut input_properties = EquivalenceProperties::new(input_schema);
-        let new_condition = (&Column::new("a", 0), &Column::new("b", 1));
+        let mut input_properties = OrderingEquivalenceProperties::new(input_schema);
+        let col_a_expr = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+        let col_b_expr = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
+        let col_c_expr = Arc::new(Column::new("c", 2)) as Arc<dyn PhysicalExpr>;
+
+        let new_condition = (&col_a_expr, &col_b_expr);
         input_properties.add_equal_conditions(new_condition);
-        let new_condition = (&Column::new("b", 1), &Column::new("c", 2));
+        let new_condition = (&col_b_expr, &col_c_expr);
         input_properties.add_equal_conditions(new_condition);
 
         let out_schema = Arc::new(Schema::new(vec![
@@ -1631,6 +1682,16 @@ mod tests {
             Field::new("a4", DataType::Int64, true),
         ]));
 
+        let col_a1_expr = Arc::new(Column::new("a1", 0)) as Arc<dyn PhysicalExpr>;
+        let col_a2_expr = Arc::new(Column::new("a2", 1)) as Arc<dyn PhysicalExpr>;
+        let col_a3_expr = Arc::new(Column::new("a3", 2)) as Arc<dyn PhysicalExpr>;
+        let col_a4_expr = Arc::new(Column::new("a4", 2)) as Arc<dyn PhysicalExpr>;
+        let source_to_target_mapping = vec![
+            (col_a_expr.clone(), col_a1_expr.clone()),
+            (col_a_expr.clone(), col_a2_expr.clone()),
+            (col_a_expr.clone(), col_a3_expr.clone()),
+            (col_a_expr.clone(), col_a4_expr.clone()),
+        ];
         let mut alias_map = HashMap::new();
         alias_map.insert(
             Column::new("a", 0),
@@ -1641,15 +1702,17 @@ mod tests {
                 Column::new("a4", 3),
             ],
         );
-        let mut out_properties = EquivalenceProperties::new(out_schema);
+        // let mut out_properties = OrderingEquivalenceProperties::new(out_schema);
+        let out_properties =
+            input_properties.project(&alias_map, &source_to_target_mapping, out_schema);
 
-        project_equivalence_properties(input_properties, &alias_map, &mut out_properties);
-        assert_eq!(out_properties.classes().len(), 1);
-        assert_eq!(out_properties.classes()[0].len(), 4);
-        assert!(out_properties.classes()[0].contains(&Column::new("a1", 0)));
-        assert!(out_properties.classes()[0].contains(&Column::new("a2", 1)));
-        assert!(out_properties.classes()[0].contains(&Column::new("a3", 2)));
-        assert!(out_properties.classes()[0].contains(&Column::new("a4", 3)));
+        assert_eq!(out_properties.eq_classes().len(), 1);
+        let eq_class = &out_properties.eq_classes()[0];
+        assert_eq!(eq_class.len(), 4);
+        assert!(physical_exprs_contains(eq_class, &col_a1_expr));
+        assert!(physical_exprs_contains(eq_class, &col_a2_expr));
+        assert!(physical_exprs_contains(eq_class, &col_a3_expr));
+        assert!(physical_exprs_contains(eq_class, &col_a4_expr));
 
         Ok(())
     }

@@ -64,8 +64,7 @@ use datafusion_physical_expr::window::{
     PartitionBatches, PartitionKey, PartitionWindowAggStates, WindowState,
 };
 use datafusion_physical_expr::{
-    OrderingEquivalenceProperties, PhysicalExpr,
-    PhysicalSortRequirement,
+    OrderingEquivalenceProperties, PhysicalExpr, PhysicalSortRequirement,
 };
 
 #[derive(Debug, Clone, PartialEq)]

@@ -22,8 +22,8 @@ use crate::aggregates::{
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::{
-    displayable, DisplayFormatType, Distribution, ExecutionPlan,
-    Partitioning, SendableRecordBatchStream, Statistics,
+    displayable, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
+    SendableRecordBatchStream, Statistics,
 };
 
 use arrow::array::ArrayRef;
@@ -33,10 +33,10 @@ use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Accumulator;
 use datafusion_physical_expr::{
-    expressions::Column,
-    normalize_out_expr_with_columns_map, physical_exprs_contains, reverse_order_bys,
-    AggregateExpr, LexOrdering, LexOrderingReq, OrderingEquivalenceProperties,
-    PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
+    expressions::Column, normalize_out_expr_with_columns_map, physical_exprs_contains,
+    reverse_order_bys, AggregateExpr, LexOrdering, LexOrderingReq,
+    OrderingEquivalenceProperties, PhysicalExpr, PhysicalSortExpr,
+    PhysicalSortRequirement,
 };
 
 use arrow_schema::SortOptions;
@@ -1351,8 +1351,7 @@ mod tests {
         lit, ApproxDistinct, Column, Count, FirstValue, LastValue, Median,
     };
     use datafusion_physical_expr::{
-        AggregateExpr, EquivalenceProperties, OrderingEquivalenceProperties,
-        PhysicalExpr, PhysicalSortExpr,
+        AggregateExpr, OrderingEquivalenceProperties, PhysicalExpr, PhysicalSortExpr,
     };
 
     use std::any::Any;
@@ -2312,7 +2311,7 @@ mod tests {
             descending: true,
             nulls_first: true,
         };
-        let mut eq_properties = EquivalenceProperties::new(test_schema.clone());
+        // let mut eq_properties = EquivalenceProperties::new(test_schema.clone());
         let col_a = Column::new("a", 0);
         let col_b = Column::new("b", 1);
         let col_c = Column::new("c", 2);

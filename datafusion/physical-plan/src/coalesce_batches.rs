@@ -24,8 +24,8 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::{
-    DisplayFormatType, ExecutionPlan, Partitioning,
-    RecordBatchStream, SendableRecordBatchStream,
+    DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
+    SendableRecordBatchStream,
 };
 
 use arrow::datatypes::SchemaRef;

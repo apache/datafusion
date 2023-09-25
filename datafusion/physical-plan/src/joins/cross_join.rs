@@ -30,9 +30,8 @@ use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::DisplayAs;
 use crate::{
     coalesce_batches::concat_batches, coalesce_partitions::CoalescePartitionsExec,
-    ColumnStatistics, DisplayFormatType, Distribution,
-    ExecutionPlan, Partitioning, PhysicalSortExpr, RecordBatchStream,
-    SendableRecordBatchStream, Statistics,
+    ColumnStatistics, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
+    PhysicalSortExpr, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 use async_trait::async_trait;
 use datafusion_common::{plan_err, DataFusionError, JoinType};
@@ -42,8 +41,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::OrderingEquivalenceProperties;
 
 use super::utils::{
-    adjust_right_output_partitioning,
-    BuildProbeJoinMetrics, OnceAsync, OnceFut,
+    adjust_right_output_partitioning, BuildProbeJoinMetrics, OnceAsync, OnceFut,
 };
 
 /// Data of the left side

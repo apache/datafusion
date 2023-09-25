@@ -42,7 +42,7 @@ use datafusion_execution::memory_pool::{
 };
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{ OrderingEquivalenceProperties};
+use datafusion_physical_expr::OrderingEquivalenceProperties;
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, error, trace};
 use std::any::Any;

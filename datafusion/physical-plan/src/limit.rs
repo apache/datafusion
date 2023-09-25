@@ -22,9 +22,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::{
-    DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
-};
+use crate::{DisplayFormatType, Distribution, ExecutionPlan, Partitioning};
 
 use super::expressions::PhysicalSortExpr;
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};

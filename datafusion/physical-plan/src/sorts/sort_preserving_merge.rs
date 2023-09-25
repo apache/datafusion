@@ -33,9 +33,7 @@ use datafusion_execution::memory_pool::MemoryConsumer;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{
-    OrderingEquivalenceProperties, PhysicalSortRequirement,
-};
+use datafusion_physical_expr::{OrderingEquivalenceProperties, PhysicalSortRequirement};
 
 use log::{debug, trace};
 

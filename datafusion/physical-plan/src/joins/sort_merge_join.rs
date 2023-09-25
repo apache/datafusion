@@ -34,14 +34,13 @@ use crate::expressions::Column;
 use crate::expressions::PhysicalSortExpr;
 use crate::joins::utils::{
     build_join_schema, calculate_join_output_ordering, check_join_is_valid,
-    combine_join_ordering_equivalence_properties,
-    estimate_join_statistics, partitioned_join_output_partitioning, JoinOn, JoinSide,
+    combine_join_ordering_equivalence_properties, estimate_join_statistics,
+    partitioned_join_output_partitioning, JoinOn, JoinSide,
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use crate::{
-    metrics, DisplayAs, DisplayFormatType, Distribution,
-    ExecutionPlan, Partitioning, PhysicalExpr, RecordBatchStream,
-    SendableRecordBatchStream, Statistics,
+    metrics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
+    PhysicalExpr, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
 use arrow::array::*;

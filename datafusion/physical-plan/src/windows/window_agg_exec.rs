@@ -24,9 +24,9 @@ use crate::windows::{
     calc_requirements, get_ordered_partition_by_indices, window_ordering_equivalence,
 };
 use crate::{
-    ColumnStatistics, DisplayAs, DisplayFormatType, Distribution,
-    ExecutionPlan, Partitioning, PhysicalExpr, RecordBatchStream,
-    SendableRecordBatchStream, Statistics, WindowExpr,
+    ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
+    Partitioning, PhysicalExpr, RecordBatchStream, SendableRecordBatchStream, Statistics,
+    WindowExpr,
 };
 use arrow::compute::{concat, concat_batches};
 use arrow::datatypes::SchemaBuilder;

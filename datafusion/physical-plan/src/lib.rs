@@ -328,9 +328,9 @@ pub fn execute_stream_partitioned(
 
 use datafusion_physical_expr::expressions::Column;
 pub use datafusion_physical_expr::window::WindowExpr;
+use datafusion_physical_expr::PhysicalSortRequirement;
 pub use datafusion_physical_expr::{AggregateExpr, PhysicalExpr};
 pub use datafusion_physical_expr::{Distribution, Partitioning};
-use datafusion_physical_expr::{ PhysicalSortRequirement};
 
 pub mod aggregates;
 pub mod analyze;
