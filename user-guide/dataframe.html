@@ -427,7 +427,7 @@ to build up a query definition.</p>
 <span class="w">           </span><span class="p">.</span><span class="n">aggregate</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span><span class="n">col</span><span class="p">(</span><span class="s">&quot;a&quot;</span><span class="p">)],</span><span class="w"> </span><span class="fm">vec!</span><span class="p">[</span><span class="n">min</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s">&quot;b&quot;</span><span class="p">))])</span><span class="o">?</span>
 <span class="w">           </span><span class="p">.</span><span class="n">limit</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="mi">100</span><span class="p">))</span><span class="o">?</span><span class="p">;</span>
 <span class="c1">// Print results</span>
-<span class="n">df</span><span class="p">.</span><span class="n">show</span><span class="p">();</span>
+<span class="n">df</span><span class="p">.</span><span class="n">show</span><span class="p">().</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
 </pre></div>
 </div>
 <p>The DataFrame API is well documented in the <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html">API reference on docs.rs</a>.</p>
