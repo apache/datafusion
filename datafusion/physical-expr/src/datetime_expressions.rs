@@ -295,15 +295,15 @@ fn _date_trunc_coarse_without_tz(
 /// epoch, for granularities greater than 1 second, in taking into
 /// account that some granularities are not uniform durations of time
 /// (e.g. months are not always the same lengths, leap seconds, etc)
-fn date_trunc_coarse(granularity: &str, value: i64, tz: Arc<Option<Tz>>) -> Result<i64> {
-    let value = match tz.as_ref() {
+fn date_trunc_coarse(granularity: &str, value: i64, tz: Option<Tz>) -> Result<i64> {
+    let value = match tz {
         Some(tz) => {
             // Use chrono DateTime<Tz> to clear the various fields because need to clear per timezone,
             // and NaiveDateTime (ISO 8601) has no concept of timezones
-            let value = as_datetime_with_timezone::<TimestampNanosecondType>(value, *tz)
+            let value = as_datetime_with_timezone::<TimestampNanosecondType>(value, tz)
                 .ok_or(DataFusionError::Execution(format!(
-                    "Timestamp {value} out of range"
-                )))?;
+                "Timestamp {value} out of range"
+            )))?;
             _date_trunc_coarse_with_tz(granularity, Some(value))
         }
         None => {
@@ -323,7 +323,7 @@ fn date_trunc_coarse(granularity: &str, value: i64, tz: Arc<Option<Tz>>) -> Resu
 fn _date_trunc(
     tu: TimeUnit,
     value: &Option<i64>,
-    tz: Arc<Option<Tz>>,
+    tz: Option<Tz>,
     granularity: &str,
 ) -> Result<Option<i64>, DataFusionError> {
     let scale = match tu {
@@ -391,45 +391,29 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     Ok(match array {
         ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(v, tz_opt)) => {
             let parsed_tz = parse_tz(tz_opt)?;
-            let value = _date_trunc(
-                TimeUnit::Nanosecond,
-                v,
-                Arc::new(parsed_tz),
-                granularity.as_str(),
-            )?;
+            let value =
+                _date_trunc(TimeUnit::Nanosecond, v, parsed_tz, granularity.as_str())?;
             let value = ScalarValue::TimestampNanosecond(value, tz_opt.clone());
             ColumnarValue::Scalar(value)
         }
         ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(v, tz_opt)) => {
             let parsed_tz = parse_tz(tz_opt)?;
-            let value = _date_trunc(
-                TimeUnit::Microsecond,
-                v,
-                Arc::new(parsed_tz),
-                granularity.as_str(),
-            )?;
+            let value =
+                _date_trunc(TimeUnit::Microsecond, v, parsed_tz, granularity.as_str())?;
             let value = ScalarValue::TimestampMicrosecond(value, tz_opt.clone());
             ColumnarValue::Scalar(value)
         }
         ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(v, tz_opt)) => {
             let parsed_tz = parse_tz(tz_opt)?;
-            let value = _date_trunc(
-                TimeUnit::Millisecond,
-                v,
-                Arc::new(parsed_tz),
-                granularity.as_str(),
-            )?;
+            let value =
+                _date_trunc(TimeUnit::Millisecond, v, parsed_tz, granularity.as_str())?;
             let value = ScalarValue::TimestampMillisecond(value, tz_opt.clone());
             ColumnarValue::Scalar(value)
         }
         ColumnarValue::Scalar(ScalarValue::TimestampSecond(v, tz_opt)) => {
             let parsed_tz = parse_tz(tz_opt)?;
-            let value = _date_trunc(
-                TimeUnit::Second,
-                v,
-                Arc::new(parsed_tz),
-                granularity.as_str(),
-            )?;
+            let value =
+                _date_trunc(TimeUnit::Second, v, parsed_tz, granularity.as_str())?;
             let value = ScalarValue::TimestampSecond(value, tz_opt.clone());
             ColumnarValue::Scalar(value)
         }
@@ -437,7 +421,7 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             let array_type = array.data_type();
             match array_type {
                 DataType::Timestamp(TimeUnit::Second, tz_opt) => {
-                    let parsed_tz = Arc::new(parse_tz(tz_opt)?);
+                    let parsed_tz = parse_tz(tz_opt)?;
                     let array = as_timestamp_second_array(array)?;
                     let array = array
                         .iter()
@@ -445,7 +429,7 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                             _date_trunc(
                                 TimeUnit::Second,
                                 &x,
-                                parsed_tz.clone(),
+                                parsed_tz,
                                 granularity.as_str(),
                             )
                         })
@@ -453,7 +437,7 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                     ColumnarValue::Array(Arc::new(array))
                 }
                 DataType::Timestamp(TimeUnit::Millisecond, tz_opt) => {
-                    let parsed_tz = Arc::new(parse_tz(tz_opt)?);
+                    let parsed_tz = parse_tz(tz_opt)?;
                     let array = as_timestamp_millisecond_array(array)?;
                     let array = array
                         .iter()
@@ -461,7 +445,7 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                             _date_trunc(
                                 TimeUnit::Millisecond,
                                 &x,
-                                parsed_tz.clone(),
+                                parsed_tz,
                                 granularity.as_str(),
                             )
                         })
@@ -469,7 +453,7 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                     ColumnarValue::Array(Arc::new(array))
                 }
                 DataType::Timestamp(TimeUnit::Microsecond, tz_opt) => {
-                    let parsed_tz = Arc::new(parse_tz(tz_opt)?);
+                    let parsed_tz = parse_tz(tz_opt)?;
                     let array = as_timestamp_microsecond_array(array)?;
                     let array = array
                         .iter()
@@ -477,7 +461,7 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                             _date_trunc(
                                 TimeUnit::Microsecond,
                                 &x,
-                                parsed_tz.clone(),
+                                parsed_tz,
                                 granularity.as_str(),
                             )
                         })
@@ -485,7 +469,7 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                     ColumnarValue::Array(Arc::new(array))
                 }
                 _ => {
-                    let parsed_tz = Arc::new(None);
+                    let parsed_tz = None;
                     let array = as_timestamp_nanosecond_array(array)?;
                     let array = array
                         .iter()
@@ -493,7 +477,7 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                             _date_trunc(
                                 TimeUnit::Nanosecond,
                                 &x,
-                                parsed_tz.clone(),
+                                parsed_tz,
                                 granularity.as_str(),
                             )
                         })
@@ -1062,7 +1046,7 @@ mod tests {
         cases.iter().for_each(|(original, granularity, expected)| {
             let left = string_to_timestamp_nanos(original).unwrap();
             let right = string_to_timestamp_nanos(expected).unwrap();
-            let result = date_trunc_coarse(granularity, left, Arc::new(None)).unwrap();
+            let result = date_trunc_coarse(granularity, left, None).unwrap();
             assert_eq!(result, right, "{original} = {expected}");
         });
     }
