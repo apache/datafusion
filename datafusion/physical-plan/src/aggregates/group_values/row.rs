@@ -203,7 +203,7 @@ impl GroupValues for GroupValuesRows {
             }
         };
 
-        // TODO: Materialize dictionaries in group keys
+        // TODO: Materialize dictionaries in group keys (#7647)
         for (field, array) in self.schema.fields.iter().zip(&mut output) {
             let expected = field.data_type();
             if let DataType::Dictionary(_, v) = expected {

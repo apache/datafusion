@@ -23,6 +23,8 @@ use datafusion_expr::ColumnarValue;
 use std::sync::Arc;
 
 /// Applies a binary [`Datum`] kernel `f` to `lhs` and `rhs`
+///
+/// This maps arrow-rs' [`Datum`] kernels to DataFusion's [`ColumnarValue`] abstraction
 pub(crate) fn apply(
     lhs: &ColumnarValue,
     rhs: &ColumnarValue,
