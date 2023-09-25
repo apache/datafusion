@@ -21,6 +21,8 @@
 
 Library crate to verify that various DataFusion crates compile successfully to the `wasm32-unknown-unknown` target with wasm-pack.
 
+Some of DataFusion's downstream projects compile to WASM to run in the browser. Doing so requires special care that certain library dependencies are not included in DataFusion.
+
 ## Setup
 
 First, [install wasm-pack](https://rustwasm.github.io/wasm-pack/installer/)
