@@ -30,6 +30,7 @@ members = [
     "datafusion/sql",
     "datafusion/sqllogictest",
     "datafusion/substrait",
+    "datafusion/wasmtest",
     "datafusion-examples",
     "test-utils",
     "benchmarks",
