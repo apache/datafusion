@@ -19,3 +19,24 @@ query II
 select * from (WITH source AS (select 1 as e) SELECT * FROM source) t1,   (WITH source AS (select 1 as e) SELECT * FROM source) t2
 ----
 1 1
+
+query I rowsort
+WITH RECURSIVE nodes AS ( 
+    SELECT 1 as id
+    UNION ALL 
+    SELECT id + 1 as id 
+    FROM nodes
+    WHERE id < 10
+)
+SELECT * FROM nodes
+----
+1
+10
+2
+3
+4
+5
+6
+7
+8
+9
