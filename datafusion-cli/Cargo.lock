@@ -1074,7 +1074,7 @@ dependencies = [
  "half",
  "hashbrown 0.14.0",
  "indexmap 2.0.0",
- "itertools 0.11.0",
+ "itertools",
  "log",
  "num_cpus",
  "object_store",
@@ -1174,7 +1174,7 @@ dependencies = [
  "datafusion-expr",
  "datafusion-physical-expr",
  "hashbrown 0.14.0",
- "itertools 0.11.0",
+ "itertools",
  "log",
  "regex-syntax",
 ]
@@ -1198,7 +1198,7 @@ dependencies = [
  "hashbrown 0.14.0",
  "hex",
  "indexmap 2.0.0",
- "itertools 0.11.0",
+ "itertools",
  "libc",
  "log",
  "md-5",
@@ -1230,7 +1230,7 @@ dependencies = [
  "half",
  "hashbrown 0.14.0",
  "indexmap 2.0.0",
- "itertools 0.11.0",
+ "itertools",
  "log",
  "once_cell",
  "parking_lot",
@@ -1848,15 +1848,6 @@ checksum = "28b29a3cd74f0f4598934efe3aeba42bae0eb4680554128851ebbecb02af14e6"
 
 [[package]]
 name = "itertools"
-version = "0.10.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0fd2260e829bddf4cb6ea802289de2f86d6a7a690192fbe91b3f46e0f2c8473"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b1c173a5686ce8bfa551b3563d0c2170bf24ca44da99c7ca4bfdab5418c3fe57"
@@ -2208,8 +2199,7 @@ dependencies = [
 [[package]]
 name = "object_store"
 version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d359e231e5451f4f9fa889d56e3ce34f8724f1a61db2107739359717cf2bbf08"
+source = "git+https://github.com/apache/arrow-rs.git?rev=2c9e2e9a95b9defd59d4ad59970b87a6fb7fa58c#2c9e2e9a95b9defd59d4ad59970b87a6fb7fa58c"
 dependencies = [
  "async-trait",
  "base64",
@@ -2218,7 +2208,7 @@ dependencies = [
  "futures",
  "humantime",
  "hyper",
- "itertools 0.10.5",
+ "itertools",
  "parking_lot",
  "percent-encoding",
  "quick-xml",
@@ -2447,7 +2437,7 @@ dependencies = [
  "anstyle",
  "difflib",
  "float-cmp",
- "itertools 0.11.0",
+ "itertools",
  "normalize-line-endings",
  "predicates-core",
  "regex",
@@ -2510,9 +2500,9 @@ dependencies = [
 
 [[package]]
 name = "quick-xml"
-version = "0.28.2"
+version = "0.30.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ce5e73202a820a31f8a0ee32ada5e21029c81fd9e3ebf668a40832e4219d9d1"
+checksum = "eff6510e86862b57b210fd8cbe8ed3f0d7d600b9c2863cd4549a2e033c66e956"
 dependencies = [
  "memchr",
  "serde",
