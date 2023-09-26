@@ -1526,18 +1526,43 @@ message PartitionStats {
   repeated ColumnStats column_stats = 4;
 }
 
+message Sharpness{
+  oneof sharpness_variant {
+    ExactInfo exact = 1;
+    InexactInfo inexact = 2;
+    AbsentInfo absent = 3;
+  }
+}
+
+message ExactInfo {
+  oneof exact_variant{
+    int64 value = 1;
+    ScalarValue scalar_value = 2;
+  }
+}
+
+message InexactInfo {
+  oneof inexact_variant{
+    int64 value = 1;
+    ScalarValue scalar_value = 2;
+  }
+}
+
+message AbsentInfo {
+  // No fields needed for Absent
+}
+
 message Statistics {
-  int64 num_rows = 1;
-  int64 total_byte_size = 2;
+  Sharpness num_rows = 1;
+  Sharpness total_byte_size = 2;
   repeated ColumnStats column_stats = 3;
-  bool is_exact = 4;
 }
 
 message ColumnStats {
-  ScalarValue min_value = 1;
-  ScalarValue max_value = 2;
-  repeated uint32 null_count = 3;
-  repeated uint32 distinct_count = 4;
+  Sharpness min_value = 1;
+  Sharpness max_value = 2;
+  Sharpness null_count = 3;
+  Sharpness distinct_count = 4;
 }
 
 message NamedStructFieldExpr {

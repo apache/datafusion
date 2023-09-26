@@ -36,6 +36,7 @@ use crate::{
 
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
+use datafusion_common::stats::Sharpness;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::expressions::{Literal, UnKnownColumn};
@@ -424,19 +425,17 @@ fn stats_projection(
         })
         .try_fold(0usize, |init, v| v.map(|value| init + value));
 
-    match (primitive_row_size, stats.num_rows) {
-        (Some(row_size), Some(row_count)) => {
+    match (primitive_row_size, stats.num_rows.get_value()) {
+        (Some(row_size), Some(_)) => {
             Statistics {
-                is_exact: stats.is_exact,
-                num_rows: stats.num_rows,
+                num_rows: stats.num_rows.clone(),
                 column_statistics,
                 // Use the row_size * row_count as the total byte size
-                total_byte_size: Some(row_size * row_count),
+                total_byte_size: Sharpness::Exact(row_size).multiply(&stats.num_rows),
             }
         }
         _ => {
             Statistics {
-                is_exact: stats.is_exact,
                 num_rows: stats.num_rows,
                 column_statistics,
                 // TODO stats: knowing the type of the new columns we can guess the output size
@@ -532,27 +531,30 @@ mod tests {
 
     fn get_stats() -> Statistics {
         Statistics {
-            is_exact: true,
-            num_rows: Some(5),
-            total_byte_size: Some(23),
+            num_rows: Sharpness::Exact(5),
+            total_byte_size: Sharpness::Exact(23),
             column_statistics: vec![
                 ColumnStatistics {
-                    distinct_count: Some(5),
-                    max_value: Some(ScalarValue::Int64(Some(21))),
-                    min_value: Some(ScalarValue::Int64(Some(-4))),
-                    null_count: Some(0),
+                    distinct_count: Sharpness::Exact(5),
+                    max_value: Sharpness::Exact(ScalarValue::Int64(Some(21))),
+                    min_value: Sharpness::Exact(ScalarValue::Int64(Some(-4))),
+                    null_count: Sharpness::Exact(0),
                 },
                 ColumnStatistics {
-                    distinct_count: Some(1),
-                    max_value: Some(ScalarValue::Utf8(Some(String::from("x")))),
-                    min_value: Some(ScalarValue::Utf8(Some(String::from("a")))),
-                    null_count: Some(3),
+                    distinct_count: Sharpness::Exact(1),
+                    max_value: Sharpness::Exact(ScalarValue::Utf8(Some(String::from(
+                        "x",
+                    )))),
+                    min_value: Sharpness::Exact(ScalarValue::Utf8(Some(String::from(
+                        "a",
+                    )))),
+                    null_count: Sharpness::Exact(3),
                 },
                 ColumnStatistics {
-                    distinct_count: None,
-                    max_value: Some(ScalarValue::Float32(Some(1.1))),
-                    min_value: Some(ScalarValue::Float32(Some(0.1))),
-                    null_count: None,
+                    distinct_count: Sharpness::Absent,
+                    max_value: Sharpness::Exact(ScalarValue::Float32(Some(1.1))),
+                    min_value: Sharpness::Exact(ScalarValue::Float32(Some(0.1))),
+                    null_count: Sharpness::Absent,
                 },
             ],
         }
@@ -577,21 +579,24 @@ mod tests {
         let result = stats_projection(source, exprs.into_iter(), Arc::new(schema));
 
         let expected = Statistics {
-            is_exact: true,
-            num_rows: Some(5),
-            total_byte_size: Some(23),
+            num_rows: Sharpness::Exact(5),
+            total_byte_size: Sharpness::Exact(23),
             column_statistics: vec![
                 ColumnStatistics {
-                    distinct_count: Some(1),
-                    max_value: Some(ScalarValue::Utf8(Some(String::from("x")))),
-                    min_value: Some(ScalarValue::Utf8(Some(String::from("a")))),
-                    null_count: Some(3),
+                    distinct_count: Sharpness::Exact(1),
+                    max_value: Sharpness::Exact(ScalarValue::Utf8(Some(String::from(
+                        "x",
+                    )))),
+                    min_value: Sharpness::Exact(ScalarValue::Utf8(Some(String::from(
+                        "a",
+                    )))),
+                    null_count: Sharpness::Exact(3),
                 },
                 ColumnStatistics {
-                    distinct_count: Some(5),
-                    max_value: Some(ScalarValue::Int64(Some(21))),
-                    min_value: Some(ScalarValue::Int64(Some(-4))),
-                    null_count: Some(0),
+                    distinct_count: Sharpness::Exact(5),
+                    max_value: Sharpness::Exact(ScalarValue::Int64(Some(21))),
+                    min_value: Sharpness::Exact(ScalarValue::Int64(Some(-4))),
+                    null_count: Sharpness::Exact(0),
                 },
             ],
         };
@@ -612,21 +617,20 @@ mod tests {
         let result = stats_projection(source, exprs.into_iter(), Arc::new(schema));
 
         let expected = Statistics {
-            is_exact: true,
-            num_rows: Some(5),
-            total_byte_size: Some(60),
+            num_rows: Sharpness::Exact(5),
+            total_byte_size: Sharpness::Exact(60),
             column_statistics: vec![
                 ColumnStatistics {
-                    distinct_count: None,
-                    max_value: Some(ScalarValue::Float32(Some(1.1))),
-                    min_value: Some(ScalarValue::Float32(Some(0.1))),
-                    null_count: None,
+                    distinct_count: Sharpness::Absent,
+                    max_value: Sharpness::Exact(ScalarValue::Float32(Some(1.1))),
+                    min_value: Sharpness::Exact(ScalarValue::Float32(Some(0.1))),
+                    null_count: Sharpness::Absent,
                 },
                 ColumnStatistics {
-                    distinct_count: Some(5),
-                    max_value: Some(ScalarValue::Int64(Some(21))),
-                    min_value: Some(ScalarValue::Int64(Some(-4))),
-                    null_count: Some(0),
+                    distinct_count: Sharpness::Exact(5),
+                    max_value: Sharpness::Exact(ScalarValue::Int64(Some(21))),
+                    min_value: Sharpness::Exact(ScalarValue::Int64(Some(-4))),
+                    null_count: Sharpness::Exact(0),
                 },
             ],
         };

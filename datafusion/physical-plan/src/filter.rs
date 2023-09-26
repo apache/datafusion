@@ -37,6 +37,7 @@ use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::stats::Sharpness;
 use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
@@ -228,14 +229,12 @@ impl ExecutionPlan for FilterExec {
                 num_rows,
                 total_byte_size,
                 column_statistics,
-                is_exact: false,
             })
         } else {
             Ok(Statistics {
                 num_rows,
                 total_byte_size,
                 column_statistics: input_stats.column_statistics,
-                is_exact: false,
             })
         }
     }
@@ -263,9 +262,17 @@ fn collect_new_statistics(
             )| {
                 let closed_interval = interval.close_bounds();
                 ColumnStatistics {
-                    null_count: input_column_stats[idx].null_count,
-                    max_value: Some(closed_interval.upper.value),
-                    min_value: Some(closed_interval.lower.value),
+                    null_count: input_column_stats[idx].null_count.clone(),
+                    max_value: if input_column_stats[idx].max_value.is_exact().is_some() {
+                        Sharpness::Exact(closed_interval.upper.value)
+                    } else {
+                        Sharpness::Inexact(closed_interval.upper.value)
+                    },
+                    min_value: if input_column_stats[idx].max_value.is_exact().is_some() {
+                        Sharpness::Exact(closed_interval.lower.value)
+                    } else {
+                        Sharpness::Inexact(closed_interval.lower.value)
+                    },
                     distinct_count,
                 }
             },
@@ -446,14 +453,13 @@ mod tests {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let input = Arc::new(StatisticsExec::new(
             Statistics {
-                num_rows: Some(100),
-                total_byte_size: Some(100 * bytes_per_row),
+                num_rows: Sharpness::Inexact(100),
+                total_byte_size: Sharpness::Inexact(100 * bytes_per_row),
                 column_statistics: vec![ColumnStatistics {
-                    min_value: Some(ScalarValue::Int32(Some(1))),
-                    max_value: Some(ScalarValue::Int32(Some(100))),
+                    min_value: Sharpness::Inexact(ScalarValue::Int32(Some(1))),
+                    max_value: Sharpness::Inexact(ScalarValue::Int32(Some(100))),
                     ..Default::default()
                 }],
-                is_exact: false,
             },
             schema.clone(),
         ));
@@ -467,13 +473,16 @@ mod tests {
             Arc::new(FilterExec::try_new(predicate, input)?);
 
         let statistics = filter.statistics()?;
-        assert_eq!(statistics.num_rows, Some(25));
-        assert_eq!(statistics.total_byte_size, Some(25 * bytes_per_row));
+        assert_eq!(statistics.num_rows, Sharpness::Inexact(25));
+        assert_eq!(
+            statistics.total_byte_size,
+            Sharpness::Inexact(25 * bytes_per_row)
+        );
         assert_eq!(
             statistics.column_statistics,
             vec![ColumnStatistics {
-                min_value: Some(ScalarValue::Int32(Some(1))),
-                max_value: Some(ScalarValue::Int32(Some(25))),
+                min_value: Sharpness::Inexact(ScalarValue::Int32(Some(1))),
+                max_value: Sharpness::Inexact(ScalarValue::Int32(Some(25))),
                 ..Default::default()
             }]
         );
@@ -488,14 +497,13 @@ mod tests {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let input = Arc::new(StatisticsExec::new(
             Statistics {
-                num_rows: Some(100),
+                num_rows: Sharpness::Inexact(100),
                 column_statistics: vec![ColumnStatistics {
-                    min_value: Some(ScalarValue::Int32(Some(1))),
-                    max_value: Some(ScalarValue::Int32(Some(100))),
+                    min_value: Sharpness::Inexact(ScalarValue::Int32(Some(1))),
+                    max_value: Sharpness::Inexact(ScalarValue::Int32(Some(100))),
                     ..Default::default()
                 }],
-                is_exact: false,
-                total_byte_size: None,
+                total_byte_size: Sharpness::Absent,
             },
             schema.clone(),
         ));
@@ -515,12 +523,12 @@ mod tests {
         )?);
 
         let statistics = filter.statistics()?;
-        assert_eq!(statistics.num_rows, Some(16));
+        assert_eq!(statistics.num_rows, Sharpness::Inexact(16));
         assert_eq!(
             statistics.column_statistics,
             vec![ColumnStatistics {
-                min_value: Some(ScalarValue::Int32(Some(10))),
-                max_value: Some(ScalarValue::Int32(Some(25))),
+                min_value: Sharpness::Inexact(ScalarValue::Int32(Some(10))),
+                max_value: Sharpness::Inexact(ScalarValue::Int32(Some(25))),
                 ..Default::default()
             }]
         );
@@ -539,21 +547,20 @@ mod tests {
         ]);
         let input = Arc::new(StatisticsExec::new(
             Statistics {
-                num_rows: Some(100),
+                num_rows: Sharpness::Inexact(100),
                 column_statistics: vec![
                     ColumnStatistics {
-                        min_value: Some(ScalarValue::Int32(Some(1))),
-                        max_value: Some(ScalarValue::Int32(Some(100))),
+                        min_value: Sharpness::Inexact(ScalarValue::Int32(Some(1))),
+                        max_value: Sharpness::Inexact(ScalarValue::Int32(Some(100))),
                         ..Default::default()
                     },
                     ColumnStatistics {
-                        min_value: Some(ScalarValue::Int32(Some(1))),
-                        max_value: Some(ScalarValue::Int32(Some(50))),
+                        min_value: Sharpness::Inexact(ScalarValue::Int32(Some(1))),
+                        max_value: Sharpness::Inexact(ScalarValue::Int32(Some(50))),
                         ..Default::default()
                     },
                 ],
-                is_exact: false,
-                total_byte_size: None,
+                total_byte_size: Sharpness::Absent,
             },
             schema.clone(),
         ));
@@ -582,18 +589,18 @@ mod tests {
         //
         // Which would result with a selectivity of  '15/100 * 5/50' or 0.015
         // and that means about %1.5 of the all rows (rounded up to 2 rows).
-        assert_eq!(statistics.num_rows, Some(2));
+        assert_eq!(statistics.num_rows, Sharpness::Inexact(2));
         assert_eq!(
             statistics.column_statistics,
             vec![
                 ColumnStatistics {
-                    min_value: Some(ScalarValue::Int32(Some(10))),
-                    max_value: Some(ScalarValue::Int32(Some(25))),
+                    min_value: Sharpness::Inexact(ScalarValue::Int32(Some(10))),
+                    max_value: Sharpness::Inexact(ScalarValue::Int32(Some(25))),
                     ..Default::default()
                 },
                 ColumnStatistics {
-                    min_value: Some(ScalarValue::Int32(Some(46))),
-                    max_value: Some(ScalarValue::Int32(Some(50))),
+                    min_value: Sharpness::Inexact(ScalarValue::Int32(Some(46))),
+                    max_value: Sharpness::Inexact(ScalarValue::Int32(Some(50))),
                     ..Default::default()
                 }
             ]
@@ -621,7 +628,7 @@ mod tests {
             Arc::new(FilterExec::try_new(predicate, input)?);
 
         let statistics = filter.statistics()?;
-        assert_eq!(statistics.num_rows, None);
+        assert_eq!(statistics.num_rows, Sharpness::Absent);
 
         Ok(())
     }
@@ -639,26 +646,25 @@ mod tests {
         ]);
         let input = Arc::new(StatisticsExec::new(
             Statistics {
-                num_rows: Some(1000),
-                total_byte_size: Some(4000),
+                num_rows: Sharpness::Inexact(1000),
+                total_byte_size: Sharpness::Inexact(4000),
                 column_statistics: vec![
                     ColumnStatistics {
-                        min_value: Some(ScalarValue::Int32(Some(1))),
-                        max_value: Some(ScalarValue::Int32(Some(100))),
+                        min_value: Sharpness::Inexact(ScalarValue::Int32(Some(1))),
+                        max_value: Sharpness::Inexact(ScalarValue::Int32(Some(100))),
                         ..Default::default()
                     },
                     ColumnStatistics {
-                        min_value: Some(ScalarValue::Int32(Some(1))),
-                        max_value: Some(ScalarValue::Int32(Some(3))),
+                        min_value: Sharpness::Inexact(ScalarValue::Int32(Some(1))),
+                        max_value: Sharpness::Inexact(ScalarValue::Int32(Some(3))),
                         ..Default::default()
                     },
                     ColumnStatistics {
-                        min_value: Some(ScalarValue::Float32(Some(1000.0))),
-                        max_value: Some(ScalarValue::Float32(Some(1100.0))),
+                        min_value: Sharpness::Inexact(ScalarValue::Float32(Some(1000.0))),
+                        max_value: Sharpness::Inexact(ScalarValue::Float32(Some(1100.0))),
                         ..Default::default()
                     },
                 ],
-                is_exact: false,
             },
             schema,
         ));
@@ -698,22 +704,22 @@ mod tests {
         // 0.5 (from a) * 0.333333... (from b) * 0.798387... (from c) ≈ 0.1330...
         // num_rows after ceil => 133.0... => 134
         // total_byte_size after ceil => 532.0... => 533
-        assert_eq!(statistics.num_rows, Some(134));
-        assert_eq!(statistics.total_byte_size, Some(533));
+        assert_eq!(statistics.num_rows, Sharpness::Inexact(134));
+        assert_eq!(statistics.total_byte_size, Sharpness::Inexact(533));
         let exp_col_stats = vec![
             ColumnStatistics {
-                min_value: Some(ScalarValue::Int32(Some(4))),
-                max_value: Some(ScalarValue::Int32(Some(53))),
+                min_value: Sharpness::Inexact(ScalarValue::Int32(Some(4))),
+                max_value: Sharpness::Inexact(ScalarValue::Int32(Some(53))),
                 ..Default::default()
             },
             ColumnStatistics {
-                min_value: Some(ScalarValue::Int32(Some(3))),
-                max_value: Some(ScalarValue::Int32(Some(3))),
+                min_value: Sharpness::Inexact(ScalarValue::Int32(Some(3))),
+                max_value: Sharpness::Inexact(ScalarValue::Int32(Some(3))),
                 ..Default::default()
             },
             ColumnStatistics {
-                min_value: Some(ScalarValue::Float32(Some(1000.0))),
-                max_value: Some(ScalarValue::Float32(Some(1075.0))),
+                min_value: Sharpness::Inexact(ScalarValue::Float32(Some(1000.0))),
+                max_value: Sharpness::Inexact(ScalarValue::Float32(Some(1075.0))),
                 ..Default::default()
             },
         ];
@@ -721,20 +727,24 @@ mod tests {
             .into_iter()
             .zip(statistics.column_statistics)
             .map(|(expected, actual)| {
-                if actual.min_value.clone().unwrap().data_type().is_floating() {
-                    // Windows rounds arithmetic operation results differently for floating point numbers.
-                    // Therefore, we check if the actual values are in an epsilon range.
-                    let actual_min = actual.min_value.unwrap();
-                    let actual_max = actual.max_value.unwrap();
-                    let expected_min = expected.min_value.unwrap();
-                    let expected_max = expected.max_value.unwrap();
-                    let eps = ScalarValue::Float32(Some(1e-6));
+                if let Some(val) = actual.min_value.get_value() {
+                    if val.data_type().is_floating() {
+                        // Windows rounds arithmetic operation results differently for floating point numbers.
+                        // Therefore, we check if the actual values are in an epsilon range.
+                        let actual_min = actual.min_value.get_value().unwrap();
+                        let actual_max = actual.max_value.get_value().unwrap();
+                        let expected_min = expected.min_value.get_value().unwrap();
+                        let expected_max = expected.max_value.get_value().unwrap();
+                        let eps = ScalarValue::Float32(Some(1e-6));
 
-                    assert!(actual_min.sub(&expected_min).unwrap() < eps);
-                    assert!(actual_min.sub(&expected_min).unwrap() < eps);
+                        assert!(actual_min.sub(&expected_min).unwrap() < eps);
+                        assert!(actual_min.sub(&expected_min).unwrap() < eps);
 
-                    assert!(actual_max.sub(&expected_max).unwrap() < eps);
-                    assert!(actual_max.sub(&expected_max).unwrap() < eps);
+                        assert!(actual_max.sub(&expected_max).unwrap() < eps);
+                        assert!(actual_max.sub(&expected_max).unwrap() < eps);
+                    } else {
+                        assert_eq!(actual, expected);
+                    }
                 } else {
                     assert_eq!(actual, expected);
                 }
@@ -754,21 +764,20 @@ mod tests {
         ]);
         let input = Arc::new(StatisticsExec::new(
             Statistics {
-                num_rows: Some(1000),
-                total_byte_size: Some(4000),
+                num_rows: Sharpness::Inexact(1000),
+                total_byte_size: Sharpness::Inexact(4000),
                 column_statistics: vec![
                     ColumnStatistics {
-                        min_value: Some(ScalarValue::Int32(Some(1))),
-                        max_value: Some(ScalarValue::Int32(Some(100))),
+                        min_value: Sharpness::Inexact(ScalarValue::Int32(Some(1))),
+                        max_value: Sharpness::Inexact(ScalarValue::Int32(Some(100))),
                         ..Default::default()
                     },
                     ColumnStatistics {
-                        min_value: Some(ScalarValue::Int32(Some(1))),
-                        max_value: Some(ScalarValue::Int32(Some(3))),
+                        min_value: Sharpness::Inexact(ScalarValue::Int32(Some(1))),
+                        max_value: Sharpness::Inexact(ScalarValue::Int32(Some(3))),
                         ..Default::default()
                     },
                 ],
-                is_exact: false,
             },
             schema,
         ));
@@ -792,8 +801,8 @@ mod tests {
             Arc::new(FilterExec::try_new(predicate, input)?);
         let statistics = filter.statistics()?;
 
-        assert_eq!(statistics.num_rows, Some(1000));
-        assert_eq!(statistics.total_byte_size, Some(4000));
+        assert_eq!(statistics.num_rows, Sharpness::Inexact(1000));
+        assert_eq!(statistics.total_byte_size, Sharpness::Inexact(4000));
         assert_eq!(statistics.column_statistics, expected);
 
         Ok(())
@@ -810,21 +819,20 @@ mod tests {
         ]);
         let input = Arc::new(StatisticsExec::new(
             Statistics {
-                num_rows: Some(1000),
-                total_byte_size: Some(4000),
+                num_rows: Sharpness::Inexact(1000),
+                total_byte_size: Sharpness::Inexact(4000),
                 column_statistics: vec![
                     ColumnStatistics {
-                        min_value: Some(ScalarValue::Int32(Some(1))),
-                        max_value: Some(ScalarValue::Int32(Some(100))),
+                        min_value: Sharpness::Inexact(ScalarValue::Int32(Some(1))),
+                        max_value: Sharpness::Inexact(ScalarValue::Int32(Some(100))),
                         ..Default::default()
                     },
                     ColumnStatistics {
-                        min_value: Some(ScalarValue::Int32(Some(1))),
-                        max_value: Some(ScalarValue::Int32(Some(3))),
+                        min_value: Sharpness::Inexact(ScalarValue::Int32(Some(1))),
+                        max_value: Sharpness::Inexact(ScalarValue::Int32(Some(3))),
                         ..Default::default()
                     },
                 ],
-                is_exact: false,
             },
             schema,
         ));
@@ -846,19 +854,19 @@ mod tests {
             Arc::new(FilterExec::try_new(predicate, input)?);
         let statistics = filter.statistics()?;
 
-        assert_eq!(statistics.num_rows, Some(0));
-        assert_eq!(statistics.total_byte_size, Some(0));
+        assert_eq!(statistics.num_rows, Sharpness::Inexact(0));
+        assert_eq!(statistics.total_byte_size, Sharpness::Inexact(0));
         assert_eq!(
             statistics.column_statistics,
             vec![
                 ColumnStatistics {
-                    min_value: Some(ScalarValue::Int32(Some(1))),
-                    max_value: Some(ScalarValue::Int32(Some(100))),
+                    min_value: Sharpness::Inexact(ScalarValue::Int32(Some(1))),
+                    max_value: Sharpness::Inexact(ScalarValue::Int32(Some(100))),
                     ..Default::default()
                 },
                 ColumnStatistics {
-                    min_value: Some(ScalarValue::Int32(Some(1))),
-                    max_value: Some(ScalarValue::Int32(Some(3))),
+                    min_value: Sharpness::Inexact(ScalarValue::Int32(Some(1))),
+                    max_value: Sharpness::Inexact(ScalarValue::Int32(Some(3))),
                     ..Default::default()
                 },
             ]
@@ -875,21 +883,20 @@ mod tests {
         ]);
         let input = Arc::new(StatisticsExec::new(
             Statistics {
-                num_rows: Some(1000),
-                total_byte_size: Some(4000),
+                num_rows: Sharpness::Inexact(1000),
+                total_byte_size: Sharpness::Inexact(4000),
                 column_statistics: vec![
                     ColumnStatistics {
-                        min_value: Some(ScalarValue::Int32(Some(1))),
-                        max_value: Some(ScalarValue::Int32(Some(100))),
+                        min_value: Sharpness::Inexact(ScalarValue::Int32(Some(1))),
+                        max_value: Sharpness::Inexact(ScalarValue::Int32(Some(100))),
                         ..Default::default()
                     },
                     ColumnStatistics {
-                        min_value: Some(ScalarValue::Int32(Some(1))),
-                        max_value: Some(ScalarValue::Int32(Some(100))),
+                        min_value: Sharpness::Inexact(ScalarValue::Int32(Some(1))),
+                        max_value: Sharpness::Inexact(ScalarValue::Int32(Some(100))),
                         ..Default::default()
                     },
                 ],
-                is_exact: false,
             },
             schema,
         ));
@@ -903,19 +910,19 @@ mod tests {
             Arc::new(FilterExec::try_new(predicate, input)?);
         let statistics = filter.statistics()?;
 
-        assert_eq!(statistics.num_rows, Some(490));
-        assert_eq!(statistics.total_byte_size, Some(1960));
+        assert_eq!(statistics.num_rows, Sharpness::Inexact(490));
+        assert_eq!(statistics.total_byte_size, Sharpness::Inexact(1960));
         assert_eq!(
             statistics.column_statistics,
             vec![
                 ColumnStatistics {
-                    min_value: Some(ScalarValue::Int32(Some(1))),
-                    max_value: Some(ScalarValue::Int32(Some(49))),
+                    min_value: Sharpness::Inexact(ScalarValue::Int32(Some(1))),
+                    max_value: Sharpness::Inexact(ScalarValue::Int32(Some(49))),
                     ..Default::default()
                 },
                 ColumnStatistics {
-                    min_value: Some(ScalarValue::Int32(Some(1))),
-                    max_value: Some(ScalarValue::Int32(Some(100))),
+                    min_value: Sharpness::Inexact(ScalarValue::Int32(Some(1))),
+                    max_value: Sharpness::Inexact(ScalarValue::Int32(Some(100))),
                     ..Default::default()
                 },
             ]
@@ -954,15 +961,14 @@ mod tests {
         let filter_statistics = filter.statistics()?;
 
         let expected_filter_statistics = Statistics {
-            num_rows: None,
-            total_byte_size: None,
+            num_rows: Sharpness::Absent,
+            total_byte_size: Sharpness::Absent,
             column_statistics: vec![ColumnStatistics {
-                null_count: None,
-                min_value: Some(ScalarValue::Int32(Some(5))),
-                max_value: Some(ScalarValue::Int32(Some(10))),
-                distinct_count: None,
+                null_count: Sharpness::Absent,
+                min_value: Sharpness::Inexact(ScalarValue::Int32(Some(5))),
+                max_value: Sharpness::Inexact(ScalarValue::Int32(Some(10))),
+                distinct_count: Sharpness::Absent,
             }],
-            is_exact: false,
         };
 
         assert_eq!(filter_statistics, expected_filter_statistics);

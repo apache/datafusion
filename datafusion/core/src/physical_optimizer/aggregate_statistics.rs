@@ -19,6 +19,7 @@
 use std::sync::Arc;
 
 use crate::config::ConfigOptions;
+use datafusion_common::stats::Sharpness;
 use datafusion_common::tree_node::TreeNode;
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
 
@@ -126,7 +127,7 @@ fn take_optimizable(node: &dyn ExecutionPlan) -> Result<Option<Arc<dyn Execution
                         && partial_agg_exec.filter_expr().iter().all(|e| e.is_none())
                     {
                         let stats = partial_agg_exec.input().statistics()?;
-                        if stats.is_exact {
+                        if stats.all_exact() {
                             return Ok(Some(child));
                         }
                     }
@@ -148,7 +149,7 @@ fn take_optimizable_table_count(
     stats: &Statistics,
 ) -> Option<(ScalarValue, &'static str)> {
     if let (Some(num_rows), Some(casted_expr)) = (
-        stats.num_rows,
+        stats.num_rows.get_value(),
         agg_expr.as_any().downcast_ref::<expressions::Count>(),
     ) {
         // TODO implementing Eq on PhysicalExpr would help a lot here
@@ -176,7 +177,7 @@ fn take_optimizable_column_count(
 ) -> Option<(ScalarValue, String)> {
     let col_stats = &stats.column_statistics;
     if let (Some(num_rows), Some(casted_expr)) = (
-        stats.num_rows,
+        stats.num_rows.get_value(),
         agg_expr.as_any().downcast_ref::<expressions::Count>(),
     ) {
         if casted_expr.expressions().len() == 1 {
@@ -185,11 +186,7 @@ fn take_optimizable_column_count(
                 .as_any()
                 .downcast_ref::<expressions::Column>()
             {
-                if let ColumnStatistics {
-                    null_count: Some(val),
-                    ..
-                } = &col_stats[col_expr.index()]
-                {
+                if let Some(val) = &col_stats[col_expr.index()].null_count.get_value() {
                     return Some((
                         ScalarValue::Int64(Some((num_rows - val) as i64)),
                         casted_expr.name().to_string(),
@@ -214,11 +211,7 @@ fn take_optimizable_min(
                 .as_any()
                 .downcast_ref::<expressions::Column>()
             {
-                if let ColumnStatistics {
-                    min_value: Some(val),
-                    ..
-                } = &col_stats[col_expr.index()]
-                {
+                if let Some(val) = &col_stats[col_expr.index()].min_value.get_value() {
                     // Exclude the unbounded case
                     // As safest estimate, -inf, and + inf is used as bound of the column
                     // If minimum is -inf, it is not exact. Hence we shouldn't do optimization
@@ -246,11 +239,7 @@ fn take_optimizable_max(
                 .as_any()
                 .downcast_ref::<expressions::Column>()
             {
-                if let ColumnStatistics {
-                    max_value: Some(val),
-                    ..
-                } = &col_stats[col_expr.index()]
-                {
+                if let Some(val) = &col_stats[col_expr.index()].max_value.get_value() {
                     // Exclude the unbounded case
                     if !val.is_null() {
                         return Some((val.clone(), casted_expr.name().to_string()));

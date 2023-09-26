@@ -29,6 +29,7 @@ use crate::{
 use arrow::array::ArrayRef;
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use datafusion_common::stats::Sharpness;
 use datafusion_common::utils::longest_consecutive_prefix;
 use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
@@ -1013,18 +1014,16 @@ impl ExecutionPlan for AggregateExec {
                 if self.group_by.expr.is_empty() =>
             {
                 Ok(Statistics {
-                    num_rows: Some(1),
-                    is_exact: true,
+                    num_rows: Sharpness::Exact(1),
                     column_statistics,
-                    total_byte_size: None,
+                    total_byte_size: Sharpness::Absent,
                 })
             }
             _ => Ok(Statistics {
                 // the output row count is surely not larger than its input row count
                 num_rows: self.input.statistics()?.num_rows,
-                is_exact: false,
                 column_statistics,
-                total_byte_size: None,
+                total_byte_size: Sharpness::Absent,
             }),
         }
     }

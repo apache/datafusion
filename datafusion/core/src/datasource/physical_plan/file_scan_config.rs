@@ -32,7 +32,7 @@ use arrow::buffer::Buffer;
 use arrow::datatypes::{ArrowNativeType, UInt16Type};
 use arrow_array::{ArrayRef, DictionaryArray, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
-use datafusion_common::exec_err;
+use datafusion_common::{exec_err, stats::Sharpness};
 use datafusion_common::{ColumnStatistics, Statistics};
 use datafusion_physical_expr::LexOrdering;
 
@@ -145,9 +145,8 @@ impl FileScanConfig {
 
         let table_stats = Statistics {
             num_rows: self.statistics.num_rows,
-            is_exact: self.statistics.is_exact,
             // TODO correct byte size?
-            total_byte_size: None,
+            total_byte_size: Sharpness::Absent,
             column_statistics: table_cols_stats,
         };
 
@@ -536,17 +535,16 @@ mod tests {
             Arc::clone(&file_schema),
             Some(vec![file_schema.fields().len(), 0]),
             Statistics {
-                num_rows: Some(10),
+                num_rows: Sharpness::Inexact(10),
                 // assign the column index to distinct_count to help assert
                 // the source statistic after the projection
                 column_statistics: (0..file_schema.fields().len())
                     .map(|i| ColumnStatistics {
-                        distinct_count: Some(i),
+                        distinct_count: Sharpness::Inexact(i),
                         ..Default::default()
                     })
                     .collect(),
-                total_byte_size: None,
-                is_exact: false,
+                total_byte_size: Sharpness::Absent,
             },
             vec![(
                 "date".to_owned(),
@@ -563,7 +561,7 @@ mod tests {
         assert_eq!(proj_stat_cols.len(), 2);
         // TODO implement tests for proj_stat_cols[0] once partition column
         // statistics are implemented
-        assert_eq!(proj_stat_cols[1].distinct_count, Some(0));
+        assert_eq!(proj_stat_cols[1].distinct_count, Sharpness::Inexact(0));
 
         let col_names = conf.projected_file_column_names();
         assert_eq!(col_names, Some(vec!["c1".to_owned()]));

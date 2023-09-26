@@ -17,6 +17,7 @@
 
 //! Parquet format abstractions
 
+use datafusion_common::stats::Sharpness;
 use parquet::column::writer::ColumnCloseResult;
 use parquet::file::writer::SerializedFileWriter;
 use rand::distributions::DistString;
@@ -508,7 +509,7 @@ async fn fetch_statistics(
 
     let mut num_rows = 0;
     let mut total_byte_size = 0;
-    let mut null_counts = vec![0; num_fields];
+    let mut null_counts = vec![Sharpness::Exact(0); num_fields];
     let mut has_statistics = false;
 
     let schema_adapter = SchemaAdapter::new(table_schema.clone());
@@ -534,7 +535,7 @@ async fn fetch_statistics(
                     schema_adapter.map_column_index(table_idx, &file_schema)
                 {
                     if let Some((null_count, stats)) = column_stats.get(&file_idx) {
-                        *null_cnt += *null_count as usize;
+                        *null_cnt = null_cnt.add(&Sharpness::Exact(*null_count as usize));
                         summarize_min_max(
                             &mut max_values,
                             &mut min_values,
@@ -548,7 +549,7 @@ async fn fetch_statistics(
                         min_values[table_idx] = None;
                     }
                 } else {
-                    *null_cnt += num_rows as usize;
+                    *null_cnt = null_cnt.add(&Sharpness::Exact(num_rows as usize));
                 }
             }
         }
@@ -561,10 +562,9 @@ async fn fetch_statistics(
     };
 
     let statistics = Statistics {
-        num_rows: Some(num_rows as usize),
-        total_byte_size: Some(total_byte_size as usize),
+        num_rows: Sharpness::Exact(num_rows as usize),
+        total_byte_size: Sharpness::Exact(total_byte_size as usize),
         column_statistics: column_stats,
-        is_exact: true,
     };
 
     Ok(statistics)
@@ -1160,20 +1160,26 @@ mod tests {
         let stats =
             fetch_statistics(store.as_ref(), schema.clone(), &meta[0], None).await?;
 
-        assert_eq!(stats.num_rows, Some(3));
+        assert_eq!(stats.num_rows, Sharpness::Exact(3));
         let c1_stats = &stats.column_statistics[0];
         let c2_stats = &stats.column_statistics[1];
-        assert_eq!(c1_stats.null_count, Some(1));
-        assert_eq!(c2_stats.null_count, Some(3));
+        assert_eq!(c1_stats.null_count, Sharpness::Exact(1));
+        assert_eq!(c2_stats.null_count, Sharpness::Exact(3));
 
         let stats = fetch_statistics(store.as_ref(), schema, &meta[1], None).await?;
-        assert_eq!(stats.num_rows, Some(3));
+        assert_eq!(stats.num_rows, Sharpness::Exact(3));
         let c1_stats = &stats.column_statistics[0];
         let c2_stats = &stats.column_statistics[1];
-        assert_eq!(c1_stats.null_count, Some(3));
-        assert_eq!(c2_stats.null_count, Some(1));
-        assert_eq!(c2_stats.max_value, Some(ScalarValue::Int64(Some(2))));
-        assert_eq!(c2_stats.min_value, Some(ScalarValue::Int64(Some(1))));
+        assert_eq!(c1_stats.null_count, Sharpness::Exact(3));
+        assert_eq!(c2_stats.null_count, Sharpness::Exact(1));
+        assert_eq!(
+            c2_stats.max_value,
+            Sharpness::Exact(ScalarValue::Int64(Some(2)))
+        );
+        assert_eq!(
+            c2_stats.min_value,
+            Sharpness::Exact(ScalarValue::Int64(Some(1)))
+        );
 
         Ok(())
     }
@@ -1309,11 +1315,11 @@ mod tests {
             fetch_statistics(store.upcast().as_ref(), schema.clone(), &meta[0], Some(9))
                 .await?;
 
-        assert_eq!(stats.num_rows, Some(3));
+        assert_eq!(stats.num_rows, Sharpness::Exact(3));
         let c1_stats = &stats.column_statistics[0];
         let c2_stats = &stats.column_statistics[1];
-        assert_eq!(c1_stats.null_count, Some(1));
-        assert_eq!(c2_stats.null_count, Some(3));
+        assert_eq!(c1_stats.null_count, Sharpness::Exact(1));
+        assert_eq!(c2_stats.null_count, Sharpness::Exact(3));
 
         let store = Arc::new(RequestCountingObjectStore::new(Arc::new(
             LocalFileSystem::new(),
@@ -1342,11 +1348,11 @@ mod tests {
         )
         .await?;
 
-        assert_eq!(stats.num_rows, Some(3));
+        assert_eq!(stats.num_rows, Sharpness::Exact(3));
         let c1_stats = &stats.column_statistics[0];
         let c2_stats = &stats.column_statistics[1];
-        assert_eq!(c1_stats.null_count, Some(1));
-        assert_eq!(c2_stats.null_count, Some(3));
+        assert_eq!(c1_stats.null_count, Sharpness::Exact(1));
+        assert_eq!(c2_stats.null_count, Sharpness::Exact(3));
 
         let store = Arc::new(RequestCountingObjectStore::new(Arc::new(
             LocalFileSystem::new(),
@@ -1386,8 +1392,8 @@ mod tests {
         assert_eq!(tt_batches, 4 /* 8/2 */);
 
         // test metadata
-        assert_eq!(exec.statistics()?.num_rows, Some(8));
-        assert_eq!(exec.statistics()?.total_byte_size, Some(671));
+        assert_eq!(exec.statistics()?.num_rows, Sharpness::Exact(8));
+        assert_eq!(exec.statistics()?.total_byte_size, Sharpness::Exact(671));
 
         Ok(())
     }
@@ -1428,9 +1434,8 @@ mod tests {
             get_exec(&state, "alltypes_plain.parquet", projection, Some(1)).await?;
 
         // note: even if the limit is set, the executor rounds up to the batch size
-        assert_eq!(exec.statistics()?.num_rows, Some(8));
-        assert_eq!(exec.statistics()?.total_byte_size, Some(671));
-        assert!(exec.statistics()?.is_exact);
+        assert_eq!(exec.statistics()?.num_rows, Sharpness::Exact(8));
+        assert_eq!(exec.statistics()?.total_byte_size, Sharpness::Exact(671));
         let batches = collect(exec, task_ctx).await?;
         assert_eq!(1, batches.len());
         assert_eq!(11, batches[0].num_columns());

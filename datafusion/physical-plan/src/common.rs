@@ -23,6 +23,7 @@ use crate::{ColumnStatistics, ExecutionPlan, Statistics};
 use arrow::datatypes::Schema;
 use arrow::ipc::writer::{FileWriter, IpcWriteOptions};
 use arrow::record_batch::RecordBatch;
+use datafusion_common::stats::Sharpness;
 use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column};
@@ -155,17 +156,25 @@ pub fn compute_record_batch_statistics(
     for partition in batches.iter() {
         for batch in partition {
             for (stat_index, col_index) in projection.iter().enumerate() {
-                *column_statistics[stat_index].null_count.get_or_insert(0) +=
-                    batch.column(*col_index).null_count();
+                column_statistics[stat_index].null_count = if let Sharpness::Exact(val) =
+                    &column_statistics[stat_index].null_count
+                {
+                    Sharpness::Exact(batch.column(*col_index).null_count() + val)
+                } else if let Sharpness::Inexact(val) =
+                    &column_statistics[stat_index].null_count
+                {
+                    Sharpness::Inexact(batch.column(*col_index).null_count() + val)
+                } else {
+                    Sharpness::Exact(0)
+                };
             }
         }
     }
 
     Statistics {
-        num_rows: Some(nb_rows),
-        total_byte_size: Some(total_byte_size),
+        num_rows: Sharpness::Exact(nb_rows),
+        total_byte_size: Sharpness::Exact(total_byte_size),
         column_statistics,
-        is_exact: true,
     }
 }
 
@@ -676,9 +685,8 @@ mod tests {
         ]));
         let stats = compute_record_batch_statistics(&[], &schema, Some(vec![0, 1]));
 
-        assert_eq!(stats.num_rows, Some(0));
-        assert!(stats.is_exact);
-        assert_eq!(stats.total_byte_size, Some(0));
+        assert_eq!(stats.num_rows, Sharpness::Exact(0));
+        assert_eq!(stats.total_byte_size, Sharpness::Exact(0));
         Ok(())
     }
 
@@ -699,21 +707,20 @@ mod tests {
             compute_record_batch_statistics(&[vec![batch]], &schema, Some(vec![0, 1]));
 
         let mut expected = Statistics {
-            is_exact: true,
-            num_rows: Some(3),
-            total_byte_size: Some(464), // this might change a bit if the way we compute the size changes
+            num_rows: Sharpness::Exact(3),
+            total_byte_size: Sharpness::Exact(464), // this might change a bit if the way we compute the size changes
             column_statistics: vec![
                 ColumnStatistics {
-                    distinct_count: None,
-                    max_value: Some(ScalarValue::Float32(None)),
-                    min_value: Some(ScalarValue::Float32(None)),
-                    null_count: Some(0),
+                    distinct_count: Sharpness::Absent,
+                    max_value: Sharpness::Exact(ScalarValue::Float32(None)),
+                    min_value: Sharpness::Exact(ScalarValue::Float32(None)),
+                    null_count: Sharpness::Exact(0),
                 },
                 ColumnStatistics {
-                    distinct_count: None,
-                    max_value: Some(ScalarValue::Float64(None)),
-                    min_value: Some(ScalarValue::Float64(None)),
-                    null_count: Some(0),
+                    distinct_count: Sharpness::Absent,
+                    max_value: Sharpness::Exact(ScalarValue::Float64(None)),
+                    min_value: Sharpness::Exact(ScalarValue::Float64(None)),
+                    null_count: Sharpness::Exact(0),
                 },
             ],
         };

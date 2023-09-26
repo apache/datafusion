@@ -2173,27 +2173,82 @@ pub struct PartitionStats {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Sharpness {
+    #[prost(oneof = "sharpness::SharpnessVariant", tags = "1, 2, 3")]
+    pub sharpness_variant: ::core::option::Option<sharpness::SharpnessVariant>,
+}
+/// Nested message and enum types in `Sharpness`.
+pub mod sharpness {
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum SharpnessVariant {
+        #[prost(message, tag = "1")]
+        Exact(super::ExactInfo),
+        #[prost(message, tag = "2")]
+        Inexact(super::InexactInfo),
+        #[prost(message, tag = "3")]
+        Absent(super::AbsentInfo),
+    }
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ExactInfo {
+    #[prost(oneof = "exact_info::ExactVariant", tags = "1, 2")]
+    pub exact_variant: ::core::option::Option<exact_info::ExactVariant>,
+}
+/// Nested message and enum types in `ExactInfo`.
+pub mod exact_info {
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum ExactVariant {
+        #[prost(int64, tag = "1")]
+        Value(i64),
+        #[prost(message, tag = "2")]
+        ScalarValue(super::ScalarValue),
+    }
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct InexactInfo {
+    #[prost(oneof = "inexact_info::InexactVariant", tags = "1, 2")]
+    pub inexact_variant: ::core::option::Option<inexact_info::InexactVariant>,
+}
+/// Nested message and enum types in `InexactInfo`.
+pub mod inexact_info {
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum InexactVariant {
+        #[prost(int64, tag = "1")]
+        Value(i64),
+        #[prost(message, tag = "2")]
+        ScalarValue(super::ScalarValue),
+    }
+}
+/// No fields needed for Absent
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AbsentInfo {}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Statistics {
-    #[prost(int64, tag = "1")]
-    pub num_rows: i64,
-    #[prost(int64, tag = "2")]
-    pub total_byte_size: i64,
+    #[prost(message, optional, tag = "1")]
+    pub num_rows: ::core::option::Option<Sharpness>,
+    #[prost(message, optional, tag = "2")]
+    pub total_byte_size: ::core::option::Option<Sharpness>,
     #[prost(message, repeated, tag = "3")]
     pub column_stats: ::prost::alloc::vec::Vec<ColumnStats>,
-    #[prost(bool, tag = "4")]
-    pub is_exact: bool,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ColumnStats {
     #[prost(message, optional, tag = "1")]
-    pub min_value: ::core::option::Option<ScalarValue>,
+    pub min_value: ::core::option::Option<Sharpness>,
     #[prost(message, optional, tag = "2")]
-    pub max_value: ::core::option::Option<ScalarValue>,
-    #[prost(uint32, repeated, tag = "3")]
-    pub null_count: ::prost::alloc::vec::Vec<u32>,
-    #[prost(uint32, repeated, tag = "4")]
-    pub distinct_count: ::prost::alloc::vec::Vec<u32>,
+    pub max_value: ::core::option::Option<Sharpness>,
+    #[prost(message, optional, tag = "3")]
+    pub null_count: ::core::option::Option<Sharpness>,
+    #[prost(message, optional, tag = "4")]
+    pub distinct_count: ::core::option::Option<Sharpness>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]

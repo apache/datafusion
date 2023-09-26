@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::Schema;
 
+use datafusion_common::stats::Sharpness;
 use datafusion_common::{ColumnStatistics, DataFusionError, Result, ScalarValue};
 
 use crate::expressions::Column;
@@ -81,7 +82,7 @@ pub struct ExprBoundaries {
     /// Minimum and maximum values this expression can have.
     pub interval: Interval,
     /// Maximum number of distinct values this expression can produce, if known.
-    pub distinct_count: Option<usize>,
+    pub distinct_count: Sharpness<usize>,
 }
 
 impl ExprBoundaries {
@@ -91,13 +92,13 @@ impl ExprBoundaries {
             column: Column::new(&col, index),
             interval: Interval::new(
                 IntervalBound::new_closed(
-                    stats.min_value.clone().unwrap_or(ScalarValue::Null),
+                    stats.min_value.get_value().unwrap_or(ScalarValue::Null),
                 ),
                 IntervalBound::new_closed(
-                    stats.max_value.clone().unwrap_or(ScalarValue::Null),
+                    stats.max_value.get_value().unwrap_or(ScalarValue::Null),
                 ),
             ),
-            distinct_count: stats.distinct_count,
+            distinct_count: stats.distinct_count.clone(),
         }
     }
 }

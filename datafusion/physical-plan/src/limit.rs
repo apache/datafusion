@@ -33,6 +33,7 @@ use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream, Statistics}
 use arrow::array::ArrayRef;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
+use datafusion_common::stats::Sharpness;
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::OrderingEquivalenceProperties;
@@ -206,17 +207,28 @@ impl ExecutionPlan for GlobalLimitExec {
             })
             .unwrap_or(usize::MAX);
         let col_stats = Statistics::unbounded_column_statistics(&self.schema());
+
+        let fetched_row_number_stats = Statistics {
+            num_rows: Sharpness::Exact(max_row_num),
+            column_statistics: col_stats.clone(),
+            total_byte_size: Sharpness::Absent,
+        };
+
         let stats = match input_stats {
             Statistics {
-                num_rows: Some(nr), ..
+                num_rows: Sharpness::Exact(nr),
+                ..
+            }
+            | Statistics {
+                num_rows: Sharpness::Inexact(nr),
+                ..
             } => {
                 if nr <= skip {
                     // if all input data will be skipped, return 0
                     Statistics {
-                        num_rows: Some(0),
-                        is_exact: input_stats.is_exact,
+                        num_rows: Sharpness::Exact(0),
                         column_statistics: col_stats,
-                        total_byte_size: None,
+                        total_byte_size: Sharpness::Absent,
                     }
                 } else if nr <= max_row_num {
                     // if the input does not reach the "fetch" globally, return input stats
@@ -224,21 +236,13 @@ impl ExecutionPlan for GlobalLimitExec {
                 } else {
                     // if the input is greater than the "fetch", the num_row will be the "fetch",
                     // but we won't be able to predict the other statistics
-                    Statistics {
-                        num_rows: Some(max_row_num),
-                        is_exact: input_stats.is_exact,
-                        column_statistics: col_stats,
-                        total_byte_size: None,
-                    }
+                    fetched_row_number_stats
                 }
             }
-            _ => Statistics {
+            _ => {
                 // the result output row number will always be no greater than the limit number
-                num_rows: Some(max_row_num),
-                is_exact: false,
-                column_statistics: col_stats,
-                total_byte_size: None,
-            },
+                fetched_row_number_stats
+            }
         };
         Ok(stats)
     }
@@ -372,27 +376,44 @@ impl ExecutionPlan for LocalLimitExec {
         let stats = match input_stats {
             // if the input does not reach the limit globally, return input stats
             Statistics {
-                num_rows: Some(nr), ..
+                num_rows: Sharpness::Exact(nr),
+                ..
+            }
+            | Statistics {
+                num_rows: Sharpness::Inexact(nr),
+                ..
             } if nr <= self.fetch => input_stats,
             // if the input is greater than the limit, the num_row will be greater
             // than the limit because the partitions will be limited separatly
             // the statistic
             Statistics {
-                num_rows: Some(nr), ..
+                num_rows: Sharpness::Exact(nr),
+                ..
             } if nr > self.fetch => Statistics {
-                num_rows: Some(self.fetch),
+                num_rows: Sharpness::Exact(self.fetch),
                 // this is not actually exact, but will be when GlobalLimit is applied
                 // TODO stats: find a more explicit way to vehiculate this information
-                is_exact: input_stats.is_exact,
                 column_statistics: col_stats,
-                total_byte_size: None,
+                total_byte_size: Sharpness::Absent,
+            },
+            Statistics {
+                num_rows: Sharpness::Inexact(nr),
+                ..
+            } if nr > self.fetch => Statistics {
+                num_rows: Sharpness::Inexact(self.fetch),
+                // this is not actually exact, but will be when GlobalLimit is applied
+                // TODO stats: find a more explicit way to vehiculate this information
+                column_statistics: col_stats,
+                total_byte_size: Sharpness::Absent,
             },
             _ => Statistics {
                 // the result output row number will always be no greater than the limit number
-                num_rows: Some(self.fetch * self.output_partitioning().partition_count()),
-                is_exact: false,
+                num_rows: Sharpness::Inexact(
+                    self.fetch * self.output_partitioning().partition_count(),
+                ),
+
                 column_statistics: col_stats,
-                total_byte_size: None,
+                total_byte_size: Sharpness::Absent,
             },
         };
         Ok(stats)
@@ -737,10 +758,10 @@ mod tests {
     #[tokio::test]
     async fn test_row_number_statistics_for_global_limit() -> Result<()> {
         let row_count = row_number_statistics_for_global_limit(0, Some(10)).await?;
-        assert_eq!(row_count, Some(10));
+        assert_eq!(row_count, Sharpness::Exact(10));
 
         let row_count = row_number_statistics_for_global_limit(5, Some(10)).await?;
-        assert_eq!(row_count, Some(15));
+        assert_eq!(row_count, Sharpness::Exact(15));
 
         Ok(())
     }
@@ -748,7 +769,7 @@ mod tests {
     #[tokio::test]
     async fn test_row_number_statistics_for_local_limit() -> Result<()> {
         let row_count = row_number_statistics_for_local_limit(4, 10).await?;
-        assert_eq!(row_count, Some(10));
+        assert_eq!(row_count, Sharpness::Exact(10));
 
         Ok(())
     }
@@ -756,7 +777,7 @@ mod tests {
     async fn row_number_statistics_for_global_limit(
         skip: usize,
         fetch: Option<usize>,
-    ) -> Result<Option<usize>> {
+    ) -> Result<Sharpness<usize>> {
         let num_partitions = 4;
         let csv = test::scan_partitioned(num_partitions);
 
@@ -771,7 +792,7 @@ mod tests {
     async fn row_number_statistics_for_local_limit(
         num_partitions: usize,
         fetch: usize,
-    ) -> Result<Option<usize>> {
+    ) -> Result<Sharpness<usize>> {
         let csv = test::scan_partitioned(num_partitions);
 
         assert_eq!(csv.output_partitioning().partition_count(), num_partitions);

@@ -29,6 +29,7 @@ use crate::{
     ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
     Partitioning, RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
 };
+use datafusion_common::stats::Sharpness;
 use datafusion_common::{exec_err, plan_err, Result};
 use datafusion_execution::TaskContext;
 
@@ -344,10 +345,9 @@ impl ExecutionPlan for BoundedWindowAggExec {
             ))
         }
         Ok(Statistics {
-            is_exact: input_stat.is_exact,
             num_rows: input_stat.num_rows,
             column_statistics,
-            total_byte_size: None,
+            total_byte_size: Sharpness::Absent,
         })
     }
 }

@@ -17,10 +17,138 @@
 
 //! This module provides data structures to represent statistics
 
-use arrow::datatypes::{DataType, Schema};
-use std::fmt::Display;
-
 use crate::ScalarValue;
+use arrow::datatypes::{DataType, Schema};
+use core::fmt::Debug;
+use std::fmt::{self, Display};
+
+#[derive(Clone, PartialEq, Eq)]
+pub enum Sharpness<T: Debug + Clone + PartialEq + Eq + Display + PartialOrd> {
+    Exact(T),
+    Inexact(T),
+    Absent,
+}
+
+impl<T: Debug + Clone + PartialEq + Eq + Display + PartialOrd> Sharpness<T> {
+    pub fn get_value(&self) -> Option<T> {
+        match self {
+            Sharpness::Exact(val) | Sharpness::Inexact(val) => Some(val.clone()),
+            Sharpness::Absent => None,
+        }
+    }
+
+    pub fn map<F>(self, f: F) -> Sharpness<T>
+    where
+        F: Fn(T) -> T,
+    {
+        match self {
+            Sharpness::Exact(val) => Sharpness::Exact(f(val)),
+            Sharpness::Inexact(val) => Sharpness::Inexact(f(val)),
+            _ => self,
+        }
+    }
+
+    pub fn is_exact(&self) -> Option<bool> {
+        match self {
+            Sharpness::Exact(_) => Some(true),
+            Sharpness::Inexact(_) => Some(false),
+            _ => None,
+        }
+    }
+
+    pub fn max(&self, other: &Sharpness<T>) -> Sharpness<T> {
+        match (self, other) {
+            (Sharpness::Exact(a), Sharpness::Exact(b)) => {
+                Sharpness::Exact(if a >= b { a.clone() } else { b.clone() })
+            }
+            (Sharpness::Inexact(a), Sharpness::Exact(b))
+            | (Sharpness::Exact(a), Sharpness::Inexact(b))
+            | (Sharpness::Inexact(a), Sharpness::Inexact(b)) => {
+                Sharpness::Inexact(if a >= b { a.clone() } else { b.clone() })
+            }
+            (_, _) => Sharpness::Absent,
+        }
+    }
+
+    pub fn min(&self, other: &Sharpness<T>) -> Sharpness<T> {
+        match (self, other) {
+            (Sharpness::Exact(a), Sharpness::Exact(b)) => {
+                Sharpness::Exact(if a >= b { b.clone() } else { a.clone() })
+            }
+            (Sharpness::Inexact(a), Sharpness::Exact(b))
+            | (Sharpness::Exact(a), Sharpness::Inexact(b))
+            | (Sharpness::Inexact(a), Sharpness::Inexact(b)) => {
+                Sharpness::Inexact(if a >= b { b.clone() } else { a.clone() })
+            }
+            (_, _) => Sharpness::Absent,
+        }
+    }
+}
+
+impl Sharpness<usize> {
+    pub fn add(&self, other: &Sharpness<usize>) -> Sharpness<usize> {
+        match (self, other) {
+            (Sharpness::Exact(a), Sharpness::Exact(b)) => Sharpness::Exact(a + b),
+            (Sharpness::Inexact(a), Sharpness::Exact(b))
+            | (Sharpness::Exact(a), Sharpness::Inexact(b))
+            | (Sharpness::Inexact(a), Sharpness::Inexact(b)) => Sharpness::Inexact(a + b),
+            (_, _) => Sharpness::Absent,
+        }
+    }
+
+    pub fn sub(&self, other: &Sharpness<usize>) -> Sharpness<usize> {
+        match (self, other) {
+            (Sharpness::Exact(a), Sharpness::Exact(b)) => Sharpness::Exact(a - b),
+            (Sharpness::Inexact(a), Sharpness::Exact(b))
+            | (Sharpness::Exact(a), Sharpness::Inexact(b))
+            | (Sharpness::Inexact(a), Sharpness::Inexact(b)) => Sharpness::Inexact(a - b),
+            (_, _) => Sharpness::Absent,
+        }
+    }
+
+    pub fn multiply(&self, other: &Sharpness<usize>) -> Sharpness<usize> {
+        match (self, other) {
+            (Sharpness::Exact(a), Sharpness::Exact(b)) => Sharpness::Exact(a * b),
+            (Sharpness::Inexact(a), Sharpness::Exact(b))
+            | (Sharpness::Exact(a), Sharpness::Inexact(b))
+            | (Sharpness::Inexact(a), Sharpness::Inexact(b)) => Sharpness::Inexact(a * b),
+            (_, _) => Sharpness::Absent,
+        }
+    }
+}
+
+impl<T: fmt::Debug + Clone + PartialEq + Eq + Display + PartialOrd> Debug
+    for Sharpness<T>
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Sharpness::Exact(inner) => write!(f, "Exact Info:({:?})", inner),
+            Sharpness::Inexact(inner) => write!(f, "Inexact Info:({:?})", inner),
+            Sharpness::Absent => write!(f, "Absent Info"),
+        }
+    }
+}
+
+impl<T: fmt::Debug + Clone + PartialEq + Eq + Display + PartialOrd> Display
+    for Sharpness<T>
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Sharpness::Exact(inner) => write!(f, "Exact Info:({})", inner),
+            Sharpness::Inexact(inner) => write!(f, "Inexact Info:({})", inner),
+            Sharpness::Absent => write!(f, "Absent Info"),
+        }
+    }
+}
+
+impl<T> Default for Sharpness<T>
+where
+    T: Debug + Clone + PartialEq + Eq + Display + PartialOrd,
+{
+    fn default() -> Self {
+        Sharpness::Absent
+    }
+}
 
 /// Statistics for a relation
 /// Fields are optional and can be inexact because the sources
@@ -29,15 +157,11 @@ use crate::ScalarValue;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Statistics {
     /// The number of table rows
-    pub num_rows: Option<usize>,
+    pub num_rows: Sharpness<usize>,
     /// total bytes of the table rows
-    pub total_byte_size: Option<usize>,
+    pub total_byte_size: Sharpness<usize>,
     /// Statistics on a column level
     pub column_statistics: Vec<ColumnStatistics>,
-    /// If true, any field that is `Some(..)` is the actual value in the data provided by the operator (it is not
-    /// an estimate). Any or all other fields might still be None, in which case no information is known.
-    /// if false, any field that is `Some(..)` may contain an inexact estimate and may not be the actual value.
-    pub is_exact: bool,
 }
 
 impl Statistics {
@@ -46,10 +170,9 @@ impl Statistics {
     /// known to give an opportunity to the current executor to shrink the bounds of some columns.
     pub fn new_with_unbounded_columns(schema: &Schema) -> Self {
         Self {
-            num_rows: None,
-            total_byte_size: None,
+            num_rows: Sharpness::Absent,
+            total_byte_size: Sharpness::Absent,
             column_statistics: Statistics::unbounded_column_statistics(schema),
-            is_exact: false,
         }
     }
 
@@ -61,52 +184,61 @@ impl Statistics {
             .map(|field| {
                 let inf = ScalarValue::try_from(field.data_type()).ok();
                 ColumnStatistics {
-                    null_count: None,
-                    max_value: inf.clone(),
-                    min_value: inf,
-                    distinct_count: None,
+                    null_count: Sharpness::Absent,
+                    max_value: inf
+                        .clone()
+                        .map(|val| Sharpness::Inexact(val))
+                        .unwrap_or(Sharpness::Absent),
+                    min_value: inf
+                        .map(|val| Sharpness::Inexact(val))
+                        .unwrap_or(Sharpness::Absent),
+                    distinct_count: Sharpness::Absent,
                 }
             })
             .collect()
+    }
+
+    pub fn all_exact(&self) -> bool {
+        self.num_rows.is_exact().unwrap_or(false)
+            && self.total_byte_size.is_exact().unwrap_or(false)
+            && self.column_statistics.iter().all(|col_stat| {
+                col_stat.distinct_count.is_exact().unwrap_or(false)
+                    && col_stat.max_value.is_exact().unwrap_or(false)
+                    && col_stat.min_value.is_exact().unwrap_or(false)
+                    && col_stat.null_count.is_exact().unwrap_or(false)
+            })
     }
 }
 
 impl Display for Statistics {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.num_rows.is_none() && self.total_byte_size.is_none() && !self.is_exact {
-            return Ok(());
-        }
-
-        let rows = self
-            .num_rows
-            .map_or_else(|| "None".to_string(), |v| v.to_string());
-        let bytes = self
-            .total_byte_size
-            .map_or_else(|| "None".to_string(), |v| v.to_string());
-
-        write!(f, "rows={}, bytes={}, exact={}", rows, bytes, self.is_exact)?;
+        write!(
+            f,
+            "Number of Rows={}, Number of Bytes={}, Columns Statistics={:?}",
+            self.num_rows, self.total_byte_size, self.column_statistics
+        )?;
 
         Ok(())
     }
 }
 
 /// Statistics for a column within a relation
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct ColumnStatistics {
     /// Number of null values on column
-    pub null_count: Option<usize>,
+    pub null_count: Sharpness<usize>,
     /// Maximum value of column
-    pub max_value: Option<ScalarValue>,
+    pub max_value: Sharpness<ScalarValue>,
     /// Minimum value of column
-    pub min_value: Option<ScalarValue>,
+    pub min_value: Sharpness<ScalarValue>,
     /// Number of distinct values
-    pub distinct_count: Option<usize>,
+    pub distinct_count: Sharpness<usize>,
 }
 
 impl ColumnStatistics {
     /// Column contains a single non null value (e.g constant).
     pub fn is_singleton(&self) -> bool {
-        match (&self.min_value, &self.max_value) {
+        match (&self.min_value.get_value(), &self.max_value.get_value()) {
             // Min and max values are the same and not infinity.
             (Some(min), Some(max)) => !min.is_null() && !max.is_null() && (min == max),
             (_, _) => false,
@@ -117,10 +249,15 @@ impl ColumnStatistics {
     pub fn new_with_unbounded_column(dt: &DataType) -> ColumnStatistics {
         let null = ScalarValue::try_from(dt.clone()).ok();
         ColumnStatistics {
-            null_count: None,
-            max_value: null.clone(),
-            min_value: null,
-            distinct_count: None,
+            null_count: Sharpness::Absent,
+            max_value: null
+                .clone()
+                .map(|val| Sharpness::Inexact(val))
+                .unwrap_or(Sharpness::Absent),
+            min_value: null
+                .map(|val| Sharpness::Inexact(val))
+                .unwrap_or(Sharpness::Absent),
+            distinct_count: Sharpness::Absent,
         }
     }
 }

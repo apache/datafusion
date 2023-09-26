@@ -19,6 +19,7 @@ use crate::arrow::datatypes::{Schema, SchemaRef};
 use crate::error::Result;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
 use crate::physical_plan::{Accumulator, ColumnStatistics, Statistics};
+use datafusion_common::stats::Sharpness;
 use futures::Stream;
 use futures::StreamExt;
 
@@ -34,7 +35,7 @@ pub async fn get_statistics_with_limit(
 ) -> Result<(Vec<PartitionedFile>, Statistics)> {
     let mut result_files = vec![];
 
-    let mut null_counts = vec![0; file_schema.fields().len()];
+    let mut null_counts = vec![Sharpness::Exact(0 as usize); file_schema.fields().len()];
     let mut has_statistics = false;
     let (mut max_values, mut min_values) = create_max_min_accs(&file_schema);
 
@@ -44,32 +45,31 @@ pub async fn get_statistics_with_limit(
     // at least one file has them. If none of the files provide them, then they
     // will be omitted from the statistics. The missing values will be counted
     // as zero.
-    let mut num_rows = None;
-    let mut total_byte_size = None;
+    let mut num_rows = Sharpness::Absent;
+    let mut total_byte_size = Sharpness::Absent;
 
     // fusing the stream allows us to call next safely even once it is finished
     let mut all_files = Box::pin(all_files.fuse());
     while let Some(res) = all_files.next().await {
         let (file, file_stats) = res?;
         result_files.push(file);
-        is_exact &= file_stats.is_exact;
-        num_rows = if let Some(num_rows) = num_rows {
-            Some(num_rows + file_stats.num_rows.unwrap_or(0))
+        num_rows = if num_rows.get_value().is_some() {
+            num_rows.add(&file_stats.num_rows)
         } else {
             file_stats.num_rows
         };
-        total_byte_size = if let Some(total_byte_size) = total_byte_size {
-            Some(total_byte_size + file_stats.total_byte_size.unwrap_or(0))
+        total_byte_size = if total_byte_size.get_value().is_some() {
+            total_byte_size.add(&file_stats.total_byte_size)
         } else {
             file_stats.total_byte_size
         };
 
         has_statistics = true;
         for (i, cs) in file_stats.column_statistics.iter().enumerate() {
-            null_counts[i] += cs.null_count.unwrap_or(0);
+            null_counts[i] = null_counts[i].add(&cs.null_count);
 
             if let Some(max_value) = &mut max_values[i] {
-                if let Some(file_max) = cs.max_value.clone() {
+                if let Some(file_max) = cs.max_value.get_value() {
                     match max_value.update_batch(&[file_max.to_array()]) {
                         Ok(_) => {}
                         Err(_) => {
@@ -82,7 +82,7 @@ pub async fn get_statistics_with_limit(
             }
 
             if let Some(min_value) = &mut min_values[i] {
-                if let Some(file_min) = cs.min_value.clone() {
+                if let Some(file_min) = cs.min_value.get_value() {
                     match min_value.update_batch(&[file_min.to_array()]) {
                         Ok(_) => {}
                         Err(_) => {
@@ -99,8 +99,13 @@ pub async fn get_statistics_with_limit(
         // files. This only applies when we know the number of rows. It also
         // currently ignores tables that have no statistics regarding the
         // number of rows.
-        if num_rows.unwrap_or(usize::MIN) > limit.unwrap_or(usize::MAX) {
-            break;
+        match (num_rows.get_value(), limit) {
+            (Some(nr), Some(limit)) => {
+                if nr > limit {
+                    break;
+                }
+            }
+            _ => break,
         }
     }
     // if we still have files in the stream, it means that the limit kicked
@@ -120,7 +125,6 @@ pub async fn get_statistics_with_limit(
         num_rows,
         total_byte_size,
         column_statistics: column_stats,
-        is_exact,
     };
 
     Ok((result_files, statistics))
@@ -144,7 +148,7 @@ pub(crate) fn create_max_min_accs(
 
 pub(crate) fn get_col_stats(
     schema: &Schema,
-    null_counts: Vec<usize>,
+    null_counts: Vec<Sharpness<usize>>,
     max_values: &mut [Option<MaxAccumulator>],
     min_values: &mut [Option<MinAccumulator>],
 ) -> Vec<ColumnStatistics> {
@@ -159,10 +163,14 @@ pub(crate) fn get_col_stats(
                 None => None,
             };
             ColumnStatistics {
-                null_count: Some(null_counts[i]),
-                max_value,
-                min_value,
-                distinct_count: None,
+                null_count: null_counts[i],
+                max_value: max_value
+                    .map(|val| Sharpness::Exact(val))
+                    .unwrap_or(Sharpness::Absent),
+                min_value: min_value
+                    .map(|val| Sharpness::Exact(val))
+                    .unwrap_or(Sharpness::Absent),
+                distinct_count: Sharpness::Absent,
             }
         })
         .collect()

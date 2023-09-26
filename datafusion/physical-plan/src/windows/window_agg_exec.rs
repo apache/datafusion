@@ -36,6 +36,7 @@ use arrow::{
     datatypes::{Schema, SchemaRef},
     record_batch::RecordBatch,
 };
+use datafusion_common::stats::Sharpness;
 use datafusion_common::utils::{evaluate_partition_ranges, get_at_indices};
 use datafusion_common::Result;
 use datafusion_common::{internal_err, plan_err, DataFusionError};
@@ -273,10 +274,9 @@ impl ExecutionPlan for WindowAggExec {
             ))
         }
         Ok(Statistics {
-            is_exact: input_stat.is_exact,
             num_rows: input_stat.num_rows,
             column_statistics,
-            total_byte_size: None,
+            total_byte_size: Sharpness::Absent,
         })
     }
 }
