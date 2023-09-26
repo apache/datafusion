@@ -140,28 +140,6 @@ impl ProjectionExec {
             };
         }
 
-        // Output Ordering need to respect the alias
-        let child_output_ordering = input.output_ordering();
-        let output_ordering = match child_output_ordering {
-            Some(sort_exprs) => {
-                let normalized_exprs = sort_exprs
-                    .iter()
-                    .map(|sort_expr| {
-                        let expr = normalize_out_expr_with_columns_map(
-                            sort_expr.expr.clone(),
-                            &columns_map,
-                        );
-                        PhysicalSortExpr {
-                            expr,
-                            options: sort_expr.options,
-                        }
-                    })
-                    .collect::<Vec<_>>();
-                Some(normalized_exprs)
-            }
-            None => None,
-        };
-
         let orderings = find_orderings_of_exprs(
             &expr,
             input.output_ordering(),
@@ -177,15 +155,13 @@ impl ProjectionExec {
         // let output_ordering =
         //     validate_output_ordering(output_ordering, &orderings, &expr);
 
-        let output_ordering = if let Some(oeq_class) = input
-            .ordering_equivalence_properties()
-            .project(&columns_map, &source_to_target_mapping, schema.clone())
-            .oeq_class()
-        {
-            Some(oeq_class.head().to_vec())
-        } else {
-            None
-        };
+        let input_oeq = input.ordering_equivalence_properties();
+        // println!("input.ordering_equivalence_properties(): {:?}", input_oeq);
+        let project_oeq = input_oeq.project(&source_to_target_mapping, schema.clone());
+        let project_orderings = project_oeq.oeq_group();
+        // println!("project_oeq: {:?}", project_oeq);
+        let output_ordering = project_orderings.output_ordering();
+        // println!("output ordering:{:?}", output_ordering);
 
         Ok(Self {
             expr,
@@ -279,13 +255,6 @@ impl ExecutionPlan for ProjectionExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        // let oeq = self.ordering_equivalence_properties();
-        // if let Some(oeq_class) = oeq.oeq_class(){
-        //     Some(oeq_class.head())
-        // } else{
-        //     None
-        // }
-        // oeq.oeq_class().map(|oeq_class| &(oeq_class.head().to_vec()))
         self.output_ordering.as_deref()
     }
 
@@ -294,57 +263,10 @@ impl ExecutionPlan for ProjectionExec {
         vec![true]
     }
 
-    // fn equivalence_properties(&self) -> EquivalenceProperties {
-    //     let mut new_properties = EquivalenceProperties::new(self.schema());
-    //     project_equivalence_properties(
-    //         self.input.equivalence_properties(),
-    //         &self.columns_map,
-    //         &mut new_properties,
-    //     );
-    //     new_properties
-    // }
-
-    // fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-    //     let mut new_properties = OrderingEquivalenceProperties::new(self.schema());
-    //     if self.output_ordering.is_none() {
-    //         // If there is no output ordering, return an "empty" equivalence set:
-    //         return new_properties;
-    //     }
-    //
-    //     let input_oeq = self.input().ordering_equivalence_properties();
-    //
-    //     project_ordering_equivalence_properties(
-    //         input_oeq,
-    //         &self.columns_map,
-    //         &mut new_properties,
-    //     );
-    //
-    //     if let Some(leading_ordering) = self
-    //         .output_ordering
-    //         .as_ref()
-    //         .map(|output_ordering| &output_ordering[0])
-    //     {
-    //         for order in self.orderings.iter().flatten() {
-    //             if !order.eq(leading_ordering)
-    //                 && !new_properties.satisfies_leading_ordering(order)
-    //             {
-    //                 new_properties.add_ordering_equal_conditions((
-    //                     &vec![leading_ordering.clone()],
-    //                     &vec![order.clone()],
-    //                 ));
-    //             }
-    //         }
-    //     }
-    //
-    //     new_properties
-    // }
-
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        self.input.ordering_equivalence_properties().project(
-            &self.columns_map,
-            &self.source_to_target_mapping,
-            self.schema(),
-        )
+        self.input
+            .ordering_equivalence_properties()
+            .project(&self.source_to_target_mapping, self.schema())
     }
 
     fn with_new_children(

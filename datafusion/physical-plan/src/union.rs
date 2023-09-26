@@ -46,6 +46,7 @@ use crate::stream::ObservedStream;
 use crate::{expressions, metrics::BaselineMetrics};
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::OrderingEquivalenceProperties;
 use tokio::macros::support::thread_rng_n;
 
 /// `UnionExec`: `UNION ALL` execution plan.
@@ -222,6 +223,26 @@ impl ExecutionPlan for UnionExec {
         } else {
             vec![false; self.inputs().len()]
         }
+    }
+
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+        let child_oeqs = self
+            .inputs
+            .iter()
+            .map(|child| child.ordering_equivalence_properties().oeq_group().clone())
+            .collect::<Vec<_>>();
+        let first_oeq = child_oeqs[0].clone();
+        let mut union_oeq = OrderingEquivalenceProperties::new(self.schema());
+        for elem in first_oeq.iter() {
+            if child_oeqs.iter().all(|child_oeq| child_oeq.contains(elem)) {
+                // res.push(elem);
+                // Search meet instead of exact
+                union_oeq.add_new_orderings(&[elem.clone()])
+            }
+        }
+        // let mut union_oeq = OrderingEquivalenceProperties::new(self.schema());
+        // union_oeq.add_ordering_equal_conditions()
+        union_oeq
     }
 
     fn with_new_children(

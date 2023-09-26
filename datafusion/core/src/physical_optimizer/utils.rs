@@ -35,7 +35,6 @@ use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::{displayable, ExecutionPlan};
 
 use datafusion_common::DataFusionError;
-use datafusion_physical_expr::utils::ordering_satisfy;
 use datafusion_physical_expr::PhysicalSortExpr;
 
 /// This object implements a tree that we use while keeping track of paths
@@ -109,9 +108,10 @@ pub fn add_sort_above(
     fetch: Option<usize>,
 ) -> Result<()> {
     // If the ordering requirement is already satisfied, do not add a sort.
-    if !ordering_satisfy(node.output_ordering(), Some(&sort_expr), || {
-        node.ordering_equivalence_properties()
-    }) {
+    if !node
+        .ordering_equivalence_properties()
+        .ordering_satisfy(Some(&sort_expr))
+    {
         let new_sort = SortExec::new(sort_expr, node.clone()).with_fetch(fetch);
 
         *node = Arc::new(if node.output_partitioning().partition_count() > 1 {

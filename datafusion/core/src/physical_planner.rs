@@ -2433,7 +2433,7 @@ mod tests {
             .build()?;
 
         let execution_plan = plan(&logical_plan).await?;
-        print_plan(&execution_plan);
+        // print_plan(&execution_plan);
         let final_hash_agg = execution_plan
             .as_any()
             .downcast_ref::<AggregateExec>()

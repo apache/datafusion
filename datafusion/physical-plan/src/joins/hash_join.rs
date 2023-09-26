@@ -364,18 +364,6 @@ impl ExecutionPlan for HashJoinExec {
         Self::maintains_input_order(self.join_type)
     }
 
-    // fn equivalence_properties(&self) -> EquivalenceProperties {
-    //     let left_columns_len = self.left.schema().fields.len();
-    //     combine_join_equivalence_properties(
-    //         self.join_type,
-    //         self.left.equivalence_properties(),
-    //         self.right.equivalence_properties(),
-    //         left_columns_len,
-    //         self.on(),
-    //         self.schema(),
-    //     )
-    // }
-
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
         combine_join_ordering_equivalence_properties(
             &self.join_type,
@@ -421,7 +409,11 @@ impl ExecutionPlan for HashJoinExec {
         // for child in self.children(){
         //     println!("hash join child ordering_equivalence_properties()\n{:?}", child.ordering_equivalence_properties());
         // }
-        // println!("hash join self.ordering_equivalence_properties()\n{:?}", self.ordering_equivalence_properties());
+        println!(
+            "hash join self.ordering_equivalence_properties()\n{:?}",
+            self.ordering_equivalence_properties()
+        );
+        println!("hash join output ordering: {:?}", self.output_ordering());
 
         if self.mode == PartitionMode::Partitioned && left_partitions != right_partitions
         {

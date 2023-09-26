@@ -49,9 +49,7 @@ use crate::physical_plan::{with_new_children_if_necessary, Distribution, Executi
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_expr::logical_plan::JoinType;
 use datafusion_physical_expr::expressions::{Column, NoOp};
-use datafusion_physical_expr::utils::{
-    map_columns_before_projection, ordering_satisfy_requirement_concrete,
-};
+use datafusion_physical_expr::utils::map_columns_before_projection;
 use datafusion_physical_expr::{
     expr_list_eq_strict_order, OrderingEquivalenceProperties, PhysicalExpr,
     PhysicalSortRequirement,
@@ -796,6 +794,7 @@ fn try_reorder(
     // println!("join_keys:{:?}", join_keys);
     // println!("expected:{:?}", expected);
     // println!("equivalence_properties:{:?}", equivalence_properties);
+    let eq_groups = equivalence_properties.eq_groups();
     let mut normalized_expected = vec![];
     let mut normalized_left_keys = vec![];
     let mut normalized_right_keys = vec![];
@@ -806,30 +805,27 @@ fn try_reorder(
         || expr_list_eq_strict_order(expected, &join_keys.right_keys)
     {
         return Some((join_keys, vec![]));
-    } else if !equivalence_properties.eq_classes().is_empty() {
+    } else if !equivalence_properties.eq_groups().is_empty() {
         normalized_expected = expected
             .iter()
-            .map(|e| equivalence_properties.normalize_expr(e.clone()))
+            .map(|e| eq_groups.normalize_expr(e.clone()))
             .collect::<Vec<_>>();
         assert_eq!(normalized_expected.len(), expected.len());
 
         normalized_left_keys = join_keys
             .left_keys
             .iter()
-            .map(|e| equivalence_properties.normalize_expr(e.clone()))
+            .map(|e| eq_groups.normalize_expr(e.clone()))
             .collect::<Vec<_>>();
         assert_eq!(join_keys.left_keys.len(), normalized_left_keys.len());
 
         normalized_right_keys = join_keys
             .right_keys
             .iter()
-            .map(|e| equivalence_properties.normalize_expr(e.clone()))
+            .map(|e| eq_groups.normalize_expr(e.clone()))
             .collect::<Vec<_>>();
         assert_eq!(join_keys.right_keys.len(), normalized_right_keys.len());
 
-        println!("normalized_expected: {:?}", normalized_expected);
-        println!("normalized_left_keys: {:?}", normalized_left_keys);
-        println!("normalized_right_keys: {:?}", normalized_right_keys);
         if expr_list_eq_strict_order(&normalized_expected, &normalized_left_keys)
             || expr_list_eq_strict_order(&normalized_expected, &normalized_right_keys)
         {
@@ -1360,15 +1356,13 @@ fn ensure_distribution(
             }
             // There is an ordering requirement of the operator:
             if let Some(required_input_ordering) = required_input_ordering {
-                let existing_ordering = child.output_ordering().unwrap_or(&[]);
                 // Either:
                 // - Ordering requirement cannot be satisfied by preserving ordering through repartitions, or
                 // - using order preserving variant is not desirable.
-                if !ordering_satisfy_requirement_concrete(
-                    existing_ordering,
-                    required_input_ordering,
-                    || child.ordering_equivalence_properties(),
-                ) || !order_preserving_variants_desirable
+                if !child
+                    .ordering_equivalence_properties()
+                    .ordering_satisfy_requirement_concrete(required_input_ordering)
+                    || !order_preserving_variants_desirable
                 {
                     replace_order_preserving_variants(&mut child, dist_onward)?;
                     let sort_expr = PhysicalSortRequirement::to_sort_exprs(
@@ -3733,14 +3727,14 @@ mod tests {
     fn repartition_transitively_past_sort_with_filter() -> Result<()> {
         let schema = schema();
         let sort_key = vec![PhysicalSortExpr {
-            expr: col("c", &schema).unwrap(),
+            expr: col("a", &schema).unwrap(),
             options: SortOptions::default(),
         }];
         let plan = sort_exec(sort_key, filter_exec(parquet_exec()), false);
 
         let expected = &[
-            "SortPreservingMergeExec: [c@2 ASC]",
-            "SortExec: expr=[c@2 ASC]",
+            "SortPreservingMergeExec: [a@0 ASC]",
+            "SortExec: expr=[a@0 ASC]",
             // Expect repartition on the input to the sort (as it can benefit from additional parallelism)
             "FilterExec: c@2 = 0",
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
@@ -3750,7 +3744,7 @@ mod tests {
         assert_optimized!(expected, plan.clone(), true);
 
         let expected_first_sort_enforcement = &[
-            "SortExec: expr=[c@2 ASC]",
+            "SortExec: expr=[a@0 ASC]",
             "CoalescePartitionsExec",
             "FilterExec: c@2 = 0",
             // Expect repartition on the input of the filter (as it can benefit from additional parallelism)
@@ -4326,6 +4320,30 @@ mod tests {
     fn do_not_preserve_ordering_through_repartition() -> Result<()> {
         let schema = schema();
         let sort_key = vec![PhysicalSortExpr {
+            expr: col("a", &schema).unwrap(),
+            options: SortOptions::default(),
+        }];
+        let input = parquet_exec_multiple_sorted(vec![sort_key.clone()]);
+        let physical_plan = sort_preserving_merge_exec(sort_key, filter_exec(input));
+
+        let expected = &[
+            "SortPreservingMergeExec: [a@0 ASC]",
+            "SortExec: expr=[a@0 ASC]",
+            "FilterExec: c@2 = 0",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
+            "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC]",
+        ];
+
+        assert_optimized!(expected, physical_plan.clone(), true);
+        assert_optimized!(expected, physical_plan, false);
+
+        Ok(())
+    }
+
+    #[test]
+    fn no_need_for_sort_after_filter() -> Result<()> {
+        let schema = schema();
+        let sort_key = vec![PhysicalSortExpr {
             expr: col("c", &schema).unwrap(),
             options: SortOptions::default(),
         }];
@@ -4334,7 +4352,7 @@ mod tests {
 
         let expected = &[
             "SortPreservingMergeExec: [c@2 ASC]",
-            "SortExec: expr=[c@2 ASC]",
+            // Since after this stage c is constant. c@2 ASC ordering is already satisfied.
             "FilterExec: c@2 = 0",
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
             "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",

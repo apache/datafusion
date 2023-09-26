@@ -27,6 +27,8 @@ use datafusion_common::utils::DataPtr;
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
+use hashbrown::HashSet;
+use itertools::izip;
 use std::any::Any;
 use std::fmt::{Debug, Display};
 use std::hash::{Hash, Hasher};
@@ -191,4 +193,191 @@ pub fn physical_exprs_contains(
     physical_exprs
         .iter()
         .any(|physical_expr| physical_expr.eq(expr))
+}
+
+/// This util removes duplicates from the `physical_exprs` vector in its argument.
+/// Once we can use `HashSet` with `Arc<dyn PhysicalExpr>` use it instead.
+pub fn deduplicate_physical_exprs(
+    physical_exprs: &[Arc<dyn PhysicalExpr>],
+) -> Vec<Arc<dyn PhysicalExpr>> {
+    let mut unique_physical_exprs = vec![];
+    for expr in physical_exprs {
+        if !physical_exprs_contains(&unique_physical_exprs, expr) {
+            unique_physical_exprs.push(expr.clone());
+        }
+    }
+    unique_physical_exprs
+}
+
+/// Check whether vectors in the arguments have common entries
+pub fn have_common_entries(
+    lhs: &[Arc<dyn PhysicalExpr>],
+    rhs: &[Arc<dyn PhysicalExpr>],
+) -> bool {
+    lhs.iter().any(|expr| physical_exprs_contains(rhs, expr))
+}
+
+/// Check whether physical exprs vectors are equal.
+pub fn physical_exprs_equal(
+    lhs: &[Arc<dyn PhysicalExpr>],
+    rhs: &[Arc<dyn PhysicalExpr>],
+) -> bool {
+    lhs.len() == rhs.len() && izip!(lhs, rhs).all(|(lhs, rhs)| lhs.eq(rhs))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::expressions::{Column, Literal};
+    use crate::physical_expr::{
+        deduplicate_physical_exprs, have_common_entries, physical_exprs_equal,
+    };
+    use crate::{physical_exprs_contains, PhysicalExpr};
+    use datafusion_common::{Result, ScalarValue};
+    use itertools::izip;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_physical_exprs_contains() -> Result<()> {
+        let lit_true = Arc::new(Literal::new(ScalarValue::Boolean(Some(true))))
+            as Arc<dyn PhysicalExpr>;
+        let lit_false = Arc::new(Literal::new(ScalarValue::Boolean(Some(false))))
+            as Arc<dyn PhysicalExpr>;
+        let lit4 =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(4)))) as Arc<dyn PhysicalExpr>;
+        let lit2 =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(2)))) as Arc<dyn PhysicalExpr>;
+        let lit1 =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))) as Arc<dyn PhysicalExpr>;
+        let col_a_expr = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+        let col_b_expr = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
+        let col_c_expr = Arc::new(Column::new("c", 2)) as Arc<dyn PhysicalExpr>;
+
+        // lit(true), lit(false), lit(4), lit(2), Col(a), Col(b)
+        let physical_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
+            lit_true.clone(),
+            lit_false.clone(),
+            lit4.clone(),
+            lit2.clone(),
+            col_a_expr.clone(),
+            col_b_expr.clone(),
+        ];
+        // below expressions are inside physical_exprs
+        assert!(physical_exprs_contains(&physical_exprs, &lit_true));
+        assert!(physical_exprs_contains(&physical_exprs, &lit2));
+        assert!(physical_exprs_contains(&physical_exprs, &col_b_expr));
+
+        // below expressions are not inside physical_exprs
+        assert!(!physical_exprs_contains(&physical_exprs, &col_c_expr));
+        assert!(!physical_exprs_contains(&physical_exprs, &lit1));
+        Ok(())
+    }
+
+    #[test]
+    fn test_deduplicate_physical_exprs() -> Result<()> {
+        let lit_true = Arc::new(Literal::new(ScalarValue::Boolean(Some(true))))
+            as Arc<dyn PhysicalExpr>;
+        let lit_false = Arc::new(Literal::new(ScalarValue::Boolean(Some(false))))
+            as Arc<dyn PhysicalExpr>;
+        let lit4 =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(4)))) as Arc<dyn PhysicalExpr>;
+        let lit2 =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(2)))) as Arc<dyn PhysicalExpr>;
+        let lit1 =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))) as Arc<dyn PhysicalExpr>;
+        let col_a_expr = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+        let col_b_expr = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
+        let col_c_expr = Arc::new(Column::new("c", 2)) as Arc<dyn PhysicalExpr>;
+
+        // lit(true), lit(false), lit(4), lit(2), Col(a), Col(b)
+        let physical_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
+            lit_true.clone(),
+            lit_false.clone(),
+            lit4.clone(),
+            lit2.clone(),
+            col_a_expr.clone(),
+            col_a_expr.clone(),
+            col_b_expr.clone(),
+            lit_true.clone(),
+            lit2.clone(),
+        ];
+
+        let expected = vec![
+            lit_true.clone(),
+            lit_false.clone(),
+            lit4.clone(),
+            lit2.clone(),
+            col_a_expr.clone(),
+            col_b_expr.clone(),
+        ];
+        // expected contains unique versions of the physical_exprs
+        let result = deduplicate_physical_exprs(&physical_exprs);
+        physical_exprs_equal(&result, &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_have_common_entries() -> Result<()> {
+        let lit_true = Arc::new(Literal::new(ScalarValue::Boolean(Some(true))))
+            as Arc<dyn PhysicalExpr>;
+        let lit_false = Arc::new(Literal::new(ScalarValue::Boolean(Some(false))))
+            as Arc<dyn PhysicalExpr>;
+        let lit4 =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(4)))) as Arc<dyn PhysicalExpr>;
+        let lit2 =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(2)))) as Arc<dyn PhysicalExpr>;
+        let lit1 =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))) as Arc<dyn PhysicalExpr>;
+        let col_a_expr = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+        let col_b_expr = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
+        let col_c_expr = Arc::new(Column::new("c", 2)) as Arc<dyn PhysicalExpr>;
+
+        let vec1: Vec<Arc<dyn PhysicalExpr>> = vec![lit_true.clone(), lit_false.clone()];
+
+        let vec2: Vec<Arc<dyn PhysicalExpr>> = vec![lit_true.clone(), col_b_expr.clone()];
+
+        let vec3: Vec<Arc<dyn PhysicalExpr>> = vec![lit2.clone(), lit1.clone()];
+
+        // lit_true is common
+        assert!(have_common_entries(&vec1, &vec2));
+
+        // there is no common entry
+        assert!(!have_common_entries(&vec1, &vec3));
+        assert!(!have_common_entries(&vec2, &vec3));
+        Ok(())
+    }
+
+    #[test]
+    fn test_physical_exprs_equal() -> Result<()> {
+        let lit_true = Arc::new(Literal::new(ScalarValue::Boolean(Some(true))))
+            as Arc<dyn PhysicalExpr>;
+        let lit_false = Arc::new(Literal::new(ScalarValue::Boolean(Some(false))))
+            as Arc<dyn PhysicalExpr>;
+        let lit4 =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(4)))) as Arc<dyn PhysicalExpr>;
+        let lit2 =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(2)))) as Arc<dyn PhysicalExpr>;
+        let lit1 =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))) as Arc<dyn PhysicalExpr>;
+        let col_a_expr = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+        let col_b_expr = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
+        let col_c_expr = Arc::new(Column::new("c", 2)) as Arc<dyn PhysicalExpr>;
+
+        let vec1: Vec<Arc<dyn PhysicalExpr>> = vec![lit_true.clone(), lit_false.clone()];
+
+        let vec2: Vec<Arc<dyn PhysicalExpr>> = vec![lit_true.clone(), col_b_expr.clone()];
+
+        let vec3: Vec<Arc<dyn PhysicalExpr>> = vec![lit2.clone(), lit1.clone()];
+
+        let vec4: Vec<Arc<dyn PhysicalExpr>> = vec![lit_true.clone(), lit_false.clone()];
+
+        // these vectors are same
+        assert!(physical_exprs_equal(&vec1, &vec1));
+        assert!(physical_exprs_equal(&vec1, &vec4));
+
+        // these vectors are different
+        assert!(!physical_exprs_equal(&vec1, &vec2));
+        assert!(!physical_exprs_equal(&vec1, &vec3));
+
+        Ok(())
+    }
 }

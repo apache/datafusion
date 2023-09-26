@@ -83,15 +83,15 @@ impl Partitioning {
                         // and normalize both exprs based on the eq_properties
                         if !fast_match {
                             let eq_properties = equal_properties();
-                            let eq_classes = eq_properties.eq_classes();
+                            let eq_classes = eq_properties.eq_groups();
                             if !eq_classes.is_empty() {
                                 let normalized_required_exprs = required_exprs
                                     .iter()
-                                    .map(|e| eq_properties.normalize_expr(e.clone()))
+                                    .map(|e| eq_classes.normalize_expr(e.clone()))
                                     .collect::<Vec<_>>();
                                 let normalized_partition_exprs = partition_exprs
                                     .iter()
-                                    .map(|e| eq_properties.normalize_expr(e.clone()))
+                                    .map(|e| eq_classes.normalize_expr(e.clone()))
                                     .collect::<Vec<_>>();
                                 expr_list_eq_strict_order(
                                     &normalized_required_exprs,

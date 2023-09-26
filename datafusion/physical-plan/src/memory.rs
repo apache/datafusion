@@ -33,6 +33,7 @@ use std::task::{Context, Poll};
 use crate::ordering_equivalence_properties_helper;
 use datafusion_common::DataFusionError;
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::equivalence::OrderingEquivalentGroup;
 use datafusion_physical_expr::{LexOrdering, OrderingEquivalenceProperties};
 use futures::Stream;
 
@@ -295,10 +296,7 @@ mod tests {
 
         assert_eq!(mem_exec.output_ordering().unwrap(), expected_output_order);
         let order_eq = mem_exec.ordering_equivalence_properties();
-        assert!(order_eq
-            .oeq_class()
-            .map(|class| class.contains(&expected_order_eq))
-            .unwrap_or(false));
+        assert!(order_eq.oeq_group().contains(&expected_order_eq));
         Ok(())
     }
 }

@@ -57,9 +57,6 @@ pub use datafusion_expr::AggregateFunction;
 use datafusion_physical_expr::aggregate::is_order_sensitive;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
 use datafusion_physical_expr::expressions::{Max, Min};
-use datafusion_physical_expr::utils::{
-    get_finer_ordering, ordering_satisfy_requirement_concrete,
-};
 
 use super::DisplayAs;
 
@@ -425,16 +422,17 @@ fn get_finest_requirement<F2: Fn() -> OrderingEquivalenceProperties>(
     ordering_eq_properties: F2,
 ) -> Result<Option<LexOrdering>> {
     let mut finest_req = get_init_req(aggr_expr, order_by_expr);
+    let oeq_properties = ordering_eq_properties();
     for (aggr_expr, fn_req) in aggr_expr.iter_mut().zip(order_by_expr.iter_mut()) {
         let fn_req = if let Some(fn_req) = fn_req {
             fn_req
         } else {
             continue;
         };
+
         if let Some(finest_req) = &mut finest_req {
-            if let Some(finer) =
-                get_finer_ordering(finest_req, fn_req, &ordering_eq_properties)
-            {
+            println!("finest_req{:?}, fn_req:{:?}", finest_req, fn_req);
+            if let Some(finer) = oeq_properties.get_finer_ordering(finest_req, fn_req) {
                 *finest_req = finer.to_vec();
                 continue;
             }
@@ -442,11 +440,9 @@ fn get_finest_requirement<F2: Fn() -> OrderingEquivalenceProperties>(
             // direction is compatible with existing requirements:
             if let Some(reverse) = aggr_expr.reverse_expr() {
                 let fn_req_reverse = reverse_order_bys(fn_req);
-                if let Some(finer) = get_finer_ordering(
-                    finest_req,
-                    &fn_req_reverse,
-                    &ordering_eq_properties,
-                ) {
+                if let Some(finer) =
+                    oeq_properties.get_finer_ordering(finest_req, &fn_req_reverse)
+                {
                     // We need to update `aggr_expr` with its reverse, since only its
                     // reverse requirement is compatible with existing requirements:
                     *aggr_expr = reverse;
@@ -550,12 +546,10 @@ fn calc_required_input_ordering(
         // plan. If neither version satisfies the existing ordering, we use the given ordering
         // requirement. In short, if running aggregators in reverse order help us to avoid a
         // sorting step, we do so. Otherwise, we use the aggregators as is.
-        let existing_ordering = input.output_ordering().unwrap_or(&[]);
-        if ordering_satisfy_requirement_concrete(
-            existing_ordering,
-            &required_input_ordering,
-            || input.ordering_equivalence_properties(),
-        ) {
+        if input
+            .ordering_equivalence_properties()
+            .ordering_satisfy_requirement_concrete(&required_input_ordering)
+        {
             break;
         }
     }
@@ -994,11 +988,9 @@ impl ExecutionPlan for AggregateExec {
     // }
 
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        self.input.ordering_equivalence_properties().project(
-            &self.columns_map,
-            &self.source_to_target_mapping,
-            self.schema(),
-        )
+        self.input
+            .ordering_equivalence_properties()
+            .project(&self.source_to_target_mapping, self.schema())
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -2318,19 +2310,22 @@ mod tests {
         let col_d = Column::new("d", 3);
         let col_a_expr = (Arc::new(col_a.clone()) as Arc<dyn PhysicalExpr>);
         let col_b_expr = (Arc::new(col_b.clone()) as Arc<dyn PhysicalExpr>);
-        // eq_properties.add_equal_conditions((&col_a, &col_b));
         let mut ordering_eq_properties = OrderingEquivalenceProperties::new(test_schema);
+        // Columns a and b are equal.
         ordering_eq_properties.add_equal_conditions((&col_a_expr, &col_b_expr));
-        ordering_eq_properties.add_ordering_equal_conditions((
-            &vec![PhysicalSortExpr {
+        // [a ASC], [c DESC] describes ordering of the schema.
+        ordering_eq_properties.add_new_orderings(&[
+            vec![PhysicalSortExpr {
                 expr: Arc::new(col_a.clone()) as _,
                 options: options1,
             }],
-            &vec![PhysicalSortExpr {
+            vec![PhysicalSortExpr {
                 expr: Arc::new(col_c.clone()) as _,
                 options: options2,
             }],
-        ));
+        ]);
+        // Aggregate requirements are
+        // [None], [a ASC], [b ASC], [c DESC], [a ASC, d ASC] respectively
         let mut order_by_exprs = vec![
             None,
             Some(vec![PhysicalSortExpr {

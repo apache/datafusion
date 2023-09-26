@@ -31,7 +31,6 @@ use super::utils::is_repartition;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
-use datafusion_physical_expr::utils::ordering_satisfy;
 
 use std::sync::Arc;
 
@@ -259,11 +258,10 @@ pub(crate) fn replace_with_order_preserving_variants(
             is_spm_better || use_order_preserving_variant,
         )?;
         // If this sort is unnecessary, we should remove it and update the plan:
-        if ordering_satisfy(
-            updated_sort_input.output_ordering(),
-            plan.output_ordering(),
-            || updated_sort_input.ordering_equivalence_properties(),
-        ) {
+        if updated_sort_input
+            .ordering_equivalence_properties()
+            .ordering_satisfy(plan.output_ordering())
+        {
             return Ok(Transformed::Yes(OrderPreservationContext {
                 plan: updated_sort_input,
                 ordering_onwards: vec![None],

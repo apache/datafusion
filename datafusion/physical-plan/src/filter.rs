@@ -163,7 +163,9 @@ impl ExecutionPlan for FilterExec {
                 .map(|column| Arc::new(column) as Arc<dyn PhysicalExpr>)
                 .collect::<Vec<_>>();
             let filter_oeq = self.input.ordering_equivalence_properties();
-            filter_oeq.with_constants(constants)
+            let res = filter_oeq.with_constants(constants);
+            println!("filter res:{:?}", res);
+            res
         } else {
             self.input.ordering_equivalence_properties()
         }
