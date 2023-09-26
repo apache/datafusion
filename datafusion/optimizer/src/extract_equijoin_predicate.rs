@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Optimizer rule to extract equijoin expr from filter
+//! [`ExtractEquijoinPredicate`] rule that extracts equijoin predicates
 use crate::optimizer::ApplyOrder;
 use crate::utils::split_conjunction;
 use crate::{OptimizerConfig, OptimizerRule};
@@ -28,7 +28,17 @@ use std::sync::Arc;
 // equijoin predicate
 type EquijoinPredicate = (Expr, Expr);
 
-/// Optimization rule that extract equijoin expr from the filter
+/// Optimizer that splits conjunctive join predicates into equijoin
+/// predicates and filter (other) predicates.
+///
+/// Join algorithms are often highly optimized for equality predicates such as `x = y`,
+/// often called `equijoin` predicates, so it is important to locate such predicates
+/// and treat them specially.
+///
+/// For example, `SELECT ... FROM A JOIN B ON (A.x = B.y AND B.z > 50)`
+/// has one equijoin predicate (`A.x = B.y`) and one filter predicate (`B.z > 50`).
+/// See [find_valid_equijoin_key_pair] for more information on what predicates
+/// are considered equijoins.
 #[derive(Default)]
 pub struct ExtractEquijoinPredicate;
 
