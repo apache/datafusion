@@ -18,11 +18,15 @@
 //! Math expressions
 
 use arrow::array::ArrayRef;
-use arrow::array::{BooleanArray, Float32Array, Float64Array, Int64Array};
+use arrow::array::{
+    BooleanArray, Decimal128Array, Float32Array, Float64Array, Int16Array, Int32Array,
+    Int64Array, Int8Array,
+};
 use arrow::datatypes::DataType;
-use datafusion_common::internal_err;
+use arrow::error::ArrowError;
 use datafusion_common::ScalarValue;
 use datafusion_common::ScalarValue::{Float32, Int64};
+use datafusion_common::{internal_err, not_impl_err};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 use rand::{thread_rng, Rng};
@@ -30,6 +34,8 @@ use std::any::type_name;
 use std::iter;
 use std::mem::swap;
 use std::sync::Arc;
+
+type MathArrayFunction = fn(&[ArrayRef]) -> Result<ArrayRef>;
 
 macro_rules! downcast_compute_op {
     ($ARRAY:expr, $NAME:expr, $FUNC:ident, $TYPE:ident) => {{
@@ -665,6 +671,70 @@ fn compute_truncate32(x: f32, y: i64) -> f32 {
 fn compute_truncate64(x: f64, y: i64) -> f64 {
     let factor = 10.0_f64.powi(y as i32);
     (x * factor).round() / factor
+}
+
+macro_rules! make_abs_function {
+    ($ARRAY_TYPE:ident) => {{
+        |args: &[ArrayRef]| {
+            let array = downcast_arg!(&args[0], "abs arg", $ARRAY_TYPE);
+            let res: $ARRAY_TYPE = array.unary(|x| x.abs());
+            Ok(Arc::new(res) as ArrayRef)
+        }
+    }};
+}
+
+macro_rules! make_try_abs_function {
+    ($ARRAY_TYPE:ident) => {{
+        |args: &[ArrayRef]| {
+            let array = downcast_arg!(&args[0], "abs arg", $ARRAY_TYPE);
+            let res: $ARRAY_TYPE = array.try_unary(|x| {
+                x.checked_abs().ok_or_else(|| {
+                    ArrowError::ComputeError(format!(
+                        "{} overflow on abs({})",
+                        stringify!($ARRAY_TYPE),
+                        x
+                    ))
+                })
+            })?;
+            Ok(Arc::new(res) as ArrayRef)
+        }
+    }};
+}
+
+/// Abs SQL function
+/// Return different implementations based on input datatype to reduce branches during execution
+pub(super) fn create_abs_function(
+    input_data_type: &DataType,
+) -> Result<MathArrayFunction> {
+    match input_data_type {
+        DataType::Float32 => Ok(make_abs_function!(Float32Array)),
+        DataType::Float64 => Ok(make_abs_function!(Float64Array)),
+
+        // Types that may overflow, such as abs(-128_i8).
+        DataType::Int8 => Ok(make_try_abs_function!(Int8Array)),
+        DataType::Int16 => Ok(make_try_abs_function!(Int16Array)),
+        DataType::Int32 => Ok(make_try_abs_function!(Int32Array)),
+        DataType::Int64 => Ok(make_try_abs_function!(Int64Array)),
+
+        // Types of results are the same as the input.
+        DataType::Null
+        | DataType::UInt8
+        | DataType::UInt16
+        | DataType::UInt32
+        | DataType::UInt64 => Ok(|args: &[ArrayRef]| Ok(args[0].clone())),
+
+        // Decimal should keep the same precision and scale by using `with_data_type()`.
+        // https://github.com/apache/arrow-rs/issues/4644
+        DataType::Decimal128(_, _) => Ok(|args: &[ArrayRef]| {
+            let array = downcast_arg!(&args[0], "abs arg", Decimal128Array);
+            let res: Decimal128Array = array
+                .unary(i128::abs)
+                .with_data_type(args[0].data_type().clone());
+            Ok(Arc::new(res) as ArrayRef)
+        }),
+
+        other => not_impl_err!("Unsupported data type {other:?} for function abs"),
+    }
 }
 
 #[cfg(test)]

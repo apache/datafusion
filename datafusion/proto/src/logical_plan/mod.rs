@@ -634,16 +634,16 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .map(|expr| from_proto::parse_expr(expr, ctx))
                     .collect::<Result<Vec<_>, _>>()?;
                 let join_type =
-                    protobuf::JoinType::from_i32(join.join_type).ok_or_else(|| {
+                    protobuf::JoinType::try_from(join.join_type).map_err(|_| {
                         proto_error(format!(
                             "Received a JoinNode message with unknown JoinType {}",
                             join.join_type
                         ))
                     })?;
-                let join_constraint = protobuf::JoinConstraint::from_i32(
+                let join_constraint = protobuf::JoinConstraint::try_from(
                     join.join_constraint,
                 )
-                .ok_or_else(|| {
+                .map_err(|_| {
                     proto_error(format!(
                         "Received a JoinNode message with unknown JoinConstraint {}",
                         join.join_constraint

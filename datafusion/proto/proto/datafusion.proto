@@ -599,6 +599,7 @@ enum ScalarFunction {
   Iszero = 114;
   ArrayEmpty = 115;
   ArrayPopBack = 116;
+  StringToArray = 117;
 }
 
 message ScalarFunctionNode {
@@ -1110,6 +1111,7 @@ message PhysicalPlanNode {
     ExplainExecNode explain = 20;
     SortPreservingMergeExecNode sort_preserving_merge = 21;
     NestedLoopJoinExecNode nested_loop_join = 22;
+    AnalyzeExecNode analyze = 23;
   }
 }
 
@@ -1181,7 +1183,11 @@ message PhysicalWindowExprNode {
     BuiltInWindowFunction built_in_function = 2;
     // udaf = 3
   }
-  PhysicalExprNode expr = 4;
+  repeated PhysicalExprNode args = 4;
+  repeated PhysicalExprNode partition_by = 5;
+  repeated PhysicalSortExprNode order_by = 6;
+  WindowFrame window_frame = 7;
+  string name = 8;
 }
 
 message PhysicalIsNull {
@@ -1345,6 +1351,13 @@ message ExplainExecNode {
   bool verbose = 3;
 }
 
+message AnalyzeExecNode {
+  bool verbose = 1;
+  bool show_statistics = 2;
+  PhysicalPlanNode input = 3;
+  Schema schema = 4;
+}
+
 message CrossJoinExecNode {
   PhysicalPlanNode left = 1;
   PhysicalPlanNode right = 2;
@@ -1379,11 +1392,21 @@ enum AggregateMode {
   SINGLE_PARTITIONED = 4;
 }
 
+message PartiallySortedPartitionSearchMode {
+  repeated uint64 columns = 6;
+}
+
 message WindowAggExecNode {
   PhysicalPlanNode input = 1;
-  repeated PhysicalExprNode window_expr = 2;
-  repeated string window_expr_name = 3;
+  repeated PhysicalWindowExprNode window_expr = 2;
   Schema input_schema = 4;
+  repeated PhysicalExprNode partition_keys = 5;
+  // Set optional to `None` for `BoundedWindowAggExec`.
+  oneof partition_search_mode {
+    EmptyMessage linear = 7;
+    PartiallySortedPartitionSearchMode partially_sorted = 8;
+    EmptyMessage sorted = 9;
+  }
 }
 
 message MaybeFilter {

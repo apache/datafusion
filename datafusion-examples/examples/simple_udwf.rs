@@ -26,10 +26,8 @@ use datafusion::datasource::file_format::options::CsvReadOptions;
 
 use datafusion::error::Result;
 use datafusion::prelude::*;
-use datafusion_common::{plan_err, DataFusionError, ScalarValue};
-use datafusion_expr::{
-    PartitionEvaluator, Signature, Volatility, WindowFrame, WindowUDF,
-};
+use datafusion_common::ScalarValue;
+use datafusion_expr::{PartitionEvaluator, Volatility, WindowFrame};
 
 // create local execution context with `cars.csv` registered as a table named `cars`
 async fn create_context() -> Result<SessionContext> {
@@ -50,8 +48,17 @@ async fn create_context() -> Result<SessionContext> {
 async fn main() -> Result<()> {
     let ctx = create_context().await?;
 
+    // here is where we define the UDWF. We also declare its signature:
+    let smooth_it = create_udwf(
+        "smooth_it",
+        DataType::Float64,
+        Arc::new(DataType::Float64),
+        Volatility::Immutable,
+        Arc::new(make_partition_evaluator),
+    );
+
     // register the window function with DataFusion so we can call it
-    ctx.register_udwf(smooth_it());
+    ctx.register_udwf(smooth_it.clone());
 
     // Use SQL to run the new window function
     let df = ctx.sql("SELECT * from cars").await?;
@@ -112,7 +119,7 @@ async fn main() -> Result<()> {
     df.show().await?;
 
     // Now, run the function using the DataFrame API:
-    let window_expr = smooth_it().call(
+    let window_expr = smooth_it.call(
         vec![col("speed")],                 // smooth_it(speed)
         vec![col("car")],                   // PARTITION BY car
         vec![col("time").sort(true, true)], // ORDER BY time ASC
@@ -124,29 +131,6 @@ async fn main() -> Result<()> {
     df.show().await?;
 
     Ok(())
-}
-
-fn smooth_it() -> WindowUDF {
-    WindowUDF {
-        name: String::from("smooth_it"),
-        // it will take 1 arguments -- the column to smooth
-        signature: Signature::exact(vec![DataType::Float64], Volatility::Immutable),
-        return_type: Arc::new(return_type),
-        partition_evaluator_factory: Arc::new(make_partition_evaluator),
-    }
-}
-
-/// Compute the return type of the smooth_it window function given
-/// arguments of `arg_types`.
-fn return_type(arg_types: &[DataType]) -> Result<Arc<DataType>> {
-    if arg_types.len() != 1 {
-        return plan_err!(
-            "my_udwf expects 1 argument, got {}: {:?}",
-            arg_types.len(),
-            arg_types
-        );
-    }
-    Ok(Arc::new(arg_types[0].clone()))
 }
 
 /// Create a `PartitionEvalutor` to evaluate this function on a new
