@@ -86,21 +86,28 @@ impl ExecTree {
     }
 }
 
-/// Get `ExecTree` for each child of the plan
-/// If there is no `ExecTree` for a child of the plan, use `None`.
-/// Children with `None` values are not tracked.
-/// Children with `Some(ExecTree)` are tracked.
+/// Get `ExecTree` for each child of the plan if they are tracked.
+/// # Arguments
+///
+/// * `n_children` - Children count of the plan of interest
+/// * `onward` - Contains `Some(ExecTree)` of the plan tracked.
+///            - Contains `None` is plan is not tracked.
+///
+/// # Returns
+///
+/// A `Vec<Option<ExecTree>>` that contains tracking information of each child.
+/// If a child is `None`, it is not tracked. If `Some(ExecTree)` child is tracked also.
 pub(crate) fn get_children_exectrees(
     n_children: usize,
-    dist_onward: &Option<ExecTree>,
+    onward: &Option<ExecTree>,
 ) -> Vec<Option<ExecTree>> {
-    let mut new_distribution_onwards = vec![None; n_children];
-    if let Some(exec_tree) = &dist_onward {
+    let mut children_onward = vec![None; n_children];
+    if let Some(exec_tree) = &onward {
         for child in &exec_tree.children {
-            new_distribution_onwards[child.idx] = Some(child.clone());
+            children_onward[child.idx] = Some(child.clone());
         }
     }
-    new_distribution_onwards
+    children_onward
 }
 
 // Get output (un)boundedness information for the given `plan`.
