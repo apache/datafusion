@@ -90,6 +90,7 @@ fn schema_to_field_with_props(
                 .find_schema_with_known_schemata::<apache_avro::Schema>(
                     &Value::Null,
                     None,
+                    &None,
                 )
                 .is_some();
             let sub_schemas = us.variants();
@@ -158,6 +159,8 @@ fn schema_to_field_with_props(
         AvroSchema::TimeMicros => DataType::Time64(TimeUnit::Microsecond),
         AvroSchema::TimestampMillis => DataType::Timestamp(TimeUnit::Millisecond, None),
         AvroSchema::TimestampMicros => DataType::Timestamp(TimeUnit::Microsecond, None),
+        AvroSchema::LocalTimestampMillis => todo!(),
+        AvroSchema::LocalTimestampMicros => todo!(),
         AvroSchema::Duration => DataType::Duration(TimeUnit::Millisecond),
     };
 
