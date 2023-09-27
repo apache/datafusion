@@ -29,6 +29,9 @@ use crate::physical_expr::down_cast_any_ref;
 use crate::utils::expr_list_eq_any_order;
 use crate::PhysicalExpr;
 use arrow::array::*;
+use arrow::buffer::BooleanBuffer;
+use arrow::compute::kernels::boolean::{not, or_kleene};
+use arrow::compute::kernels::cmp::eq;
 use arrow::compute::take;
 use arrow::datatypes::*;
 use arrow::record_batch::RecordBatch;
@@ -63,6 +66,7 @@ impl Debug for InListExpr {
 /// A type-erased container of array elements
 pub trait Set: Send + Sync {
     fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray>;
+    fn has_nulls(&self) -> bool;
 }
 
 struct ArrayHashSet {
@@ -130,6 +134,10 @@ where
                 })
             })
             .collect())
+    }
+
+    fn has_nulls(&self) -> bool {
+        self.array.null_count() != 0
     }
 }
 
@@ -322,16 +330,43 @@ impl PhysicalExpr for InListExpr {
     }
 
     fn nullable(&self, input_schema: &Schema) -> Result<bool> {
-        self.expr.nullable(input_schema)
+        if self.expr.nullable(input_schema)? {
+            return Ok(true);
+        }
+
+        if let Some(static_filter) = &self.static_filter {
+            Ok(static_filter.has_nulls())
+        } else {
+            for expr in &self.list {
+                if expr.nullable(input_schema)? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let value = self.expr.evaluate(batch)?.into_array(1);
+        let value = self.expr.evaluate(batch)?;
         let r = match &self.static_filter {
-            Some(f) => f.contains(value.as_ref(), self.negated)?,
+            Some(f) => f.contains(value.into_array(1).as_ref(), self.negated)?,
             None => {
-                let list = evaluate_list(&self.list, batch)?;
-                make_set(list.as_ref())?.contains(value.as_ref(), self.negated)?
+                let value = value.into_array(batch.num_rows());
+                let found = self.list.iter().map(|expr| expr.evaluate(batch)).try_fold(
+                    BooleanArray::new(BooleanBuffer::new_unset(batch.num_rows()), None),
+                    |result, expr| -> Result<BooleanArray> {
+                        Ok(or_kleene(
+                            &result,
+                            &eq(&value, &expr?.into_array(batch.num_rows()))?,
+                        )?)
+                    },
+                )?;
+
+                if self.negated {
+                    not(&found)?
+                } else {
+                    found
+                }
             }
         };
         Ok(ColumnarValue::Array(Arc::new(r)))
@@ -1126,6 +1161,105 @@ mod tests {
             col_a.clone(),
             &schema
         );
+        Ok(())
+    }
+
+    #[test]
+    fn in_expr_with_multiple_element_in_list() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Float64, true),
+            Field::new("b", DataType::Float64, true),
+            Field::new("c", DataType::Float64, true),
+        ]);
+        let a = Float64Array::from(vec![
+            Some(0.0),
+            Some(1.0),
+            Some(2.0),
+            Some(f64::NAN),
+            Some(-f64::NAN),
+        ]);
+        let b = Float64Array::from(vec![
+            Some(8.0),
+            Some(1.0),
+            Some(5.0),
+            Some(f64::NAN),
+            Some(3.0),
+        ]);
+        let c = Float64Array::from(vec![
+            Some(6.0),
+            Some(7.0),
+            None,
+            Some(5.0),
+            Some(-f64::NAN),
+        ]);
+        let col_a = col("a", &schema)?;
+        let col_b = col("b", &schema)?;
+        let col_c = col("c", &schema)?;
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(a), Arc::new(b), Arc::new(c)],
+        )?;
+
+        let list = vec![col_b.clone(), col_c.clone()];
+        in_list!(
+            batch,
+            list.clone(),
+            &false,
+            vec![Some(false), Some(true), None, Some(true), Some(true)],
+            col_a.clone(),
+            &schema
+        );
+
+        in_list!(
+            batch,
+            list,
+            &true,
+            vec![Some(true), Some(false), None, Some(false), Some(false)],
+            col_a.clone(),
+            &schema
+        );
+
+        Ok(())
+    }
+
+    macro_rules! test_nullable {
+        ($COL:expr, $LIST:expr, $SCHEMA:expr, $EXPECTED:expr) => {{
+            let (cast_expr, cast_list_exprs) = in_list_cast($COL, $LIST, $SCHEMA)?;
+            let expr = in_list(cast_expr, cast_list_exprs, &false, $SCHEMA).unwrap();
+            let result = expr.nullable($SCHEMA)?;
+            assert_eq!($EXPECTED, result);
+        }};
+    }
+
+    #[test]
+    fn in_list_nullable() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("c1_nullable", DataType::Int64, true),
+            Field::new("c2_non_nullable", DataType::Int64, false),
+        ]);
+
+        let c1_nullable = col("c1_nullable", &schema)?;
+        let c2_non_nullable = col("c2_non_nullable", &schema)?;
+
+        // static_filter has no nulls
+        let list = vec![lit(1_i64), lit(2_i64)];
+        test_nullable!(c1_nullable.clone(), list.clone(), &schema, true);
+        test_nullable!(c2_non_nullable.clone(), list.clone(), &schema, false);
+
+        // static_filter has nulls
+        let list = vec![lit(1_i64), lit(2_i64), lit(ScalarValue::Null)];
+        test_nullable!(c1_nullable.clone(), list.clone(), &schema, true);
+        test_nullable!(c2_non_nullable.clone(), list.clone(), &schema, true);
+
+        let list = vec![c1_nullable.clone()];
+        test_nullable!(c2_non_nullable.clone(), list.clone(), &schema, true);
+
+        let list = vec![c2_non_nullable.clone()];
+        test_nullable!(c1_nullable.clone(), list.clone(), &schema, true);
+
+        let list = vec![c2_non_nullable.clone(), c2_non_nullable.clone()];
+        test_nullable!(c2_non_nullable.clone(), list.clone(), &schema, false);
+
         Ok(())
     }
 }

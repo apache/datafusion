@@ -83,7 +83,7 @@ impl PhysicalExpr for NotExpr {
                 if scalar.is_null() {
                     return Ok(ColumnarValue::Scalar(ScalarValue::Boolean(None)));
                 }
-                let value_type = scalar.get_datatype();
+                let value_type = scalar.data_type();
                 if value_type != DataType::Boolean {
                     return internal_err!(
                         "NOT '{:?}' can't be evaluated because the expression's type is {:?}, not boolean or NULL",

@@ -16,6 +16,8 @@
 // under the License.
 
 //! DataFusion error types
+#[cfg(feature = "backtrace")]
+use std::backtrace::{Backtrace, BacktraceStatus};
 
 use std::error::Error;
 use std::fmt::{Display, Formatter};
@@ -278,7 +280,9 @@ impl From<GenericError> for DataFusionError {
 impl Display for DataFusionError {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match *self {
-            DataFusionError::ArrowError(ref desc) => write!(f, "Arrow error: {desc}"),
+            DataFusionError::ArrowError(ref desc) => {
+                write!(f, "Arrow error: {desc}")
+            }
             #[cfg(feature = "parquet")]
             DataFusionError::ParquetError(ref desc) => {
                 write!(f, "Parquet error: {desc}")
@@ -287,7 +291,9 @@ impl Display for DataFusionError {
             DataFusionError::AvroError(ref desc) => {
                 write!(f, "Avro error: {desc}")
             }
-            DataFusionError::IoError(ref desc) => write!(f, "IO error: {desc}"),
+            DataFusionError::IoError(ref desc) => {
+                write!(f, "IO error: {desc}")
+            }
             DataFusionError::SQL(ref desc) => {
                 write!(f, "SQL error: {desc:?}")
             }
@@ -298,7 +304,7 @@ impl Display for DataFusionError {
                 write!(f, "This feature is not implemented: {desc}")
             }
             DataFusionError::Internal(ref desc) => {
-                write!(f, "Internal error: {desc}. This was likely caused by a bug in DataFusion's \
+                write!(f, "Internal error: {desc}.\nThis was likely caused by a bug in DataFusion's \
                     code and we would welcome that you file an bug report in our issue tracker")
             }
             DataFusionError::Plan(ref desc) => {
@@ -363,6 +369,8 @@ impl From<DataFusionError> for io::Error {
 }
 
 impl DataFusionError {
+    const BACK_TRACE_SEP: &str = "\n\nbacktrace: ";
+
     /// Get deepest underlying [`DataFusionError`]
     ///
     /// [`DataFusionError`]s sometimes form a chain, such as `DataFusionError::ArrowError()` in order to conform
@@ -404,6 +412,38 @@ impl DataFusionError {
     pub fn context(self, description: impl Into<String>) -> Self {
         Self::Context(description.into(), Box::new(self))
     }
+
+    pub fn strip_backtrace(&self) -> String {
+        self.to_string()
+            .split(Self::BACK_TRACE_SEP)
+            .collect::<Vec<&str>>()
+            .first()
+            .unwrap_or(&"")
+            .to_string()
+    }
+
+    /// To enable optional rust backtrace in DataFusion:
+    /// - [`Setup Env Variables`]<https://doc.rust-lang.org/std/backtrace/index.html#environment-variables>
+    /// - Enable `backtrace` cargo feature
+    ///
+    /// Example:
+    /// cargo build --features 'backtrace'
+    /// RUST_BACKTRACE=1 ./app
+    #[inline(always)]
+    pub fn get_back_trace() -> String {
+        #[cfg(feature = "backtrace")]
+        {
+            let back_trace = Backtrace::capture();
+            if back_trace.status() == BacktraceStatus::Captured {
+                return format!("{}{}", Self::BACK_TRACE_SEP, back_trace);
+            }
+
+            "".to_owned()
+        }
+
+        #[cfg(not(feature = "backtrace"))]
+        "".to_owned()
+    }
 }
 
 /// Unwrap an `Option` if possible. Otherwise return an `DataFusionError::Internal`.
@@ -444,7 +484,7 @@ macro_rules! make_error {
                 #[macro_export]
                 macro_rules! $NAME {
                     ($d($d args:expr),*) => {
-                        Err(DataFusionError::$ERR(format!($d($d args),*).into()))
+                        Err(DataFusionError::$ERR(format!("{}{}", format!($d($d args),*), DataFusionError::get_back_trace()).into()))
                     }
                 }
             }
@@ -464,6 +504,14 @@ make_error!(not_impl_err, NotImplemented);
 // Exposes a macro to create `DataFusionError::Execution`
 make_error!(exec_err, Execution);
 
+// Exposes a macro to create `DataFusionError::SQL`
+#[macro_export]
+macro_rules! sql_err {
+    ($ERR:expr) => {
+        Err(DataFusionError::SQL($ERR))
+    };
+}
+
 // To avoid compiler error when using macro in the same crate:
 // macros from the current crate cannot be referred to by absolute paths
 pub use exec_err as _exec_err;
@@ -478,18 +526,52 @@ mod test {
     use arrow::error::ArrowError;
 
     #[test]
-    fn arrow_error_to_datafusion() {
+    fn datafusion_error_to_arrow() {
         let res = return_arrow_error().unwrap_err();
-        assert_eq!(
-            res.to_string(),
-            "External error: Error during planning: foo"
-        );
+        assert!(res
+            .to_string()
+            .starts_with("External error: Error during planning: foo"));
     }
 
     #[test]
-    fn datafusion_error_to_arrow() {
+    fn arrow_error_to_datafusion() {
         let res = return_datafusion_error().unwrap_err();
-        assert_eq!(res.to_string(), "Arrow error: Schema error: bar");
+        assert_eq!(res.strip_backtrace(), "Arrow error: Schema error: bar");
+    }
+
+    // RUST_BACKTRACE=1 cargo test --features backtrace --package datafusion-common --lib -- error::test::test_backtrace
+    #[cfg(feature = "backtrace")]
+    #[test]
+    #[allow(clippy::unnecessary_literal_unwrap)]
+    fn test_enabled_backtrace() {
+        let res: Result<(), DataFusionError> = plan_err!("Err");
+        let err = res.unwrap_err().to_string();
+        assert!(err.contains(DataFusionError::BACK_TRACE_SEP));
+        assert_eq!(
+            err.split(DataFusionError::BACK_TRACE_SEP)
+                .collect::<Vec<&str>>()
+                .get(0)
+                .unwrap(),
+            &"Error during planning: Err"
+        );
+        assert!(
+            err.split(DataFusionError::BACK_TRACE_SEP)
+                .collect::<Vec<&str>>()
+                .get(1)
+                .unwrap()
+                .len()
+                > 0
+        );
+    }
+
+    #[cfg(not(feature = "backtrace"))]
+    #[test]
+    #[allow(clippy::unnecessary_literal_unwrap)]
+    fn test_disabled_backtrace() {
+        let res: Result<(), DataFusionError> = plan_err!("Err");
+        let res = res.unwrap_err().to_string();
+        assert!(!res.contains(DataFusionError::BACK_TRACE_SEP));
+        assert_eq!(res, "Error during planning: Err");
     }
 
     #[test]
@@ -552,31 +634,37 @@ mod test {
     fn test_make_error_parse_input() {
         let res: Result<(), DataFusionError> = plan_err!("Err");
         let res = res.unwrap_err();
-        assert_eq!(res.to_string(), "Error during planning: Err");
+        assert_eq!(res.strip_backtrace(), "Error during planning: Err");
 
         let extra1 = "extra1";
         let extra2 = "extra2";
 
         let res: Result<(), DataFusionError> = plan_err!("Err {} {}", extra1, extra2);
         let res = res.unwrap_err();
-        assert_eq!(res.to_string(), "Error during planning: Err extra1 extra2");
+        assert_eq!(
+            res.strip_backtrace(),
+            "Error during planning: Err extra1 extra2"
+        );
 
         let res: Result<(), DataFusionError> =
             plan_err!("Err {:?} {:#?}", extra1, extra2);
         let res = res.unwrap_err();
         assert_eq!(
-            res.to_string(),
+            res.strip_backtrace(),
             "Error during planning: Err \"extra1\" \"extra2\""
         );
 
         let res: Result<(), DataFusionError> = plan_err!("Err {extra1} {extra2}");
         let res = res.unwrap_err();
-        assert_eq!(res.to_string(), "Error during planning: Err extra1 extra2");
+        assert_eq!(
+            res.strip_backtrace(),
+            "Error during planning: Err extra1 extra2"
+        );
 
         let res: Result<(), DataFusionError> = plan_err!("Err {extra1:?} {extra2:#?}");
         let res = res.unwrap_err();
         assert_eq!(
-            res.to_string(),
+            res.strip_backtrace(),
             "Error during planning: Err \"extra1\" \"extra2\""
         );
     }
@@ -599,7 +687,7 @@ mod test {
         let e = e.find_root();
 
         // DataFusionError does not implement Eq, so we use a string comparison + some cheap "same variant" test instead
-        assert_eq!(e.to_string(), exp.to_string(),);
+        assert_eq!(e.strip_backtrace(), exp.strip_backtrace());
         assert_eq!(std::mem::discriminant(e), std::mem::discriminant(&exp),)
     }
 }

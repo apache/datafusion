@@ -47,14 +47,6 @@ use arrow::{
 };
 use arrow_array::{ArrowNativeTypeOp, Scalar};
 
-// Constants we use throughout this file:
-const MILLISECS_IN_ONE_DAY: i64 = 86_400_000;
-const NANOSECS_IN_ONE_DAY: i64 = 86_400_000_000_000;
-const SECS_IN_ONE_MONTH: i64 = 2_592_000; // assuming 30 days.
-const MILLISECS_IN_ONE_MONTH: i64 = 2_592_000_000; // assuming 30 days.
-const MICROSECS_IN_ONE_MONTH: i64 = 2_592_000_000_000; // assuming 30 days.
-const NANOSECS_IN_ONE_MONTH: i128 = 2_592_000_000_000_000; // assuming 30 days.
-
 /// Represents a dynamically typed, nullable single value.
 /// This is the single-valued counter-part to arrow's [`Array`].
 ///
@@ -237,28 +229,10 @@ impl PartialEq for ScalarValue {
             (DurationNanosecond(v1), DurationNanosecond(v2)) => v1.eq(v2),
             (DurationNanosecond(_), _) => false,
             (IntervalYearMonth(v1), IntervalYearMonth(v2)) => v1.eq(v2),
-            (IntervalYearMonth(v1), IntervalDayTime(v2)) => {
-                ym_to_milli(v1).eq(&dt_to_milli(v2))
-            }
-            (IntervalYearMonth(v1), IntervalMonthDayNano(v2)) => {
-                ym_to_nano(v1).eq(&mdn_to_nano(v2))
-            }
             (IntervalYearMonth(_), _) => false,
             (IntervalDayTime(v1), IntervalDayTime(v2)) => v1.eq(v2),
-            (IntervalDayTime(v1), IntervalYearMonth(v2)) => {
-                dt_to_milli(v1).eq(&ym_to_milli(v2))
-            }
-            (IntervalDayTime(v1), IntervalMonthDayNano(v2)) => {
-                dt_to_nano(v1).eq(&mdn_to_nano(v2))
-            }
             (IntervalDayTime(_), _) => false,
             (IntervalMonthDayNano(v1), IntervalMonthDayNano(v2)) => v1.eq(v2),
-            (IntervalMonthDayNano(v1), IntervalYearMonth(v2)) => {
-                mdn_to_nano(v1).eq(&ym_to_nano(v2))
-            }
-            (IntervalMonthDayNano(v1), IntervalDayTime(v2)) => {
-                mdn_to_nano(v1).eq(&dt_to_nano(v2))
-            }
             (IntervalMonthDayNano(_), _) => false,
             (Struct(v1, t1), Struct(v2, t2)) => v1.eq(v2) && t1.eq(t2),
             (Struct(_, _), _) => false,
@@ -377,28 +351,10 @@ impl PartialOrd for ScalarValue {
             }
             (TimestampNanosecond(_, _), _) => None,
             (IntervalYearMonth(v1), IntervalYearMonth(v2)) => v1.partial_cmp(v2),
-            (IntervalYearMonth(v1), IntervalDayTime(v2)) => {
-                ym_to_milli(v1).partial_cmp(&dt_to_milli(v2))
-            }
-            (IntervalYearMonth(v1), IntervalMonthDayNano(v2)) => {
-                ym_to_nano(v1).partial_cmp(&mdn_to_nano(v2))
-            }
             (IntervalYearMonth(_), _) => None,
             (IntervalDayTime(v1), IntervalDayTime(v2)) => v1.partial_cmp(v2),
-            (IntervalDayTime(v1), IntervalYearMonth(v2)) => {
-                dt_to_milli(v1).partial_cmp(&ym_to_milli(v2))
-            }
-            (IntervalDayTime(v1), IntervalMonthDayNano(v2)) => {
-                dt_to_nano(v1).partial_cmp(&mdn_to_nano(v2))
-            }
             (IntervalDayTime(_), _) => None,
             (IntervalMonthDayNano(v1), IntervalMonthDayNano(v2)) => v1.partial_cmp(v2),
-            (IntervalMonthDayNano(v1), IntervalYearMonth(v2)) => {
-                mdn_to_nano(v1).partial_cmp(&ym_to_nano(v2))
-            }
-            (IntervalMonthDayNano(v1), IntervalDayTime(v2)) => {
-                mdn_to_nano(v1).partial_cmp(&dt_to_nano(v2))
-            }
             (IntervalMonthDayNano(_), _) => None,
             (DurationSecond(v1), DurationSecond(v2)) => v1.partial_cmp(v2),
             (DurationSecond(_), _) => None,
@@ -429,122 +385,6 @@ impl PartialOrd for ScalarValue {
             (Null, _) => None,
         }
     }
-}
-
-/// This function computes the duration (in milliseconds) of the given
-/// year-month-interval.
-#[inline]
-pub fn ym_to_sec(val: &Option<i32>) -> Option<i64> {
-    val.map(|value| (value as i64) * SECS_IN_ONE_MONTH)
-}
-
-/// This function computes the duration (in milliseconds) of the given
-/// year-month-interval.
-#[inline]
-pub fn ym_to_milli(val: &Option<i32>) -> Option<i64> {
-    val.map(|value| (value as i64) * MILLISECS_IN_ONE_MONTH)
-}
-
-/// This function computes the duration (in milliseconds) of the given
-/// year-month-interval.
-#[inline]
-pub fn ym_to_micro(val: &Option<i32>) -> Option<i64> {
-    val.map(|value| (value as i64) * MICROSECS_IN_ONE_MONTH)
-}
-
-/// This function computes the duration (in nanoseconds) of the given
-/// year-month-interval.
-#[inline]
-pub fn ym_to_nano(val: &Option<i32>) -> Option<i128> {
-    val.map(|value| (value as i128) * NANOSECS_IN_ONE_MONTH)
-}
-
-/// This function computes the duration (in seconds) of the given
-/// daytime-interval.
-#[inline]
-pub fn dt_to_sec(val: &Option<i64>) -> Option<i64> {
-    val.map(|val| {
-        let (days, millis) = IntervalDayTimeType::to_parts(val);
-        (days as i64) * MILLISECS_IN_ONE_DAY + (millis as i64 / 1_000)
-    })
-}
-
-/// This function computes the duration (in milliseconds) of the given
-/// daytime-interval.
-#[inline]
-pub fn dt_to_milli(val: &Option<i64>) -> Option<i64> {
-    val.map(|val| {
-        let (days, millis) = IntervalDayTimeType::to_parts(val);
-        (days as i64) * MILLISECS_IN_ONE_DAY + (millis as i64)
-    })
-}
-
-/// This function computes the duration (in microseconds) of the given
-/// daytime-interval.
-#[inline]
-pub fn dt_to_micro(val: &Option<i64>) -> Option<i128> {
-    val.map(|val| {
-        let (days, millis) = IntervalDayTimeType::to_parts(val);
-        (days as i128) * (NANOSECS_IN_ONE_DAY as i128) + (millis as i128) * 1_000
-    })
-}
-
-/// This function computes the duration (in nanoseconds) of the given
-/// daytime-interval.
-#[inline]
-pub fn dt_to_nano(val: &Option<i64>) -> Option<i128> {
-    val.map(|val| {
-        let (days, millis) = IntervalDayTimeType::to_parts(val);
-        (days as i128) * (NANOSECS_IN_ONE_DAY as i128) + (millis as i128) * 1_000_000
-    })
-}
-
-/// This function computes the duration (in seconds) of the given
-/// month-day-nano-interval. Assumes a month is 30 days long.
-#[inline]
-pub fn mdn_to_sec(val: &Option<i128>) -> Option<i128> {
-    val.map(|val| {
-        let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(val);
-        (months as i128) * NANOSECS_IN_ONE_MONTH
-            + (days as i128) * (NANOSECS_IN_ONE_DAY as i128)
-            + (nanos as i128) / 1_000_000_000
-    })
-}
-
-/// This function computes the duration (in milliseconds) of the given
-/// month-day-nano-interval. Assumes a month is 30 days long.
-#[inline]
-pub fn mdn_to_milli(val: &Option<i128>) -> Option<i128> {
-    val.map(|val| {
-        let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(val);
-        (months as i128) * NANOSECS_IN_ONE_MONTH
-            + (days as i128) * (NANOSECS_IN_ONE_DAY as i128)
-            + (nanos as i128) / 1_000_000
-    })
-}
-
-/// This function computes the duration (in microseconds) of the given
-/// month-day-nano-interval. Assumes a month is 30 days long.
-#[inline]
-pub fn mdn_to_micro(val: &Option<i128>) -> Option<i128> {
-    val.map(|val| {
-        let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(val);
-        (months as i128) * NANOSECS_IN_ONE_MONTH
-            + (days as i128) * (NANOSECS_IN_ONE_DAY as i128)
-            + (nanos as i128) / 1_000
-    })
-}
-
-/// This function computes the duration (in nanoseconds) of the given
-/// month-day-nano-interval. Assumes a month is 30 days long.
-#[inline]
-pub fn mdn_to_nano(val: &Option<i128>) -> Option<i128> {
-    val.map(|val| {
-        let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(val);
-        (months as i128) * NANOSECS_IN_ONE_MONTH
-            + (days as i128) * (NANOSECS_IN_ONE_DAY as i128)
-            + (nanos as i128)
-    })
 }
 
 impl Eq for ScalarValue {}
@@ -1072,8 +912,8 @@ impl ScalarValue {
         })
     }
 
-    /// Getter for the `DataType` of the value
-    pub fn get_datatype(&self) -> DataType {
+    /// return the [`DataType`] of this `ScalarValue`
+    pub fn data_type(&self) -> DataType {
         match self {
             ScalarValue::Boolean(_) => DataType::Boolean,
             ScalarValue::UInt8(_) => DataType::UInt8,
@@ -1143,10 +983,18 @@ impl ScalarValue {
             }
             ScalarValue::Struct(_, fields) => DataType::Struct(fields.clone()),
             ScalarValue::Dictionary(k, v) => {
-                DataType::Dictionary(k.clone(), Box::new(v.get_datatype()))
+                DataType::Dictionary(k.clone(), Box::new(v.data_type()))
             }
             ScalarValue::Null => DataType::Null,
         }
+    }
+
+    /// Getter for the `DataType` of the value.
+    ///
+    /// Suggest using  [`Self::data_type`] as a more standard API
+    #[deprecated(since = "31.0.0", note = "use data_type instead")]
+    pub fn get_datatype(&self) -> DataType {
+        self.data_type()
     }
 
     /// Calculate arithmetic negation for a scalar value
@@ -1287,31 +1135,22 @@ impl ScalarValue {
     ///
     /// Note: the datatype itself must support subtraction.
     pub fn distance(&self, other: &ScalarValue) -> Option<usize> {
-        // Having an explicit null check here is important because the
-        // subtraction for scalar values will return a real value even
-        // if one side is null.
-        if self.is_null() || other.is_null() {
-            return None;
-        }
-
-        let distance = if self > other {
-            self.sub_checked(other).ok()?
-        } else {
-            other.sub_checked(self).ok()?
-        };
-
-        match distance {
-            ScalarValue::Int8(Some(v)) => usize::try_from(v).ok(),
-            ScalarValue::Int16(Some(v)) => usize::try_from(v).ok(),
-            ScalarValue::Int32(Some(v)) => usize::try_from(v).ok(),
-            ScalarValue::Int64(Some(v)) => usize::try_from(v).ok(),
-            ScalarValue::UInt8(Some(v)) => Some(v as usize),
-            ScalarValue::UInt16(Some(v)) => Some(v as usize),
-            ScalarValue::UInt32(Some(v)) => usize::try_from(v).ok(),
-            ScalarValue::UInt64(Some(v)) => usize::try_from(v).ok(),
+        match (self, other) {
+            (Self::Int8(Some(l)), Self::Int8(Some(r))) => Some(l.abs_diff(*r) as _),
+            (Self::Int16(Some(l)), Self::Int16(Some(r))) => Some(l.abs_diff(*r) as _),
+            (Self::Int32(Some(l)), Self::Int32(Some(r))) => Some(l.abs_diff(*r) as _),
+            (Self::Int64(Some(l)), Self::Int64(Some(r))) => Some(l.abs_diff(*r) as _),
+            (Self::UInt8(Some(l)), Self::UInt8(Some(r))) => Some(l.abs_diff(*r) as _),
+            (Self::UInt16(Some(l)), Self::UInt16(Some(r))) => Some(l.abs_diff(*r) as _),
+            (Self::UInt32(Some(l)), Self::UInt32(Some(r))) => Some(l.abs_diff(*r) as _),
+            (Self::UInt64(Some(l)), Self::UInt64(Some(r))) => Some(l.abs_diff(*r) as _),
             // TODO: we might want to look into supporting ceil/floor here for floats.
-            ScalarValue::Float32(Some(v)) => Some(v.round() as usize),
-            ScalarValue::Float64(Some(v)) => Some(v.round() as usize),
+            (Self::Float32(Some(l)), Self::Float32(Some(r))) => {
+                Some((l - r).abs().round() as _)
+            }
+            (Self::Float64(Some(l)), Self::Float64(Some(r))) => {
+                Some((l - r).abs().round() as _)
+            }
             _ => None,
         }
     }
@@ -1321,7 +1160,34 @@ impl ScalarValue {
         self.to_array_of_size(1)
     }
 
-    /// Converts a scalar into an arrow [`Scalar`]
+    /// Converts a scalar into an arrow [`Scalar`] (which implements
+    /// the [`Datum`] interface).
+    ///
+    /// This can be used to call arrow compute kernels such as `lt`
+    ///
+    /// # Example
+    /// ```
+    /// use datafusion_common::ScalarValue;
+    /// use arrow::array::{BooleanArray, Int32Array};
+    ///
+    /// let arr = Int32Array::from(vec![Some(1), None, Some(10)]);
+    /// let five = ScalarValue::Int32(Some(5));
+    ///
+    /// let result = arrow::compute::kernels::cmp::lt(
+    ///   &arr,
+    ///   &five.to_scalar(),
+    /// ).unwrap();
+    ///
+    /// let expected = BooleanArray::from(vec![
+    ///     Some(true),
+    ///     None,
+    ///     Some(false)
+    ///   ]
+    /// );
+    ///
+    /// assert_eq!(&result, &expected);
+    /// ```
+    /// [`Datum`]: arrow_array::Datum
     pub fn to_scalar(&self) -> Scalar<ArrayRef> {
         Scalar::new(self.to_array_of_size(1))
     }
@@ -1332,7 +1198,7 @@ impl ScalarValue {
     /// Returns an error if the iterator is empty or if the
     /// [`ScalarValue`]s are not all the same type
     ///
-    /// Example
+    /// # Example
     /// ```
     /// use datafusion_common::ScalarValue;
     /// use arrow::array::{ArrayRef, BooleanArray};
@@ -1369,7 +1235,7 @@ impl ScalarValue {
                     "Empty iterator passed to ScalarValue::iter_to_array"
                 );
             }
-            Some(sv) => sv.get_datatype(),
+            Some(sv) => sv.data_type(),
         };
 
         /// Creates an array of $ARRAY_TY by unpacking values of
@@ -2139,7 +2005,7 @@ impl ScalarValue {
                     Arc::new(StructArray::from(field_values))
                 }
                 None => {
-                    let dt = self.get_datatype();
+                    let dt = self.data_type();
                     new_null_array(&dt, size)
                 }
             },
@@ -2744,9 +2610,7 @@ impl From<Vec<(&str, ScalarValue)>> for ScalarValue {
     fn from(value: Vec<(&str, ScalarValue)>) -> Self {
         let (fields, scalars): (SchemaBuilder, Vec<_>) = value
             .into_iter()
-            .map(|(name, scalar)| {
-                (Field::new(name, scalar.get_datatype(), false), scalar)
-            })
+            .map(|(name, scalar)| (Field::new(name, scalar.data_type(), false), scalar))
             .unzip();
 
         Self::Struct(Some(scalars), fields.finish().fields)
@@ -3238,7 +3102,10 @@ mod tests {
     fn scalar_sub_trait_int32_overflow_test() {
         let int_value = ScalarValue::Int32(Some(i32::MAX));
         let int_value_2 = ScalarValue::Int32(Some(i32::MIN));
-        let err = int_value.sub_checked(&int_value_2).unwrap_err().to_string();
+        let err = int_value
+            .sub_checked(&int_value_2)
+            .unwrap_err()
+            .strip_backtrace();
         assert_eq!(
             err,
             "Arrow error: Compute error: Overflow happened on: 2147483647 - -2147483648"
@@ -3258,7 +3125,10 @@ mod tests {
     fn scalar_sub_trait_int64_overflow_test() {
         let int_value = ScalarValue::Int64(Some(i64::MAX));
         let int_value_2 = ScalarValue::Int64(Some(i64::MIN));
-        let err = int_value.sub_checked(&int_value_2).unwrap_err().to_string();
+        let err = int_value
+            .sub_checked(&int_value_2)
+            .unwrap_err()
+            .strip_backtrace();
         assert_eq!(err, "Arrow error: Compute error: Overflow happened on: 9223372036854775807 - -9223372036854775808")
     }
 
@@ -3341,7 +3211,7 @@ mod tests {
     #[test]
     fn scalar_decimal_test() -> Result<()> {
         let decimal_value = ScalarValue::Decimal128(Some(123), 10, 1);
-        assert_eq!(DataType::Decimal128(10, 1), decimal_value.get_datatype());
+        assert_eq!(DataType::Decimal128(10, 1), decimal_value.data_type());
         let try_into_value: i128 = decimal_value.clone().try_into().unwrap();
         assert_eq!(123_i128, try_into_value);
         assert!(!decimal_value.is_null());
@@ -4066,53 +3936,6 @@ mod tests {
             ])),
             None
         );
-        // Different type of intervals can be compared.
-        assert!(
-            IntervalYearMonth(Some(IntervalYearMonthType::make_value(1, 2)))
-                < IntervalMonthDayNano(Some(IntervalMonthDayNanoType::make_value(
-                    14, 0, 1
-                ))),
-        );
-        assert!(
-            IntervalYearMonth(Some(IntervalYearMonthType::make_value(0, 4)))
-                >= IntervalDayTime(Some(IntervalDayTimeType::make_value(119, 1)))
-        );
-        assert!(
-            IntervalDayTime(Some(IntervalDayTimeType::make_value(12, 86_399_999)))
-                >= IntervalDayTime(Some(IntervalDayTimeType::make_value(12, 0)))
-        );
-        assert!(
-            IntervalYearMonth(Some(IntervalYearMonthType::make_value(2, 12)))
-                == IntervalMonthDayNano(Some(IntervalMonthDayNanoType::make_value(
-                    36, 0, 0
-                ))),
-        );
-        assert!(
-            IntervalYearMonth(Some(IntervalYearMonthType::make_value(0, 0)))
-                != IntervalDayTime(Some(IntervalDayTimeType::make_value(0, 1)))
-        );
-        assert!(
-            IntervalYearMonth(Some(IntervalYearMonthType::make_value(1, 4)))
-                == IntervalYearMonth(Some(IntervalYearMonthType::make_value(0, 16))),
-        );
-        assert!(
-            IntervalYearMonth(Some(IntervalYearMonthType::make_value(0, 3)))
-                > IntervalMonthDayNano(Some(IntervalMonthDayNanoType::make_value(
-                    2,
-                    28,
-                    999_999_999
-                ))),
-        );
-        assert!(
-            IntervalYearMonth(Some(IntervalYearMonthType::make_value(0, 1)))
-                > IntervalDayTime(Some(IntervalDayTimeType::make_value(29, 9_999))),
-        );
-        assert!(
-            IntervalMonthDayNano(Some(IntervalMonthDayNanoType::make_value(1, 12, 34)))
-                > IntervalMonthDayNano(Some(IntervalMonthDayNanoType::make_value(
-                    0, 142, 34
-                )))
-        );
     }
 
     #[test]
@@ -4359,11 +4182,11 @@ mod tests {
 
         // Define list-of-structs scalars
         let nl0 =
-            ScalarValue::new_list(Some(vec![s0.clone(), s1.clone()]), s0.get_datatype());
+            ScalarValue::new_list(Some(vec![s0.clone(), s1.clone()]), s0.data_type());
 
-        let nl1 = ScalarValue::new_list(Some(vec![s2]), s0.get_datatype());
+        let nl1 = ScalarValue::new_list(Some(vec![s2]), s0.data_type());
 
-        let nl2 = ScalarValue::new_list(Some(vec![s1]), s0.get_datatype());
+        let nl2 = ScalarValue::new_list(Some(vec![s1]), s0.data_type());
         // iter_to_array for list-of-struct
         let array = ScalarValue::iter_to_array(vec![nl0, nl1, nl2]).unwrap();
         let array = as_list_array(&array).unwrap();
@@ -4572,7 +4395,7 @@ mod tests {
         );
 
         assert_eq!(
-            scalar.get_datatype(),
+            scalar.data_type(),
             DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into()))
         );
 
@@ -4585,7 +4408,7 @@ mod tests {
 
         let newscalar = ScalarValue::try_from_array(&array, 0).unwrap();
         assert_eq!(
-            newscalar.get_datatype(),
+            newscalar.data_type(),
             DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into()))
         );
     }
@@ -4619,7 +4442,7 @@ mod tests {
 
         // turn it back to a scalar
         let cast_scalar = ScalarValue::try_from_array(&cast_array, 0).unwrap();
-        assert_eq!(cast_scalar.get_datatype(), desired_type);
+        assert_eq!(cast_scalar.data_type(), desired_type);
 
         // Some time later the "cast" scalar is turned back into an array:
         let array = cast_scalar.to_array_of_size(10);
@@ -4893,11 +4716,6 @@ mod tests {
                 ScalarValue::Decimal128(Some(123), 5, 5),
                 ScalarValue::Decimal128(Some(120), 5, 5),
             ),
-            // Overflows
-            (
-                ScalarValue::Int8(Some(i8::MAX)),
-                ScalarValue::Int8(Some(i8::MIN)),
-            ),
         ];
         for (lhs, rhs) in cases {
             let distance = lhs.distance(&rhs);
@@ -5147,7 +4965,8 @@ mod tests {
                             .unwrap()
                             .and_hms_nano_opt(hour, minute, second, nanosec)
                             .unwrap()
-                            .timestamp_nanos(),
+                            .timestamp_nanos_opt()
+                            .unwrap(),
                     ),
                     None,
                 ))
@@ -5157,6 +4976,9 @@ mod tests {
     }
 
     fn get_random_intervals(sample_size: u64) -> Vec<ScalarValue> {
+        const MILLISECS_IN_ONE_DAY: i64 = 86_400_000;
+        const NANOSECS_IN_ONE_DAY: i64 = 86_400_000_000_000;
+
         let vector_size = sample_size;
         let mut intervals = vec![];
         let mut rng = rand::thread_rng();

@@ -93,14 +93,10 @@ datafusion.execution.coalesce_batches false
 statement ok
 set datafusion.catalog.information_schema = true
 
-statement error DataFusion error: SQL error: ParserError\("Expected an SQL statement, found: caused"\)
-caused by
-External error: provided string was not `true` or `false`
+statement error DataFusion error: Error parsing 1 as bool
 SET datafusion.execution.coalesce_batches to 1
 
-statement error DataFusion error: SQL error: ParserError\("Expected an SQL statement, found: caused"\)
-caused by
-External error: provided string was not `true` or `false`
+statement error DataFusion error: Error parsing abc as bool
 SET datafusion.execution.coalesce_batches to abc
 
 # set u64 variable
@@ -136,19 +132,13 @@ datafusion.execution.batch_size 2
 statement ok
 set datafusion.catalog.information_schema = true
 
-statement error DataFusion error: SQL error: ParserError\("Expected an SQL statement, found: caused"\)
-caused by
-External error: invalid digit found in string
+statement error DataFusion error: Error parsing -1 as usize
 SET datafusion.execution.batch_size to -1
 
-statement error DataFusion error: SQL error: ParserError\("Expected an SQL statement, found: caused"\)
-caused by
-External error: invalid digit found in string
+statement error DataFusion error: Error parsing abc as usize
 SET datafusion.execution.batch_size to abc
 
-statement error DataFusion error: SQL error: ParserError\("Expected an SQL statement, found: caused"\)
-caused by
-External error: invalid digit found in string
+statement error External error: invalid digit found in string
 SET datafusion.execution.batch_size to 0.1
 
 # set time zone

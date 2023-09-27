@@ -23,49 +23,6 @@ The DataFusion CLI is a command-line interactive SQL utility for executing
 queries against any supported data files. It is a convenient way to
 try DataFusion's SQL support with your own data.
 
-## Example
-
-Create a CSV file to query.
-
-```shell
-$ echo "a,b" > data.csv
-$ echo "1,2" >> data.csv
-```
-
-Query that single file (the CLI also supports parquet, compressed csv, avro, json and more)
-
-```shell
-$ datafusion-cli
-DataFusion CLI v17.0.0
-❯ select * from 'data.csv';
-+---+---+
-| a | b |
-+---+---+
-| 1 | 2 |
-+---+---+
-1 row in set. Query took 0.007 seconds.
-```
-
-You can also query directories of files with compatible schemas:
-
-```shell
-$ ls data_dir/
-data.csv   data2.csv
-```
-
-```shell
-$ datafusion-cli
-DataFusion CLI v16.0.0
-❯ select * from 'data_dir';
-+---+---+
-| a | b |
-+---+---+
-| 3 | 4 |
-| 1 | 2 |
-+---+---+
-2 rows in set. Query took 0.007 seconds.
-```
-
 ## Installation
 
 ### Install and run using Cargo
@@ -118,35 +75,123 @@ USAGE:
     datafusion-cli [OPTIONS]
 
 OPTIONS:
-    -c, --batch-size <BATCH_SIZE>           The batch size of each query, or use DataFusion default
-    -f, --file <FILE>...                    Execute commands from file(s), then exit
-        --format <FORMAT>                   [default: table] [possible values: csv, tsv, table, json,
-                                            nd-json]
-    -h, --help                              Print help information
-    -m, --memory-limit <MEMORY_LIMIT>       The memory pool limitation (e.g. '10g'), default to None (no limit)
-        --mem-pool-type <MEM_POOL_TYPE>     Specify the memory pool type 'greedy' or 'fair', default to 'greedy'
-    -p, --data-path <DATA_PATH>             Path to your data, default to current directory
-    -q, --quiet                             Reduce printing other than the results and work quietly
-    -r, --rc <RC>...                        Run the provided files on startup instead of ~/.datafusionrc
-    -V, --version                           Print version information
+    -b, --batch-size <BATCH_SIZE>
+            The batch size of each query, or use DataFusion default
+
+    -c, --command <COMMAND>...
+            Execute the given command string(s), then exit
+
+    -f, --file <FILE>...
+            Execute commands from file(s), then exit
+
+        --format <FORMAT>
+            [default: table] [possible values: csv, tsv, table, json, nd-json]
+
+    -h, --help
+            Print help information
+
+    -m, --memory-limit <MEMORY_LIMIT>
+            The memory pool limitation (e.g. '10g'), default to None (no limit)
+
+        --maxrows <MAXROWS>
+            The max number of rows to display for 'Table' format
+            [default: 40] [possible values: numbers(0/10/...), inf(no limit)]
+
+        --mem-pool-type <MEM_POOL_TYPE>
+            Specify the memory pool type 'greedy' or 'fair', default to 'greedy'
+
+    -p, --data-path <DATA_PATH>
+            Path to your data, default to current directory
+
+    -q, --quiet
+            Reduce printing other than the results and work quietly
+
+    -r, --rc <RC>...
+            Run the provided files on startup instead of ~/.datafusionrc
+
+    -V, --version
+            Print version information
 ```
 
-## Selecting files directly
+## Querying data from the files directly
 
 Files can be queried directly by enclosing the file or
 directory name in single `'` quotes as shown in the example.
 
+## Example
+
+Create a CSV file to query.
+
+```shell
+$ echo "a,b" > data.csv
+$ echo "1,2" >> data.csv
+```
+
+Query that single file (the CLI also supports parquet, compressed csv, avro, json and more)
+
+```shell
+$ datafusion-cli
+DataFusion CLI v17.0.0
+❯ select * from 'data.csv';
++---+---+
+| a | b |
++---+---+
+| 1 | 2 |
++---+---+
+1 row in set. Query took 0.007 seconds.
+```
+
+You can also query directories of files with compatible schemas:
+
+```shell
+$ ls data_dir/
+data.csv   data2.csv
+```
+
+```shell
+$ datafusion-cli
+DataFusion CLI v16.0.0
+❯ select * from 'data_dir';
++---+---+
+| a | b |
++---+---+
+| 3 | 4 |
+| 1 | 2 |
++---+---+
+2 rows in set. Query took 0.007 seconds.
+```
+
+## Creating external tables
+
 It is also possible to create a table backed by files by explicitly
-via `CREATE EXTERNAL TABLE` as shown below.
+via `CREATE EXTERNAL TABLE` as shown below. Filemask wildcards supported
 
 ## Registering Parquet Data Sources
 
-Parquet data sources can be registered by executing a `CREATE EXTERNAL TABLE` SQL statement. It is not necessary to provide schema information for Parquet files.
+Parquet data sources can be registered by executing a `CREATE EXTERNAL TABLE` SQL statement. The schema information will be derived automatically.
+
+Register a single file parquet datasource
 
 ```sql
 CREATE EXTERNAL TABLE taxi
 STORED AS PARQUET
 LOCATION '/mnt/nyctaxi/tripdata.parquet';
+```
+
+Register a single folder parquet datasource. All files inside must be valid parquet files!
+
+```sql
+CREATE EXTERNAL TABLE taxi
+STORED AS PARQUET
+LOCATION '/mnt/nyctaxi/';
+```
+
+Register a single folder parquet datasource by specifying a wildcard for files to read
+
+```sql
+CREATE EXTERNAL TABLE taxi
+STORED AS PARQUET
+LOCATION '/mnt/nyctaxi/*.parquet';
 ```
 
 ## Registering CSV Data Sources

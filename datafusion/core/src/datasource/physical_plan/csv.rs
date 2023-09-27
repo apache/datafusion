@@ -17,6 +17,7 @@
 
 //! Execution plan for reading CSV files
 
+use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::listing::{FileRange, ListingTableUrl};
 use crate::datasource::physical_plan::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
@@ -31,7 +32,6 @@ use crate::physical_plan::{
 };
 use arrow::csv;
 use arrow::datatypes::SchemaRef;
-use datafusion_common::FileCompressionType;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{
     ordering_equivalence_properties_helper, LexOrdering, OrderingEquivalenceProperties,
@@ -240,10 +240,6 @@ impl ExecutionPlan for CsvExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
-    }
-
-    fn file_scan_config(&self) -> Option<&FileScanConfig> {
-        Some(&self.base_config)
     }
 }
 
@@ -577,6 +573,7 @@ pub async fn plan_to_csv(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dataframe::DataFrameWriteOptions;
     use crate::prelude::*;
     use crate::test::{partitioned_csv_config, partitioned_file_groups};
     use crate::{scalar::ScalarValue, test_util::aggr_test_schema};
@@ -834,7 +831,7 @@ mod tests {
 
         // errors due to https://github.com/apache/arrow-datafusion/issues/4918
         let mut it = csv.execute(0, task_ctx)?;
-        let err = it.next().await.unwrap().unwrap_err().to_string();
+        let err = it.next().await.unwrap().unwrap_err().strip_backtrace();
         assert_eq!(
             err,
             "Arrow error: Csv error: incorrect number of fields for line 1, expected 14 got 13"
@@ -1071,10 +1068,10 @@ mod tests {
 
         let out_dir_url = "file://local/out";
         let e = df
-            .write_csv(out_dir_url)
+            .write_csv(out_dir_url, DataFrameWriteOptions::new(), None)
             .await
             .expect_err("should fail because input file does not match inferred schema");
-        assert_eq!("Arrow error: Parser error: Error while parsing value d for column 0 at line 4", format!("{e}"));
+        assert_eq!(e.strip_backtrace(), "Arrow error: Parser error: Error while parsing value d for column 0 at line 4");
         Ok(())
     }
 
@@ -1106,7 +1103,8 @@ mod tests {
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
         let out_dir_url = "file://local/out";
         let df = ctx.sql("SELECT c1, c2 FROM test").await?;
-        df.write_csv(out_dir_url).await?;
+        df.write_csv(out_dir_url, DataFrameWriteOptions::new(), None)
+            .await?;
 
         // create a new context and verify that the results were saved to a partitioned csv file
         let ctx = SessionContext::new();

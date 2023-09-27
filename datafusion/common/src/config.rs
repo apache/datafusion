@@ -251,6 +251,9 @@ config_namespace! {
         /// and sorted in a single RecordBatch rather than sorted in
         /// batches and merged.
         pub sort_in_place_threshold_bytes: usize, default = 1024 * 1024
+
+        /// Number of files to read in parallel when inferring schema and statistics
+        pub meta_fetch_concurrency: usize, default = 32
     }
 }
 
@@ -353,6 +356,15 @@ config_namespace! {
         /// Sets bloom filter number of distinct values. If NULL, uses
         /// default parquet writer setting
         pub bloom_filter_ndv: Option<u64>, default = None
+
+        /// Controls whether DataFusion will attempt to speed up writing
+        /// large parquet files by first writing multiple smaller files
+        /// and then stitching them together into a single large file.
+        /// This will result in faster write speeds, but higher memory usage.
+        /// Also currently unsupported are bloom filters and column indexes
+        /// when single_file_parallelism is enabled.
+        pub allow_single_file_parallelism: bool, default = false
+
     }
 }
 
@@ -379,6 +391,10 @@ config_namespace! {
         /// When set to true, the physical plan optimizer will try to add round robin
         /// repartitioning to increase parallelism to leverage more CPU cores
         pub enable_round_robin_repartition: bool, default = true
+
+        /// When set to true, the optimizer will attempt to perform limit operations
+        /// during aggregations, if possible
+        pub enable_topk_aggregation: bool, default = true
 
         /// When set to true, the optimizer will insert filters before a join between
         /// a nullable and non-nullable column to filter out nulls on the nullable side. This
@@ -473,6 +489,10 @@ config_namespace! {
 
         /// When set to true, the explain statement will only print physical plans
         pub physical_plan_only: bool, default = false
+
+        /// When set to true, the explain statement will print operator statistics
+        /// for physical plans
+        pub show_statistics: bool, default = false
     }
 }
 

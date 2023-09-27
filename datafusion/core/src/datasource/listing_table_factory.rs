@@ -30,6 +30,7 @@ use datafusion_expr::CreateExternalTable;
 use crate::datasource::file_format::arrow::ArrowFormat;
 use crate::datasource::file_format::avro::AvroFormat;
 use crate::datasource::file_format::csv::CsvFormat;
+use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::json::JsonFormat;
 use crate::datasource::file_format::parquet::ParquetFormat;
 use crate::datasource::file_format::FileFormat;
@@ -39,7 +40,7 @@ use crate::datasource::listing::{
 use crate::datasource::provider::TableProviderFactory;
 use crate::datasource::TableProvider;
 use crate::execution::context::SessionState;
-use datafusion_common::{FileCompressionType, FileType};
+use datafusion_common::FileType;
 
 use super::listing::ListingTableInsertMode;
 
@@ -137,8 +138,15 @@ impl TableProviderFactory for ListingTableFactory {
         let mut statement_options = StatementOptions::from(&cmd.options);
 
         // Extract ListingTable specific options if present or set default
-        // Discard unbounded option if present
-        statement_options.take_str_option("unbounded");
+        let unbounded = if infinite_source {
+            statement_options.take_str_option("unbounded");
+            infinite_source
+        } else {
+            statement_options
+                .take_bool_option("unbounded")?
+                .unwrap_or(false)
+        };
+
         let create_local_path = statement_options
             .take_bool_option("create_local_path")?
             .unwrap_or(false);
@@ -209,11 +217,11 @@ impl TableProviderFactory for ListingTableFactory {
             .with_file_extension(file_extension)
             .with_target_partitions(state.config().target_partitions())
             .with_table_partition_cols(table_partition_cols)
-            .with_infinite_source(infinite_source)
             .with_file_sort_order(cmd.order_exprs.clone())
             .with_insert_mode(insert_mode)
             .with_single_file(single_file)
-            .with_write_options(file_type_writer_options);
+            .with_write_options(file_type_writer_options)
+            .with_infinite_source(unbounded);
 
         let resolved_schema = match provided_schema {
             None => options.infer_schema(state, &table_path).await?,
@@ -222,8 +230,9 @@ impl TableProviderFactory for ListingTableFactory {
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(options)
             .with_schema(resolved_schema);
-        let table =
-            ListingTable::try_new(config)?.with_definition(cmd.definition.clone());
+        let provider = ListingTable::try_new(config)?
+            .with_cache(state.runtime_env().cache_manager.get_file_statistic_cache());
+        let table = provider.with_definition(cmd.definition.clone());
         Ok(Arc::new(table))
     }
 }

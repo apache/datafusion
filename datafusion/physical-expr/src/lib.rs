@@ -55,13 +55,14 @@ pub use aggregate::groups_accumulator::{
 pub use aggregate::AggregateExpr;
 pub use analysis::{analyze, AnalysisContext, ExprBoundaries};
 pub use equivalence::{
-    ordering_equivalence_properties_helper, project_equivalence_properties,
-    project_ordering_equivalence_properties, EquivalenceProperties, EquivalentClass,
-    OrderingEquivalenceProperties, OrderingEquivalentClass,
+    add_offset_to_lex_ordering, ordering_equivalence_properties_helper,
+    project_equivalence_properties, project_ordering_equivalence_properties,
+    EquivalenceProperties, EquivalentClass, OrderingEquivalenceProperties,
+    OrderingEquivalentClass,
 };
 
 pub use partitioning::{Distribution, Partitioning};
-pub use physical_expr::{PhysicalExpr, PhysicalExprRef};
+pub use physical_expr::{physical_exprs_contains, PhysicalExpr, PhysicalExprRef};
 pub use planner::create_physical_expr;
 pub use scalar_function::ScalarFunctionExpr;
 pub use sort_expr::{
@@ -70,7 +71,6 @@ pub use sort_expr::{
 };
 pub use sort_properties::update_ordering;
 pub use utils::{
-    expr_list_eq_any_order, expr_list_eq_strict_order, find_orderings_of_exprs,
-    normalize_expr_with_equivalence_properties, normalize_ordering_equivalence_classes,
+    expr_list_eq_any_order, expr_list_eq_strict_order,
     normalize_out_expr_with_columns_map, reverse_order_bys, split_conjunction,
 };

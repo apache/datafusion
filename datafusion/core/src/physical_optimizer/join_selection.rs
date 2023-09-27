@@ -579,14 +579,14 @@ fn apply_subrules(
 
 #[cfg(test)]
 mod tests_statistical {
+    use super::*;
     use crate::{
         physical_plan::{
             displayable, joins::PartitionMode, ColumnStatistics, Statistics,
         },
-        test::exec::StatisticsExec,
+        test::StatisticsExec,
     };
 
-    use super::*;
     use std::sync::Arc;
 
     use arrow::datatypes::{DataType, Field, Schema};
@@ -1175,7 +1175,7 @@ mod tests_statistical {
 mod util_tests {
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Column, NegativeExpr};
-    use datafusion_physical_expr::intervals::check_support;
+    use datafusion_physical_expr::intervals::utils::check_support;
     use datafusion_physical_expr::PhysicalExpr;
     use std::sync::Arc;
 

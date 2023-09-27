@@ -36,7 +36,7 @@ use datafusion_common::{
 use datafusion_execution::registry::SerializerRegistry;
 use datafusion_expr::{
     logical_plan::{DdlStatement, Statement},
-    DescribeTable, StringifiedPlan, UserDefinedLogicalNode, WindowUDF,
+    StringifiedPlan, UserDefinedLogicalNode, WindowUDF,
 };
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
@@ -50,11 +50,8 @@ use std::{
 };
 use std::{ops::ControlFlow, sync::Weak};
 
+use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use arrow::{
-    array::StringBuilder,
-    datatypes::{DataType, Field, Schema, SchemaRef},
-};
 
 use crate::catalog::{
     schema::{MemorySchemaProvider, SchemaProvider},
@@ -426,9 +423,8 @@ impl SessionContext {
     /// let err = ctx.sql_with_options("CREATE TABLE foo (x INTEGER)", options)
     ///   .await
     ///   .unwrap_err();
-    /// assert_eq!(
-    ///   err.to_string(),
-    ///   "Error during planning: DDL not supported: CreateMemoryTable"
+    /// assert!(
+    ///   err.to_string().starts_with("Error during planning: DDL not supported: CreateMemoryTable")
     /// );
     /// # Ok(())
     /// # }
@@ -473,9 +469,6 @@ impl SessionContext {
             LogicalPlan::Statement(Statement::SetVariable(stmt)) => {
                 self.set_variable(stmt).await
             }
-            LogicalPlan::DescribeTable(DescribeTable { schema, .. }) => {
-                self.return_describe_table_dataframe(schema).await
-            }
 
             plan => Ok(DataFrame::new(self.state(), plan)),
         }
@@ -485,53 +478,6 @@ impl SessionContext {
     fn return_empty_dataframe(&self) -> Result<DataFrame> {
         let plan = LogicalPlanBuilder::empty(false).build()?;
         Ok(DataFrame::new(self.state(), plan))
-    }
-
-    // return an record_batch which describe table
-    async fn return_describe_table_record_batch(
-        &self,
-        schema: Arc<Schema>,
-    ) -> Result<RecordBatch> {
-        let record_batch_schema = Arc::new(Schema::new(vec![
-            Field::new("column_name", DataType::Utf8, false),
-            Field::new("data_type", DataType::Utf8, false),
-            Field::new("is_nullable", DataType::Utf8, false),
-        ]));
-
-        let mut column_names = StringBuilder::new();
-        let mut data_types = StringBuilder::new();
-        let mut is_nullables = StringBuilder::new();
-        for (_, field) in schema.fields().iter().enumerate() {
-            column_names.append_value(field.name());
-
-            // "System supplied type" --> Use debug format of the datatype
-            let data_type = field.data_type();
-            data_types.append_value(format!("{data_type:?}"));
-
-            // "YES if the column is possibly nullable, NO if it is known not nullable. "
-            let nullable_str = if field.is_nullable() { "YES" } else { "NO" };
-            is_nullables.append_value(nullable_str);
-        }
-
-        let record_batch = RecordBatch::try_new(
-            record_batch_schema,
-            vec![
-                Arc::new(column_names.finish()),
-                Arc::new(data_types.finish()),
-                Arc::new(is_nullables.finish()),
-            ],
-        )?;
-
-        Ok(record_batch)
-    }
-
-    // return an dataframe which describe file
-    async fn return_describe_table_dataframe(
-        &self,
-        schema: Arc<Schema>,
-    ) -> Result<DataFrame> {
-        let record_batch = self.return_describe_table_record_batch(schema).await?;
-        self.read_batch(record_batch)
     }
 
     async fn create_external_table(
@@ -1402,7 +1348,12 @@ impl QueryPlanner for DefaultQueryPlanner {
     }
 }
 
-/// Execution context for registering data sources and executing queries
+/// Execution context for registering data sources and executing queries.
+/// See [`SessionContext`] for a higher level API.
+///
+/// Note that there is no `Default` or `new()` for SessionState,
+/// to avoid accidentally running queries or other operations without passing through
+/// the [`SessionConfig`] or [`RuntimeEnv`]. See [`SessionContext`].
 #[derive(Clone)]
 pub struct SessionState {
     /// A unique UUID that identifies the session
@@ -2277,6 +2228,7 @@ mod tests {
     use crate::variable::VarType;
     use arrow::array::ArrayRef;
     use arrow::record_batch::RecordBatch;
+    use arrow_schema::{Field, Schema};
     use async_trait::async_trait;
     use datafusion_expr::{create_udaf, create_udf, Expr, Volatility};
     use datafusion_physical_expr::functions::make_scalar_function;
@@ -2356,9 +2308,8 @@ mod tests {
         let ctx = SessionContext::new();
 
         let err = plan_and_collect(&ctx, "SElECT @=   X3").await.unwrap_err();
-
         assert_eq!(
-            err.to_string(),
+            err.strip_backtrace(),
             "Error during planning: variable [\"@=\"] has no type information"
         );
         Ok(())

@@ -43,8 +43,7 @@ pub use json::{JsonOpener, NdJsonExec};
 mod file_scan_config;
 pub(crate) use file_scan_config::PartitionColumnProjector;
 pub use file_scan_config::{
-    get_scan_files, wrap_partition_type_in_dict, wrap_partition_value_in_dict,
-    FileScanConfig,
+    wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
 };
 
 use crate::error::{DataFusionError, Result};
@@ -64,6 +63,7 @@ use datafusion_common::{file_options::FileTypeWriterOptions, plan_err};
 use datafusion_physical_expr::expressions::Column;
 
 use arrow::compute::cast;
+use datafusion_physical_plan::ExecutionPlan;
 use log::debug;
 use object_store::path::Path;
 use object_store::ObjectMeta;
@@ -95,6 +95,8 @@ pub struct FileSinkConfig {
     /// regardless of input partitioning. Otherwise, each table path is assumed to be a directory
     /// to which each output partition is written to its own output file.
     pub single_file_output: bool,
+    /// If input is unbounded, tokio tasks need to yield to not block execution forever
+    pub unbounded_input: bool,
     /// Controls whether existing data should be overwritten by this sink
     pub overwrite: bool,
     /// Contains settings specific to writing a given FileType, e.g. parquet max_row_group_size
@@ -497,6 +499,21 @@ fn get_projected_output_ordering(
         }
     }
     all_orderings
+}
+
+// Get output (un)boundedness information for the given `plan`.
+pub(crate) fn is_plan_streaming(plan: &Arc<dyn ExecutionPlan>) -> Result<bool> {
+    let result = if plan.children().is_empty() {
+        plan.unbounded_output(&[])
+    } else {
+        let children_unbounded_output = plan
+            .children()
+            .iter()
+            .map(is_plan_streaming)
+            .collect::<Result<Vec<_>>>();
+        plan.unbounded_output(&children_unbounded_output?)
+    };
+    result
 }
 
 #[cfg(test)]

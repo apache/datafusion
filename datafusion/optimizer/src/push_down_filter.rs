@@ -24,9 +24,7 @@ use datafusion_expr::{
     and,
     expr_rewriter::replace_col,
     logical_plan::{CrossJoin, Join, JoinType, LogicalPlan, TableScan, Union},
-    or,
-    utils::from_plan,
-    BinaryExpr, Expr, Filter, Operator, TableProviderFilterPushDown,
+    or, BinaryExpr, Expr, Filter, Operator, TableProviderFilterPushDown,
 };
 use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
@@ -457,7 +455,7 @@ fn push_down_all_join(
     if !join_conditions.is_empty() {
         new_exprs.push(join_conditions.into_iter().reduce(Expr::and).unwrap());
     }
-    let plan = from_plan(join_plan, &new_exprs, &[left, right])?;
+    let plan = join_plan.with_new_exprs(new_exprs, &[left, right])?;
 
     if keep_predicates.is_empty() {
         Ok(plan)
