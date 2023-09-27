@@ -87,7 +87,7 @@ fn new_arc_field(name: &str, dt: DataType, nullable: bool) -> Arc<Field> {
 #[tokio::test]
 async fn roundtrip_logical_plan() -> Result<()> {
     let ctx = SessionContext::new();
-    ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
+    ctx.register_csv("t1", "tests/testdata/test.csv", CsvReadOptions::default())
         .await?;
     let scan = ctx.table("t1").await?.into_optimized_plan()?;
     let topk_plan = LogicalPlan::Extension(Extension {
@@ -196,7 +196,7 @@ async fn roundtrip_logical_plan_aggregation() -> Result<()> {
 
     ctx.register_csv(
         "t1",
-        "testdata/test.csv",
+        "tests/testdata/test.csv",
         CsvReadOptions::default().schema(&schema),
     )
     .await?;
@@ -222,7 +222,7 @@ async fn roundtrip_single_count_distinct() -> Result<()> {
 
     ctx.register_csv(
         "t1",
-        "testdata/test.csv",
+        "tests/testdata/test.csv",
         CsvReadOptions::default().schema(&schema),
     )
     .await?;
@@ -240,7 +240,7 @@ async fn roundtrip_single_count_distinct() -> Result<()> {
 #[tokio::test]
 async fn roundtrip_logical_plan_with_extension() -> Result<()> {
     let ctx = SessionContext::new();
-    ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
+    ctx.register_csv("t1", "tests/testdata/test.csv", CsvReadOptions::default())
         .await?;
     let plan = ctx.table("t1").await?.into_optimized_plan()?;
     let bytes = logical_plan_to_bytes(&plan)?;
@@ -252,7 +252,7 @@ async fn roundtrip_logical_plan_with_extension() -> Result<()> {
 #[tokio::test]
 async fn roundtrip_logical_plan_with_view_scan() -> Result<()> {
     let ctx = SessionContext::new();
-    ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
+    ctx.register_csv("t1", "tests/testdata/test.csv", CsvReadOptions::default())
         .await?;
     ctx.sql("CREATE VIEW view_t1(a, b) AS SELECT a, b FROM t1")
         .await?;
