@@ -369,6 +369,10 @@ pub(crate) fn window_ordering_equivalence(
 pub(crate) fn get_window_for_the_input(
     window_exprs: &[Arc<dyn WindowExpr>],
     input: &Arc<dyn ExecutionPlan>,
+    // This is the partition keys used during repartitioning
+    // It is either same with window_expr partition by or empty
+    // (if partitioning is not desirable for the window executor)
+    physical_partition_keys: Vec<Arc<dyn PhysicalExpr>>,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
     // Contains at least one window expr and all of the partition by and order by sections
     // of the window_exprs are same.
@@ -413,7 +417,7 @@ pub(crate) fn get_window_for_the_input(
             window_expr,
             input.clone(),
             input.schema(),
-            partitionby_exprs.to_vec(),
+            physical_partition_keys.to_vec(),
             partition_search_mode,
         )?) as _))
     } else if partition_search_mode != PartitionSearchMode::Sorted {
@@ -427,7 +431,7 @@ pub(crate) fn get_window_for_the_input(
             window_expr,
             input.clone(),
             input.schema(),
-            partitionby_exprs.to_vec(),
+            physical_partition_keys.to_vec(),
         )?) as _))
     }
 }

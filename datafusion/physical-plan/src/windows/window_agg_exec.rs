@@ -129,7 +129,7 @@ impl WindowAggExec {
         &self,
         input: &Arc<dyn ExecutionPlan>,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        get_window_for_the_input(self.window_expr(), input)
+        get_window_for_the_input(self.window_expr(), input, self.partition_keys.clone())
     }
 }
 
