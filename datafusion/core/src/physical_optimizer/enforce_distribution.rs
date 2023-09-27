@@ -1028,6 +1028,11 @@ fn add_hash_on_top(
     dist_onward: &mut Option<ExecTree>,
     input_idx: usize,
 ) -> Result<Arc<dyn ExecutionPlan>> {
+    let input_partition_count = input.output_partitioning().partition_count();
+    if n_target == 1 && input_partition_count == 1 {
+        // in this case using hash repartition is useless
+        return Ok(input);
+    }
     // When there is an existing ordering, we preserve ordering
     // during repartition. This will be un-done in the future
     // If any of the following conditions is true
@@ -4387,6 +4392,30 @@ mod tests {
 
         assert_optimized!(expected, physical_plan.clone(), true);
         assert_optimized!(expected, physical_plan, false);
+
+        Ok(())
+    }
+
+    #[test]
+    fn do_not_add_unnecessary_hash() -> Result<()> {
+        let schema = schema();
+        let sort_key = vec![PhysicalSortExpr {
+            expr: col("c", &schema).unwrap(),
+            options: SortOptions::default(),
+        }];
+        let alias = vec![("a".to_string(), "a".to_string())];
+        let input = parquet_exec_with_sort(vec![sort_key]);
+        let physical_plan = aggregate_exec_with_alias(input, alias.clone());
+
+        let expected = &[
+            "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
+            "AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
+        ];
+
+        // Make sure target partition number is 1. In this case hash repartition is unnecessary
+        assert_optimized!(expected, physical_plan.clone(), true, false, 1, false, 1024);
+        assert_optimized!(expected, physical_plan, false, false, 1, false, 1024);
 
         Ok(())
     }
