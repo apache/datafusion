@@ -15,10 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::ops::Deref;
+use std::sync::Arc;
+
 use arrow::array::{Int32Builder, Int64Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use async_trait::async_trait;
 use datafusion::datasource::provider::{TableProvider, TableType};
 use datafusion::error::Result;
 use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
@@ -34,8 +36,8 @@ use datafusion::scalar::ScalarValue;
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::{internal_err, not_impl_err, DataFusionError};
 use datafusion_expr::expr::{BinaryExpr, Cast};
-use std::ops::Deref;
-use std::sync::Arc;
+
+use async_trait::async_trait;
 
 fn create_batch(value: i32, num_rows: usize) -> Result<RecordBatch> {
     let mut builder = Int32Builder::with_capacity(num_rows);

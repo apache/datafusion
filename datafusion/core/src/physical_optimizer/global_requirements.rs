@@ -49,7 +49,7 @@ pub struct GlobalRequirements {
 impl GlobalRequirements {
     /// Create a new rule which works in `Add` mode; i.e. it simply adds a
     /// top-level [`GlobalRequirementExec`] into the physical plan to keep track
-    /// of global ordering, and global distribution requirements if there is any.
+    /// of global ordering and distribution requirements if there are any.
     /// Note that this rule should run at the beginning.
     pub fn new_add_mode() -> Self {
         Self {
@@ -149,7 +149,7 @@ impl ExecutionPlan for GlobalRequirementExec {
     }
 
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
-        // Has single child
+        // Has a single child
         Ok(children[0])
     }
 
@@ -157,10 +157,8 @@ impl ExecutionPlan for GlobalRequirementExec {
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        assert_eq!(children.len(), 1);
-        let child = children.remove(0);
         Ok(Arc::new(Self::new(
-            child,
+            children.remove(0), // has a single child
             self.order_requirement.clone(),
             self.dist_requirement.clone(),
         )))
@@ -191,7 +189,7 @@ impl PhysicalOptimizerRule for GlobalRequirements {
                 if let Some(sort_req) =
                     plan.as_any().downcast_ref::<GlobalRequirementExec>()
                 {
-                    Ok(Transformed::Yes(sort_req.input().clone()))
+                    Ok(Transformed::Yes(sort_req.input()))
                 } else {
                     Ok(Transformed::No(plan))
                 }
@@ -240,19 +238,14 @@ fn require_top_ordering_helper(
         let req_dist = sort_exec.required_input_distribution()[0].clone();
         let reqs = PhysicalSortRequirement::from_sort_exprs(req_ordering);
         Ok((
-            Arc::new(GlobalRequirementExec::new(
-                plan.clone(),
-                Some(reqs),
-                req_dist,
-            )) as _,
+            Arc::new(GlobalRequirementExec::new(plan, Some(reqs), req_dist)) as _,
             true,
         ))
     } else if let Some(spm) = plan.as_any().downcast_ref::<SortPreservingMergeExec>() {
-        let req_ordering = spm.expr();
-        let reqs = PhysicalSortRequirement::from_sort_exprs(req_ordering);
+        let reqs = PhysicalSortRequirement::from_sort_exprs(spm.expr());
         Ok((
             Arc::new(GlobalRequirementExec::new(
-                plan.clone(),
+                plan,
                 Some(reqs),
                 Distribution::SinglePartition,
             )) as _,

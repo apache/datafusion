@@ -70,7 +70,7 @@ impl PhysicalOptimizer {
     pub fn new() -> Self {
         let rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> = vec![
             // If there is a required global requirement of the query, make sure that
-            // this information is not lost across different rules during optimization
+            // this information is not lost across different rules during optimization.
             Arc::new(GlobalRequirements::new_add_mode()),
             Arc::new(AggregateStatistics::new()),
             // Statistics-based join selection will change the Auto mode to a real join implementation,

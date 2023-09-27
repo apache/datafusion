@@ -1101,9 +1101,9 @@ fn add_spm_on_top(
     }
 }
 
-/// Updates the physical plan inside `distribution_context` if having a
-/// so that executors that change distribution are removed from the top
-/// (If they are necessary, they will be added in subsequent stages).
+/// Updates the physical plan inside `distribution_context` so that distribution
+/// changing operators are removed from the top. If they are necessary, they will
+/// be added in subsequent stages.
 ///
 /// Assume that following plan is given:
 /// ```text
@@ -1112,8 +1112,8 @@ fn add_spm_on_top(
 /// "    ParquetExec: file_groups={2 groups: \[\[x], \[y]]}, projection=\[a, b, c, d, e], output_ordering=\[a@0 ASC]",
 /// ```
 ///
-/// Since `RepartitionExec`s changes distribution.
-/// This function removes `RepartitionExec`s, and returns following plan.
+/// Since `RepartitionExec`s change the distribution, this function removes
+/// them and returns following plan:
 ///
 /// ```text
 /// "ParquetExec: file_groups={2 groups: \[\[x], \[y]]}, projection=\[a, b, c, d, e], output_ordering=\[a@0 ASC]",
@@ -1126,13 +1126,14 @@ fn remove_dist_changing_operators(
         mut distribution_onwards,
     } = distribution_context;
 
-    // Remove any distribution changing operators at the beginning
-    // They will be re-inserted, according to requirements if absolutely necessary or helpful.
+    // Remove any distribution changing operators at the beginning:
+    // Note that they will be re-inserted later on if necessary or helpful.
     while is_repartition(&plan)
         || is_coalesce_partitions(&plan)
         || is_sort_preserving_merge(&plan)
     {
-        // All of above operators have single child. when we remove top operator, we take first child.
+        // All of above operators have a single child. When we remove the top
+        // operator, we take the first child.
         plan = plan.children()[0].clone();
         distribution_onwards =
             get_children_exectrees(plan.children().len(), &distribution_onwards[0]);
@@ -1184,7 +1185,7 @@ fn replace_order_preserving_variants_helper(
     for child in &exec_tree.children {
         updated_children[child.idx] = replace_order_preserving_variants_helper(child)?;
     }
-    if exec_tree.plan.as_any().is::<SortPreservingMergeExec>() {
+    if is_sort_preserving_merge(&exec_tree.plan) {
         return Ok(Arc::new(CoalescePartitionsExec::new(
             updated_children[0].clone(),
         )));
@@ -1668,6 +1669,7 @@ mod tests {
     };
     use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
     use crate::physical_plan::sorts::sort::SortExec;
+
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::{FileCompressionType, ScalarValue};
@@ -2084,7 +2086,7 @@ mod tests {
             // TODO: Orthogonalize the tests here just to verify `EnforceDistribution` and create
             //       new tests for the cascade.
 
-            // Add global requirement at the start, of any
+            // Add the ancillary global requirements operator at the start:
             let optimizer = GlobalRequirements::new_add_mode();
             let optimized = optimizer.optimize($PLAN.clone(), &config)?;
 
@@ -2114,7 +2116,7 @@ mod tests {
                 optimized
             };
 
-            // Remove ancillary global requirements at the end
+            // Remove the ancillary global requirements operator when done:
             let optimizer = GlobalRequirements::new_remove_mode();
             let optimized = optimizer.optimize(optimized, &config)?;
 

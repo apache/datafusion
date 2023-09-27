@@ -20,16 +20,8 @@
 use std::str::FromStr;
 use std::{any::Any, sync::Arc};
 
-use arrow::compute::SortOptions;
-use arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
-use arrow_schema::Schema;
-use async_trait::async_trait;
-use datafusion_common::FileTypeWriterOptions;
-use datafusion_common::{internal_err, plan_err, project_schema, SchemaExt, ToDFSchema};
-use datafusion_expr::expr::Sort;
-use datafusion_optimizer::utils::conjunction;
-use datafusion_physical_expr::{create_physical_expr, LexOrdering, PhysicalSortExpr};
-use futures::{future, stream, StreamExt, TryStreamExt};
+use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
+use super::PartitionedFile;
 
 use crate::datasource::physical_plan::{FileScanConfig, FileSinkConfig};
 use crate::datasource::{
@@ -49,13 +41,22 @@ use crate::{
     logical_expr::Expr,
     physical_plan::{empty::EmptyExec, ExecutionPlan, Statistics},
 };
-use datafusion_common::{FileCompressionType, FileType};
+
+use arrow::compute::SortOptions;
+use arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
+use arrow_schema::Schema;
+use datafusion_common::{
+    internal_err, plan_err, project_schema, FileCompressionType, FileType,
+    FileTypeWriterOptions, SchemaExt, ToDFSchema,
+};
 use datafusion_execution::cache::cache_manager::FileStatisticsCache;
 use datafusion_execution::cache::cache_unit::DefaultFileStatisticsCache;
+use datafusion_expr::expr::Sort;
+use datafusion_optimizer::utils::conjunction;
+use datafusion_physical_expr::{create_physical_expr, LexOrdering, PhysicalSortExpr};
 
-use super::PartitionedFile;
-
-use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
+use async_trait::async_trait;
+use futures::{future, stream, StreamExt, TryStreamExt};
 
 /// Configuration for creating a [`ListingTable`]
 #[derive(Debug, Clone)]
@@ -979,6 +980,9 @@ impl ListingTable {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::fs::File;
+
     use super::*;
     use crate::datasource::{provider_as_source, MemTable};
     use crate::execution::options::ArrowReadOptions;
@@ -991,14 +995,13 @@ mod tests {
         logical_expr::{col, lit},
         test::{columns, object_store::register_test_store},
     };
+
     use arrow::datatypes::{DataType, Schema};
     use arrow::record_batch::RecordBatch;
-    use datafusion_common::GetExt;
-    use datafusion_common::{assert_contains, ScalarValue};
+    use datafusion_common::{assert_contains, GetExt, ScalarValue};
     use datafusion_expr::{BinaryExpr, LogicalPlanBuilder, Operator};
+
     use rstest::*;
-    use std::collections::HashMap;
-    use std::fs::File;
     use tempfile::TempDir;
 
     /// It creates dummy file and checks if it can create unbounded input executors.
@@ -2123,11 +2126,11 @@ mod tests {
         // Convert the source table into a provider so that it can be used in a query
         let source = provider_as_source(source_table);
         // Create a table scan logical plan to read from the source table
-        // Since logical plan contains filter increasing parallelism is helpful, hence in the final plan we
-        // will have 8 partitions.
         let scan_plan = LogicalPlanBuilder::scan("source", source, None)?
             .filter(filter_predicate)?
             .build()?;
+        // Since logical plan contains a filter, increasing parallelism is helpful.
+        // Therefore, we will have 8 partitions in the final plan.
         // Create an insert plan to insert the source data into the initial table
         let insert_into_table =
             LogicalPlanBuilder::insert_into(scan_plan, "t", &schema, false)?.build()?;
@@ -2167,7 +2170,7 @@ mod tests {
         // Assert that the batches read from the file match the expected result.
         assert_batches_eq!(expected, &batches);
 
-        // Assert that # of `target_partition_number` files were added to the table.
+        // Assert that `target_partition_number` many files were added to the table.
         let num_files = tmp_dir.path().read_dir()?.count();
         assert_eq!(num_files, target_partition_number);
 
@@ -2210,7 +2213,7 @@ mod tests {
         // Assert that the batches read from the file after the second append match the expected result.
         assert_batches_eq!(expected, &batches);
 
-        // Assert that another # of `target_partition_number` files were added to the table
+        // Assert that another `target_partition_number` many files were added to the table.
         let num_files = tmp_dir.path().read_dir()?.count();
         assert_eq!(num_files, 2 * target_partition_number);
 
