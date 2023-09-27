@@ -16,3 +16,4 @@
 // under the License.
 
 mod roundtrip_logical_plan;
+mod roundtrip_physical_plan;
