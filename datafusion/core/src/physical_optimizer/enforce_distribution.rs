@@ -29,8 +29,8 @@ use crate::config::ConfigOptions;
 use crate::datasource::physical_plan::{CsvExec, ParquetExec};
 use crate::error::Result;
 use crate::physical_optimizer::utils::{
-    add_sort_above, get_plan_string, is_coalesce_partitions, is_repartition,
-    is_sort_preserving_merge, unbounded_output, ExecTree,
+    add_sort_above, get_children_exectrees, get_plan_string, is_coalesce_partitions,
+    is_repartition, is_sort_preserving_merge, unbounded_output, ExecTree,
 };
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
@@ -940,20 +940,6 @@ fn update_distribution_onward(
     } else {
         *dist_onward = Some(ExecTree::new(input, input_idx, vec![]));
     }
-}
-
-/// Get ExecTree for each child of the plan
-fn get_children_exectrees(
-    n_children: usize,
-    dist_onward: &Option<ExecTree>,
-) -> Vec<Option<ExecTree>> {
-    let mut new_distribution_onwards = vec![None; n_children];
-    if let Some(exec_tree) = &dist_onward {
-        for child in &exec_tree.children {
-            new_distribution_onwards[child.idx] = Some(child.clone());
-        }
-    }
-    new_distribution_onwards
 }
 
 /// Adds RoundRobin repartition operator to the plan increase parallelism.
