@@ -434,7 +434,7 @@ impl LimitStream {
 
             match &poll {
                 Poll::Ready(Some(Ok(batch))) => {
-                    if batch.num_rows() > 0 && self.skip == 0 {
+                    if batch.num_rows() > 0 {
                         break poll;
                     } else {
                         // continue to poll input stream
