@@ -1304,6 +1304,26 @@ impl TableProvider for DataFrameTableProvider {
         state.create_physical_plan(&plan).await
     }
 }
+/// [DataFrame] extension methods.
+pub trait DataFrameExt {
+    /// Changes [DataFrame] logical plan and creates new [DataFrame].
+    ///
+    /// Could be used to add [LogicalPlan::Extension] nodes to
+    /// existing [LogicalPlan].
+    fn map_plan<F: FnOnce(LogicalPlan) -> Result<LogicalPlan>>(
+        self,
+        map: F,
+    ) -> Result<DataFrame>;
+}
+
+impl DataFrameExt for DataFrame {
+    fn map_plan<F: FnOnce(LogicalPlan) -> Result<LogicalPlan>>(
+        self,
+        map: F,
+    ) -> Result<DataFrame> {
+        Ok(DataFrame::new(self.session_state, map(self.plan)?))
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -2413,6 +2433,32 @@ mod tests {
             assert_eq!(written_compression, compression);
         }
 
+        Ok(())
+    }
+    #[tokio::test]
+    async fn map_plan() -> Result<()> {
+        let df = test_table().await?.select_columns(&["c1", "c2"])?;
+        let fn_map_plan = |plan| {
+            Ok::<datafusion_expr::LogicalPlan, DataFusionError>(
+                crate::logical_expr::LogicalPlan::Limit(crate::logical_expr::Limit {
+                    input: Arc::new(plan),
+                    fetch: Some(11),
+                    skip: 2,
+                }),
+            )
+        };
+        let df = df.map_plan(fn_map_plan)?;
+        if let crate::logical_expr::LogicalPlan::Limit(crate::logical_expr::Limit {
+            fetch,
+            skip,
+            ..
+        }) = df.logical_plan()
+        {
+            assert_eq!(2, *skip);
+            assert_eq!(Some(11), *fetch);
+        } else {
+            panic!("Logical plan does not have Limit");
+        }
         Ok(())
     }
 }
