@@ -28,9 +28,7 @@ use std::sync::Arc;
 use crate::config::ConfigOptions;
 use crate::datasource::physical_plan::{CsvExec, ParquetExec};
 use crate::error::{DataFusionError, Result};
-use crate::physical_optimizer::utils::{
-    add_sort_above, get_plan_string, unbounded_output, ExecTree,
-};
+use crate::physical_optimizer::utils::{add_sort_above, get_plan_string, ExecTree};
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -58,6 +56,7 @@ use datafusion_physical_expr::{
 };
 
 use datafusion_common::internal_err;
+use datafusion_physical_plan::unbounded_output;
 use itertools::izip;
 
 /// The `EnforceDistribution` rule ensures that distribution requirements are

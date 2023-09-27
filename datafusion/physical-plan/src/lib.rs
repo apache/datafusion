@@ -330,6 +330,21 @@ pub fn execute_stream_partitioned(
     Ok(streams)
 }
 
+// Get output (un)boundedness information for the given `plan`.
+pub fn unbounded_output(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    let result = if plan.children().is_empty() {
+        plan.unbounded_output(&[])
+    } else {
+        let children_unbounded_output = plan
+            .children()
+            .iter()
+            .map(unbounded_output)
+            .collect::<Vec<_>>();
+        plan.unbounded_output(&children_unbounded_output)
+    };
+    result.unwrap_or(true)
+}
+
 use datafusion_physical_expr::expressions::Column;
 pub use datafusion_physical_expr::window::WindowExpr;
 pub use datafusion_physical_expr::{AggregateExpr, PhysicalExpr};
