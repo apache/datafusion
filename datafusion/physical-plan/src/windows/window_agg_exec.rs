@@ -17,18 +17,23 @@
 
 //! Stream and channel implementations for window function expressions.
 
+use std::any::Any;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+
 use crate::common::transpose;
 use crate::expressions::PhysicalSortExpr;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::windows::{
-    calc_requirements, get_ordered_partition_by_indices, get_window_for_the_input,
-    window_ordering_equivalence,
+    calc_requirements, get_ordered_partition_by_indices, window_ordering_equivalence,
 };
 use crate::{
     ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, EquivalenceProperties,
     ExecutionPlan, Partitioning, PhysicalExpr, RecordBatchStream,
     SendableRecordBatchStream, Statistics, WindowExpr,
 };
+
 use arrow::compute::{concat, concat_batches};
 use arrow::datatypes::SchemaBuilder;
 use arrow::error::ArrowError;
@@ -38,16 +43,12 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion_common::utils::{evaluate_partition_ranges, get_at_indices};
-use datafusion_common::Result;
-use datafusion_common::{internal_err, plan_err, DataFusionError};
+use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{OrderingEquivalenceProperties, PhysicalSortRequirement};
+
 use futures::stream::Stream;
 use futures::{ready, StreamExt};
-use std::any::Any;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{Context, Poll};
 
 /// Window execution plan
 #[derive(Debug)]
@@ -117,19 +118,6 @@ impl WindowAggExec {
         // Partition by sort keys indices are stored in self.ordered_partition_by_indices.
         let sort_keys = self.input.output_ordering().unwrap_or(&[]);
         get_at_indices(sort_keys, &self.ordered_partition_by_indices)
-    }
-
-    /// Constructs either `WindowAggExec` or `BoundedWindowExec` for the given input
-    /// according to specifications of the `window_exprs`.
-    /// `None` represents that with the given input (and its ordering), there is no way to
-    /// construct a window exec. Existing ordering should be changed to be able to run window exec.
-    /// `Some(window exec)` contains the optimal window exec (WindowAggExec or BoundedWindowExec) for the
-    /// given input.
-    pub fn get_window_for_the_input(
-        &self,
-        input: &Arc<dyn ExecutionPlan>,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        get_window_for_the_input(self.window_expr(), input, self.partition_keys.clone())
     }
 }
 

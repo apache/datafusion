@@ -17,6 +17,10 @@
 
 //! Physical expressions for window functions
 
+use std::borrow::Borrow;
+use std::convert::TryInto;
+use std::sync::Arc;
+
 use crate::{
     aggregates,
     expressions::{
@@ -25,39 +29,37 @@ use crate::{
     },
     udaf, unbounded_output, ExecutionPlan, PhysicalExpr,
 };
+
 use arrow::datatypes::Schema;
 use arrow_schema::{DataType, Field, SchemaRef};
-use datafusion_common::ScalarValue;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::utils::{
+    find_indices, get_at_indices, is_sorted, longest_consecutive_prefix,
+    merge_and_order_indices, set_difference,
+};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
     window_function::{BuiltInWindowFunction, WindowFunction},
     PartitionEvaluator, WindowFrame, WindowUDF,
 };
 use datafusion_physical_expr::{
+    equivalence::OrderingEquivalenceBuilder,
+    utils::{convert_to_expr, get_indices_of_matching_exprs},
     window::{BuiltInWindowFunctionExpr, SlidingAggregateWindowExpr},
-    AggregateExpr,
+    AggregateExpr, OrderingEquivalenceProperties, PhysicalSortRequirement,
 };
+
 use itertools::{izip, Itertools};
-use std::borrow::Borrow;
-use std::convert::TryInto;
-use std::sync::Arc;
 
 mod bounded_window_agg_exec;
 mod window_agg_exec;
 
 pub use bounded_window_agg_exec::BoundedWindowAggExec;
 pub use bounded_window_agg_exec::PartitionSearchMode;
-use datafusion_common::utils::{
-    find_indices, get_at_indices, is_sorted, longest_consecutive_prefix,
-    merge_and_order_indices, set_difference,
-};
-use datafusion_physical_expr::equivalence::OrderingEquivalenceBuilder;
-use datafusion_physical_expr::utils::{convert_to_expr, get_indices_of_matching_exprs};
+pub use window_agg_exec::WindowAggExec;
+
 pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
 };
-use datafusion_physical_expr::{OrderingEquivalenceProperties, PhysicalSortRequirement};
-pub use window_agg_exec::WindowAggExec;
 
 /// Create a physical expression for window function
 pub fn create_window_expr(
@@ -360,18 +362,22 @@ pub(crate) fn window_ordering_equivalence(
     builder.build()
 }
 
-/// Constructs either `WindowAggExec` or `BoundedWindowExec` for the given input
-/// according to specifications of the `window_exprs`.
-/// `None` represents that with the given input (and its ordering), there is no way to
-/// construct a window exec. Existing ordering should be changed to be able to run window exec.
-/// `Some(window exec)` contains the optimal window exec (WindowAggExec or BoundedWindowExec) for the
-/// given input.
-pub(crate) fn get_window_for_the_input(
+/// Constructs the best-fitting windowing operator (a `WindowAggExec` or a
+/// `BoundedWindowExec`) for the given `input` according to the specifications
+/// of `window_exprs` and `physical_partition_keys`. Here, best-fitting means
+/// not requiring additional sorting and/or partitioning for the given input.
+/// - A return value of `None` represents that there is no way to construct a
+///   windowing operator that doesn't need additional sorting/partitioning for
+///   the given input. Existing ordering should be changed to run the given
+///   windowing operation.
+/// - A `Some(window exec)` value contains the optimal windowing operator (a
+///   `WindowAggExec` or a `BoundedWindowExec`) for the given input.
+pub fn get_best_fitting_window(
     window_exprs: &[Arc<dyn WindowExpr>],
     input: &Arc<dyn ExecutionPlan>,
-    // This is the partition keys used during repartitioning
-    // It is either same with window_expr partition by or empty
-    // (if partitioning is not desirable for the window executor)
+    // These are the partition keys used during repartitioning.
+    // They are either the same with `window_expr`'s PARTITION BY columns,
+    // or it is empty if partitioning is not desirable for this windowing operator.
     physical_partition_keys: Vec<Arc<dyn PhysicalExpr>>,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
     // Contains at least one window expr and all of the partition by and order by sections
@@ -436,15 +442,16 @@ pub(crate) fn get_window_for_the_input(
     }
 }
 
-/// Compares physical ordering (output ordering of input executor) with
-/// `partitionby_exprs` and `orderby_keys`
-/// to decide whether existing ordering is sufficient to run current window executor.
-/// A `None` return value indicates that we can not remove the sort in question (input ordering is not
-/// sufficient to run current window executor).
-/// A `Some((bool, PartitionSearchMode))` value indicates window executor can be run with existing input ordering
-/// (Hence we can remove \[`SortExec`] before it).
-/// `bool` represents whether we should reverse window executor to remove \[`SortExec`] before it.
-/// `PartitionSearchMode` represents, in which mode Window Executor should work with existing ordering.
+/// Compares physical ordering (output ordering of the `input` operator) with
+/// `partitionby_exprs` and `orderby_keys` to decide whether existing ordering
+/// is sufficient to run the current window operator.
+/// - A `None` return value indicates that we can not remove the sort in question
+///   (input ordering is not sufficient to run current window executor).
+/// - A `Some((bool, PartitionSearchMode))` value indicates that the window operator
+///   can run with existing input ordering, so we can remove `SortExec` before it.
+/// The `bool` field in the return value represents whether we should reverse window
+/// operator to remove `SortExec` before it. The `PartitionSearchMode` field represents
+/// the mode this window operator should work in to accomodate the existing ordering.
 fn can_skip_sort(
     partitionby_exprs: &[Arc<dyn PhysicalExpr>],
     orderby_keys: &[PhysicalSortExpr],
@@ -460,7 +467,7 @@ fn can_skip_sort(
     let orderby_exprs = convert_to_expr(orderby_keys);
     let physical_ordering_exprs = convert_to_expr(physical_ordering);
     let equal_properties = || input.equivalence_properties();
-    // indices of the order by expressions among input ordering expressions
+    // Get the indices of the ORDER BY expressions among input ordering expressions:
     let ob_indices = get_indices_of_matching_exprs(
         &orderby_exprs,
         &physical_ordering_exprs,
@@ -471,15 +478,16 @@ fn can_skip_sort(
         // there is no way to remove a sort -- immediately return:
         return Ok(None);
     }
-    // indices of the partition by expressions among input ordering expressions
+    // Get the indices of the PARTITION BY expressions among input ordering expressions:
     let pb_indices = get_indices_of_matching_exprs(
         partitionby_exprs,
         &physical_ordering_exprs,
         equal_properties,
     );
     let ordered_merged_indices = merge_and_order_indices(&pb_indices, &ob_indices);
-    // Indices of order by columns that doesn't seen in partition by
-    // Equivalently (Order by columns) ∖ (Partition by columns) where `∖` represents set difference.
+    // Get the indices of the ORDER BY columns that don't appear in the
+    // PARTITION BY clause; i.e. calculate (ORDER BY columns) ∖ (PARTITION
+    // BY columns) where `∖` represents set difference.
     let unique_ob_indices = set_difference(&ob_indices, &pb_indices);
     if !is_sorted(&unique_ob_indices) {
         // ORDER BY indices should be ascending ordered
@@ -488,13 +496,15 @@ fn can_skip_sort(
     let first_n = longest_consecutive_prefix(ordered_merged_indices);
     let furthest_ob_index = *unique_ob_indices.last().unwrap_or(&0);
     // Cannot skip sort if last order by index is not within consecutive prefix.
-    // For instance, if input is ordered by a,b,c,d
-    // for expression `PARTITION BY a, ORDER BY b, d`, `first_n` would be 2 (meaning a, b defines a prefix for input ordering)
-    // Whereas `furthest_ob_index` would be 3 (column d occurs at the 3rd index of the existing ordering.)
-    // Hence existing ordering is not sufficient to run current Executor.
-    // However, for expression `PARTITION BY a, ORDER BY b, c, d`, `first_n` would be 4 (meaning a, b, c, d defines a prefix for input ordering)
-    // Similarly, `furthest_ob_index` would be 3 (column d occurs at the 3rd index of the existing ordering.)
-    // Hence existing ordering would be sufficient to run current Executor.
+    // For instance, if input is ordered by a, b, c, d for the expression
+    // `PARTITION BY a, ORDER BY b, d`, then `first_n` would be 2 (meaning a, b defines a
+    // prefix for input ordering). However, `furthest_ob_index` would be 3 as column d
+    // occurs at the 3rd index of the existing ordering. Hence, existing ordering would
+    // not be sufficient to run the current operator.
+    // However, for expression `PARTITION BY a, ORDER BY b, c, d`, `first_n` would be 4 (meaning
+    // a, b, c, d defines a prefix for input ordering). Similarly, `furthest_ob_index` would be
+    // 3 as column d occurs at the 3rd index of the existing ordering. Therefore, the existing
+    // ordering would be sufficient to run the current operator.
     if first_n <= furthest_ob_index {
         return Ok(None);
     }
@@ -508,18 +518,19 @@ fn can_skip_sort(
     )? {
         should_reverse
     } else {
-        // If ordering directions are not aligned. We cannot calculate result without changing existing ordering.
+        // If ordering directions are not aligned, we cannot calculate the
+        // result without changing existing ordering.
         return Ok(None);
     };
 
     let ordered_pb_indices = pb_indices.iter().copied().sorted().collect::<Vec<_>>();
-    // Determine how many elements in the partition by columns defines a consecutive range from zero.
+    // Determine how many elements in the PARTITION BY columns defines a consecutive range from zero.
     let first_n = longest_consecutive_prefix(&ordered_pb_indices);
     let mode = if first_n == partitionby_exprs.len() {
-        // All of the partition by columns defines a consecutive range from zero.
+        // All of the PARTITION BY columns defines a consecutive range from zero.
         PartitionSearchMode::Sorted
     } else if first_n > 0 {
-        // All of the partition by columns defines a consecutive range from zero.
+        // All of the PARTITION BY columns defines a consecutive range from zero.
         let ordered_range = &ordered_pb_indices[0..first_n];
         let input_pb_exprs = get_at_indices(&physical_ordering_exprs, ordered_range)?;
         let partially_ordered_indices = get_indices_of_matching_exprs(
@@ -529,22 +540,26 @@ fn can_skip_sort(
         );
         PartitionSearchMode::PartiallySorted(partially_ordered_indices)
     } else {
-        // None of the partition by columns defines a consecutive range from zero.
+        // None of the PARTITION BY columns defines a consecutive range from zero.
         PartitionSearchMode::Linear
     };
 
     Ok(Some((should_reverse, mode)))
 }
 
+/// Compares all the orderings in `physical_ordering` and `required`, decides
+/// whether alignments match. A `None` return value indicates that current
+/// column is not aligned. A `Some(bool)` value indicates otherwise, and signals
+/// whether we should reverse the window expression in order to avoid sorting.
 fn check_alignments(
     schema: &SchemaRef,
     physical_ordering: &[PhysicalSortExpr],
     required: &[PhysicalSortExpr],
 ) -> Result<Option<bool>> {
-    let res = izip!(physical_ordering, required)
+    let result = izip!(physical_ordering, required)
         .map(|(lhs, rhs)| check_alignment(schema, lhs, rhs))
         .collect::<Result<Option<Vec<_>>>>()?;
-    Ok(if let Some(res) = res {
+    Ok(if let Some(res) = result {
         if !res.is_empty() {
             let first = res[0];
             let all_same = res.into_iter().all(|elem| elem == first);
@@ -592,9 +607,11 @@ mod tests {
     use crate::test::assert_is_pending;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::windows::PartitionSearchMode::{Linear, PartiallySorted, Sorted};
+
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, SchemaRef};
     use datafusion_execution::TaskContext;
+
     use futures::FutureExt;
 
     fn create_test_schema() -> Result<SchemaRef> {

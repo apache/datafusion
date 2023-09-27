@@ -51,7 +51,7 @@ use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::physical_plan::windows::{
-    BoundedWindowAggExec, PartitionSearchMode, WindowAggExec,
+    get_best_fitting_window, BoundedWindowAggExec, PartitionSearchMode, WindowAggExec,
 };
 use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
 
@@ -571,12 +571,20 @@ fn analyze_window_sort_removal(
         if let Some(exec) = window_exec.as_any().downcast_ref::<BoundedWindowAggExec>() {
             (
                 exec.window_expr(),
-                exec.get_window_for_the_input(&window_child)?,
+                get_best_fitting_window(
+                    exec.window_expr(),
+                    &window_child,
+                    exec.partition_keys.clone(),
+                )?,
             )
         } else if let Some(exec) = window_exec.as_any().downcast_ref::<WindowAggExec>() {
             (
                 exec.window_expr(),
-                exec.get_window_for_the_input(&window_child)?,
+                get_best_fitting_window(
+                    exec.window_expr(),
+                    &window_child,
+                    exec.partition_keys.clone(),
+                )?,
             )
         } else {
             return plan_err!(
@@ -739,7 +747,10 @@ fn get_sort_exprs(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
+    use crate::physical_optimizer::enforce_distribution::EnforceDistribution;
     use crate::physical_optimizer::test_utils::{
         aggregate_exec, bounded_window_exec, coalesce_batches_exec,
         coalesce_partitions_exec, filter_exec, global_limit_exec, hash_join_exec,
@@ -747,6 +758,7 @@ mod tests {
         repartition_exec, sort_exec, sort_expr, sort_expr_options, sort_merge_join_exec,
         sort_preserving_merge_exec, union_exec,
     };
+    use crate::physical_optimizer::utils::get_plan_string;
     use crate::physical_plan::repartition::RepartitionExec;
     use crate::physical_plan::{displayable, Partitioning};
     use crate::prelude::{SessionConfig, SessionContext};
@@ -758,10 +770,6 @@ mod tests {
     use datafusion_expr::JoinType;
     use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_expr::expressions::{col, NotExpr};
-
-    use crate::physical_optimizer::enforce_distribution::EnforceDistribution;
-    use crate::physical_optimizer::utils::get_plan_string;
-    use std::sync::Arc;
 
     fn create_test_schema() -> Result<SchemaRef> {
         let nullable_column = Field::new("nullable_col", DataType::Int32, true);

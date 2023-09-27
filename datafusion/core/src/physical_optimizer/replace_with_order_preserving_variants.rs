@@ -19,6 +19,8 @@
 //! order-preserving variants when it is helpful; either in terms of
 //! performance or to accommodate unbounded streams by fixing the pipeline.
 
+use std::sync::Arc;
+
 use crate::error::Result;
 use crate::physical_optimizer::utils::{is_coalesce_partitions, is_sort, ExecTree};
 use crate::physical_plan::repartition::RepartitionExec;
@@ -30,9 +32,7 @@ use super::utils::is_repartition;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_physical_expr::utils::ordering_satisfy;
-
 use datafusion_physical_plan::unbounded_output;
-use std::sync::Arc;
 
 /// For a given `plan`, this object carries the information one needs from its
 /// descendants to decide whether it is beneficial to replace order-losing (but
