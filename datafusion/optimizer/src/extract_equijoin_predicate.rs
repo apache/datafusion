@@ -29,7 +29,7 @@ use std::sync::Arc;
 type EquijoinPredicate = (Expr, Expr);
 
 /// Optimizer that splits conjunctive join predicates into equijoin
-/// predicates and filter (other) predicates.
+/// predicates and (other) filter predicates.
 ///
 /// Join algorithms are often highly optimized for equality predicates such as `x = y`,
 /// often called `equijoin` predicates, so it is important to locate such predicates
