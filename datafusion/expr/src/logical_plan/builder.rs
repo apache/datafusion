@@ -172,22 +172,51 @@ impl LogicalPlanBuilder {
                 })
                 .collect::<Result<Vec<Option<DataType>>>>()?;
         }
-        let fields = field_types
+
+        let field_types_with_default = field_types
+            .iter()
+            .map(|x| x.clone().unwrap_or_else(|| DataType::Utf8))
+            .collect::<Vec<_>>();
+
+        let mut nullable_columns = HashMap::new();
+
+        let preliminary_fields = field_types_with_default
             .iter()
             .enumerate()
             .map(|(j, data_type)| {
                 // naming is following convention https://www.postgresql.org/docs/current/queries-values.html
                 let name = &format!("column{}", j + 1);
-                DFField::new_unqualified(
-                    name,
-                    data_type.clone().unwrap_or(DataType::Utf8),
-                    true,
-                )
+                DFField::new_unqualified(name, data_type.clone(), true)
             })
             .collect::<Vec<_>>();
+
+        let preliminary_schema = DFSchemaRef::new(DFSchema::new_with_metadata(
+            preliminary_fields,
+            HashMap::new(),
+        )?);
+
+        dbg!(&nulls);
         for (i, j) in nulls {
-            values[i][j] = Expr::Literal(ScalarValue::try_from(fields[j].data_type())?);
+            values[i][j] = Expr::Literal(ScalarValue::try_from(
+                field_types_with_default[j].clone(),
+            )?);
+            let nullable = values[i][j].nullable(&preliminary_schema).expect("ughhh");
+            let existing = *nullable_columns.get(&j).unwrap_or(&false);
+            nullable_columns.insert(j, nullable || existing);
         }
+
+        let fields = field_types_with_default
+            .iter()
+            .enumerate()
+            .map(|(j, data_type)| {
+                // naming is following convention https://www.postgresql.org/docs/current/queries-values.html
+                let name = &format!("column{}", j + 1);
+                let nullable = *nullable_columns.get(&j).unwrap_or(&false);
+                println!("nullable column: {}", nullable);
+                DFField::new_unqualified(name, data_type.clone(), nullable)
+            })
+            .collect::<Vec<_>>();
+
         let schema =
             DFSchemaRef::new(DFSchema::new_with_metadata(fields, HashMap::new())?);
         Ok(Self::from(LogicalPlan::Values(Values { schema, values })))
@@ -364,6 +393,7 @@ impl LogicalPlanBuilder {
                 .window(window_exprs)?
                 .build()?;
         }
+        println!("window plan schema: {:?}", plan.schema());
         Ok(plan)
     }
     /// Apply a projection without alias.

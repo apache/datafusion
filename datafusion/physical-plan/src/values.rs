@@ -26,6 +26,7 @@ use crate::{
 use arrow::array::new_null_array;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use arrow_schema::{Field, Schema};
 use datafusion_common::{internal_err, plan_err, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::TaskContext;
@@ -54,7 +55,16 @@ impl ValuesExec {
         let n_col = schema.fields().len();
         // we have this single row, null, typed batch as a placeholder to satisfy evaluation argument
         let batch = RecordBatch::try_new(
-            schema.clone(),
+            // the schema we're using might have non-nullable fields, so we need to make them nullable
+            // for this dummy batch
+            Schema::new(
+                schema
+                    .fields()
+                    .iter()
+                    .map(|f| Field::new(f.name(), f.data_type().clone(), true))
+                    .collect::<Vec<_>>(),
+            )
+            .into(),
             schema
                 .fields()
                 .iter()
