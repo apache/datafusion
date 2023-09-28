@@ -944,20 +944,22 @@ impl ListingTable {
             )
         }))
         .await?;
-
         let file_list = stream::iter(file_list).flatten();
-
         // collect the statistics if required by the config
         let files = file_list
             .map(|part_file| async {
                 let part_file = part_file?;
-                let statistics_result = if self.options.collect_stat {
+                let mut statistics_result =
+                    Statistics::new_with_unbounded_columns(&self.file_schema);
+                if self.options.collect_stat {
                     let statistics_cache = self.collected_statistics.clone();
                     match statistics_cache.get_with_extra(
                         &part_file.object_meta.location,
                         &part_file.object_meta,
                     ) {
-                        Some(statistics) => statistics.as_ref().clone(),
+                        Some(statistics) => {
+                            statistics_result = statistics.as_ref().clone()
+                        }
                         None => {
                             let statistics = self
                                 .options
@@ -974,12 +976,10 @@ impl ListingTable {
                                 statistics.clone().into(),
                                 &part_file.object_meta,
                             );
-                            statistics
+                            statistics_result = statistics;
                         }
                     }
-                } else {
-                    Statistics::new_with_unbounded_columns(&self.file_schema)
-                };
+                }
                 Ok((part_file, statistics_result))
                     as Result<(PartitionedFile, Statistics)>
             })
@@ -1015,6 +1015,7 @@ mod tests {
     use arrow::datatypes::{DataType, Schema};
     use arrow::record_batch::RecordBatch;
     use datafusion_common::assert_contains;
+    use datafusion_common::stats::Sharpness;
     use datafusion_common::GetExt;
     use datafusion_expr::LogicalPlanBuilder;
     use rstest::*;
@@ -1065,8 +1066,8 @@ mod tests {
         assert_eq!(exec.output_partitioning().partition_count(), 1);
 
         // test metadata
-        assert_eq!(exec.statistics()?.num_rows, Some(8));
-        assert_eq!(exec.statistics()?.total_byte_size, Some(671));
+        assert_eq!(exec.statistics()?.num_rows, Sharpness::Exact(8));
+        assert_eq!(exec.statistics()?.total_byte_size, Sharpness::Exact(671));
 
         Ok(())
     }
@@ -1088,8 +1089,8 @@ mod tests {
         let table = ListingTable::try_new(config)?;
 
         let exec = table.scan(&state, None, &[], None).await?;
-        assert_eq!(exec.statistics()?.num_rows, Some(8));
-        assert_eq!(exec.statistics()?.total_byte_size, Some(671));
+        assert_eq!(exec.statistics()?.num_rows, Sharpness::Exact(8));
+        assert_eq!(exec.statistics()?.total_byte_size, Sharpness::Exact(671));
 
         Ok(())
     }
@@ -1112,8 +1113,8 @@ mod tests {
         let table = ListingTable::try_new(config)?;
 
         let exec = table.scan(&state, None, &[], None).await?;
-        assert_eq!(exec.statistics()?.num_rows, None);
-        assert_eq!(exec.statistics()?.total_byte_size, None);
+        assert_eq!(exec.statistics()?.num_rows, Sharpness::Absent);
+        assert_eq!(exec.statistics()?.total_byte_size, Sharpness::Absent);
 
         Ok(())
     }

@@ -1254,9 +1254,12 @@ fn ensure_distribution(
     // Don't need to apply when the returned row count is not greater than 1:
     let stats = dist_context.plan.statistics()?;
     let mut repartition_beneficial_stat = true;
-    if stats.is_exact {
-        repartition_beneficial_stat =
-            stats.num_rows.map(|num_rows| num_rows > 1).unwrap_or(true);
+    if stats.all_exact() {
+        repartition_beneficial_stat = stats
+            .num_rows
+            .get_value()
+            .map(|num_rows| num_rows > 1)
+            .unwrap_or(true);
     }
 
     // Remove unnecessary repartition from the physical plan if any

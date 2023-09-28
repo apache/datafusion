@@ -114,7 +114,7 @@ impl PhysicalOptimizerRule for AggregateStatistics {
 /// the `ExecutionPlan.children()` method that returns an owned reference.
 fn take_optimizable(node: &dyn ExecutionPlan) -> Result<Option<Arc<dyn ExecutionPlan>>> {
     if let Some(final_agg_exec) = node.as_any().downcast_ref::<AggregateExec>() {
-        if final_agg_exec.mode() == &AggregateMode::Final
+        if !final_agg_exec.mode().is_first_stage()
             && final_agg_exec.group_expr().is_empty()
         {
             let mut child = Arc::clone(final_agg_exec.input());
@@ -122,11 +122,12 @@ fn take_optimizable(node: &dyn ExecutionPlan) -> Result<Option<Arc<dyn Execution
                 if let Some(partial_agg_exec) =
                     child.as_any().downcast_ref::<AggregateExec>()
                 {
-                    if partial_agg_exec.mode() == &AggregateMode::Partial
+                    if partial_agg_exec.mode().is_first_stage()
                         && partial_agg_exec.group_expr().is_empty()
                         && partial_agg_exec.filter_expr().iter().all(|e| e.is_none())
                     {
                         let stats = partial_agg_exec.input().statistics()?;
+                        println!("{:?}", stats);
                         if stats.all_exact() {
                             return Ok(Some(child));
                         }
@@ -262,6 +263,7 @@ mod tests {
     use datafusion_common::cast::as_int64_array;
     use datafusion_physical_expr::expressions::cast;
     use datafusion_physical_expr::PhysicalExpr;
+    use datafusion_physical_plan::displayable;
 
     use crate::error::Result;
     use crate::logical_expr::Operator;
@@ -302,10 +304,17 @@ mod tests {
     ) -> Result<()> {
         let session_ctx = SessionContext::new();
         let state = session_ctx.state();
-        let plan = Arc::new(plan) as _;
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(plan);
+        fn print_plan(plan: &Arc<dyn ExecutionPlan>) -> Result<()> {
+            let formatted = displayable(plan.as_ref()).indent(true).to_string();
+            let actual: Vec<&str> = formatted.trim().lines().collect();
+            println!("{:#?}", actual);
+            Ok(())
+        }
+        print_plan(&plan);
         let optimized = AggregateStatistics::new()
             .optimize(Arc::clone(&plan), state.config_options())?;
-
+        print_plan(&optimized);
         // A ProjectionExec is a sign that the count optimization was applied
         assert!(optimized.as_any().is::<ProjectionExec>());
 

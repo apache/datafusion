@@ -63,17 +63,22 @@ use datafusion::physical_plan::expressions::{
 };
 use datafusion::physical_plan::{AggregateExpr, PhysicalExpr};
 
-use crate::protobuf::{self, physical_window_expr_node};
 use crate::protobuf::{
     physical_aggregate_expr_node, PhysicalSortExprNode, PhysicalSortExprNodeCollection,
     ScalarValue,
+};
+use crate::{
+    logical_plan::from_proto::Error,
+    protobuf::{self, physical_window_expr_node, scalar_value::Value},
 };
 use datafusion::logical_expr::BuiltinScalarFunction;
 use datafusion::physical_expr::expressions::{GetFieldAccessExpr, GetIndexedFieldExpr};
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::joins::utils::JoinSide;
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
-use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
+use datafusion_common::{
+    internal_err, not_impl_err, stats::Sharpness, DataFusionError, Result,
+};
 
 impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
     type Error = DataFusionError;
@@ -644,26 +649,80 @@ impl TryFrom<&[PartitionedFile]> for protobuf::FileGroup {
     }
 }
 
-impl From<&ColumnStatistics> for protobuf::ColumnStats {
-    fn from(cs: &ColumnStatistics) -> protobuf::ColumnStats {
-        protobuf::ColumnStats {
-            min_value: cs.min_value.as_ref().map(|m| m.try_into().unwrap()),
-            max_value: cs.max_value.as_ref().map(|m| m.try_into().unwrap()),
-            null_count: cs.null_count.map(|n| vec![n as u32]).unwrap_or(vec![]),
-            distinct_count: cs.distinct_count.map(|n| vec![n as u32]).unwrap_or(vec![]),
+impl From<&Sharpness<usize>> for protobuf::Sharpness {
+    fn from(s: &Sharpness<usize>) -> protobuf::Sharpness {
+        match s {
+            Sharpness::Exact(val) => protobuf::Sharpness {
+                sharpness_info: protobuf::SharpnessInfo::Exact.into(),
+                val: Some(ScalarValue {
+                    value: Some(Value::Uint64Value(val.clone() as u64)),
+                }),
+            },
+            Sharpness::Inexact(val) => protobuf::Sharpness {
+                sharpness_info: protobuf::SharpnessInfo::Inexact.into(),
+                val: Some(ScalarValue {
+                    value: Some(Value::Uint64Value(val.clone() as u64)),
+                }),
+            },
+            Sharpness::Absent => protobuf::Sharpness {
+                sharpness_info: protobuf::SharpnessInfo::Absent.into(),
+                val: Some(ScalarValue { value: None }),
+            },
+        }
+    }
+}
+
+impl From<&Sharpness<datafusion_common::ScalarValue>> for protobuf::Sharpness {
+    fn from(s: &Sharpness<datafusion_common::ScalarValue>) -> protobuf::Sharpness {
+        match s {
+            Sharpness::Exact(val) | Sharpness::Inexact(val) => {
+                let res: Result<ScalarValue> = val.try_into().map_err(|_| {
+                    DataFusionError::Internal("Undefined sharpness".to_owned())
+                });
+                if res.is_err() {
+                    return protobuf::Sharpness {
+                        sharpness_info: protobuf::SharpnessInfo::Absent.into(),
+                        val: Some(ScalarValue { value: None }),
+                    };
+                };
+                if s.is_exact().unwrap() {
+                    protobuf::Sharpness {
+                        sharpness_info: protobuf::SharpnessInfo::Exact.into(),
+                        val: Some(val.try_into().unwrap()),
+                    }
+                } else {
+                    protobuf::Sharpness {
+                        sharpness_info: protobuf::SharpnessInfo::Inexact.into(),
+                        val: Some(val.try_into().unwrap()),
+                    }
+                }
+            }
+            Sharpness::Absent => protobuf::Sharpness {
+                sharpness_info: protobuf::SharpnessInfo::Absent.into(),
+                val: Some(ScalarValue { value: None }),
+            },
         }
     }
 }
 
 impl From<&Statistics> for protobuf::Statistics {
     fn from(s: &Statistics) -> protobuf::Statistics {
-        let none_value = -1_i64;
         let column_stats = s.column_statistics.iter().map(|s| s.into()).collect();
         protobuf::Statistics {
-            num_rows: s.num_rows.map(|n| n as i64).unwrap_or(none_value),
-            total_byte_size: s.total_byte_size.map(|n| n as i64).unwrap_or(none_value),
+            num_rows: Some(protobuf::Sharpness::from(&s.num_rows)),
+            total_byte_size: Some(protobuf::Sharpness::from(&s.total_byte_size)),
             column_stats,
-            is_exact: s.is_exact,
+        }
+    }
+}
+
+impl From<&ColumnStatistics> for protobuf::ColumnStats {
+    fn from(s: &ColumnStatistics) -> protobuf::ColumnStats {
+        protobuf::ColumnStats {
+            min_value: Some(protobuf::Sharpness::from(&s.min_value)),
+            max_value: Some(protobuf::Sharpness::from(&s.max_value)),
+            null_count: Some(protobuf::Sharpness::from(&s.null_count)),
+            distinct_count: Some(protobuf::Sharpness::from(&s.distinct_count)),
         }
     }
 }

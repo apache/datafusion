@@ -144,7 +144,7 @@ impl FileScanConfig {
         }
 
         let table_stats = Statistics {
-            num_rows: self.statistics.num_rows,
+            num_rows: self.statistics.num_rows.clone(),
             // TODO correct byte size?
             total_byte_size: Sharpness::Absent,
             column_statistics: table_cols_stats,

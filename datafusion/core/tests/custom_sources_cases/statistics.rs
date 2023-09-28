@@ -34,7 +34,7 @@ use datafusion::{
 
 use async_trait::async_trait;
 use datafusion::execution::context::{SessionState, TaskContext};
-use datafusion_common::project_schema;
+use datafusion_common::{project_schema, stats::Sharpness};
 
 /// This is a testing structure for statistics
 /// It will act both as a table provider and execution plan
@@ -97,11 +97,10 @@ impl TableProvider for StatisticsValidation {
             .collect();
         Ok(Arc::new(Self::new(
             Statistics {
-                is_exact: current_stat.is_exact,
                 num_rows: current_stat.num_rows,
                 column_statistics: proj_col_stats,
                 // TODO stats: knowing the type of the new columns we can guess the output size
-                total_byte_size: None,
+                total_byte_size: Sharpness::Absent,
             },
             projected_schema,
         )))
@@ -179,21 +178,20 @@ fn init_ctx(stats: Statistics, schema: Schema) -> Result<SessionContext> {
 fn fully_defined() -> (Statistics, Schema) {
     (
         Statistics {
-            num_rows: Some(13),
-            is_exact: true,
-            total_byte_size: None, // ignore byte size for now
+            num_rows: Sharpness::Exact(13),
+            total_byte_size: Sharpness::Absent, // ignore byte size for now
             column_statistics: vec![
                 ColumnStatistics {
-                    distinct_count: Some(2),
-                    max_value: Some(ScalarValue::Int32(Some(1023))),
-                    min_value: Some(ScalarValue::Int32(Some(-24))),
-                    null_count: Some(0),
+                    distinct_count: Sharpness::Exact(2),
+                    max_value: Sharpness::Exact(ScalarValue::Int32(Some(1023))),
+                    min_value: Sharpness::Exact(ScalarValue::Int32(Some(-24))),
+                    null_count: Sharpness::Exact(0),
                 },
                 ColumnStatistics {
-                    distinct_count: Some(13),
-                    max_value: Some(ScalarValue::Int64(Some(5486))),
-                    min_value: Some(ScalarValue::Int64(Some(-6783))),
-                    null_count: Some(5),
+                    distinct_count: Sharpness::Exact(13),
+                    max_value: Sharpness::Exact(ScalarValue::Int64(Some(5486))),
+                    min_value: Sharpness::Exact(ScalarValue::Int64(Some(-6783))),
+                    null_count: Sharpness::Exact(5),
                 },
             ],
         },
@@ -231,8 +229,7 @@ async fn sql_filter() -> Result<()> {
     let physical_plan = df.create_physical_plan().await.unwrap();
 
     let stats = physical_plan.statistics()?;
-    assert!(!stats.is_exact);
-    assert_eq!(stats.num_rows, Some(1));
+    assert_eq!(stats.num_rows, Sharpness::Exact(1));
 
     Ok(())
 }
@@ -249,10 +246,9 @@ async fn sql_limit() -> Result<()> {
     let col_stats = Statistics::unbounded_column_statistics(&schema);
     assert_eq!(
         Statistics {
-            num_rows: Some(5),
-            is_exact: true,
+            num_rows: Sharpness::Exact(5),
             column_statistics: col_stats,
-            total_byte_size: None
+            total_byte_size: Sharpness::Absent
         },
         physical_plan.statistics()?
     );

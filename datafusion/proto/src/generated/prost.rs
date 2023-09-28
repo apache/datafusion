@@ -2174,60 +2174,11 @@ pub struct PartitionStats {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Sharpness {
-    #[prost(oneof = "sharpness::SharpnessVariant", tags = "1, 2, 3")]
-    pub sharpness_variant: ::core::option::Option<sharpness::SharpnessVariant>,
+    #[prost(enumeration = "SharpnessInfo", tag = "1")]
+    pub sharpness_info: i32,
+    #[prost(message, optional, tag = "2")]
+    pub val: ::core::option::Option<ScalarValue>,
 }
-/// Nested message and enum types in `Sharpness`.
-pub mod sharpness {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum SharpnessVariant {
-        #[prost(message, tag = "1")]
-        Exact(super::ExactInfo),
-        #[prost(message, tag = "2")]
-        Inexact(super::InexactInfo),
-        #[prost(message, tag = "3")]
-        Absent(super::AbsentInfo),
-    }
-}
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ExactInfo {
-    #[prost(oneof = "exact_info::ExactVariant", tags = "1, 2")]
-    pub exact_variant: ::core::option::Option<exact_info::ExactVariant>,
-}
-/// Nested message and enum types in `ExactInfo`.
-pub mod exact_info {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum ExactVariant {
-        #[prost(int64, tag = "1")]
-        Value(i64),
-        #[prost(message, tag = "2")]
-        ScalarValue(super::ScalarValue),
-    }
-}
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct InexactInfo {
-    #[prost(oneof = "inexact_info::InexactVariant", tags = "1, 2")]
-    pub inexact_variant: ::core::option::Option<inexact_info::InexactVariant>,
-}
-/// Nested message and enum types in `InexactInfo`.
-pub mod inexact_info {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum InexactVariant {
-        #[prost(int64, tag = "1")]
-        Value(i64),
-        #[prost(message, tag = "2")]
-        ScalarValue(super::ScalarValue),
-    }
-}
-/// No fields needed for Absent
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct AbsentInfo {}
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Statistics {
@@ -3176,6 +3127,35 @@ impl JoinSide {
         match value {
             "LEFT_SIDE" => Some(Self::LeftSide),
             "RIGHT_SIDE" => Some(Self::RightSide),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum SharpnessInfo {
+    Exact = 0,
+    Inexact = 1,
+    Absent = 2,
+}
+impl SharpnessInfo {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            SharpnessInfo::Exact => "EXACT",
+            SharpnessInfo::Inexact => "INEXACT",
+            SharpnessInfo::Absent => "ABSENT",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "EXACT" => Some(Self::Exact),
+            "INEXACT" => Some(Self::Inexact),
+            "ABSENT" => Some(Self::Absent),
             _ => None,
         }
     }

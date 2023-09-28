@@ -1527,29 +1527,14 @@ message PartitionStats {
 }
 
 message Sharpness{
-  oneof sharpness_variant {
-    ExactInfo exact = 1;
-    InexactInfo inexact = 2;
-    AbsentInfo absent = 3;
-  }
+  SharpnessInfo sharpness_info = 1;
+  ScalarValue val = 2;
 }
 
-message ExactInfo {
-  oneof exact_variant{
-    int64 value = 1;
-    ScalarValue scalar_value = 2;
-  }
-}
-
-message InexactInfo {
-  oneof inexact_variant{
-    int64 value = 1;
-    ScalarValue scalar_value = 2;
-  }
-}
-
-message AbsentInfo {
-  // No fields needed for Absent
+enum SharpnessInfo {
+  EXACT = 0;
+  INEXACT = 1;
+  ABSENT = 2;
 }
 
 message Statistics {

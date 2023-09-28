@@ -1542,6 +1542,7 @@ mod roundtrip_tests {
         prelude::SessionContext,
         scalar::ScalarValue,
     };
+    use datafusion_common::stats::Sharpness;
     use datafusion_common::Result;
     use datafusion_expr::{
         Accumulator, AccumulatorFactoryFunction, AggregateUDF, ReturnTypeFunction,
@@ -1961,10 +1962,9 @@ mod roundtrip_tests {
                 1024,
             )]],
             statistics: Statistics {
-                num_rows: Some(100),
-                total_byte_size: Some(1024),
+                num_rows: Sharpness::Exact(100),
+                total_byte_size: Sharpness::Exact(1024),
                 column_statistics: Statistics::unbounded_column_statistics(&schema),
-                is_exact: false,
             },
             projection: None,
             limit: None,

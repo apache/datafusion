@@ -18,6 +18,7 @@
 //! Test queries on partitioned datasets
 
 use arrow::datatypes::DataType;
+use datafusion_common::stats::Sharpness;
 use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -464,7 +465,7 @@ async fn parquet_statistics() -> Result<()> {
     let stat_cols = physical_plan.statistics()?.column_statistics;
     assert_eq!(stat_cols.len(), 4);
     // stats for the first col are read from the parquet file
-    assert_eq!(stat_cols[0].null_count, Some(3));
+    assert_eq!(stat_cols[0].null_count, Sharpness::Exact(3));
     // TODO assert partition column (1,2,3) stats once implemented (#1186)
     assert_eq!(
         stat_cols[1],
@@ -488,7 +489,7 @@ async fn parquet_statistics() -> Result<()> {
     let stat_cols = physical_plan.statistics()?.column_statistics;
     assert_eq!(stat_cols.len(), 2);
     // stats for the first col are read from the parquet file
-    assert_eq!(stat_cols[0].null_count, Some(1));
+    assert_eq!(stat_cols[0].null_count, Sharpness::Exact(1));
     // TODO assert partition column stats once implemented (#1186)
     assert_eq!(
         stat_cols[1],

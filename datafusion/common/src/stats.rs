@@ -208,6 +208,47 @@ impl Statistics {
                     && col_stat.null_count.is_exact().unwrap_or(false)
             })
     }
+
+    pub fn make_inexact(self) -> Self {
+        Statistics {
+            num_rows: if let Sharpness::Exact(val) = &self.num_rows {
+                Sharpness::Inexact(val.clone())
+            } else {
+                self.num_rows
+            },
+            total_byte_size: if let Sharpness::Exact(val) = &self.total_byte_size {
+                Sharpness::Inexact(val.clone())
+            } else {
+                self.total_byte_size
+            },
+            column_statistics: self
+                .column_statistics
+                .iter()
+                .map(|cs| ColumnStatistics {
+                    null_count: if let Sharpness::Exact(val) = &cs.null_count {
+                        Sharpness::Inexact(val.clone())
+                    } else {
+                        cs.null_count.clone()
+                    },
+                    max_value: if let Sharpness::Exact(val) = &cs.max_value {
+                        Sharpness::Inexact(val.clone())
+                    } else {
+                        cs.max_value.clone()
+                    },
+                    min_value: if let Sharpness::Exact(val) = &cs.min_value {
+                        Sharpness::Inexact(val.clone())
+                    } else {
+                        cs.min_value.clone()
+                    },
+                    distinct_count: if let Sharpness::Exact(val) = &cs.distinct_count {
+                        Sharpness::Inexact(val.clone())
+                    } else {
+                        cs.distinct_count.clone()
+                    },
+                })
+                .collect::<Vec<_>>(),
+        }
+    }
 }
 
 impl Display for Statistics {

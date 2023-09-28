@@ -925,9 +925,9 @@ mod tests_statistical {
             "  HashJoinExec: mode=CollectLeft, join_type=Right, on=[(small_col@1, medium_col@0)]",
             "    ProjectionExec: expr=[big_col@1 as big_col, small_col@0 as small_col]",
             "      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(small_col@0, big_col@0)]",
-            "        StatisticsExec: col_count=1, row_count=Some(1000)",
-            "        StatisticsExec: col_count=1, row_count=Some(100000)",
-            "    StatisticsExec: col_count=1, row_count=Some(10000)",
+            "        StatisticsExec: col_count=1, row_count=Inexact Info:(1000)",
+            "        StatisticsExec: col_count=1, row_count=Inexact Info:(100000)",
+            "    StatisticsExec: col_count=1, row_count=Inexact Info:(0)",
             "",
         ];
         assert_optimized!(expected, join);

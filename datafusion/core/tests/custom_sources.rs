@@ -38,6 +38,7 @@ use datafusion::{error::Result, physical_plan::DisplayFormatType};
 
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::project_schema;
+use datafusion_common::stats::Sharpness;
 use futures::stream::Stream;
 use std::any::Any;
 use std::pin::Pin;
@@ -156,20 +157,19 @@ impl ExecutionPlan for CustomExecutionPlan {
     fn statistics(&self) -> Result<Statistics> {
         let batch = TEST_CUSTOM_RECORD_BATCH!().unwrap();
         Ok(Statistics {
-            is_exact: true,
-            num_rows: Some(batch.num_rows()),
-            total_byte_size: None,
+            num_rows: Sharpness::Exact(batch.num_rows()),
+            total_byte_size: Sharpness::Absent,
             column_statistics: self
                 .projection
                 .clone()
                 .unwrap_or_else(|| (0..batch.columns().len()).collect())
                 .iter()
                 .map(|i| ColumnStatistics {
-                    null_count: Some(batch.column(*i).null_count()),
-                    min_value: Some(ScalarValue::Int32(aggregate::min(
+                    null_count: Sharpness::Exact(batch.column(*i).null_count()),
+                    min_value: Sharpness::Exact(ScalarValue::Int32(aggregate::min(
                         as_primitive_array::<Int32Type>(batch.column(*i)).unwrap(),
                     ))),
-                    max_value: Some(ScalarValue::Int32(aggregate::max(
+                    max_value: Sharpness::Exact(ScalarValue::Int32(aggregate::max(
                         as_primitive_array::<Int32Type>(batch.column(*i)).unwrap(),
                     ))),
                     ..Default::default()

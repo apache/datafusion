@@ -378,6 +378,7 @@ impl DataSink for JsonSink {
 mod tests {
     use super::super::test_util::scan_format;
     use datafusion_common::cast::as_int64_array;
+    use datafusion_common::stats::Sharpness;
     use futures::StreamExt;
     use object_store::local::LocalFileSystem;
 
@@ -408,8 +409,8 @@ mod tests {
         assert_eq!(tt_batches, 6 /* 12/2 */);
 
         // test metadata
-        assert_eq!(exec.statistics()?.num_rows, None);
-        assert_eq!(exec.statistics()?.total_byte_size, None);
+        assert_eq!(exec.statistics()?.num_rows, Sharpness::Absent);
+        assert_eq!(exec.statistics()?.total_byte_size, Sharpness::Absent);
 
         Ok(())
     }

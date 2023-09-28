@@ -726,7 +726,7 @@ mod tests {
         };
 
         // Prevent test flakiness due to undefined / changing implementation details
-        expected.total_byte_size = actual.total_byte_size;
+        expected.total_byte_size = actual.total_byte_size.clone();
 
         assert_eq!(actual, expected);
         Ok(())
