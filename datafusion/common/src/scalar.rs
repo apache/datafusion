@@ -939,7 +939,7 @@ impl ScalarValue {
                 Arc::new(Field::new("item", field.data_type().clone(), true)),
                 *length,
             ),
-            ScalarValue::List(_, _) => todo!("List data type is not supported yet"),
+            ScalarValue::List(_, _) => unreachable!("Deprecated"),
             ScalarValue::ListArr(arr) => arr.data_type().to_owned(),
             ScalarValue::Date32(_) => DataType::Date32,
             ScalarValue::Date64(_) => DataType::Date64,
@@ -2008,12 +2008,10 @@ impl ScalarValue {
             ScalarValue::Fixedsizelist(..) => {
                 unimplemented!("FixedSizeList is not supported yet")
             }
-            ScalarValue::List(_, _) => todo!("REMOVE"),
+            ScalarValue::List(_, _) => unreachable!("Deprecated"),
             ScalarValue::ListArr(arr) => {
-                let arr = arr.as_ref();
-                let arrays = std::iter::repeat(arr).take(size).collect::<Vec<_>>();
-                let arr = arrow::compute::concat(arrays.as_slice()).unwrap();
-                arr
+                let arrays = std::iter::repeat(arr.as_ref()).take(size).collect::<Vec<_>>();
+                arrow::compute::concat(arrays.as_slice()).unwrap()
             }
             ScalarValue::Date32(e) => {
                 build_array_from_option!(Date32, Date32Array, e, size)

@@ -227,7 +227,6 @@ mod tests {
             arrow::compute::concat(&[&a1, &a2])?,
             None,
         );
-        println!("l1 {:?}", l1);
 
         let a1 = ListArray::from_iter_primitive::<Int32Type, _, _>(
             vec![
@@ -258,8 +257,6 @@ mod tests {
             None,
         );
 
-
-        
         let list = ListArray::new(
             Arc::new(Field::new("item", l1.data_type().to_owned(), true)),
             OffsetBuffer::from_lengths([l1.len() + l2.len() + l3.len()]),
@@ -272,7 +269,6 @@ mod tests {
         let l3 = ScalarValue::ListArr(Arc::new(l3));
 
         let array = ScalarValue::iter_to_array(vec![l1, l2, l3]).unwrap();
-        println!("array {:?}", array);
 
         generic_test_op!(
             array,
