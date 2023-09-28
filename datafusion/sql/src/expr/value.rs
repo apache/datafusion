@@ -17,6 +17,7 @@
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow::compute::kernels::cast_utils::parse_interval_month_day_nano;
+use arrow::datatypes::DECIMAL128_MAX_PRECISION;
 use arrow_schema::DataType;
 use datafusion_common::{
     not_impl_err, plan_err, DFSchema, DataFusionError, Result, ScalarValue,
@@ -26,6 +27,7 @@ use datafusion_expr::{lit, Expr, Operator};
 use log::debug;
 use sqlparser::ast::{BinaryOperator, Expr as SQLExpr, Interval, Value};
 use sqlparser::parser::ParserError::ParserError;
+use std::borrow::Cow;
 use std::collections::HashSet;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -35,7 +37,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         param_data_types: &[DataType],
     ) -> Result<Expr> {
         match value {
-            Value::Number(n, _) => self.parse_sql_number(&n),
+            Value::Number(n, _) => self.parse_sql_number(&n, false),
             Value::SingleQuotedString(s) | Value::DoubleQuotedString(s) => Ok(lit(s)),
             Value::Null => Ok(Expr::Literal(ScalarValue::Null)),
             Value::Boolean(n) => Ok(lit(n)),
@@ -54,39 +56,36 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     /// Parse number in sql string, convert to Expr::Literal
-    fn parse_sql_number(&self, n: &str) -> Result<Expr> {
-        if let Ok(n) = n.parse::<i64>() {
-            Ok(lit(n))
-        } else if let Ok(n) = n.parse::<u64>() {
-            Ok(lit(n))
-        } else if self.options.parse_float_as_decimal {
-            // remove leading zeroes
-            let str = n.trim_start_matches('0');
-            if let Some(i) = str.find('.') {
-                let p = str.len() - 1;
-                let s = str.len() - i - 1;
-                let str = str.replace('.', "");
-                let n = str.parse::<i128>().map_err(|_| {
-                    DataFusionError::from(ParserError(format!(
-                        "Cannot parse {str} as i128 when building decimal"
-                    )))
-                })?;
-                Ok(Expr::Literal(ScalarValue::Decimal128(
-                    Some(n),
-                    p as u8,
-                    s as i8,
-                )))
-            } else {
-                let number = n.parse::<i128>().map_err(|_| {
-                    DataFusionError::from(ParserError(format!(
-                        "Cannot parse {n} as i128 when building decimal"
-                    )))
-                })?;
-                Ok(Expr::Literal(ScalarValue::Decimal128(Some(number), 38, 0)))
-            }
+    pub(super) fn parse_sql_number(
+        &self,
+        unsigned_number: &str,
+        negative: bool,
+    ) -> Result<Expr> {
+        let signed_number: Cow<str> = if negative {
+            Cow::Owned(format!("-{unsigned_number}"))
         } else {
-            n.parse::<f64>().map(lit).map_err(|_| {
-                DataFusionError::from(ParserError(format!("Cannot parse {n} as f64")))
+            Cow::Borrowed(unsigned_number)
+        };
+
+        // Try to parse as i64 first, then u64 if negative is false, then decimal or f64
+
+        if let Ok(n) = signed_number.parse::<i64>() {
+            return Ok(lit(n));
+        }
+
+        if !negative {
+            if let Ok(n) = unsigned_number.parse::<u64>() {
+                return Ok(lit(n));
+            }
+        }
+
+        if self.options.parse_float_as_decimal {
+            parse_decimal_128(unsigned_number, negative)
+        } else {
+            signed_number.parse::<f64>().map(lit).map_err(|_| {
+                DataFusionError::from(ParserError(format!(
+                    "Cannot parse {signed_number} as f64"
+                )))
             })
         }
     }
@@ -392,6 +391,47 @@ const fn try_decode_hex_char(c: u8) -> Option<u8> {
         b'0'..=b'9' => Some(c - b'0'),
         _ => None,
     }
+}
+
+/// Parse Decimal128 from a string
+///
+/// TODO: support parsing from scientific notation
+fn parse_decimal_128(unsigned_number: &str, negative: bool) -> Result<Expr> {
+    // remove leading zeroes
+    let trimmed = unsigned_number.trim_start_matches('0');
+    // parse precision and scale, remove decimal point if exists
+    let (precision, scale, replaced_str) = if trimmed == "." {
+        // special cases for numbers such as “0.”, “000.”, and so on.
+        (1, 0, Cow::Borrowed("0"))
+    } else if let Some(i) = trimmed.find('.') {
+        (
+            trimmed.len() - 1,
+            trimmed.len() - i - 1,
+            Cow::Owned(trimmed.replace('.', "")),
+        )
+    } else {
+        // no decimal point, keep as is
+        (trimmed.len(), 0, Cow::Borrowed(trimmed))
+    };
+
+    let number = replaced_str.parse::<i128>().map_err(|e| {
+        DataFusionError::from(ParserError(format!(
+            "Cannot parse {replaced_str} as i128 when building decimal: {e}"
+        )))
+    })?;
+
+    // check precision overflow
+    if precision as u8 > DECIMAL128_MAX_PRECISION {
+        return Err(DataFusionError::from(ParserError(format!(
+            "Cannot parse {replaced_str} as i128 when building decimal: precision overflow"
+        ))));
+    }
+
+    Ok(Expr::Literal(ScalarValue::Decimal128(
+        Some(if negative { -number } else { number }),
+        precision as u8,
+        scale as i8,
+    )))
 }
 
 #[cfg(test)]

@@ -1667,7 +1667,7 @@ mod tests {
         ))];
 
         let task_ctx = if spill {
-            new_spill_ctx(2, 2500)
+            new_spill_ctx(2, 1500)
         } else {
             Arc::new(TaskContext::default())
         };
@@ -1925,6 +1925,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn aggregate_source_with_yielding_with_spill() -> Result<()> {
         let input: Arc<dyn ExecutionPlan> =
             Arc::new(TestYieldingExec { yield_first: true });

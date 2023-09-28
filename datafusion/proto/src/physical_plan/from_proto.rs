@@ -289,7 +289,7 @@ pub fn parse_physical_expr(
         )),
         ExprType::ScalarFunction(e) => {
             let scalar_function =
-                protobuf::ScalarFunction::from_i32(e.fun).ok_or_else(|| {
+                protobuf::ScalarFunction::try_from(e.fun).map_err(|_| {
                     proto_error(
                         format!("Received an unknown scalar function: {}", e.fun,),
                     )
@@ -417,7 +417,7 @@ impl TryFrom<&protobuf::physical_window_expr_node::WindowFunction> for WindowFun
     ) -> Result<Self, Self::Error> {
         match expr {
             protobuf::physical_window_expr_node::WindowFunction::AggrFunction(n) => {
-                let f = protobuf::AggregateFunction::from_i32(*n).ok_or_else(|| {
+                let f = protobuf::AggregateFunction::try_from(*n).map_err(|_| {
                     proto_error(format!(
                         "Received an unknown window aggregate function: {n}"
                     ))
@@ -426,12 +426,11 @@ impl TryFrom<&protobuf::physical_window_expr_node::WindowFunction> for WindowFun
                 Ok(WindowFunction::AggregateFunction(f.into()))
             }
             protobuf::physical_window_expr_node::WindowFunction::BuiltInFunction(n) => {
-                let f =
-                    protobuf::BuiltInWindowFunction::from_i32(*n).ok_or_else(|| {
-                        proto_error(format!(
-                            "Received an unknown window builtin function: {n}"
-                        ))
-                    })?;
+                let f = protobuf::BuiltInWindowFunction::try_from(*n).map_err(|_| {
+                    proto_error(format!(
+                        "Received an unknown window builtin function: {n}"
+                    ))
+                })?;
 
                 Ok(WindowFunction::BuiltInWindowFunction(f.into()))
             }
