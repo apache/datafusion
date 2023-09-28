@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use super::{Interval, IntervalBound};
 use crate::{
-    expressions::{BinaryExpr, CastExpr, Column, Literal},
+    expressions::{BinaryExpr, CastExpr, Column, Literal, NegativeExpr},
     PhysicalExpr,
 };
 
@@ -37,7 +37,7 @@ const DT_MS_MASK: i64 = 0xFFFF_FFFF;
 /// Currently, we do not support all [`PhysicalExpr`]s for interval calculations.
 /// We do not support every type of [`Operator`]s either. Over time, this check
 /// will relax as more types of `PhysicalExpr`s and `Operator`s are supported.
-/// Currently, [`CastExpr`], [`BinaryExpr`], [`Column`] and [`Literal`] are supported.
+/// Currently, [`CastExpr`], [`NegativeExpr`], [`BinaryExpr`], [`Column`] and [`Literal`] are supported.
 pub fn check_support(expr: &Arc<dyn PhysicalExpr>, schema: SchemaRef) -> bool {
     let expr_any = expr.as_any();
     if let Some(binary_expr) = expr_any.downcast_ref::<BinaryExpr>() {
@@ -58,6 +58,8 @@ pub fn check_support(expr: &Arc<dyn PhysicalExpr>, schema: SchemaRef) -> bool {
         }
     } else if let Some(cast) = expr_any.downcast_ref::<CastExpr>() {
         check_support(cast.expr(), schema)
+    } else if let Some(negative) = expr_any.downcast_ref::<NegativeExpr>() {
+        check_support(negative.arg(), schema)
     } else {
         false
     }

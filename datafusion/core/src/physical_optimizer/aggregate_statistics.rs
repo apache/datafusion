@@ -51,7 +51,7 @@ impl PhysicalOptimizerRule for AggregateStatistics {
         plan: Arc<dyn ExecutionPlan>,
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if let Some(partial_agg_exec) = take_optimizable(&*plan)? {
+        if let Some(partial_agg_exec) = take_optimizable(&*plan) {
             let partial_agg_exec = partial_agg_exec
                 .as_any()
                 .downcast_ref::<AggregateExec>()
@@ -108,7 +108,7 @@ impl PhysicalOptimizerRule for AggregateStatistics {
 /// If this is the case, return a ref to the partial `AggregateExec`, else `None`.
 /// We would have preferred to return a casted ref to AggregateExec but the recursion requires
 /// the `ExecutionPlan.children()` method that returns an owned reference.
-fn take_optimizable(node: &dyn ExecutionPlan) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+fn take_optimizable(node: &dyn ExecutionPlan) -> Option<Arc<dyn ExecutionPlan>> {
     if let Some(final_agg_exec) = node.as_any().downcast_ref::<AggregateExec>() {
         if !final_agg_exec.mode().is_first_stage()
             && final_agg_exec.group_expr().is_empty()
@@ -122,7 +122,7 @@ fn take_optimizable(node: &dyn ExecutionPlan) -> Result<Option<Arc<dyn Execution
                         && partial_agg_exec.group_expr().is_empty()
                         && partial_agg_exec.filter_expr().iter().all(|e| e.is_none())
                     {
-                        return Ok(Some(child));
+                        return Some(child);
                     }
                 }
                 if let [ref childrens_child] = child.children().as_slice() {
@@ -133,19 +133,22 @@ fn take_optimizable(node: &dyn ExecutionPlan) -> Result<Option<Arc<dyn Execution
             }
         }
     }
-    Ok(None)
+    None
 }
 
-/// If this agg_expr is a count that is defined in the statistics, return it
+/// If this agg_expr is a count that is exactly defined in the statistics, return it.
 fn take_optimizable_table_count(
     agg_expr: &dyn AggregateExpr,
     stats: &Statistics,
 ) -> Option<(ScalarValue, &'static str)> {
-    if !stats.num_rows.is_exact().unwrap_or(false) {
-        return None;
-    }
     if let (Some(num_rows), Some(casted_expr)) = (
-        stats.num_rows.get_value(),
+        stats.num_rows.is_exact().and_then(|exact| {
+            if exact {
+                stats.num_rows.get_value()
+            } else {
+                None
+            }
+        }),
         agg_expr.as_any().downcast_ref::<expressions::Count>(),
     ) {
         // TODO implementing Eq on PhysicalExpr would help a lot here
@@ -166,21 +169,20 @@ fn take_optimizable_table_count(
     None
 }
 
-/// If this agg_expr is a count that can be derived from the statistics, return it
+/// If this agg_expr is a count that can be exactly derived from the statistics, return it.
 fn take_optimizable_column_count(
     agg_expr: &dyn AggregateExpr,
     stats: &Statistics,
 ) -> Option<(ScalarValue, String)> {
     let col_stats = &stats.column_statistics;
-    if !stats.num_rows.is_exact().unwrap_or(false)
-        || !col_stats
-            .iter()
-            .all(|cs| cs.null_count.is_exact().unwrap_or(false))
-    {
-        return None;
-    }
     if let (Some(num_rows), Some(casted_expr)) = (
-        stats.num_rows.get_value(),
+        stats.num_rows.is_exact().and_then(|exact| {
+            if exact {
+                stats.num_rows.get_value()
+            } else {
+                None
+            }
+        }),
         agg_expr.as_any().downcast_ref::<expressions::Count>(),
     ) {
         if casted_expr.expressions().len() == 1 {
@@ -189,11 +191,14 @@ fn take_optimizable_column_count(
                 .as_any()
                 .downcast_ref::<expressions::Column>()
             {
-                if let Some(val) = &col_stats[col_expr.index()].null_count.get_value() {
-                    return Some((
-                        ScalarValue::Int64(Some((num_rows - val) as i64)),
-                        casted_expr.name().to_string(),
-                    ));
+                let current_val = &col_stats[col_expr.index()].null_count;
+                if let Some(val) = current_val.get_value() {
+                    if current_val.is_exact().unwrap_or(false) {
+                        return Some((
+                            ScalarValue::Int64(Some((num_rows - val) as i64)),
+                            casted_expr.name().to_string(),
+                        ));
+                    }
                 }
             }
         }
@@ -201,18 +206,12 @@ fn take_optimizable_column_count(
     None
 }
 
-/// If this agg_expr is a min that is defined in the statistics, return it
+/// If this agg_expr is a min that is exactly defined in the statistics, return it.
 fn take_optimizable_min(
     agg_expr: &dyn AggregateExpr,
     stats: &Statistics,
 ) -> Option<(ScalarValue, String)> {
     let col_stats = &stats.column_statistics;
-    if !col_stats
-        .iter()
-        .all(|cs| cs.min_value.is_exact().unwrap_or(false))
-    {
-        return None;
-    }
     if let Some(casted_expr) = agg_expr.as_any().downcast_ref::<expressions::Min>() {
         if casted_expr.expressions().len() == 1 {
             // TODO optimize with exprs other than Column
@@ -220,12 +219,9 @@ fn take_optimizable_min(
                 .as_any()
                 .downcast_ref::<expressions::Column>()
             {
-                if let Some(val) = &col_stats[col_expr.index()].min_value.get_value() {
-                    // Exclude the unbounded case
-                    // As safest estimate, -inf, and + inf is used as bound of the column
-                    // If minimum is -inf, it is not exact. Hence we shouldn't do optimization
-                    // based on this statistic
-                    if !val.is_null() {
+                let current_val = &col_stats[col_expr.index()].min_value;
+                if let Some(val) = current_val.get_value() {
+                    if !val.is_null() && current_val.is_exact().unwrap_or(false) {
                         return Some((val.clone(), casted_expr.name().to_string()));
                     }
                 }
@@ -235,18 +231,12 @@ fn take_optimizable_min(
     None
 }
 
-/// If this agg_expr is a max that is defined in the statistics, return it
+/// If this agg_expr is a max that is exactly defined in the statistics, return it.
 fn take_optimizable_max(
     agg_expr: &dyn AggregateExpr,
     stats: &Statistics,
 ) -> Option<(ScalarValue, String)> {
     let col_stats = &stats.column_statistics;
-    if !col_stats
-        .iter()
-        .all(|cs| cs.max_value.is_exact().unwrap_or(false))
-    {
-        return None;
-    }
     if let Some(casted_expr) = agg_expr.as_any().downcast_ref::<expressions::Max>() {
         if casted_expr.expressions().len() == 1 {
             // TODO optimize with exprs other than Column
@@ -254,9 +244,9 @@ fn take_optimizable_max(
                 .as_any()
                 .downcast_ref::<expressions::Column>()
             {
-                if let Some(val) = &col_stats[col_expr.index()].max_value.get_value() {
-                    // Exclude the unbounded case
-                    if !val.is_null() {
+                let current_val = &col_stats[col_expr.index()].max_value;
+                if let Some(val) = current_val.get_value() {
+                    if !val.is_null() && current_val.is_exact().unwrap_or(false) {
                         return Some((val.clone(), casted_expr.name().to_string()));
                     }
                 }

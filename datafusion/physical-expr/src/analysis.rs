@@ -188,8 +188,8 @@ fn shrink_boundaries(
         }
     });
     let graph_nodes = graph.gather_node_indices(&[expr.clone()]);
-    // Since the propagation result success, the graph has at least one element, and
-    // empty check is also done at the outer scope.
+    // Since the propagation result is success, the graph has at least one element.
+    // An empty check is also done at the outer scope, do not repeat it here.
     let (_, root_index) = graph_nodes[0];
     let final_result = graph.get_interval(root_index);
 

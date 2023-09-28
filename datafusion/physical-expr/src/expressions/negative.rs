@@ -21,6 +21,7 @@ use std::any::Any;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use crate::intervals::{Interval, IntervalBound};
 use crate::physical_expr::down_cast_any_ref;
 use crate::sort_properties::SortProperties;
 use crate::PhysicalExpr;
@@ -105,6 +106,43 @@ impl PhysicalExpr for NegativeExpr {
         self.hash(&mut s);
     }
 
+    /// Given the child interval of a NegativeExpr, it calculates the NegativeExpr's interval.
+    /// It replaces the upper and lower bounds after multiplying them with -1.
+    /// Ex: (a, b] => [-b, a)
+    fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
+        Ok(Interval::new(
+            IntervalBound::new(
+                children[0].upper.value.arithmetic_negate()?,
+                children[0].upper.open,
+            ),
+            IntervalBound::new(
+                children[0].lower.value.arithmetic_negate()?,
+                children[0].lower.open,
+            ),
+        ))
+    }
+
+    /// Updates the child interval of a NegativeExpr by intersecting the original
+    /// interval of child with the possibly shrunk NegativeExpr interval.
+    fn propagate_constraints(
+        &self,
+        interval: &Interval,
+        children: &[&Interval],
+    ) -> Result<Vec<Option<Interval>>> {
+        let child_interval = children[0];
+        let negated_interval = Interval::new(
+            IntervalBound::new(
+                interval.upper.value.arithmetic_negate()?,
+                interval.upper.open,
+            ),
+            IntervalBound::new(
+                interval.lower.value.arithmetic_negate()?,
+                interval.lower.open,
+            ),
+        );
+        Ok(vec![child_interval.intersect(negated_interval)?])
+    }
+
     /// The ordering of a [`NegativeExpr`] is simply the reverse of its child.
     fn get_ordering(&self, children: &[SortProperties]) -> SortProperties {
         -children[0]
@@ -144,11 +182,12 @@ pub fn negative(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::col;
+    use crate::expressions::{col, Column};
     #[allow(unused_imports)]
     use arrow::array::*;
     use arrow::datatypes::*;
     use arrow_schema::DataType::{Float32, Float64, Int16, Int32, Int64, Int8};
+    use datafusion_common::ScalarValue;
     use datafusion_common::{cast::as_primitive_array, Result};
     use paste::paste;
 
@@ -185,6 +224,53 @@ mod tests {
         test_array_negative_op!(Int64, 23456i64, 12345i64);
         test_array_negative_op!(Float32, 2345.0f32, 1234.0f32);
         test_array_negative_op!(Float64, 23456.0f64, 12345.0f64);
+        Ok(())
+    }
+
+    #[test]
+    fn test_evaluate_bounds() -> Result<()> {
+        let negative_expr = NegativeExpr {
+            arg: Arc::new(Column::new("a", 0)),
+        };
+        let child_interval = Interval::new(
+            IntervalBound::new(ScalarValue::Int64(Some(-2)), true),
+            IntervalBound::new(ScalarValue::Int64(Some(1)), false),
+        );
+        let negative_expr_interval = Interval::new(
+            IntervalBound::new(ScalarValue::Int64(Some(-1)), false),
+            IntervalBound::new(ScalarValue::Int64(Some(2)), true),
+        );
+        assert_eq!(
+            negative_expr.evaluate_bounds(&[&child_interval])?,
+            negative_expr_interval
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn propagate_constraints() -> Result<()> {
+        let negative_expr = NegativeExpr {
+            arg: Arc::new(Column::new("a", 0)),
+        };
+        let original_child_interval = Interval::new(
+            IntervalBound::new(ScalarValue::Int64(Some(-2)), false),
+            IntervalBound::new(ScalarValue::Int64(Some(3)), false),
+        );
+        let negative_expr_interval = Interval::new(
+            IntervalBound::new(ScalarValue::Int64(Some(0)), true),
+            IntervalBound::new(ScalarValue::Int64(Some(4)), false),
+        );
+        let after_propagation = vec![Some(Interval::new(
+            IntervalBound::new(ScalarValue::Int64(Some(-2)), false),
+            IntervalBound::new(ScalarValue::Int64(Some(0)), true),
+        ))];
+        assert_eq!(
+            negative_expr.propagate_constraints(
+                &negative_expr_interval,
+                &[&original_child_interval]
+            )?,
+            after_propagation
+        );
         Ok(())
     }
 }

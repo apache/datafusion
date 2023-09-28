@@ -660,6 +660,7 @@ fn next_value<const INC: bool>(value: ScalarValue) -> ScalarValue {
 }
 
 /// This function computes the cardinality ratio of the given intervals.
+/// If it cannot be calculated, it returns 1.0 meaning full selective.
 pub fn cardinality_ratio(
     initial_interval: &Interval,
     final_interval: &Interval,

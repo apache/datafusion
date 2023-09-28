@@ -22,6 +22,8 @@ use arrow::datatypes::{DataType, Schema};
 use core::fmt::Debug;
 use std::fmt::{self, Display};
 
+/// To deal with information whose exactness is not guaranteed, it can be wrapped with [`Sharpness`]
+/// to express its reliability, such as in Statistics.
 #[derive(Clone, PartialEq, Eq, Default)]
 pub enum Sharpness<T: Debug + Clone + PartialEq + Eq + Display + PartialOrd> {
     Exact(T),
@@ -31,6 +33,7 @@ pub enum Sharpness<T: Debug + Clone + PartialEq + Eq + Display + PartialOrd> {
 }
 
 impl<T: Debug + Clone + PartialEq + Eq + Display + PartialOrd> Sharpness<T> {
+    /// If the information is known somehow, it return the value. Otherwise, it returns None.
     pub fn get_value(&self) -> Option<T> {
         match self {
             Sharpness::Exact(val) | Sharpness::Inexact(val) => Some(val.clone()),
@@ -38,6 +41,7 @@ impl<T: Debug + Clone + PartialEq + Eq + Display + PartialOrd> Sharpness<T> {
         }
     }
 
+    /// Value in the [`Sharpness`] is mapped to the function result wrapped with same exactness state.
     pub fn map<F>(self, f: F) -> Sharpness<T>
     where
         F: Fn(T) -> T,
@@ -49,6 +53,8 @@ impl<T: Debug + Clone + PartialEq + Eq + Display + PartialOrd> Sharpness<T> {
         }
     }
 
+    /// Returns Some(true) if the information is exact, or Some(false) if not exact.
+    /// If the information does not even exist, it returns None.
     pub fn is_exact(&self) -> Option<bool> {
         match self {
             Sharpness::Exact(_) => Some(true),
@@ -57,6 +63,8 @@ impl<T: Debug + Clone + PartialEq + Eq + Display + PartialOrd> Sharpness<T> {
         }
     }
 
+    /// Returns the greater one between two exact or inexact values.
+    /// If one of them is a [`Sharpness::Absent`], it returns [`Sharpness::Absent`].
     pub fn max(&self, other: &Sharpness<T>) -> Sharpness<T> {
         match (self, other) {
             (Sharpness::Exact(a), Sharpness::Exact(b)) => {
@@ -71,6 +79,8 @@ impl<T: Debug + Clone + PartialEq + Eq + Display + PartialOrd> Sharpness<T> {
         }
     }
 
+    /// Returns the smaller one between two exact or inexact values.
+    /// If one of them is a [`Sharpness::Absent`], it returns [`Sharpness::Absent`].
     pub fn min(&self, other: &Sharpness<T>) -> Sharpness<T> {
         match (self, other) {
             (Sharpness::Exact(a), Sharpness::Exact(b)) => {
@@ -87,6 +97,8 @@ impl<T: Debug + Clone + PartialEq + Eq + Display + PartialOrd> Sharpness<T> {
 }
 
 impl Sharpness<usize> {
+    /// Calculates the sum of two exact or inexact values in the type of [`usize`].
+    /// If one of them is a [`Sharpness::Absent`], it returns [`Sharpness::Absent`].
     pub fn add(&self, other: &Sharpness<usize>) -> Sharpness<usize> {
         match (self, other) {
             (Sharpness::Exact(a), Sharpness::Exact(b)) => Sharpness::Exact(a + b),
@@ -97,6 +109,8 @@ impl Sharpness<usize> {
         }
     }
 
+    /// Calculates the difference of two exact or inexact values in the type of [`usize`].
+    /// If one of them is a [`Sharpness::Absent`], it returns [`Sharpness::Absent`].
     pub fn sub(&self, other: &Sharpness<usize>) -> Sharpness<usize> {
         match (self, other) {
             (Sharpness::Exact(a), Sharpness::Exact(b)) => Sharpness::Exact(a - b),
@@ -107,6 +121,8 @@ impl Sharpness<usize> {
         }
     }
 
+    /// Calculates the multiplication of two exact or inexact values in the type of [`usize`].
+    /// If one of them is a [`Sharpness::Absent`], it returns [`Sharpness::Absent`].
     pub fn multiply(&self, other: &Sharpness<usize>) -> Sharpness<usize> {
         match (self, other) {
             (Sharpness::Exact(a), Sharpness::Exact(b)) => Sharpness::Exact(a * b),
@@ -188,6 +204,7 @@ impl Statistics {
             .collect()
     }
 
+    /// Returns true if all the statistical parameters contain exact information.
     pub fn all_exact(&self) -> bool {
         self.num_rows.is_exact().unwrap_or(false)
             && self.total_byte_size.is_exact().unwrap_or(false)
@@ -199,6 +216,8 @@ impl Statistics {
             })
     }
 
+    /// If the exactness of a [`Statistics`] instance is lost, this function relaxes
+    /// the exactness of all information by converting them [`Sharpness::Inexact`].
     pub fn make_inexact(self) -> Self {
         Statistics {
             num_rows: if let Sharpness::Exact(val) = &self.num_rows {
