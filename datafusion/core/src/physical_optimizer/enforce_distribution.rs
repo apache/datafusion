@@ -44,6 +44,7 @@ use crate::physical_plan::windows::WindowAggExec;
 use crate::physical_plan::Partitioning;
 use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
 
+use datafusion_common::internal_err;
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_expr::logical_plan::JoinType;
 use datafusion_physical_expr::equivalence::EquivalenceProperties;
@@ -54,9 +55,8 @@ use datafusion_physical_expr::utils::{
 use datafusion_physical_expr::{
     expr_list_eq_strict_order, PhysicalExpr, PhysicalSortRequirement,
 };
-
-use datafusion_common::internal_err;
 use datafusion_physical_plan::unbounded_output;
+
 use itertools::izip;
 
 /// The `EnforceDistribution` rule ensures that distribution requirements are

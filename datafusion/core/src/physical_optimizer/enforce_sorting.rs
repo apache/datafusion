@@ -574,7 +574,7 @@ fn analyze_window_sort_removal(
                 get_best_fitting_window(
                     exec.window_expr(),
                     &window_child,
-                    exec.partition_keys.clone(),
+                    &exec.partition_keys,
                 )?,
             )
         } else if let Some(exec) = window_exec.as_any().downcast_ref::<WindowAggExec>() {
@@ -583,7 +583,7 @@ fn analyze_window_sort_removal(
                 get_best_fitting_window(
                     exec.window_expr(),
                     &window_child,
-                    exec.partition_keys.clone(),
+                    &exec.partition_keys,
                 )?,
             )
         } else {
@@ -594,15 +594,17 @@ fn analyze_window_sort_removal(
     let partitionby_exprs = window_expr[0].partition_by();
 
     if let Some(new_window) = new_window {
+        // We were able to change the window to accommodate the input, use it:
         Ok(Some(PlanWithCorrespondingSort::new(new_window)))
     } else {
-        // Exiting input is not sufficient for window
+        // We were unable to change the window to accommodate the input, so we
+        // will insert a sort.
         let reqs = window_exec
             .required_input_ordering()
             .swap_remove(0)
             .unwrap_or(vec![]);
         let sort_expr = PhysicalSortRequirement::to_sort_exprs(reqs);
-        // Satisfy the ordering requirement so that window can be run
+        // Satisfy the ordering requirement so that the window can run:
         add_sort_above(&mut window_child, sort_expr, None)?;
 
         let uses_bounded_memory = window_expr.iter().all(|e| e.uses_bounded_memory());

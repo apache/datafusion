@@ -378,7 +378,7 @@ pub fn get_best_fitting_window(
     // These are the partition keys used during repartitioning.
     // They are either the same with `window_expr`'s PARTITION BY columns,
     // or it is empty if partitioning is not desirable for this windowing operator.
-    physical_partition_keys: Vec<Arc<dyn PhysicalExpr>>,
+    physical_partition_keys: &[Arc<dyn PhysicalExpr>],
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
     // Contains at least one window expr and all of the partition by and order by sections
     // of the window_exprs are same.
@@ -415,10 +415,9 @@ pub fn get_best_fitting_window(
         window_exprs.to_vec()
     };
 
-    let uses_bounded_memory = window_expr.iter().all(|e| e.uses_bounded_memory());
     // If all window expressions can run with bounded memory, choose the
     // bounded window variant:
-    if uses_bounded_memory {
+    if window_expr.iter().all(|e| e.uses_bounded_memory()) {
         Ok(Some(Arc::new(BoundedWindowAggExec::try_new(
             window_expr,
             input.clone(),
