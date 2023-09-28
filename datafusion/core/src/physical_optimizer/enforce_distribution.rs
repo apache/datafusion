@@ -1020,24 +1020,42 @@ fn add_hash_on_top(
     dist_onward: &mut Option<ExecTree>,
     input_idx: usize,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    // When there is an existing ordering, we preserve ordering
-    // during repartition. This will be un-done in the future
-    // If any of the following conditions is true
-    // - Preserving ordering is not helpful in terms of satisfying ordering requirements
-    // - Usage of order preserving variants is not desirable
-    // (determined by flag `config.optimizer.bounded_order_preserving_variants`)
-    let should_preserve_ordering = input.output_ordering().is_some();
-    // Since hashing benefits from partitioning, add a round-robin repartition
-    // before it:
-    let mut new_plan = add_roundrobin_on_top(input, n_target, dist_onward, 0)?;
-    new_plan = Arc::new(
-        RepartitionExec::try_new(new_plan, Partitioning::Hash(hash_exprs, n_target))?
-            .with_preserve_order(should_preserve_ordering),
-    ) as _;
+    if n_target == input.output_partitioning().partition_count() && n_target == 1 {
+        // In this case adding a hash repartition is unnecessary as the hash
+        // requirement is implicitly satisfied.
+        return Ok(input);
+    }
+    let satisfied = input
+        .output_partitioning()
+        .satisfy(Distribution::HashPartitioned(hash_exprs.clone()), || {
+            input.equivalence_properties()
+        });
+    // Add hash repartitioning when:
+    // - The hash distribution requirement is not satisfied, or
+    // - We can increase parallelism by adding hash partitioning.
+    if !satisfied || n_target > input.output_partitioning().partition_count() {
+        // When there is an existing ordering, we preserve ordering during
+        // repartition. This will be rolled back in the future if any of the
+        // following conditions is true:
+        // - Preserving ordering is not helpful in terms of satisfying ordering
+        //   requirements.
+        // - Usage of order preserving variants is not desirable (per the flag
+        //   `config.optimizer.bounded_order_preserving_variants`).
+        let should_preserve_ordering = input.output_ordering().is_some();
+        // Since hashing benefits from partitioning, add a round-robin repartition
+        // before it:
+        let mut new_plan = add_roundrobin_on_top(input, n_target, dist_onward, 0)?;
+        new_plan = Arc::new(
+            RepartitionExec::try_new(new_plan, Partitioning::Hash(hash_exprs, n_target))?
+                .with_preserve_order(should_preserve_ordering),
+        ) as _;
 
-    // update distribution onward with new operator
-    update_distribution_onward(new_plan.clone(), dist_onward, input_idx);
-    Ok(new_plan)
+        // update distribution onward with new operator
+        update_distribution_onward(new_plan.clone(), dist_onward, input_idx);
+        Ok(new_plan)
+    } else {
+        Ok(input)
+    }
 }
 
 /// Adds a `SortPreservingMergeExec` operator on top of input executor:
@@ -1289,27 +1307,23 @@ fn ensure_distribution(
                 )?;
             }
 
-            if !child
-                .output_partitioning()
-                .satisfy(requirement.clone(), || child.equivalence_properties())
-            {
-                // Satisfy the distribution requirement if it is unmet.
-                match requirement {
-                    Distribution::SinglePartition => {
-                        child = add_spm_on_top(child, dist_onward, child_idx);
-                    }
-                    Distribution::HashPartitioned(exprs) => {
-                        child = add_hash_on_top(
-                            child,
-                            exprs.to_vec(),
-                            target_partitions,
-                            dist_onward,
-                            child_idx,
-                        )?;
-                    }
-                    Distribution::UnspecifiedDistribution => {}
-                };
-            }
+            // Satisfy the distribution requirement if it is unmet.
+            match requirement {
+                Distribution::SinglePartition => {
+                    child = add_spm_on_top(child, dist_onward, child_idx);
+                }
+                Distribution::HashPartitioned(exprs) => {
+                    child = add_hash_on_top(
+                        child,
+                        exprs.to_vec(),
+                        target_partitions,
+                        dist_onward,
+                        child_idx,
+                    )?;
+                }
+                Distribution::UnspecifiedDistribution => {}
+            };
+
             // There is an ordering requirement of the operator:
             if let Some(required_input_ordering) = required_input_ordering {
                 let existing_ordering = child.output_ordering().unwrap_or(&[]);
@@ -4397,6 +4411,61 @@ mod tests {
 
         assert_optimized!(expected, physical_plan.clone(), true);
         assert_optimized!(expected, physical_plan, false);
+
+        Ok(())
+    }
+
+    #[test]
+    fn do_not_add_unnecessary_hash() -> Result<()> {
+        let schema = schema();
+        let sort_key = vec![PhysicalSortExpr {
+            expr: col("c", &schema).unwrap(),
+            options: SortOptions::default(),
+        }];
+        let alias = vec![("a".to_string(), "a".to_string())];
+        let input = parquet_exec_with_sort(vec![sort_key]);
+        let physical_plan = aggregate_exec_with_alias(input, alias.clone());
+
+        let expected = &[
+            "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
+            "AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
+        ];
+
+        // Make sure target partition number is 1. In this case hash repartition is unnecessary
+        assert_optimized!(expected, physical_plan.clone(), true, false, 1, false, 1024);
+        assert_optimized!(expected, physical_plan, false, false, 1, false, 1024);
+
+        Ok(())
+    }
+
+    #[test]
+    fn do_not_add_unnecessary_hash2() -> Result<()> {
+        let schema = schema();
+        let sort_key = vec![PhysicalSortExpr {
+            expr: col("c", &schema).unwrap(),
+            options: SortOptions::default(),
+        }];
+        let alias = vec![("a".to_string(), "a".to_string())];
+        let input = parquet_exec_multiple_sorted(vec![sort_key]);
+        let aggregate = aggregate_exec_with_alias(input, alias.clone());
+        let physical_plan = aggregate_exec_with_alias(aggregate, alias.clone());
+
+        let expected = &[
+            "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
+            // Since hash requirements of this operator is satisfied. There shouldn't be
+            // a hash repartition here
+            "AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
+            "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
+            "RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4",
+            "AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
+            "RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2",
+            "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
+        ];
+
+        // Make sure target partition number is larger than 2 (e.g partition number at the source).
+        assert_optimized!(expected, physical_plan.clone(), true, false, 4, false, 1024);
+        assert_optimized!(expected, physical_plan, false, false, 4, false, 1024);
 
         Ok(())
     }
