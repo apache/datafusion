@@ -17,19 +17,19 @@
 
 //! Functionality used both on logical and physical plans
 
+use std::sync::Arc;
+
 use ahash::RandomState;
 use arrow::array::*;
 use arrow::datatypes::*;
 use arrow::row::Rows;
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
 use arrow_buffer::i256;
-use datafusion_common::{
-    cast::{
-        as_boolean_array, as_generic_binary_array, as_primitive_array, as_string_array,
-    },
-    internal_err, DataFusionError, Result,
+
+use crate::cast::{
+    as_boolean_array, as_generic_binary_array, as_primitive_array, as_string_array,
 };
-use std::sync::Arc;
+use crate::error::{DataFusionError, Result, _internal_err};
 
 // Combines two hashes into one hash
 #[inline]
@@ -51,7 +51,7 @@ fn hash_null(random_state: &RandomState, hashes_buffer: &'_ mut [u64], mul_col: 
     }
 }
 
-pub(crate) trait HashValue {
+pub trait HashValue {
     fn hash_one(&self, state: &RandomState) -> u64;
 }
 
@@ -337,7 +337,7 @@ pub fn create_hashes<'a>(
             }
             _ => {
                 // This is internal because we should have caught this before.
-                return internal_err!(
+                return _internal_err!(
                     "Unsupported data type in hasher: {}",
                     col.data_type()
                 );

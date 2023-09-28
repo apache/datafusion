@@ -28,7 +28,6 @@ pub mod equivalence;
 pub mod execution_props;
 pub mod expressions;
 pub mod functions;
-pub mod hash_utils;
 pub mod intervals;
 pub mod math_expressions;
 mod partitioning;

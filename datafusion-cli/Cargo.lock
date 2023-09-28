@@ -1122,9 +1122,13 @@ dependencies = [
 name = "datafusion-common"
 version = "31.0.0"
 dependencies = [
+ "ahash",
  "arrow",
  "arrow-array",
+ "arrow-buffer",
+ "arrow-schema",
  "chrono",
+ "half",
  "num_cpus",
  "object_store",
  "parquet",

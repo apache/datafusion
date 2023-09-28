@@ -25,6 +25,7 @@ mod error;
 pub mod file_options;
 pub mod format;
 mod functional_dependencies;
+pub mod hash_utils;
 mod join_type;
 pub mod parsers;
 #[cfg(feature = "pyarrow")]
