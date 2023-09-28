@@ -43,8 +43,8 @@ use super::{
     SendableRecordBatchStream, Statistics,
 };
 use crate::common::get_meet_of_orderings;
+use crate::metrics::BaselineMetrics;
 use crate::stream::ObservedStream;
-use crate::{expressions, metrics::BaselineMetrics};
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use tokio::macros::support::thread_rng_n;

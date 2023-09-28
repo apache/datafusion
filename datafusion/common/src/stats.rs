@@ -22,10 +22,11 @@ use arrow::datatypes::{DataType, Schema};
 use core::fmt::Debug;
 use std::fmt::{self, Display};
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Default)]
 pub enum Sharpness<T: Debug + Clone + PartialEq + Eq + Display + PartialOrd> {
     Exact(T),
     Inexact(T),
+    #[default]
     Absent,
 }
 
@@ -122,8 +123,8 @@ impl<T: fmt::Debug + Clone + PartialEq + Eq + Display + PartialOrd> Debug
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Sharpness::Exact(inner) => write!(f, "Exact Info:({:?})", inner),
-            Sharpness::Inexact(inner) => write!(f, "Inexact Info:({:?})", inner),
+            Sharpness::Exact(inner) => write!(f, "Exact:({:?})", inner),
+            Sharpness::Inexact(inner) => write!(f, "Approximate:({:?})", inner),
             Sharpness::Absent => write!(f, "Absent Info"),
         }
     }
@@ -134,19 +135,10 @@ impl<T: fmt::Debug + Clone + PartialEq + Eq + Display + PartialOrd> Display
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Sharpness::Exact(inner) => write!(f, "Exact Info:({})", inner),
-            Sharpness::Inexact(inner) => write!(f, "Inexact Info:({})", inner),
+            Sharpness::Exact(inner) => write!(f, "Exact:({})", inner),
+            Sharpness::Inexact(inner) => write!(f, "Approximate:({})", inner),
             Sharpness::Absent => write!(f, "Absent Info"),
         }
-    }
-}
-
-impl<T> Default for Sharpness<T>
-where
-    T: Debug + Clone + PartialEq + Eq + Display + PartialOrd,
-{
-    fn default() -> Self {
-        Sharpness::Absent
     }
 }
 
@@ -187,11 +179,9 @@ impl Statistics {
                     null_count: Sharpness::Absent,
                     max_value: inf
                         .clone()
-                        .map(|val| Sharpness::Inexact(val))
+                        .map(Sharpness::Inexact)
                         .unwrap_or(Sharpness::Absent),
-                    min_value: inf
-                        .map(|val| Sharpness::Inexact(val))
-                        .unwrap_or(Sharpness::Absent),
+                    min_value: inf.map(Sharpness::Inexact).unwrap_or(Sharpness::Absent),
                     distinct_count: Sharpness::Absent,
                 }
             })
@@ -212,12 +202,12 @@ impl Statistics {
     pub fn make_inexact(self) -> Self {
         Statistics {
             num_rows: if let Sharpness::Exact(val) = &self.num_rows {
-                Sharpness::Inexact(val.clone())
+                Sharpness::Inexact(*val)
             } else {
                 self.num_rows
             },
             total_byte_size: if let Sharpness::Exact(val) = &self.total_byte_size {
-                Sharpness::Inexact(val.clone())
+                Sharpness::Inexact(*val)
             } else {
                 self.total_byte_size
             },
@@ -226,7 +216,7 @@ impl Statistics {
                 .iter()
                 .map(|cs| ColumnStatistics {
                     null_count: if let Sharpness::Exact(val) = &cs.null_count {
-                        Sharpness::Inexact(val.clone())
+                        Sharpness::Inexact(*val)
                     } else {
                         cs.null_count.clone()
                     },
@@ -241,7 +231,7 @@ impl Statistics {
                         cs.min_value.clone()
                     },
                     distinct_count: if let Sharpness::Exact(val) = &cs.distinct_count {
-                        Sharpness::Inexact(val.clone())
+                        Sharpness::Inexact(*val)
                     } else {
                         cs.distinct_count.clone()
                     },
@@ -293,11 +283,9 @@ impl ColumnStatistics {
             null_count: Sharpness::Absent,
             max_value: null
                 .clone()
-                .map(|val| Sharpness::Inexact(val))
+                .map(Sharpness::Inexact)
                 .unwrap_or(Sharpness::Absent),
-            min_value: null
-                .map(|val| Sharpness::Inexact(val))
-                .unwrap_or(Sharpness::Absent),
+            min_value: null.map(Sharpness::Inexact).unwrap_or(Sharpness::Absent),
             distinct_count: Sharpness::Absent,
         }
     }

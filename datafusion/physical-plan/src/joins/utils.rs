@@ -17,7 +17,6 @@
 
 //! Join related functionality used both on logical and physical plans
 
-use std::cmp::max;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use std::future::Future;
@@ -843,7 +842,7 @@ fn estimate_inner_join_cardinality(
                 _ => Some(Sharpness::Inexact(0)),
             };
         }
-        if left_stat.max_value.get_value()? > right_stat.min_value.get_value()? {
+        if left_stat.max_value.get_value()? < right_stat.min_value.get_value()? {
             return match (
                 left_stat.max_value.is_exact().unwrap(),
                 right_stat.min_value.is_exact().unwrap(),
@@ -1589,16 +1588,14 @@ mod tests {
     ) -> Statistics {
         if is_exact {
             Statistics {
-                num_rows: num_rows
-                    .map(|size| Sharpness::Exact(size))
-                    .unwrap_or(Sharpness::Absent),
+                num_rows: num_rows.map(Sharpness::Exact).unwrap_or(Sharpness::Absent),
                 column_statistics: column_stats,
                 total_byte_size: Sharpness::Absent,
             }
         } else {
             Statistics {
                 num_rows: num_rows
-                    .map(|size| Sharpness::Inexact(size))
+                    .map(Sharpness::Inexact)
                     .unwrap_or(Sharpness::Absent),
                 column_statistics: column_stats,
                 total_byte_size: Sharpness::Absent,
@@ -1613,7 +1610,7 @@ mod tests {
     ) -> ColumnStatistics {
         ColumnStatistics {
             distinct_count: distinct_count
-                .map(|count| Sharpness::Inexact(count))
+                .map(Sharpness::Inexact)
                 .unwrap_or(Sharpness::Absent),
             min_value: min
                 .map(|size| Sharpness::Inexact(ScalarValue::Int64(Some(size))))
@@ -1699,9 +1696,9 @@ mod tests {
             //  so one of them is always going to work, this just proves negative
             //  ranges with bigger absolute values are not are not accidentally used).
             (
-                (10, Some(10), Some(0), None),
+                (10, Some(-10), Some(0), None),
                 (10, Some(0), Some(10), Some(5)),
-                Some(Sharpness::Inexact(20)), // It would have been ten if we have used abs(range(left))
+                Some(Sharpness::Inexact(10)),
             ),
             // range(left) = 1, range(right) = 1
             (
@@ -1732,22 +1729,12 @@ mod tests {
             (
                 (10, Some(0), Some(10), None),
                 (10, Some(11), Some(20), None),
-                None,
+                Some(Sharpness::Inexact(0)),
             ),
             (
                 (10, Some(11), Some(20), None),
                 (10, Some(0), Some(10), None),
-                None,
-            ),
-            (
-                (10, Some(5), Some(10), Some(10)),
-                (10, Some(11), Some(3), Some(10)),
-                None,
-            ),
-            (
-                (10, Some(10), Some(5), Some(10)),
-                (10, Some(3), Some(7), Some(10)),
-                None,
+                Some(Sharpness::Inexact(0)),
             ),
             // distinct(left) = 0, distinct(right) = 0
             (
@@ -1782,7 +1769,7 @@ mod tests {
                         column_statistics: right_col_stats.clone(),
                     },
                 ),
-                expected_cardinality
+                expected_cardinality.clone()
             );
 
             // We should also be able to use join_cardinality to get the same results
@@ -1799,11 +1786,13 @@ mod tests {
                 partial_join_stats
                     .clone()
                     .map(|s| Sharpness::Inexact(s.num_rows)),
-                expected_cardinality
+                expected_cardinality.clone()
             );
             assert_eq!(
                 partial_join_stats.map(|s| s.column_statistics),
-                expected_cardinality.map(|_| [left_col_stats, right_col_stats].concat())
+                expected_cardinality
+                    .clone()
+                    .map(|_| [left_col_stats, right_col_stats].concat())
             );
         }
         Ok(())

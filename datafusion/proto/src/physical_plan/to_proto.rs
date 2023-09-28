@@ -63,13 +63,10 @@ use datafusion::physical_plan::expressions::{
 };
 use datafusion::physical_plan::{AggregateExpr, PhysicalExpr};
 
+use crate::protobuf::{self, physical_window_expr_node, scalar_value::Value};
 use crate::protobuf::{
     physical_aggregate_expr_node, PhysicalSortExprNode, PhysicalSortExprNodeCollection,
     ScalarValue,
-};
-use crate::{
-    logical_plan::from_proto::Error,
-    protobuf::{self, physical_window_expr_node, scalar_value::Value},
 };
 use datafusion::logical_expr::BuiltinScalarFunction;
 use datafusion::physical_expr::expressions::{GetFieldAccessExpr, GetIndexedFieldExpr};
@@ -655,13 +652,13 @@ impl From<&Sharpness<usize>> for protobuf::Sharpness {
             Sharpness::Exact(val) => protobuf::Sharpness {
                 sharpness_info: protobuf::SharpnessInfo::Exact.into(),
                 val: Some(ScalarValue {
-                    value: Some(Value::Uint64Value(val.clone() as u64)),
+                    value: Some(Value::Uint64Value(*val as u64)),
                 }),
             },
             Sharpness::Inexact(val) => protobuf::Sharpness {
                 sharpness_info: protobuf::SharpnessInfo::Inexact.into(),
                 val: Some(ScalarValue {
-                    value: Some(Value::Uint64Value(val.clone() as u64)),
+                    value: Some(Value::Uint64Value(*val as u64)),
                 }),
             },
             Sharpness::Absent => protobuf::Sharpness {

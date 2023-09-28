@@ -35,7 +35,7 @@ pub async fn get_statistics_with_limit(
 ) -> Result<(Vec<PartitionedFile>, Statistics)> {
     let mut result_files = vec![];
 
-    let mut null_counts = vec![Sharpness::Exact(0 as usize); file_schema.fields().len()];
+    let mut null_counts = vec![Sharpness::Exact(0_usize); file_schema.fields().len()];
     let mut has_statistics = false;
     let (mut max_values, mut min_values) = create_max_min_accs(&file_schema);
 
@@ -54,22 +54,20 @@ pub async fn get_statistics_with_limit(
         num_rows = if let Some(exactness) = num_rows.is_exact() {
             if exactness {
                 if file_stats.num_rows == Sharpness::Absent {
-                    Sharpness::Exact(0 as usize)
+                    Sharpness::Exact(0_usize)
                         .add(&Sharpness::Exact(num_rows.get_value().unwrap()))
                 } else {
                     file_stats
                         .num_rows
                         .add(&Sharpness::Exact(num_rows.get_value().unwrap()))
                 }
+            } else if file_stats.num_rows == Sharpness::Absent {
+                Sharpness::Exact(0_usize)
+                    .add(&Sharpness::Inexact(num_rows.get_value().unwrap()))
             } else {
-                if file_stats.num_rows == Sharpness::Absent {
-                    Sharpness::Exact(0 as usize)
-                        .add(&Sharpness::Inexact(num_rows.get_value().unwrap()))
-                } else {
-                    file_stats
-                        .num_rows
-                        .add(&Sharpness::Inexact(num_rows.get_value().unwrap()))
-                }
+                file_stats
+                    .num_rows
+                    .add(&Sharpness::Inexact(num_rows.get_value().unwrap()))
             }
         } else {
             file_stats.num_rows
@@ -77,22 +75,20 @@ pub async fn get_statistics_with_limit(
         total_byte_size = if let Some(exactness) = total_byte_size.is_exact() {
             if exactness {
                 if file_stats.total_byte_size == Sharpness::Absent {
-                    Sharpness::Exact(0 as usize)
+                    Sharpness::Exact(0_usize)
                         .add(&Sharpness::Exact(total_byte_size.get_value().unwrap()))
                 } else {
                     file_stats
                         .total_byte_size
                         .add(&Sharpness::Exact(total_byte_size.get_value().unwrap()))
                 }
+            } else if file_stats.total_byte_size == Sharpness::Absent {
+                Sharpness::Exact(0_usize)
+                    .add(&Sharpness::Inexact(total_byte_size.get_value().unwrap()))
             } else {
-                if file_stats.total_byte_size == Sharpness::Absent {
-                    Sharpness::Exact(0 as usize)
-                        .add(&Sharpness::Inexact(total_byte_size.get_value().unwrap()))
-                } else {
-                    file_stats
-                        .total_byte_size
-                        .add(&Sharpness::Inexact(total_byte_size.get_value().unwrap()))
-                }
+                file_stats
+                    .total_byte_size
+                    .add(&Sharpness::Inexact(total_byte_size.get_value().unwrap()))
             }
         } else {
             file_stats.total_byte_size
@@ -203,12 +199,8 @@ pub(crate) fn get_col_stats(
             };
             ColumnStatistics {
                 null_count: null_counts[i].clone(),
-                max_value: max_value
-                    .map(|val| Sharpness::Exact(val))
-                    .unwrap_or(Sharpness::Absent),
-                min_value: min_value
-                    .map(|val| Sharpness::Exact(val))
-                    .unwrap_or(Sharpness::Absent),
+                max_value: max_value.map(Sharpness::Exact).unwrap_or(Sharpness::Absent),
+                min_value: min_value.map(Sharpness::Exact).unwrap_or(Sharpness::Absent),
                 distinct_count: Sharpness::Absent,
             }
         })

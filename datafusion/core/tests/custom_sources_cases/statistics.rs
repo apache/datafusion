@@ -227,9 +227,8 @@ async fn sql_filter() -> Result<()> {
         .unwrap();
 
     let physical_plan = df.create_physical_plan().await.unwrap();
-
     let stats = physical_plan.statistics()?;
-    assert_eq!(stats.num_rows, Sharpness::Exact(1));
+    assert_eq!(stats.num_rows, Sharpness::Inexact(1));
 
     Ok(())
 }

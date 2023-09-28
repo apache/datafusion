@@ -216,9 +216,14 @@ impl ExecutionPlan for FilterExec {
         let analysis_ctx = analyze(predicate, input_analysis_ctx)?;
 
         let selectivity = analysis_ctx.selectivity.unwrap_or(1.0);
-        let num_rows = num_rows.map(|num| (num as f64 * selectivity).ceil() as usize);
-        let total_byte_size =
-            total_byte_size.map(|size| (size as f64 * selectivity).ceil() as usize);
+        let num_rows = match num_rows.get_value() {
+            Some(nr) => Sharpness::Inexact((nr as f64 * selectivity).ceil() as usize),
+            None => Sharpness::Absent,
+        };
+        let total_byte_size = match total_byte_size.get_value() {
+            Some(tbs) => Sharpness::Inexact((tbs as f64 * selectivity).ceil() as usize),
+            None => Sharpness::Absent,
+        };
 
         if let Some(analysis_boundaries) = analysis_ctx.boundaries {
             let column_statistics = collect_new_statistics(
@@ -262,18 +267,16 @@ fn collect_new_statistics(
             )| {
                 let closed_interval = interval.close_bounds();
                 ColumnStatistics {
-                    null_count: input_column_stats[idx].null_count.clone(),
-                    max_value: if input_column_stats[idx].max_value.is_exact().is_some() {
-                        Sharpness::Exact(closed_interval.upper.value)
-                    } else {
-                        Sharpness::Inexact(closed_interval.upper.value)
+                    null_count: match input_column_stats[idx].null_count.get_value() {
+                        Some(nc) => Sharpness::Inexact(nc),
+                        None => Sharpness::Absent,
                     },
-                    min_value: if input_column_stats[idx].max_value.is_exact().is_some() {
-                        Sharpness::Exact(closed_interval.lower.value)
-                    } else {
-                        Sharpness::Inexact(closed_interval.lower.value)
+                    max_value: Sharpness::Inexact(closed_interval.upper.value),
+                    min_value: Sharpness::Inexact(closed_interval.lower.value),
+                    distinct_count: match distinct_count.get_value() {
+                        Some(dc) => Sharpness::Inexact(dc),
+                        None => Sharpness::Absent,
                     },
-                    distinct_count,
                 }
             },
         )

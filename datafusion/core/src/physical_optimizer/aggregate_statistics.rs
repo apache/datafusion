@@ -19,16 +19,13 @@
 use std::sync::Arc;
 
 use crate::config::ConfigOptions;
-use datafusion_common::stats::Sharpness;
 use datafusion_common::tree_node::TreeNode;
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
 
-use crate::physical_plan::aggregates::{AggregateExec, AggregateMode};
+use crate::physical_plan::aggregates::AggregateExec;
 use crate::physical_plan::empty::EmptyExec;
 use crate::physical_plan::projection::ProjectionExec;
-use crate::physical_plan::{
-    expressions, AggregateExpr, ColumnStatistics, ExecutionPlan, Statistics,
-};
+use crate::physical_plan::{expressions, AggregateExpr, ExecutionPlan, Statistics};
 use crate::scalar::ScalarValue;
 
 use super::optimizer::PhysicalOptimizerRule;
@@ -108,7 +105,6 @@ impl PhysicalOptimizerRule for AggregateStatistics {
 /// assert if the node passed as argument is a final `AggregateExec` node that can be optimized:
 /// - its child (with possible intermediate layers) is a partial `AggregateExec` node
 /// - they both have no grouping expression
-/// - the statistics are exact
 /// If this is the case, return a ref to the partial `AggregateExec`, else `None`.
 /// We would have preferred to return a casted ref to AggregateExec but the recursion requires
 /// the `ExecutionPlan.children()` method that returns an owned reference.
@@ -126,11 +122,7 @@ fn take_optimizable(node: &dyn ExecutionPlan) -> Result<Option<Arc<dyn Execution
                         && partial_agg_exec.group_expr().is_empty()
                         && partial_agg_exec.filter_expr().iter().all(|e| e.is_none())
                     {
-                        let stats = partial_agg_exec.input().statistics()?;
-                        println!("{:?}", stats);
-                        if stats.all_exact() {
-                            return Ok(Some(child));
-                        }
+                        return Ok(Some(child));
                     }
                 }
                 if let [ref childrens_child] = child.children().as_slice() {
@@ -149,6 +141,9 @@ fn take_optimizable_table_count(
     agg_expr: &dyn AggregateExpr,
     stats: &Statistics,
 ) -> Option<(ScalarValue, &'static str)> {
+    if !stats.num_rows.is_exact().unwrap_or(false) {
+        return None;
+    }
     if let (Some(num_rows), Some(casted_expr)) = (
         stats.num_rows.get_value(),
         agg_expr.as_any().downcast_ref::<expressions::Count>(),
@@ -177,6 +172,13 @@ fn take_optimizable_column_count(
     stats: &Statistics,
 ) -> Option<(ScalarValue, String)> {
     let col_stats = &stats.column_statistics;
+    if !stats.num_rows.is_exact().unwrap_or(false)
+        || !col_stats
+            .iter()
+            .all(|cs| cs.null_count.is_exact().unwrap_or(false))
+    {
+        return None;
+    }
     if let (Some(num_rows), Some(casted_expr)) = (
         stats.num_rows.get_value(),
         agg_expr.as_any().downcast_ref::<expressions::Count>(),
@@ -205,6 +207,12 @@ fn take_optimizable_min(
     stats: &Statistics,
 ) -> Option<(ScalarValue, String)> {
     let col_stats = &stats.column_statistics;
+    if !col_stats
+        .iter()
+        .all(|cs| cs.min_value.is_exact().unwrap_or(false))
+    {
+        return None;
+    }
     if let Some(casted_expr) = agg_expr.as_any().downcast_ref::<expressions::Min>() {
         if casted_expr.expressions().len() == 1 {
             // TODO optimize with exprs other than Column
@@ -233,6 +241,12 @@ fn take_optimizable_max(
     stats: &Statistics,
 ) -> Option<(ScalarValue, String)> {
     let col_stats = &stats.column_statistics;
+    if !col_stats
+        .iter()
+        .all(|cs| cs.max_value.is_exact().unwrap_or(false))
+    {
+        return None;
+    }
     if let Some(casted_expr) = agg_expr.as_any().downcast_ref::<expressions::Max>() {
         if casted_expr.expressions().len() == 1 {
             // TODO optimize with exprs other than Column
@@ -263,7 +277,7 @@ mod tests {
     use datafusion_common::cast::as_int64_array;
     use datafusion_physical_expr::expressions::cast;
     use datafusion_physical_expr::PhysicalExpr;
-    use datafusion_physical_plan::displayable;
+    use datafusion_physical_plan::aggregates::AggregateMode;
 
     use crate::error::Result;
     use crate::logical_expr::Operator;
@@ -305,16 +319,10 @@ mod tests {
         let session_ctx = SessionContext::new();
         let state = session_ctx.state();
         let plan: Arc<dyn ExecutionPlan> = Arc::new(plan);
-        fn print_plan(plan: &Arc<dyn ExecutionPlan>) -> Result<()> {
-            let formatted = displayable(plan.as_ref()).indent(true).to_string();
-            let actual: Vec<&str> = formatted.trim().lines().collect();
-            println!("{:#?}", actual);
-            Ok(())
-        }
-        print_plan(&plan);
+
         let optimized = AggregateStatistics::new()
             .optimize(Arc::clone(&plan), state.config_options())?;
-        print_plan(&optimized);
+
         // A ProjectionExec is a sign that the count optimization was applied
         assert!(optimized.as_any().is::<ProjectionExec>());
 

@@ -156,17 +156,8 @@ pub fn compute_record_batch_statistics(
     for partition in batches.iter() {
         for batch in partition {
             for (stat_index, col_index) in projection.iter().enumerate() {
-                column_statistics[stat_index].null_count = if let Sharpness::Exact(val) =
-                    &column_statistics[stat_index].null_count
-                {
-                    Sharpness::Exact(batch.column(*col_index).null_count() + val)
-                } else if let Sharpness::Inexact(val) =
-                    &column_statistics[stat_index].null_count
-                {
-                    Sharpness::Inexact(batch.column(*col_index).null_count() + val)
-                } else {
-                    Sharpness::Exact(0)
-                };
+                column_statistics[stat_index].null_count =
+                    Sharpness::Exact(batch.column(*col_index).null_count());
             }
         }
     }
@@ -712,14 +703,14 @@ mod tests {
             column_statistics: vec![
                 ColumnStatistics {
                     distinct_count: Sharpness::Absent,
-                    max_value: Sharpness::Exact(ScalarValue::Float32(None)),
-                    min_value: Sharpness::Exact(ScalarValue::Float32(None)),
+                    max_value: Sharpness::Inexact(ScalarValue::Float32(None)),
+                    min_value: Sharpness::Inexact(ScalarValue::Float32(None)),
                     null_count: Sharpness::Exact(0),
                 },
                 ColumnStatistics {
                     distinct_count: Sharpness::Absent,
-                    max_value: Sharpness::Exact(ScalarValue::Float64(None)),
-                    min_value: Sharpness::Exact(ScalarValue::Float64(None)),
+                    max_value: Sharpness::Inexact(ScalarValue::Float64(None)),
+                    min_value: Sharpness::Inexact(ScalarValue::Float64(None)),
                     null_count: Sharpness::Exact(0),
                 },
             ],

@@ -47,8 +47,6 @@ use datafusion_common::{not_impl_err, DataFusionError, Result};
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use std::convert::{TryFrom, TryInto};
-use std::fmt;
-use std::fmt::Display;
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -589,22 +587,22 @@ impl From<&protobuf::ColumnStats> for ColumnStatistics {
             null_count: if cs.null_count.is_none() {
                 Sharpness::Absent
             } else {
-                protobuf::Sharpness::from(cs.null_count.clone().unwrap()).into()
+                cs.null_count.clone().unwrap().into()
             },
             max_value: if cs.max_value.is_none() {
                 Sharpness::Absent
             } else {
-                protobuf::Sharpness::from(cs.max_value.clone().unwrap()).into()
+                cs.max_value.clone().unwrap().into()
             },
             min_value: if cs.min_value.is_none() {
                 Sharpness::Absent
             } else {
-                protobuf::Sharpness::from(cs.min_value.clone().unwrap()).into()
+                cs.min_value.clone().unwrap().into()
             },
             distinct_count: if cs.distinct_count.is_none() {
                 Sharpness::Absent
             } else {
-                protobuf::Sharpness::from(cs.distinct_count.clone().unwrap()).into()
+                cs.distinct_count.clone().unwrap().into()
             },
         }
     }
@@ -622,27 +620,23 @@ impl From<protobuf::Sharpness> for Sharpness<usize> {
             protobuf::SharpnessInfo::Exact => {
                 if s.val.is_none() {
                     Sharpness::Absent
+                } else if let Ok(ScalarValue::UInt64(Some(val))) =
+                    ScalarValue::try_from(&s.val.unwrap())
+                {
+                    Sharpness::Exact(val as usize)
                 } else {
-                    if let Ok(ScalarValue::UInt64(Some(val))) =
-                        ScalarValue::try_from(&s.val.unwrap())
-                    {
-                        Sharpness::Exact(val as usize)
-                    } else {
-                        Sharpness::Absent
-                    }
+                    Sharpness::Absent
                 }
             }
             protobuf::SharpnessInfo::Inexact => {
                 if s.val.is_none() {
                     Sharpness::Absent
+                } else if let Ok(ScalarValue::UInt64(Some(val))) =
+                    ScalarValue::try_from(&s.val.unwrap())
+                {
+                    Sharpness::Inexact(val as usize)
                 } else {
-                    if let Ok(ScalarValue::UInt64(Some(val))) =
-                        ScalarValue::try_from(&s.val.unwrap())
-                    {
-                        Sharpness::Inexact(val as usize)
-                    } else {
-                        Sharpness::Absent
-                    }
+                    Sharpness::Absent
                 }
             }
             protobuf::SharpnessInfo::Absent => Sharpness::Absent,
@@ -662,23 +656,19 @@ impl From<protobuf::Sharpness> for Sharpness<ScalarValue> {
             protobuf::SharpnessInfo::Exact => {
                 if s.val.is_none() {
                     Sharpness::Absent
+                } else if let Ok(val) = ScalarValue::try_from(&s.val.unwrap()) {
+                    Sharpness::Exact(val)
                 } else {
-                    if let Ok(val) = ScalarValue::try_from(&s.val.unwrap()) {
-                        Sharpness::Exact(val)
-                    } else {
-                        Sharpness::Absent
-                    }
+                    Sharpness::Absent
                 }
             }
             protobuf::SharpnessInfo::Inexact => {
                 if s.val.is_none() {
                     Sharpness::Absent
+                } else if let Ok(val) = ScalarValue::try_from(&s.val.unwrap()) {
+                    Sharpness::Inexact(val)
                 } else {
-                    if let Ok(val) = ScalarValue::try_from(&s.val.unwrap()) {
-                        Sharpness::Inexact(val)
-                    } else {
-                        Sharpness::Absent
-                    }
+                    Sharpness::Absent
                 }
             }
             protobuf::SharpnessInfo::Absent => Sharpness::Absent,
@@ -706,12 +696,12 @@ impl TryFrom<&protobuf::Statistics> for Statistics {
             num_rows: if s.num_rows.is_none() {
                 Sharpness::Absent
             } else {
-                protobuf::Sharpness::from(s.num_rows.clone().unwrap()).into()
+                s.num_rows.clone().unwrap().into()
             },
             total_byte_size: if s.total_byte_size.is_none() {
                 Sharpness::Absent
             } else {
-                protobuf::Sharpness::from(s.total_byte_size.clone().unwrap()).into()
+                s.total_byte_size.clone().unwrap().into()
             },
             // No column statistic (None) is encoded with empty array
             column_statistics,
