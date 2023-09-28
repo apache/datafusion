@@ -127,7 +127,7 @@ With this, and the implementation of the omitted methods, we can now use the `Cu
 
 ###### `supports_filters_pushdown`
 
-The `supports_filters_pushdown` method can be overridden to indicate which filter expressions support being pushed down to the data source as within that the specificity of the pushdown.
+The `supports_filters_pushdown` method can be overridden to indicate which filter expressions support being pushed down to the data source and within that the specificity of the pushdown.
 
 This returns a `Vec` of `TableProviderFilterPushDown` enums where each enum represents a filter that can be pushed down. The `TableProviderFilterPushDown` enum has three variants:
 
