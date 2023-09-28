@@ -881,6 +881,7 @@ mod test {
 
     #[test]
     fn scalar_function() -> Result<()> {
+        // test that automatic argument type coercion for scalar functions work
         let empty = empty();
         let lit_expr = lit(10i64);
         let fun: BuiltinScalarFunction = BuiltinScalarFunction::Acos;
