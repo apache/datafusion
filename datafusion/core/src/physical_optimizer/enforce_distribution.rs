@@ -1029,8 +1029,8 @@ fn add_hash_on_top(
     input_idx: usize,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     if n_target == input.output_partitioning().partition_count() && n_target == 1 {
-        // in this case using hash repartition is useless
-        // Because hash requirement is implicitly satisfied
+        // In this case adding a hash repartition is unnecessary as the hash
+        // requirement is implicitly satisfied.
         return Ok(input);
     }
     let satisfied = input
@@ -1038,16 +1038,17 @@ fn add_hash_on_top(
         .satisfy(Distribution::HashPartitioned(hash_exprs.clone()), || {
             input.equivalence_properties()
         });
-    // Add hash repartition when
-    // - hash distribution requirement is not satisfied
-    // - we can increase parallelism with adding hash (even if hash requirement is satisfied)
+    // Add hash repartitioning when:
+    // - The hash distribution requirement is not satisfied, or
+    // - We can increase parallelism by adding hash partitioning.
     if !satisfied || n_target > input.output_partitioning().partition_count() {
-        // When there is an existing ordering, we preserve ordering
-        // during repartition. This will be un-done in the future
-        // If any of the following conditions is true
-        // - Preserving ordering is not helpful in terms of satisfying ordering requirements
-        // - Usage of order preserving variants is not desirable
-        // (determined by flag `config.optimizer.bounded_order_preserving_variants`)
+        // When there is an existing ordering, we preserve ordering during
+        // repartition. This will be rolled back in the future if any of the
+        // following conditions is true:
+        // - Preserving ordering is not helpful in terms of satisfying ordering
+        //   requirements.
+        // - Usage of order preserving variants is not desirable (per the flag
+        //   `config.optimizer.bounded_order_preserving_variants`).
         let should_preserve_ordering = input.output_ordering().is_some();
         // Since hashing benefits from partitioning, add a round-robin repartition
         // before it:
