@@ -169,6 +169,37 @@ async fn test_udaf_returning_struct_subquery() {
     assert_batches_eq!(expected, &execute(&ctx, sql).await.unwrap());
 }
 
+#[tokio::test]
+async fn test_udaf_shadows_builtin_fn() {
+    let TestContext {
+        mut ctx,
+        test_state,
+    } = TestContext::new();
+    let sql = "SELECT sum(arrow_cast(time, 'Int64')) from t";
+
+    // compute with builtin `sum` aggregator
+    let expected = [
+        "+-------------+",
+        "| SUM(t.time) |",
+        "+-------------+",
+        "| 19000       |",
+        "+-------------+",
+    ];
+    assert_batches_eq!(expected, &execute(&ctx, sql).await.unwrap());
+
+    // Register `TimeSum` with name `sum`. This will shadow the builtin one
+    let sql = "SELECT sum(time) from t";
+    TimeSum::register(&mut ctx, test_state.clone(), "sum");
+    let expected = [
+        "+----------------------------+",
+        "| sum(t.time)                |",
+        "+----------------------------+",
+        "| 1970-01-01T00:00:00.000019 |",
+        "+----------------------------+",
+    ];
+    assert_batches_eq!(expected, &execute(&ctx, sql).await.unwrap());
+}
+
 async fn execute(ctx: &SessionContext, sql: &str) -> Result<Vec<RecordBatch>> {
     ctx.sql(sql).await?.collect().await
 }
@@ -214,7 +245,7 @@ impl TestContext {
         // Tell DataFusion about the "first" function
         FirstSelector::register(&mut ctx);
         // Tell DataFusion about the "time_sum" function
-        TimeSum::register(&mut ctx, Arc::clone(&test_state));
+        TimeSum::register(&mut ctx, Arc::clone(&test_state), "time_sum");
 
         Self { ctx, test_state }
     }
@@ -281,7 +312,7 @@ impl TimeSum {
         Self { sum: 0, test_state }
     }
 
-    fn register(ctx: &mut SessionContext, test_state: Arc<TestState>) {
+    fn register(ctx: &mut SessionContext, test_state: Arc<TestState>, name: &str) {
         let timestamp_type = DataType::Timestamp(TimeUnit::Nanosecond, None);
 
         // Returns the same type as its input
@@ -300,8 +331,6 @@ impl TimeSum {
         let captured_state = Arc::clone(&test_state);
         let accumulator: AccumulatorFactoryFunction =
             Arc::new(move |_| Ok(Box::new(Self::new(Arc::clone(&captured_state)))));
-
-        let name = "time_sum";
 
         let time_sum =
             AggregateUDF::new(name, &signature, &return_type, &accumulator, &state_type);
