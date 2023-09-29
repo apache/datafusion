@@ -39,7 +39,7 @@ default = ["parquet"]
 pyarrow = ["pyo3", "arrow/pyarrow"]
 
 [dependencies]
-apache-avro = { version = "0.15", default-features = false, features = ["snappy"], optional = true }
+apache-avro = { version = "0.16", default-features = false, features = ["snappy"], optional = true }
 arrow = { workspace = true }
 arrow-array = { workspace = true }
 chrono = { workspace = true }

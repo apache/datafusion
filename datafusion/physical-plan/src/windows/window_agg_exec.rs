@@ -17,6 +17,11 @@
 
 //! Stream and channel implementations for window function expressions.
 
+use std::any::Any;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+
 use crate::common::transpose;
 use crate::expressions::PhysicalSortExpr;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
@@ -28,6 +33,7 @@ use crate::{
     ExecutionPlan, Partitioning, PhysicalExpr, RecordBatchStream,
     SendableRecordBatchStream, Statistics, WindowExpr,
 };
+
 use arrow::compute::{concat, concat_batches};
 use arrow::datatypes::SchemaBuilder;
 use arrow::error::ArrowError;
@@ -38,16 +44,12 @@ use arrow::{
 };
 use datafusion_common::stats::Sharpness;
 use datafusion_common::utils::{evaluate_partition_ranges, get_at_indices};
-use datafusion_common::Result;
-use datafusion_common::{internal_err, plan_err, DataFusionError};
+use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{OrderingEquivalenceProperties, PhysicalSortRequirement};
+
 use futures::stream::Stream;
 use futures::{ready, StreamExt};
-use std::any::Any;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{Context, Poll};
 
 /// Window execution plan
 #[derive(Debug)]

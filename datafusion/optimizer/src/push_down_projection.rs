@@ -147,10 +147,6 @@ impl OptimizerRule for PushDownProjection {
                 if !scan.projected_schema.fields().is_empty() =>
             {
                 let mut used_columns: HashSet<Column> = HashSet::new();
-                // filter expr may not exist in expr in projection.
-                // like: TableScan: t1 projection=[bool_col, int_col], full_filters=[t1.id = Int32(1)]
-                // projection=[bool_col, int_col] don't contain `ti.id`.
-                exprlist_to_columns(&scan.filters, &mut used_columns)?;
                 if projection_is_empty {
                     used_columns
                         .insert(scan.projected_schema.fields()[0].qualified_column());
@@ -568,6 +564,7 @@ mod tests {
     use crate::OptimizerContext;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::DFSchema;
+    use datafusion_expr::builder::table_scan_with_filters;
     use datafusion_expr::expr;
     use datafusion_expr::expr::Cast;
     use datafusion_expr::WindowFrame;
@@ -973,6 +970,35 @@ mod tests {
         let expected = "\
         Projection: Int32(1) AS a\
         \n  TableScan: test projection=[a]";
+
+        assert_optimized_plan_eq(&plan, expected)
+    }
+
+    #[test]
+    fn table_full_filter_pushdown() -> Result<()> {
+        let schema = Schema::new(test_table_scan_fields());
+
+        let table_scan = table_scan_with_filters(
+            Some("test"),
+            &schema,
+            None,
+            vec![col("b").eq(lit(1))],
+        )?
+        .build()?;
+        assert_eq!(3, table_scan.schema().fields().len());
+        assert_fields_eq(&table_scan, vec!["a", "b", "c"]);
+
+        // there is no need for the first projection
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("b")])?
+            .project(vec![lit(1).alias("a")])?
+            .build()?;
+
+        assert_fields_eq(&plan, vec!["a"]);
+
+        let expected = "\
+        Projection: Int32(1) AS a\
+        \n  TableScan: test projection=[a], full_filters=[b = Int32(1)]";
 
         assert_optimized_plan_eq(&plan, expected)
     }

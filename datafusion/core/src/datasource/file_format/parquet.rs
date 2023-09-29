@@ -839,6 +839,8 @@ async fn output_single_parquet_file_parallelized(
     parquet_props: &WriterProperties,
 ) -> Result<usize> {
     let mut row_count = 0;
+    // TODO decrease parallelism / buffering:
+    // https://github.com/apache/arrow-datafusion/issues/7591
     let parallelism = data.len();
     let mut join_handles: Vec<JoinHandle<ParquetFileSerializedResult>> =
         Vec::with_capacity(parallelism);
@@ -872,6 +874,8 @@ async fn output_single_parquet_file_parallelized(
         >,
     > = tokio::task::spawn(async move {
         while let Some(data) = rx.recv().await {
+            // TODO write incrementally
+            // https://github.com/apache/arrow-datafusion/issues/7591
             object_store_writer.write_all(data.as_slice()).await?;
         }
         Ok(object_store_writer)
@@ -908,6 +912,8 @@ async fn output_single_parquet_file_parallelized(
                                     bytes_written: column.compressed_size() as _,
                                     rows_written: rg.num_rows() as _,
                                     metadata: column.clone(),
+                                    // TODO need to populate the indexes when writing final file
+                                    // see https://github.com/apache/arrow-datafusion/issues/7589
                                     bloom_filter: None,
                                     column_index: None,
                                     offset_index: None,

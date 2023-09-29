@@ -833,8 +833,7 @@ mod tests {
 
         // before simplify: t.g = power(t.f, 1.0)
         // after simplify:  (t.g = t.f) as "t.g = power(t.f, 1.0)"
-        let expected =
-            "TableScan: test, unsupported_filters=[g = f AS g = power(f,Float64(1))]";
+        let expected = "TableScan: test, full_filters=[g = f AS g = power(f,Float64(1))]";
         assert_optimized_plan_eq(&plan, expected)
     }
 

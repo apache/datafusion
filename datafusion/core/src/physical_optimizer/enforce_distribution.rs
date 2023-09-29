@@ -28,9 +28,7 @@ use std::sync::Arc;
 use crate::config::ConfigOptions;
 use crate::datasource::physical_plan::{CsvExec, ParquetExec};
 use crate::error::{DataFusionError, Result};
-use crate::physical_optimizer::utils::{
-    add_sort_above, get_plan_string, unbounded_output, ExecTree,
-};
+use crate::physical_optimizer::utils::{add_sort_above, get_plan_string, ExecTree};
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -46,6 +44,7 @@ use crate::physical_plan::windows::WindowAggExec;
 use crate::physical_plan::Partitioning;
 use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
 
+use datafusion_common::internal_err;
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_expr::logical_plan::JoinType;
 use datafusion_physical_expr::equivalence::EquivalenceProperties;
@@ -56,8 +55,8 @@ use datafusion_physical_expr::utils::{
 use datafusion_physical_expr::{
     expr_list_eq_strict_order, PhysicalExpr, PhysicalSortRequirement,
 };
+use datafusion_physical_plan::unbounded_output;
 
-use datafusion_common::internal_err;
 use itertools::izip;
 
 /// The `EnforceDistribution` rule ensures that distribution requirements are
