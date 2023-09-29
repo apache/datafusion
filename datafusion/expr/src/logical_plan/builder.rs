@@ -178,18 +178,21 @@ impl LogicalPlanBuilder {
             .map(|x| x.clone().unwrap_or_else(|| DataType::Utf8))
             .collect::<Vec<_>>();
 
-        let preliminary_fields = field_types
-            .iter()
-            .enumerate()
-            .map(|(j, data_type)| {
-                // naming is following convention https://www.postgresql.org/docs/current/queries-values.html
-                let name = &format!("column{}", j + 1);
-                DFField::new_unqualified(name, data_type.clone(), true)
-            })
-            .collect::<Vec<_>>();
+        let create_fields = |nullable_columns: Vec<bool>| {
+            field_types
+                .iter()
+                .zip(nullable_columns.iter())
+                .enumerate()
+                .map(|(j, (data_type, nullable))| {
+                    // naming is following convention https://www.postgresql.org/docs/current/queries-values.html
+                    let name = &format!("column{}", j + 1);
+                    DFField::new_unqualified(name, data_type.clone(), *nullable)
+                })
+                .collect::<Vec<_>>()
+        };
 
         let preliminary_schema = DFSchemaRef::new(DFSchema::new_with_metadata(
-            preliminary_fields,
+            create_fields(vec![true; n_cols]),
             HashMap::new(),
         )?);
 
@@ -202,16 +205,14 @@ impl LogicalPlanBuilder {
             nullable_columns.insert(j, nullable || existing);
         }
 
-        let fields = field_types
-            .iter()
-            .enumerate()
-            .map(|(j, data_type)| {
-                // naming is following convention https://www.postgresql.org/docs/current/queries-values.html
-                let name = &format!("column{}", j + 1);
-                let nullable = *nullable_columns.get(&j).unwrap_or(&false);
-                DFField::new_unqualified(name, data_type.clone(), nullable)
-            })
-            .collect::<Vec<_>>();
+        let fields = create_fields(
+            (0..n_cols)
+                .map(|j| {
+                    // if we didn't find nullable columns while looping through the nulls grid above, then the columns are not nullable
+                    *nullable_columns.get(&j).unwrap_or(&false)
+                })
+                .collect(),
+        );
 
         let schema =
             DFSchemaRef::new(DFSchema::new_with_metadata(fields, HashMap::new())?);
