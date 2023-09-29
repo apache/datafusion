@@ -16,6 +16,7 @@
 // under the License.
 
 //! Utilizing exact statistics from sources to avoid scanning data
+use datafusion_common::stats::Sharpness;
 use std::sync::Arc;
 
 use crate::config::ConfigOptions;
@@ -141,14 +142,8 @@ fn take_optimizable_table_count(
     agg_expr: &dyn AggregateExpr,
     stats: &Statistics,
 ) -> Option<(ScalarValue, &'static str)> {
-    if let (Some(num_rows), Some(casted_expr)) = (
-        stats.num_rows.is_exact().and_then(|exact| {
-            if exact {
-                stats.num_rows.get_value()
-            } else {
-                None
-            }
-        }),
+    if let (&Sharpness::Exact(num_rows), Some(casted_expr)) = (
+        &stats.num_rows,
         agg_expr.as_any().downcast_ref::<expressions::Count>(),
     ) {
         // TODO implementing Eq on PhysicalExpr would help a lot here
@@ -175,14 +170,8 @@ fn take_optimizable_column_count(
     stats: &Statistics,
 ) -> Option<(ScalarValue, String)> {
     let col_stats = &stats.column_statistics;
-    if let (Some(num_rows), Some(casted_expr)) = (
-        stats.num_rows.is_exact().and_then(|exact| {
-            if exact {
-                stats.num_rows.get_value()
-            } else {
-                None
-            }
-        }),
+    if let (&Sharpness::Exact(num_rows), Some(casted_expr)) = (
+        &stats.num_rows,
         agg_expr.as_any().downcast_ref::<expressions::Count>(),
     ) {
         if casted_expr.expressions().len() == 1 {
@@ -192,13 +181,11 @@ fn take_optimizable_column_count(
                 .downcast_ref::<expressions::Column>()
             {
                 let current_val = &col_stats[col_expr.index()].null_count;
-                if let Some(val) = current_val.get_value() {
-                    if current_val.is_exact().unwrap_or(false) {
-                        return Some((
-                            ScalarValue::Int64(Some((num_rows - val) as i64)),
-                            casted_expr.name().to_string(),
-                        ));
-                    }
+                if let &Sharpness::Exact(val) = current_val {
+                    return Some((
+                        ScalarValue::Int64(Some((num_rows - val) as i64)),
+                        casted_expr.name().to_string(),
+                    ));
                 }
             }
         }
@@ -219,11 +206,8 @@ fn take_optimizable_min(
                 .as_any()
                 .downcast_ref::<expressions::Column>()
             {
-                let current_val = &col_stats[col_expr.index()].min_value;
-                if let Some(val) = current_val.get_value() {
-                    if !val.is_null() && current_val.is_exact().unwrap_or(false) {
-                        return Some((val.clone(), casted_expr.name().to_string()));
-                    }
+                if let Sharpness::Exact(val) = &col_stats[col_expr.index()].min_value {
+                    return Some((val.clone(), casted_expr.name().to_string()));
                 }
             }
         }
@@ -244,11 +228,8 @@ fn take_optimizable_max(
                 .as_any()
                 .downcast_ref::<expressions::Column>()
             {
-                let current_val = &col_stats[col_expr.index()].max_value;
-                if let Some(val) = current_val.get_value() {
-                    if !val.is_null() && current_val.is_exact().unwrap_or(false) {
-                        return Some((val.clone(), casted_expr.name().to_string()));
-                    }
+                if let Sharpness::Exact(val) = &col_stats[col_expr.index()].max_value {
+                    return Some((val.clone(), casted_expr.name().to_string()));
                 }
             }
         }

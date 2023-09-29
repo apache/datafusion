@@ -51,53 +51,23 @@ pub async fn get_statistics_with_limit(
     while let Some(res) = all_files.next().await {
         let (file, file_stats) = res?;
         result_files.push(file);
-        num_rows = if let Some(exactness) = num_rows.is_exact() {
-            if exactness {
-                if file_stats.num_rows == Sharpness::Absent {
-                    Sharpness::Exact(0_usize)
-                        .add(&Sharpness::Exact(num_rows.get_value().unwrap()))
-                } else {
-                    file_stats
-                        .num_rows
-                        .add(&Sharpness::Exact(num_rows.get_value().unwrap()))
-                }
-            } else if file_stats.num_rows == Sharpness::Absent {
-                Sharpness::Exact(0_usize)
-                    .add(&Sharpness::Inexact(num_rows.get_value().unwrap()))
-            } else {
-                file_stats
-                    .num_rows
-                    .add(&Sharpness::Inexact(num_rows.get_value().unwrap()))
-            }
-        } else {
-            file_stats.num_rows
+        num_rows = match (file_stats.num_rows, num_rows.clone()) {
+            (Sharpness::Absent, rhs) => rhs.to_inexact(),
+            (lhs, Sharpness::Absent) => lhs.to_inexact(),
+            (lhs, rhs) => lhs.add(&rhs),
         };
-        total_byte_size = if let Some(exactness) = total_byte_size.is_exact() {
-            if exactness {
-                if file_stats.total_byte_size == Sharpness::Absent {
-                    Sharpness::Exact(0_usize)
-                        .add(&Sharpness::Exact(total_byte_size.get_value().unwrap()))
-                } else {
-                    file_stats
-                        .total_byte_size
-                        .add(&Sharpness::Exact(total_byte_size.get_value().unwrap()))
-                }
-            } else if file_stats.total_byte_size == Sharpness::Absent {
-                Sharpness::Exact(0_usize)
-                    .add(&Sharpness::Inexact(total_byte_size.get_value().unwrap()))
-            } else {
-                file_stats
-                    .total_byte_size
-                    .add(&Sharpness::Inexact(total_byte_size.get_value().unwrap()))
-            }
-        } else {
-            file_stats.total_byte_size
+        total_byte_size = match (file_stats.total_byte_size, total_byte_size.clone()) {
+            (Sharpness::Absent, rhs) => rhs.to_inexact(),
+            (lhs, Sharpness::Absent) => lhs.to_inexact(),
+            (lhs, rhs) => lhs.add(&rhs),
         };
+
         if !file_stats.column_statistics.is_empty() {
             has_statistics = true;
             for (i, cs) in file_stats.column_statistics.iter().enumerate() {
                 null_counts[i] = if cs.null_count == Sharpness::Absent {
-                    null_counts[i].clone()
+                    // Downcast to inexact
+                    null_counts[i].clone().to_inexact()
                 } else {
                     null_counts[i].add(&cs.null_count)
                 };

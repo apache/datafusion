@@ -57,6 +57,7 @@ use datafusion_physical_expr::{
 };
 use datafusion_physical_plan::unbounded_output;
 
+use datafusion_common::stats::Sharpness;
 use itertools::izip;
 
 /// The `EnforceDistribution` rule ensures that distribution requirements are
@@ -1271,12 +1272,10 @@ fn ensure_distribution(
     // Don't need to apply when the returned row count is not greater than 1:
     let stats = dist_context.plan.statistics()?;
     let mut repartition_beneficial_stat = true;
-    if stats.all_exact() {
-        repartition_beneficial_stat = stats
-            .num_rows
-            .get_value()
-            .map(|num_rows| num_rows > 1)
-            .unwrap_or(true);
+    if let Sharpness::Exact(num_rows) = stats.num_rows {
+        // when we are sure that number of rows is <=1
+        // repartitioning is not beneficial
+        repartition_beneficial_stat = num_rows > 1;
     }
 
     // Remove unnecessary repartition from the physical plan if any

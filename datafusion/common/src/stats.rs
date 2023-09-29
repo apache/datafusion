@@ -94,6 +94,14 @@ impl<T: Debug + Clone + PartialEq + Eq + Display + PartialOrd> Sharpness<T> {
             (_, _) => Sharpness::Absent,
         }
     }
+
+    /// Convert Sharpness from exact to inexact.
+    pub fn to_inexact(self) -> Self {
+        match self {
+            Sharpness::Exact(val) => Sharpness::Inexact(val),
+            other => other,
+        }
+    }
 }
 
 impl Sharpness<usize> {
@@ -189,71 +197,24 @@ impl Statistics {
         schema
             .fields()
             .iter()
-            .map(|field| {
-                let inf = ScalarValue::try_from(field.data_type()).ok();
-                ColumnStatistics {
-                    null_count: Sharpness::Absent,
-                    max_value: inf
-                        .clone()
-                        .map(Sharpness::Inexact)
-                        .unwrap_or(Sharpness::Absent),
-                    min_value: inf.map(Sharpness::Inexact).unwrap_or(Sharpness::Absent),
-                    distinct_count: Sharpness::Absent,
-                }
-            })
+            .map(|field| ColumnStatistics::new_with_unbounded_column(field.data_type()))
             .collect()
-    }
-
-    /// Returns true if all the statistical parameters contain exact information.
-    pub fn all_exact(&self) -> bool {
-        self.num_rows.is_exact().unwrap_or(false)
-            && self.total_byte_size.is_exact().unwrap_or(false)
-            && self.column_statistics.iter().all(|col_stat| {
-                col_stat.distinct_count.is_exact().unwrap_or(false)
-                    && col_stat.max_value.is_exact().unwrap_or(false)
-                    && col_stat.min_value.is_exact().unwrap_or(false)
-                    && col_stat.null_count.is_exact().unwrap_or(false)
-            })
     }
 
     /// If the exactness of a [`Statistics`] instance is lost, this function relaxes
     /// the exactness of all information by converting them [`Sharpness::Inexact`].
     pub fn make_inexact(self) -> Self {
         Statistics {
-            num_rows: if let Sharpness::Exact(val) = &self.num_rows {
-                Sharpness::Inexact(*val)
-            } else {
-                self.num_rows
-            },
-            total_byte_size: if let Sharpness::Exact(val) = &self.total_byte_size {
-                Sharpness::Inexact(*val)
-            } else {
-                self.total_byte_size
-            },
+            num_rows: self.num_rows.to_inexact(),
+            total_byte_size: self.total_byte_size.to_inexact(),
             column_statistics: self
                 .column_statistics
-                .iter()
+                .into_iter()
                 .map(|cs| ColumnStatistics {
-                    null_count: if let Sharpness::Exact(val) = &cs.null_count {
-                        Sharpness::Inexact(*val)
-                    } else {
-                        cs.null_count.clone()
-                    },
-                    max_value: if let Sharpness::Exact(val) = &cs.max_value {
-                        Sharpness::Inexact(val.clone())
-                    } else {
-                        cs.max_value.clone()
-                    },
-                    min_value: if let Sharpness::Exact(val) = &cs.min_value {
-                        Sharpness::Inexact(val.clone())
-                    } else {
-                        cs.min_value.clone()
-                    },
-                    distinct_count: if let Sharpness::Exact(val) = &cs.distinct_count {
-                        Sharpness::Inexact(*val)
-                    } else {
-                        cs.distinct_count.clone()
-                    },
+                    null_count: cs.null_count.to_inexact(),
+                    max_value: cs.max_value.to_inexact(),
+                    min_value: cs.min_value.to_inexact(),
+                    distinct_count: cs.distinct_count.to_inexact(),
                 })
                 .collect::<Vec<_>>(),
         }
@@ -297,14 +258,13 @@ impl ColumnStatistics {
 
     /// Returns the [`ColumnStatistics`] corresponding to the given datatype by assigning infinite bounds.
     pub fn new_with_unbounded_column(dt: &DataType) -> ColumnStatistics {
-        let null = ScalarValue::try_from(dt.clone()).ok();
+        let inf = ScalarValue::try_from(dt.clone())
+            .map(Sharpness::Inexact)
+            .unwrap_or(Sharpness::Absent);
         ColumnStatistics {
             null_count: Sharpness::Absent,
-            max_value: null
-                .clone()
-                .map(Sharpness::Inexact)
-                .unwrap_or(Sharpness::Absent),
-            min_value: null.map(Sharpness::Inexact).unwrap_or(Sharpness::Absent),
+            max_value: inf.clone(),
+            min_value: inf,
             distinct_count: Sharpness::Absent,
         }
     }
