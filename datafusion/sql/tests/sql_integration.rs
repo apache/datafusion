@@ -3895,6 +3895,40 @@ Projection: person.id, person.age
 }
 
 #[test]
+fn test_prepare_statement_infer_types_from_between_predicate() {
+    let sql = "SELECT id, age FROM person WHERE age BETWEEN $1 AND $2";
+
+    let expected_plan = r#"
+Projection: person.id, person.age
+  Filter: person.age BETWEEN $1 AND $2
+    TableScan: person
+        "#
+    .trim();
+
+    let expected_dt = "[Int32]";
+    let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+
+    let actual_types = plan.get_parameter_types().unwrap();
+    let expected_types = HashMap::from([
+        ("$1".to_string(), Some(DataType::Int32)),
+        ("$2".to_string(), Some(DataType::Int32)),
+    ]);
+    assert_eq!(actual_types, expected_types);
+
+    // replace params with values
+    let param_values = vec![ScalarValue::Int32(Some(10)), ScalarValue::Int32(Some(30))];
+    let expected_plan = r#"
+Projection: person.id, person.age
+  Filter: person.age BETWEEN Int32(10) AND Int32(30)
+    TableScan: person
+        "#
+    .trim();
+    let plan = plan.replace_params_with_values(&param_values).unwrap();
+
+    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+}
+
+#[test]
 fn test_prepare_statement_infer_types_subquery() {
     let sql = "SELECT id, age FROM person WHERE age = (select max(age) from person where id = $1)";
 
