@@ -18,12 +18,10 @@
 use arrow::compute::kernels::numeric::add;
 use arrow_array::{ArrayRef, Float64Array, Int32Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
-use datafusion::datasource::MemTable;
 use datafusion::prelude::*;
 use datafusion::{
     execution::registry::FunctionRegistry,
-    physical_plan::{expressions::AvgAccumulator, functions::make_scalar_function},
-    test_util,
+    physical_plan::functions::make_scalar_function, test_util,
 };
 use datafusion_common::cast::as_float64_array;
 use datafusion_common::{assert_batches_eq, cast::as_int32_array, Result, ScalarValue};
@@ -46,6 +44,24 @@ async fn csv_query_custom_udf_with_cast() -> Result<()> {
         "| AVG(custom_sqrt(aggregate_test_100.c11)) |",
         "+------------------------------------------+",
         "| 0.6584408483418833                       |",
+        "+------------------------------------------+",
+    ];
+    assert_batches_eq!(&expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_query_avg_sqrt() -> Result<()> {
+    let ctx = create_udf_context();
+    register_aggregate_csv(&ctx).await?;
+    // Note it is a different column (c12) than above (c11)
+    let sql = "SELECT avg(custom_sqrt(c12)) FROM aggregate_test_100";
+    let actual = plan_and_collect(&ctx, sql).await.unwrap();
+    let expected = [
+        "+------------------------------------------+",
+        "| AVG(custom_sqrt(aggregate_test_100.c12)) |",
+        "+------------------------------------------+",
+        "| 0.6706002946036462                       |",
         "+------------------------------------------+",
     ];
     assert_batches_eq!(&expected, &actual);
@@ -226,51 +242,6 @@ async fn scalar_udf_override_built_in_scalar_function() -> Result<()> {
     Ok(())
 }
 
-/// tests the creation, registration and usage of a UDAF
-#[tokio::test]
-async fn simple_udaf() -> Result<()> {
-    let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
-
-    let batch1 = RecordBatch::try_new(
-        Arc::new(schema.clone()),
-        vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
-    )?;
-    let batch2 = RecordBatch::try_new(
-        Arc::new(schema.clone()),
-        vec![Arc::new(Int32Array::from(vec![4, 5]))],
-    )?;
-
-    let ctx = SessionContext::new();
-
-    let provider = MemTable::try_new(Arc::new(schema), vec![vec![batch1], vec![batch2]])?;
-    ctx.register_table("t", Arc::new(provider))?;
-
-    // define a udaf, using a DataFusion's accumulator
-    let my_avg = create_udaf(
-        "my_avg",
-        vec![DataType::Float64],
-        Arc::new(DataType::Float64),
-        Volatility::Immutable,
-        Arc::new(|_| Ok(Box::<AvgAccumulator>::default())),
-        Arc::new(vec![DataType::UInt64, DataType::Float64]),
-    );
-
-    ctx.register_udaf(my_avg);
-
-    let result = plan_and_collect(&ctx, "SELECT MY_AVG(a) FROM t").await?;
-
-    let expected = [
-        "+-------------+",
-        "| my_avg(t.a) |",
-        "+-------------+",
-        "| 3.0         |",
-        "+-------------+",
-    ];
-    assert_batches_eq!(expected, &result);
-
-    Ok(())
-}
-
 #[tokio::test]
 async fn udaf_as_window_func() -> Result<()> {
     #[derive(Debug)]
@@ -326,6 +297,47 @@ async fn udaf_as_window_func() -> Result<()> {
 
     let dataframe = context.sql(sql).await.unwrap();
     assert_eq!(format!("{:?}", dataframe.logical_plan()), expected);
+    Ok(())
+}
+
+#[tokio::test]
+async fn case_sensitive_identifiers_user_defined_functions() -> Result<()> {
+    let ctx = SessionContext::new();
+    let arr = Int32Array::from(vec![1]);
+    let batch = RecordBatch::try_from_iter(vec![("i", Arc::new(arr) as _)])?;
+    ctx.register_batch("t", batch).unwrap();
+
+    let myfunc = |args: &[ArrayRef]| Ok(Arc::clone(&args[0]));
+    let myfunc = make_scalar_function(myfunc);
+
+    ctx.register_udf(create_udf(
+        "MY_FUNC",
+        vec![DataType::Int32],
+        Arc::new(DataType::Int32),
+        Volatility::Immutable,
+        myfunc,
+    ));
+
+    // doesn't work as it was registered with non lowercase
+    let err = plan_and_collect(&ctx, "SELECT MY_FUNC(i) FROM t")
+        .await
+        .unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("Error during planning: Invalid function \'my_func\'"));
+
+    // Can call it if you put quotes
+    let result = plan_and_collect(&ctx, "SELECT \"MY_FUNC\"(i) FROM t").await?;
+
+    let expected = [
+        "+--------------+",
+        "| MY_FUNC(t.i) |",
+        "+--------------+",
+        "| 1            |",
+        "+--------------+",
+    ];
+    assert_batches_eq!(expected, &result);
+
     Ok(())
 }
 

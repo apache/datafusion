@@ -2331,46 +2331,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn case_sensitive_identifiers_user_defined_functions() -> Result<()> {
-        let ctx = SessionContext::new();
-        ctx.register_table("t", test::table_with_sequence(1, 1).unwrap())
-            .unwrap();
-
-        let myfunc = |args: &[ArrayRef]| Ok(Arc::clone(&args[0]));
-        let myfunc = make_scalar_function(myfunc);
-
-        ctx.register_udf(create_udf(
-            "MY_FUNC",
-            vec![DataType::Int32],
-            Arc::new(DataType::Int32),
-            Volatility::Immutable,
-            myfunc,
-        ));
-
-        // doesn't work as it was registered with non lowercase
-        let err = plan_and_collect(&ctx, "SELECT MY_FUNC(i) FROM t")
-            .await
-            .unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("Error during planning: Invalid function \'my_func\'"));
-
-        // Can call it if you put quotes
-        let result = plan_and_collect(&ctx, "SELECT \"MY_FUNC\"(i) FROM t").await?;
-
-        let expected = [
-            "+--------------+",
-            "| MY_FUNC(t.i) |",
-            "+--------------+",
-            "| 1            |",
-            "+--------------+",
-        ];
-        assert_batches_eq!(expected, &result);
-
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn case_sensitive_identifiers_user_defined_aggregates() -> Result<()> {
         let ctx = SessionContext::new();
         ctx.register_table("t", test::table_with_sequence(1, 1).unwrap())
