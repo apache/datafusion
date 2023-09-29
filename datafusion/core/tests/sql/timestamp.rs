@@ -567,25 +567,30 @@ async fn timestamp_sub_interval_days() -> Result<()> {
 #[tokio::test]
 async fn timestamp_add_interval_months() -> Result<()> {
     let ctx = SessionContext::new();
+    let table_a =
+        make_timestamp_tz_table::<TimestampNanosecondType>(Some("+00:00".into()))?;
+    ctx.register_table("table_a", table_a)?;
 
-    let sql = "SELECT NOW(), NOW() + INTERVAL '17' MONTH;";
+    let sql = "SELECT ts, ts + INTERVAL '17' MONTH FROM table_a;";
     let results = execute_to_batches(&ctx, sql).await;
-    let actual = result_vec(&results);
+    let actual_vec = result_vec(&results);
 
-    let res1 = actual[0][0].as_str();
-    let res2 = actual[0][1].as_str();
+    for actual in actual_vec {
+        let res1 = actual[0].as_str();
+        let res2 = actual[1].as_str();
 
-    let format = "%Y-%m-%dT%H:%M:%S%.6fZ";
-    let t1_naive = NaiveDateTime::parse_from_str(res1, format).unwrap();
-    let t2_naive = NaiveDateTime::parse_from_str(res2, format).unwrap();
+        let format = "%Y-%m-%dT%H:%M:%S%.6fZ";
+        let t1_naive = NaiveDateTime::parse_from_str(res1, format).unwrap();
+        let t2_naive = NaiveDateTime::parse_from_str(res2, format).unwrap();
 
-    let year = t1_naive.year() + (t1_naive.month0() as i32 + 17) / 12;
-    let month = (t1_naive.month0() + 17) % 12 + 1;
+        let year = t1_naive.year() + (t1_naive.month0() as i32 + 17) / 12;
+        let month = (t1_naive.month0() + 17) % 12 + 1;
 
-    assert_eq!(
-        t1_naive.with_year(year).unwrap().with_month(month).unwrap(),
-        t2_naive
-    );
+        assert_eq!(
+            t1_naive.with_year(year).unwrap().with_month(month).unwrap(),
+            t2_naive
+        );
+    }
     Ok(())
 }
 
