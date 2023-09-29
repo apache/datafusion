@@ -15,10 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::ops::Deref;
+use std::sync::Arc;
+
 use arrow::array::{Int32Builder, Int64Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use async_trait::async_trait;
 use datafusion::datasource::provider::{TableProvider, TableType};
 use datafusion::error::Result;
 use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
@@ -32,10 +34,10 @@ use datafusion::physical_plan::{
 use datafusion::prelude::*;
 use datafusion::scalar::ScalarValue;
 use datafusion_common::cast::as_primitive_array;
-use datafusion_common::{not_impl_err, DataFusionError};
+use datafusion_common::{internal_err, not_impl_err, DataFusionError};
 use datafusion_expr::expr::{BinaryExpr, Cast};
-use std::ops::Deref;
-use std::sync::Arc;
+
+use async_trait::async_trait;
 
 fn create_batch(value: i32, num_rows: usize) -> Result<RecordBatch> {
     let mut builder = Int32Builder::with_capacity(num_rows);
@@ -96,9 +98,14 @@ impl ExecutionPlan for CustomPlan {
 
     fn with_new_children(
         self: Arc<Self>,
-        _: Vec<Arc<dyn ExecutionPlan>>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        unreachable!()
+        // CustomPlan has no children
+        if children.is_empty() {
+            Ok(self)
+        } else {
+            internal_err!("Children cannot be replaced in {self:?}")
+        }
     }
 
     fn execute(
