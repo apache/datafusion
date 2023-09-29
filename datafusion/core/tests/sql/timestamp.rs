@@ -567,7 +567,8 @@ async fn timestamp_sub_interval_days() -> Result<()> {
 #[tokio::test]
 async fn timestamp_add_interval_months() -> Result<()> {
     let ctx = SessionContext::new();
-    let table_a = make_timestamp_tz_table::<TimestampNanosecondType>(Some("+00:00".into()))?;
+    let table_a =
+        make_timestamp_tz_table::<TimestampNanosecondType>(Some("+00:00".into()))?;
     ctx.register_table("table_a", table_a)?;
 
     let sql = "SELECT ts, ts + INTERVAL '17' MONTH FROM table_a;";
