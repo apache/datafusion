@@ -2222,16 +2222,13 @@ mod tests {
     use crate::execution::context::QueryPlanner;
     use crate::execution::memory_pool::MemoryConsumer;
     use crate::execution::runtime_env::RuntimeConfig;
-    use crate::physical_plan::expressions::AvgAccumulator;
     use crate::test;
     use crate::test_util::parquet_test_data;
     use crate::variable::VarType;
-    use arrow::array::ArrayRef;
     use arrow::record_batch::RecordBatch;
     use arrow_schema::{Field, Schema};
     use async_trait::async_trait;
-    use datafusion_expr::{create_udaf, create_udf, Expr, Volatility};
-    use datafusion_physical_expr::functions::make_scalar_function;
+    use datafusion_expr::Expr;
     use std::fs::File;
     use std::path::PathBuf;
     use std::sync::Weak;
