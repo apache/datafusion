@@ -375,10 +375,11 @@ pub mod windows;
 
 use crate::repartition::RepartitionExec;
 use crate::sorts::sort_preserving_merge::SortPreservingMergeExec;
+pub use datafusion_common::hash_utils;
 pub use datafusion_common::utils::project_schema;
 use datafusion_execution::TaskContext;
 pub use datafusion_physical_expr::{
-    expressions, functions, hash_utils, ordering_equivalence_properties_helper, udf,
+    expressions, functions, ordering_equivalence_properties_helper, udf,
 };
 
 #[cfg(test)]

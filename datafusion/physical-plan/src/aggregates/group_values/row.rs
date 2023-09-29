@@ -22,9 +22,9 @@ use arrow::record_batch::RecordBatch;
 use arrow::row::{RowConverter, Rows, SortField};
 use arrow_array::{Array, ArrayRef};
 use arrow_schema::{DataType, SchemaRef};
+use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
-use datafusion_physical_expr::hash_utils::create_hashes;
 use datafusion_physical_expr::EmitTo;
 use hashbrown::raw::RawTable;
 
