@@ -365,6 +365,30 @@
       <a class="reference internal nav-link" href="#scan-revisited">
        Scan Revisited
       </a>
+      <ul class="nav section-nav flex-column">
+       <li class="toc-h5 nav-item toc-entry">
+        <a class="reference internal nav-link" href="#additional-tableprovider-methods">
+         Additional
+         <code class="docutils literal notranslate">
+          <span class="pre">
+           TableProvider
+          </span>
+         </code>
+         Methods
+        </a>
+        <ul class="nav section-nav flex-column">
+         <li class="toc-h6 nav-item toc-entry">
+          <a class="reference internal nav-link" href="#supports-filters-pushdown">
+           <code class="docutils literal notranslate">
+            <span class="pre">
+             supports_filters_pushdown
+            </span>
+           </code>
+          </a>
+         </li>
+        </ul>
+       </li>
+      </ul>
      </li>
     </ul>
    </li>
@@ -523,6 +547,21 @@
 </pre></div>
 </div>
 <p>With this, and the implementation of the omitted methods, we can now use the <code class="docutils literal notranslate"><span class="pre">CustomDataSource</span></code> as a <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code> in DataFusion.</p>
+<section id="additional-tableprovider-methods">
+<h5>Additional <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code> Methods<a class="headerlink" href="#additional-tableprovider-methods" title="Link to this heading">¶</a></h5>
+<p><code class="docutils literal notranslate"><span class="pre">scan</span></code> has no default implementation, so it needed to be written. There are other methods on the <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code> that have default implementations, but can be overridden if needed to provide additional functionality.</p>
+<section id="supports-filters-pushdown">
+<h6><code class="docutils literal notranslate"><span class="pre">supports_filters_pushdown</span></code><a class="headerlink" href="#supports-filters-pushdown" title="Link to this heading">¶</a></h6>
+<p>The <code class="docutils literal notranslate"><span class="pre">supports_filters_pushdown</span></code> method can be overridden to indicate which filter expressions support being pushed down to the data source and within that the specificity of the pushdown.</p>
+<p>This returns a <code class="docutils literal notranslate"><span class="pre">Vec</span></code> of <code class="docutils literal notranslate"><span class="pre">TableProviderFilterPushDown</span></code> enums where each enum represents a filter that can be pushed down. The <code class="docutils literal notranslate"><span class="pre">TableProviderFilterPushDown</span></code> enum has three variants:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">TableProviderFilterPushDown::Unsupported</span></code> - the filter cannot be pushed down</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">TableProviderFilterPushDown::Exact</span></code> - the filter can be pushed down and the data source can guarantee that the filter will be applied completely to all rows. This is the highest performance option.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">TableProviderFilterPushDown::Inexact</span></code> - the filter can be pushed down, but the data source cannot guarantee that the filter will be applied to all rows. DataFusion will apply <code class="docutils literal notranslate"><span class="pre">Inexact</span></code> filters again after the scan to ensure correctness.</p></li>
+</ul>
+<p>For filters that can be pushed down, they’ll be passed to the <code class="docutils literal notranslate"><span class="pre">scan</span></code> method as the <code class="docutils literal notranslate"><span class="pre">filters</span></code> parameter and they can be made use of there.</p>
+</section>
+</section>
 </section>
 </section>
 </section>
