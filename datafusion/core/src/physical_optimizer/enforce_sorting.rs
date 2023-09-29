@@ -2035,7 +2035,6 @@ mod tests {
         let orig_plan =
             Arc::new(SortExec::new(sort_exprs, repartition)) as Arc<dyn ExecutionPlan>;
         let actual = get_plan_string(&orig_plan);
-        println!("{:?}", actual);
         let expected_input = vec![
             "SortExec: expr=[nullable_col@0 ASC]",
             "  RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
