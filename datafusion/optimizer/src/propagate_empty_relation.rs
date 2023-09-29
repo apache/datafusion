@@ -182,6 +182,7 @@ fn empty_child(plan: &LogicalPlan) -> Result<Option<LogicalPlan>> {
 #[cfg(test)]
 mod tests {
     use crate::eliminate_filter::EliminateFilter;
+    use crate::eliminate_nested_union::EliminateNestedUnion;
     use crate::optimizer::Optimizer;
     use crate::test::{
         assert_optimized_plan_eq, test_table_scan, test_table_scan_fields,
@@ -209,6 +210,7 @@ mod tests {
         fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
         let optimizer = Optimizer::with_rules(vec![
             Arc::new(EliminateFilter::new()),
+            Arc::new(EliminateNestedUnion::new()),
             Arc::new(PropagateEmptyRelation::new()),
         ]);
         let config = &mut OptimizerContext::new()
