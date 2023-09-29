@@ -48,6 +48,9 @@ pub mod utils;
 pub mod var_provider;
 pub mod window;
 
+// For backwards compatibility
+pub use datafusion_common::hash_utils;
+
 pub use aggregate::groups_accumulator::{
     EmitTo, GroupsAccumulator, GroupsAccumulatorAdapter,
 };
