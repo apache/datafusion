@@ -1652,7 +1652,7 @@ mod tests {
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::datasource::physical_plan::{FileScanConfig, ParquetExec};
     use crate::physical_optimizer::enforce_sorting::EnforceSorting;
-    use crate::physical_optimizer::global_requirements::GlobalRequirements;
+    use crate::physical_optimizer::output_requirements::OutputRequirements;
     use crate::physical_plan::aggregates::{
         AggregateExec, AggregateMode, PhysicalGroupBy,
     };
@@ -2088,8 +2088,8 @@ mod tests {
             // TODO: Orthogonalize the tests here just to verify `EnforceDistribution` and create
             //       new tests for the cascade.
 
-            // Add the ancillary global requirements operator at the start:
-            let optimizer = GlobalRequirements::new_add_mode();
+            // Add the ancillary output requirements operator at the start:
+            let optimizer = OutputRequirements::new_add_mode();
             let optimized = optimizer.optimize($PLAN.clone(), &config)?;
 
             let optimized = if $FIRST_ENFORCE_DIST {
@@ -2118,8 +2118,8 @@ mod tests {
                 optimized
             };
 
-            // Remove the ancillary global requirements operator when done:
-            let optimizer = GlobalRequirements::new_remove_mode();
+            // Remove the ancillary output requirements operator when done:
+            let optimizer = OutputRequirements::new_remove_mode();
             let optimized = optimizer.optimize(optimized, &config)?;
 
             // Now format correctly
@@ -2956,7 +2956,7 @@ mod tests {
                 format!("SortMergeJoin: join_type={join_type}, on=[(a@0, c@2)]");
 
             let expected = match join_type {
-                // Should include 6 RepartitionExecs 3 SortExecs
+                // Should include 6 RepartitionExecs (3 hash, 3 round-robin), 3 SortExecs
                 JoinType::Inner | JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti =>
                     vec![
                         top_join_plan.as_str(),
@@ -2975,9 +2975,18 @@ mod tests {
                         "SortExec: expr=[c@2 ASC]",
                         "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                     ],
-                // Should include 7 RepartitionExecs
+                // Should include 7 RepartitionExecs (4 hash, 3 round-robin), 4 SortExecs
+                // Since ordering of the left child is not preserved after SortMergeJoin
+                // when mode is Right, RgihtSemi, RightAnti, Full
+                // - We need to add one additional SortExec after SortMergeJoin in contrast the test cases
+                //   when mode is Inner, Left, LeftSemi, LeftAnti
+                // Similarly, since partitioning of the left side is not preserved
+                // when mode is Right, RgihtSemi, RightAnti, Full
+                // - We need to add one additional Hash Repartition after SortMergeJoin in contrast the test
+                //   cases when mode is Inner, Left, LeftSemi, LeftAnti
                 _ => vec![
                         top_join_plan.as_str(),
+                        // Below 2 operators are differences introduced, when join mode is changed
                         "SortPreservingRepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
                         "SortExec: expr=[a@0 ASC]",
                         join_plan.as_str(),
@@ -2999,7 +3008,7 @@ mod tests {
             assert_optimized!(expected, top_join.clone(), true, true);
 
             let expected_first_sort_enforcement = match join_type {
-                // Should include 3 RepartitionExecs 3 SortExecs
+                // Should include 6 RepartitionExecs (3 hash, 3 round-robin), 3 SortExecs
                 JoinType::Inner | JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti =>
                     vec![
                         top_join_plan.as_str(),
@@ -3018,9 +3027,18 @@ mod tests {
                         "SortExec: expr=[c@2 ASC]",
                         "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                     ],
-                // Should include 8 RepartitionExecs (4 of them preserves ordering)
+                // Should include 8 RepartitionExecs (4 hash, 8 round-robin), 4 SortExecs
+                // Since ordering of the left child is not preserved after SortMergeJoin
+                // when mode is Right, RgihtSemi, RightAnti, Full
+                // - We need to add one additional SortExec after SortMergeJoin in contrast the test cases
+                //   when mode is Inner, Left, LeftSemi, LeftAnti
+                // Similarly, since partitioning of the left side is not preserved
+                // when mode is Right, RgihtSemi, RightAnti, Full
+                // - We need to add one additional Hash Repartition and Roundrobin repartition after
+                //   SortMergeJoin in contrast the test cases when mode is Inner, Left, LeftSemi, LeftAnti
                 _ => vec![
                     top_join_plan.as_str(),
+                    // Below 4 operators are differences introduced, when join mode is changed
                     "SortPreservingRepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
                     "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                     "SortExec: expr=[a@0 ASC]",
@@ -3061,7 +3079,7 @@ mod tests {
                         format!("SortMergeJoin: join_type={join_type}, on=[(b1@6, c@2)]");
 
                     let expected = match join_type {
-                        // Should include 3 RepartitionExecs and 3 SortExecs
+                        // Should include 6 RepartitionExecs(3 hash, 3 round-robin) and 3 SortExecs
                         JoinType::Inner | JoinType::Right => vec![
                             top_join_plan.as_str(),
                             join_plan.as_str(),
@@ -3079,8 +3097,8 @@ mod tests {
                             "SortExec: expr=[c@2 ASC]",
                             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                         ],
-                        // Should include 4 RepartitionExecs and 4 SortExecs
-                        _ => vec![
+                        // Should include 7 RepartitionExecs (4 hash, 3 round-robin) and 4 SortExecs
+                        JoinType::Left | JoinType::Full => vec![
                             top_join_plan.as_str(),
                             "SortPreservingRepartitionExec: partitioning=Hash([b1@6], 10), input_partitions=10",
                             "SortExec: expr=[b1@6 ASC]",
@@ -3099,6 +3117,8 @@ mod tests {
                             "SortExec: expr=[c@2 ASC]",
                             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                         ],
+                        // this match arm cannot be reached
+                        _ => unreachable!()
                     };
                     assert_optimized!(expected, top_join.clone(), true, true);
 
@@ -3122,7 +3142,7 @@ mod tests {
                             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                         ],
                         // Should include 8 RepartitionExecs (4 of them preserves order) and 4 SortExecs
-                        _ => vec![
+                        JoinType::Left | JoinType::Full => vec![
                             top_join_plan.as_str(),
                             "SortPreservingRepartitionExec: partitioning=Hash([b1@6], 10), input_partitions=10",
                             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
@@ -3143,6 +3163,8 @@ mod tests {
                             "SortExec: expr=[c@2 ASC]",
                             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                         ],
+                        // this match arm cannot be reached
+                        _ => unreachable!()
                     };
                     assert_optimized!(
                         expected_first_sort_enforcement,
@@ -3279,6 +3301,10 @@ mod tests {
             "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC]",
         ];
         assert_optimized!(expected, exec, true);
+        // In this case preserving ordering through order preserving operators is not desirable
+        // (according to flag: bounded_order_preserving_variants)
+        // hence in this case ordering lost during CoalescePartitionsExec and re-introduced with
+        // SortExec at the top.
         let expected = &[
             "SortExec: expr=[a@0 ASC]",
             "CoalescePartitionsExec",

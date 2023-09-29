@@ -16,10 +16,10 @@
 // under the License.
 
 //! The GlobalOrderRequire optimizer rule either:
-//! - Adds an auxiliary `GlobalRequirementExec` operator to keep track of global
+//! - Adds an auxiliary `OutputRequirementExec` operator to keep track of global
 //!   ordering and distribution requirement across rules, or
-//! - Removes the auxiliary `GlobalRequirementExec` operator from the physical plan.
-//!   Since the `GlobalRequirementExec` operator is only a helper operator, it
+//! - Removes the auxiliary `OutputRequirementExec` operator from the physical plan.
+//!   Since the `OutputRequirementExec` operator is only a helper operator, it
 //!   shouldn't occur in the final plan (i.e. the executed plan).
 
 use std::sync::Arc;
@@ -37,23 +37,23 @@ use datafusion_physical_expr::{
 };
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 
-/// This rule either adds or removes [`GlobalRequirements`]s to/from the physical
+/// This rule either adds or removes [`OutputRequirements`]s to/from the physical
 /// plan according to its `mode` attribute, which is set by the constructors
 /// `new_add_mode` and `new_remove_mode`. With this rule, we can keep track of
 /// the global requirements (ordering and distribution) across rules.
 ///
-/// The primary usecase of this node and rule is to specify and preserve the desired output 
+/// The primary usecase of this node and rule is to specify and preserve the desired output
 /// ordering and distribution the entire plan. When sending to a single client, a single partition may
 /// be desirable, but when sending to a multi-partitioned writer, keeping multiple partitions may be
-/// better. 
+/// better.
 #[derive(Debug)]
-pub struct GlobalRequirements {
+pub struct OutputRequirements {
     mode: RuleMode,
 }
 
-impl GlobalRequirements {
+impl OutputRequirements {
     /// Create a new rule which works in `Add` mode; i.e. it simply adds a
-    /// top-level [`GlobalRequirementExec`] into the physical plan to keep track
+    /// top-level [`OutputRequirementExec`] into the physical plan to keep track
     /// of global ordering and distribution requirements if there are any.
     /// Note that this rule should run at the beginning.
     pub fn new_add_mode() -> Self {
@@ -63,11 +63,11 @@ impl GlobalRequirements {
     }
 
     /// Create a new rule which works in `Remove` mode; i.e. it simply removes
-    /// the top-level [`GlobalRequirementExec`] from the physical plan if there is
-    /// any. We do this because a `GlobalRequirementExec` is an ancillary,
+    /// the top-level [`OutputRequirementExec`] from the physical plan if there is
+    /// any. We do this because a `OutputRequirementExec` is an ancillary,
     /// non-executable operator whose sole purpose is to track global
     /// requirements during optimization. Therefore, a
-    /// `GlobalRequirementExec` should not appear in the final plan.
+    /// `OutputRequirementExec` should not appear in the final plan.
     pub fn new_remove_mode() -> Self {
         Self {
             mode: RuleMode::Remove,
@@ -86,15 +86,15 @@ enum RuleMode {
 /// - the ordering requirement in its `order_requirement` attribute.
 /// - the distribution requirement in its `dist_requirement` attribute.
 ///
-/// See [`GlobalRequirements`] for more details
+/// See [`OutputRequirements`] for more details
 #[derive(Debug)]
-struct GlobalRequirementExec {
+struct OutputRequirementExec {
     input: Arc<dyn ExecutionPlan>,
     order_requirement: Option<LexOrderingReq>,
     dist_requirement: Distribution,
 }
 
-impl GlobalRequirementExec {
+impl OutputRequirementExec {
     fn new(
         input: Arc<dyn ExecutionPlan>,
         requirements: Option<LexOrderingReq>,
@@ -112,17 +112,17 @@ impl GlobalRequirementExec {
     }
 }
 
-impl DisplayAs for GlobalRequirementExec {
+impl DisplayAs for OutputRequirementExec {
     fn fmt_as(
         &self,
         _t: DisplayFormatType,
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
-        write!(f, "GlobalRequirementExec")
+        write!(f, "OutputRequirementExec")
     }
 }
 
-impl ExecutionPlan for GlobalRequirementExec {
+impl ExecutionPlan for OutputRequirementExec {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -184,7 +184,7 @@ impl ExecutionPlan for GlobalRequirementExec {
     }
 }
 
-impl PhysicalOptimizerRule for GlobalRequirements {
+impl PhysicalOptimizerRule for OutputRequirements {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
@@ -194,7 +194,7 @@ impl PhysicalOptimizerRule for GlobalRequirements {
             RuleMode::Add => require_top_ordering(plan),
             RuleMode::Remove => plan.transform_up(&|plan| {
                 if let Some(sort_req) =
-                    plan.as_any().downcast_ref::<GlobalRequirementExec>()
+                    plan.as_any().downcast_ref::<OutputRequirementExec>()
                 {
                     Ok(Transformed::Yes(sort_req.input()))
                 } else {
@@ -205,7 +205,7 @@ impl PhysicalOptimizerRule for GlobalRequirements {
     }
 
     fn name(&self) -> &str {
-        "GlobalRequirements"
+        "OutputRequirements"
     }
 
     fn schema_check(&self) -> bool {
@@ -213,15 +213,15 @@ impl PhysicalOptimizerRule for GlobalRequirements {
     }
 }
 
-/// This functions adds ancillary `GlobalRequirementExec` to the the physical plan, so that
+/// This functions adds ancillary `OutputRequirementExec` to the the physical plan, so that
 /// global requirements are not lost during optimization.
 fn require_top_ordering(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
     let (new_plan, is_changed) = require_top_ordering_helper(plan)?;
     if is_changed {
         Ok(new_plan)
     } else {
-        // Add `GlobalRequirementExec` to the top, with no specified ordering and distribution requirement.
-        Ok(Arc::new(GlobalRequirementExec::new(
+        // Add `OutputRequirementExec` to the top, with no specified ordering and distribution requirement.
+        Ok(Arc::new(OutputRequirementExec::new(
             new_plan,
             // there is no ordering requirement
             None,
@@ -230,9 +230,9 @@ fn require_top_ordering(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn Executio
     }
 }
 
-/// Helper function that adds an ancillary `GlobalRequirementExec` to the given plan.
+/// Helper function that adds an ancillary `OutputRequirementExec` to the given plan.
 /// First entry in the tuple is resulting plan, second entry indicates whether any
-/// `GlobalRequirementExec` is added to the plan.
+/// `OutputRequirementExec` is added to the plan.
 fn require_top_ordering_helper(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<(Arc<dyn ExecutionPlan>, bool)> {
@@ -245,13 +245,13 @@ fn require_top_ordering_helper(
         let req_dist = sort_exec.required_input_distribution()[0].clone();
         let reqs = PhysicalSortRequirement::from_sort_exprs(req_ordering);
         Ok((
-            Arc::new(GlobalRequirementExec::new(plan, Some(reqs), req_dist)) as _,
+            Arc::new(OutputRequirementExec::new(plan, Some(reqs), req_dist)) as _,
             true,
         ))
     } else if let Some(spm) = plan.as_any().downcast_ref::<SortPreservingMergeExec>() {
         let reqs = PhysicalSortRequirement::from_sort_exprs(spm.expr());
         Ok((
-            Arc::new(GlobalRequirementExec::new(
+            Arc::new(OutputRequirementExec::new(
                 plan,
                 Some(reqs),
                 Distribution::SinglePartition,
