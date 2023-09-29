@@ -178,8 +178,6 @@ impl LogicalPlanBuilder {
             .map(|x| x.clone().unwrap_or_else(|| DataType::Utf8))
             .collect::<Vec<_>>();
 
-        let mut nullable_columns = HashMap::new();
-
         let preliminary_fields = field_types
             .iter()
             .enumerate()
@@ -194,6 +192,8 @@ impl LogicalPlanBuilder {
             preliminary_fields,
             HashMap::new(),
         )?);
+
+        let mut nullable_columns = HashMap::new();
 
         for (i, j) in nulls {
             values[i][j] = Expr::Literal(ScalarValue::try_from(field_types[j].clone())?);
