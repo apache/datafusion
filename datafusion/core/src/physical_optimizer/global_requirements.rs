@@ -41,6 +41,11 @@ use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeE
 /// plan according to its `mode` attribute, which is set by the constructors
 /// `new_add_mode` and `new_remove_mode`. With this rule, we can keep track of
 /// the global requirements (ordering and distribution) across rules.
+///
+/// The primary usecase of this node and rule is to specify and preserve the desired output 
+/// ordering and distribution the entire plan. When sending to a single client, a single partition may
+/// be desirable, but when sending to a multi-partitioned writer, keeping multiple partitions may be
+/// better. 
 #[derive(Debug)]
 pub struct GlobalRequirements {
     mode: RuleMode,
@@ -80,6 +85,8 @@ enum RuleMode {
 /// requirements during optimization. It imposes
 /// - the ordering requirement in its `order_requirement` attribute.
 /// - the distribution requirement in its `dist_requirement` attribute.
+///
+/// See [`GlobalRequirements`] for more details
 #[derive(Debug)]
 struct GlobalRequirementExec {
     input: Arc<dyn ExecutionPlan>,
