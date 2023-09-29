@@ -15,16 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Optimizer rule [TODO]
+//! Optimizer rule to replace nested unions to single union.
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
-use datafusion_expr::logical_plan::{LogicalPlan, Union};
+use datafusion_expr::{
+    builder::project_with_column_index,
+    expr_rewriter::coerce_plan_expr_for_schema,
+    logical_plan::{LogicalPlan, Projection, Union},
+};
 
 use crate::optimizer::ApplyOrder;
 use std::sync::Arc;
 
 #[derive(Default)]
-/// [TODO] add description
+/// An optimization rule that replaces nested unions with a single union.
 pub struct EliminateNestedUnion;
 
 impl EliminateNestedUnion {
@@ -38,11 +42,13 @@ impl OptimizerRule for EliminateNestedUnion {
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        config: &dyn OptimizerConfig,
+        _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::Union(union) => {
                 let Union { inputs, schema } = union;
+
+                let union_schema = schema.clone();
 
                 let inputs = inputs
                     .into_iter()
@@ -50,12 +56,25 @@ impl OptimizerRule for EliminateNestedUnion {
                         LogicalPlan::Union(Union { inputs, .. }) => inputs.clone(),
                         _ => vec![Arc::clone(plan)],
                     })
-                    .map(|plan| Ok(plan))
+                    .map(|plan| {
+                        let plan = coerce_plan_expr_for_schema(&plan, &union_schema)?;
+                        match plan {
+                            LogicalPlan::Projection(Projection {
+                                expr, input, ..
+                            }) => Ok(Arc::new(project_with_column_index(
+                                expr,
+                                input,
+                                union_schema.clone(),
+                            )?)),
+                            _ => Ok(Arc::new(plan)),
+                        }
+                    })
                     .collect::<Result<Vec<_>>>()?;
 
-                let schema = schema.clone();
-
-                Ok(Some(LogicalPlan::Union(Union { inputs, schema })))
+                Ok(Some(LogicalPlan::Union(Union {
+                    inputs,
+                    schema: union_schema,
+                })))
             }
             _ => Ok(None),
         }
@@ -72,10 +91,18 @@ impl OptimizerRule for EliminateNestedUnion {
 
 #[cfg(test)]
 mod tests {
-    use datafusion_expr::Union;
-
     use super::*;
     use crate::test::*;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_expr::logical_plan::table_scan;
+
+    fn schema() -> Schema {
+        Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("key", DataType::Utf8, false),
+            Field::new("value", DataType::Int32, false),
+        ])
+    }
 
     fn assert_optimized_plan_equal(plan: &LogicalPlan, expected: &str) -> Result<()> {
         assert_optimized_plan_eq(Arc::new(EliminateNestedUnion::new()), plan, expected)
@@ -83,54 +110,37 @@ mod tests {
 
     #[test]
     fn eliminate_nothing() -> Result<()> {
-        let table_1 = test_table_scan_with_name("table_1")?;
-        let table_2 = test_table_scan_with_name("table_2")?;
+        let plan_builder = table_scan(Some("table"), &schema(), None)?;
 
-        let schema = table_1.schema().clone();
-
-        let plan = LogicalPlan::Union(Union {
-            inputs: vec![Arc::new(table_1), Arc::new(table_2)],
-            schema,
-        });
+        let plan = plan_builder
+            .clone()
+            .union(plan_builder.clone().build()?)?
+            .build()?;
 
         let expected = "\
         Union\
-        \n  TableScan: table_1\
-        \n  TableScan: table_2";
+        \n  TableScan: table\
+        \n  TableScan: table";
         assert_optimized_plan_equal(&plan, expected)
     }
 
     #[test]
     fn eliminate_nested_union() -> Result<()> {
-        let table_1 = Arc::new(test_table_scan_with_name("table_1")?);
-        let table_2 = Arc::new(test_table_scan_with_name("table_2")?);
-        let table_3 = Arc::new(test_table_scan_with_name("table_3")?);
-        let table_4 = Arc::new(test_table_scan_with_name("table_4")?);
+        let plan_builder = table_scan(Some("table"), &schema(), None)?;
 
-        let schema = table_1.schema().clone();
+        let plan = plan_builder
+            .clone()
+            .union(plan_builder.clone().build()?)?
+            .union(plan_builder.clone().build()?)?
+            .union(plan_builder.clone().build()?)?
+            .build()?;
 
-        let plan = LogicalPlan::Union(Union {
-            inputs: vec![
-                table_1,
-                Arc::new(LogicalPlan::Union(Union {
-                    inputs: vec![
-                        table_2,
-                        Arc::new(LogicalPlan::Union(Union {
-                            inputs: vec![table_3, table_4],
-                            schema: schema.clone(),
-                        })),
-                    ],
-                    schema: schema.clone(),
-                })),
-            ],
-            schema: schema.clone(),
-        });
         let expected = "\
         Union\
-        \n  TableScan: table_1\
-        \n  TableScan: table_2\
-        \n  TableScan: table_3\
-        \n  TableScan: table_4";
+        \n  TableScan: table\
+        \n  TableScan: table\
+        \n  TableScan: table\
+        \n  TableScan: table";
         assert_optimized_plan_equal(&plan, expected)
     }
 }
