@@ -635,6 +635,9 @@ pub fn make_partition(sz: i32) -> RecordBatch {
 
 /// Specialised String representation
 fn col_str(column: &ArrayRef, row_index: usize) -> String {
+    // NullArray::is_null() does not work on NullArray.
+    // can remove check for DataType::Null when
+    // https://github.com/apache/arrow-rs/issues/4835 is fixed
     if column.data_type() == &DataType::Null || column.is_null(row_index) {
         return "NULL".to_string();
     }

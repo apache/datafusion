@@ -30,7 +30,7 @@ use crate::datasource::physical_plan::{CsvExec, ParquetExec};
 use crate::error::Result;
 use crate::physical_optimizer::utils::{
     add_sort_above, get_children_exectrees, get_plan_string, is_coalesce_partitions,
-    is_repartition, is_sort_preserving_merge, unbounded_output, ExecTree,
+    is_repartition, is_sort_preserving_merge, ExecTree,
 };
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
@@ -57,6 +57,7 @@ use datafusion_physical_expr::utils::{
 use datafusion_physical_expr::{
     expr_list_eq_strict_order, PhysicalExpr, PhysicalSortRequirement,
 };
+use datafusion_physical_plan::unbounded_output;
 
 use itertools::izip;
 

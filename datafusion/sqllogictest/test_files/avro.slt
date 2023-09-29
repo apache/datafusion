@@ -48,6 +48,18 @@ STORED AS AVRO
 WITH HEADER ROW
 LOCATION '../../testing/data/avro/nested_records.avro'
 
+statement ok
+CREATE EXTERNAL TABLE simple_enum
+STORED AS AVRO
+WITH HEADER ROW
+LOCATION '../../testing/data/avro/simple_enum.avro'
+
+statement ok
+CREATE EXTERNAL TABLE simple_fixed
+STORED AS AVRO
+WITH HEADER ROW
+LOCATION '../../testing/data/avro/simple_fixed.avro'
+
 # test avro query
 query IT
 SELECT id, CAST(string_col AS varchar) FROM alltypes_plain
@@ -94,6 +106,22 @@ SELECT f1, f2 FROM nested_records
 ----
 {ns2.record2.f1_1: aaa, ns2.record2.f1_2: 10, ns2.record2.f1_3: {ns3.record3.f1_3_1: 3.14}} [{ns4.record4.f2_1: true, ns4.record4.f2_2: 1.2}, {ns4.record4.f2_1: true, ns4.record4.f2_2: 2.2}]
 {ns2.record2.f1_1: bbb, ns2.record2.f1_2: 20, ns2.record2.f1_3: {ns3.record3.f1_3_1: 3.14}} [{ns4.record4.f2_1: false, ns4.record4.f2_2: 10.2}]
+
+# test avro enum
+query TTT
+SELECT f1, f2, f3 FROM simple_enum
+----
+a g j
+b h k
+c e NULL
+d f i
+
+# test avro fixed
+query ???
+SELECT f1, f2, f3 FROM simple_fixed
+----
+6162636465 666768696a6b6c6d6e6f 414243444546
+3132333435 31323334353637383930 NULL
 
 # test avro explain
 query TT
