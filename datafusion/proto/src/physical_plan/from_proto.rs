@@ -609,12 +609,11 @@ impl From<&protobuf::ColumnStats> for ColumnStatistics {
 
 impl From<protobuf::Sharpness> for Sharpness<usize> {
     fn from(s: protobuf::Sharpness) -> Self {
-        let sharpness_type =
-            if let Some(s_type) = protobuf::SharpnessInfo::from_i32(s.sharpness_info) {
-                s_type
-            } else {
-                return Sharpness::Absent;
-            };
+        let sharpness_type = if let Ok(s_type) = s.sharpness_info.try_into() {
+            s_type
+        } else {
+            return Sharpness::Absent;
+        };
         match sharpness_type {
             protobuf::SharpnessInfo::Exact => {
                 if s.val.is_none() {
@@ -645,12 +644,11 @@ impl From<protobuf::Sharpness> for Sharpness<usize> {
 
 impl From<protobuf::Sharpness> for Sharpness<ScalarValue> {
     fn from(s: protobuf::Sharpness) -> Self {
-        let sharpness_type =
-            if let Some(s_type) = protobuf::SharpnessInfo::from_i32(s.sharpness_info) {
-                s_type
-            } else {
-                return Sharpness::Absent;
-            };
+        let sharpness_type = if let Ok(s_type) = s.sharpness_info.try_into() {
+            s_type
+        } else {
+            return Sharpness::Absent;
+        };
         match sharpness_type {
             protobuf::SharpnessInfo::Exact => {
                 if s.val.is_none() {
