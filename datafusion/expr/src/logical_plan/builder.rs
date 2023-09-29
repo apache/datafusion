@@ -1605,7 +1605,6 @@ mod tests {
             .union(plan.build()?)?
             .build()?;
 
-        // output has only one union
         let expected = "Union\
         \n  Union\
         \n    Union\
