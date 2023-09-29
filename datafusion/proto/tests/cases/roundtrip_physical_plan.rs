@@ -53,6 +53,7 @@ use datafusion::physical_plan::{functions, udaf};
 use datafusion::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr, Statistics};
 use datafusion::prelude::SessionContext;
 use datafusion::scalar::ScalarValue;
+use datafusion_common::stats::Sharpness;
 use datafusion_common::Result;
 use datafusion_expr::{
     Accumulator, AccumulatorFactoryFunction, AggregateUDF, ReturnTypeFunction, Signature,
@@ -473,10 +474,11 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
             1024,
         )]],
         statistics: Statistics {
-            num_rows: Some(100),
-            total_byte_size: Some(1024),
-            column_statistics: None,
-            is_exact: false,
+            num_rows: Sharpness::Inexact(100),
+            total_byte_size: Sharpness::Inexact(1024),
+            column_statistics: Statistics::unbounded_column_statistics(&Arc::new(
+                Schema::new(vec![Field::new("col", DataType::Utf8, false)]),
+            )),
         },
         projection: None,
         limit: None,

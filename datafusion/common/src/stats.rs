@@ -33,7 +33,7 @@ pub enum Sharpness<T: Debug + Clone + PartialEq + Eq + Display + PartialOrd> {
 }
 
 impl<T: Debug + Clone + PartialEq + Eq + Display + PartialOrd> Sharpness<T> {
-    /// If the information is known somehow, it return the value. Otherwise, it returns None.
+    /// If the information is known somehow, it returns the value. Otherwise, it returns None.
     pub fn get_value(&self) -> Option<T> {
         match self {
             Sharpness::Exact(val) | Sharpness::Inexact(val) => Some(val.clone()),

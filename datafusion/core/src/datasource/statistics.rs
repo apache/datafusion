@@ -146,8 +146,8 @@ pub async fn get_statistics_with_limit(
 
     let statistics = if all_files.next().await.is_some() {
         // if we still have files in the stream, it means that the limit kicked
-        // in and that the statistic could have been different if we processed
-        // the files in a different order.
+        // in and the statistic could have been different if we have
+        // processed the files in a different order.
         Statistics {
             num_rows,
             total_byte_size,
