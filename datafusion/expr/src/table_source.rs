@@ -30,14 +30,14 @@ use std::any::Any;
 pub enum TableProviderFilterPushDown {
     /// The expression cannot be used by the provider.
     Unsupported,
-    /// The expression can be used to help minimise the data retrieved,
-    /// but the provider cannot guarantee that all returned tuples
-    /// satisfy the filter. The Filter plan node containing this expression
-    /// will be preserved.
+    /// The expression can be used to reduce the data retrieved,
+    /// but the provider cannot guarantee it will omit all tuples that
+    /// may be filtered. In this case, DataFusion will apply an additional
+    /// `Filter` operation after the scan to ensure all rows are filtered correctly.
     Inexact,
-    /// The provider guarantees that all returned data satisfies this
-    /// filter expression. The Filter plan node containing this expression
-    /// will be removed.
+    /// The provider **guarantees** that it will omit **all** tuples that are
+    /// filtered by the filter expression. This is the fastest option, if available
+    /// as DataFusion will not apply additional filtering.
     Exact,
 }
 
