@@ -254,6 +254,50 @@ async fn simple_udaf() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn case_sensitive_identifiers_user_defined_aggregates() -> Result<()> {
+    let ctx = SessionContext::new();
+    let arr = Int32Array::from(vec![1]);
+    let batch = RecordBatch::try_from_iter(vec![("i", Arc::new(arr) as _)])?;
+    ctx.register_batch("t", batch).unwrap();
+
+    // Note capitalization
+    let my_avg = create_udaf(
+        "MY_AVG",
+        vec![DataType::Float64],
+        Arc::new(DataType::Float64),
+        Volatility::Immutable,
+        Arc::new(|_| Ok(Box::<AvgAccumulator>::default())),
+        Arc::new(vec![DataType::UInt64, DataType::Float64]),
+    );
+
+    ctx.register_udaf(my_avg);
+
+    // doesn't work as it was registered as non lowercase
+    let err = ctx.sql("SELECT MY_AVG(i) FROM t").await.unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("Error during planning: Invalid function \'my_avg\'"));
+
+    // Can call it if you put quotes
+    let result = ctx
+        .sql("SELECT \"MY_AVG\"(i) FROM t")
+        .await?
+        .collect()
+        .await?;
+
+    let expected = [
+        "+-------------+",
+        "| MY_AVG(t.i) |",
+        "+-------------+",
+        "| 1.0         |",
+        "+-------------+",
+    ];
+    assert_batches_eq!(expected, &result);
+
+    Ok(())
+}
+
 /// Returns an context with a table "t" and the "first" and "time_sum"
 /// aggregate functions registered.
 ///

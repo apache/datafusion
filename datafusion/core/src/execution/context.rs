@@ -2331,47 +2331,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn case_sensitive_identifiers_user_defined_aggregates() -> Result<()> {
-        let ctx = SessionContext::new();
-        ctx.register_table("t", test::table_with_sequence(1, 1).unwrap())
-            .unwrap();
-
-        // Note capitalization
-        let my_avg = create_udaf(
-            "MY_AVG",
-            vec![DataType::Float64],
-            Arc::new(DataType::Float64),
-            Volatility::Immutable,
-            Arc::new(|_| Ok(Box::<AvgAccumulator>::default())),
-            Arc::new(vec![DataType::UInt64, DataType::Float64]),
-        );
-
-        ctx.register_udaf(my_avg);
-
-        // doesn't work as it was registered as non lowercase
-        let err = plan_and_collect(&ctx, "SELECT MY_AVG(i) FROM t")
-            .await
-            .unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("Error during planning: Invalid function \'my_avg\'"));
-
-        // Can call it if you put quotes
-        let result = plan_and_collect(&ctx, "SELECT \"MY_AVG\"(i) FROM t").await?;
-
-        let expected = [
-            "+-------------+",
-            "| MY_AVG(t.i) |",
-            "+-------------+",
-            "| 1.0         |",
-            "+-------------+",
-        ];
-        assert_batches_eq!(expected, &result);
-
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn query_csv_with_custom_partition_extension() -> Result<()> {
         let tmp_dir = TempDir::new()?;
 
