@@ -73,6 +73,30 @@ impl ExecTree {
     }
 }
 
+/// Get `ExecTree` for each child of the plan if they are tracked.
+/// # Arguments
+///
+/// * `n_children` - Children count of the plan of interest
+/// * `onward` - Contains `Some(ExecTree)` of the plan tracked.
+///            - Contains `None` is plan is not tracked.
+///
+/// # Returns
+///
+/// A `Vec<Option<ExecTree>>` that contains tracking information of each child.
+/// If a child is `None`, it is not tracked. If `Some(ExecTree)` child is tracked also.
+pub(crate) fn get_children_exectrees(
+    n_children: usize,
+    onward: &Option<ExecTree>,
+) -> Vec<Option<ExecTree>> {
+    let mut children_onward = vec![None; n_children];
+    if let Some(exec_tree) = &onward {
+        for child in &exec_tree.children {
+            children_onward[child.idx] = Some(child.clone());
+        }
+    }
+    children_onward
+}
+
 /// This utility function adds a `SortExec` above an operator according to the
 /// given ordering requirements while preserving the original partitioning.
 pub fn add_sort_above(
