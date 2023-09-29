@@ -672,28 +672,14 @@ impl From<&Sharpness<usize>> for protobuf::Sharpness {
 impl From<&Sharpness<datafusion_common::ScalarValue>> for protobuf::Sharpness {
     fn from(s: &Sharpness<datafusion_common::ScalarValue>) -> protobuf::Sharpness {
         match s {
-            Sharpness::Exact(val) | Sharpness::Inexact(val) => {
-                let res: Result<ScalarValue> = val.try_into().map_err(|_| {
-                    DataFusionError::Internal("Undefined sharpness".to_owned())
-                });
-                if res.is_err() {
-                    return protobuf::Sharpness {
-                        sharpness_info: protobuf::SharpnessInfo::Absent.into(),
-                        val: Some(ScalarValue { value: None }),
-                    };
-                };
-                if s.is_exact().unwrap() {
-                    protobuf::Sharpness {
-                        sharpness_info: protobuf::SharpnessInfo::Exact.into(),
-                        val: Some(val.try_into().unwrap()),
-                    }
-                } else {
-                    protobuf::Sharpness {
-                        sharpness_info: protobuf::SharpnessInfo::Inexact.into(),
-                        val: Some(val.try_into().unwrap()),
-                    }
-                }
-            }
+            Sharpness::Exact(val) => protobuf::Sharpness {
+                sharpness_info: protobuf::SharpnessInfo::Exact.into(),
+                val: val.try_into().ok(),
+            },
+            Sharpness::Inexact(val) => protobuf::Sharpness {
+                sharpness_info: protobuf::SharpnessInfo::Inexact.into(),
+                val: val.try_into().ok(),
+            },
             Sharpness::Absent => protobuf::Sharpness {
                 sharpness_info: protobuf::SharpnessInfo::Absent.into(),
                 val: Some(ScalarValue { value: None }),

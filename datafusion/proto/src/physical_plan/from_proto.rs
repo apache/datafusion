@@ -583,25 +583,25 @@ impl TryFrom<&protobuf::FileGroup> for Vec<PartitionedFile> {
 impl From<&protobuf::ColumnStats> for ColumnStatistics {
     fn from(cs: &protobuf::ColumnStats) -> ColumnStatistics {
         ColumnStatistics {
-            null_count: if cs.null_count.is_none() {
-                Sharpness::Absent
+            null_count: if let Some(nc) = &cs.null_count {
+                nc.clone().into()
             } else {
-                cs.null_count.clone().unwrap().into()
+                Sharpness::Absent
             },
-            max_value: if cs.max_value.is_none() {
-                Sharpness::Absent
+            max_value: if let Some(max) = &cs.max_value {
+                max.clone().into()
             } else {
-                cs.max_value.clone().unwrap().into()
+                Sharpness::Absent
             },
-            min_value: if cs.min_value.is_none() {
-                Sharpness::Absent
+            min_value: if let Some(min) = &cs.min_value {
+                min.clone().into()
             } else {
-                cs.min_value.clone().unwrap().into()
+                Sharpness::Absent
             },
-            distinct_count: if cs.distinct_count.is_none() {
-                Sharpness::Absent
+            distinct_count: if let Some(dc) = &cs.distinct_count {
+                dc.clone().into()
             } else {
-                cs.distinct_count.clone().unwrap().into()
+                Sharpness::Absent
             },
         }
     }
@@ -616,23 +616,27 @@ impl From<protobuf::Sharpness> for Sharpness<usize> {
         };
         match sharpness_type {
             protobuf::SharpnessInfo::Exact => {
-                if s.val.is_none() {
-                    Sharpness::Absent
-                } else if let Ok(ScalarValue::UInt64(Some(val))) =
-                    ScalarValue::try_from(&s.val.unwrap())
-                {
-                    Sharpness::Exact(val as usize)
+                if let Some(val) = s.val {
+                    if let Ok(ScalarValue::UInt64(Some(val))) =
+                        ScalarValue::try_from(&val)
+                    {
+                        Sharpness::Exact(val as usize)
+                    } else {
+                        Sharpness::Absent
+                    }
                 } else {
                     Sharpness::Absent
                 }
             }
             protobuf::SharpnessInfo::Inexact => {
-                if s.val.is_none() {
-                    Sharpness::Absent
-                } else if let Ok(ScalarValue::UInt64(Some(val))) =
-                    ScalarValue::try_from(&s.val.unwrap())
-                {
-                    Sharpness::Inexact(val as usize)
+                if let Some(val) = s.val {
+                    if let Ok(ScalarValue::UInt64(Some(val))) =
+                        ScalarValue::try_from(&val)
+                    {
+                        Sharpness::Inexact(val as usize)
+                    } else {
+                        Sharpness::Absent
+                    }
                 } else {
                     Sharpness::Absent
                 }
@@ -651,19 +655,23 @@ impl From<protobuf::Sharpness> for Sharpness<ScalarValue> {
         };
         match sharpness_type {
             protobuf::SharpnessInfo::Exact => {
-                if s.val.is_none() {
-                    Sharpness::Absent
-                } else if let Ok(val) = ScalarValue::try_from(&s.val.unwrap()) {
-                    Sharpness::Exact(val)
+                if let Some(val) = s.val {
+                    if let Ok(val) = ScalarValue::try_from(&val) {
+                        Sharpness::Exact(val)
+                    } else {
+                        Sharpness::Absent
+                    }
                 } else {
                     Sharpness::Absent
                 }
             }
             protobuf::SharpnessInfo::Inexact => {
-                if s.val.is_none() {
-                    Sharpness::Absent
-                } else if let Ok(val) = ScalarValue::try_from(&s.val.unwrap()) {
-                    Sharpness::Inexact(val)
+                if let Some(val) = s.val {
+                    if let Ok(val) = ScalarValue::try_from(&val) {
+                        Sharpness::Inexact(val)
+                    } else {
+                        Sharpness::Absent
+                    }
                 } else {
                     Sharpness::Absent
                 }
@@ -690,15 +698,15 @@ impl TryFrom<&protobuf::Statistics> for Statistics {
         let column_statistics =
             s.column_stats.iter().map(|s| s.into()).collect::<Vec<_>>();
         Ok(Statistics {
-            num_rows: if s.num_rows.is_none() {
-                Sharpness::Absent
+            num_rows: if let Some(nr) = &s.num_rows {
+                nr.clone().into()
             } else {
-                s.num_rows.clone().unwrap().into()
+                Sharpness::Absent
             },
-            total_byte_size: if s.total_byte_size.is_none() {
-                Sharpness::Absent
+            total_byte_size: if let Some(tbs) = &s.total_byte_size {
+                tbs.clone().into()
             } else {
-                s.total_byte_size.clone().unwrap().into()
+                Sharpness::Absent
             },
             // No column statistic (None) is encoded with empty array
             column_statistics,

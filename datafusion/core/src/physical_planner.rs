@@ -2755,10 +2755,8 @@ mod tests {
 
 digraph {
     1[shape=box label="ProjectionExec: expr=[id@0 + 2 as employee.id + Int32(2)]", tooltip=""]
-    2[shape=box label="RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1", tooltip=""]
+    2[shape=box label="EmptyExec: produce_one_row=false", tooltip=""]
     1 -> 2 [arrowhead=none, arrowtail=normal, dir=back]
-    3[shape=box label="EmptyExec: produce_one_row=false", tooltip=""]
-    2 -> 3 [arrowhead=none, arrowtail=normal, dir=back]
 }
 // End DataFusion GraphViz Plan
 "#;

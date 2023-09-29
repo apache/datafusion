@@ -43,8 +43,8 @@ pub async fn get_statistics_with_limit(
     // at least one file has them. If none of the files provide them, then they
     // will be omitted from the statistics. The missing values will be counted
     // as zero.
-    let mut num_rows = Sharpness::Absent;
-    let mut total_byte_size = Sharpness::Absent;
+    let mut num_rows = Sharpness::Exact(0);
+    let mut total_byte_size = Sharpness::Exact(0);
 
     // fusing the stream allows us to call next safely even once it is finished
     let mut all_files = Box::pin(all_files.fuse());

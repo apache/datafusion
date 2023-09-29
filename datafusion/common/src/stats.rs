@@ -95,7 +95,7 @@ impl<T: Debug + Clone + PartialEq + Eq + Display + PartialOrd> Sharpness<T> {
         }
     }
 
-    /// Convert Sharpness from exact to inexact.
+    /// Converts Sharpness from exact to inexact.
     pub fn to_inexact(self) -> Self {
         match self {
             Sharpness::Exact(val) => Sharpness::Inexact(val),
@@ -147,9 +147,9 @@ impl<T: fmt::Debug + Clone + PartialEq + Eq + Display + PartialOrd> Debug
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Sharpness::Exact(inner) => write!(f, "Exact:({:?})", inner),
-            Sharpness::Inexact(inner) => write!(f, "Approximate:({:?})", inner),
-            Sharpness::Absent => write!(f, "Absent Info"),
+            Sharpness::Exact(inner) => write!(f, "Exact({:?})", inner),
+            Sharpness::Inexact(inner) => write!(f, "Inexact({:?})", inner),
+            Sharpness::Absent => write!(f, "Absent"),
         }
     }
 }
@@ -159,9 +159,9 @@ impl<T: fmt::Debug + Clone + PartialEq + Eq + Display + PartialOrd> Display
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Sharpness::Exact(inner) => write!(f, "Exact:({})", inner),
-            Sharpness::Inexact(inner) => write!(f, "Approximate:({})", inner),
-            Sharpness::Absent => write!(f, "Absent Info"),
+            Sharpness::Exact(inner) => write!(f, "Exact({})", inner),
+            Sharpness::Inexact(inner) => write!(f, "Inexact({})", inner),
+            Sharpness::Absent => write!(f, "Absent"),
         }
     }
 }
@@ -225,7 +225,7 @@ impl Display for Statistics {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Number of Rows={}, Number of Bytes={}, Columns Statistics={:?}",
+            "Rows={}, Bytes={}, ColStats={:?}",
             self.num_rows, self.total_byte_size, self.column_statistics
         )?;
 

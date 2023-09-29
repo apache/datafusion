@@ -207,7 +207,9 @@ fn take_optimizable_min(
                 .downcast_ref::<expressions::Column>()
             {
                 if let Sharpness::Exact(val) = &col_stats[col_expr.index()].min_value {
-                    return Some((val.clone(), casted_expr.name().to_string()));
+                    if !val.is_null() {
+                        return Some((val.clone(), casted_expr.name().to_string()));
+                    }
                 }
             }
         }
@@ -229,7 +231,9 @@ fn take_optimizable_max(
                 .downcast_ref::<expressions::Column>()
             {
                 if let Sharpness::Exact(val) = &col_stats[col_expr.index()].max_value {
-                    return Some((val.clone(), casted_expr.name().to_string()));
+                    if !val.is_null() {
+                        return Some((val.clone(), casted_expr.name().to_string()));
+                    }
                 }
             }
         }

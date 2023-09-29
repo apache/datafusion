@@ -835,8 +835,8 @@ fn estimate_inner_join_cardinality(
         // this when the statistics are exact (since it is a very strong assumption).
         if left_stat.min_value.get_value()? > right_stat.max_value.get_value()? {
             return match (
-                left_stat.min_value.is_exact().unwrap(),
-                right_stat.max_value.is_exact().unwrap(),
+                left_stat.min_value.is_exact().unwrap_or(false),
+                right_stat.max_value.is_exact().unwrap_or(false),
             ) {
                 (true, true) => Some(Sharpness::Exact(0)),
                 _ => Some(Sharpness::Inexact(0)),
@@ -844,8 +844,8 @@ fn estimate_inner_join_cardinality(
         }
         if left_stat.max_value.get_value()? < right_stat.min_value.get_value()? {
             return match (
-                left_stat.max_value.is_exact().unwrap(),
-                right_stat.min_value.is_exact().unwrap(),
+                left_stat.max_value.is_exact().unwrap_or(false),
+                right_stat.min_value.is_exact().unwrap_or(false),
             ) {
                 (true, true) => Some(Sharpness::Exact(0)),
                 _ => Some(Sharpness::Inexact(0)),
@@ -914,9 +914,8 @@ fn max_distinct_count(
             let ceiling =
                 num_rows.get_value()? - stats.null_count.get_value().unwrap_or(0);
             Some(
-                if num_rows.is_exact().unwrap()
-                    && stats.max_value.is_exact().unwrap()
-                    && stats.min_value.is_exact().unwrap()
+                if let (Sharpness::Exact(_), Sharpness::Exact(_), Sharpness::Exact(_)) =
+                    (num_rows, stats.max_value, stats.min_value)
                 {
                     Sharpness::Exact(numeric_range.min(ceiling))
                 } else {
