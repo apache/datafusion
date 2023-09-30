@@ -189,21 +189,23 @@ mod tests {
     use arrow::array::Int32Array;
     use arrow::datatypes::*;
     use arrow::record_batch::RecordBatch;
-    use datafusion_common::DataFusionError;
     use arrow_array::Array;
     use arrow_array::ListArray;
     use arrow_buffer::OffsetBuffer;
+    use datafusion_common::DataFusionError;
     use datafusion_common::Result;
 
     #[test]
     fn array_agg_i32() -> Result<()> {
         let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
 
-        let list = ListArray::from_iter_primitive::<Int32Type, _, _>(
-            vec![
-                Some(vec![Some(1), Some(2), Some(3), Some(4), Some(5)]),
-            ]
-        );
+        let list = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+            Some(1),
+            Some(2),
+            Some(3),
+            Some(4),
+            Some(5),
+        ])]);
         let list = ScalarValue::ListArr(Arc::new(list));
 
         generic_test_op!(a, DataType::Int32, ArrayAgg, list, DataType::Int32)
@@ -211,16 +213,15 @@ mod tests {
 
     #[test]
     fn array_agg_nested() -> Result<()> {
-        let a1 = ListArray::from_iter_primitive::<Int32Type, _, _>(
-            vec![
-                Some(vec![Some(1), Some(2), Some(3)]),
-            ]
-        );
-        let a2 = ListArray::from_iter_primitive::<Int32Type, _, _>(
-            vec![
-                Some(vec![Some(4), Some(5)]),
-            ]
-        );
+        let a1 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+            Some(1),
+            Some(2),
+            Some(3),
+        ])]);
+        let a2 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+            Some(4),
+            Some(5),
+        ])]);
         let l1 = ListArray::new(
             Arc::new(Field::new("item", a1.data_type().to_owned(), true)),
             OffsetBuffer::from_lengths([a1.len() + a2.len()]),
@@ -228,16 +229,12 @@ mod tests {
             None,
         );
 
-        let a1 = ListArray::from_iter_primitive::<Int32Type, _, _>(
-            vec![
-                Some(vec![Some(6)]),
-            ]
-        );
-        let a2 = ListArray::from_iter_primitive::<Int32Type, _, _>(
-            vec![
-                Some(vec![Some(7), Some(8)]),
-            ]
-        );
+        let a1 =
+            ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![Some(6)])]);
+        let a2 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+            Some(7),
+            Some(8),
+        ])]);
         let l2 = ListArray::new(
             Arc::new(Field::new("item", a1.data_type().to_owned(), true)),
             OffsetBuffer::from_lengths([a1.len() + a2.len()]),
@@ -245,11 +242,8 @@ mod tests {
             None,
         );
 
-        let a1 = ListArray::from_iter_primitive::<Int32Type, _, _>(
-            vec![
-                Some(vec![Some(9)]),
-            ]
-        );
+        let a1 =
+            ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![Some(9)])]);
         let l3 = ListArray::new(
             Arc::new(Field::new("item", a1.data_type().to_owned(), true)),
             OffsetBuffer::from_lengths([a1.len()]),
