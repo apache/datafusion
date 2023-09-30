@@ -29,6 +29,7 @@ use crate::cast::{
     as_fixed_size_binary_array, as_fixed_size_list_array, as_struct_array,
 };
 use crate::error::{DataFusionError, Result, _internal_err, _not_impl_err};
+use crate::hash_utils::create_hashes;
 use crate::utils::wrap_into_list_array;
 use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::compute::kernels::numeric::*;
@@ -451,8 +452,14 @@ impl std::hash::Hash for ScalarValue {
                 v.hash(state);
                 t.hash(state);
             }
-            // TODO(jayzhan): implement hash for Array in arrow-rs
-            ListArr(_) => {}
+            ListArr(arr) => {
+                let arrays = vec![arr.to_owned()];
+                let hashes_buffer = &mut vec![0; arr.len()];
+                let random_state = ahash::RandomState::with_seeds(0, 0, 0, 0);
+                let hashes = create_hashes(&arrays, &random_state, hashes_buffer).unwrap();
+                // Hash back to std::hash::Hasher
+                hashes.hash(state);
+            }
             Date32(v) => v.hash(state),
             Date64(v) => v.hash(state),
             Time32Second(v) => v.hash(state),
