@@ -1095,7 +1095,7 @@ impl ScalarValue {
             ScalarValue::FixedSizeBinary(_, v) => v.is_none(),
             ScalarValue::LargeBinary(v) => v.is_none(),
             ScalarValue::Fixedsizelist(v, ..) => v.is_none(),
-            ScalarValue::List(_, _) => todo!("is_null for list"),
+            ScalarValue::List(_, _) => unimplemented!("Deprecated"),
             ScalarValue::ListArr(arr) => arr.len() == arr.null_count(),
             ScalarValue::Date32(v) => v.is_none(),
             ScalarValue::Date64(v) => v.is_none(),
@@ -1790,11 +1790,9 @@ impl ScalarValue {
                     // Element is valid
                     valid.append(true);
                 }
-            } else if let ScalarValue::List(_, _) = scalar {
-                panic!("No List")
             } else {
                 return _internal_err!(
-                    "v2 Expected ScalarValue::List element. Received {scalar:?}"
+                    "Expected ScalarValue::List element. Received {scalar:?}"
                 );
             }
         }
@@ -2566,8 +2564,8 @@ impl ScalarValue {
                 eq_array_primitive!(array, index, LargeBinaryArray, val)
             }
             ScalarValue::Fixedsizelist(..) => unimplemented!(),
-            ScalarValue::List(_, _) => unimplemented!(),
-            ScalarValue::ListArr(_) => unimplemented!("ListArray"),
+            ScalarValue::List(_, _) => unimplemented!("Deprecated"),
+            ScalarValue::ListArr(_) => unimplemented!("ListArr"),
             ScalarValue::Date32(val) => {
                 eq_array_primitive!(array, index, Date32Array, val)
             }
