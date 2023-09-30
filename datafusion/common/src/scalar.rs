@@ -456,7 +456,8 @@ impl std::hash::Hash for ScalarValue {
                 let arrays = vec![arr.to_owned()];
                 let hashes_buffer = &mut vec![0; arr.len()];
                 let random_state = ahash::RandomState::with_seeds(0, 0, 0, 0);
-                let hashes = create_hashes(&arrays, &random_state, hashes_buffer).unwrap();
+                let hashes =
+                    create_hashes(&arrays, &random_state, hashes_buffer).unwrap();
                 // Hash back to std::hash::Hasher
                 hashes.hash(state);
             }
@@ -1665,6 +1666,17 @@ impl ScalarValue {
                 let list_arr = wrap_into_list_array(Arc::new(arr));
                 Arc::new(list_arr)
             }
+            DataType::Boolean => {
+                let mut bools = Vec::with_capacity(scalars.len());
+                for scalar in scalars.into_iter() {
+                    if let ScalarValue::Boolean(v) = scalar {
+                        bools.push(v);
+                    }
+                }
+                let arr = BooleanArray::from(bools);
+                let list_arr = wrap_into_list_array(Arc::new(arr));
+                Arc::new(list_arr)
+            }
             _ => {
                 return _not_impl_err!(
                     "Unsupported data type for DistinctCountAccumulator: {:?}",
@@ -2017,7 +2029,9 @@ impl ScalarValue {
             }
             ScalarValue::List(_, _) => unreachable!("Deprecated"),
             ScalarValue::ListArr(arr) => {
-                let arrays = std::iter::repeat(arr.as_ref()).take(size).collect::<Vec<_>>();
+                let arrays = std::iter::repeat(arr.as_ref())
+                    .take(size)
+                    .collect::<Vec<_>>();
                 arrow::compute::concat(arrays.as_slice()).unwrap()
             }
             ScalarValue::Date32(e) => {
