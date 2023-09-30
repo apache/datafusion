@@ -156,7 +156,7 @@ datafusion.execution.parquet.bloom_filter_enabled false
 datafusion.execution.parquet.bloom_filter_fpp NULL
 datafusion.execution.parquet.bloom_filter_ndv NULL
 datafusion.execution.parquet.column_index_truncate_length NULL
-datafusion.execution.parquet.compression NULL
+datafusion.execution.parquet.compression zstd(3)
 datafusion.execution.parquet.created_by datafusion
 datafusion.execution.parquet.data_page_row_count_limit 18446744073709551615
 datafusion.execution.parquet.data_pagesize_limit 1048576
