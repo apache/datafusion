@@ -241,7 +241,7 @@ jobs:
       - name: Verify that benchmark queries return expected results
         run: |
           export TPCH_DATA=`realpath datafusion/sqllogictest/test_files/tpch/data`
-          cargo test serde_q --profile release-nonlto --features=ci -- --test-threads=1
+          cargo test plan_q --package datafusion-benchmarks --profile release-nonlto --features=ci -- --test-threads=1
           INCLUDE_TPCH=true cargo test --test sqllogictests
       - name: Verify Working Directory Clean
         run: git diff --exit-code
