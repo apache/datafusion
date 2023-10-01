@@ -226,17 +226,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
-      - name: Cache Cargo
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            ./target/
-          # this key equals the ones on `linux-build-lib` for re-use
-          key: cargo-cache-benchmark-${{ hashFiles('datafusion/**/Cargo.toml', 'benchmarks/Cargo.toml') }}
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -252,7 +241,7 @@ jobs:
       - name: Verify that benchmark queries return expected results
         run: |
           export TPCH_DATA=`realpath datafusion/sqllogictest/test_files/tpch/data`
-          cargo test serde_q --profile release-nonlto --features=ci -- --test-threads=1
+          cargo test plan_q --package datafusion-benchmarks --profile release-nonlto --features=ci -- --test-threads=1
           INCLUDE_TPCH=true cargo test --test sqllogictests
       - name: Verify Working Directory Clean
         run: git diff --exit-code
