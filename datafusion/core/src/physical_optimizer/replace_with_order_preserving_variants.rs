@@ -251,7 +251,7 @@ pub(crate) fn replace_with_order_preserving_variants(
         // any case, as doing so helps fix the pipeline.
         // Also do the replacement if opted-in via config options.
         let use_order_preserving_variant =
-            config.optimizer.prefer_exising_sort || unbounded_output(plan);
+            config.optimizer.prefer_existing_sort || unbounded_output(plan);
         let updated_sort_input = get_updated_plan(
             exec_tree,
             is_spr_better || use_order_preserving_variant,

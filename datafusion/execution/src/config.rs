@@ -150,7 +150,7 @@ impl SessionConfig {
     ///
     /// [prefer_existing_sort]: datafusion_common::config::OptimizerOptions::prefer_existing_sort
     pub fn prefer_existing_sort(&self) -> bool {
-        self.options.optimizer.prefer_exising_sort
+        self.options.optimizer.prefer_existing_sort
     }
 
     /// Are statistics collected during execution?
@@ -228,7 +228,7 @@ impl SessionConfig {
     ///
     /// [prefer_existing_sort]: datafusion_common::config::OptimizerOptions::prefer_existing_sort
     pub fn with_prefer_existing_sort(mut self, enabled: bool) -> Self {
-        self.options.optimizer.prefer_exising_sort = enabled;
+        self.options.optimizer.prefer_existing_sort = enabled;
         self
     }
 

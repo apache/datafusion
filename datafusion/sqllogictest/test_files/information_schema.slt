@@ -188,7 +188,7 @@ datafusion.optimizer.enable_topk_aggregation true
 datafusion.optimizer.filter_null_join_keys false
 datafusion.optimizer.hash_join_single_partition_threshold 1048576
 datafusion.optimizer.max_passes 3
-datafusion.optimizer.prefer_exising_sort false
+datafusion.optimizer.prefer_existing_sort false
 datafusion.optimizer.prefer_hash_join true
 datafusion.optimizer.repartition_aggregations true
 datafusion.optimizer.repartition_file_min_size 10485760
