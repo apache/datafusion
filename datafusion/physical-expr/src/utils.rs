@@ -172,15 +172,6 @@ pub fn convert_to_expr<T: Borrow<PhysicalSortExpr>>(
         .collect()
 }
 
-/// This function finds the indices of `targets` within `items`, taking into
-/// account equivalences according to `equal_properties`.
-pub fn get_indices_of_matching_exprs(
-    targets: &[Arc<dyn PhysicalExpr>],
-    items: &[Arc<dyn PhysicalExpr>],
-) -> Vec<usize> {
-    get_indices_of_exprs_strict(targets, items)
-}
-
 /// This function finds the indices of `targets` within `items` using strict
 /// equality.
 pub fn get_indices_of_exprs_strict<T: Borrow<Arc<dyn PhysicalExpr>>>(
@@ -787,7 +778,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_indices_of_matching_exprs() {
+    fn test_get_indices_of_exprs_strict() {
         let list1: Vec<Arc<dyn PhysicalExpr>> = vec![
             Arc::new(Column::new("a", 0)),
             Arc::new(Column::new("b", 1)),
@@ -799,8 +790,8 @@ mod tests {
             Arc::new(Column::new("c", 2)),
             Arc::new(Column::new("a", 0)),
         ];
-        assert_eq!(get_indices_of_matching_exprs(&list1, &list2), vec![2, 0, 1]);
-        assert_eq!(get_indices_of_matching_exprs(&list2, &list1), vec![1, 2, 0]);
+        assert_eq!(get_indices_of_exprs_strict(&list1, &list2), vec![2, 0, 1]);
+        assert_eq!(get_indices_of_exprs_strict(&list2, &list1), vec![1, 2, 0]);
     }
 
     #[test]

@@ -40,7 +40,7 @@ use datafusion_expr::{
 };
 use datafusion_physical_expr::{
     equivalence::OrderingEquivalenceBuilder,
-    utils::{convert_to_expr, get_indices_of_matching_exprs},
+    utils::convert_to_expr,
     window::{BuiltInWindowFunctionExpr, SlidingAggregateWindowExpr},
     AggregateExpr, OrderingEquivalenceProperties, PhysicalSortRequirement,
 };
@@ -50,6 +50,7 @@ mod window_agg_exec;
 
 pub use bounded_window_agg_exec::BoundedWindowAggExec;
 use datafusion_physical_expr::equivalence::PartitionSearchMode;
+use datafusion_physical_expr::utils::get_indices_of_exprs_strict;
 pub use window_agg_exec::WindowAggExec;
 
 pub use datafusion_physical_expr::window::{
@@ -320,9 +321,9 @@ pub(crate) fn get_ordered_partition_by_indices(
     let input_ordering_exprs = convert_to_expr(input_ordering);
     // let equal_properties = || input.equivalence_properties();
     let input_places =
-        get_indices_of_matching_exprs(&input_ordering_exprs, partition_by_exprs);
+        get_indices_of_exprs_strict(&input_ordering_exprs, partition_by_exprs);
     let mut partition_places =
-        get_indices_of_matching_exprs(partition_by_exprs, &input_ordering_exprs);
+        get_indices_of_exprs_strict(partition_by_exprs, &input_ordering_exprs);
     partition_places.sort();
     let first_n = longest_consecutive_prefix(partition_places);
     input_places[0..first_n].to_vec()

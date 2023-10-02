@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::expressions::{CastExpr, Column};
-use crate::utils::get_indices_of_matching_exprs;
+use crate::utils::get_indices_of_exprs_strict;
 use crate::{
     physical_exprs_contains, reverse_order_bys, LexOrdering, LexOrderingRef,
     LexOrderingReq, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
@@ -809,7 +809,7 @@ impl OrderingEquivalenceProperties {
                 .map(|sort_expr| sort_expr.expr.clone())
                 .collect::<Vec<_>>();
             let mut ordered_indices =
-                get_indices_of_matching_exprs(&exprs_normalized, &ordering_exprs);
+                get_indices_of_exprs_strict(&exprs_normalized, &ordering_exprs);
             ordered_indices.sort();
             // Find out how many expressions of the existing ordering define ordering
             // for expressions in the GROUP BY clause. For example, if the input is
@@ -823,7 +823,7 @@ impl OrderingEquivalenceProperties {
                 // this would produce 1, 0; meaning 1st and 0th entries (a, b) among the
                 // GROUP BY expressions b, a, d match input ordering.
                 let indices =
-                    get_indices_of_matching_exprs(&ordered_exprs, &exprs_normalized);
+                    get_indices_of_exprs_strict(&ordered_exprs, &exprs_normalized);
                 best = indices
                     .iter()
                     .enumerate()

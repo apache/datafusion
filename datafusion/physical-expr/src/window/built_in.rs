@@ -25,7 +25,7 @@ use super::BuiltInWindowFunctionExpr;
 use super::WindowExpr;
 use crate::equivalence::OrderingEquivalenceBuilder;
 use crate::expressions::PhysicalSortExpr;
-use crate::utils::{convert_to_expr, get_indices_of_matching_exprs};
+use crate::utils::{convert_to_expr, get_indices_of_exprs_strict};
 use crate::window::window_expr::{get_orderby_values, WindowFn};
 use crate::window::{PartitionBatches, PartitionWindowAggStates, WindowState};
 use crate::{reverse_order_bys, PhysicalExpr};
@@ -91,7 +91,7 @@ impl BuiltInWindowExpr {
                 let existing_ordering = builder.existing_ordering();
                 let existing_ordering_exprs = convert_to_expr(existing_ordering);
                 // Get indices of the PARTITION BY expressions among input ordering expressions:
-                let pb_indices = get_indices_of_matching_exprs(
+                let pb_indices = get_indices_of_exprs_strict(
                     &self.partition_by,
                     &existing_ordering_exprs,
                 );
