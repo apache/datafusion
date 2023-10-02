@@ -251,7 +251,7 @@ pub(crate) fn replace_with_order_preserving_variants(
         // any case, as doing so helps fix the pipeline.
         // Also do the replacement if opted-in via config options.
         let use_order_preserving_variant =
-            config.optimizer.bounded_order_preserving_variants || unbounded_output(plan);
+            config.optimizer.prefer_exising_sort || unbounded_output(plan);
         let updated_sort_input = get_updated_plan(
             exec_tree,
             is_spr_better || use_order_preserving_variant,
@@ -336,7 +336,7 @@ mod tests {
 
             // Run the rule top-down
             // let optimized_physical_plan = physical_plan.transform_down(&replace_repartition_execs)?;
-            let config = SessionConfig::new().with_bounded_order_preserving_variants($ALLOW_BOUNDED);
+            let config = SessionConfig::new().with_prefer_existing_sort($ALLOW_BOUNDED);
             let plan_with_pipeline_fixer = OrderPreservationContext::new(physical_plan);
             let parallel = plan_with_pipeline_fixer.transform_up(&|plan_with_pipeline_fixer| replace_with_order_preserving_variants(plan_with_pipeline_fixer, false, false, config.options()))?;
             let optimized_physical_plan = parallel.plan;
