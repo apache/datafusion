@@ -35,6 +35,78 @@ WITH HEADER ROW
 LOCATION '../../testing/data/avro/alltypes_plain.avro'
 
 statement ok
+CREATE EXTERNAL TABLE alltypes_plain_snappy (
+  id  INT NOT NULL,
+  bool_col BOOLEAN NOT NULL,
+  tinyint_col TINYINT NOT NULL,
+  smallint_col SMALLINT NOT NULL,
+  int_col INT NOT NULL,
+  bigint_col BIGINT NOT NULL,
+  float_col FLOAT NOT NULL,
+  double_col DOUBLE NOT NULL,
+  date_string_col BYTEA NOT NULL,
+  string_col VARCHAR NOT NULL,
+  timestamp_col TIMESTAMP NOT NULL,
+)
+STORED AS AVRO
+WITH HEADER ROW
+LOCATION '../../testing/data/avro/alltypes_plain.snappy.avro'
+
+statement ok
+CREATE EXTERNAL TABLE alltypes_plain_bzip2 (
+  id  INT NOT NULL,
+  bool_col BOOLEAN NOT NULL,
+  tinyint_col TINYINT NOT NULL,
+  smallint_col SMALLINT NOT NULL,
+  int_col INT NOT NULL,
+  bigint_col BIGINT NOT NULL,
+  float_col FLOAT NOT NULL,
+  double_col DOUBLE NOT NULL,
+  date_string_col BYTEA NOT NULL,
+  string_col VARCHAR NOT NULL,
+  timestamp_col TIMESTAMP NOT NULL,
+)
+STORED AS AVRO
+WITH HEADER ROW
+LOCATION '../../testing/data/avro/alltypes_plain.bzip2.avro'
+
+statement ok
+CREATE EXTERNAL TABLE alltypes_plain_xz (
+  id  INT NOT NULL,
+  bool_col BOOLEAN NOT NULL,
+  tinyint_col TINYINT NOT NULL,
+  smallint_col SMALLINT NOT NULL,
+  int_col INT NOT NULL,
+  bigint_col BIGINT NOT NULL,
+  float_col FLOAT NOT NULL,
+  double_col DOUBLE NOT NULL,
+  date_string_col BYTEA NOT NULL,
+  string_col VARCHAR NOT NULL,
+  timestamp_col TIMESTAMP NOT NULL,
+)
+STORED AS AVRO
+WITH HEADER ROW
+LOCATION '../../testing/data/avro/alltypes_plain.xz.avro'
+
+statement ok
+CREATE EXTERNAL TABLE alltypes_plain_zstandard (
+  id  INT NOT NULL,
+  bool_col BOOLEAN NOT NULL,
+  tinyint_col TINYINT NOT NULL,
+  smallint_col SMALLINT NOT NULL,
+  int_col INT NOT NULL,
+  bigint_col BIGINT NOT NULL,
+  float_col FLOAT NOT NULL,
+  double_col DOUBLE NOT NULL,
+  date_string_col BYTEA NOT NULL,
+  string_col VARCHAR NOT NULL,
+  timestamp_col TIMESTAMP NOT NULL,
+)
+STORED AS AVRO
+WITH HEADER ROW
+LOCATION '../../testing/data/avro/alltypes_plain.zstandard.avro'
+
+statement ok
 CREATE EXTERNAL TABLE single_nan (
   mycol FLOAT
 )
@@ -63,6 +135,58 @@ LOCATION '../../testing/data/avro/simple_fixed.avro'
 # test avro query
 query IT
 SELECT id, CAST(string_col AS varchar) FROM alltypes_plain
+----
+4 0
+5 1
+6 0
+7 1
+2 0
+3 1
+0 0
+1 1
+
+# test avro query with snappy
+query IT
+SELECT id, CAST(string_col AS varchar) FROM alltypes_plain_snappy
+----
+4 0
+5 1
+6 0
+7 1
+2 0
+3 1
+0 0
+1 1
+
+# test avro query with bzip2
+query IT
+SELECT id, CAST(string_col AS varchar) FROM alltypes_plain_bzip2
+----
+4 0
+5 1
+6 0
+7 1
+2 0
+3 1
+0 0
+1 1
+
+# test avro query with xz
+query IT
+SELECT id, CAST(string_col AS varchar) FROM alltypes_plain_xz
+----
+4 0
+5 1
+6 0
+7 1
+2 0
+3 1
+0 0
+1 1
+
+# test avro query with zstandard
+query IT
+SELECT id, CAST(string_col AS varchar) FROM alltypes_plain_zstandard
 ----
 4 0
 5 1
