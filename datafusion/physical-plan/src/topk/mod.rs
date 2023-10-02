@@ -370,8 +370,8 @@ impl TopKHeap {
             return Ok((RecordBatch::new_empty(schema), topk_rows));
         }
 
-        // Indicies for each row within its respective RecordBatch
-        let indicies: Vec<_> = topk_rows
+        // Indices for each row within its respective RecordBatch
+        let indices: Vec<_> = topk_rows
             .iter()
             .enumerate()
             .map(|(i, k)| (i, k.index))
@@ -396,7 +396,7 @@ impl TopKHeap {
                 // rows and `input_arrays` contains a reference to the
                 // relevant Array for that index. `interleave` pulls
                 // them together into a single new array
-                Ok(interleave(&input_arrays, &indicies)?)
+                Ok(interleave(&input_arrays, &indices)?)
             })
             .collect::<Result<_>>()?;
 
@@ -413,17 +413,12 @@ impl TopKHeap {
         // batches might be partially full
         let max_unused_rows = (20 * self.batch_size) + self.k;
         let unused_rows = self.store.unused_rows();
-        use log::info;
-        //info!("{} batches in store, unused rows in store: {}, max unused rows: {}",
-        //self.store.len(), unused_rows, max_unused_rows);
 
         // don't compact if the store has only one batch or
         if self.store.len() <= 2 || unused_rows < max_unused_rows {
             //if self.store.len() <= 2 {
             return Ok(());
         }
-        info!("Have {} batches in store, COMPACTING", self.store.len());
-
         // at first, compact the entire thing always into a new batch
         // (maybe we can get fancier in the future about ignoring
         // batches that have a high usage ratio already
@@ -450,10 +445,6 @@ impl TopKHeap {
         // restore the heap
         self.inner = BinaryHeap::from(topk_rows);
 
-        info!(
-            "COMPACTION DONE: Have {} batches in store",
-            self.store.len()
-        );
         Ok(())
     }
 
