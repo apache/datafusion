@@ -32,7 +32,6 @@ use crate::{
 
 use arrow::datatypes::Schema;
 use arrow_schema::{DataType, Field, SchemaRef};
-use datafusion_common::utils::longest_consecutive_prefix;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
     window_function::{BuiltInWindowFunction, WindowFunction},
@@ -40,7 +39,6 @@ use datafusion_expr::{
 };
 use datafusion_physical_expr::{
     equivalence::OrderingEquivalenceBuilder,
-    utils::convert_to_expr,
     window::{BuiltInWindowFunctionExpr, SlidingAggregateWindowExpr},
     AggregateExpr, OrderingEquivalenceProperties, PhysicalSortRequirement,
 };
@@ -50,7 +48,6 @@ mod window_agg_exec;
 
 pub use bounded_window_agg_exec::BoundedWindowAggExec;
 use datafusion_physical_expr::equivalence::PartitionSearchMode;
-use datafusion_physical_expr::utils::get_indices_of_exprs_strict;
 pub use window_agg_exec::WindowAggExec;
 
 pub use datafusion_physical_expr::window::{
@@ -317,16 +314,17 @@ pub(crate) fn get_ordered_partition_by_indices(
     partition_by_exprs: &[Arc<dyn PhysicalExpr>],
     input: &Arc<dyn ExecutionPlan>,
 ) -> Vec<usize> {
-    let input_ordering = input.output_ordering().unwrap_or(&[]);
-    let input_ordering_exprs = convert_to_expr(input_ordering);
-    // let equal_properties = || input.equivalence_properties();
-    let input_places =
-        get_indices_of_exprs_strict(&input_ordering_exprs, partition_by_exprs);
-    let mut partition_places =
-        get_indices_of_exprs_strict(partition_by_exprs, &input_ordering_exprs);
-    partition_places.sort();
-    let first_n = longest_consecutive_prefix(partition_places);
-    input_places[0..first_n].to_vec()
+    if let Some(indices_and_orderings) = input
+        .ordering_equivalence_properties()
+        .set_satisfy(partition_by_exprs)
+    {
+        indices_and_orderings
+            .into_iter()
+            .map(|(idx, _options)| idx)
+            .collect()
+    } else {
+        vec![]
+    }
 }
 
 pub(crate) fn window_ordering_equivalence(
