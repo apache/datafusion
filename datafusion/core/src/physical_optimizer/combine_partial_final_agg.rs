@@ -43,22 +43,12 @@ impl CombinePartialFinalAggregate {
     }
 }
 
-#[allow(dead_code)]
-fn print_plan(plan: &Arc<dyn ExecutionPlan>) {
-    let formatted = crate::physical_plan::displayable(plan.as_ref())
-        .indent(true)
-        .to_string();
-    let actual: Vec<&str> = formatted.trim().lines().collect();
-    println!("{:#?}", actual);
-}
-
 impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // print_plan(&plan);
         plan.transform_down(&|plan| {
             let transformed =
                 plan.as_any()

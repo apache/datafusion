@@ -54,8 +54,14 @@ impl EquivalentGroups {
         res
     }
 
+    /// Get how many equivalent groups there are.
+    fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    /// Check whether equivalent groups is empty
     pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
+        self.len() == 0
     }
 
     fn iter(&self) -> impl Iterator<Item = &Vec<Arc<dyn PhysicalExpr>>> {
@@ -145,11 +151,6 @@ impl EquivalentGroups {
             }
         }
         self.inner = out_groups;
-    }
-
-    #[allow(dead_code)]
-    fn len(&self) -> usize {
-        self.inner.len()
     }
 
     fn extend(&mut self, other: EquivalentGroups) {

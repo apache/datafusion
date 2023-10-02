@@ -791,9 +791,6 @@ fn try_reorder(
     expected: &[Arc<dyn PhysicalExpr>],
     equivalence_properties: &OrderingEquivalenceProperties,
 ) -> Option<(JoinKeyPairs, Vec<usize>)> {
-    // println!("join_keys:{:?}", join_keys);
-    // println!("expected:{:?}", expected);
-    // println!("equivalence_properties:{:?}", equivalence_properties);
     let eq_groups = equivalence_properties.eq_groups();
     let mut normalized_expected = vec![];
     let mut normalized_left_keys = vec![];
