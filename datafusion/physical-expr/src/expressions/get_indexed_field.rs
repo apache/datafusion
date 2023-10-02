@@ -255,7 +255,6 @@ impl PhysicalExpr for GetIndexedFieldExpr {
 
 impl PartialEq<dyn Any> for GetIndexedFieldExpr {
     fn eq(&self, other: &dyn Any) -> bool {
-        // println!("self:{:?}, other:{:?}", self, other);
         down_cast_any_ref(other)
             .downcast_ref::<Self>()
             .map(|x| self.arg.eq(&x.arg) && self.field.eq(&x.field))

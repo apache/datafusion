@@ -2433,7 +2433,6 @@ mod tests {
             .build()?;
 
         let execution_plan = plan(&logical_plan).await?;
-        // print_plan(&execution_plan);
         let final_hash_agg = execution_plan
             .as_any()
             .downcast_ref::<AggregateExec>()
@@ -2789,13 +2788,4 @@ digraph {
 
         assert_contains!(generated_graph, expected_tooltip);
     }
-}
-
-#[allow(dead_code)]
-fn print_plan(plan: &Arc<dyn ExecutionPlan>) {
-    let formatted = crate::physical_plan::displayable(plan.as_ref())
-        .indent(true)
-        .to_string();
-    let actual: Vec<&str> = formatted.trim().lines().collect();
-    println!("{:#?}", actual);
 }
