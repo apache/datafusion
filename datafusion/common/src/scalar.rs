@@ -2188,7 +2188,7 @@ impl ScalarValue {
 
     /// Retrieve ScalarValue for each row in `array`
     pub fn convert_array_to_scalar_vec(array: &dyn Array) -> Result<Vec<Vec<Self>>> {
-        let mut scalars = Vec::with_capacity(array.len()); 
+        let mut scalars = Vec::with_capacity(array.len());
 
         for index in 0..array.len() {
             let scalar_values = match array.data_type() {
@@ -2198,7 +2198,10 @@ impl ScalarValue {
                         true => Vec::new(),
                         false => {
                             let nested_array = list_array.value(index);
-                            ScalarValue::convert_array_to_scalar_vec(&nested_array)?.into_iter().flatten().collect()
+                            ScalarValue::convert_array_to_scalar_vec(&nested_array)?
+                                .into_iter()
+                                .flatten()
+                                .collect()
                         }
                     }
                 }
@@ -2260,9 +2263,7 @@ impl ScalarValue {
             DataType::List(nested_type) => {
                 let list_array = as_list_array(array);
                 let arr = match list_array.is_null(index) {
-                    true => {
-                        new_null_array(nested_type.data_type(), 0)
-                    }
+                    true => new_null_array(nested_type.data_type(), 0),
                     false => {
                         let nested_array = list_array.value(index);
                         Arc::new(wrap_into_list_array(nested_array))
@@ -2275,9 +2276,7 @@ impl ScalarValue {
             DataType::FixedSizeList(nested_type, _len) => {
                 let list_array = as_fixed_size_list_array(array)?;
                 let arr = match list_array.is_null(index) {
-                    true => {
-                        new_null_array(nested_type.data_type(), 0)
-                    }
+                    true => new_null_array(nested_type.data_type(), 0),
                     false => {
                         let nested_array = list_array.value(index);
                         Arc::new(wrap_into_list_array(nested_array))
