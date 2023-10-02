@@ -43,6 +43,7 @@ impl CombinePartialFinalAggregate {
     }
 }
 
+#[allow(dead_code)]
 fn print_plan(plan: &Arc<dyn ExecutionPlan>) {
     let formatted = crate::physical_plan::displayable(plan.as_ref())
         .indent(true)

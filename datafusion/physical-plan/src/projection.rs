@@ -37,13 +37,12 @@ use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::expressions::{Literal, UnKnownColumn};
+use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::{
     normalize_out_expr_with_columns_map, OrderingEquivalenceProperties,
 };
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_physical_expr::utils::find_orderings_of_exprs;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 

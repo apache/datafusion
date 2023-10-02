@@ -339,18 +339,16 @@ fn get_working_mode(
     // let ordered_group_by_indices =
     //     get_indices_of_matching_exprs(&ordered_exprs, &groupby_exprs);
 
-    if let Some(ordered_group_by_info) = input
+    input
         .ordering_equivalence_properties()
         .set_satisfy(&groupby_exprs)
-    {
-        Some(if ordered_group_by_info.len() == group_by.expr.len() {
-            (GroupByOrderMode::FullyOrdered, ordered_group_by_info)
-        } else {
-            (GroupByOrderMode::PartiallyOrdered, ordered_group_by_info)
+        .map(|ordered_group_by_info| {
+            if ordered_group_by_info.len() == group_by.expr.len() {
+                (GroupByOrderMode::FullyOrdered, ordered_group_by_info)
+            } else {
+                (GroupByOrderMode::PartiallyOrdered, ordered_group_by_info)
+            }
         })
-    } else {
-        None
-    }
 }
 
 /// This function gathers the ordering information for the GROUP BY columns.

@@ -257,16 +257,16 @@ fn pushdown_requirement_to_children(
         || plan.as_any().is::<HashJoinExec>()
         // Do not push-down through SortPreservingMergeExec when
         // ordering requirement invalidates requirement of sort preserving merge exec.
-        || (is_sort_preserving_merge(plan) && true
-        // !ordering_satisfy(
-        // parent_required
-        //     .map(|req| PhysicalSortRequirement::to_sort_exprs(req.to_vec()))
-        //     .as_deref(),
-        // plan.output_ordering(),
-        // || plan.ordering_equivalence_properties(),
-        //     )
-        // && plan.ordering_equivalence_properties().get_finer_ordering()
-        )
+        || is_sort_preserving_merge(plan)
+    // !ordering_satisfy(
+    // parent_required
+    //     .map(|req| PhysicalSortRequirement::to_sort_exprs(req.to_vec()))
+    //     .as_deref(),
+    // plan.output_ordering(),
+    // || plan.ordering_equivalence_properties(),
+    //     )
+    // && plan.ordering_equivalence_properties().get_finer_ordering()
+    // )
     {
         println!("parent_required if:{:?}", parent_required);
         // If the current plan is a leaf node or can not maintain any of the input ordering, can not pushed down requirements.

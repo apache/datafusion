@@ -252,15 +252,11 @@ fn get_updated_right_ordering_equivalent_class(
         // In these modes, indices of the right schema should be offset by
         // the left table size.
         JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
-            let right_oeq_class = add_offset(&right_oeq_class, left_columns_len)?;
-            return Ok(
-                // right_oeq_class.normalize_with_equivalence_properties(join_eq_properties)
-                right_oeq_class,
-            );
+            let right_oeq_class = add_offset(right_oeq_class, left_columns_len)?;
+            return Ok(right_oeq_class);
         }
         _ => {}
     };
-    // Ok(right_oeq_class.normalize_with_equivalence_properties(join_eq_properties))
     Ok(right_oeq_class.clone())
 }
 

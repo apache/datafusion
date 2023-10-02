@@ -310,6 +310,7 @@ impl TreeNode for PlanWithCorrespondingCoalescePartitions {
     }
 }
 
+#[allow(dead_code)]
 fn print_plan(plan: &Arc<dyn ExecutionPlan>) {
     let formatted = crate::physical_plan::displayable(plan.as_ref())
         .indent(true)
@@ -2797,6 +2798,7 @@ mod tests {
     }
 }
 
+#[cfg(test)]
 mod tmp_tests {
     use crate::physical_optimizer::utils::get_plan_string;
     use crate::physical_plan::{collect, displayable, ExecutionPlan};
@@ -3048,7 +3050,7 @@ mod tmp_tests {
         let dataframe = ctx.sql(sql).await.expect(&msg);
         let physical_plan = dataframe.create_physical_plan().await?;
         print_plan(&physical_plan)?;
-        let actual = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+        let _actual = collect(physical_plan.clone(), ctx.task_ctx()).await?;
         // print_batches(&actual)?;
 
         let expected_optimized_lines: Vec<&str> = vec![
@@ -3111,7 +3113,7 @@ mod tmp_tests {
         let dataframe = ctx.sql(sql).await.expect(&msg);
         let physical_plan = dataframe.create_physical_plan().await?;
         print_plan(&physical_plan)?;
-        let actual = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+        let _actual = collect(physical_plan.clone(), ctx.task_ctx()).await?;
         // print_batches(&actual)?;
 
         let expected_optimized_lines: Vec<&str> = vec![
@@ -3173,7 +3175,7 @@ mod tmp_tests {
         let dataframe = ctx.sql(sql).await.expect(&msg);
         let physical_plan = dataframe.create_physical_plan().await?;
         print_plan(&physical_plan)?;
-        let actual = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+        let _actual = collect(physical_plan.clone(), ctx.task_ctx()).await?;
         // print_batches(&actual)?;
 
         let expected_optimized_lines: Vec<&str> = vec![
@@ -3227,7 +3229,7 @@ mod tmp_tests {
         let dataframe = ctx.sql(sql).await.expect(&msg);
         let physical_plan = dataframe.create_physical_plan().await?;
         print_plan(&physical_plan)?;
-        let actual = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+        let _actual = collect(physical_plan.clone(), ctx.task_ctx()).await?;
         // print_batches(&actual)?;
 
         let expected_optimized_lines: Vec<&str> = vec![
@@ -3293,7 +3295,7 @@ mod tmp_tests {
         let dataframe = ctx.sql(sql).await.expect(&msg);
         let physical_plan = dataframe.create_physical_plan().await?;
         print_plan(&physical_plan)?;
-        let actual = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+        let _actual = collect(physical_plan.clone(), ctx.task_ctx()).await?;
         // print_batches(&actual)?;
 
         let expected_optimized_lines: Vec<&str> = vec![
@@ -3362,7 +3364,7 @@ mod tmp_tests {
         let dataframe = ctx.sql(sql).await.expect(&msg);
         let physical_plan = dataframe.create_physical_plan().await?;
         print_plan(&physical_plan)?;
-        let actual = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+        let _actual = collect(physical_plan.clone(), ctx.task_ctx()).await?;
         // print_batches(&actual)?;
 
         let expected_optimized_lines: Vec<&str> = vec![
@@ -3417,7 +3419,7 @@ mod tmp_tests {
         let dataframe = ctx.sql(sql).await.expect(&msg);
         let physical_plan = dataframe.create_physical_plan().await?;
         print_plan(&physical_plan)?;
-        let actual = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+        let _actual = collect(physical_plan.clone(), ctx.task_ctx()).await?;
         // print_batches(&actual)?;
 
         let expected_optimized_lines: Vec<&str> = vec![
@@ -3472,7 +3474,7 @@ mod tmp_tests {
         let dataframe = ctx.sql(sql).await.expect(&msg);
         let physical_plan = dataframe.create_physical_plan().await?;
         print_plan(&physical_plan)?;
-        let actual = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+        let _actual = collect(physical_plan.clone(), ctx.task_ctx()).await?;
         // print_batches(&actual)?;
 
         let expected_optimized_lines: Vec<&str> = vec![

@@ -788,7 +788,6 @@ mod tests {
 
     #[test]
     fn test_get_indices_of_matching_exprs() {
-        let empty_schema = &Arc::new(Schema::empty());
         let list1: Vec<Arc<dyn PhysicalExpr>> = vec![
             Arc::new(Column::new("a", 0)),
             Arc::new(Column::new("b", 1)),
@@ -1005,11 +1004,6 @@ mod tests {
 
     #[test]
     fn test_normalize_sort_requirement_with_equivalence() -> Result<()> {
-        let col_a = &Column::new("a", 0);
-        let _col_b = &Column::new("b", 1);
-        let col_c = &Column::new("c", 2);
-        let col_d = &Column::new("d", 3);
-        let _col_e = &Column::new("e", 4);
         let option1 = SortOptions {
             descending: false,
             nulls_first: false,
@@ -1017,10 +1011,10 @@ mod tests {
         // Assume that column a and c are aliases.
         let (test_schema, ordering_eq_properties) = create_test_params()?;
         let col_a_expr = col("a", &test_schema)?;
-        let col_b_expr = col("b", &test_schema)?;
+        let _col_b_expr = col("b", &test_schema)?;
         let col_c_expr = col("c", &test_schema)?;
         let col_d_expr = col("d", &test_schema)?;
-        let col_e_expr = col("e", &test_schema)?;
+        let _col_e_expr = col("e", &test_schema)?;
 
         // Test cases for equivalence normalization
         // First entry in the tuple is PhysicalExpr, second entry is its ordering, third entry is result after normalization.
@@ -1208,8 +1202,6 @@ mod tests {
             Field::new("b", DataType::Int32, true),
             Field::new("c", DataType::Int32, true),
         ]);
-        let equal_properties =
-            OrderingEquivalenceProperties::new(Arc::new(schema.clone()));
         let mut ordering_equal_properties =
             OrderingEquivalenceProperties::new(Arc::new(schema));
         ordering_equal_properties.add_new_orderings(&[
