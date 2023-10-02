@@ -22,6 +22,16 @@ use arrow::{
 };
 use datafusion_common::{plan_err, DataFusionError, Result};
 
+/// Constant that is used as a placeholder for any valid timezone.
+/// This is used where a function can accept a timestamp type with any
+/// valid timezone, it exists to avoid the need to enumerate all possible
+/// timezones.
+///
+/// Type coercion always ensures that functions will be executed using
+/// timestamp arrays that have a valid time zone. Functions must never
+/// return results with this timezone.
+pub(crate) const TIMEZONE_PLACEHOLDER: &str = "+TZ";
+
 /// Performs type coercion for function arguments.
 ///
 /// Returns the data types to which each argument must be coerced to
@@ -222,19 +232,18 @@ fn coerced_from<'a>(
         Utf8 | LargeUtf8 => Some(type_into.clone()),
         Null if can_cast_types(type_from, type_into) => Some(type_into.clone()),
 
-        // The "+TZ" timezone is a placeholder used to avoid needing to enumerate
-        // every possible timezone. When coercing types it is important to
-        // coerce to a valid time zone.
-        Timestamp(unit, Some(tz)) if tz.as_ref() == "+TZ" => match type_from {
-            Timestamp(_, Some(from_tz)) => {
-                Some(Timestamp(unit.clone(), Some(from_tz.clone())))
+        Timestamp(unit, Some(tz)) if tz.as_ref() == TIMEZONE_PLACEHOLDER => {
+            match type_from {
+                Timestamp(_, Some(from_tz)) => {
+                    Some(Timestamp(unit.clone(), Some(from_tz.clone())))
+                }
+                Null | Date32 | Utf8 | LargeUtf8 => {
+                    // In the absence of any other information assume the time zone is "+00" (UTC).
+                    Some(Timestamp(unit.clone(), Some("+00".into())))
+                }
+                _ => None,
             }
-            Null | Date32 | Utf8 | LargeUtf8 => {
-                // In the absence of any other information assume the time zone is "+00" (UTC).
-                Some(Timestamp(unit.clone(), Some("+00".into())))
-            }
-            _ => None,
-        },
+        }
         Timestamp(_, Some(_))
             if matches!(
                 type_from,
