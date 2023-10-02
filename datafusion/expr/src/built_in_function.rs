@@ -18,7 +18,7 @@
 //! Built-in functions module contains all the built-in functions definitions.
 
 use crate::nullif::SUPPORTED_NULLIF_TYPES;
-use crate::type_coercion::functions::data_types;
+use crate::type_coercion::functions::{data_types, TIMEZONE_PLACEHOLDER};
 use crate::{
     conditional_expressions, struct_expressions, utils, Signature, TypeSignature,
     Volatility,
@@ -1020,13 +1020,25 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::DateTrunc => Signature::one_of(
                 vec![
                     Exact(vec![Utf8, Timestamp(Nanosecond, None)]),
-                    Exact(vec![Utf8, Timestamp(Nanosecond, Some("+TZ".into()))]),
+                    Exact(vec![
+                        Utf8,
+                        Timestamp(Nanosecond, Some(TIMEZONE_PLACEHOLDER.into())),
+                    ]),
                     Exact(vec![Utf8, Timestamp(Microsecond, None)]),
-                    Exact(vec![Utf8, Timestamp(Microsecond, Some("+TZ".into()))]),
+                    Exact(vec![
+                        Utf8,
+                        Timestamp(Microsecond, Some(TIMEZONE_PLACEHOLDER.into())),
+                    ]),
                     Exact(vec![Utf8, Timestamp(Millisecond, None)]),
-                    Exact(vec![Utf8, Timestamp(Millisecond, Some("+TZ".into()))]),
+                    Exact(vec![
+                        Utf8,
+                        Timestamp(Millisecond, Some(TIMEZONE_PLACEHOLDER.into())),
+                    ]),
                     Exact(vec![Utf8, Timestamp(Second, None)]),
-                    Exact(vec![Utf8, Timestamp(Second, Some("+TZ".into()))]),
+                    Exact(vec![
+                        Utf8,
+                        Timestamp(Second, Some(TIMEZONE_PLACEHOLDER.into())),
+                    ]),
                 ],
                 self.volatility(),
             ),
@@ -1040,8 +1052,11 @@ impl BuiltinScalarFunction {
                         ]),
                         Exact(vec![
                             Interval(MonthDayNano),
-                            Timestamp(array_type.clone(), Some("+TZ".into())),
-                            Timestamp(Nanosecond, Some("+TZ".into())),
+                            Timestamp(
+                                array_type.clone(),
+                                Some(TIMEZONE_PLACEHOLDER.into()),
+                            ),
+                            Timestamp(Nanosecond, Some(TIMEZONE_PLACEHOLDER.into())),
                         ]),
                         Exact(vec![
                             Interval(DayTime),
@@ -1050,8 +1065,11 @@ impl BuiltinScalarFunction {
                         ]),
                         Exact(vec![
                             Interval(DayTime),
-                            Timestamp(array_type.clone(), Some("+TZ".into())),
-                            Timestamp(Nanosecond, Some("+TZ".into())),
+                            Timestamp(
+                                array_type.clone(),
+                                Some(TIMEZONE_PLACEHOLDER.into()),
+                            ),
+                            Timestamp(Nanosecond, Some(TIMEZONE_PLACEHOLDER.into())),
                         ]),
                         Exact(vec![
                             Interval(MonthDayNano),
@@ -1059,7 +1077,10 @@ impl BuiltinScalarFunction {
                         ]),
                         Exact(vec![
                             Interval(MonthDayNano),
-                            Timestamp(array_type.clone(), Some("+TZ".into())),
+                            Timestamp(
+                                array_type.clone(),
+                                Some(TIMEZONE_PLACEHOLDER.into()),
+                            ),
                         ]),
                         Exact(vec![
                             Interval(DayTime),
@@ -1067,7 +1088,7 @@ impl BuiltinScalarFunction {
                         ]),
                         Exact(vec![
                             Interval(DayTime),
-                            Timestamp(array_type, Some("+TZ".into())),
+                            Timestamp(array_type, Some(TIMEZONE_PLACEHOLDER.into())),
                         ]),
                     ]
                 };
@@ -1085,13 +1106,25 @@ impl BuiltinScalarFunction {
                     Exact(vec![Utf8, Date32]),
                     Exact(vec![Utf8, Date64]),
                     Exact(vec![Utf8, Timestamp(Second, None)]),
-                    Exact(vec![Utf8, Timestamp(Second, Some("+TZ".into()))]),
+                    Exact(vec![
+                        Utf8,
+                        Timestamp(Second, Some(TIMEZONE_PLACEHOLDER.into())),
+                    ]),
                     Exact(vec![Utf8, Timestamp(Microsecond, None)]),
-                    Exact(vec![Utf8, Timestamp(Microsecond, Some("+TZ".into()))]),
+                    Exact(vec![
+                        Utf8,
+                        Timestamp(Microsecond, Some(TIMEZONE_PLACEHOLDER.into())),
+                    ]),
                     Exact(vec![Utf8, Timestamp(Millisecond, None)]),
-                    Exact(vec![Utf8, Timestamp(Millisecond, Some("+TZ".into()))]),
+                    Exact(vec![
+                        Utf8,
+                        Timestamp(Millisecond, Some(TIMEZONE_PLACEHOLDER.into())),
+                    ]),
                     Exact(vec![Utf8, Timestamp(Nanosecond, None)]),
-                    Exact(vec![Utf8, Timestamp(Nanosecond, Some("+TZ".into()))]),
+                    Exact(vec![
+                        Utf8,
+                        Timestamp(Nanosecond, Some(TIMEZONE_PLACEHOLDER.into())),
+                    ]),
                 ],
                 self.volatility(),
             ),
