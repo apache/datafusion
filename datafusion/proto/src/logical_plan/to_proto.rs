@@ -34,7 +34,9 @@ use arrow::datatypes::{
     DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, SchemaRef, TimeUnit,
     UnionMode,
 };
-use datafusion_common::{Column, DFField, DFSchemaRef, OwnedTableReference, ScalarValue};
+use datafusion_common::{
+    Column, DFField, DFSchema, DFSchemaRef, OwnedTableReference, ScalarValue,
+};
 use datafusion_expr::expr::{
     self, Alias, Between, BinaryExpr, Cast, GetFieldAccess, GetIndexedField, GroupingSet,
     InList, Like, Placeholder, ScalarFunction, ScalarUDF, Sort,
@@ -300,10 +302,10 @@ impl TryFrom<&DFField> for protobuf::DfField {
     }
 }
 
-impl TryFrom<&DFSchemaRef> for protobuf::DfSchema {
+impl TryFrom<&DFSchema> for protobuf::DfSchema {
     type Error = Error;
 
-    fn try_from(s: &DFSchemaRef) -> Result<Self, Self::Error> {
+    fn try_from(s: &DFSchema) -> Result<Self, Self::Error> {
         let columns = s
             .fields()
             .iter()
@@ -313,6 +315,14 @@ impl TryFrom<&DFSchemaRef> for protobuf::DfSchema {
             columns,
             metadata: s.metadata().clone(),
         })
+    }
+}
+
+impl TryFrom<&DFSchemaRef> for protobuf::DfSchema {
+    type Error = Error;
+
+    fn try_from(s: &DFSchemaRef) -> Result<Self, Self::Error> {
+        s.as_ref().try_into()
     }
 }
 
@@ -1073,7 +1083,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
     fn try_from(val: &ScalarValue) -> Result<Self, Self::Error> {
         use protobuf::scalar_value::Value;
 
-        let data_type = val.get_datatype();
+        let data_type = val.data_type();
         match val {
             ScalarValue::Boolean(val) => {
                 create_proto_scalar(val.as_ref(), &data_type, |s| Value::BoolValue(*s))
@@ -1451,6 +1461,7 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::ToTimestamp => Self::ToTimestamp,
             BuiltinScalarFunction::ArrayAppend => Self::ArrayAppend,
             BuiltinScalarFunction::ArrayConcat => Self::ArrayConcat,
+            BuiltinScalarFunction::ArrayEmpty => Self::ArrayEmpty,
             BuiltinScalarFunction::ArrayHasAll => Self::ArrayHasAll,
             BuiltinScalarFunction::ArrayHasAny => Self::ArrayHasAny,
             BuiltinScalarFunction::ArrayHas => Self::ArrayHas,
@@ -1459,6 +1470,7 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Flatten => Self::Flatten,
             BuiltinScalarFunction::ArrayLength => Self::ArrayLength,
             BuiltinScalarFunction::ArrayNdims => Self::ArrayNdims,
+            BuiltinScalarFunction::ArrayPopBack => Self::ArrayPopBack,
             BuiltinScalarFunction::ArrayPosition => Self::ArrayPosition,
             BuiltinScalarFunction::ArrayPositions => Self::ArrayPositions,
             BuiltinScalarFunction::ArrayPrepend => Self::ArrayPrepend,
@@ -1506,6 +1518,7 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Right => Self::Right,
             BuiltinScalarFunction::Rpad => Self::Rpad,
             BuiltinScalarFunction::SplitPart => Self::SplitPart,
+            BuiltinScalarFunction::StringToArray => Self::StringToArray,
             BuiltinScalarFunction::StartsWith => Self::StartsWith,
             BuiltinScalarFunction::Strpos => Self::Strpos,
             BuiltinScalarFunction::Substr => Self::Substr,

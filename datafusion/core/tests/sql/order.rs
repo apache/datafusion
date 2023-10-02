@@ -70,7 +70,7 @@ async fn create_external_table_with_ddl_ordered_non_cols() -> Result<()> {
         Ok(_) => panic!("Expecting error."),
         Err(e) => {
             assert_eq!(
-                e.to_string(),
+                e.strip_backtrace(),
                 "Error during planning: Column a is not in schema"
             )
         }
@@ -85,7 +85,7 @@ async fn create_external_table_with_ddl_ordered_without_schema() -> Result<()> {
     match ctx.state().create_logical_plan(sql).await {
         Ok(_) => panic!("Expecting error."),
         Err(e) => {
-            assert_eq!(e.to_string(), "Error during planning: Provide a schema before specifying the order while creating a table.")
+            assert_eq!(e.strip_backtrace(), "Error during planning: Provide a schema before specifying the order while creating a table.")
         }
     }
     Ok(())
@@ -125,7 +125,7 @@ async fn sort_with_duplicate_sort_exprs() -> Result<()> {
         "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
-    let expected = vec![
+    let expected = [
         "+----+------+",
         "| id | name |",
         "+----+------+",
@@ -156,7 +156,7 @@ async fn sort_with_duplicate_sort_exprs() -> Result<()> {
         "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
-    let expected = vec![
+    let expected = [
         "+----+------+",
         "| id | name |",
         "+----+------+",
@@ -235,7 +235,7 @@ ORDER BY 1, 2;
         let actual = execute_to_batches(&ctx, sql).await;
 
         // in https://github.com/apache/arrow-datafusion/issues/5970 the order of the output was sometimes not right
-        let expected = vec![
+        let expected = [
             "+---+---+",
             "| m | t |",
             "+---+---+",

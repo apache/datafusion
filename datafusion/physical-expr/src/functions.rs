@@ -31,6 +31,7 @@
 //! argument is automatically is coerced to f64.
 
 use crate::execution_props::ExecutionProps;
+use crate::sort_properties::SortProperties;
 use crate::{
     array_expressions, conditional_expressions, datetime_expressions,
     expressions::{cast_column, nullif_func},
@@ -47,6 +48,7 @@ use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
     BuiltinScalarFunction, ColumnarValue, ScalarFunctionImplementation,
 };
+use std::ops::Neg;
 use std::sync::Arc;
 
 /// Create a physical (function) expression.
@@ -169,15 +171,23 @@ pub fn create_physical_expr(
                 )))))
             })
         }
+        BuiltinScalarFunction::Abs => {
+            let input_data_type = input_phy_exprs[0].data_type(input_schema)?;
+            let abs_fun = math_expressions::create_abs_function(&input_data_type)?;
+            Arc::new(move |args| make_scalar_function(abs_fun)(args))
+        }
         // These don't need args and input schema
         _ => create_physical_fun(fun, execution_props)?,
     };
+
+    let monotonicity = get_func_monotonicity(fun);
 
     Ok(Arc::new(ScalarFunctionExpr::new(
         &format!("{fun}"),
         fun_expr,
         input_phy_exprs.to_vec(),
         &data_type,
+        monotonicity,
     )))
 }
 
@@ -355,7 +365,6 @@ pub fn create_physical_fun(
 ) -> Result<ScalarFunctionImplementation> {
     Ok(match fun {
         // math functions
-        BuiltinScalarFunction::Abs => Arc::new(math_expressions::abs),
         BuiltinScalarFunction::Acos => Arc::new(math_expressions::acos),
         BuiltinScalarFunction::Asin => Arc::new(math_expressions::asin),
         BuiltinScalarFunction::Atan => Arc::new(math_expressions::atan),
@@ -425,6 +434,9 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ArrayConcat => {
             Arc::new(|args| make_scalar_function(array_expressions::array_concat)(args))
         }
+        BuiltinScalarFunction::ArrayEmpty => {
+            Arc::new(|args| make_scalar_function(array_expressions::array_empty)(args))
+        }
         BuiltinScalarFunction::ArrayHasAll => {
             Arc::new(|args| make_scalar_function(array_expressions::array_has_all)(args))
         }
@@ -446,9 +458,11 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Flatten => {
             Arc::new(|args| make_scalar_function(array_expressions::flatten)(args))
         }
-
         BuiltinScalarFunction::ArrayNdims => {
             Arc::new(|args| make_scalar_function(array_expressions::array_ndims)(args))
+        }
+        BuiltinScalarFunction::ArrayPopBack => {
+            Arc::new(|args| make_scalar_function(array_expressions::array_pop_back)(args))
         }
         BuiltinScalarFunction::ArrayPosition => {
             Arc::new(|args| make_scalar_function(array_expressions::array_position)(args))
@@ -786,6 +800,21 @@ pub fn create_physical_fun(
                 internal_err!("Unsupported data type {other:?} for function split_part")
             }
         }),
+        BuiltinScalarFunction::StringToArray => {
+            Arc::new(|args| match args[0].data_type() {
+                DataType::Utf8 => {
+                    make_scalar_function(array_expressions::string_to_array::<i32>)(args)
+                }
+                DataType::LargeUtf8 => {
+                    make_scalar_function(array_expressions::string_to_array::<i64>)(args)
+                }
+                other => {
+                    internal_err!(
+                        "Unsupported data type {other:?} for function string_to_array"
+                    )
+                }
+            })
+        }
         BuiltinScalarFunction::StartsWith => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
                 make_scalar_function(string_expressions::starts_with::<i32>)(args)
@@ -874,6 +903,108 @@ pub fn create_physical_fun(
     })
 }
 
+/// Monotonicity of the `ScalarFunctionExpr` with respect to its arguments.
+/// Each element of this vector corresponds to an argument and indicates whether
+/// the function's behavior is monotonic, or non-monotonic/unknown for that argument, namely:
+/// - `None` signifies unknown monotonicity or non-monotonicity.
+/// - `Some(true)` indicates that the function is monotonically increasing w.r.t. the argument in question.
+/// - Some(false) indicates that the function is monotonically decreasing w.r.t. the argument in question.
+pub type FuncMonotonicity = Vec<Option<bool>>;
+
+/// Determines a [`ScalarFunctionExpr`]'s monotonicity for the given arguments
+/// and the function's behavior depending on its arguments.
+pub fn out_ordering(
+    func: &FuncMonotonicity,
+    arg_orderings: &[SortProperties],
+) -> SortProperties {
+    func.iter().zip(arg_orderings).fold(
+        SortProperties::Singleton,
+        |prev_sort, (item, arg)| {
+            let current_sort = func_order_in_one_dimension(item, arg);
+
+            match (prev_sort, current_sort) {
+                (_, SortProperties::Unordered) => SortProperties::Unordered,
+                (SortProperties::Singleton, SortProperties::Ordered(_)) => current_sort,
+                (SortProperties::Ordered(prev), SortProperties::Ordered(current))
+                    if prev.descending != current.descending =>
+                {
+                    SortProperties::Unordered
+                }
+                _ => prev_sort,
+            }
+        },
+    )
+}
+
+/// This function decides the monotonicity property of a [`ScalarFunctionExpr`] for a single argument (i.e. across a single dimension), given that argument's sort properties.
+fn func_order_in_one_dimension(
+    func_monotonicity: &Option<bool>,
+    arg: &SortProperties,
+) -> SortProperties {
+    if *arg == SortProperties::Singleton {
+        SortProperties::Singleton
+    } else {
+        match func_monotonicity {
+            None => SortProperties::Unordered,
+            Some(false) => {
+                if let SortProperties::Ordered(_) = arg {
+                    arg.neg()
+                } else {
+                    SortProperties::Unordered
+                }
+            }
+            Some(true) => {
+                if let SortProperties::Ordered(_) = arg {
+                    *arg
+                } else {
+                    SortProperties::Unordered
+                }
+            }
+        }
+    }
+}
+
+/// This function specifies monotonicity behaviors for built-in scalar functions.
+/// The list can be extended, only mathematical and datetime functions are
+/// considered for the initial implementation of this feature.
+pub fn get_func_monotonicity(fun: &BuiltinScalarFunction) -> Option<FuncMonotonicity> {
+    if matches!(
+        fun,
+        BuiltinScalarFunction::Atan
+            | BuiltinScalarFunction::Acosh
+            | BuiltinScalarFunction::Asinh
+            | BuiltinScalarFunction::Atanh
+            | BuiltinScalarFunction::Ceil
+            | BuiltinScalarFunction::Degrees
+            | BuiltinScalarFunction::Exp
+            | BuiltinScalarFunction::Factorial
+            | BuiltinScalarFunction::Floor
+            | BuiltinScalarFunction::Ln
+            | BuiltinScalarFunction::Log10
+            | BuiltinScalarFunction::Log2
+            | BuiltinScalarFunction::Radians
+            | BuiltinScalarFunction::Round
+            | BuiltinScalarFunction::Signum
+            | BuiltinScalarFunction::Sinh
+            | BuiltinScalarFunction::Sqrt
+            | BuiltinScalarFunction::Cbrt
+            | BuiltinScalarFunction::Tanh
+            | BuiltinScalarFunction::Trunc
+            | BuiltinScalarFunction::Pi
+    ) {
+        Some(vec![Some(true)])
+    } else if matches!(
+        fun,
+        BuiltinScalarFunction::DateTrunc | BuiltinScalarFunction::DateBin
+    ) {
+        Some(vec![None, Some(true)])
+    } else if *fun == BuiltinScalarFunction::Log {
+        Some(vec![Some(true), Some(false)])
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -888,7 +1019,7 @@ mod tests {
         record_batch::RecordBatch,
     };
     use datafusion_common::cast::as_uint64_array;
-    use datafusion_common::plan_err;
+    use datafusion_common::{exec_err, plan_err};
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::type_coercion::functions::data_types;
     use datafusion_expr::Signature;
@@ -934,7 +1065,7 @@ mod tests {
                     match expr.evaluate(&batch) {
                         Ok(_) => assert!(false, "expected error"),
                         Err(error) => {
-                            assert_eq!(error.to_string(), expected_error.to_string());
+                            assert!(expected_error.strip_backtrace().starts_with(&error.strip_backtrace()));
                         }
                     }
                 }
@@ -1142,9 +1273,7 @@ mod tests {
         test_function!(
             Chr,
             &[lit(ScalarValue::Int64(Some(0)))],
-            Err(DataFusionError::Execution(
-                "null character not permitted.".to_string(),
-            )),
+            exec_err!("null character not permitted."),
             &str,
             Utf8,
             StringArray
@@ -1152,9 +1281,7 @@ mod tests {
         test_function!(
             Chr,
             &[lit(ScalarValue::Int64(Some(i64::MAX)))],
-            Err(DataFusionError::Execution(
-                "requested character too large for encoding.".to_string(),
-            )),
+            exec_err!("requested character too large for encoding."),
             &str,
             Utf8,
             StringArray
@@ -2359,9 +2486,7 @@ mod tests {
                 lit("~@~"),
                 lit(ScalarValue::Int64(Some(-1))),
             ],
-            Err(DataFusionError::Execution(
-                "field position must be greater than zero".to_string(),
-            )),
+            exec_err!("field position must be greater than zero"),
             &str,
             Utf8,
             StringArray
@@ -2662,9 +2787,7 @@ mod tests {
                 lit(ScalarValue::Int64(Some(1))),
                 lit(ScalarValue::Int64(Some(-1))),
             ],
-            Err(DataFusionError::Execution(
-                "negative substring length not allowed: substr(<str>, 1, -1)".to_string(),
-            )),
+            exec_err!("negative substring length not allowed: substr(<str>, 1, -1)"),
             &str,
             Utf8,
             StringArray

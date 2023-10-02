@@ -545,12 +545,26 @@ scalar_expr!(
     array element,
     "appends an element to the end of an array."
 );
+
+scalar_expr!(
+    ArrayPopBack,
+    array_pop_back,
+    array,
+    "returns the array without the last element."
+);
+
 nary_scalar_expr!(ArrayConcat, array_concat, "concatenates arrays.");
 scalar_expr!(
     ArrayHas,
     array_has,
     first_array second_array,
     "returns true, if the element appears in the first array, otherwise false."
+);
+scalar_expr!(
+    ArrayEmpty,
+    array_empty,
+    array,
+    "returns 1 for an empty array or 0 for a non-empty array."
 );
 scalar_expr!(
     ArrayHasAll,
@@ -663,7 +677,7 @@ scalar_expr!(
 scalar_expr!(
     ArrayToString,
     array_to_string,
-    array delimeter,
+    array delimiter,
     "converts each element to its text representation."
 );
 scalar_expr!(
@@ -732,6 +746,7 @@ scalar_expr!(SHA256, sha256, string, "SHA-256 hash");
 scalar_expr!(SHA384, sha384, string, "SHA-384 hash");
 scalar_expr!(SHA512, sha512, string, "SHA-512 hash");
 scalar_expr!(SplitPart, split_part, string delimiter index, "splits a string based on a delimiter and picks out the desired field based on the index.");
+scalar_expr!(StringToArray, string_to_array, string delimiter null_string, "splits a `string` based on a `delimiter` and returns an array of parts. Any parts matching the optional `null_string` will be replaced with `NULL`");
 scalar_expr!(StartsWith, starts_with, string prefix, "whether the `string` starts with the `prefix`");
 scalar_expr!(Strpos, strpos, string substring, "finds the position from where the `substring` matches the `string`");
 scalar_expr!(Substr, substr, string position, "substring from the `position` to the end");
@@ -945,7 +960,7 @@ mod test {
 
     macro_rules! test_scalar_expr {
         ($ENUM:ident, $FUNC:ident, $($arg:ident),*) => {
-            let expected = vec![$(stringify!($arg)),*];
+            let expected = [$(stringify!($arg)),*];
             let result = $FUNC(
                 $(
                     col(stringify!($arg.to_string()))
@@ -963,7 +978,7 @@ mod test {
 
     macro_rules! test_nary_scalar_expr {
         ($ENUM:ident, $FUNC:ident, $($arg:ident),*) => {
-            let expected = vec![$(stringify!($arg)),*];
+            let expected = [$(stringify!($arg)),*];
             let result = $FUNC(
                 vec![
                     $(
@@ -1066,6 +1081,7 @@ mod test {
         test_scalar_expr!(SHA384, sha384, string);
         test_scalar_expr!(SHA512, sha512, string);
         test_scalar_expr!(SplitPart, split_part, expr, delimiter, index);
+        test_scalar_expr!(StringToArray, string_to_array, expr, delimiter, null_value);
         test_scalar_expr!(StartsWith, starts_with, string, characters);
         test_scalar_expr!(Strpos, strpos, string, substring);
         test_scalar_expr!(Substr, substr, string, position);
@@ -1081,6 +1097,7 @@ mod test {
         test_scalar_expr!(FromUnixtime, from_unixtime, unixtime);
 
         test_scalar_expr!(ArrayAppend, array_append, array, element);
+        test_scalar_expr!(ArrayPopBack, array_pop_back, array);
         test_unary_scalar_expr!(ArrayDims, array_dims);
         test_scalar_expr!(ArrayLength, array_length, array, dimension);
         test_unary_scalar_expr!(ArrayNdims, array_ndims);

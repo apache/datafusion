@@ -302,7 +302,7 @@ CREATE TABLE my_table(c1 float, c2 double, c3 boolean, c4 varchar) AS SELECT *,c
 query RRBT rowsort
 SELECT * FROM my_table order by c1 LIMIT 1
 ----
-0.00001 0.000000000001 true 1
+0.00001 0.000000000001 true true
 
 statement ok
 DROP TABLE my_table;
@@ -669,33 +669,6 @@ describe TABLE_WITHOUT_NORMALIZATION
 ----
 FIELD1 Int64 YES
 FIELD2 Int64 YES
-
-query R
-select 10000000000000000000.01
-----
-10000000000000000000
-
-query T
-select arrow_typeof(10000000000000000000.01)
-----
-Float64
-
-statement ok
-set datafusion.sql_parser.parse_float_as_decimal = true;
-
-query R
-select 10000000000000000000.01
-----
-10000000000000000000.01
-
-query T
-select arrow_typeof(10000000000000000000.01)
-----
-Decimal128(22, 2)
-
-# Restore those to default value again
-statement ok
-set datafusion.sql_parser.parse_float_as_decimal = false;
 
 statement ok
 set datafusion.sql_parser.enable_ident_normalization = true;

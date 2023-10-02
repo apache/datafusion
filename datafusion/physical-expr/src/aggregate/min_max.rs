@@ -31,12 +31,12 @@ use arrow::datatypes::{
 };
 use arrow::{
     array::{
-        ArrayRef, BooleanArray, Date32Array, Date64Array, Float32Array, Float64Array,
-        Int16Array, Int32Array, Int64Array, Int8Array, LargeStringArray, StringArray,
-        Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
-        Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-        TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array,
-        UInt64Array, UInt8Array,
+        ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array, Float32Array,
+        Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray,
+        LargeStringArray, StringArray, Time32MillisecondArray, Time32SecondArray,
+        Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
+        TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
+        UInt16Array, UInt32Array, UInt64Array, UInt8Array,
     },
     datatypes::Field,
 };
@@ -284,6 +284,16 @@ macro_rules! typed_min_max_batch_string {
     }};
 }
 
+// Statically-typed version of min/max(array) -> ScalarValue for binay types.
+macro_rules! typed_min_max_batch_binary {
+    ($VALUES:expr, $ARRAYTYPE:ident, $SCALAR:ident, $OP:ident) => {{
+        let array = downcast_value!($VALUES, $ARRAYTYPE);
+        let value = compute::$OP(array);
+        let value = value.and_then(|e| Some(e.to_vec()));
+        ScalarValue::$SCALAR(value)
+    }};
+}
+
 // Statically-typed version of min/max(array) -> ScalarValue for non-string types.
 macro_rules! typed_min_max_batch {
     ($VALUES:expr, $ARRAYTYPE:ident, $SCALAR:ident, $OP:ident $(, $EXTRA_ARGS:ident)*) => {{
@@ -405,6 +415,17 @@ fn min_batch(values: &ArrayRef) -> Result<ScalarValue> {
         DataType::Boolean => {
             typed_min_max_batch!(values, BooleanArray, Boolean, min_boolean)
         }
+        DataType::Binary => {
+            typed_min_max_batch_binary!(&values, BinaryArray, Binary, min_binary)
+        }
+        DataType::LargeBinary => {
+            typed_min_max_batch_binary!(
+                &values,
+                LargeBinaryArray,
+                LargeBinary,
+                min_binary
+            )
+        }
         _ => min_max_batch!(values, min),
     })
 }
@@ -420,6 +441,17 @@ fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
         }
         DataType::Boolean => {
             typed_min_max_batch!(values, BooleanArray, Boolean, max_boolean)
+        }
+        DataType::Binary => {
+            typed_min_max_batch_binary!(&values, BinaryArray, Binary, max_binary)
+        }
+        DataType::LargeBinary => {
+            typed_min_max_batch_binary!(
+                &values,
+                LargeBinaryArray,
+                LargeBinary,
+                max_binary
+            )
         }
         _ => min_max_batch!(values, max),
     })
@@ -529,6 +561,12 @@ macro_rules! min_max {
             (ScalarValue::LargeUtf8(lhs), ScalarValue::LargeUtf8(rhs)) => {
                 typed_min_max_string!(lhs, rhs, LargeUtf8, $OP)
             }
+            (ScalarValue::Binary(lhs), ScalarValue::Binary(rhs)) => {
+                typed_min_max_string!(lhs, rhs, Binary, $OP)
+            }
+            (ScalarValue::LargeBinary(lhs), ScalarValue::LargeBinary(rhs)) => {
+                typed_min_max_string!(lhs, rhs, LargeBinary, $OP)
+            }
             (ScalarValue::TimestampSecond(lhs, l_tz), ScalarValue::TimestampSecond(rhs, _)) => {
                 typed_min_max!(lhs, rhs, TimestampSecond, $OP, l_tz)
             }
@@ -624,6 +662,30 @@ macro_rules! min_max {
                 ScalarValue::IntervalMonthDayNano(_),
             ) => {
                 interval_min_max!($OP, $VALUE, $DELTA)
+            }
+                    (
+                ScalarValue::DurationSecond(lhs),
+                ScalarValue::DurationSecond(rhs),
+            ) => {
+                typed_min_max!(lhs, rhs, DurationSecond, $OP)
+            }
+                                (
+                ScalarValue::DurationMillisecond(lhs),
+                ScalarValue::DurationMillisecond(rhs),
+            ) => {
+                typed_min_max!(lhs, rhs, DurationMillisecond, $OP)
+            }
+                                (
+                ScalarValue::DurationMicrosecond(lhs),
+                ScalarValue::DurationMicrosecond(rhs),
+            ) => {
+                typed_min_max!(lhs, rhs, DurationMicrosecond, $OP)
+            }
+                                        (
+                ScalarValue::DurationNanosecond(lhs),
+                ScalarValue::DurationNanosecond(rhs),
+            ) => {
+                typed_min_max!(lhs, rhs, DurationNanosecond, $OP)
             }
             e => {
                 return internal_err!(
@@ -1013,8 +1075,8 @@ impl Accumulator for SlidingMinAccumulator {
 mod tests {
     use super::*;
     use crate::expressions::col;
-    use crate::expressions::tests::aggregate;
-    use crate::generic_test_op;
+    use crate::expressions::tests::{aggregate, aggregate_new};
+    use crate::{generic_test_op, generic_test_op_new};
     use arrow::datatypes::*;
     use arrow::record_batch::RecordBatch;
     use datafusion_common::Result;
@@ -1110,11 +1172,14 @@ mod tests {
 
         let right = ScalarValue::Decimal128(Some(124), 10, 3);
         let result = max(&left, &right);
-        let expect = DataFusionError::Internal(format!(
+        let err_msg = format!(
             "MIN/MAX is not expected to receive scalars of incompatible types {:?}",
             (Decimal128(Some(123), 10, 2), Decimal128(Some(124), 10, 3))
-        ));
-        assert_eq!(expect.to_string(), result.unwrap_err().to_string());
+        );
+        let expect = DataFusionError::Internal(err_msg);
+        assert!(expect
+            .strip_backtrace()
+            .starts_with(&result.unwrap_err().strip_backtrace()));
 
         // max batch
         let array: ArrayRef = Arc::new(
@@ -1427,6 +1492,26 @@ mod tests {
             Max,
             ScalarValue::Time64Nanosecond(Some(5))
         )
+    }
+
+    #[test]
+    fn max_new_timestamp_micro() -> Result<()> {
+        let dt = DataType::Timestamp(TimeUnit::Microsecond, None);
+        let actual = TimestampMicrosecondArray::from(vec![1, 2, 3, 4, 5])
+            .with_data_type(dt.clone());
+        let expected: ArrayRef =
+            Arc::new(TimestampMicrosecondArray::from(vec![5]).with_data_type(dt.clone()));
+        generic_test_op_new!(Arc::new(actual), dt.clone(), Max, &expected)
+    }
+
+    #[test]
+    fn max_new_timestamp_micro_with_tz() -> Result<()> {
+        let dt = DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()));
+        let actual = TimestampMicrosecondArray::from(vec![1, 2, 3, 4, 5])
+            .with_data_type(dt.clone());
+        let expected: ArrayRef =
+            Arc::new(TimestampMicrosecondArray::from(vec![5]).with_data_type(dt.clone()));
+        generic_test_op_new!(Arc::new(actual), dt.clone(), Max, &expected)
     }
 
     #[test]

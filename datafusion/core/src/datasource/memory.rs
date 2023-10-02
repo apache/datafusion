@@ -26,7 +26,9 @@ use std::sync::Arc;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
-use datafusion_common::{plan_err, Constraints, DataFusionError, SchemaExt};
+use datafusion_common::{
+    not_impl_err, plan_err, Constraints, DataFusionError, SchemaExt,
+};
 use datafusion_execution::TaskContext;
 use tokio::sync::RwLock;
 use tokio::task::JoinSet;
@@ -214,9 +216,7 @@ impl TableProvider for MemTable {
             );
         }
         if overwrite {
-            return Err(DataFusionError::NotImplemented(
-                "Overwrite not implemented for MemoryTable yet".into(),
-            ));
+            return not_impl_err!("Overwrite not implemented for MemoryTable yet");
         }
         let sink = Arc::new(MemSink::new(self.batches.clone()));
         Ok(Arc::new(FileSinkExec::new(
@@ -435,12 +435,11 @@ mod tests {
             ],
         )?;
 
-        match MemTable::try_new(schema2, vec![vec![batch]]) {
-            Err(DataFusionError::Plan(e)) => {
-                assert_eq!("\"Mismatch between schema and batches\"", format!("{e:?}"))
-            }
-            _ => panic!("MemTable::new should have failed due to schema mismatch"),
-        }
+        let e = MemTable::try_new(schema2, vec![vec![batch]]).unwrap_err();
+        assert_eq!(
+            "Error during planning: Mismatch between schema and batches",
+            e.strip_backtrace()
+        );
 
         Ok(())
     }
@@ -466,12 +465,11 @@ mod tests {
             ],
         )?;
 
-        match MemTable::try_new(schema2, vec![vec![batch]]) {
-            Err(DataFusionError::Plan(e)) => {
-                assert_eq!("\"Mismatch between schema and batches\"", format!("{e:?}"))
-            }
-            _ => panic!("MemTable::new should have failed due to schema mismatch"),
-        }
+        let e = MemTable::try_new(schema2, vec![vec![batch]]).unwrap_err();
+        assert_eq!(
+            "Error during planning: Mismatch between schema and batches",
+            e.strip_backtrace()
+        );
 
         Ok(())
     }

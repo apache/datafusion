@@ -67,19 +67,19 @@ CREATE TABLE small_floats(
 ## abs
 
 # abs scalar function
-query RRR rowsort
+query III rowsort
 select abs(64), abs(0), abs(-64);
 ----
 64 0 64
 
 # abs scalar nulls
-query R rowsort
+query ? rowsort
 select abs(null);
 ----
 NULL
 
 # abs with columns
-query RRR rowsort
+query III rowsort
 select abs(a), abs(b), abs(c) from signed_integers;
 ----
 1 100 567
@@ -1325,21 +1325,22 @@ SELECT arrow_typeof(c8), arrow_typeof(c6), arrow_typeof(c8 + c6) FROM aggregate_
 Int32 Int64 Int64
 
 # in list array
-query BBBBB rowsort
+query BBBBBB rowsort
 SELECT c1 IN ('a', 'c') AS utf8_in_true
       ,c1 IN ('x', 'y') AS utf8_in_false
       ,c1 NOT IN ('x', 'y') AS utf8_not_in_true
       ,c1 NOT IN ('a', 'c') AS utf8_not_in_false
       ,NULL IN ('a', 'c') AS utf8_in_null
+      ,'a' IN (c1, NULL, 'c') uft8_in_column
 FROM aggregate_test_100 WHERE c12 < 0.05
 ----
-false false true true NULL
-false false true true NULL
-false false true true NULL
-false false true true NULL
-true false true false NULL
-true false true false NULL
-true false true false NULL
+false false true true NULL NULL
+false false true true NULL NULL
+false false true true NULL NULL
+false false true true NULL NULL
+true false true false NULL NULL
+true false true false NULL true
+true false true false NULL true
 
 # csv count star
 query III
@@ -1526,7 +1527,7 @@ SELECT not(true), not(false)
 ----
 false true
 
-query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nInternal error: NOT 'Literal \{ value: Int64\(1\) \}' can't be evaluated because the expression's type is Int64, not boolean or NULL\. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nInternal error: NOT 'Literal \{ value: Int64\(1\) \}' can't be evaluated because the expression's type is Int64, not boolean or NULL
 SELECT not(1), not(0)
 
 query ?B
@@ -1534,7 +1535,7 @@ SELECT null, not(null)
 ----
 NULL NULL
 
-query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nInternal error: NOT 'Literal \{ value: Utf8\("hi"\) \}' can't be evaluated because the expression's type is Utf8, not boolean or NULL\. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nInternal error: NOT 'Literal \{ value: Utf8\("hi"\) \}' can't be evaluated because the expression's type is Utf8, not boolean or NULL
 SELECT NOT('hi')
 
 # test_negative_expressions()

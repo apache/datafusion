@@ -24,7 +24,7 @@ use arrow::datatypes::{DataType, Field, UInt64Type};
 use arrow_buffer::NullBuffer;
 use core::any::type_name;
 use datafusion_common::cast::{as_generic_string_array, as_int64_array, as_list_array};
-use datafusion_common::{internal_err, plan_err, ScalarValue};
+use datafusion_common::{exec_err, internal_err, not_impl_err, plan_err, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 use itertools::Itertools;
@@ -388,9 +388,7 @@ fn array_array(args: &[ArrayRef], data_type: DataType) -> Result<ArrayRef> {
         DataType::UInt32 => array!(args, UInt32Array, UInt32Builder),
         DataType::UInt64 => array!(args, UInt64Array, UInt64Builder),
         data_type => {
-            return Err(DataFusionError::NotImplemented(format!(
-                "Array is not implemented for type '{data_type:?}'."
-            )))
+            return not_impl_err!("Array is not implemented for type '{data_type:?}'.")
         }
     };
 
@@ -599,6 +597,22 @@ pub fn array_slice(args: &[ArrayRef]) -> Result<ArrayRef> {
     let key = as_int64_array(&args[1])?;
     let extra_key = as_int64_array(&args[2])?;
     define_array_slice(list_array, key, extra_key, false)
+}
+
+pub fn array_pop_back(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let list_array = as_list_array(&args[0])?;
+    let key = vec![0; list_array.len()];
+    let extra_key: Vec<_> = list_array
+        .iter()
+        .map(|x| x.map_or(0, |arr| arr.len() as i64 - 1))
+        .collect();
+
+    define_array_slice(
+        list_array,
+        &Int64Array::from(key),
+        &Int64Array::from(extra_key),
+        false,
+    )
 }
 
 macro_rules! append {
@@ -856,9 +870,7 @@ pub fn array_concat(args: &[ArrayRef]) -> Result<ArrayRef> {
         let (ndim, lower_data_type) =
             compute_array_ndims_with_datatype(Some(arg.clone()))?;
         if ndim.is_none() || ndim == Some(1) {
-            return Err(DataFusionError::NotImplemented(format!(
-                "Array is not type '{lower_data_type:?}'."
-            )));
+            return not_impl_err!("Array is not type '{lower_data_type:?}'.");
         } else if !lower_data_type.equals_datatype(&DataType::Null) {
             new_args.push(arg.clone());
         }
@@ -986,6 +998,20 @@ macro_rules! general_repeat_list {
     }};
 }
 
+/// Array_empty SQL function
+pub fn array_empty(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args[0].as_any().downcast_ref::<NullArray>().is_some() {
+        return Ok(args[0].clone());
+    }
+
+    let array = as_list_array(&args[0])?;
+    let builder = array
+        .iter()
+        .map(|arr| arr.map(|arr| arr.len() == arr.null_count()))
+        .collect::<BooleanArray>();
+    Ok(Arc::new(builder))
+}
+
 /// Array_repeat SQL function
 pub fn array_repeat(args: &[ArrayRef]) -> Result<ArrayRef> {
     let element = &args[0];
@@ -1029,11 +1055,7 @@ macro_rules! position {
                             i - 1
                         }
                     }
-                    None => {
-                        return Err(DataFusionError::Execution(
-                            "initial position must not be null".to_string(),
-                        ))
-                    }
+                    None => return exec_err!("initial position must not be null"),
                 };
 
                 match arr {
@@ -1449,18 +1471,18 @@ array_replacement_function!(
 );
 
 macro_rules! to_string {
-    ($ARG:expr, $ARRAY:expr, $DELIMETER:expr, $NULL_STRING:expr, $WITH_NULL_STRING:expr, $ARRAY_TYPE:ident) => {{
+    ($ARG:expr, $ARRAY:expr, $DELIMITER:expr, $NULL_STRING:expr, $WITH_NULL_STRING:expr, $ARRAY_TYPE:ident) => {{
         let arr = downcast_arg!($ARRAY, $ARRAY_TYPE);
         for x in arr {
             match x {
                 Some(x) => {
                     $ARG.push_str(&x.to_string());
-                    $ARG.push_str($DELIMETER);
+                    $ARG.push_str($DELIMITER);
                 }
                 None => {
                     if $WITH_NULL_STRING {
                         $ARG.push_str($NULL_STRING);
-                        $ARG.push_str($DELIMETER);
+                        $ARG.push_str($DELIMITER);
                     }
                 }
             }
@@ -1473,8 +1495,8 @@ macro_rules! to_string {
 pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
     let arr = &args[0];
 
-    let delimeters = as_generic_string_array::<i32>(&args[1])?;
-    let delimeters: Vec<Option<&str>> = delimeters.iter().collect();
+    let delimiters = as_generic_string_array::<i32>(&args[1])?;
+    let delimiters: Vec<Option<&str>> = delimiters.iter().collect();
 
     let mut null_string = String::from("");
     let mut with_null_string = false;
@@ -1488,7 +1510,7 @@ pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
     fn compute_array_to_string(
         arg: &mut String,
         arr: ArrayRef,
-        delimeter: String,
+        delimiter: String,
         null_string: String,
         with_null_string: bool,
     ) -> Result<&mut String> {
@@ -1500,7 +1522,7 @@ pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
                     compute_array_to_string(
                         arg,
                         list_array.value(i),
-                        delimeter.clone(),
+                        delimiter.clone(),
                         null_string.clone(),
                         with_null_string,
                     )?;
@@ -1515,7 +1537,7 @@ pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
                         to_string!(
                             arg,
                             arr,
-                            &delimeter,
+                            &delimiter,
                             &null_string,
                             with_null_string,
                             $ARRAY_TYPE
@@ -1533,19 +1555,19 @@ pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
     match arr.data_type() {
         DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _) => {
             let list_array = arr.as_list::<i32>();
-            for (arr, &delimeter) in list_array.iter().zip(delimeters.iter()) {
-                if let (Some(arr), Some(delimeter)) = (arr, delimeter) {
+            for (arr, &delimiter) in list_array.iter().zip(delimiters.iter()) {
+                if let (Some(arr), Some(delimiter)) = (arr, delimiter) {
                     arg = String::from("");
                     let s = compute_array_to_string(
                         &mut arg,
                         arr,
-                        delimeter.to_string(),
+                        delimiter.to_string(),
                         null_string.clone(),
                         with_null_string,
                     )?
                     .clone();
 
-                    if let Some(s) = s.strip_suffix(delimeter) {
+                    if let Some(s) = s.strip_suffix(delimiter) {
                         res.push(Some(s.to_string()));
                     } else {
                         res.push(Some(s));
@@ -1556,20 +1578,20 @@ pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
             }
         }
         _ => {
-            // delimeter length is 1
-            assert_eq!(delimeters.len(), 1);
-            let delimeter = delimeters[0].unwrap();
+            // delimiter length is 1
+            assert_eq!(delimiters.len(), 1);
+            let delimiter = delimiters[0].unwrap();
             let s = compute_array_to_string(
                 &mut arg,
                 arr.clone(),
-                delimeter.to_string(),
+                delimiter.to_string(),
                 null_string,
                 with_null_string,
             )?
             .clone();
 
             if !s.is_empty() {
-                let s = s.strip_suffix(delimeter).unwrap().to_string();
+                let s = s.strip_suffix(delimiter).unwrap().to_string();
                 res.push(Some(s));
             } else {
                 res.push(Some(s));
@@ -1842,6 +1864,95 @@ pub fn array_has_all(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(boolean_builder.finish()))
 }
 
+/// Splits string at occurrences of delimiter and returns an array of parts
+/// string_to_array('abc~@~def~@~ghi', '~@~') = '["abc", "def", "ghi"]'
+pub fn string_to_array<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let string_array = as_generic_string_array::<T>(&args[0])?;
+    let delimiter_array = as_generic_string_array::<T>(&args[1])?;
+
+    let mut list_builder = ListBuilder::new(StringBuilder::with_capacity(
+        string_array.len(),
+        string_array.get_buffer_memory_size(),
+    ));
+
+    match args.len() {
+        2 => {
+            string_array.iter().zip(delimiter_array.iter()).for_each(
+                |(string, delimiter)| {
+                    match (string, delimiter) {
+                        (Some(string), Some("")) => {
+                            list_builder.values().append_value(string);
+                            list_builder.append(true);
+                        }
+                        (Some(string), Some(delimiter)) => {
+                            string.split(delimiter).for_each(|s| {
+                                list_builder.values().append_value(s);
+                            });
+                            list_builder.append(true);
+                        }
+                        (Some(string), None) => {
+                            string.chars().map(|c| c.to_string()).for_each(|c| {
+                                list_builder.values().append_value(c);
+                            });
+                            list_builder.append(true);
+                        }
+                        _ => list_builder.append(false), // null value
+                    }
+                },
+            );
+        }
+
+        3 => {
+            let null_value_array = as_generic_string_array::<T>(&args[2])?;
+            string_array
+                .iter()
+                .zip(delimiter_array.iter())
+                .zip(null_value_array.iter())
+                .for_each(|((string, delimiter), null_value)| {
+                    match (string, delimiter) {
+                        (Some(string), Some("")) => {
+                            if Some(string) == null_value {
+                                list_builder.values().append_null();
+                            } else {
+                                list_builder.values().append_value(string);
+                            }
+                            list_builder.append(true);
+                        }
+                        (Some(string), Some(delimiter)) => {
+                            string.split(delimiter).for_each(|s| {
+                                if Some(s) == null_value {
+                                    list_builder.values().append_null();
+                                } else {
+                                    list_builder.values().append_value(s);
+                                }
+                            });
+                            list_builder.append(true);
+                        }
+                        (Some(string), None) => {
+                            string.chars().map(|c| c.to_string()).for_each(|c| {
+                                if Some(c.as_str()) == null_value {
+                                    list_builder.values().append_null();
+                                } else {
+                                    list_builder.values().append_value(c);
+                                }
+                            });
+                            list_builder.append(true);
+                        }
+                        _ => list_builder.append(false), // null value
+                    }
+                });
+        }
+        _ => {
+            return internal_err!(
+                "Expect string_to_array function to take two or three parameters"
+            )
+        }
+    }
+
+    let list_array = list_builder.finish();
+    Ok(Arc::new(list_array) as ArrayRef)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1992,6 +2103,151 @@ mod tests {
                 .unwrap()
                 .values()
         );
+    }
+
+    #[test]
+    fn test_array_pop_back() {
+        // array_pop_back([1, 2, 3, 4]) = [1, 2, 3]
+        let list_array = return_array().into_array(1);
+        let arr = array_pop_back(&[list_array])
+            .expect("failed to initialize function array_pop_back");
+        let result =
+            as_list_array(&arr).expect("failed to initialize function array_pop_back");
+        assert_eq!(
+            &[1, 2, 3],
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values()
+        );
+
+        // array_pop_back([1, 2, 3]) = [1, 2]
+        let list_array = Arc::new(result.clone());
+        let arr = array_pop_back(&[list_array])
+            .expect("failed to initialize function array_pop_back");
+        let result =
+            as_list_array(&arr).expect("failed to initialize function array_pop_back");
+        assert_eq!(
+            &[1, 2],
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values()
+        );
+
+        // array_pop_back([1, 2]) = [1]
+        let list_array = Arc::new(result.clone());
+        let arr = array_pop_back(&[list_array])
+            .expect("failed to initialize function array_pop_back");
+        let result =
+            as_list_array(&arr).expect("failed to initialize function array_pop_back");
+        assert_eq!(
+            &[1],
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values()
+        );
+
+        // array_pop_back([1]) = []
+        let list_array = Arc::new(result.clone());
+        let arr = array_pop_back(&[list_array])
+            .expect("failed to initialize function array_pop_back");
+        let result =
+            as_list_array(&arr).expect("failed to initialize function array_pop_back");
+        assert_eq!(
+            &[],
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values()
+        );
+        // array_pop_back([]) = []
+        let list_array = Arc::new(result.clone());
+        let arr = array_pop_back(&[list_array])
+            .expect("failed to initialize function array_pop_back");
+        let result =
+            as_list_array(&arr).expect("failed to initialize function array_pop_back");
+        assert_eq!(
+            &[],
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values()
+        );
+
+        // array_pop_back([1, NULL, 3, NULL]) = [1, NULL, 3]
+        let list_array = return_array_with_nulls().into_array(1);
+        let arr = array_pop_back(&[list_array])
+            .expect("failed to initialize function array_pop_back");
+        let result =
+            as_list_array(&arr).expect("failed to initialize function array_pop_back");
+        assert_eq!(3, result.values().len());
+        assert_eq!(
+            &[false, true, false],
+            &[
+                result.values().is_null(0),
+                result.values().is_null(1),
+                result.values().is_null(2)
+            ]
+        );
+    }
+    #[test]
+    fn test_nested_array_pop_back() {
+        // array_pop_back([[1, 2, 3, 4], [5, 6, 7, 8]]) = [[1, 2, 3, 4]]
+        let list_array = return_nested_array().into_array(1);
+        let arr = array_pop_back(&[list_array])
+            .expect("failed to initialize function array_slice");
+        let result =
+            as_list_array(&arr).expect("failed to initialize function array_slice");
+        assert_eq!(
+            &[1, 2, 3, 4],
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .unwrap()
+                .value(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values()
+        );
+
+        // array_pop_back([[1, 2, 3, 4]]) = []
+        let list_array = Arc::new(result.clone());
+        let arr = array_pop_back(&[list_array])
+            .expect("failed to initialize function array_pop_back");
+        let result =
+            as_list_array(&arr).expect("failed to initialize function array_pop_back");
+        assert!(result
+            .value(0)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap()
+            .is_empty());
+        // array_pop_back([]) = []
+        let list_array = Arc::new(result.clone());
+        let arr = array_pop_back(&[list_array])
+            .expect("failed to initialize function array_pop_back");
+        let result =
+            as_list_array(&arr).expect("failed to initialize function array_pop_back");
+        assert!(result
+            .value(0)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -3046,7 +3302,7 @@ mod tests {
 
         let array = array_append(&args);
 
-        assert_eq!(array.unwrap_err().to_string(), "Error during planning: array_append received incompatible types: '[Int64, Utf8]'.");
+        assert_eq!(array.unwrap_err().strip_backtrace(), "Error during planning: array_append received incompatible types: '[Int64, Utf8]'.");
     }
 
     fn return_array() -> ColumnarValue {

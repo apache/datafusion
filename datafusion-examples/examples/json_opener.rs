@@ -21,7 +21,7 @@ use arrow_schema::{DataType, Field, Schema};
 use datafusion::{
     assert_batches_eq,
     datasource::{
-        file_format::file_type::FileCompressionType,
+        file_format::file_compression_type::FileCompressionType,
         listing::PartitionedFile,
         object_store::ObjectStoreUrl,
         physical_plan::{FileScanConfig, FileStream, JsonOpener},

@@ -161,10 +161,6 @@ impl ExecutionPlan for AvroExec {
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }
-
-    fn file_scan_config(&self) -> Option<&FileScanConfig> {
-        Some(&self.base_config)
-    }
 }
 
 #[cfg(feature = "avro")]
@@ -175,7 +171,7 @@ mod private {
     use crate::datasource::physical_plan::FileMeta;
     use bytes::Buf;
     use futures::StreamExt;
-    use object_store::{GetResult, ObjectStore};
+    use object_store::{GetResultPayload, ObjectStore};
 
     pub struct AvroConfig {
         pub schema: SchemaRef,
@@ -203,12 +199,13 @@ mod private {
         fn open(&self, file_meta: FileMeta) -> Result<FileOpenFuture> {
             let config = self.config.clone();
             Ok(Box::pin(async move {
-                match config.object_store.get(file_meta.location()).await? {
-                    GetResult::File(file, _) => {
+                let r = config.object_store.get(file_meta.location()).await?;
+                match r.payload {
+                    GetResultPayload::File(file, _) => {
                         let reader = config.open(file)?;
                         Ok(futures::stream::iter(reader).boxed())
                     }
-                    r @ GetResult::Stream(_) => {
+                    GetResultPayload::Stream(_) => {
                         let bytes = r.bytes().await?;
                         let reader = config.open(bytes.reader())?;
                         Ok(futures::stream::iter(reader).boxed())
@@ -225,12 +222,12 @@ mod tests {
     use crate::datasource::file_format::{avro::AvroFormat, FileFormat};
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
-    use crate::datasource::physical_plan::chunked_store::ChunkedStore;
     use crate::prelude::SessionContext;
     use crate::scalar::ScalarValue;
     use crate::test::object_store::local_unpartitioned_file;
     use arrow::datatypes::{DataType, Field, SchemaBuilder};
     use futures::StreamExt;
+    use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
     use object_store::ObjectStore;
     use rstest::*;
@@ -294,7 +291,7 @@ mod tests {
             .expect("plan iterator empty")
             .expect("plan iterator returned an error");
 
-        let expected = vec![
+        let expected = [
             "+----+----------+-------------+",
             "| id | bool_col | tinyint_col |",
             "+----+----------+-------------+",
@@ -367,7 +364,7 @@ mod tests {
             .expect("plan iterator empty")
             .expect("plan iterator returned an error");
 
-        let expected = vec![
+        let expected = [
             "+----+----------+-------------+-------------+",
             "| id | bool_col | tinyint_col | missing_col |",
             "+----+----------+-------------+-------------+",
@@ -439,7 +436,7 @@ mod tests {
             .expect("plan iterator empty")
             .expect("plan iterator returned an error");
 
-        let expected = vec![
+        let expected = [
             "+----+----------+------------+-------------+",
             "| id | bool_col | date       | tinyint_col |",
             "+----+----------+------------+-------------+",

@@ -24,7 +24,8 @@ use arrow::datatypes::{DataType, IntervalUnit};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{RewriteRecursion, TreeNodeRewriter};
 use datafusion_common::{
-    internal_err, plan_err, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
+    exec_err, internal_err, plan_err, DFSchema, DFSchemaRef, DataFusionError, Result,
+    ScalarValue,
 };
 use datafusion_expr::expr::{
     self, Between, BinaryExpr, Case, Exists, InList, InSubquery, Like, ScalarFunction,
@@ -41,11 +42,10 @@ use datafusion_expr::type_coercion::other::{
     get_coerce_type_for_case_expression, get_coerce_type_for_list,
 };
 use datafusion_expr::type_coercion::{is_datetime, is_numeric, is_utf8_or_large_utf8};
-use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
     is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown,
-    type_coercion, AggregateFunction, BuiltinScalarFunction, Expr, LogicalPlan, Operator,
-    Projection, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    type_coercion, window_function, AggregateFunction, BuiltinScalarFunction, Expr,
+    LogicalPlan, Operator, Projection, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
 use datafusion_expr::{ExprSchemable, Signature};
 
@@ -111,13 +111,13 @@ fn analyze_internal(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    // TODO: from_plan can't change the schema, so we need to do this here
+    // TODO: with_new_exprs can't change the schema, so we need to do this here
     match &plan {
         LogicalPlan::Projection(_) => Ok(LogicalPlan::Projection(Projection::try_new(
             new_expr,
             Arc::new(new_inputs[0].clone()),
         )?)),
-        _ => from_plan(plan, &new_expr, &new_inputs),
+        _ => plan.with_new_exprs(new_expr, &new_inputs),
     }
 }
 
@@ -381,6 +381,19 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
             }) => {
                 let window_frame =
                     coerce_window_frame(window_frame, &self.schema, &order_by)?;
+
+                let args = match &fun {
+                    window_function::WindowFunction::AggregateFunction(fun) => {
+                        coerce_agg_exprs_for_signature(
+                            fun,
+                            &args,
+                            &self.schema,
+                            &fun.signature(),
+                        )?
+                    }
+                    _ => args,
+                };
+
                 let expr = Expr::WindowFunction(WindowFunction::new(
                     fun,
                     args,
@@ -431,11 +444,7 @@ fn coerce_scalar_range_aware(
         // If type coercion fails, check if the largest type in family works:
         if let Some(largest_type) = get_widest_type_in_family(target_type) {
             coerce_scalar(largest_type, value).map_or_else(
-                |_| {
-                    Err(DataFusionError::Execution(format!(
-                        "Cannot cast {value:?} to {target_type:?}"
-                    )))
-                },
+                |_| exec_err!("Cannot cast {value:?} to {target_type:?}"),
                 |_| ScalarValue::try_from(target_type),
             )
         } else {
@@ -864,24 +873,25 @@ mod test {
             .err()
             .unwrap();
         assert_eq!(
-            r#"Context("type_coercion", Plan("Coercion from [Utf8] to the signature Uniform(1, [Int32]) failed."))"#,
-            &format!("{err:?}")
+            "type_coercion\ncaused by\nError during planning: Coercion from [Utf8] to the signature Uniform(1, [Int32]) failed.",
+            err.strip_backtrace()
         );
         Ok(())
     }
 
     #[test]
     fn scalar_function() -> Result<()> {
+        // test that automatic argument type coercion for scalar functions work
         let empty = empty();
         let lit_expr = lit(10i64);
-        let fun: BuiltinScalarFunction = BuiltinScalarFunction::Abs;
+        let fun: BuiltinScalarFunction = BuiltinScalarFunction::Acos;
         let scalar_function_expr =
             Expr::ScalarFunction(ScalarFunction::new(fun, vec![lit_expr]));
         let plan = LogicalPlan::Projection(Projection::try_new(
             vec![scalar_function_expr],
             empty,
         )?);
-        let expected = "Projection: abs(CAST(Int64(10) AS Float64))\n  EmptyRelation";
+        let expected = "Projection: acos(CAST(Int64(10) AS Float64))\n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)
     }
 
@@ -893,12 +903,7 @@ mod test {
             vec![DataType::Float64],
             Arc::new(DataType::Float64),
             Volatility::Immutable,
-            Arc::new(|_| {
-                Ok(Box::new(AvgAccumulator::try_new(
-                    &DataType::Float64,
-                    &DataType::Float64,
-                )?))
-            }),
+            Arc::new(|_| Ok(Box::<AvgAccumulator>::default())),
             Arc::new(vec![DataType::UInt64, DataType::Float64]),
         );
         let udaf = Expr::AggregateUDF(expr::AggregateUDF::new(
@@ -919,12 +924,8 @@ mod test {
             Arc::new(move |_| Ok(Arc::new(DataType::Float64)));
         let state_type: StateTypeFunction =
             Arc::new(move |_| Ok(Arc::new(vec![DataType::UInt64, DataType::Float64])));
-        let accumulator: AccumulatorFactoryFunction = Arc::new(|_| {
-            Ok(Box::new(AvgAccumulator::try_new(
-                &DataType::Float64,
-                &DataType::Float64,
-            )?))
-        });
+        let accumulator: AccumulatorFactoryFunction =
+            Arc::new(|_| Ok(Box::<AvgAccumulator>::default()));
         let my_avg = AggregateUDF::new(
             "MY_AVG",
             &Signature::uniform(1, vec![DataType::Float64], Volatility::Immutable),
@@ -943,8 +944,8 @@ mod test {
             .err()
             .unwrap();
         assert_eq!(
-            r#"Context("type_coercion", Plan("Coercion from [Utf8] to the signature Uniform(1, [Float64]) failed."))"#,
-            &format!("{err:?}")
+            "type_coercion\ncaused by\nError during planning: Coercion from [Utf8] to the signature Uniform(1, [Float64]) failed.",
+            err.strip_backtrace()
         );
         Ok(())
     }
@@ -961,7 +962,7 @@ mod test {
             None,
         ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![agg_expr], empty)?);
-        let expected = "Projection: AVG(Int64(12))\n  EmptyRelation";
+        let expected = "Projection: AVG(CAST(Int64(12) AS Float64))\n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)?;
 
         let empty = empty_with_type(DataType::Int32);
@@ -974,7 +975,7 @@ mod test {
             None,
         ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![agg_expr], empty)?);
-        let expected = "Projection: AVG(a)\n  EmptyRelation";
+        let expected = "Projection: AVG(CAST(a AS Float64))\n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)?;
         Ok(())
     }
@@ -1456,7 +1457,7 @@ mod test {
         };
         let err = coerce_case_expression(case, &schema).unwrap_err();
         assert_eq!(
-            err.to_string(),
+            err.strip_backtrace(),
             "Error during planning: \
             Failed to coerce case (Interval(MonthDayNano)) and \
             when ([Float32, Binary, Utf8]) to common types in \
@@ -1474,7 +1475,7 @@ mod test {
         };
         let err = coerce_case_expression(case, &schema).unwrap_err();
         assert_eq!(
-            err.to_string(),
+            err.strip_backtrace(),
             "Error during planning: \
             Failed to coerce then ([Date32, Float32, Binary]) and \
             else (Some(Timestamp(Nanosecond, None))) to common types \

@@ -21,14 +21,16 @@ use std::any::Any;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use crate::physical_expr::down_cast_any_ref;
+use crate::sort_properties::SortProperties;
+use crate::PhysicalExpr;
+
 use arrow::{
     compute::kernels::numeric::neg_wrapping,
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
 
-use crate::physical_expr::down_cast_any_ref;
-use crate::PhysicalExpr;
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_expr::{
     type_coercion::{is_interval, is_null, is_signed_numeric},
@@ -101,6 +103,11 @@ impl PhysicalExpr for NegativeExpr {
     fn dyn_hash(&self, state: &mut dyn Hasher) {
         let mut s = state;
         self.hash(&mut s);
+    }
+
+    /// The ordering of a [`NegativeExpr`] is simply the reverse of its child.
+    fn get_ordering(&self, children: &[SortProperties]) -> SortProperties {
+        -children[0]
     }
 }
 

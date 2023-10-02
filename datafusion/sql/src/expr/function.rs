@@ -16,8 +16,7 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::plan_err;
-use datafusion_common::{DFSchema, DataFusionError, Result};
+use datafusion_common::{not_impl_err, plan_err, DFSchema, DataFusionError, Result};
 use datafusion_expr::expr::{ScalarFunction, ScalarUDF};
 use datafusion_expr::function::suggest_valid_function;
 use datafusion_expr::window_frame::regularize;
@@ -125,6 +124,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 return Ok(expr);
             }
         } else {
+            // User defined aggregate functions (UDAF) have precedence in case it has the same name as a scalar built-in function
+            if let Some(fm) = self.schema_provider.get_aggregate_meta(&name) {
+                let args =
+                    self.function_args_to_expr(function.args, schema, planner_context)?;
+                return Ok(Expr::AggregateUDF(expr::AggregateUDF::new(
+                    fm, args, None, None,
+                )));
+            }
+
             // next, aggregate built-ins
             if let Ok(fun) = AggregateFunction::from_str(&name) {
                 let distinct = function.distinct;
@@ -141,15 +149,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     fun, args, distinct, None, order_by,
                 )));
             };
-
-            // User defined aggregate functions (UDAF)
-            if let Some(fm) = self.schema_provider.get_aggregate_meta(&name) {
-                let args =
-                    self.function_args_to_expr(function.args, schema, planner_context)?;
-                return Ok(Expr::AggregateUDF(expr::AggregateUDF::new(
-                    fm, args, None, None,
-                )));
-            }
 
             // Special case arrow_cast (as its type is dependent on its argument value)
             if name == ARROW_CAST_NAME {
@@ -213,9 +212,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.sql_expr_to_logical_expr(arg, schema, planner_context)
             }
             FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => Ok(Expr::Wildcard),
-            _ => Err(DataFusionError::NotImplemented(format!(
-                "Unsupported qualified wildcard argument: {sql:?}"
-            ))),
+            _ => not_impl_err!("Unsupported qualified wildcard argument: {sql:?}"),
         }
     }
 

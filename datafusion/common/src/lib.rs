@@ -19,12 +19,13 @@ pub mod alias;
 pub mod cast;
 mod column;
 pub mod config;
-pub mod delta;
 mod dfschema;
 pub mod display;
 mod error;
+pub mod file_options;
 pub mod format;
 mod functional_dependencies;
+pub mod hash_utils;
 mod join_type;
 pub mod parsers;
 #[cfg(feature = "pyarrow")]
@@ -44,6 +45,12 @@ pub use error::{
     field_not_found, unqualified_field_not_found, DataFusionError, Result, SchemaError,
     SharedResult,
 };
+
+pub use file_options::file_type::{
+    FileType, GetExt, DEFAULT_ARROW_EXTENSION, DEFAULT_AVRO_EXTENSION,
+    DEFAULT_CSV_EXTENSION, DEFAULT_JSON_EXTENSION, DEFAULT_PARQUET_EXTENSION,
+};
+pub use file_options::FileTypeWriterOptions;
 pub use functional_dependencies::{
     aggregate_functional_dependencies, get_target_functional_dependencies, Constraints,
     Dependency, FunctionalDependence, FunctionalDependencies,
@@ -55,6 +62,9 @@ pub use stats::{ColumnStatistics, Statistics};
 pub use table_reference::{OwnedTableReference, ResolvedTableReference, TableReference};
 pub use unnest::UnnestOptions;
 pub use utils::project_schema;
+
+/// Reexport arrow crate
+pub use arrow;
 
 /// Downcast an Arrow Array to a concrete type, return an `DataFusionError::Internal` if the cast is
 /// not possible. In normal usage of DataFusion the downcast should always succeed.

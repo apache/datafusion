@@ -469,7 +469,7 @@ select c1%c5 from decimal_simple;
 query T
 select arrow_typeof(abs(c1)) from decimal_simple limit 1;
 ----
-Float64
+Decimal128(10, 6)
 
 
 query R rowsort
@@ -618,7 +618,12 @@ select a / b from foo;
 statement ok
 create table t as values (arrow_cast(123, 'Decimal256(5,2)'));
 
-query error DataFusion error: Internal error: Operator \+ is not implemented for types Decimal256\(None,15,2\) and Decimal256\(Some\(12300\),15,2\)\. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+# make sure query below runs in single partition
+# otherwise error message may not be deterministic
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+query error DataFusion error: This feature is not implemented: AvgAccumulator for \(Decimal256\(5, 2\) --> Decimal256\(9, 6\)\)
 select AVG(column1) from t;
 
 statement ok

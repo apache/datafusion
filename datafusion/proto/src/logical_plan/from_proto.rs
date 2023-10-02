@@ -34,7 +34,6 @@ use datafusion_common::{
     internal_err, Column, DFField, DFSchema, DFSchemaRef, DataFusionError,
     OwnedTableReference, Result, ScalarValue,
 };
-use datafusion_expr::expr::{Alias, Placeholder};
 use datafusion_expr::{
     abs, acos, acosh, array, array_append, array_concat, array_dims, array_element,
     array_has, array_has_all, array_has_any, array_length, array_ndims, array_position,
@@ -58,6 +57,10 @@ use datafusion_expr::{
     GroupingSet::GroupingSets,
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
+};
+use datafusion_expr::{
+    array_empty, array_pop_back,
+    expr::{Alias, Placeholder},
 };
 use std::sync::Arc;
 
@@ -327,8 +330,8 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
                     .collect::<Result<_, _>>()?,
             ),
             arrow_type::ArrowTypeEnum::Union(union) => {
-                let union_mode = protobuf::UnionMode::from_i32(union.union_mode)
-                    .ok_or_else(|| Error::unknown("UnionMode", union.union_mode))?;
+                let union_mode = protobuf::UnionMode::try_from(union.union_mode)
+                    .map_err(|_| Error::unknown("UnionMode", union.union_mode))?;
                 let union_mode = match union_mode {
                     protobuf::UnionMode::Dense => UnionMode::Dense,
                     protobuf::UnionMode::Sparse => UnionMode::Sparse,
@@ -452,6 +455,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ToTimestamp => Self::ToTimestamp,
             ScalarFunction::ArrayAppend => Self::ArrayAppend,
             ScalarFunction::ArrayConcat => Self::ArrayConcat,
+            ScalarFunction::ArrayEmpty => Self::ArrayEmpty,
             ScalarFunction::ArrayHasAll => Self::ArrayHasAll,
             ScalarFunction::ArrayHasAny => Self::ArrayHasAny,
             ScalarFunction::ArrayHas => Self::ArrayHas,
@@ -460,6 +464,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Flatten => Self::Flatten,
             ScalarFunction::ArrayLength => Self::ArrayLength,
             ScalarFunction::ArrayNdims => Self::ArrayNdims,
+            ScalarFunction::ArrayPopBack => Self::ArrayPopBack,
             ScalarFunction::ArrayPosition => Self::ArrayPosition,
             ScalarFunction::ArrayPositions => Self::ArrayPositions,
             ScalarFunction::ArrayPrepend => Self::ArrayPrepend,
@@ -506,6 +511,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Right => Self::Right,
             ScalarFunction::Rpad => Self::Rpad,
             ScalarFunction::SplitPart => Self::SplitPart,
+            ScalarFunction::StringToArray => Self::StringToArray,
             ScalarFunction::StartsWith => Self::StartsWith,
             ScalarFunction::Strpos => Self::Strpos,
             ScalarFunction::Substr => Self::Substr,
@@ -785,8 +791,8 @@ impl TryFrom<protobuf::WindowFrame> for WindowFrame {
     type Error = Error;
 
     fn try_from(window: protobuf::WindowFrame) -> Result<Self, Self::Error> {
-        let units = protobuf::WindowFrameUnits::from_i32(window.window_frame_units)
-            .ok_or_else(|| Error::unknown("WindowFrameUnits", window.window_frame_units))?
+        let units = protobuf::WindowFrameUnits::try_from(window.window_frame_units)
+            .map_err(|_| Error::unknown("WindowFrameUnits", window.window_frame_units))?
             .into();
         let start_bound = window.start_bound.required("start_bound")?;
         let end_bound = window
@@ -811,8 +817,8 @@ impl TryFrom<protobuf::WindowFrameBound> for WindowFrameBound {
 
     fn try_from(bound: protobuf::WindowFrameBound) -> Result<Self, Self::Error> {
         let bound_type =
-            protobuf::WindowFrameBoundType::from_i32(bound.window_frame_bound_type)
-                .ok_or_else(|| {
+            protobuf::WindowFrameBoundType::try_from(bound.window_frame_bound_type)
+                .map_err(|_| {
                     Error::unknown("WindowFrameBoundType", bound.window_frame_bound_type)
                 })?;
         match bound_type {
@@ -875,21 +881,21 @@ impl From<protobuf::JoinConstraint> for JoinConstraint {
 }
 
 pub fn parse_i32_to_time_unit(value: &i32) -> Result<TimeUnit, Error> {
-    protobuf::TimeUnit::from_i32(*value)
+    protobuf::TimeUnit::try_from(*value)
         .map(|t| t.into())
-        .ok_or_else(|| Error::unknown("TimeUnit", *value))
+        .map_err(|_| Error::unknown("TimeUnit", *value))
 }
 
 pub fn parse_i32_to_interval_unit(value: &i32) -> Result<IntervalUnit, Error> {
-    protobuf::IntervalUnit::from_i32(*value)
+    protobuf::IntervalUnit::try_from(*value)
         .map(|t| t.into())
-        .ok_or_else(|| Error::unknown("IntervalUnit", *value))
+        .map_err(|_| Error::unknown("IntervalUnit", *value))
 }
 
 pub fn parse_i32_to_aggregate_function(value: &i32) -> Result<AggregateFunction, Error> {
-    protobuf::AggregateFunction::from_i32(*value)
+    protobuf::AggregateFunction::try_from(*value)
         .map(|a| a.into())
-        .ok_or_else(|| Error::unknown("AggregateFunction", *value))
+        .map_err(|_| Error::unknown("AggregateFunction", *value))
 }
 
 /// Ensures that all `values` are of type DataType::List and have the
@@ -897,7 +903,7 @@ pub fn parse_i32_to_aggregate_function(value: &i32) -> Result<AggregateFunction,
 fn validate_list_values(field: &Field, values: &[ScalarValue]) -> Result<(), Error> {
     for value in values {
         let field_type = field.data_type();
-        let value_type = value.get_datatype();
+        let value_type = value.data_type();
 
         if field_type != &value_type {
             return Err(proto_error(format!(
@@ -1036,8 +1042,8 @@ pub fn parse_expr(
                     )))
                 }
                 window_expr_node::WindowFunction::BuiltInFunction(i) => {
-                    let built_in_function = protobuf::BuiltInWindowFunction::from_i32(*i)
-                        .ok_or_else(|| Error::unknown("BuiltInWindowFunction", *i))?
+                    let built_in_function = protobuf::BuiltInWindowFunction::try_from(*i)
+                        .map_err(|_| Error::unknown("BuiltInWindowFunction", *i))?
                         .into();
 
                     let args = parse_optional_expr(expr.expr.as_deref(), registry)?
@@ -1249,8 +1255,8 @@ pub fn parse_expr(
         ))),
         ExprType::Wildcard(_) => Ok(Expr::Wildcard),
         ExprType::ScalarFunction(expr) => {
-            let scalar_function = protobuf::ScalarFunction::from_i32(expr.fun)
-                .ok_or_else(|| Error::unknown("ScalarFunction", expr.fun))?;
+            let scalar_function = protobuf::ScalarFunction::try_from(expr.fun)
+                .map_err(|_| Error::unknown("ScalarFunction", expr.fun))?;
             let args = &expr.args;
 
             match scalar_function {
@@ -1268,6 +1274,9 @@ pub fn parse_expr(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                 )),
+                ScalarFunction::ArrayPopBack => {
+                    Ok(array_pop_back(parse_expr(&args[0], registry)?))
+                }
                 ScalarFunction::ArrayPrepend => Ok(array_prepend(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
@@ -1355,6 +1364,9 @@ pub fn parse_expr(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                 )),
+                ScalarFunction::ArrayEmpty => {
+                    Ok(array_empty(parse_expr(&args[0], registry)?))
+                }
                 ScalarFunction::ArrayNdims => {
                     Ok(array_ndims(parse_expr(&args[0], registry)?))
                 }

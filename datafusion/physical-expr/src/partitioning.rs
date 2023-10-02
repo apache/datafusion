@@ -20,10 +20,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use crate::{
-    expr_list_eq_strict_order, normalize_expr_with_equivalence_properties,
-    EquivalenceProperties, PhysicalExpr,
-};
+use crate::{expr_list_eq_strict_order, EquivalenceProperties, PhysicalExpr};
 
 /// Partitioning schemes supported by operators.
 #[derive(Debug, Clone)]
@@ -90,21 +87,11 @@ impl Partitioning {
                             if !eq_classes.is_empty() {
                                 let normalized_required_exprs = required_exprs
                                     .iter()
-                                    .map(|e| {
-                                        normalize_expr_with_equivalence_properties(
-                                            e.clone(),
-                                            eq_classes,
-                                        )
-                                    })
+                                    .map(|e| eq_properties.normalize_expr(e.clone()))
                                     .collect::<Vec<_>>();
                                 let normalized_partition_exprs = partition_exprs
                                     .iter()
-                                    .map(|e| {
-                                        normalize_expr_with_equivalence_properties(
-                                            e.clone(),
-                                            eq_classes,
-                                        )
-                                    })
+                                    .map(|e| eq_properties.normalize_expr(e.clone()))
                                     .collect::<Vec<_>>();
                                 expr_list_eq_strict_order(
                                     &normalized_required_exprs,
@@ -166,5 +153,82 @@ impl Distribution {
                 Partitioning::Hash(expr.clone(), partition_count)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::expressions::Column;
+
+    use super::*;
+    use arrow::datatypes::DataType;
+    use arrow::datatypes::Field;
+    use arrow::datatypes::Schema;
+    use datafusion_common::Result;
+
+    use std::sync::Arc;
+
+    #[test]
+    fn partitioning_satisfy_distribution() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("column_1", DataType::Int64, false),
+            Field::new("column_2", DataType::Utf8, false),
+        ]));
+
+        let partition_exprs1: Vec<Arc<dyn PhysicalExpr>> = vec![
+            Arc::new(Column::new_with_schema("column_1", &schema).unwrap()),
+            Arc::new(Column::new_with_schema("column_2", &schema).unwrap()),
+        ];
+
+        let partition_exprs2: Vec<Arc<dyn PhysicalExpr>> = vec![
+            Arc::new(Column::new_with_schema("column_2", &schema).unwrap()),
+            Arc::new(Column::new_with_schema("column_1", &schema).unwrap()),
+        ];
+
+        let distribution_types = vec![
+            Distribution::UnspecifiedDistribution,
+            Distribution::SinglePartition,
+            Distribution::HashPartitioned(partition_exprs1.clone()),
+        ];
+
+        let single_partition = Partitioning::UnknownPartitioning(1);
+        let unspecified_partition = Partitioning::UnknownPartitioning(10);
+        let round_robin_partition = Partitioning::RoundRobinBatch(10);
+        let hash_partition1 = Partitioning::Hash(partition_exprs1, 10);
+        let hash_partition2 = Partitioning::Hash(partition_exprs2, 10);
+
+        for distribution in distribution_types {
+            let result = (
+                single_partition.satisfy(distribution.clone(), || {
+                    EquivalenceProperties::new(schema.clone())
+                }),
+                unspecified_partition.satisfy(distribution.clone(), || {
+                    EquivalenceProperties::new(schema.clone())
+                }),
+                round_robin_partition.satisfy(distribution.clone(), || {
+                    EquivalenceProperties::new(schema.clone())
+                }),
+                hash_partition1.satisfy(distribution.clone(), || {
+                    EquivalenceProperties::new(schema.clone())
+                }),
+                hash_partition2.satisfy(distribution.clone(), || {
+                    EquivalenceProperties::new(schema.clone())
+                }),
+            );
+
+            match distribution {
+                Distribution::UnspecifiedDistribution => {
+                    assert_eq!(result, (true, true, true, true, true))
+                }
+                Distribution::SinglePartition => {
+                    assert_eq!(result, (true, false, false, false, false))
+                }
+                Distribution::HashPartitioned(_) => {
+                    assert_eq!(result, (false, false, false, true, false))
+                }
+            }
+        }
+
+        Ok(())
     }
 }

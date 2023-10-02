@@ -108,12 +108,20 @@ impl TableProvider for ViewTable {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let plan = if let Some(projection) = projection {
+        let filter = filters.iter().cloned().reduce(|acc, new| acc.and(new));
+        let plan = self.logical_plan().clone();
+        let mut plan = LogicalPlanBuilder::from(plan);
+
+        if let Some(filter) = filter {
+            plan = plan.filter(filter)?;
+        }
+
+        let mut plan = if let Some(projection) = projection {
             // avoiding adding a redundant projection (e.g. SELECT * FROM view)
             let current_projection =
-                (0..self.logical_plan.schema().fields().len()).collect::<Vec<usize>>();
+                (0..plan.schema().fields().len()).collect::<Vec<usize>>();
             if projection == &current_projection {
-                self.logical_plan().clone()
+                plan
             } else {
                 let fields: Vec<Expr> = projection
                     .iter()
@@ -123,19 +131,11 @@ impl TableProvider for ViewTable {
                         )
                     })
                     .collect();
-                LogicalPlanBuilder::from(self.logical_plan.clone())
-                    .project(fields)?
-                    .build()?
+                plan.project(fields)?
             }
         } else {
-            self.logical_plan().clone()
+            plan
         };
-        let mut plan = LogicalPlanBuilder::from(plan);
-        let filter = filters.iter().cloned().reduce(|acc, new| acc.and(new));
-
-        if let Some(filter) = filter {
-            plan = plan.filter(filter)?;
-        }
 
         if let Some(limit) = limit {
             plan = plan.limit(0, Some(limit))?;
@@ -175,7 +175,7 @@ mod tests {
             .collect()
             .await?;
 
-        let expected = vec!["+---+", "| b |", "+---+", "| 2 |", "+---+"];
+        let expected = ["+---+", "| b |", "+---+", "| 2 |", "+---+"];
 
         assert_batches_eq!(expected, &results);
 
@@ -221,7 +221,7 @@ mod tests {
             .collect()
             .await?;
 
-        let expected = vec![
+        let expected = [
             "+---------+---------+---------+",
             "| column1 | column2 | column3 |",
             "+---------+---------+---------+",
@@ -254,7 +254,7 @@ mod tests {
             .collect()
             .await?;
 
-        let expected = vec![
+        let expected = [
             "+---------------+",
             "| column1_alias |",
             "+---------------+",
@@ -287,7 +287,7 @@ mod tests {
             .collect()
             .await?;
 
-        let expected = vec![
+        let expected = [
             "+---------------+---------------+",
             "| column2_alias | column1_alias |",
             "+---------------+---------------+",
@@ -325,7 +325,7 @@ mod tests {
             .collect()
             .await?;
 
-        let expected = vec![
+        let expected = [
             "+---------+",
             "| column1 |",
             "+---------+",
@@ -363,7 +363,7 @@ mod tests {
             .collect()
             .await?;
 
-        let expected = vec![
+        let expected = [
             "+---------+",
             "| column1 |",
             "+---------+",
@@ -403,7 +403,7 @@ mod tests {
             .collect()
             .await?;
 
-        let expected = vec![
+        let expected = [
             "+---------+---------+---------+",
             "| column2 | column1 | column3 |",
             "+---------+---------+---------+",
@@ -439,6 +439,7 @@ mod tests {
             .select_columns(&["bool_col", "int_col"])?;
 
         let plan = df.explain(false, false)?.collect().await?;
+
         // Filters all the way to Parquet
         let formatted = arrow::util::pretty::pretty_format_batches(&plan)
             .unwrap()
@@ -558,7 +559,7 @@ mod tests {
             .collect()
             .await?;
 
-        let expected = vec![
+        let expected = [
             "+---------+",
             "| column1 |",
             "+---------+",

@@ -19,7 +19,9 @@ use std::sync::Arc;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
-use datafusion_common::{Constraints, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    not_impl_err, plan_err, sql_err, Constraints, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::{
     CreateMemoryTable, DdlStatement, Expr, LogicalPlan, LogicalPlanBuilder,
 };
@@ -27,7 +29,6 @@ use sqlparser::ast::{
     Expr as SQLExpr, Offset as SQLOffset, OrderByExpr, Query, SetExpr, Value,
 };
 
-use datafusion_common::plan_err;
 use sqlparser::parser::ParserError::ParserError;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -53,18 +54,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // Process CTEs from top to bottom
             // do not allow self-references
             if with.recursive {
-                return Err(DataFusionError::NotImplemented(
-                    "Recursive CTEs are not supported".to_string(),
-                ));
+                return not_impl_err!("Recursive CTEs are not supported");
             }
 
             for cte in with.cte_tables {
                 // A `WITH` block can't use the same name more than once
                 let cte_name = self.normalizer.normalize(cte.alias.name.clone());
                 if planner_context.contains_cte(&cte_name) {
-                    return Err(DataFusionError::SQL(ParserError(format!(
+                    return sql_err!(ParserError(format!(
                         "WITH query name {cte_name:?} specified more than once"
-                    ))));
+                    )));
                 }
                 // create logical plan & pass backreferencing CTEs
                 // CTE expr don't need extend outer_query_schema

@@ -21,26 +21,38 @@ create table source_table(col1 integer, col2 varchar) as values (1, 'Foo'), (2, 
 
 # Copy to directory as multiple files
 query IT
-COPY source_table TO 'test_files/scratch/table' (format parquet, per_thread_output true);
+COPY source_table TO 'test_files/scratch/copy/table' (format parquet, single_file_output false, compression 'zstd(10)');
 ----
 2
 
-#Explain copy queries not currently working
-query error DataFusion error: This feature is not implemented: Unsupported SQL statement: Some\("COPY source_table TO 'test_files/scratch/table'"\)
-EXPLAIN COPY source_table to 'test_files/scratch/table'
+query TT
+EXPLAIN COPY source_table TO 'test_files/scratch/copy/table' (format parquet, single_file_output false, compression 'zstd(10)');
+----
+logical_plan
+CopyTo: format=parquet output_url=test_files/scratch/copy/table single_file_output=false options: (compression 'zstd(10)')
+--TableScan: source_table projection=[col1, col2]
+physical_plan
+InsertExec: sink=ParquetSink(writer_mode=PutMultipart, file_groups=[])
+--MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
 
-query error DataFusion error: SQL error: ParserError\("Expected end of statement, found: source_table"\)
-EXPLAIN COPY source_table to 'test_files/scratch/table' (format parquet, per_thread_output true)
+# Error case
+query error DataFusion error: Invalid or Unsupported Configuration: Format not explicitly set and unable to get file extension!
+EXPLAIN COPY source_table to 'test_files/scratch/copy/table'
+
+query error DataFusion error: SQL error: ParserError\("Expected end of statement, found: query"\)
+EXPLAIN COPY source_table to 'test_files/scratch/copy/table' (format parquet, single_file_output false)
+query TT
+EXPLAIN COPY source_table to 'test_files/scratch/copy/table' (format parquet, per_thread_output true)
 
 # Copy more files to directory via query
 query IT
-COPY (select * from source_table UNION ALL select * from source_table) to 'test_files/scratch/table' (format parquet, per_thread_output true);
+COPY (select * from source_table UNION ALL select * from source_table) to 'test_files/scratch/copy/table' (format parquet, single_file_output false);
 ----
 4
 
 # validate multiple parquet file output
 statement ok
-CREATE EXTERNAL TABLE validate_parquet STORED AS PARQUET LOCATION 'test_files/scratch/table/';
+CREATE EXTERNAL TABLE validate_parquet STORED AS PARQUET LOCATION 'test_files/scratch/copy/table/';
 
 query IT
 select * from validate_parquet;
@@ -52,15 +64,59 @@ select * from validate_parquet;
 1 Foo
 2 Bar
 
+# Copy parquet with all supported statment overrides
+query IT
+COPY source_table 
+TO 'test_files/scratch/copy/table_with_options' 
+(format parquet,
+single_file_output false,
+compression snappy,
+'compression::col1' 'zstd(5)',
+'compression::col2' snappy,
+max_row_group_size 12345,
+data_pagesize_limit 1234,
+write_batch_size 1234,
+writer_version 2.0,
+dictionary_page_size_limit 123,
+created_by 'DF copy.slt',
+column_index_truncate_length 123,
+data_page_row_count_limit 1234,
+bloom_filter_enabled true,
+'bloom_filter_enabled::col1' false,
+'bloom_filter_fpp::col2' 0.456,
+'bloom_filter_ndv::col2' 456,
+encoding plain,
+'encoding::col1' DELTA_BINARY_PACKED,
+'dictionary_enabled::col2' true,
+dictionary_enabled false,
+statistics_enabled page,
+'statistics_enabled::col2' none,
+max_statistics_size 123,
+bloom_filter_fpp 0.001,
+bloom_filter_ndv 100
+)
+----
+2
+
+# validate multiple parquet file output with all options set
+statement ok
+CREATE EXTERNAL TABLE validate_parquet_with_options STORED AS PARQUET LOCATION 'test_files/scratch/copy/table_with_options/';
+
+query IT
+select * from validate_parquet_with_options;
+----
+1 Foo
+2 Bar
+
 # Copy from table to single file
 query IT
-COPY source_table to 'test_files/scratch/table.parquet';
+COPY source_table to 'test_files/scratch/copy/table.parquet';
 ----
 2
 
 # validate single parquet file output
 statement ok
-CREATE EXTERNAL TABLE validate_parquet_single STORED AS PARQUET LOCATION 'test_files/scratch/table.parquet';
+CREATE EXTERNAL TABLE validate_parquet_single STORED AS PARQUET LOCATION 'test_files/scratch/copy/table.parquet';
 
 query IT
 select * from validate_parquet_single;
@@ -68,15 +124,31 @@ select * from validate_parquet_single;
 1 Foo
 2 Bar
 
-# copy from table to folder of csv files
+# copy from table to folder of compressed json files
 query IT
-COPY source_table  to 'test_files/scratch/table_csv' (format csv, per_thread_output true);
+COPY source_table  to 'test_files/scratch/copy/table_json_gz' (format json, single_file_output false, compression 'gzip');
 ----
 2
 
 # validate folder of csv files
 statement ok
-CREATE EXTERNAL TABLE validate_csv STORED AS csv WITH HEADER ROW LOCATION 'test_files/scratch/table_csv';
+CREATE EXTERNAL TABLE validate_json_gz STORED AS json COMPRESSION TYPE gzip LOCATION 'test_files/scratch/copy/table_json_gz';
+
+query IT
+select * from validate_json_gz;
+----
+1 Foo
+2 Bar
+
+# copy from table to folder of compressed csv files
+query IT
+COPY source_table  to 'test_files/scratch/copy/table_csv' (format csv, single_file_output false, header false, compression 'gzip');
+----
+2
+
+# validate folder of csv files
+statement ok
+CREATE EXTERNAL TABLE validate_csv STORED AS csv COMPRESSION TYPE gzip LOCATION 'test_files/scratch/copy/table_csv';
 
 query IT
 select * from validate_csv;
@@ -86,13 +158,13 @@ select * from validate_csv;
 
 # Copy from table to single csv
 query IT
-COPY source_table  to 'test_files/scratch/table.csv';
+COPY source_table  to 'test_files/scratch/copy/table.csv';
 ----
 2
 
 # Validate single csv output
 statement ok
-CREATE EXTERNAL TABLE validate_single_csv STORED AS csv WITH HEADER ROW LOCATION 'test_files/scratch/table.csv';
+CREATE EXTERNAL TABLE validate_single_csv STORED AS csv WITH HEADER ROW LOCATION 'test_files/scratch/copy/table.csv';
 
 query IT
 select * from validate_single_csv;
@@ -102,13 +174,13 @@ select * from validate_single_csv;
 
 # Copy from table to folder of json
 query IT
-COPY source_table to 'test_files/scratch/table_json' (format json, per_thread_output true);
+COPY source_table to 'test_files/scratch/copy/table_json' (format json, single_file_output false);
 ----
 2
 
 # Validate json output
 statement ok
-CREATE EXTERNAL TABLE validate_json STORED AS json LOCATION 'test_files/scratch/table_json';
+CREATE EXTERNAL TABLE validate_json STORED AS json LOCATION 'test_files/scratch/copy/table_json';
 
 query IT
 select * from validate_json;
@@ -118,13 +190,13 @@ select * from validate_json;
 
 # Copy from table to single json file
 query IT
-COPY source_table  to 'test_files/scratch/table.json';
+COPY source_table  to 'test_files/scratch/copy/table.json';
 ----
 2
 
 # Validate single JSON file`
 statement ok
-CREATE EXTERNAL TABLE validate_single_json STORED AS json LOCATION 'test_files/scratch/table_json';
+CREATE EXTERNAL TABLE validate_single_json STORED AS json LOCATION 'test_files/scratch/copy/table_json';
 
 query IT
 select * from validate_single_json;
@@ -132,20 +204,37 @@ select * from validate_single_json;
 1 Foo
 2 Bar
 
-# Copy from table with options
+# COPY csv files with all options set
 query IT
-COPY source_table  to 'test_files/scratch/table.json' (row_group_size 55);
+COPY source_table 
+to 'test_files/scratch/copy/table_csv_with_options' 
+(format csv, 
+single_file_output false, 
+header false, 
+compression 'uncompressed',
+datetime_format '%FT%H:%M:%S.%9f',
+delimiter ';',
+null_value 'NULLVAL');
 ----
 2
 
-# Copy from table with options (and trailing comma)
-query IT
-COPY source_table  to 'test_files/scratch/table.json' (row_group_size 55, row_group_limit_bytes 9,);
-----
-2
+# Validate single csv output
+statement ok
+CREATE EXTERNAL TABLE validate_csv_with_options 
+STORED AS csv 
+LOCATION 'test_files/scratch/copy/table_csv_with_options';
 
+query T
+select * from validate_csv_with_options;
+----
+1;Foo
+2;Bar
 
 # Error cases:
+
+# Copy from table with options
+query error DataFusion error: Invalid or Unsupported Configuration: Found unsupported option row_group_size with value 55 for JSON format!
+COPY source_table  to 'test_files/scratch/copy/table.json' (row_group_size 55);
 
 # Incomplete statement
 query error DataFusion error: SQL error: ParserError\("Expected \), found: EOF"\)

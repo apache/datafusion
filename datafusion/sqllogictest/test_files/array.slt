@@ -80,6 +80,17 @@ AS VALUES
 ;
 
 statement ok
+CREATE TABLE arrayspop
+AS VALUES
+  (make_array(1, 2, NULL)),
+  (make_array(3, 4, 5, NULL)),
+  (make_array(6, 7, 8, NULL, 9)),
+  (make_array(NULL, NULL, 100)),
+  (NULL),
+  (make_array(NULL, 10, 11, 12))
+;
+
+statement ok
 CREATE TABLE nested_arrays
 AS VALUES
   (make_array(make_array(1, 2, 3), make_array(2, 9, 1), make_array(7, 8, 9), make_array(1, 2, 3), make_array(1, 7, 4), make_array(4, 5, 6)), make_array(7, 8, 9), 2, make_array([[1, 2, 3], [4, 5, 6]], [[7, 8, 9], [10, 11, 12]]), make_array(11, 12, 13)),
@@ -600,6 +611,11 @@ from arrays_values_without_nulls;
 
 ## array_element (aliases: array_extract, list_extract, list_element)
 
+# array_element error
+query error DataFusion error: Error during planning: The array_element function can only accept list as the first argument
+select array_element(1, 2);
+
+
 # array_element scalar function #1 (with positive index)
 query IT
 select array_element(make_array(1, 2, 3, 4, 5), 2), array_element(make_array('h', 'e', 'l', 'l', 'o'), 3);
@@ -681,6 +697,67 @@ NULL 23
 4 NULL
 NULL 43
 5 NULL
+
+## array_pop_back (aliases: `list_pop_back`)
+
+# array_pop_back scalar function #1
+query ??
+select array_pop_back(make_array(1, 2, 3, 4, 5)), array_pop_back(make_array('h', 'e', 'l', 'l', 'o'));
+----
+[1, 2, 3, 4] [h, e, l, l]
+
+# array_pop_back scalar function #2 (after array_pop_back, array is empty)
+query ?
+select array_pop_back(make_array(1));
+----
+[]
+
+# array_pop_back scalar function #3 (array_pop_back the empty array)
+query ?
+select array_pop_back(array_pop_back(make_array(1)));
+----
+[]
+
+# array_pop_back scalar function #4 (array_pop_back the arrays which have NULL)
+query ??
+select array_pop_back(make_array(1, 2, 3, 4, NULL)), array_pop_back(make_array(NULL, 'e', 'l', NULL, 'o'));
+----
+[1, 2, 3, 4] [, e, l, ]
+
+# array_pop_back scalar function #5 (array_pop_back the nested arrays)
+query ?
+select array_pop_back(make_array(make_array(1, 2, 3), make_array(2, 9, 1), make_array(7, 8, 9), make_array(1, 2, 3), make_array(1, 7, 4), make_array(4, 5, 6)));
+----
+[[1, 2, 3], [2, 9, 1], [7, 8, 9], [1, 2, 3], [1, 7, 4]]
+
+# array_pop_back scalar function #6 (array_pop_back the nested arrays with NULL)
+query ?
+select array_pop_back(make_array(make_array(1, 2, 3), make_array(2, 9, 1), make_array(7, 8, 9), make_array(1, 2, 3), make_array(1, 7, 4), NULL));
+----
+[[1, 2, 3], [2, 9, 1], [7, 8, 9], [1, 2, 3], [1, 7, 4]]
+
+# array_pop_back scalar function #7 (array_pop_back the nested arrays with NULL)
+query ?
+select array_pop_back(make_array(make_array(1, 2, 3), make_array(2, 9, 1), make_array(7, 8, 9), NULL, make_array(1, 7, 4)));
+----
+[[1, 2, 3], [2, 9, 1], [7, 8, 9], ]
+
+# array_pop_back scalar function #8 (after array_pop_back, nested array is empty)
+query ?
+select array_pop_back(make_array(make_array(1, 2, 3)));
+----
+[]
+
+# array_pop_back with columns
+query ?
+select array_pop_back(column1) from arrayspop;
+----
+[1, 2]
+[3, 4, 5]
+[6, 7, 8, ]
+[, ]
+[]
+[, 10, 11]
 
 ## array_slice (aliases: list_slice)
 
@@ -1097,6 +1174,10 @@ select array_repeat([1], column3), array_repeat(column1, 3) from arrays_values_w
 [[1], [1], [1], [1]] [[31, 32, 33, 34, 35, 26, 37, 38, 39, 40], [31, 32, 33, 34, 35, 26, 37, 38, 39, 40], [31, 32, 33, 34, 35, 26, 37, 38, 39, 40]]
 
 ## array_concat (aliases: `array_cat`, `list_concat`, `list_cat`)
+
+# array_concat error
+query error DataFusion error: Error during planning: The array_concat function can only accept list as the args\.
+select array_concat(1, 2);
 
 # array_concat scalar function #1
 query ??
@@ -2008,6 +2089,11 @@ NULL 10
 
 ## array_dims (aliases: `list_dims`)
 
+# array dims error
+# TODO this is a separate bug
+query error Internal error: could not cast value to arrow_array::array::list_array::GenericListArray<i32>\.
+select array_dims(1);
+
 # array_dims scalar function
 query ???
 select array_dims(make_array(1, 2, 3)), array_dims(make_array([1, 2], [3, 4])), array_dims(make_array([[[[1], [2]]]]));
@@ -2363,6 +2449,88 @@ from flatten_table;
 [1, 2, 3] [1, 2, 3, 4, 5, 6] [1, 2, 3] [1.0, 2.1, 2.2, 3.2, 3.3, 3.4]
 [1, 2, 3, 4, 5, 6] [8] [1, 2, 3] [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
 
+# empty scalar function #1
+query B
+select empty(make_array(1));
+----
+false
+
+# empty scalar function #2
+query B
+select empty(make_array());
+----
+true
+
+# empty scalar function #3
+query B
+select empty(make_array(NULL));
+----
+true
+
+# empty scalar function #4
+query B
+select empty(NULL);
+----
+NULL
+
+# empty scalar function #5
+query B
+select empty(column1) from arrays;
+----
+false
+false
+false
+false
+NULL
+false
+false
+
+query ?
+SELECT string_to_array('abcxxxdef', 'xxx')
+----
+[abc, def]
+
+query ?
+SELECT string_to_array('abc', '')
+----
+[abc]
+
+query ?
+SELECT string_to_array('abc', NULL)
+----
+[a, b, c]
+
+query ?
+SELECT string_to_array('abc def', ' ', 'def')
+----
+[abc, ]
+
+query ?
+select string_to_array(e, ',') from values;
+----
+[Lorem]
+[ipsum]
+[dolor]
+[sit]
+[amet]
+[, ]
+[consectetur]
+[adipiscing]
+NULL
+
+query ?
+select string_to_list(e, 'm') from values;
+----
+[Lore, ]
+[ipsu, ]
+[dolor]
+[sit]
+[a, et]
+[,]
+[consectetur]
+[adipiscing]
+NULL
+
 ### Delete tables
 
 statement ok
@@ -2379,6 +2547,9 @@ drop table arrays;
 
 statement ok
 drop table slices;
+
+statement ok
+drop table arrayspop;
 
 statement ok
 drop table arrays_values;

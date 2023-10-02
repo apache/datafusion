@@ -19,6 +19,7 @@
 
 use crate::PhysicalExpr;
 use arrow::array::Array;
+use datafusion_common::exec_err;
 
 use crate::array_expressions::{array_element, array_slice};
 use crate::physical_expr::down_cast_any_ref;
@@ -60,9 +61,28 @@ impl std::fmt::Display for GetFieldAccessExpr {
 
 impl PartialEq<dyn Any> for GetFieldAccessExpr {
     fn eq(&self, other: &dyn Any) -> bool {
+        use GetFieldAccessExpr::{ListIndex, ListRange, NamedStructField};
         down_cast_any_ref(other)
             .downcast_ref::<Self>()
-            .map(|x| self.eq(x))
+            .map(|x| match (self, x) {
+                (NamedStructField { name: lhs }, NamedStructField { name: rhs }) => {
+                    lhs.eq(rhs)
+                }
+                (ListIndex { key: lhs }, ListIndex { key: rhs }) => lhs.eq(rhs),
+                (
+                    ListRange {
+                        start: start_lhs,
+                        stop: stop_lhs,
+                    },
+                    ListRange {
+                        start: start_rhs,
+                        stop: stop_rhs,
+                    },
+                ) => start_lhs.eq(start_rhs) && stop_lhs.eq(stop_rhs),
+                (NamedStructField { .. }, ListIndex { .. } | ListRange { .. }) => false,
+                (ListIndex { .. }, NamedStructField { .. } | ListRange { .. }) => false,
+                (ListRange { .. }, NamedStructField { .. } | ListIndex { .. }) => false,
+            })
             .unwrap_or(false)
     }
 }
@@ -166,17 +186,17 @@ impl PhysicalExpr for GetIndexedFieldExpr {
                 (DataType::Struct(_), ScalarValue::Utf8(Some(k))) => {
                     let as_struct_array = as_struct_array(&array)?;
                     match as_struct_array.column_by_name(k) {
-                        None => Err(DataFusionError::Execution(
-                            format!("get indexed field {k} not found in struct"))),
+                        None => exec_err!(
+                            "get indexed field {k} not found in struct"),
                         Some(col) => Ok(ColumnarValue::Array(col.clone()))
                     }
                 }
-                (DataType::Struct(_), name) => Err(DataFusionError::Execution(
-                    format!("get indexed field is only possible on struct with utf8 indexes. \
-                             Tried with {name:?} index"))),
-                (dt, name) => Err(DataFusionError::Execution(
-                                format!("get indexed field is only possible on lists with int64 indexes or struct \
-                                         with utf8 indexes. Tried {dt:?} with {name:?} index"))),
+                (DataType::Struct(_), name) => exec_err!(
+                    "get indexed field is only possible on struct with utf8 indexes. \
+                             Tried with {name:?} index"),
+                (dt, name) => exec_err!(
+                                "get indexed field is only possible on lists with int64 indexes or struct \
+                                         with utf8 indexes. Tried {dt:?} with {name:?} index"),
             },
             GetFieldAccessExpr::ListIndex{key} => {
             let key = key.evaluate(batch)?.into_array(batch.num_rows());
@@ -184,12 +204,12 @@ impl PhysicalExpr for GetIndexedFieldExpr {
                 (DataType::List(_), DataType::Int64) => Ok(ColumnarValue::Array(array_element(&[
                     array, key
                 ])?)),
-                (DataType::List(_), key) => Err(DataFusionError::Execution(
-                                format!("get indexed field is only possible on lists with int64 indexes. \
-                                    Tried with {key:?} index"))),
-                            (dt, key) => Err(DataFusionError::Execution(
-                                        format!("get indexed field is only possible on lists with int64 indexes or struct \
-                                                 with utf8 indexes. Tried {dt:?} with {key:?} index"))),
+                (DataType::List(_), key) => exec_err!(
+                                "get indexed field is only possible on lists with int64 indexes. \
+                                    Tried with {key:?} index"),
+                            (dt, key) => exec_err!(
+                                        "get indexed field is only possible on lists with int64 indexes or struct \
+                                                 with utf8 indexes. Tried {dt:?} with {key:?} index"),
                         }
                 },
             GetFieldAccessExpr::ListRange{start, stop} => {
@@ -199,12 +219,12 @@ impl PhysicalExpr for GetIndexedFieldExpr {
                     (DataType::List(_), DataType::Int64, DataType::Int64) => Ok(ColumnarValue::Array(array_slice(&[
                         array, start, stop
                     ])?)),
-                    (DataType::List(_), start, stop) => Err(DataFusionError::Execution(
-                        format!("get indexed field is only possible on lists with int64 indexes. \
-                                 Tried with {start:?} and {stop:?} indices"))),
-                    (dt, start, stop) => Err(DataFusionError::Execution(
-                        format!("get indexed field is only possible on lists with int64 indexes or struct \
-                                 with utf8 indexes. Tried {dt:?} with {start:?} and {stop:?} indices"))),
+                    (DataType::List(_), start, stop) => exec_err!(
+                        "get indexed field is only possible on lists with int64 indexes. \
+                                 Tried with {start:?} and {stop:?} indices"),
+                    (dt, start, stop) => exec_err!(
+                        "get indexed field is only possible on lists with int64 indexes or struct \
+                                 with utf8 indexes. Tried {dt:?} with {start:?} and {stop:?} indices"),
                 }
             },
         }
@@ -432,6 +452,21 @@ mod tests {
         let expr = Arc::new(GetIndexedFieldExpr::new_index(expr, key));
         let result = expr.evaluate(&batch)?.into_array(1);
         assert!(result.is_null(0));
+        Ok(())
+    }
+
+    #[test]
+    fn get_indexed_field_eq() -> Result<()> {
+        let schema = list_schema(&["list", "error"]);
+        let expr = col("list", &schema).unwrap();
+        let key = col("error", &schema).unwrap();
+        let indexed_field =
+            Arc::new(GetIndexedFieldExpr::new_index(expr.clone(), key.clone()))
+                as Arc<dyn PhysicalExpr>;
+        let indexed_field_other =
+            Arc::new(GetIndexedFieldExpr::new_index(key, expr)) as Arc<dyn PhysicalExpr>;
+        assert!(indexed_field.eq(&indexed_field));
+        assert!(!indexed_field.eq(&indexed_field_other));
         Ok(())
     }
 }

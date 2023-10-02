@@ -27,11 +27,10 @@ use arrow::datatypes::{
 use arrow::temporal_conversions::{MICROSECONDS, MILLISECONDS, NANOSECONDS};
 use datafusion_common::tree_node::{RewriteRecursion, TreeNodeRewriter};
 use datafusion_common::{
-    internal_err, DFSchemaRef, DataFusionError, Result, ScalarValue,
+    internal_err, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::expr::{BinaryExpr, Cast, InList, TryCast};
 use datafusion_expr::expr_rewriter::rewrite_preserving_name;
-use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
     binary_expr, in_list, lit, Expr, ExprSchemable, LogicalPlan, Operator,
 };
@@ -92,6 +91,12 @@ impl OptimizerRule for UnwrapCastInComparison {
     ) -> Result<Option<LogicalPlan>> {
         let mut schema = merge_schema(plan.inputs());
 
+        if let LogicalPlan::TableScan(ts) = plan {
+            let source_schema =
+                DFSchema::try_from_qualified_schema(&ts.table_name, &ts.source.schema())?;
+            schema.merge(&source_schema);
+        }
+
         schema.merge(plan.schema());
 
         let mut expr_rewriter = UnwrapCastExprRewriter {
@@ -105,11 +110,7 @@ impl OptimizerRule for UnwrapCastInComparison {
             .collect::<Result<Vec<_>>>()?;
 
         let inputs: Vec<LogicalPlan> = plan.inputs().into_iter().cloned().collect();
-        Ok(Some(from_plan(
-            plan,
-            new_exprs.as_slice(),
-            inputs.as_slice(),
-        )?))
+        Ok(Some(plan.with_new_exprs(new_exprs, inputs.as_slice())?))
     }
 
     fn name(&self) -> &str {
@@ -303,7 +304,7 @@ fn try_cast_literal_to_type(
     lit_value: &ScalarValue,
     target_type: &DataType,
 ) -> Result<Option<ScalarValue>> {
-    let lit_data_type = lit_value.get_datatype();
+    let lit_data_type = lit_value.data_type();
     // the rule just support the signed numeric data type now
     if !is_support_data_type(&lit_data_type) || !is_support_data_type(target_type) {
         return Ok(None);
@@ -822,7 +823,7 @@ mod tests {
             for s2 in &scalars {
                 let expected_value = ExpectedCast::Value(s2.clone());
 
-                expect_cast(s1.clone(), s2.get_datatype(), expected_value);
+                expect_cast(s1.clone(), s2.data_type(), expected_value);
             }
         }
     }
@@ -847,7 +848,7 @@ mod tests {
             for s2 in &scalars {
                 let expected_value = ExpectedCast::Value(s2.clone());
 
-                expect_cast(s1.clone(), s2.get_datatype(), expected_value);
+                expect_cast(s1.clone(), s2.data_type(), expected_value);
             }
         }
 
@@ -981,10 +982,10 @@ mod tests {
             assert_eq!(lit_tz_none, lit_tz_utc);
 
             // e.g. DataType::Timestamp(_, None)
-            let dt_tz_none = lit_tz_none.get_datatype();
+            let dt_tz_none = lit_tz_none.data_type();
 
             // e.g. DataType::Timestamp(_, Some(utc))
-            let dt_tz_utc = lit_tz_utc.get_datatype();
+            let dt_tz_utc = lit_tz_utc.data_type();
 
             // None <--> None
             expect_cast(
@@ -1107,7 +1108,7 @@ mod tests {
                 if let (
                     DataType::Timestamp(left_unit, left_tz),
                     DataType::Timestamp(right_unit, right_tz),
-                ) = (actual_value.get_datatype(), expected_value.get_datatype())
+                ) = (actual_value.data_type(), expected_value.data_type())
                 {
                     assert_eq!(left_unit, right_unit);
                     assert_eq!(left_tz, right_tz);

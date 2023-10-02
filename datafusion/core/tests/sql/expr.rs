@@ -128,6 +128,14 @@ async fn test_encoding_expressions() -> Result<()> {
     Ok(())
 }
 
+#[should_panic(expected = "Invalid timezone \\\"Foo\\\": 'Foo' is not a valid timezone")]
+#[tokio::test]
+async fn test_array_cast_invalid_timezone_will_panic() {
+    let ctx = SessionContext::new();
+    let sql = "SELECT arrow_cast('2021-01-02T03:04:00', 'Timestamp(Nanosecond, Some(\"Foo\"))')";
+    execute(&ctx, sql).await;
+}
+
 #[tokio::test]
 #[cfg_attr(not(feature = "crypto_expressions"), ignore)]
 async fn test_crypto_expressions() -> Result<()> {
@@ -908,13 +916,11 @@ async fn nested_subquery() -> Result<()> {
     let actual = execute_to_batches(&ctx, sql).await;
     // the purpose of this test is just to make sure the query produces a valid plan
     #[rustfmt::skip]
-    let expected = vec![
-        "+-----+",
+    let expected = ["+-----+",
         "| cnt |",
         "+-----+",
         "| 0   |",
-        "+-----+"
-    ];
+        "+-----+"];
     assert_batches_eq!(expected, &actual);
     Ok(())
 }

@@ -1481,6 +1481,7 @@ from_unixtime(expression)
 - [array_length](#array_length)
 - [array_ndims](#array_ndims)
 - [array_prepend](#array_prepend)
+- [array_pop_back](#array_pop_back)
 - [array_position](#array_position)
 - [array_positions](#array_positions)
 - [array_push_back](#array_push_back)
@@ -1495,6 +1496,7 @@ from_unixtime(expression)
 - [array_slice](#array_slice)
 - [array_to_string](#array_to_string)
 - [cardinality](#cardinality)
+- [empty](#empty)
 - [list_append](#list_append)
 - [list_cat](#list_cat)
 - [list_concat](#list_concat)
@@ -1521,6 +1523,8 @@ from_unixtime(expression)
 - [list_to_string](#list_to_string)
 - [make_array](#make_array)
 - [make_list](#make_list)
+- [string_to_array](#string_to_array)
+- [string_to_list](#string_to_list)
 - [trim_array](#trim_array)
 
 ### `array_append`
@@ -1693,6 +1697,8 @@ array_element(array, index)
 - list_element
 - list_extract
 
+### `array_empty`
+
 ### `array_extract`
 
 _Alias of [array_element](#array_element)._
@@ -1826,6 +1832,30 @@ array_prepend(element, array)
 - array_push_front
 - list_prepend
 - list_push_front
+
+### `array_pop_back`
+
+Returns the array without the last element.
+
+```
+array_pop_back(array)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```
+❯ select array_pop_back([1, 2, 3]);
++-------------------------------+
+| array_pop_back(List([1,2,3])) |
++-------------------------------+
+| [1, 2]                        |
++-------------------------------+
+```
 
 ### `array_position`
 
@@ -2138,14 +2168,14 @@ array_slice(array, begin, end)
 Converts each element to its text representation.
 
 ```
-array_to_string(array, delimeter)
+array_to_string(array, delimiter)
 ```
 
 #### Arguments
 
 - **array**: Array expression.
   Can be a constant, column, or function, and any combination of array operators.
-- **delimeter**: Array element separator.
+- **delimiter**: Array element separator.
 
 #### Example
 
@@ -2186,6 +2216,30 @@ cardinality(array)
 +--------------------------------------+
 | 8                                    |
 +--------------------------------------+
+```
+
+### `empty`
+
+Returns 1 for an empty array or 0 for a non-empty array.
+
+```
+empty(array)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```
+❯ select empty([1]);
++------------------+
+| empty(List([1])) |
++------------------+
+| 0                |
++------------------+
 ```
 
 ### `list_append`
@@ -2316,6 +2370,28 @@ make_array(expression1[, ..., expression_n])
 ### `make_list`
 
 _Alias of [make_array](#make_array)._
+
+### `string_to_array`
+
+Splits a string in to an array of substrings based on a delimiter. Any substrings matching the optional `null_str` argument are replaced with NULL.
+
+```
+starts_with(str, delimiter[, null_str])
+```
+
+#### Arguments
+
+- **str**: String expression to split.
+- **delimiter**: Delimiter string to split on.
+- **null_str**: Substring values to be replaced with `NULL`
+
+#### Aliases
+
+- string_to_list
+
+### `string_to_list`
+
+_Alias of [string_to_array](#string_to_array)._
 
 ### `trim_array`
 
@@ -2490,12 +2566,28 @@ arrow_cast(expression, datatype)
 - **expression**: Expression to cast.
   Can be a constant, column, or function, and any combination of arithmetic or
   string operators.
-- **datatype**: [Arrow data type](https://arrow.apache.org/datafusion/user-guide/sql/data_types.html)
-  to cast to.
+- **datatype**: [Arrow data type](https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html) name
+  to cast to, as a string. The format is the same as that returned by [`arrow_typeof`]
+
+#### Example
+
+```
+❯ select arrow_cast(-5, 'Int8') as a,
+  arrow_cast('foo', 'Dictionary(Int32, Utf8)') as b,
+  arrow_cast('bar', 'LargeUtf8') as c,
+  arrow_cast('2023-01-02T12:53:02', 'Timestamp(Microsecond, Some("+08:00"))') as d
+  ;
++----+-----+-----+---------------------------+
+| a  | b   | c   | d                         |
++----+-----+-----+---------------------------+
+| -5 | foo | bar | 2023-01-02T12:53:02+08:00 |
++----+-----+-----+---------------------------+
+1 row in set. Query took 0.001 seconds.
+```
 
 ### `arrow_typeof`
 
-Returns the underlying Arrow data type of the expression:
+Returns the name of the underlying [Arrow data type](https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html) of the expression:
 
 ```
 arrow_typeof(expression)
@@ -2506,3 +2598,15 @@ arrow_typeof(expression)
 - **expression**: Expression to evaluate.
   Can be a constant, column, or function, and any combination of arithmetic or
   string operators.
+
+#### Example
+
+```
+❯ select arrow_typeof('foo'), arrow_typeof(1);
++---------------------------+------------------------+
+| arrow_typeof(Utf8("foo")) | arrow_typeof(Int64(1)) |
++---------------------------+------------------------+
+| Utf8                      | Int64                  |
++---------------------------+------------------------+
+1 row in set. Query took 0.001 seconds.
+```

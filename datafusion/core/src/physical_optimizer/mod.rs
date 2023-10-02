@@ -24,15 +24,16 @@
 pub mod aggregate_statistics;
 pub mod coalesce_batches;
 pub mod combine_partial_final_agg;
-pub mod dist_enforcement;
+pub mod enforce_distribution;
+pub mod enforce_sorting;
 pub mod join_selection;
 pub mod optimizer;
+pub mod output_requirements;
 pub mod pipeline_checker;
 pub mod pruning;
-pub mod repartition;
 pub mod replace_with_order_preserving_variants;
-pub mod sort_enforcement;
 mod sort_pushdown;
+pub mod topk_aggregation;
 mod utils;
 
 #[cfg(test)]

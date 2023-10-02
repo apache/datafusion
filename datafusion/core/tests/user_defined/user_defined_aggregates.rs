@@ -40,14 +40,16 @@ use datafusion::{
     prelude::SessionContext,
     scalar::ScalarValue,
 };
-use datafusion_common::{assert_contains, cast::as_primitive_array, DataFusionError};
+use datafusion_common::{
+    assert_contains, cast::as_primitive_array, exec_err, DataFusionError,
+};
 
 /// Test to show the contents of the setup
 #[tokio::test]
 async fn test_setup() {
     let TestContext { ctx, test_state: _ } = TestContext::new();
     let sql = "SELECT * from t order by time";
-    let expected = vec![
+    let expected = [
         "+-------+----------------------------+",
         "| value | time                       |",
         "+-------+----------------------------+",
@@ -67,7 +69,7 @@ async fn test_udaf() {
     let TestContext { ctx, test_state } = TestContext::new();
     assert!(!test_state.update_batch());
     let sql = "SELECT time_sum(time) from t";
-    let expected = vec![
+    let expected = [
         "+----------------------------+",
         "| time_sum(t.time)           |",
         "+----------------------------+",
@@ -85,7 +87,7 @@ async fn test_udaf() {
 async fn test_udaf_as_window() {
     let TestContext { ctx, test_state } = TestContext::new();
     let sql = "SELECT time_sum(time) OVER() as time_sum from t";
-    let expected = vec![
+    let expected = [
         "+----------------------------+",
         "| time_sum                   |",
         "+----------------------------+",
@@ -107,7 +109,7 @@ async fn test_udaf_as_window() {
 async fn test_udaf_as_window_with_frame() {
     let TestContext { ctx, test_state } = TestContext::new();
     let sql = "SELECT time_sum(time) OVER(ORDER BY time ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) as time_sum from t";
-    let expected = vec![
+    let expected = [
         "+----------------------------+",
         "| time_sum                   |",
         "+----------------------------+",
@@ -142,7 +144,7 @@ async fn test_udaf_as_window_with_frame_without_retract_batch() {
 async fn test_udaf_returning_struct() {
     let TestContext { ctx, test_state: _ } = TestContext::new();
     let sql = "SELECT first(value, time) from t";
-    let expected = vec![
+    let expected = [
         "+------------------------------------------------+",
         "| first(t.value,t.time)                          |",
         "+------------------------------------------------+",
@@ -157,12 +159,43 @@ async fn test_udaf_returning_struct() {
 async fn test_udaf_returning_struct_subquery() {
     let TestContext { ctx, test_state: _ } = TestContext::new();
     let sql = "select sq.first['value'], sq.first['time'] from (SELECT first(value, time) as first from t) as sq";
-    let expected = vec![
+    let expected = [
         "+-----------------+----------------------------+",
         "| sq.first[value] | sq.first[time]             |",
         "+-----------------+----------------------------+",
         "| 2.0             | 1970-01-01T00:00:00.000002 |",
         "+-----------------+----------------------------+",
+    ];
+    assert_batches_eq!(expected, &execute(&ctx, sql).await.unwrap());
+}
+
+#[tokio::test]
+async fn test_udaf_shadows_builtin_fn() {
+    let TestContext {
+        mut ctx,
+        test_state,
+    } = TestContext::new();
+    let sql = "SELECT sum(arrow_cast(time, 'Int64')) from t";
+
+    // compute with builtin `sum` aggregator
+    let expected = [
+        "+-------------+",
+        "| SUM(t.time) |",
+        "+-------------+",
+        "| 19000       |",
+        "+-------------+",
+    ];
+    assert_batches_eq!(expected, &execute(&ctx, sql).await.unwrap());
+
+    // Register `TimeSum` with name `sum`. This will shadow the builtin one
+    let sql = "SELECT sum(time) from t";
+    TimeSum::register(&mut ctx, test_state.clone(), "sum");
+    let expected = [
+        "+----------------------------+",
+        "| sum(t.time)                |",
+        "+----------------------------+",
+        "| 1970-01-01T00:00:00.000019 |",
+        "+----------------------------+",
     ];
     assert_batches_eq!(expected, &execute(&ctx, sql).await.unwrap());
 }
@@ -212,7 +245,7 @@ impl TestContext {
         // Tell DataFusion about the "first" function
         FirstSelector::register(&mut ctx);
         // Tell DataFusion about the "time_sum" function
-        TimeSum::register(&mut ctx, Arc::clone(&test_state));
+        TimeSum::register(&mut ctx, Arc::clone(&test_state), "time_sum");
 
         Self { ctx, test_state }
     }
@@ -279,7 +312,7 @@ impl TimeSum {
         Self { sum: 0, test_state }
     }
 
-    fn register(ctx: &mut SessionContext, test_state: Arc<TestState>) {
+    fn register(ctx: &mut SessionContext, test_state: Arc<TestState>, name: &str) {
         let timestamp_type = DataType::Timestamp(TimeUnit::Nanosecond, None);
 
         // Returns the same type as its input
@@ -298,8 +331,6 @@ impl TimeSum {
         let captured_state = Arc::clone(&test_state);
         let accumulator: AccumulatorFactoryFunction =
             Arc::new(move |_| Ok(Box::new(Self::new(Arc::clone(&captured_state)))));
-
-        let name = "time_sum";
 
         let time_sum =
             AggregateUDF::new(name, &signature, &return_type, &accumulator, &state_type);
@@ -344,9 +375,7 @@ impl Accumulator for TimeSum {
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         if self.test_state.error_on_retract_batch() {
-            return Err(DataFusionError::Execution(
-                "Error in Retract Batch".to_string(),
-            ));
+            return exec_err!("Error in Retract Batch");
         }
 
         self.test_state.set_retract_batch();

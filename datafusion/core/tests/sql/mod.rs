@@ -82,6 +82,8 @@ pub mod arrow_files;
 #[cfg(feature = "avro")]
 pub mod create_drop;
 pub mod csv_files;
+pub mod describe;
+pub mod displayable;
 pub mod explain_analyze;
 pub mod expr;
 pub mod group_by;
@@ -96,6 +98,7 @@ pub mod projection;
 pub mod references;
 pub mod repartition;
 pub mod select;
+mod sql_api;
 pub mod subqueries;
 pub mod timestamp;
 pub mod udf;
@@ -632,7 +635,10 @@ pub fn make_partition(sz: i32) -> RecordBatch {
 
 /// Specialised String representation
 fn col_str(column: &ArrayRef, row_index: usize) -> String {
-    if column.is_null(row_index) {
+    // NullArray::is_null() does not work on NullArray.
+    // can remove check for DataType::Null when
+    // https://github.com/apache/arrow-rs/issues/4835 is fixed
+    if column.data_type() == &DataType::Null || column.is_null(row_index) {
         return "NULL".to_string();
     }
 

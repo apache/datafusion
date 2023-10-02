@@ -17,7 +17,7 @@
 
 //! Execution plan for reading CSV files
 
-use crate::datasource::file_format::file_type::FileCompressionType;
+use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::listing::{FileRange, ListingTableUrl};
 use crate::datasource::physical_plan::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
@@ -43,10 +43,9 @@ use super::FileScanConfig;
 use bytes::{Buf, Bytes};
 use futures::ready;
 use futures::{StreamExt, TryStreamExt};
-use object_store::local::LocalFileSystem;
-use object_store::{GetOptions, GetResult, ObjectStore};
+use object_store::{GetOptions, GetResultPayload, ObjectStore};
 use std::any::Any;
-use std::io::Cursor;
+use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
 use std::sync::Arc;
 use std::task::Poll;
@@ -242,10 +241,6 @@ impl ExecutionPlan for CsvExec {
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }
-
-    fn file_scan_config(&self) -> Option<&FileScanConfig> {
-        Some(&self.base_config)
-    }
 }
 
 /// A Config for [`CsvOpener`]
@@ -286,30 +281,22 @@ impl CsvConfig {
 }
 
 impl CsvConfig {
-    fn open<R: std::io::Read>(&self, reader: R) -> Result<csv::Reader<R>> {
-        let mut builder = csv::ReaderBuilder::new(self.file_schema.clone())
-            .has_header(self.has_header)
-            .with_delimiter(self.delimiter)
-            .with_quote(self.quote)
-            .with_batch_size(self.batch_size);
-        if let Some(escape) = self.escape {
-            builder = builder.with_escape(escape);
-        }
-        if let Some(p) = &self.file_projection {
-            builder = builder.with_projection(p.clone());
-        }
-
-        Ok(builder.build(reader)?)
+    fn open<R: Read>(&self, reader: R) -> Result<csv::Reader<R>> {
+        Ok(self.builder().build(reader)?)
     }
 
     fn builder(&self) -> csv::ReaderBuilder {
         let mut builder = csv::ReaderBuilder::new(self.file_schema.clone())
             .with_delimiter(self.delimiter)
             .with_batch_size(self.batch_size)
-            .has_header(self.has_header);
+            .has_header(self.has_header)
+            .with_quote(self.quote);
 
         if let Some(proj) = &self.file_projection {
             builder = builder.with_projection(proj.clone());
+        }
+        if let Some(escape) = self.escape {
+            builder = builder.with_escape(escape)
         }
 
         builder
@@ -335,30 +322,6 @@ impl CsvOpener {
     }
 }
 
-/// Returns the position of the first newline in the byte stream, or the total length if no newline is found.
-fn find_first_newline_bytes<R: std::io::Read>(reader: &mut R) -> Result<usize> {
-    let mut buffer = [0; 1];
-    let mut index = 0;
-
-    loop {
-        let result = reader.read(&mut buffer);
-        match result {
-            Ok(n) => {
-                if n == 0 {
-                    return Ok(index); // End of file, no newline found
-                }
-                if buffer[0] == b'\n' {
-                    return Ok(index);
-                }
-                index += 1;
-            }
-            Err(e) => {
-                return Err(DataFusionError::IoError(e));
-            }
-        }
-    }
-}
-
 /// Returns the offset of the first newline in the object store range [start, end), or the end offset if no newline is found.
 async fn find_first_newline(
     object_store: &Arc<dyn ObjectStore>,
@@ -374,54 +337,30 @@ async fn find_first_newline(
         ..Default::default()
     };
 
-    let offset = match object_store.get_opts(location, options).await? {
-        GetResult::File(_, _) => {
-            // Range currently is ignored for GetResult::File(...)
-            // Alternative get_range() will copy the whole range into memory, thus set a limit of
-            // max bytes to read to find the first newline
-            let max_line_length = 4096; // in bytes
-            let get_range_end_result = object_store
-                .get_range(
-                    location,
-                    Range {
-                        start: start_byte,
-                        end: std::cmp::min(start_byte + max_line_length, end_byte),
-                    },
-                )
-                .await;
-            let mut decoder_tail = Cursor::new(get_range_end_result?);
-            find_first_newline_bytes(&mut decoder_tail)?
-        }
-        GetResult::Stream(s) => {
-            let mut input = s.map_err(DataFusionError::from);
-            let mut buffered = Bytes::new();
+    let r = object_store.get_opts(location, options).await?;
+    let mut input = r.into_stream();
 
-            let future_index = async move {
-                let mut index = 0;
+    let mut buffered = Bytes::new();
+    let mut index = 0;
 
-                loop {
-                    if buffered.is_empty() {
-                        match input.next().await {
-                            Some(Ok(b)) => buffered = b,
-                            Some(Err(e)) => return Err(e),
-                            None => return Ok(index),
-                        };
-                    }
-
-                    for byte in &buffered {
-                        if *byte == b'\n' {
-                            return Ok(index);
-                        }
-                        index += 1;
-                    }
-
-                    buffered.advance(buffered.len());
-                }
+    loop {
+        if buffered.is_empty() {
+            match input.next().await {
+                Some(Ok(b)) => buffered = b,
+                Some(Err(e)) => return Err(e.into()),
+                None => return Ok(index),
             };
-            future_index.await?
         }
-    };
-    Ok(offset)
+
+        for byte in &buffered {
+            if *byte == b'\n' {
+                return Ok(index);
+            }
+            index += 1;
+        }
+
+        buffered.advance(buffered.len());
+    }
 }
 
 impl FileOpener for CsvOpener {
@@ -476,8 +415,8 @@ impl FileOpener for CsvOpener {
         Ok(Box::pin(async move {
             let file_size = file_meta.object_meta.size;
             // Current partition contains bytes [start_byte, end_byte) (might contain incomplete lines at boundaries)
-            let (start_byte, end_byte) = match file_meta.range {
-                None => (0, file_size),
+            let range = match file_meta.range {
+                None => None,
                 Some(FileRange { start, end }) => {
                     let (start, end) = (start as usize, end as usize);
                     // Partition byte range is [start, end), the boundary might be in the middle of
@@ -504,57 +443,41 @@ impl FileOpener for CsvOpener {
                     } else {
                         0
                     };
-                    (start + start_delta, end + end_delta)
+                    let range = start + start_delta..end + end_delta;
+                    if range.start == range.end {
+                        return Ok(
+                            futures::stream::poll_fn(move |_| Poll::Ready(None)).boxed()
+                        );
+                    }
+                    Some(range)
                 }
             };
 
-            // For special case: If `Range` has equal `start` and `end`, object store will fetch
-            // the whole file
-            let localfs: Arc<dyn ObjectStore> = Arc::new(LocalFileSystem::new());
-            let is_localfs = localfs.type_id() == config.object_store.type_id();
-            if start_byte == end_byte && !is_localfs {
-                return Ok(futures::stream::poll_fn(move |_| Poll::Ready(None)).boxed());
-            }
-
             let options = GetOptions {
-                range: Some(Range {
-                    start: start_byte,
-                    end: end_byte,
-                }),
+                range,
                 ..Default::default()
             };
-
-            match config
+            let result = config
                 .object_store
                 .get_opts(file_meta.location(), options)
-                .await?
-            {
-                GetResult::File(file, _) => {
+                .await?;
+
+            match result.payload {
+                GetResultPayload::File(mut file, _) => {
                     let is_whole_file_scanned = file_meta.range.is_none();
                     let decoder = if is_whole_file_scanned {
-                        // For special case: `get_range()` will interpret `start` and `end` as the
-                        // byte range after decompression for compressed files
+                        // Don't seek if no range as breaks FIFO files
                         file_compression_type.convert_read(file)?
                     } else {
-                        // Range currently is ignored for GetResult::File(...)
-                        let bytes = Cursor::new(
-                            config
-                                .object_store
-                                .get_range(
-                                    file_meta.location(),
-                                    Range {
-                                        start: start_byte,
-                                        end: end_byte,
-                                    },
-                                )
-                                .await?,
-                        );
-                        file_compression_type.convert_read(bytes)?
+                        file.seek(SeekFrom::Start(result.range.start as _))?;
+                        file_compression_type.convert_read(
+                            file.take((result.range.end - result.range.start) as u64),
+                        )?
                     };
 
                     Ok(futures::stream::iter(config.open(decoder)?).boxed())
                 }
-                GetResult::Stream(s) => {
+                GetResultPayload::Stream(s) => {
                     let mut decoder = config.builder().build_decoder();
                     let s = s.map_err(DataFusionError::from);
                     let mut input =
@@ -650,14 +573,15 @@ pub async fn plan_to_csv(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::datasource::file_format::file_type::FileType;
-    use crate::datasource::physical_plan::chunked_store::ChunkedStore;
+    use crate::dataframe::DataFrameWriteOptions;
     use crate::prelude::*;
     use crate::test::{partitioned_csv_config, partitioned_file_groups};
-    use crate::test_util::{aggr_test_schema_with_missing_col, arrow_test_data};
     use crate::{scalar::ScalarValue, test_util::aggr_test_schema};
     use arrow::datatypes::*;
+    use datafusion_common::test_util::arrow_test_data;
+    use datafusion_common::FileType;
     use futures::StreamExt;
+    use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
     use rstest::*;
     use std::fs::{self, File};
@@ -715,7 +639,7 @@ mod tests {
         assert_eq!(100, batch.num_rows());
 
         // slice of the first 5 lines
-        let expected = vec![
+        let expected = [
             "+----+-----+------------+",
             "| c1 | c3  | c5         |",
             "+----+-----+------------+",
@@ -781,7 +705,7 @@ mod tests {
         assert_eq!(100, batch.num_rows());
 
         // slice of the first 5 lines
-        let expected = vec![
+        let expected = [
             "+------------+----+-----+",
             "| c5         | c1 | c3  |",
             "+------------+----+-----+",
@@ -846,8 +770,7 @@ mod tests {
         assert_eq!(13, batch.num_columns());
         assert_eq!(5, batch.num_rows());
 
-        let expected = vec![
-            "+----+----+-----+--------+------------+----------------------+-----+-------+------------+----------------------+-------------+---------------------+--------------------------------+",
+        let expected = ["+----+----+-----+--------+------------+----------------------+-----+-------+------------+----------------------+-------------+---------------------+--------------------------------+",
             "| c1 | c2 | c3  | c4     | c5         | c6                   | c7  | c8    | c9         | c10                  | c11         | c12                 | c13                            |",
             "+----+----+-----+--------+------------+----------------------+-----+-------+------------+----------------------+-------------+---------------------+--------------------------------+",
             "| c  | 2  | 1   | 18109  | 2033001162 | -6513304855495910254 | 25  | 43062 | 1491205016 | 5863949479783605708  | 0.110830784 | 0.9294097332465232  | 6WfVFBVGJSQb7FhA7E0lBwdvjfZnSW |",
@@ -855,8 +778,7 @@ mod tests {
             "| b  | 1  | 29  | -18218 | 994303988  | 5983957848665088916  | 204 | 9489  | 3275293996 | 14857091259186476033 | 0.53840446  | 0.17909035118828576 | AyYVExXK6AR2qUTxNZ7qRHQOVGMLcz |",
             "| a  | 1  | -85 | -15154 | 1171968280 | 1919439543497968449  | 77  | 52286 | 774637006  | 12101411955859039553 | 0.12285209  | 0.6864391962767343  | 0keZ5G8BffGwgF2RwQD59TFzMStxCB |",
             "| b  | 5  | -82 | 22080  | 1824882165 | 7373730676428214987  | 208 | 34331 | 3342719438 | 3330177516592499461  | 0.82634634  | 0.40975383525297016 | Ig1QcuKsjHXkproePdERo2w0mYzIqd |",
-            "+----+----+-----+--------+------------+----------------------+-----+-------+------------+----------------------+-------------+---------------------+--------------------------------+",
-        ];
+            "+----+----+-----+--------+------------+----------------------+-----+-------+------------+----------------------+-------------+---------------------+--------------------------------+"];
 
         crate::assert_batches_eq!(expected, &[batch]);
 
@@ -909,7 +831,7 @@ mod tests {
 
         // errors due to https://github.com/apache/arrow-datafusion/issues/4918
         let mut it = csv.execute(0, task_ctx)?;
-        let err = it.next().await.unwrap().unwrap_err().to_string();
+        let err = it.next().await.unwrap().unwrap_err().strip_backtrace();
         assert_eq!(
             err,
             "Arrow error: Csv error: incorrect number of fields for line 1, expected 14 got 13"
@@ -977,7 +899,7 @@ mod tests {
         assert_eq!(100, batch.num_rows());
 
         // slice of the first 5 lines
-        let expected = vec![
+        let expected = [
             "+----+------------+",
             "| c1 | date       |",
             "+----+------------+",
@@ -1118,7 +1040,7 @@ mod tests {
 
         let result = df.collect().await.unwrap();
 
-        let expected = vec![
+        let expected = [
             "+---+---+",
             "| a | b |",
             "+---+---+",
@@ -1146,10 +1068,10 @@ mod tests {
 
         let out_dir_url = "file://local/out";
         let e = df
-            .write_csv(out_dir_url)
+            .write_csv(out_dir_url, DataFrameWriteOptions::new(), None)
             .await
             .expect_err("should fail because input file does not match inferred schema");
-        assert_eq!("Arrow error: Parser error: Error while parsing value d for column 0 at line 4", format!("{e}"));
+        assert_eq!(e.strip_backtrace(), "Arrow error: Parser error: Error while parsing value d for column 0 at line 4");
         Ok(())
     }
 
@@ -1181,7 +1103,8 @@ mod tests {
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
         let out_dir_url = "file://local/out";
         let df = ctx.sql("SELECT c1, c2 FROM test").await?;
-        df.write_csv(out_dir_url).await?;
+        df.write_csv(out_dir_url, DataFrameWriteOptions::new(), None)
+            .await?;
 
         // create a new context and verify that the results were saved to a partitioned csv file
         let ctx = SessionContext::new();
@@ -1248,5 +1171,21 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Get the schema for the aggregate_test_* csv files with an additional filed not present in the files.
+    fn aggr_test_schema_with_missing_col() -> SchemaRef {
+        let fields =
+            Fields::from_iter(aggr_test_schema().fields().iter().cloned().chain(
+                std::iter::once(Arc::new(Field::new(
+                    "missing_col",
+                    DataType::Int64,
+                    true,
+                ))),
+            ));
+
+        let schema = Schema::new(fields);
+
+        Arc::new(schema)
     }
 }

@@ -102,7 +102,13 @@ html_static_path = ['_static']
 
 html_logo = "_static/images/DataFusion-Logo-Background-White.png"
 
-html_css_files = ["theme_overrides.css"]
+html_css_files = [
+    "theme_overrides.css"
+]
+
+html_js_files = [
+    ("https://buttons.github.io/buttons.js", {'async': 'true', 'defer': 'true'}),
+]
 
 html_sidebars = {
     "**": ["docs-sidebar.html"],

@@ -1271,14 +1271,31 @@ NULL 4 29 1.260869565217 123 -117 23
 NULL 5 -194 -13.857142857143 118 -101 14
 NULL NULL 781 7.81 125 -117 100
 
-# TODO this querys output is non determinisitic (the order of the elements
-# differs run to run
+# TODO: array_agg_distinct output is non-determinisitic -- rewrite with array_sort(list_sort)
+#       unnest is also not available, so manually unnesting via CROSS JOIN
+# additional count(1) forces array_agg_distinct instead of array_agg over aggregated by c2 data
 #
 # csv_query_array_agg_distinct
-# query T
-# SELECT array_agg(distinct c2) FROM aggregate_test_100
-# ----
-# [4, 2, 3, 5, 1]
+query III
+WITH indices AS (
+  SELECT 1 AS idx UNION ALL
+  SELECT 2 AS idx UNION ALL
+  SELECT 3 AS idx UNION ALL
+  SELECT 4 AS idx UNION ALL
+  SELECT 5 AS idx
+)
+SELECT data.arr[indices.idx] as element, array_length(data.arr) as array_len, dummy
+FROM (
+  SELECT array_agg(distinct c2) as arr, count(1) as dummy FROM aggregate_test_100
+) data
+  CROSS JOIN indices
+ORDER BY 1
+----
+1 5 100
+2 5 100
+3 5 100
+4 5 100
+5 5 100
 
 # aggregate_time_min_and_max
 query TT
@@ -1966,7 +1983,7 @@ select
 from t_source;
 
 # No groupy
-query error DataFusion error: Internal error: Min/Max accumulator not implemented for type Binary\. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+query ??I??I
 SELECT
   min(binary),
   max(binary),
@@ -1975,10 +1992,11 @@ SELECT
   max(largebinary),
   count(largebinary)
 FROM t
-
+----
+426172 466f6f 3 426172 466f6f 3
 
 # with groupby
-query error DataFusion error: External error: Internal error: Min/Max accumulator not implemented for type Binary\. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+query ??I??I
 SELECT
   min(binary),
   max(binary),
@@ -1989,6 +2007,9 @@ SELECT
 FROM t
 GROUP BY tag
 ORDER BY tag
+----
+42617a 466f6f 2 42617a 466f6f 2
+426172 426172 1 426172 426172 1
 
 
 
@@ -2261,7 +2282,7 @@ select max(x_dict) from value_dict group by x_dict % 2 order by max(x_dict);
 4
 5
 
-# bool aggregtion
+# bool aggregation
 statement ok
 CREATE TABLE value_bool(x boolean, g int) AS VALUES (NULL, 0), (false, 0), (true, 0), (false, 1), (true, 2), (NULL, 3);
 
@@ -2291,7 +2312,196 @@ false
 true
 NULL
 
+# TopK aggregation
+statement ok
+CREATE TABLE traces(trace_id varchar, timestamp bigint, other bigint) AS VALUES
+(NULL, 0, 0),
+('a', NULL, NULL),
+('a', 1, 1),
+('b', 0, 0),
+('c', 1, 1),
+('c', 2, 2),
+('b', 3, 3);
 
+statement ok
+set datafusion.optimizer.enable_topk_aggregation = false;
+
+query TT
+explain select trace_id, MAX(timestamp) from traces group by trace_id order by MAX(timestamp) desc limit 4;
+----
+logical_plan
+Limit: skip=0, fetch=4
+--Sort: MAX(traces.timestamp) DESC NULLS FIRST, fetch=4
+----Aggregate: groupBy=[[traces.trace_id]], aggr=[[MAX(traces.timestamp)]]
+------TableScan: traces projection=[trace_id, timestamp]
+physical_plan
+GlobalLimitExec: skip=0, fetch=4
+--SortPreservingMergeExec: [MAX(traces.timestamp)@1 DESC], fetch=4
+----SortExec: fetch=4, expr=[MAX(traces.timestamp)@1 DESC]
+------AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[MAX(traces.timestamp)]
+--------CoalesceBatchesExec: target_batch_size=8192
+----------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=4
+------------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[MAX(traces.timestamp)]
+--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+----------------MemoryExec: partitions=1, partition_sizes=[1]
+
+
+query TI
+select trace_id, MAX(timestamp) from traces group by trace_id order by MAX(timestamp) desc limit 4;
+----
+b 3
+c 2
+a 1
+NULL 0
+
+query TI
+select trace_id, MIN(timestamp) from traces group by trace_id order by MIN(timestamp) asc limit 4;
+----
+NULL 0
+b 0
+c 1
+a 1
+
+query TII
+select trace_id, other, MIN(timestamp) from traces group by trace_id, other order by MIN(timestamp) asc limit 4;
+----
+b 0 0
+NULL 0 0
+c 1 1
+a 1 1
+
+query TII
+select trace_id, MIN(other), MIN(timestamp) from traces group by trace_id order by MIN(timestamp), MIN(other) limit 4;
+----
+NULL 0 0
+b 0 0
+c 1 1
+a 1 1
+
+statement ok
+set datafusion.optimizer.enable_topk_aggregation = true;
+
+query TT
+explain select trace_id, MAX(timestamp) from traces group by trace_id order by MAX(timestamp) desc limit 4;
+----
+logical_plan
+Limit: skip=0, fetch=4
+--Sort: MAX(traces.timestamp) DESC NULLS FIRST, fetch=4
+----Aggregate: groupBy=[[traces.trace_id]], aggr=[[MAX(traces.timestamp)]]
+------TableScan: traces projection=[trace_id, timestamp]
+physical_plan
+GlobalLimitExec: skip=0, fetch=4
+--SortPreservingMergeExec: [MAX(traces.timestamp)@1 DESC], fetch=4
+----SortExec: fetch=4, expr=[MAX(traces.timestamp)@1 DESC]
+------AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[MAX(traces.timestamp)], lim=[4]
+--------CoalesceBatchesExec: target_batch_size=8192
+----------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=4
+------------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[MAX(traces.timestamp)], lim=[4]
+--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+----------------MemoryExec: partitions=1, partition_sizes=[1]
+
+query TT
+explain select trace_id, MIN(timestamp) from traces group by trace_id order by MIN(timestamp) desc limit 4;
+----
+logical_plan
+Limit: skip=0, fetch=4
+--Sort: MIN(traces.timestamp) DESC NULLS FIRST, fetch=4
+----Aggregate: groupBy=[[traces.trace_id]], aggr=[[MIN(traces.timestamp)]]
+------TableScan: traces projection=[trace_id, timestamp]
+physical_plan
+GlobalLimitExec: skip=0, fetch=4
+--SortPreservingMergeExec: [MIN(traces.timestamp)@1 DESC], fetch=4
+----SortExec: fetch=4, expr=[MIN(traces.timestamp)@1 DESC]
+------AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[MIN(traces.timestamp)]
+--------CoalesceBatchesExec: target_batch_size=8192
+----------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=4
+------------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[MIN(traces.timestamp)]
+--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+----------------MemoryExec: partitions=1, partition_sizes=[1]
+
+query TT
+explain select trace_id, MAX(timestamp) from traces group by trace_id order by MAX(timestamp) asc limit 4;
+----
+logical_plan
+Limit: skip=0, fetch=4
+--Sort: MAX(traces.timestamp) ASC NULLS LAST, fetch=4
+----Aggregate: groupBy=[[traces.trace_id]], aggr=[[MAX(traces.timestamp)]]
+------TableScan: traces projection=[trace_id, timestamp]
+physical_plan
+GlobalLimitExec: skip=0, fetch=4
+--SortPreservingMergeExec: [MAX(traces.timestamp)@1 ASC NULLS LAST], fetch=4
+----SortExec: fetch=4, expr=[MAX(traces.timestamp)@1 ASC NULLS LAST]
+------AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[MAX(traces.timestamp)]
+--------CoalesceBatchesExec: target_batch_size=8192
+----------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=4
+------------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[MAX(traces.timestamp)]
+--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+----------------MemoryExec: partitions=1, partition_sizes=[1]
+
+query TT
+explain select trace_id, MAX(timestamp) from traces group by trace_id order by trace_id asc limit 4;
+----
+logical_plan
+Limit: skip=0, fetch=4
+--Sort: traces.trace_id ASC NULLS LAST, fetch=4
+----Aggregate: groupBy=[[traces.trace_id]], aggr=[[MAX(traces.timestamp)]]
+------TableScan: traces projection=[trace_id, timestamp]
+physical_plan
+GlobalLimitExec: skip=0, fetch=4
+--SortPreservingMergeExec: [trace_id@0 ASC NULLS LAST], fetch=4
+----SortExec: fetch=4, expr=[trace_id@0 ASC NULLS LAST]
+------AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[MAX(traces.timestamp)]
+--------CoalesceBatchesExec: target_batch_size=8192
+----------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=4
+------------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[MAX(traces.timestamp)]
+--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+----------------MemoryExec: partitions=1, partition_sizes=[1]
+
+query TI
+select trace_id, MAX(timestamp) from traces group by trace_id order by MAX(timestamp) desc limit 4;
+----
+b 3
+c 2
+a 1
+NULL 0
+
+query TI
+select trace_id, MIN(timestamp) from traces group by trace_id order by MIN(timestamp) asc limit 4;
+----
+NULL 0
+b 0
+c 1
+a 1
+
+query TI
+select trace_id, MAX(timestamp) from traces group by trace_id order by MAX(timestamp) desc limit 3;
+----
+b 3
+c 2
+a 1
+
+query TI
+select trace_id, MIN(timestamp) from traces group by trace_id order by MIN(timestamp) asc limit 3;
+----
+NULL 0
+b 0
+c 1
+
+query TII
+select trace_id, other, MIN(timestamp) from traces group by trace_id, other order by MIN(timestamp) asc limit 4;
+----
+b 0 0
+NULL 0 0
+c 1 1
+a 1 1
+
+query TII
+select trace_id, MIN(other), MIN(timestamp) from traces group by trace_id order by MIN(timestamp), MIN(other) limit 4;
+----
+NULL 0 0
+b 0 0
+c 1 1
+a 1 1
 
 #
 # regr_*() tests

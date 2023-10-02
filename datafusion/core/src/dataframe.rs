@@ -22,10 +22,19 @@ use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
 use arrow::compute::{cast, concat};
+use arrow::csv::WriterBuilder;
 use arrow::datatypes::{DataType, Field};
 use async_trait::async_trait;
-use datafusion_common::{DataFusionError, SchemaError, UnnestOptions};
-use datafusion_expr::dml::OutputFileFormat;
+use datafusion_common::file_options::csv_writer::CsvWriterOptions;
+use datafusion_common::file_options::json_writer::JsonWriterOptions;
+use datafusion_common::file_options::parquet_writer::{
+    default_builder, ParquetWriterOptions,
+};
+use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_common::{
+    DataFusionError, FileType, FileTypeWriterOptions, SchemaError, UnnestOptions,
+};
+use datafusion_expr::dml::CopyOptions;
 use parquet::file::properties::WriterProperties;
 
 use datafusion_common::{Column, DFSchema, ScalarValue};
@@ -57,19 +66,40 @@ use crate::prelude::SessionContext;
 /// written out from a DataFrame
 pub struct DataFrameWriteOptions {
     /// Controls if existing data should be overwritten
-    overwrite: bool, // TODO, enable DataFrame COPY TO write without TableProvider
-                     // settings such as LOCATION and FILETYPE can be set here
-                     // e.g. add location: Option<Path>
+    overwrite: bool,
+    /// Controls if all partitions should be coalesced into a single output file
+    /// Generally will have slower performance when set to true.
+    single_file_output: bool,
+    /// Sets compression by DataFusion applied after file serialization.
+    /// Allows compression of CSV and JSON.
+    /// Not supported for parquet.
+    compression: CompressionTypeVariant,
 }
 
 impl DataFrameWriteOptions {
     /// Create a new DataFrameWriteOptions with default values
     pub fn new() -> Self {
-        DataFrameWriteOptions { overwrite: false }
+        DataFrameWriteOptions {
+            overwrite: false,
+            single_file_output: false,
+            compression: CompressionTypeVariant::UNCOMPRESSED,
+        }
     }
     /// Set the overwrite option to true or false
     pub fn with_overwrite(mut self, overwrite: bool) -> Self {
         self.overwrite = overwrite;
+        self
+    }
+
+    /// Set the single_file_output value to true or false
+    pub fn with_single_file_output(mut self, single_file_output: bool) -> Self {
+        self.single_file_output = single_file_output;
+        self
+    }
+
+    /// Sets the compression type applied to the output file(s)
+    pub fn with_compression(mut self, compression: CompressionTypeVariant) -> Self {
+        self.compression = compression;
         self
     }
 }
@@ -995,14 +1025,29 @@ impl DataFrame {
     pub async fn write_csv(
         self,
         path: &str,
+        options: DataFrameWriteOptions,
+        writer_properties: Option<WriterBuilder>,
     ) -> Result<Vec<RecordBatch>, DataFusionError> {
+        if options.overwrite {
+            return Err(DataFusionError::NotImplemented(
+                "Overwrites are not implemented for DataFrame::write_csv.".to_owned(),
+            ));
+        }
+        let props = match writer_properties {
+            Some(props) => props,
+            None => WriterBuilder::new(),
+        };
+
+        let file_type_writer_options =
+            FileTypeWriterOptions::CSV(CsvWriterOptions::new(props, options.compression));
+        let copy_options = CopyOptions::WriterOptions(Box::new(file_type_writer_options));
+
         let plan = LogicalPlanBuilder::copy_to(
             self.plan,
             path.into(),
-            OutputFileFormat::CSV,
-            true,
-            // TODO implement options
-            vec![],
+            FileType::CSV,
+            options.single_file_output,
+            copy_options,
         )?
         .build()?;
         DataFrame::new(self.session_state, plan).collect().await
@@ -1012,15 +1057,31 @@ impl DataFrame {
     pub async fn write_parquet(
         self,
         path: &str,
-        _writer_properties: Option<WriterProperties>,
+        options: DataFrameWriteOptions,
+        writer_properties: Option<WriterProperties>,
     ) -> Result<Vec<RecordBatch>, DataFusionError> {
+        if options.overwrite {
+            return Err(DataFusionError::NotImplemented(
+                "Overwrites are not implemented for DataFrame::write_parquet.".to_owned(),
+            ));
+        }
+        match options.compression{
+            CompressionTypeVariant::UNCOMPRESSED => (),
+            _ => return Err(DataFusionError::Configuration("DataFrame::write_parquet method does not support compression set via DataFrameWriteOptions. Set parquet compression via writer_properties instead.".to_owned()))
+        }
+        let props = match writer_properties {
+            Some(props) => props,
+            None => default_builder(self.session_state.config_options())?.build(),
+        };
+        let file_type_writer_options =
+            FileTypeWriterOptions::Parquet(ParquetWriterOptions::new(props));
+        let copy_options = CopyOptions::WriterOptions(Box::new(file_type_writer_options));
         let plan = LogicalPlanBuilder::copy_to(
             self.plan,
             path.into(),
-            OutputFileFormat::PARQUET,
-            true,
-            // TODO implement options
-            vec![],
+            FileType::PARQUET,
+            options.single_file_output,
+            copy_options,
         )?
         .build()?;
         DataFrame::new(self.session_state, plan).collect().await
@@ -1030,14 +1091,22 @@ impl DataFrame {
     pub async fn write_json(
         self,
         path: &str,
+        options: DataFrameWriteOptions,
     ) -> Result<Vec<RecordBatch>, DataFusionError> {
+        if options.overwrite {
+            return Err(DataFusionError::NotImplemented(
+                "Overwrites are not implemented for DataFrame::write_json.".to_owned(),
+            ));
+        }
+        let file_type_writer_options =
+            FileTypeWriterOptions::JSON(JsonWriterOptions::new(options.compression));
+        let copy_options = CopyOptions::WriterOptions(Box::new(file_type_writer_options));
         let plan = LogicalPlanBuilder::copy_to(
             self.plan,
             path.into(),
-            OutputFileFormat::JSON,
-            true,
-            // TODO implement options
-            vec![],
+            FileType::JSON,
+            options.single_file_output,
+            copy_options,
         )?
         .build()?;
         DataFrame::new(self.session_state, plan).collect().await
@@ -1218,15 +1287,16 @@ impl TableProvider for DataFrameTableProvider {
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let mut expr = LogicalPlanBuilder::from(self.plan.clone());
-        if let Some(p) = projection {
-            expr = expr.select(p.iter().copied())?
-        }
-
         // Add filter when given
         let filter = filters.iter().cloned().reduce(|acc, new| acc.and(new));
         if let Some(filter) = filter {
             expr = expr.filter(filter)?
         }
+
+        if let Some(p) = projection {
+            expr = expr.select(p.iter().copied())?
+        }
+
         // add a limit if given
         if let Some(l) = limit {
             expr = expr.limit(0, Some(l))?
@@ -1249,6 +1319,11 @@ mod tests {
         WindowFunction,
     };
     use datafusion_physical_expr::expressions::Column;
+    use object_store::local::LocalFileSystem;
+    use parquet::basic::{BrotliLevel, GzipLevel, ZstdLevel};
+    use parquet::file::reader::FileReader;
+    use tempfile::TempDir;
+    use url::Url;
 
     use crate::execution::context::SessionConfig;
     use crate::execution::options::{CsvReadOptions, ParquetReadOptions};
@@ -1331,7 +1406,7 @@ mod tests {
         let df_results = df.collect().await?;
 
         assert_batches_sorted_eq!(
-            vec!["+------+", "| f.c1 |", "+------+", "| 1    |", "| 10   |", "+------+",],
+            ["+------+", "| f.c1 |", "+------+", "| 1    |", "| 10   |", "+------+"],
             &df_results
         );
 
@@ -1355,8 +1430,7 @@ mod tests {
         let df: Vec<RecordBatch> = df.aggregate(group_expr, aggr_expr)?.collect().await?;
 
         assert_batches_sorted_eq!(
-            vec![
-                "+----+-----------------------------+-----------------------------+-----------------------------+-----------------------------+-------------------------------+----------------------------------------+",
+            ["+----+-----------------------------+-----------------------------+-----------------------------+-----------------------------+-------------------------------+----------------------------------------+",
                 "| c1 | MIN(aggregate_test_100.c12) | MAX(aggregate_test_100.c12) | AVG(aggregate_test_100.c12) | SUM(aggregate_test_100.c12) | COUNT(aggregate_test_100.c12) | COUNT(DISTINCT aggregate_test_100.c12) |",
                 "+----+-----------------------------+-----------------------------+-----------------------------+-----------------------------+-------------------------------+----------------------------------------+",
                 "| a  | 0.02182578039211991         | 0.9800193410444061          | 0.48754517466109415         | 10.238448667882977          | 21                            | 21                                     |",
@@ -1364,8 +1438,7 @@ mod tests {
                 "| c  | 0.0494924465469434          | 0.991517828651004           | 0.6600456536439784          | 13.860958726523545          | 21                            | 21                                     |",
                 "| d  | 0.061029375346466685        | 0.9748360509016578          | 0.48855379387549824         | 8.793968289758968           | 18                            | 18                                     |",
                 "| e  | 0.01479305307777301         | 0.9965400387585364          | 0.48600669271341534         | 10.206140546981722          | 21                            | 21                                     |",
-                "+----+-----------------------------+-----------------------------+-----------------------------+-----------------------------+-------------------------------+----------------------------------------+",
-            ],
+                "+----+-----------------------------+-----------------------------+-----------------------------+-----------------------------+-------------------------------+----------------------------------------+"],
             &df
         );
 
@@ -1404,8 +1477,7 @@ mod tests {
 
         #[rustfmt::skip]
         assert_batches_sorted_eq!(
-            vec![
-                "+----+",
+            ["+----+",
                 "| c1 |",
                 "+----+",
                 "| a  |",
@@ -1413,8 +1485,7 @@ mod tests {
                 "| c  |",
                 "| d  |",
                 "| e  |",
-                "+----+",
-            ],
+                "+----+"],
             &df_results
         );
 
@@ -1432,7 +1503,7 @@ mod tests {
             // try to sort on some value not present in input to distinct
             .sort(vec![col("c2").sort(true, true)])
             .unwrap_err();
-        assert_eq!(err.to_string(), "Error during planning: For SELECT DISTINCT, ORDER BY expressions c2 must appear in select list");
+        assert_eq!(err.strip_backtrace(), "Error during planning: For SELECT DISTINCT, ORDER BY expressions c2 must appear in select list");
 
         Ok(())
     }
@@ -1490,7 +1561,7 @@ mod tests {
             .join_on(right, JoinType::Inner, [col("c1").eq(col("c1"))])
             .expect_err("join didn't fail check");
         let expected = "Schema error: Ambiguous reference to unqualified field c1";
-        assert_eq!(join.to_string(), expected);
+        assert_eq!(join.strip_backtrace(), expected);
 
         Ok(())
     }
@@ -1637,7 +1708,7 @@ mod tests {
         let table_results = &table.aggregate(group_expr, aggr_expr)?.collect().await?;
 
         assert_batches_sorted_eq!(
-            vec![
+            [
                 "+----+-----------------------------+",
                 "| c1 | SUM(aggregate_test_100.c12) |",
                 "+----+-----------------------------+",
@@ -1646,14 +1717,14 @@ mod tests {
                 "| c  | 13.860958726523545          |",
                 "| d  | 8.793968289758968           |",
                 "| e  | 10.206140546981722          |",
-                "+----+-----------------------------+",
+                "+----+-----------------------------+"
             ],
             &df_results
         );
 
         // the results are the same as the results from the view, modulo the leaf table name
         assert_batches_sorted_eq!(
-            vec![
+            [
                 "+----+---------------------+",
                 "| c1 | SUM(test_table.c12) |",
                 "+----+---------------------+",
@@ -1662,7 +1733,7 @@ mod tests {
                 "| c  | 13.860958726523545  |",
                 "| d  | 8.793968289758968   |",
                 "| e  | 10.206140546981722  |",
-                "+----+---------------------+",
+                "+----+---------------------+"
             ],
             table_results
         );
@@ -1720,7 +1791,7 @@ mod tests {
         let df_results = df.clone().collect().await?;
 
         assert_batches_sorted_eq!(
-            vec![
+            [
                 "+----+----+-----+-----+",
                 "| c1 | c2 | c3  | sum |",
                 "+----+----+-----+-----+",
@@ -1730,7 +1801,7 @@ mod tests {
                 "| a  | 3  | 13  | 16  |",
                 "| a  | 3  | 14  | 17  |",
                 "| a  | 3  | 17  | 20  |",
-                "+----+----+-----+-----+",
+                "+----+----+-----+-----+"
             ],
             &df_results
         );
@@ -1743,7 +1814,7 @@ mod tests {
             .await?;
 
         assert_batches_sorted_eq!(
-            vec![
+            [
                 "+-----+----+-----+-----+",
                 "| c1  | c2 | c3  | sum |",
                 "+-----+----+-----+-----+",
@@ -1753,7 +1824,7 @@ mod tests {
                 "| 16  | 3  | 13  | 16  |",
                 "| 17  | 3  | 14  | 17  |",
                 "| 20  | 3  | 17  | 20  |",
-                "+-----+----+-----+-----+",
+                "+-----+----+-----+-----+"
             ],
             &df_results_overwrite
         );
@@ -1766,7 +1837,7 @@ mod tests {
             .await?;
 
         assert_batches_sorted_eq!(
-            vec![
+            [
                 "+----+----+-----+-----+",
                 "| c1 | c2 | c3  | sum |",
                 "+----+----+-----+-----+",
@@ -1776,7 +1847,7 @@ mod tests {
                 "| a  | 4  | 13  | 16  |",
                 "| a  | 4  | 14  | 17  |",
                 "| a  | 4  | 17  | 20  |",
-                "+----+----+-----+-----+",
+                "+----+----+-----+-----+"
             ],
             &df_results_overwrite_self
         );
@@ -1811,12 +1882,12 @@ mod tests {
             .await?;
 
         assert_batches_sorted_eq!(
-            vec![
+            [
                 "+-----+-----+----+-------+",
                 "| one | two | c3 | total |",
                 "+-----+-----+----+-------+",
                 "| a   | 3   | 13 | 16    |",
-                "+-----+-----+----+-------+",
+                "+-----+-----+----+-------+"
             ],
             &df_sum_renamed
         );
@@ -1847,7 +1918,7 @@ mod tests {
             .with_column_renamed("c2", "AAA")
             .unwrap_err();
         let expected_err = "Schema error: Ambiguous reference to unqualified field c2";
-        assert_eq!(actual_err.to_string(), expected_err);
+        assert_eq!(actual_err.strip_backtrace(), expected_err);
 
         Ok(())
     }
@@ -1883,12 +1954,12 @@ mod tests {
 
         let df_results = df.clone().collect().await?;
         assert_batches_sorted_eq!(
-            vec![
+            [
                 "+----+----+-----+----+----+-----+",
                 "| c1 | c2 | c3  | c1 | c2 | c3  |",
                 "+----+----+-----+----+----+-----+",
                 "| a  | 1  | -85 | a  | 1  | -85 |",
-                "+----+----+-----+----+----+-----+",
+                "+----+----+-----+----+----+-----+"
             ],
             &df_results
         );
@@ -1920,12 +1991,12 @@ mod tests {
         let df_results = df_renamed.collect().await?;
 
         assert_batches_sorted_eq!(
-            vec![
+            [
                 "+-----+----+-----+----+----+-----+",
                 "| AAA | c2 | c3  | c1 | c2 | c3  |",
                 "+-----+----+-----+----+----+-----+",
                 "| a   | 1  | -85 | a  | 1  | -85 |",
-                "+-----+----+-----+----+----+-----+",
+                "+-----+----+-----+----+----+-----+"
             ],
             &df_results
         );
@@ -1962,12 +2033,12 @@ mod tests {
         let res = &df_renamed.clone().collect().await?;
 
         assert_batches_sorted_eq!(
-            vec![
+            [
                 "+---------+",
                 "| CoLuMn1 |",
                 "+---------+",
                 "| a       |",
-                "+---------+",
+                "+---------+"
             ],
             res
         );
@@ -1978,7 +2049,7 @@ mod tests {
             .await?;
 
         assert_batches_sorted_eq!(
-            vec!["+----+", "| c1 |", "+----+", "| a  |", "+----+",],
+            ["+----+", "| c1 |", "+----+", "| a  |", "+----+"],
             &df_renamed
         );
 
@@ -2023,12 +2094,12 @@ mod tests {
         let df_results = df.clone().collect().await?;
         df.clone().show().await?;
         assert_batches_sorted_eq!(
-            vec![
+            [
                 "+----+----+-----+",
                 "| c2 | c3 | sum |",
                 "+----+----+-----+",
                 "| 2  | 1  | 3   |",
-                "+----+----+-----+",
+                "+----+----+-----+"
             ],
             &df_results
         );
@@ -2089,13 +2160,13 @@ mod tests {
         let df_results = df.collect().await?;
 
         assert_batches_sorted_eq!(
-            vec![
+            [
                 "+------+-------+",
                 "| f.c1 | f.c2  |",
                 "+------+-------+",
                 "| 1    | hello |",
                 "| 10   | hello |",
-                "+------+-------+",
+                "+------+-------+"
             ],
             &df_results
         );
@@ -2121,12 +2192,12 @@ mod tests {
         let df_results = df.collect().await?;
         let cached_df_results = cached_df.collect().await?;
         assert_batches_sorted_eq!(
-            vec![
+            [
                 "+----+----+-----+",
                 "| c2 | c3 | sum |",
                 "+----+----+-----+",
                 "| 2  | 1  | 3   |",
-                "+----+----+-----+",
+                "+----+----+-----+"
             ],
             &cached_df_results
         );
@@ -2292,6 +2363,55 @@ mod tests {
                     Partitioning::UnknownPartitioning(partition_count) if partition_count == default_partition_count));
                 }
             }
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn write_parquet_with_compression() -> Result<()> {
+        let test_df = test_table().await?;
+
+        let output_path = "file://local/test.parquet";
+        let test_compressions = vec![
+            parquet::basic::Compression::SNAPPY,
+            parquet::basic::Compression::LZ4,
+            parquet::basic::Compression::LZ4_RAW,
+            parquet::basic::Compression::GZIP(GzipLevel::default()),
+            parquet::basic::Compression::BROTLI(BrotliLevel::default()),
+            parquet::basic::Compression::ZSTD(ZstdLevel::default()),
+        ];
+        for compression in test_compressions.into_iter() {
+            let df = test_df.clone();
+            let tmp_dir = TempDir::new()?;
+            let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
+            let local_url = Url::parse("file://local").unwrap();
+            let ctx = &test_df.session_state;
+            ctx.runtime_env().register_object_store(&local_url, local);
+            df.write_parquet(
+                output_path,
+                DataFrameWriteOptions::new().with_single_file_output(true),
+                Some(
+                    WriterProperties::builder()
+                        .set_compression(compression)
+                        .build(),
+                ),
+            )
+            .await?;
+
+            // Check that file actually used the specified compression
+            let file = std::fs::File::open(tmp_dir.into_path().join("test.parquet"))?;
+
+            let reader =
+                parquet::file::serialized_reader::SerializedFileReader::new(file)
+                    .unwrap();
+
+            let parquet_metadata = reader.metadata();
+
+            let written_compression =
+                parquet_metadata.row_group(0).column(0).compression();
+
+            assert_eq!(written_compression, compression);
         }
 
         Ok(())

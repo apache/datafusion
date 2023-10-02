@@ -28,11 +28,15 @@ use crate::{
     optimizer::optimizer::Optimizer,
     physical_optimizer::optimizer::{PhysicalOptimizer, PhysicalOptimizerRule},
 };
-use datafusion_common::{alias::AliasGenerator, plan_err};
+use datafusion_common::{
+    alias::AliasGenerator,
+    exec_err, not_impl_err, plan_err,
+    tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion},
+};
 use datafusion_execution::registry::SerializerRegistry;
 use datafusion_expr::{
     logical_plan::{DdlStatement, Statement},
-    DescribeTable, StringifiedPlan, UserDefinedLogicalNode, WindowUDF,
+    StringifiedPlan, UserDefinedLogicalNode, WindowUDF,
 };
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
@@ -46,11 +50,8 @@ use std::{
 };
 use std::{ops::ControlFlow, sync::Weak};
 
+use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use arrow::{
-    array::StringBuilder,
-    datatypes::{DataType, Field, Schema, SchemaRef},
-};
 
 use crate::catalog::{
     schema::{MemorySchemaProvider, SchemaProvider},
@@ -163,12 +164,14 @@ where
 /// * Register a custom data source that can be referenced from a SQL query.
 /// * Execution a SQL query
 ///
+/// # Example: DataFrame API
+///
 /// The following example demonstrates how to use the context to execute a query against a CSV
 /// data source using the DataFrame API:
 ///
 /// ```
 /// use datafusion::prelude::*;
-/// # use datafusion::error::Result;
+/// # use datafusion::{error::Result, assert_batches_eq};
 /// # #[tokio::main]
 /// # async fn main() -> Result<()> {
 /// let ctx = SessionContext::new();
@@ -176,22 +179,49 @@ where
 /// let df = df.filter(col("a").lt_eq(col("b")))?
 ///            .aggregate(vec![col("a")], vec![min(col("b"))])?
 ///            .limit(0, Some(100))?;
-/// let results = df.collect();
+/// let results = df
+///   .collect()
+///   .await?;
+/// assert_batches_eq!(
+///  &[
+///    "+---+----------------+",
+///    "| a | MIN(?table?.b) |",
+///    "+---+----------------+",
+///    "| 1 | 2              |",
+///    "+---+----------------+",
+///  ],
+///  &results
+/// );
 /// # Ok(())
 /// # }
 /// ```
+///
+/// # Example: SQL API
 ///
 /// The following example demonstrates how to execute the same query using SQL:
 ///
 /// ```
 /// use datafusion::prelude::*;
-///
-/// # use datafusion::error::Result;
+/// # use datafusion::{error::Result, assert_batches_eq};
 /// # #[tokio::main]
 /// # async fn main() -> Result<()> {
 /// let mut ctx = SessionContext::new();
 /// ctx.register_csv("example", "tests/data/example.csv", CsvReadOptions::new()).await?;
-/// let results = ctx.sql("SELECT a, MIN(b) FROM example GROUP BY a LIMIT 100").await?;
+/// let results = ctx
+///   .sql("SELECT a, MIN(b) FROM example GROUP BY a LIMIT 100")
+///   .await?
+///   .collect()
+///   .await?;
+/// assert_batches_eq!(
+///  &[
+///    "+---+----------------+",
+///    "| a | MIN(example.b) |",
+///    "+---+----------------+",
+///    "| 1 | 2              |",
+///    "+---+----------------+",
+///  ],
+///  &results
+/// );
 /// # Ok(())
 /// # }
 /// ```
@@ -342,22 +372,81 @@ impl SessionContext {
         self.state.read().config.clone()
     }
 
-    /// Creates a [`DataFrame`] that will execute a SQL query.
+    /// Creates a [`DataFrame`] from SQL query text.
     ///
     /// Note: This API implements DDL statements such as `CREATE TABLE` and
     /// `CREATE VIEW` and DML statements such as `INSERT INTO` with in-memory
-    /// default implementations.
+    /// default implementations. See [`Self::sql_with_options`].
     ///
-    /// If this is not desirable, consider using [`SessionState::create_logical_plan()`] which
-    /// does not mutate the state based on such statements.
+    /// # Example: Running SQL queries
+    ///
+    /// See the example on [`Self`]
+    ///
+    /// # Example: Creating a Table with SQL
+    ///
+    /// ```
+    /// use datafusion::prelude::*;
+    /// # use datafusion::{error::Result, assert_batches_eq};
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let mut ctx = SessionContext::new();
+    /// ctx
+    ///   .sql("CREATE TABLE foo (x INTEGER)")
+    ///   .await?
+    ///   .collect()
+    ///   .await?;
+    /// assert!(ctx.table_exist("foo").unwrap());
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn sql(&self, sql: &str) -> Result<DataFrame> {
-        // create a query planner
+        self.sql_with_options(sql, SQLOptions::new()).await
+    }
+
+    /// Creates a [`DataFrame`] from SQL query text, first validating
+    /// that the queries are allowed by `options`
+    ///
+    /// # Example: Preventing Creating a Table with SQL
+    ///
+    /// If you want to avoid creating tables, or modifying data or the
+    /// session, set [`SQLOptions`] appropriately:
+    ///
+    /// ```
+    /// use datafusion::prelude::*;
+    /// # use datafusion::{error::Result};
+    /// # use datafusion::physical_plan::collect;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let mut ctx = SessionContext::new();
+    /// let options = SQLOptions::new()
+    ///   .with_allow_ddl(false);
+    /// let err = ctx.sql_with_options("CREATE TABLE foo (x INTEGER)", options)
+    ///   .await
+    ///   .unwrap_err();
+    /// assert!(
+    ///   err.to_string().starts_with("Error during planning: DDL not supported: CreateMemoryTable")
+    /// );
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn sql_with_options(
+        &self,
+        sql: &str,
+        options: SQLOptions,
+    ) -> Result<DataFrame> {
         let plan = self.state().create_logical_plan(sql).await?;
+        options.verify_plan(&plan)?;
 
         self.execute_logical_plan(plan).await
     }
 
-    /// Execute the [`LogicalPlan`], return a [`DataFrame`]
+    /// Execute the [`LogicalPlan`], return a [`DataFrame`]. This API
+    /// is not featured limited (so all SQL such as `CREATE TABLE` and
+    /// `COPY` will be run).
+    ///
+    /// If you wish to limit the type of plan that can be run from
+    /// SQL, see [`Self::sql_with_options`] and
+    /// [`SQLOptions::verify_plan`].
     pub async fn execute_logical_plan(&self, plan: LogicalPlan) -> Result<DataFrame> {
         match plan {
             LogicalPlan::Ddl(ddl) => match ddl {
@@ -380,9 +469,6 @@ impl SessionContext {
             LogicalPlan::Statement(Statement::SetVariable(stmt)) => {
                 self.set_variable(stmt).await
             }
-            LogicalPlan::DescribeTable(DescribeTable { schema, .. }) => {
-                self.return_describe_table_dataframe(schema).await
-            }
 
             plan => Ok(DataFrame::new(self.state(), plan)),
         }
@@ -394,53 +480,6 @@ impl SessionContext {
         Ok(DataFrame::new(self.state(), plan))
     }
 
-    // return an record_batch which describe table
-    async fn return_describe_table_record_batch(
-        &self,
-        schema: Arc<Schema>,
-    ) -> Result<RecordBatch> {
-        let record_batch_schema = Arc::new(Schema::new(vec![
-            Field::new("column_name", DataType::Utf8, false),
-            Field::new("data_type", DataType::Utf8, false),
-            Field::new("is_nullable", DataType::Utf8, false),
-        ]));
-
-        let mut column_names = StringBuilder::new();
-        let mut data_types = StringBuilder::new();
-        let mut is_nullables = StringBuilder::new();
-        for (_, field) in schema.fields().iter().enumerate() {
-            column_names.append_value(field.name());
-
-            // "System supplied type" --> Use debug format of the datatype
-            let data_type = field.data_type();
-            data_types.append_value(format!("{data_type:?}"));
-
-            // "YES if the column is possibly nullable, NO if it is known not nullable. "
-            let nullable_str = if field.is_nullable() { "YES" } else { "NO" };
-            is_nullables.append_value(nullable_str);
-        }
-
-        let record_batch = RecordBatch::try_new(
-            record_batch_schema,
-            vec![
-                Arc::new(column_names.finish()),
-                Arc::new(data_types.finish()),
-                Arc::new(is_nullables.finish()),
-            ],
-        )?;
-
-        Ok(record_batch)
-    }
-
-    // return an dataframe which describe file
-    async fn return_describe_table_dataframe(
-        &self,
-        schema: Arc<Schema>,
-    ) -> Result<DataFrame> {
-        let record_batch = self.return_describe_table_record_batch(schema).await?;
-        self.read_batch(record_batch)
-    }
-
     async fn create_external_table(
         &self,
         cmd: &CreateExternalTable,
@@ -450,10 +489,7 @@ impl SessionContext {
             match cmd.if_not_exists {
                 true => return self.return_empty_dataframe(),
                 false => {
-                    return Err(DataFusionError::Execution(format!(
-                        "Table '{}' already exists",
-                        cmd.name
-                    )));
+                    return exec_err!("Table '{}' already exists", cmd.name);
                 }
             }
         }
@@ -489,9 +525,9 @@ impl SessionContext {
                 self.register_table(&name, table)?;
                 self.return_empty_dataframe()
             }
-            (true, true, Ok(_)) => Err(DataFusionError::Execution(
-                "'IF NOT EXISTS' cannot coexist with 'REPLACE'".to_string(),
-            )),
+            (true, true, Ok(_)) => {
+                exec_err!("'IF NOT EXISTS' cannot coexist with 'REPLACE'")
+            }
             (_, _, Err(_)) => {
                 let df_schema = input.schema();
                 let schema = Arc::new(df_schema.as_ref().into());
@@ -506,9 +542,7 @@ impl SessionContext {
                 self.register_table(&name, table)?;
                 self.return_empty_dataframe()
             }
-            (false, false, Ok(_)) => Err(DataFusionError::Execution(format!(
-                "Table '{name}' already exists"
-            ))),
+            (false, false, Ok(_)) => exec_err!("Table '{name}' already exists"),
         }
     }
 
@@ -536,9 +570,7 @@ impl SessionContext {
                 self.register_table(&name, table)?;
                 self.return_empty_dataframe()
             }
-            (false, Ok(_)) => Err(DataFusionError::Execution(format!(
-                "Table '{name}' already exists"
-            ))),
+            (false, Ok(_)) => exec_err!("Table '{name}' already exists"),
         }
     }
 
@@ -570,11 +602,7 @@ impl SessionContext {
                 })?;
                 (catalog, tokens[1])
             }
-            _ => {
-                return Err(DataFusionError::Execution(format!(
-                    "Unable to parse catalog from {schema_name}"
-                )))
-            }
+            _ => return exec_err!("Unable to parse catalog from {schema_name}"),
         };
         let schema = catalog.schema(schema_name);
 
@@ -585,9 +613,7 @@ impl SessionContext {
                 catalog.register_schema(schema_name, schema)?;
                 self.return_empty_dataframe()
             }
-            (false, Some(_)) => Err(DataFusionError::Execution(format!(
-                "Schema '{schema_name}' already exists"
-            ))),
+            (false, Some(_)) => exec_err!("Schema '{schema_name}' already exists"),
         }
     }
 
@@ -609,9 +635,7 @@ impl SessionContext {
                     .register_catalog(catalog_name, new_catalog);
                 self.return_empty_dataframe()
             }
-            (false, Some(_)) => Err(DataFusionError::Execution(format!(
-                "Catalog '{catalog_name}' already exists"
-            ))),
+            (false, Some(_)) => exec_err!("Catalog '{catalog_name}' already exists"),
         }
     }
 
@@ -623,9 +647,7 @@ impl SessionContext {
         match (result, if_exists) {
             (Ok(true), _) => self.return_empty_dataframe(),
             (_, true) => self.return_empty_dataframe(),
-            (_, _) => Err(DataFusionError::Execution(format!(
-                "Table '{name}' doesn't exist."
-            ))),
+            (_, _) => exec_err!("Table '{name}' doesn't exist."),
         }
     }
 
@@ -637,9 +659,7 @@ impl SessionContext {
         match (result, if_exists) {
             (Ok(true), _) => self.return_empty_dataframe(),
             (_, true) => self.return_empty_dataframe(),
-            (_, _) => Err(DataFusionError::Execution(format!(
-                "View '{name}' doesn't exist."
-            ))),
+            (_, _) => exec_err!("View '{name}' doesn't exist."),
         }
     }
 
@@ -678,9 +698,7 @@ impl SessionContext {
         &self,
         schemaref: SchemaReference<'_>,
     ) -> Result<DataFrame> {
-        Err(DataFusionError::Execution(format!(
-            "Schema '{schemaref}' doesn't exist."
-        )))
+        exec_err!("Schema '{schemaref}' doesn't exist.")
     }
 
     async fn set_variable(&self, stmt: SetVariable) -> Result<DataFrame> {
@@ -1304,7 +1322,7 @@ impl FunctionRegistry for SessionContext {
 /// A planner used to add extensions to DataFusion logical and physical plans.
 #[async_trait]
 pub trait QueryPlanner {
-    /// Given a `LogicalPlan`, create an `ExecutionPlan` suitable for execution
+    /// Given a `LogicalPlan`, create an [`ExecutionPlan`] suitable for execution
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
@@ -1317,7 +1335,7 @@ struct DefaultQueryPlanner {}
 
 #[async_trait]
 impl QueryPlanner for DefaultQueryPlanner {
-    /// Given a `LogicalPlan`, create an `ExecutionPlan` suitable for execution
+    /// Given a `LogicalPlan`, create an [`ExecutionPlan`] suitable for execution
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
@@ -1330,7 +1348,12 @@ impl QueryPlanner for DefaultQueryPlanner {
     }
 }
 
-/// Execution context for registering data sources and executing queries
+/// Execution context for registering data sources and executing queries.
+/// See [`SessionContext`] for a higher level API.
+///
+/// Note that there is no `Default` or `new()` for SessionState,
+/// to avoid accidentally running queries or other operations without passing through
+/// the [`SessionConfig`] or [`RuntimeEnv`]. See [`SessionContext`].
 #[derive(Clone)]
 pub struct SessionState {
     /// A unique UUID that identifies the session
@@ -1628,7 +1651,8 @@ impl SessionState {
         &mut self.table_factories
     }
 
-    /// Convert a SQL string into an AST Statement
+    /// Parse an SQL string into an DataFusion specific AST
+    /// [`Statement`]. See [`SessionContext::sql`] for running queries.
     pub fn sql_to_statement(
         &self,
         sql: &str,
@@ -1643,9 +1667,9 @@ impl SessionState {
         })?;
         let mut statements = DFParser::parse_sql_with_dialect(sql, dialect.as_ref())?;
         if statements.len() > 1 {
-            return Err(DataFusionError::NotImplemented(
-                "The context currently only supports a single SQL statement".to_string(),
-            ));
+            return not_impl_err!(
+                "The context currently only supports a single SQL statement"
+            );
         }
         let statement = statements.pop_front().ok_or_else(|| {
             DataFusionError::NotImplemented(
@@ -1698,29 +1722,38 @@ impl SessionState {
         }
 
         let mut visitor = RelationVisitor(&mut relations);
-        match statement {
-            DFStatement::Statement(s) => {
-                let _ = s.as_ref().visit(&mut visitor);
-            }
-            DFStatement::CreateExternalTable(table) => {
-                visitor
-                    .0
-                    .insert(ObjectName(vec![Ident::from(table.name.as_str())]));
-            }
-            DFStatement::DescribeTableStmt(table) => visitor.insert(&table.table_name),
-            DFStatement::CopyTo(CopyToStatement {
-                source,
-                target: _,
-                options: _,
-            }) => match source {
-                CopyToSource::Relation(table_name) => {
-                    visitor.insert(table_name);
+        fn visit_statement(statement: &DFStatement, visitor: &mut RelationVisitor<'_>) {
+            match statement {
+                DFStatement::Statement(s) => {
+                    let _ = s.as_ref().visit(visitor);
                 }
-                CopyToSource::Query(query) => {
-                    query.visit(&mut visitor);
+                DFStatement::CreateExternalTable(table) => {
+                    visitor
+                        .0
+                        .insert(ObjectName(vec![Ident::from(table.name.as_str())]));
                 }
-            },
+                DFStatement::DescribeTableStmt(table) => {
+                    visitor.insert(&table.table_name)
+                }
+                DFStatement::CopyTo(CopyToStatement {
+                    source,
+                    target: _,
+                    options: _,
+                }) => match source {
+                    CopyToSource::Relation(table_name) => {
+                        visitor.insert(table_name);
+                    }
+                    CopyToSource::Query(query) => {
+                        query.visit(visitor);
+                    }
+                },
+                DFStatement::Explain(explain) => {
+                    visit_statement(&explain.statement, visitor)
+                }
+            }
         }
+
+        visit_statement(statement, &mut visitor);
 
         // Always include information_schema if available
         if self.config.information_schema() {
@@ -1778,9 +1811,15 @@ impl SessionState {
         query.statement_to_plan(statement)
     }
 
-    /// Creates a [`LogicalPlan`] from the provided SQL string
+    /// Creates a [`LogicalPlan`] from the provided SQL string. This
+    /// interface will plan any SQL DataFusion supports, including DML
+    /// like `CREATE TABLE`, and `COPY` (which can write to local
+    /// files.
     ///
-    /// See [`SessionContext::sql`] for a higher-level interface that also handles DDL
+    /// See [`SessionContext::sql`] and
+    /// [`SessionContext::sql_with_options`] for a higher-level
+    /// interface that handles DDL and verification of allowed
+    /// statements.
     pub async fn create_logical_plan(&self, sql: &str) -> Result<LogicalPlan> {
         let dialect = self.config.options().sql_parser.dialect.as_str();
         let statement = self.sql_to_statement(sql, dialect)?;
@@ -1861,7 +1900,11 @@ impl SessionState {
 
     /// Creates a physical plan from a logical plan.
     ///
-    /// Note: this first calls [`Self::optimize`] on the provided plan
+    /// Note: this first calls [`Self::optimize`] on the provided
+    /// plan.
+    ///
+    /// This function will error for [`LogicalPlan`]s such as catalog
+    /// DDL `CREATE TABLE` must be handled by another layer.
     pub async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
@@ -2069,10 +2112,10 @@ impl SerializerRegistry for EmptySerializerRegistry {
         &self,
         node: &dyn UserDefinedLogicalNode,
     ) -> Result<Vec<u8>> {
-        Err(DataFusionError::NotImplemented(format!(
+        not_impl_err!(
             "Serializing user defined logical plan node `{}` is not supported",
             node.name()
-        )))
+        )
     }
 
     fn deserialize_logical_plan(
@@ -2080,9 +2123,95 @@ impl SerializerRegistry for EmptySerializerRegistry {
         name: &str,
         _bytes: &[u8],
     ) -> Result<Arc<dyn UserDefinedLogicalNode>> {
-        Err(DataFusionError::NotImplemented(format!(
+        not_impl_err!(
             "Deserializing user defined logical plan node `{name}` is not supported"
-        )))
+        )
+    }
+}
+
+/// Describes which SQL statements can be run.
+///
+/// See [`SessionContext::sql_with_options`] for more details.
+#[derive(Clone, Debug, Copy)]
+pub struct SQLOptions {
+    /// See [`Self::with_allow_ddl`]
+    allow_ddl: bool,
+    /// See [`Self::with_allow_dml`]
+    allow_dml: bool,
+    /// See [`Self::with_allow_statements`]
+    allow_statements: bool,
+}
+
+impl Default for SQLOptions {
+    fn default() -> Self {
+        Self {
+            allow_ddl: true,
+            allow_dml: true,
+            allow_statements: true,
+        }
+    }
+}
+
+impl SQLOptions {
+    /// Create a new `SQLOptions` with default values
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    /// Should DML data modification commands  (e.g. `INSERT and COPY`) be run? Defaults to `true`.
+    pub fn with_allow_ddl(mut self, allow: bool) -> Self {
+        self.allow_ddl = allow;
+        self
+    }
+
+    /// Should DML data modification commands (e.g. `INSERT and COPY`) be run? Defaults to `true`
+    pub fn with_allow_dml(mut self, allow: bool) -> Self {
+        self.allow_dml = allow;
+        self
+    }
+
+    /// Should Statements such as (e.g. `SET VARIABLE and `BEGIN TRANSACTION` ...`) be run?. Defaults to `true`
+    pub fn with_allow_statements(mut self, allow: bool) -> Self {
+        self.allow_statements = allow;
+        self
+    }
+
+    /// Return an error if the [`LogicalPlan`] has any nodes that are
+    /// incompatible with this [`SQLOptions`].
+    pub fn verify_plan(&self, plan: &LogicalPlan) -> Result<()> {
+        plan.visit(&mut BadPlanVisitor::new(self))?;
+        Ok(())
+    }
+}
+
+struct BadPlanVisitor<'a> {
+    options: &'a SQLOptions,
+}
+impl<'a> BadPlanVisitor<'a> {
+    fn new(options: &'a SQLOptions) -> Self {
+        Self { options }
+    }
+}
+
+impl<'a> TreeNodeVisitor for BadPlanVisitor<'a> {
+    type N = LogicalPlan;
+
+    fn pre_visit(&mut self, node: &Self::N) -> Result<VisitRecursion> {
+        match node {
+            LogicalPlan::Ddl(ddl) if !self.options.allow_ddl => {
+                plan_err!("DDL not supported: {}", ddl.name())
+            }
+            LogicalPlan::Dml(dml) if !self.options.allow_dml => {
+                plan_err!("DML not supported: {}", dml.op)
+            }
+            LogicalPlan::Copy(_) if !self.options.allow_dml => {
+                plan_err!("DML not supported: COPY")
+            }
+            LogicalPlan::Statement(stmt) if !self.options.allow_statements => {
+                plan_err!("Statement not supported: {}", stmt.name())
+            }
+            _ => Ok(VisitRecursion::Continue),
+        }
     }
 }
 
@@ -2099,6 +2228,7 @@ mod tests {
     use crate::variable::VarType;
     use arrow::array::ArrayRef;
     use arrow::record_batch::RecordBatch;
+    use arrow_schema::{Field, Schema};
     use async_trait::async_trait;
     use datafusion_expr::{create_udaf, create_udf, Expr, Volatility};
     use datafusion_physical_expr::functions::make_scalar_function;
@@ -2161,7 +2291,7 @@ mod tests {
             plan_and_collect(&ctx, "SELECT @@version, @name, @integer + 1 FROM dual")
                 .await?;
 
-        let expected = vec![
+        let expected = [
             "+----------------------+------------------------+---------------------+",
             "| @@version            | @name                  | @integer + Int64(1) |",
             "+----------------------+------------------------+---------------------+",
@@ -2178,9 +2308,8 @@ mod tests {
         let ctx = SessionContext::new();
 
         let err = plan_and_collect(&ctx, "SElECT @=   X3").await.unwrap_err();
-
         assert_eq!(
-            err.to_string(),
+            err.strip_backtrace(),
             "Error during planning: variable [\"@=\"] has no type information"
         );
         Ok(())
@@ -2229,7 +2358,7 @@ mod tests {
         // Can call it if you put quotes
         let result = plan_and_collect(&ctx, "SELECT \"MY_FUNC\"(i) FROM t").await?;
 
-        let expected = vec![
+        let expected = [
             "+--------------+",
             "| MY_FUNC(t.i) |",
             "+--------------+",
@@ -2253,12 +2382,7 @@ mod tests {
             vec![DataType::Float64],
             Arc::new(DataType::Float64),
             Volatility::Immutable,
-            Arc::new(|_| {
-                Ok(Box::new(AvgAccumulator::try_new(
-                    &DataType::Float64,
-                    &DataType::Float64,
-                )?))
-            }),
+            Arc::new(|_| Ok(Box::<AvgAccumulator>::default())),
             Arc::new(vec![DataType::UInt64, DataType::Float64]),
         );
 
@@ -2275,7 +2399,7 @@ mod tests {
         // Can call it if you put quotes
         let result = plan_and_collect(&ctx, "SELECT \"MY_AVG\"(i) FROM t").await?;
 
-        let expected = vec![
+        let expected = [
             "+-------------+",
             "| MY_AVG(t.i) |",
             "+-------------+",
@@ -2308,7 +2432,7 @@ mod tests {
             plan_and_collect(&ctx, "SELECT SUM(c1), SUM(c2), COUNT(*) FROM test").await?;
 
         assert_eq!(results.len(), 1);
-        let expected = vec![
+        let expected = [
             "+--------------+--------------+----------+",
             "| SUM(test.c1) | SUM(test.c2) | COUNT(*) |",
             "+--------------+--------------+----------+",
@@ -2456,7 +2580,7 @@ mod tests {
             .await
             .unwrap();
 
-            let expected = vec![
+            let expected = [
                 "+-------+",
                 "| count |",
                 "+-------+",
@@ -2498,7 +2622,7 @@ mod tests {
         )
         .await?;
 
-        let expected = vec![
+        let expected = [
             "+-----+-------+",
             "| cat | total |",
             "+-----+-------+",
@@ -2637,43 +2761,6 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn unsupported_sql_returns_error() -> Result<()> {
-        let ctx = SessionContext::new();
-        ctx.register_table("test", test::table_with_sequence(1, 1).unwrap())
-            .unwrap();
-        let state = ctx.state();
-
-        // create view
-        let sql = "create view test_view as select * from test";
-        let plan = state.create_logical_plan(sql).await;
-        let physical_plan = state.create_physical_plan(&plan.unwrap()).await;
-        assert!(physical_plan.is_err());
-        assert_eq!(
-            format!("{}", physical_plan.unwrap_err()),
-            "This feature is not implemented: Unsupported logical plan: CreateView"
-        );
-        // // drop view
-        let sql = "drop view test_view";
-        let plan = state.create_logical_plan(sql).await;
-        let physical_plan = state.create_physical_plan(&plan.unwrap()).await;
-        assert!(physical_plan.is_err());
-        assert_eq!(
-            format!("{}", physical_plan.unwrap_err()),
-            "This feature is not implemented: Unsupported logical plan: DropView"
-        );
-        // // drop table
-        let sql = "drop table test";
-        let plan = state.create_logical_plan(sql).await;
-        let physical_plan = state.create_physical_plan(&plan.unwrap()).await;
-        assert!(physical_plan.is_err());
-        assert_eq!(
-            format!("{}", physical_plan.unwrap_err()),
-            "This feature is not implemented: Unsupported logical plan: DropTable"
-        );
-        Ok(())
-    }
-
     struct MyPhysicalPlanner {}
 
     #[async_trait]
@@ -2683,9 +2770,7 @@ mod tests {
             _logical_plan: &LogicalPlan,
             _session_state: &SessionState,
         ) -> Result<Arc<dyn ExecutionPlan>> {
-            Err(DataFusionError::NotImplemented(
-                "query not supported".to_string(),
-            ))
+            not_impl_err!("query not supported")
         }
 
         fn create_physical_expr(

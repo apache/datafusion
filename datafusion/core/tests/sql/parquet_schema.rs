@@ -58,7 +58,7 @@ async fn schema_merge_ignores_metadata_by_default() {
     write_files(table_dir.as_path(), schemas);
 
     // can be any order
-    let expected = vec![
+    let expected = [
         "+----+------+",
         "| id | name |",
         "+----+------+",
@@ -119,7 +119,7 @@ async fn schema_merge_can_preserve_metadata() {
     write_files(table_dir.as_path(), schemas);
 
     // can be any order
-    let expected = vec![
+    let expected = [
         "+----+------+",
         "| id | name |",
         "+----+------+",

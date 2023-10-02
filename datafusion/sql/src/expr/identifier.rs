@@ -429,10 +429,10 @@ mod test {
     #[test]
     fn test_form_identifier() -> Result<()> {
         let err = form_identifier(&[]).expect_err("empty identifiers didn't fail");
-        let expected = "Internal error: Incorrect number of identifiers: 0. \
+        let expected = "Internal error: Incorrect number of identifiers: 0.\n\
         This was likely caused by a bug in DataFusion's code and we would \
         welcome that you file an bug report in our issue tracker";
-        assert_eq!(err.to_string(), expected);
+        assert!(expected.starts_with(&err.strip_backtrace()));
 
         let ids = vec!["a".to_string()];
         let (qualifier, column) = form_identifier(&ids)?;
@@ -467,10 +467,10 @@ mod test {
             "e".to_string(),
         ])
         .expect_err("too many identifiers didn't fail");
-        let expected = "Internal error: Incorrect number of identifiers: 5. \
+        let expected = "Internal error: Incorrect number of identifiers: 5.\n\
         This was likely caused by a bug in DataFusion's code and we would \
         welcome that you file an bug report in our issue tracker";
-        assert_eq!(err.to_string(), expected);
+        assert!(expected.starts_with(&err.strip_backtrace()));
 
         Ok(())
     }

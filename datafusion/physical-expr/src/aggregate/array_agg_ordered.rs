@@ -33,7 +33,7 @@ use arrow::datatypes::{DataType, Field};
 use arrow_array::{Array, ListArray};
 use arrow_schema::{Fields, SortOptions};
 use datafusion_common::utils::{compare_rows, get_row_at_idx};
-use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{exec_err, internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
 use itertools::izip;
@@ -236,9 +236,7 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
             self.values = new_values;
             self.ordering_values = new_orderings;
         } else {
-            return Err(DataFusionError::Execution(
-                "Expects to receive a list array".to_string(),
-            ));
+            return exec_err!("Expects to receive a list array");
         }
         Ok(())
     }
@@ -291,17 +289,17 @@ impl OrderSensitiveArrayAggAccumulator {
                 if let ScalarValue::Struct(Some(orderings), _fields) = struct_vals {
                     Ok(orderings)
                 } else {
-                    Err(DataFusionError::Execution(format!(
+                    exec_err!(
                         "Expects to receive ScalarValue::Struct(Some(..), _) but got:{:?}",
-                        struct_vals.get_datatype()
-                    )))
+                        struct_vals.data_type()
+                    )
                 }
             }).collect::<Result<Vec<_>>>()
         } else {
-            Err(DataFusionError::Execution(format!(
+            exec_err!(
                 "Expects to receive ScalarValue::List(Some(..), _) but got:{:?}",
-                in_data.get_datatype()
-            )))
+                in_data.data_type()
+            )
         }
     }
 
@@ -427,10 +425,9 @@ fn merge_ordered_arrays(
             .zip(ordering_values.iter())
             .all(|(vals, ordering_vals)| vals.len() == ordering_vals.len()))
     {
-        return Err(DataFusionError::Execution(
+        return exec_err!(
             "Expects values arguments and/or ordering_values arguments to have same size"
-                .to_string(),
-        ));
+        );
     }
     let n_branch = values.len();
     // For each branch we keep track of indices of next will be merged entry

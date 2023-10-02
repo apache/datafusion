@@ -46,6 +46,11 @@ impl WindowShift {
     pub fn get_shift_offset(&self) -> i64 {
         self.shift_offset
     }
+
+    /// Get the default_value for window shift expression.
+    pub fn get_default_value(&self) -> Option<ScalarValue> {
+        self.default_value.clone()
+    }
 }
 
 /// lead() window function
@@ -273,7 +278,7 @@ mod tests {
                 None,
                 None,
             ),
-            vec![
+            [
                 Some(-2),
                 Some(3),
                 Some(-4),
@@ -295,7 +300,7 @@ mod tests {
                 None,
                 None,
             ),
-            vec![
+            [
                 None,
                 Some(1),
                 Some(-2),
@@ -317,7 +322,7 @@ mod tests {
                 None,
                 Some(ScalarValue::Int32(Some(100))),
             ),
-            vec![
+            [
                 Some(100),
                 Some(1),
                 Some(-2),

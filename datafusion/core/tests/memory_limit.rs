@@ -55,118 +55,110 @@ fn init() {
 
 #[tokio::test]
 async fn oom_sort() {
-    TestCase::new(
-        "select * from t order by host DESC",
-        vec![
+    TestCase::new()
+        .with_query("select * from t order by host DESC")
+        .with_expected_errors(vec![
             "Resources exhausted: Memory Exhausted while Sorting (DiskManager is disabled)",
-        ],
-        200_000,
-    )
+        ])
+        .with_memory_limit(200_000)
         .run()
         .await
 }
 
 #[tokio::test]
 async fn group_by_none() {
-    TestCase::new(
-        "select median(image) from t",
-        vec![
+    TestCase::new()
+        .with_query("select median(request_bytes) from t")
+        .with_expected_errors(vec![
             "Resources exhausted: Failed to allocate additional",
             "AggregateStream",
-        ],
-        20_000,
-    )
-    .run()
-    .await
+        ])
+        .with_memory_limit(2_000)
+        .run()
+        .await
 }
 
 #[tokio::test]
 async fn group_by_row_hash() {
-    TestCase::new(
-        "select count(*) from t GROUP BY response_bytes",
-        vec![
+    TestCase::new()
+        .with_query("select count(*) from t GROUP BY response_bytes")
+        .with_expected_errors(vec![
             "Resources exhausted: Failed to allocate additional",
             "GroupedHashAggregateStream",
-        ],
-        2_000,
-    )
-    .run()
-    .await
+        ])
+        .with_memory_limit(2_000)
+        .run()
+        .await
 }
 
 #[tokio::test]
 async fn group_by_hash() {
-    TestCase::new(
+    TestCase::new()
         // group by dict column
-        "select count(*) from t GROUP BY service, host, pod, container",
-        vec![
+        .with_query("select count(*) from t GROUP BY service, host, pod, container")
+        .with_expected_errors(vec![
             "Resources exhausted: Failed to allocate additional",
             "GroupedHashAggregateStream",
-        ],
-        1_000,
-    )
-    .run()
-    .await
+        ])
+        .with_memory_limit(1_000)
+        .run()
+        .await
 }
 
 #[tokio::test]
 async fn join_by_key_multiple_partitions() {
     let config = SessionConfig::new().with_target_partitions(2);
-    TestCase::new(
-        "select t1.* from t t1 JOIN t t2 ON t1.service = t2.service",
-        vec![
+    TestCase::new()
+        .with_query("select t1.* from t t1 JOIN t t2 ON t1.service = t2.service")
+        .with_expected_errors(vec![
             "Resources exhausted: Failed to allocate additional",
             "HashJoinInput[0]",
-        ],
-        1_000,
-    )
-    .with_config(config)
-    .run()
-    .await
+        ])
+        .with_memory_limit(1_000)
+        .with_config(config)
+        .run()
+        .await
 }
 
 #[tokio::test]
 async fn join_by_key_single_partition() {
     let config = SessionConfig::new().with_target_partitions(1);
-    TestCase::new(
-        "select t1.* from t t1 JOIN t t2 ON t1.service = t2.service",
-        vec![
+    TestCase::new()
+        .with_query("select t1.* from t t1 JOIN t t2 ON t1.service = t2.service")
+        .with_expected_errors(vec![
             "Resources exhausted: Failed to allocate additional",
             "HashJoinInput",
-        ],
-        1_000,
-    )
-    .with_config(config)
-    .run()
-    .await
+        ])
+        .with_memory_limit(1_000)
+        .with_config(config)
+        .run()
+        .await
 }
 
 #[tokio::test]
 async fn join_by_expression() {
-    TestCase::new(
-        "select t1.* from t t1 JOIN t t2 ON t1.service != t2.service",
-        vec![
+    TestCase::new()
+        .with_query("select t1.* from t t1 JOIN t t2 ON t1.service != t2.service")
+        .with_expected_errors(vec![
             "Resources exhausted: Failed to allocate additional",
             "NestedLoopJoinLoad[0]",
-        ],
-        1_000,
-    )
-    .run()
-    .await
+        ])
+        .with_memory_limit(1_000)
+        .run()
+        .await
 }
 
 #[tokio::test]
 async fn cross_join() {
-    TestCase::new(
-        "select t1.* from t t1 CROSS JOIN t t2",
-        vec![
+    TestCase::new()
+        .with_query("select t1.* from t t1 CROSS JOIN t t2")
+        .with_expected_errors(vec![
             "Resources exhausted: Failed to allocate additional",
             "CrossJoinExec",
-        ],
-        1_000,
-    )
-    .run()
-    .await
+        ])
+        .with_memory_limit(1_000)
+        .run()
+        .await
 }
 
 #[tokio::test]
@@ -176,51 +168,53 @@ async fn merge_join() {
         .with_target_partitions(2)
         .set_bool("datafusion.optimizer.prefer_hash_join", false);
 
-    TestCase::new(
-        "select t1.* from t t1 JOIN t t2 ON t1.pod = t2.pod AND t1.time = t2.time",
-        vec![
+    TestCase::new()
+        .with_query(
+            "select t1.* from t t1 JOIN t t2 ON t1.pod = t2.pod AND t1.time = t2.time",
+        )
+        .with_expected_errors(vec![
             "Resources exhausted: Failed to allocate additional",
             "SMJStream",
-        ],
-        1_000,
-    )
-    .with_config(config)
-    .run()
-    .await
+        ])
+        .with_memory_limit(1_000)
+        .with_config(config)
+        .run()
+        .await
 }
 
 #[tokio::test]
 async fn symmetric_hash_join() {
-    TestCase::new(
-        "select t1.* from t t1 JOIN t t2 ON t1.pod = t2.pod AND t1.time = t2.time",
-        vec![
+    TestCase::new()
+        .with_query(
+            "select t1.* from t t1 JOIN t t2 ON t1.pod = t2.pod AND t1.time = t2.time",
+        )
+        .with_expected_errors(vec![
             "Resources exhausted: Failed to allocate additional",
             "SymmetricHashJoinStream",
-        ],
-        1_000,
-    )
-    .with_scenario(Scenario::AccessLogStreaming)
-    .run()
-    .await
+        ])
+        .with_memory_limit(1_000)
+        .with_scenario(Scenario::AccessLogStreaming)
+        .run()
+        .await
 }
 
 #[tokio::test]
 async fn sort_preserving_merge() {
-    let partition_size = batches_byte_size(&dict_batches());
+    let scenario = Scenario::new_dictionary_strings(2);
+    let partition_size = scenario.partition_size();
 
-    TestCase::new(
-        // This query uses the exact same ordering as the input table
-        // so only a merge is needed
-        "select * from t ORDER BY a ASC NULLS LAST, b ASC NULLS LAST LIMIT 10",
-        vec![
+    TestCase::new()
+    // This query uses the exact same ordering as the input table
+    // so only a merge is needed
+        .with_query("select * from t ORDER BY a ASC NULLS LAST, b ASC NULLS LAST LIMIT 10")
+        .with_expected_errors(vec![
             "Resources exhausted: Failed to allocate additional",
             "SortPreservingMergeExec",
-        ],
+        ])
         // provide insufficient memory to merge
-        partition_size / 2,
-    )
+        .with_memory_limit(partition_size / 2)
         // two partitions of data, so a merge is required
-        .with_scenario(Scenario::DictionaryStrings(2))
+        .with_scenario(scenario)
         .with_expected_plan(
             // It is important that this plan only has
             // SortPreservingMergeExec (not a Sort which would compete
@@ -245,7 +239,8 @@ async fn sort_preserving_merge() {
 
 #[tokio::test]
 async fn sort_spill_reservation() {
-    let partition_size = batches_byte_size(&dict_batches());
+    let scenario = Scenario::new_dictionary_strings(1);
+    let partition_size = scenario.partition_size();
 
     let base_config = SessionConfig::new()
         // do not allow the sort to use the 'concat in place' path
@@ -254,33 +249,31 @@ async fn sort_spill_reservation() {
     // This test case shows how sort_spill_reservation works by
     // purposely sorting data that requires non trivial memory to
     // sort/merge.
-    let test = TestCase::new(
-        // This query uses a different order than the input table to
-        // force a sort. It also needs to have multiple columns to
-        // force RowFormat / interner that makes merge require
-        // substantial memory
-        "select * from t ORDER BY a , b DESC",
-        vec![], // expected errors set below
-        // enough memory to sort if we don't try to merge it all at once
-        (partition_size * 5) / 2,
-    )
-        // use a single partiton so only a sort is needed
-        .with_scenario(Scenario::DictionaryStrings(1))
+    let test = TestCase::new()
+    // This query uses a different order than the input table to
+    // force a sort. It also needs to have multiple columns to
+    // force RowFormat / interner that makes merge require
+    // substantial memory
+        .with_query("select * from t ORDER BY a , b DESC")
+    // enough memory to sort if we don't try to merge it all at once
+        .with_memory_limit(partition_size)
+    // use a single partiton so only a sort is needed
+        .with_scenario(scenario)
         .with_disk_manager_config(DiskManagerConfig::NewOs)
         .with_expected_plan(
             // It is important that this plan only has a SortExec, not
             // also merge, so we can ensure the sort could finish
             // given enough merging memory
             &[
-    "+---------------+--------------------------------------------------------------------------------------------------------+",
-    "| plan_type     | plan                                                                                                   |",
-    "+---------------+--------------------------------------------------------------------------------------------------------+",
-    "| logical_plan  | Sort: t.a ASC NULLS LAST, t.b DESC NULLS FIRST                                                         |",
-    "|               |   TableScan: t projection=[a, b]                                                                       |",
-    "| physical_plan | SortExec: expr=[a@0 ASC NULLS LAST,b@1 DESC]                                                           |",
-    "|               |   MemoryExec: partitions=1, partition_sizes=[5], output_ordering=a@0 ASC NULLS LAST,b@1 ASC NULLS LAST |",
-    "|               |                                                                                                        |",
-    "+---------------+--------------------------------------------------------------------------------------------------------+",
+                "+---------------+--------------------------------------------------------------------------------------------------------+",
+                "| plan_type     | plan                                                                                                   |",
+                "+---------------+--------------------------------------------------------------------------------------------------------+",
+                "| logical_plan  | Sort: t.a ASC NULLS LAST, t.b DESC NULLS FIRST                                                         |",
+                "|               |   TableScan: t projection=[a, b]                                                                       |",
+                "| physical_plan | SortExec: expr=[a@0 ASC NULLS LAST,b@1 DESC]                                                           |",
+                "|               |   MemoryExec: partitions=1, partition_sizes=[5], output_ordering=a@0 ASC NULLS LAST,b@1 ASC NULLS LAST |",
+                "|               |                                                                                                        |",
+                "+---------------+--------------------------------------------------------------------------------------------------------+",
             ]
         );
 
@@ -303,7 +296,7 @@ async fn sort_spill_reservation() {
         // reserve sufficient space up front for merge and this time,
         // which will force the spills to happen with less buffered
         // input and thus with enough to merge.
-        .with_sort_spill_reservation_bytes(2 * partition_size);
+        .with_sort_spill_reservation_bytes(partition_size / 2);
 
     test.with_config(config).with_expected_success().run().await;
 }
@@ -312,7 +305,7 @@ async fn sort_spill_reservation() {
 /// and verifies the expected errors are returned
 #[derive(Clone, Debug)]
 struct TestCase {
-    query: String,
+    query: Option<String>,
     expected_errors: Vec<String>,
     memory_limit: usize,
     config: SessionConfig,
@@ -327,25 +320,23 @@ struct TestCase {
 }
 
 impl TestCase {
-    // TODO remove expected errors and memory limits and query from constructor
-    fn new<'a>(
-        query: impl Into<String>,
-        expected_errors: impl IntoIterator<Item = &'a str>,
-        memory_limit: usize,
-    ) -> Self {
-        let expected_errors: Vec<String> =
-            expected_errors.into_iter().map(|s| s.to_string()).collect();
-
+    fn new() -> Self {
         Self {
-            query: query.into(),
-            expected_errors,
-            memory_limit,
+            query: None,
+            expected_errors: vec![],
+            memory_limit: 0,
             config: SessionConfig::new(),
             scenario: Scenario::AccessLog,
             disk_manager_config: DiskManagerConfig::Disabled,
             expected_plan: vec![],
             expected_success: false,
         }
+    }
+
+    /// Set the query to run
+    fn with_query(mut self, query: impl Into<String>) -> Self {
+        self.query = Some(query.into());
+        self
     }
 
     /// Set a list of expected strings that must appear in any errors
@@ -355,6 +346,12 @@ impl TestCase {
     ) -> Self {
         self.expected_errors =
             expected_errors.into_iter().map(|s| s.to_string()).collect();
+        self
+    }
+
+    /// Set the amount of memory that can be used
+    fn with_memory_limit(mut self, memory_limit: usize) -> Self {
+        self.memory_limit = memory_limit;
         self
     }
 
@@ -424,6 +421,7 @@ impl TestCase {
         let ctx = SessionContext::with_state(state);
         ctx.register_table("t", table).expect("registering table");
 
+        let query = query.expect("Test error: query not specified");
         let df = ctx.sql(&query).await.expect("Planning query");
 
         if !expected_plan.is_empty() {
@@ -475,11 +473,35 @@ enum Scenario {
     /// [`StreamingTable`]
     AccessLogStreaming,
 
-    /// N partitions of of sorted, dictionary encoded strings
-    DictionaryStrings(usize),
+    /// N partitions of of sorted, dictionary encoded strings.
+    DictionaryStrings {
+        partitions: usize,
+        /// If true, splits all input batches into 1 row each
+        single_row_batches: bool,
+    },
 }
 
 impl Scenario {
+    /// Create a new DictionaryStrings scenario with the number of partitions
+    fn new_dictionary_strings(partitions: usize) -> Self {
+        Self::DictionaryStrings {
+            partitions,
+            single_row_batches: false,
+        }
+    }
+
+    /// return the size, in bytes, of each partition
+    fn partition_size(&self) -> usize {
+        if let Self::DictionaryStrings {
+            single_row_batches, ..
+        } = self
+        {
+            batches_byte_size(&maybe_split_batches(dict_batches(), *single_row_batches))
+        } else {
+            panic!("Scenario does not support partition size");
+        }
+    }
+
     /// return a TableProvider with data for the test
     fn table(&self) -> Arc<dyn TableProvider> {
         match self {
@@ -504,11 +526,17 @@ impl Scenario {
                 .with_infinite_table(true);
                 Arc::new(table)
             }
-            Self::DictionaryStrings(num_partitions) => {
+            Self::DictionaryStrings {
+                partitions,
+                single_row_batches,
+            } => {
                 use datafusion::physical_expr::expressions::col;
-                let batches: Vec<Vec<_>> = std::iter::repeat(dict_batches())
-                    .take(*num_partitions)
-                    .collect();
+                let batches: Vec<Vec<_>> = std::iter::repeat(maybe_split_batches(
+                    dict_batches(),
+                    *single_row_batches,
+                ))
+                .take(*partitions)
+                .collect();
 
                 let schema = batches[0][0].schema();
                 let options = SortOptions {
@@ -548,7 +576,7 @@ impl Scenario {
                 // first
                 Some(vec![Arc::new(JoinSelection::new())])
             }
-            Self::DictionaryStrings(_) => {
+            Self::DictionaryStrings { .. } => {
                 // Use default rules
                 None
             }
@@ -560,6 +588,29 @@ fn access_log_batches() -> Vec<RecordBatch> {
     AccessLogGenerator::new()
         .with_row_limit(1000)
         .with_max_batch_size(50)
+        .collect()
+}
+
+/// If `one_row_batches` is true, then returns new record batches that
+/// are one row in size
+fn maybe_split_batches(
+    batches: Vec<RecordBatch>,
+    one_row_batches: bool,
+) -> Vec<RecordBatch> {
+    if !one_row_batches {
+        return batches;
+    }
+
+    batches
+        .into_iter()
+        .flat_map(|mut batch| {
+            let mut batches = vec![];
+            while batch.num_rows() > 1 {
+                batches.push(batch.slice(0, 1));
+                batch = batch.slice(1, batch.num_rows() - 1);
+            }
+            batches
+        })
         .collect()
 }
 
@@ -585,7 +636,9 @@ fn make_dict_batches() -> Vec<RecordBatch> {
         // ...
         // 0000000002
 
-        let values: Vec<_> = (i..i + batch_size).map(|x| format!("{x:010}")).collect();
+        let values: Vec<_> = (i..i + batch_size)
+            .map(|x| format!("{:010}", x / 16))
+            .collect();
         //println!("values: \n{values:?}");
         let array: DictionaryArray<Int32Type> =
             values.iter().map(|s| s.as_str()).collect();
