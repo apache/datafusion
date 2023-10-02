@@ -17,7 +17,10 @@
 
 //! TopK: Combination of Sort / LIMIT
 
-use arrow::row::{RowConverter, Rows, SortField};
+use arrow::{
+    compute::interleave,
+    row::{RowConverter, Rows, SortField},
+};
 use std::{cmp::Ordering, collections::BinaryHeap, sync::Arc};
 
 use arrow_array::{
@@ -646,109 +649,5 @@ impl RecordBatchStore {
             + self.batches.capacity()
                 * (std::mem::size_of::<u32>() + std::mem::size_of::<RecordBatchEntry>())
             + self.batches_size
-    }
-}
-
-/// wrapper over [`arrow::compute::interleave`] that re-encodes
-/// dictionaries that have a low usage (values referenced)
-fn interleave(values: &[&dyn Array], indices: &[(usize, usize)]) -> Result<ArrayRef> {
-    // for now, always re-encode only string dictionaries
-    if !values.is_empty() {
-        match values[0].data_type() {
-            DataType::Dictionary(_key_type, value_type)
-                if value_type.as_ref() == &DataType::Utf8 =>
-            {
-                return interleave_and_repack_dictionary(values, indices);
-            }
-            _ => {}
-        }
-    }
-    // fallback to arrow
-    Ok(arrow::compute::interleave(values, indices)?)
-}
-
-/// Special interleave kernel that re-creates the dictionary values,
-/// ensuring no unused space
-fn interleave_and_repack_dictionary(
-    values: &[&dyn Array],
-    indices: &[(usize, usize)],
-) -> Result<ArrayRef> {
-    let data_type = values[0].data_type();
-
-    // maps strings to new keys ( indexes)
-    let mut new_value_to_key = HashMap::new();
-    let mut new_values = StringBuilder::new();
-    let mut new_keys = vec![];
-
-    for (array_idx, row_idx) in indices {
-        // look up value,
-        let array = values[*array_idx];
-        downcast_dictionary_array!(
-            array=> {
-                if let Some(key) = array.key(*row_idx) {
-                    let values: &StringArray = array.values().as_string();
-                    if values.is_valid(key) {
-                        let current_value = values.value(key);
-                        if let Some(new_key) = new_value_to_key.get(current_value) {
-                            // value was already in the set
-                            new_keys.push(Some(*new_key))
-                        } else {
-                            // value not yet seen
-                            let new_key = new_value_to_key.len();
-                            new_values.append_value(current_value);
-                            new_keys.push(Some(new_key));
-                            new_value_to_key.insert(current_value, new_key);
-                        }
-                    } else {
-                        new_keys.push(None)
-                    }
-                }
-                else {
-                    new_keys.push(None);
-                }
-            }
-        _ => unreachable!("Non dictionary type")
-
-        )
-    }
-
-    // form the output
-    let DataType::Dictionary(key_type, _value_type) = data_type else {
-        unreachable!("non dictionary type");
-    };
-
-    let new_values: ArrayRef = Arc::new(new_values.finish());
-
-    // creates a $ARRAY_TYPE array from $NEW_KEYS ad $NEW_VALUES
-    use datafusion_common::DataFusionError;
-    macro_rules! make_keys {
-        ($PRIM_TYPE:ty, $ARRAY_TYPE:ty, $NEW_KEYS:ident, $NEW_VALUES:ident) => {{
-            // check the keys will fit in this array
-            if $NEW_VALUES.len() >= <$PRIM_TYPE>::MAX as usize {
-                return Err(DataFusionError::Execution(format!(
-                    "keys did not fit in prim type -- TODO MAKE BETTER"
-                )));
-            }
-            let new_keys: $ARRAY_TYPE = new_keys
-                .iter()
-                .map(|v| v.map(|v| v as $PRIM_TYPE))
-                .collect();
-            Ok(Arc::new(DictionaryArray::try_new(new_keys, new_values)?))
-        }};
-    }
-
-    match key_type.as_ref() {
-        DataType::Int8 => make_keys!(i8, Int8Array, new_keys, new_values),
-        DataType::Int16 => make_keys!(i16, Int16Array, new_keys, new_values),
-        DataType::Int32 => make_keys!(i32, Int32Array, new_keys, new_values),
-        DataType::Int64 => make_keys!(i64, Int64Array, new_keys, new_values),
-        DataType::UInt8 => make_keys!(u8, UInt8Array, new_keys, new_values),
-        DataType::UInt16 => make_keys!(u16, UInt16Array, new_keys, new_values),
-        DataType::UInt32 => make_keys!(u32, UInt32Array, new_keys, new_values),
-        DataType::UInt64 => make_keys!(u64, UInt64Array, new_keys, new_values),
-        _ => {
-            // handle other keys
-            unreachable!("unvalid key type");
-        }
     }
 }
