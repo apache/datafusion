@@ -1730,8 +1730,8 @@ impl ScalarValue {
         Ok(array)
     }
 
-    // V3 is the version that arguments are values and data_type instead of ScalarValue::List
-    fn iter_to_array_list_v3(
+    // This function does not contains nulls but empty array instead.
+    fn iter_to_array_list_without_nulls(
         values: &[ScalarValue],
         data_type: &DataType,
     ) -> Result<GenericListArray<i32>> {
@@ -1765,6 +1765,7 @@ impl ScalarValue {
         Ok(list_array)
     }
 
+    // This function build with nulls with nulls buffer.
     fn iter_to_array_list(
         scalars: impl IntoIterator<Item = ScalarValue>,
     ) -> Result<GenericListArray<i32>> {
@@ -1774,7 +1775,7 @@ impl ScalarValue {
 
         for scalar in scalars {
             if let ScalarValue::ListArr(arr) = scalar {
-                // NullArray(1)
+                // i.e. NullArray(1)
                 if arr.as_any().downcast_ref::<NullArray>().is_some() {
                     // Repeat previous offset index
                     offsets.push(0);
@@ -1797,8 +1798,6 @@ impl ScalarValue {
             }
         }
 
-        let offset_buffer = OffsetBuffer::<i32>::from_lengths(offsets);
-
         // Concatenate element arrays to create single flat array
         let element_arrays: Vec<&dyn Array> =
             elements.iter().map(|a| a.as_ref()).collect();
@@ -1812,7 +1811,7 @@ impl ScalarValue {
 
         let list_array = ListArray::new(
             Arc::new(Field::new("item", flat_array.data_type().clone(), true)),
-            offset_buffer,
+            OffsetBuffer::<i32>::from_lengths(offsets),
             flat_array,
             Some(NullBuffer::new(buffer)),
         );
@@ -1876,7 +1875,7 @@ impl ScalarValue {
                 build_timestamp_list!(unit.clone(), tz.clone(), values, 1)
             }
             DataType::List(_) | DataType::Struct(_) => {
-                ScalarValue::iter_to_array_list_v3(values, data_type).unwrap()
+                ScalarValue::iter_to_array_list_without_nulls(values, data_type).unwrap()
             }
             DataType::Decimal128(precision, scale) => {
                 let mut vals = vec![];
