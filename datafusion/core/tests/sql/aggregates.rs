@@ -47,7 +47,7 @@ async fn csv_query_array_agg_distinct() -> Result<()> {
     let column = actual[0].column(0);
     assert_eq!(column.len(), 1);
 
-    let scalar_vec = ScalarValue::process_array_to_scalar_vec(&column)?;
+    let scalar_vec = ScalarValue::convert_array_to_scalar_vec(&column)?;
     if !scalar_vec.is_empty() {
         let mut scalars = scalar_vec[0].clone();
         // workaround lack of Ord of ScalarValue

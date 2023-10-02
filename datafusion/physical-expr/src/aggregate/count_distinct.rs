@@ -169,7 +169,7 @@ impl Accumulator for DistinctCountAccumulator {
         }
         let arr = &states[0];
 
-        let scalar_vec = ScalarValue::process_array_to_scalar_vec(arr)?;
+        let scalar_vec = ScalarValue::convert_array_to_scalar_vec(arr)?;
         for scalars in scalar_vec.into_iter() {
             scalars.iter().for_each(|scalar| {
                 if !ScalarValue::is_null(scalar) {

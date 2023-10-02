@@ -132,7 +132,7 @@ impl Accumulator for DistinctArrayAggAccumulator {
         assert_eq!(values.len(), 1, "batch input should only include 1 column!");
 
         let array = &values[0];
-        let scalars = ScalarValue::process_array_to_scalar_vec(array)?;
+        let scalars = ScalarValue::convert_array_to_scalar_vec(array)?;
         for scalar in scalars {
             self.values.extend(scalar)
         }
@@ -151,7 +151,7 @@ impl Accumulator for DistinctArrayAggAccumulator {
         );
 
         let array = &states[0];
-        let scalars = ScalarValue::process_array_to_scalar_vec(array)?;
+        let scalars = ScalarValue::convert_array_to_scalar_vec(array)?;
         for scalar in scalars {
             self.values.extend(scalar)
         }

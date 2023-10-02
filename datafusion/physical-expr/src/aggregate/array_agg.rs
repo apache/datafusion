@@ -126,7 +126,8 @@ impl Accumulator for ArrayAggAccumulator {
             return Ok(());
         }
         assert!(values.len() == 1, "array_agg can only take 1 param!");
-        self.values.push(values[0].clone());
+        let val = values[0].clone();
+        self.values.push(val);
         Ok(())
     }
 

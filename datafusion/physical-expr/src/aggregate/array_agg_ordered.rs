@@ -214,12 +214,12 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
             partition_ordering_values.push(self.ordering_values.clone());
 
             let array_agg_res =
-                ScalarValue::process_array_to_scalar_vec(array_agg_values)?;
+                ScalarValue::convert_array_to_scalar_vec(array_agg_values)?;
             for v in array_agg_res.into_iter() {
                 partition_values.push(v);
             }
 
-            let orderings = ScalarValue::process_array_to_scalar_vec(agg_orderings)?;
+            let orderings = ScalarValue::convert_array_to_scalar_vec(agg_orderings)?;
             // Ordering requirement expression values for each entry in the ARRAY_AGG list
             let other_ordering_values = self.convert_array_agg_to_orderings(orderings)?;
             for v in other_ordering_values.into_iter() {

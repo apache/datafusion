@@ -2188,29 +2188,27 @@ impl ScalarValue {
     }
 
     /// Retrieve ScalarValue for each row in `array`
-    pub fn process_array_to_scalar_vec(array: &dyn Array) -> Result<Vec<Vec<Self>>> {
-        let mut scalars = vec![];
+    pub fn convert_array_to_scalar_vec(array: &dyn Array) -> Result<Vec<Vec<Self>>> {
+        let mut scalars = Vec::with_capacity(array.len()); 
 
         for index in 0..array.len() {
-            match array.data_type() {
+            let scalar_values = match array.data_type() {
                 DataType::List(_) => {
                     let list_array = as_list_array(array);
                     match list_array.is_null(index) {
-                        true => scalars.push(vec![]),
+                        true => Vec::new(),
                         false => {
                             let nested_array = list_array.value(index);
-                            let values =
-                                ScalarValue::process_array_to_scalar_vec(&nested_array)?;
-                            let values = values.into_iter().flatten().collect::<Vec<_>>();
-                            scalars.push(values);
+                            ScalarValue::convert_array_to_scalar_vec(&nested_array)?.into_iter().flatten().collect()
                         }
                     }
                 }
                 _ => {
                     let scalar = ScalarValue::try_from_array(array, index)?;
-                    scalars.push(vec![scalar])
+                    vec![scalar]
                 }
-            }
+            };
+            scalars.push(scalar_values);
         }
         Ok(scalars)
     }
