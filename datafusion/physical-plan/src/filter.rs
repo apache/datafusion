@@ -155,6 +155,14 @@ impl ExecutionPlan for FilterExec {
 
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
         let stats = self.statistics();
+        // Combine the equal predicates with the input equivalence properties
+        let mut filter_oeq = self.input.ordering_equivalence_properties();
+        let (equal_pairs, _ne_pairs) = collect_columns_from_predicate(&self.predicate);
+        for (lhs, rhs) in equal_pairs {
+            let lhs_expr = Arc::new(lhs.clone()) as _;
+            let rhs_expr = Arc::new(rhs.clone()) as _;
+            filter_oeq.add_equal_conditions((&lhs_expr, &rhs_expr))
+        }
         // Add the columns that have only one value (singleton) after filtering to constants.
         if let Some(col_stats) = stats.column_statistics {
             let constants = collect_columns(self.predicate())
@@ -162,12 +170,13 @@ impl ExecutionPlan for FilterExec {
                 .filter(|column| col_stats[column.index()].is_singleton())
                 .map(|column| Arc::new(column) as Arc<dyn PhysicalExpr>)
                 .collect::<Vec<_>>();
-            let filter_oeq = self.input.ordering_equivalence_properties();
-            let res = filter_oeq.with_constants(constants);
-            println!("filter res:{:?}", res);
-            res
+            // // let filter_oeq = self.input.ordering_equivalence_properties();
+            // let res = filter_oeq.with_constants(constants);
+            // println!("filter res:{:?}", res);
+            // res
+            filter_oeq.with_constants(constants)
         } else {
-            self.input.ordering_equivalence_properties()
+            filter_oeq
         }
     }
 

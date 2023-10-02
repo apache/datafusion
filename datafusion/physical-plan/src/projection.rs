@@ -64,10 +64,6 @@ pub struct ProjectionExec {
     source_to_target_mapping: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    /// Expressions' normalized orderings (as given by the output ordering API
-    /// and normalized with respect to equivalence classes of input plan). The
-    /// projected expressions are mapped by their indices to this vector.
-    orderings: Vec<Option<PhysicalSortExpr>>,
 }
 
 impl ProjectionExec {
@@ -140,11 +136,11 @@ impl ProjectionExec {
             };
         }
 
-        let orderings = find_orderings_of_exprs(
-            &expr,
-            input.output_ordering(),
-            input.ordering_equivalence_properties(),
-        )?;
+        // let orderings = find_orderings_of_exprs(
+        //     &expr,
+        //     input.output_ordering(),
+        //     input.ordering_equivalence_properties(),
+        // )?;
 
         // println!("source_to_target_mapping:{:?}", source_to_target_mapping);
         // println!("input.ordering_equivalence_properties():{:?}", input.ordering_equivalence_properties());
@@ -171,7 +167,6 @@ impl ProjectionExec {
             columns_map,
             source_to_target_mapping,
             metrics: ExecutionPlanMetricsSet::new(),
-            orderings,
         })
     }
 
@@ -324,40 +319,6 @@ impl ExecutionPlan for ProjectionExec {
             self.schema.clone(),
         )
     }
-}
-
-/// This function takes the current `output_ordering`, the `orderings` based on projected expressions,
-/// and the `expr` representing the projected expressions themselves. It aims to ensure that the output
-/// ordering is valid and correctly corresponds to the projected columns.
-///
-/// If the leading expression in the `output_ordering` is an [`UnKnownColumn`], it indicates that the column
-/// referenced in the ordering is not found among the projected expressions. In such cases, this function
-/// attempts to create a new output ordering by referring to valid columns from the leftmost side of the
-/// expressions that have an ordering specified.
-fn validate_output_ordering(
-    output_ordering: Option<Vec<PhysicalSortExpr>>,
-    orderings: &[Option<PhysicalSortExpr>],
-    expr: &[(Arc<dyn PhysicalExpr>, String)],
-) -> Option<Vec<PhysicalSortExpr>> {
-    output_ordering.and_then(|ordering| {
-        // If the leading expression is invalid column, change output
-        // ordering of the projection so that it refers to valid columns if
-        // possible.
-        if ordering[0].expr.as_any().is::<UnKnownColumn>() {
-            for (idx, order) in orderings.iter().enumerate() {
-                if let Some(sort_expr) = order {
-                    let (_, col_name) = &expr[idx];
-                    return Some(vec![PhysicalSortExpr {
-                        expr: Arc::new(Column::new(col_name, idx)),
-                        options: sort_expr.options,
-                    }]);
-                }
-            }
-            None
-        } else {
-            Some(ordering)
-        }
-    })
 }
 
 /// If e is a direct column reference, returns the field level

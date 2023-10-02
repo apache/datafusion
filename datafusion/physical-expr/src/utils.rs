@@ -178,11 +178,7 @@ pub fn get_indices_of_matching_exprs(
     targets: &[Arc<dyn PhysicalExpr>],
     items: &[Arc<dyn PhysicalExpr>],
 ) -> Vec<usize> {
-    // let eq_properties = equal_properties();
-    // let normalized_items = eq_properties.normalize_exprs(items);
-    // let normalized_targets = eq_properties.normalize_exprs(targets);
-    // get_indices_of_exprs_strict(normalized_targets, &normalized_items)
-    get_indices_of_exprs_strict(targets, &items)
+    get_indices_of_exprs_strict(targets, items)
 }
 
 /// This function finds the indices of `targets` within `items` using strict

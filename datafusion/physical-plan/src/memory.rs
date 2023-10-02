@@ -33,7 +33,6 @@ use std::task::{Context, Poll};
 use crate::ordering_equivalence_properties_helper;
 use datafusion_common::DataFusionError;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::equivalence::OrderingEquivalentGroup;
 use datafusion_physical_expr::{LexOrdering, OrderingEquivalenceProperties};
 use futures::Stream;
 

@@ -830,13 +830,15 @@ impl ExecutionPlan for SortExec {
     // }
 
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        let mut input_oeq = self.input.ordering_equivalence_properties();
+        let input_oeq = self.input.ordering_equivalence_properties();
         // println!("sort input: {:?}", input_oeq);
         // let mut res = OrderingEquivalenceProperties::new(self.schema());
 
-        let res = input_oeq.with_reorder(self.expr.to_vec());
-        // println!("sort output: {:?}", res);
-        res
+        // let res = input_oeq.with_reorder(self.expr.to_vec());
+        // // println!("sort output: {:?}", res);
+        // res
+
+        input_oeq.with_reorder(self.expr.to_vec())
     }
 
     fn with_new_children(

@@ -310,7 +310,7 @@ impl TreeNode for PlanWithCorrespondingCoalescePartitions {
     }
 }
 
-fn print_plan(plan: &Arc<dyn ExecutionPlan>) -> () {
+fn print_plan(plan: &Arc<dyn ExecutionPlan>) {
     let formatted = crate::physical_plan::displayable(plan.as_ref())
         .indent(true)
         .to_string();
@@ -3692,5 +3692,4 @@ mod tmp_tests {
         print_batches(&actual)?;
         Ok(())
     }
-
 }

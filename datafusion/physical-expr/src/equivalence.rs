@@ -16,14 +16,14 @@
 // under the License.
 
 use crate::expressions::{CastExpr, Column};
-use crate::utils::{collect_columns, get_indices_of_matching_exprs};
+use crate::utils::get_indices_of_matching_exprs;
 use crate::{
     physical_exprs_contains, LexOrdering, LexOrderingRef, LexOrderingReq, PhysicalExpr,
     PhysicalSortExpr, PhysicalSortRequirement,
 };
 
 use arrow::datatypes::SchemaRef;
-use arrow_schema::{Fields, SortOptions};
+use arrow_schema::SortOptions;
 
 use crate::physical_expr::{deduplicate_physical_exprs, have_common_entries};
 use crate::sort_properties::{ExprOrdering, SortProperties};
@@ -31,7 +31,6 @@ use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::utils::longest_consecutive_prefix;
 use datafusion_common::{JoinType, Result};
 use itertools::izip;
-use petgraph::visit::Walker;
 use std::hash::Hash;
 use std::ops::Range;
 use std::sync::Arc;
@@ -63,6 +62,7 @@ impl EquivalentGroups {
         self.inner.iter()
     }
 
+    #[allow(dead_code)]
     fn into_iter(self) -> impl Iterator<Item = Vec<Arc<dyn PhysicalExpr>>> {
         self.inner.into_iter()
     }
@@ -133,7 +133,7 @@ impl EquivalentGroups {
                 // Delete groups in the `out_groups` that have common entry with `group`.
                 // Append deleted groups to the `bridged_group`
                 out_groups.retain(|distinct_group| {
-                    let have_common = have_common_entries(distinct_group, &group);
+                    let have_common = have_common_entries(distinct_group, group);
                     if have_common {
                         bridged_group.extend(distinct_group.clone());
                     }
@@ -147,8 +147,7 @@ impl EquivalentGroups {
         self.inner = out_groups;
     }
 
-    // TODO: Add a method for bridging equalities
-
+    #[allow(dead_code)]
     fn len(&self) -> usize {
         self.inner.len()
     }
@@ -351,7 +350,7 @@ impl OrderingEquivalentGroup {
     /// Adds new ordering into the ordering equivalent group.
     pub fn add_new_orderings(&mut self, orderings: &[LexOrdering]) {
         for ordering in orderings.iter() {
-            if !self.contains(&ordering) {
+            if !self.contains(ordering) {
                 self.push(ordering.clone());
             }
         }
@@ -364,7 +363,7 @@ impl OrderingEquivalentGroup {
         for ordering in self.iter() {
             let mut is_inside = false;
             for item in &mut res {
-                if let Some(finer) = get_finer(item, &ordering) {
+                if let Some(finer) = get_finer(item, ordering) {
                     *item = finer;
                     is_inside = true;
                 }
@@ -388,6 +387,7 @@ impl OrderingEquivalentGroup {
         self.inner.into_iter()
     }
 
+    #[allow(dead_code)]
     fn len(&self) -> usize {
         self.inner.len()
     }
@@ -402,11 +402,7 @@ impl OrderingEquivalentGroup {
     }
 
     pub fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
-        if let Some(first) = self.inner.first() {
-            Some(first.clone())
-        } else {
-            None
-        }
+        self.inner.first().cloned()
     }
 
     // Append other as postfix to existing ordering equivalences
@@ -508,7 +504,7 @@ impl OrderingEquivalenceProperties {
             .inner
             .iter()
             .map(|ordering| {
-                let ordering = self.eq_groups.normalize_sort_exprs(&ordering);
+                let ordering = self.eq_groups.normalize_sort_exprs(ordering);
                 let req = prune_sort_reqs_with_constants(
                     &PhysicalSortRequirement::from_sort_exprs(&ordering),
                     &self.constants,
@@ -627,9 +623,10 @@ impl OrderingEquivalenceProperties {
         }
         normalized_sort_reqs = simplify_lex_req(normalized_sort_reqs, &self.oeq_group);
 
-        let res = collapse_lex_req(normalized_sort_reqs);
-        // println!("normalzied sort_reqs:{:?}", res);
-        res
+        // let res = collapse_lex_req(normalized_sort_reqs);
+        // // println!("normalzied sort_reqs:{:?}", res);
+        // res
+        collapse_lex_req(normalized_sort_reqs)
     }
 
     /// Checks whether `leading_ordering` is contained in any of the ordering
@@ -756,7 +753,7 @@ impl OrderingEquivalenceProperties {
         for (source, target) in source_to_target_mapping {
             let initial_expr = ExprOrdering::new(source.clone());
             let transformed = initial_expr
-                .transform_up(&|expr| update_ordering(expr, &self))
+                .transform_up(&|expr| update_ordering(expr, self))
                 .unwrap();
             if let Some(SortProperties::Ordered(sort_options)) = transformed.state {
                 let sort_expr = PhysicalSortExpr {
@@ -876,12 +873,18 @@ impl OrderingEquivalenceProperties {
         if required_normalized.len() > provided_normalized.len() {
             return false;
         }
-        let res = required_normalized
+
+        // let res = required_normalized
+        //     .into_iter()
+        //     .zip(provided_normalized)
+        //     .all(|(req, given)| given == req);
+        // // println!("res:{:?}", res);
+        // res
+
+        required_normalized
             .into_iter()
             .zip(provided_normalized)
-            .all(|(req, given)| given == req);
-        // println!("res:{:?}", res);
-        res
+            .all(|(req, given)| given == req)
     }
 
     /// Find the finer requirement among `req1` and `req2`
@@ -1012,53 +1015,6 @@ impl OrderingEquivalenceProperties {
 }
 
 type ProjectionMapping = Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>;
-
-/// Update each expression in `ordering` with alias expressions. Assume
-/// `ordering` is `a ASC, b ASC` and `c` is alias of `b`. Then, the result
-/// will be `a ASC, c ASC`.
-fn update_with_alias(
-    mut ordering: LexOrdering,
-    oeq_alias_map: &[(Column, Column)],
-) -> LexOrdering {
-    for (source_col, target_col) in oeq_alias_map {
-        let source_col: Arc<dyn PhysicalExpr> = Arc::new(source_col.clone());
-        // Replace invalidated columns with its alias in the ordering expression.
-        let target_col: Arc<dyn PhysicalExpr> = Arc::new(target_col.clone());
-        for item in ordering.iter_mut() {
-            if item.expr.eq(&source_col) {
-                // Change the corresponding entry with alias expression
-                item.expr = target_col.clone();
-            }
-        }
-    }
-    ordering
-}
-
-fn update_with_aliases(
-    in_data: &OrderingEquivalentGroup,
-    oeq_alias_map: &[(Column, Column)],
-    fields: &Fields,
-) -> OrderingEquivalentGroup {
-    let new_data = in_data
-        .iter()
-        .filter_map(|ordering| {
-            let new_ordering = update_with_alias(ordering.clone(), oeq_alias_map);
-            let is_invalid = new_ordering.iter().any(|sort_expr| {
-                // If any one of the columns, used in Expression is invalid after projection,
-                // remove expression from ordering equivalences
-                collect_columns(&sort_expr.expr)
-                    .iter()
-                    .any(|col| is_column_invalid_in_new_schema(col, fields))
-            });
-            if is_invalid {
-                None
-            } else {
-                Some(new_ordering)
-            }
-        })
-        .collect();
-    OrderingEquivalentGroup::new(new_data)
-}
 
 /// Adds `offset` value to the index of each expression inside `self.head` and `self.others`.
 pub fn add_offset(
@@ -1279,12 +1235,6 @@ impl OrderingEquivalenceBuilder {
     }
 }
 
-/// Checks whether column is still valid after projection.
-fn is_column_invalid_in_new_schema(column: &Column, fields: &Fields) -> bool {
-    let idx = column.index();
-    idx >= fields.len() || fields[idx].name() != column.name()
-}
-
 // /// This function applies the given projection to the given ordering
 // /// equivalence properties to compute the resulting (projected) ordering
 // /// equivalence properties; e.g.
@@ -1372,10 +1322,10 @@ pub fn ordering_equivalence_properties_helper(
     let mut oep = OrderingEquivalenceProperties::new(schema);
     if eq_orderings.is_empty() {
         // Return an empty OrderingEquivalenceProperties:
-        return oep;
+        oep
     } else {
         oep.extend(OrderingEquivalentGroup::new(eq_orderings.to_vec()));
-        return oep;
+        oep
     }
     // oep.extend(Some(OrderingEquivalentClass::new()))
     // let first_ordering = if let Some(first) = eq_orderings.first() {
@@ -1391,35 +1341,6 @@ pub fn ordering_equivalence_properties_helper(
     //     }
     // }
     // oep
-}
-
-/// This function constructs a duplicate-free vector by filtering out duplicate
-/// entries inside the given vector `input`.
-fn collapse_vec<T: PartialEq>(input: Vec<T>) -> Vec<T> {
-    let mut output = vec![];
-    for item in input {
-        if !output.contains(&item) {
-            output.push(item);
-        }
-    }
-    output
-}
-
-/// This function constructs a duplicate-free `LexOrderingReq` by filtering out duplicate
-/// entries that have same physical expression inside the given vector `input`.
-/// `vec![a Some(Asc), a Some(Desc)]` is collapsed to the `vec![a Some(Asc)]`. Since
-/// when same expression is already seen before, following expressions are redundant.
-fn collapse_lex_sort_exprs(input: LexOrdering) -> LexOrdering {
-    let mut output = vec![];
-    for item in input {
-        if output
-            .iter()
-            .all(|elem: &PhysicalSortExpr| !elem.expr.eq(&item.expr))
-        {
-            output.push(item);
-        }
-    }
-    output
 }
 
 /// This function constructs a duplicate-free `LexOrderingReq` by filtering out duplicate
@@ -1700,10 +1621,12 @@ mod tests {
         Ok(schema)
     }
 
+    /// Construct a schema with following properties
+    /// Schema satisfied following orderings:
+    /// [a ASC], [d ASC, b ASC], [e DESC, f ASC, g ASC]
+    /// and
+    /// Column [a=c] (e.g they are aliases).
     fn create_test_params() -> Result<(SchemaRef, OrderingEquivalenceProperties)> {
-        // Assume schema satisfies ordering a ASC NULLS LAST
-        // and d ASC NULLS LAST, b ASC NULLS LAST and e DESC NULLS FIRST, f ASC NULLS LAST, g ASC NULLS LAST
-        // Assume that column a and c are aliases.
         let col_a = &Column::new("a", 0);
         let col_b = &Column::new("b", 1);
         let col_c = &Column::new("c", 2);
@@ -1740,12 +1663,6 @@ mod tests {
                     options: option1,
                 },
             ],
-        ]);
-        ordering_eq_properties.add_new_orderings(&[
-            vec![PhysicalSortExpr {
-                expr: Arc::new(col_a.clone()),
-                options: option1,
-            }],
             vec![
                 PhysicalSortExpr {
                     expr: Arc::new(col_e.clone()),
@@ -1885,14 +1802,6 @@ mod tests {
     }
 
     #[test]
-    fn test_collapse_vec() -> Result<()> {
-        assert_eq!(collapse_vec(vec![1, 2, 3]), vec![1, 2, 3]);
-        assert_eq!(collapse_vec(vec![1, 2, 3, 2, 3]), vec![1, 2, 3]);
-        assert_eq!(collapse_vec(vec![3, 1, 2, 3, 2, 3]), vec![3, 1, 2]);
-        Ok(())
-    }
-
-    #[test]
     fn test_get_compatible_ranges() -> Result<()> {
         let col_a = &Column::new("a", 0);
         let col_b = &Column::new("b", 1);
@@ -1980,17 +1889,6 @@ mod tests {
             nulls_first: true,
         };
         // The schema is ordered by a ASC NULLS LAST, b ASC NULLS LAST
-        let provided = vec![
-            PhysicalSortExpr {
-                expr: Arc::new(col_a.clone()),
-                options: option1,
-            },
-            PhysicalSortExpr {
-                expr: Arc::new(col_b.clone()),
-                options: option1,
-            },
-        ];
-        let provided = Some(&provided[..]);
         let (_test_schema, ordering_eq_properties) = create_test_params()?;
         // First element in the tuple stores vector of requirement, second element is the expected return value for ordering_satisfy function
         let requirements = vec![

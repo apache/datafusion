@@ -27,7 +27,6 @@ use datafusion_common::utils::DataPtr;
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
-use hashbrown::HashSet;
 use itertools::izip;
 use std::any::Any;
 use std::fmt::{Debug, Display};
@@ -218,6 +217,7 @@ pub fn have_common_entries(
 }
 
 /// Check whether physical exprs vectors are equal.
+#[allow(dead_code)]
 pub fn physical_exprs_equal(
     lhs: &[Arc<dyn PhysicalExpr>],
     rhs: &[Arc<dyn PhysicalExpr>],
@@ -233,7 +233,6 @@ mod tests {
     };
     use crate::{physical_exprs_contains, PhysicalExpr};
     use datafusion_common::{Result, ScalarValue};
-    use itertools::izip;
     use std::sync::Arc;
 
     #[test]
@@ -282,11 +281,8 @@ mod tests {
             Arc::new(Literal::new(ScalarValue::Int32(Some(4)))) as Arc<dyn PhysicalExpr>;
         let lit2 =
             Arc::new(Literal::new(ScalarValue::Int32(Some(2)))) as Arc<dyn PhysicalExpr>;
-        let lit1 =
-            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))) as Arc<dyn PhysicalExpr>;
         let col_a_expr = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
         let col_b_expr = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
-        let col_c_expr = Arc::new(Column::new("c", 2)) as Arc<dyn PhysicalExpr>;
 
         // lit(true), lit(false), lit(4), lit(2), Col(a), Col(b)
         let physical_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
@@ -321,13 +317,10 @@ mod tests {
             as Arc<dyn PhysicalExpr>;
         let lit_false = Arc::new(Literal::new(ScalarValue::Boolean(Some(false))))
             as Arc<dyn PhysicalExpr>;
-        let lit4 =
-            Arc::new(Literal::new(ScalarValue::Int32(Some(4)))) as Arc<dyn PhysicalExpr>;
         let lit2 =
             Arc::new(Literal::new(ScalarValue::Int32(Some(2)))) as Arc<dyn PhysicalExpr>;
         let lit1 =
             Arc::new(Literal::new(ScalarValue::Int32(Some(1)))) as Arc<dyn PhysicalExpr>;
-        let col_a_expr = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
         let col_b_expr = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
         let col_c_expr = Arc::new(Column::new("c", 2)) as Arc<dyn PhysicalExpr>;
 

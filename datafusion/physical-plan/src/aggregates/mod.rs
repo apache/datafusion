@@ -464,7 +464,8 @@ fn get_finest_requirement<F2: Fn() -> OrderingEquivalenceProperties>(
     Ok(finest_req)
 }
 
-fn print_plan(plan: &Arc<dyn ExecutionPlan>) -> () {
+#[allow(dead_code)]
+fn print_plan(plan: &Arc<dyn ExecutionPlan>) {
     let formatted = displayable(plan.as_ref()).indent(true).to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
     println!("{:#?}", actual);
@@ -2308,8 +2309,8 @@ mod tests {
         let col_b = Column::new("b", 1);
         let col_c = Column::new("c", 2);
         let col_d = Column::new("d", 3);
-        let col_a_expr = (Arc::new(col_a.clone()) as Arc<dyn PhysicalExpr>);
-        let col_b_expr = (Arc::new(col_b.clone()) as Arc<dyn PhysicalExpr>);
+        let col_a_expr = Arc::new(col_a.clone()) as Arc<dyn PhysicalExpr>;
+        let col_b_expr = Arc::new(col_b.clone()) as Arc<dyn PhysicalExpr>;
         let mut ordering_eq_properties = OrderingEquivalenceProperties::new(test_schema);
         // Columns a and b are equal.
         ordering_eq_properties.add_equal_conditions((&col_a_expr, &col_b_expr));
