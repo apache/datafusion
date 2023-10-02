@@ -106,6 +106,7 @@ Here are some active projects using DataFusion:
 - [GlareDB](https://github.com/GlareDB/glaredb) Fast SQL database for querying and analyzing distributed data.
 - [InfluxDB IOx](https://github.com/influxdata/influxdb_iox) Time Series Database
 - [Kamu](https://github.com/kamu-data/kamu-cli/) Planet-scale streaming data pipeline
+- [Lance](https://github.com/lancedb/lance) Modern columnar data format for ML
 - [Parseable](https://github.com/parseablehq/parseable) Log storage and observability platform
 - [qv](https://github.com/timvw/qv) Quickly view your data
 - [bdt](https://github.com/andygrove/bdt) Boring Data Tool
