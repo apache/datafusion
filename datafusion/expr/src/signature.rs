@@ -69,7 +69,10 @@ pub enum Volatility {
 /// # use datafusion_expr::{TIMEZONE_WILDCARD, TypeSignature};
 /// let type_signature = TypeSignature::Exact(vec![
 ///   // A nanosecond precision timestamp with ANY timezone
-///   DataType::Timestamp(TimeUnit::Nanosecond, TIMEZONE_WILDCARD),
+///   // matches  Timestamp(Nanosecond, Some("+0:00"))
+///   // matches  Timestamp(Nanosecond, Some("+5:00"))
+///   // does not match  Timestamp(Nanosecond, None)
+///   DataType::Timestamp(TimeUnit::Nanosecond, Some(TIMEZONE_WILDCARD.into())),
 /// ]);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
