@@ -23,12 +23,8 @@ use arrow::{
 };
 use std::{cmp::Ordering, collections::BinaryHeap, sync::Arc};
 
-use arrow_array::{
-    builder::StringBuilder, cast::AsArray, downcast_dictionary_array, Array, ArrayRef,
-    DictionaryArray, Int16Array, Int32Array, Int64Array, Int8Array, RecordBatch,
-    StringArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
-};
-use arrow_schema::{DataType, SchemaRef};
+use arrow_array::{Array, ArrayRef, RecordBatch};
+use arrow_schema::SchemaRef;
 use datafusion_common::Result;
 use datafusion_execution::{
     memory_pool::{MemoryConsumer, MemoryReservation},
@@ -55,7 +51,7 @@ use super::metrics::{BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuil
 ///
 /// The simple plan would be:
 ///
-/// ```
+/// ```sql
 /// > explain SELECT customer_id, revenue FROM sales ORDER BY revenue DESC limit 3;
 /// +--------------+----------------------------------------+
 /// | plan_type    | plan                                   |
