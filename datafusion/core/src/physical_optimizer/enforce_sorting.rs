@@ -3157,4 +3157,113 @@ mod tmp_tests {
         print_batches(&actual)?;
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_query16() -> Result<()> {
+        let config = SessionConfig::new().with_target_partitions(1);
+        let ctx = SessionContext::with_config(config);
+
+        ctx.sql(
+            "CREATE EXTERNAL TABLE multiple_ordered_table (
+              a0 INTEGER,
+              a INTEGER,
+              b INTEGER,
+              c INTEGER,
+              d INTEGER
+            )
+            STORED AS CSV
+            WITH HEADER ROW
+            WITH ORDER (a ASC, b ASC)
+            WITH ORDER (c ASC)
+            LOCATION '../core/tests/data/window_2.csv'",
+        )
+            .await?;
+
+        let sql = "SELECT LAST_VALUE(l.d ORDER BY l.a) AS amount_usd
+                FROM multiple_ordered_table AS l
+                INNER JOIN (
+                    SELECT *, ROW_NUMBER() OVER (ORDER BY r.a) as row_n FROM multiple_ordered_table AS r
+                )
+                ON l.d = r.d AND
+                      l.a >= r.a - 10
+                GROUP BY row_n
+                ORDER BY row_n";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        print_plan(&physical_plan)?;
+
+        let expected = vec![
+            "ProjectionExec: expr=[amount_usd@0 as amount_usd]",
+            "  ProjectionExec: expr=[LAST_VALUE(l.d) ORDER BY [l.a ASC NULLS LAST]@1 as amount_usd, row_n@0 as row_n]",
+            "    AggregateExec: mode=Single, gby=[row_n@2 as row_n], aggr=[LAST_VALUE(l.d)], ordering_mode=FullyOrdered",
+            "      ProjectionExec: expr=[a@0 as a, d@1 as d, row_n@4 as row_n]",
+            "        CoalesceBatchesExec: target_batch_size=8192",
+            "          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(d@1, d@1)], filter=CAST(a@0 AS Int64) >= CAST(a@1 AS Int64) - 10",
+            "            CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+            "            ProjectionExec: expr=[a@0 as a, d@1 as d, ROW_NUMBER() ORDER BY [r.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as row_n]",
+            "              BoundedWindowAggExec: wdw=[ROW_NUMBER() ORDER BY [r.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: \"ROW_NUMBER() ORDER BY [r.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: CurrentRow }], mode=[Sorted]",
+            "                CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+        ];
+        // Get string representation of the plan
+        let actual = get_plan_string(&physical_plan);
+        assert_eq!(
+            expected, actual,
+            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        let actual = collect(physical_plan, ctx.task_ctx()).await?;
+        print_batches(&actual)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_query17() -> Result<()> {
+        let config = SessionConfig::new().with_target_partitions(1);
+        let ctx = SessionContext::with_config(config);
+
+        ctx.sql(
+            "CREATE EXTERNAL TABLE multiple_ordered_table (
+              a0 INTEGER,
+              a INTEGER,
+              b INTEGER,
+              c INTEGER,
+              d INTEGER
+            )
+            STORED AS CSV
+            WITH HEADER ROW
+            WITH ORDER (a ASC, b ASC)
+            WITH ORDER (c ASC)
+            LOCATION '../core/tests/data/window_2.csv'",
+        )
+            .await?;
+
+        let sql = "EXPLAIN VERBOSE SELECT MIN(d) OVER(ORDER BY c ASC) as min1,
+                  MAX(d) OVER(PARTITION BY b, a ORDER BY c ASC) as max1
+                FROM multiple_ordered_table";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        print_plan(&physical_plan)?;
+
+        let expected = vec![
+            "ProjectionExec: expr=[MIN(multiple_ordered_table.d) ORDER BY [multiple_ordered_table.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as min1, MAX(multiple_ordered_table.d) PARTITION BY [multiple_ordered_table.b, multiple_ordered_table.a] ORDER BY [multiple_ordered_table.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as max1]",
+            "  BoundedWindowAggExec: wdw=[MIN(multiple_ordered_table.d) ORDER BY [multiple_ordered_table.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: \"MIN(multiple_ordered_table.d) ORDER BY [multiple_ordered_table.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: CurrentRow }], mode=[Sorted]",
+            "    ProjectionExec: expr=[c@2 as c, d@3 as d, MAX(multiple_ordered_table.d) PARTITION BY [multiple_ordered_table.b, multiple_ordered_table.a] ORDER BY [multiple_ordered_table.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@4 as MAX(multiple_ordered_table.d) PARTITION BY [multiple_ordered_table.b, multiple_ordered_table.a] ORDER BY [multiple_ordered_table.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]",
+            "      BoundedWindowAggExec: wdw=[MAX(multiple_ordered_table.d) PARTITION BY [multiple_ordered_table.b, multiple_ordered_table.a] ORDER BY [multiple_ordered_table.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: \"MAX(multiple_ordered_table.d) PARTITION BY [multiple_ordered_table.b, multiple_ordered_table.a] ORDER BY [multiple_ordered_table.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: CurrentRow }], mode=[Sorted]",
+            "        CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c, d], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], has_header=true",
+        ];
+        // Get string representation of the plan
+        // let actual = get_plan_string(&physical_plan);
+        // assert_eq!(
+        //     expected, actual,
+        //     "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        // );
+
+        let actual = collect(physical_plan, ctx.task_ctx()).await?;
+        print_batches(&actual)?;
+        Ok(())
+    }
 }
