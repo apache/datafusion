@@ -1074,7 +1074,7 @@ mod tests {
             assert_eq!(result.len(), 1);
 
             let metrics = sort_exec.metrics().unwrap();
-            let did_it_spill = metrics.spill_count().unwrap() > 0;
+            let did_it_spill = metrics.spill_count().unwrap_or(0) > 0;
             assert_eq!(did_it_spill, expect_spillage, "with fetch: {fetch:?}");
         }
         Ok(())
