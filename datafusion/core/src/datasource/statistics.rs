@@ -20,6 +20,7 @@ use crate::error::Result;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
 use crate::physical_plan::{Accumulator, ColumnStatistics, Statistics};
 use datafusion_common::stats::Sharpness;
+use datafusion_common::ScalarValue;
 use futures::Stream;
 use futures::StreamExt;
 
@@ -34,10 +35,8 @@ pub async fn get_statistics_with_limit(
     limit: Option<usize>,
 ) -> Result<(Vec<PartitionedFile>, Statistics)> {
     let mut result_files = vec![];
-
     let mut null_counts = vec![Sharpness::Exact(0_usize); file_schema.fields().len()];
-    let mut has_statistics = false;
-    let (mut max_values, mut min_values) = create_max_min_accs(&file_schema);
+    let (mut max_values, mut min_values) = create_max_min_vecs(&file_schema);
 
     // The number of rows and the total byte size can be calculated as long as
     // at least one file has them. If none of the files provide them, then they
@@ -62,39 +61,60 @@ pub async fn get_statistics_with_limit(
             (lhs, rhs) => lhs.add(&rhs),
         };
 
-        if !file_stats.column_statistics.is_empty() {
-            has_statistics = true;
-            for (i, cs) in file_stats.column_statistics.iter().enumerate() {
-                null_counts[i] = if cs.null_count == Sharpness::Absent {
-                    // Downcast to inexact
-                    null_counts[i].clone().to_inexact()
-                } else {
-                    null_counts[i].add(&cs.null_count)
-                };
+        for (i, cs) in file_stats.column_statistics.iter().enumerate() {
+            null_counts[i] = if cs.null_count == Sharpness::Absent {
+                // Downcast to inexact
+                null_counts[i].clone().to_inexact()
+            } else {
+                null_counts[i].add(&cs.null_count)
+            };
 
-                if let Some(max_value) = &mut max_values[i] {
-                    if let Some(file_max) = cs.max_value.get_value() {
-                        match max_value.update_batch(&[file_max.to_array()]) {
-                            Ok(_) => {}
-                            Err(_) => {
-                                max_values[i] = None;
-                            }
+            if let Sharpness::Exact(max) = &cs.max_value {
+                match max_values[i].clone() {
+                    Sharpness::Exact(val) => {
+                        if val < *max {
+                            max_values[i] = Sharpness::Exact(max.clone())
                         }
-                    } else {
-                        max_values[i] = None;
+                    }
+                    Sharpness::Inexact(val) => {
+                        max_values[i] = max_values[i].clone().to_inexact();
+                        if val < *max {
+                            max_values[i] = Sharpness::Inexact(max.clone())
+                        }
+                    }
+                    Sharpness::Absent => {
+                        max_values[i] = max_values[i].clone().to_inexact()
                     }
                 }
+            } else if let Sharpness::Inexact(max) = &cs.max_value {
+                if let Some(val) = max_values[i].get_value() {
+                    if val < *max {
+                        max_values[i] = Sharpness::Inexact(max.clone())
+                    }
+                }
+            }
 
-                if let Some(min_value) = &mut min_values[i] {
-                    if let Some(file_min) = cs.min_value.get_value() {
-                        match min_value.update_batch(&[file_min.to_array()]) {
-                            Ok(_) => {}
-                            Err(_) => {
-                                min_values[i] = None;
-                            }
+            if let Sharpness::Exact(min) = &cs.min_value {
+                match min_values[i].clone() {
+                    Sharpness::Exact(val) => {
+                        if val > *min {
+                            min_values[i] = Sharpness::Exact(min.clone())
                         }
-                    } else {
-                        min_values[i] = None;
+                    }
+                    Sharpness::Inexact(val) => {
+                        min_values[i] = min_values[i].clone().to_inexact();
+                        if val > *min {
+                            min_values[i] = Sharpness::Inexact(min.clone())
+                        }
+                    }
+                    Sharpness::Absent => {
+                        min_values[i] = min_values[i].clone().to_inexact()
+                    }
+                }
+            } else if let Sharpness::Inexact(min) = &cs.min_value {
+                if let Some(val) = min_values[i].get_value() {
+                    if val > *min {
+                        min_values[i] = Sharpness::Inexact(min.clone())
                     }
                 }
             }
@@ -108,11 +128,8 @@ pub async fn get_statistics_with_limit(
         }
     }
 
-    let column_stats = if has_statistics {
-        get_col_stats(&file_schema, null_counts, &mut max_values, &mut min_values)
-    } else {
-        Statistics::new_with_unbounded_columns(&file_schema).column_statistics
-    };
+    let column_stats =
+        get_col_stats_vec(&file_schema, null_counts, &max_values, &min_values);
 
     let statistics = if all_files.next().await.is_some() {
         // if we still have files in the stream, it means that the limit kicked
@@ -135,6 +152,37 @@ pub async fn get_statistics_with_limit(
     Ok((result_files, statistics))
 }
 
+pub(crate) fn create_max_min_vecs(
+    schema: &Schema,
+) -> (Vec<Sharpness<ScalarValue>>, Vec<Sharpness<ScalarValue>>) {
+    (
+        schema
+            .fields()
+            .iter()
+            .map(|field| {
+                let dt = ScalarValue::try_from(field.data_type());
+                if let Ok(dt) = dt {
+                    Sharpness::Exact(dt)
+                } else {
+                    Sharpness::Absent
+                }
+            })
+            .collect::<Vec<_>>(),
+        schema
+            .fields()
+            .iter()
+            .map(|field| {
+                let dt = ScalarValue::try_from(field.data_type());
+                if let Ok(dt) = dt {
+                    Sharpness::Exact(dt)
+                } else {
+                    Sharpness::Absent
+                }
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
 pub(crate) fn create_max_min_accs(
     schema: &Schema,
 ) -> (Vec<Option<MaxAccumulator>>, Vec<Option<MinAccumulator>>) {
@@ -149,6 +197,22 @@ pub(crate) fn create_max_min_accs(
         .map(|field| MinAccumulator::try_new(field.data_type()).ok())
         .collect::<Vec<_>>();
     (max_values, min_values)
+}
+
+pub(crate) fn get_col_stats_vec(
+    schema: &Schema,
+    null_counts: Vec<Sharpness<usize>>,
+    max_values: &[Sharpness<ScalarValue>],
+    min_values: &[Sharpness<ScalarValue>],
+) -> Vec<ColumnStatistics> {
+    (0..schema.fields().len())
+        .map(|i| ColumnStatistics {
+            null_count: null_counts[i].clone(),
+            max_value: max_values[i].clone(),
+            min_value: min_values[i].clone(),
+            distinct_count: Sharpness::Absent,
+        })
+        .collect()
 }
 
 pub(crate) fn get_col_stats(

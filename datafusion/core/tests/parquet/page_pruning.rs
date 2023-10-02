@@ -240,10 +240,11 @@ async fn test_prune(
     expected_row_pages_pruned: Option<usize>,
     expected_results: usize,
 ) {
-    let output = ContextWithParquet::new(case_data_type, Page)
-        .await
-        .query(sql)
-        .await;
+    let output: crate::parquet::TestOutput =
+        ContextWithParquet::new(case_data_type, Page)
+            .await
+            .query(sql)
+            .await;
 
     println!("{}", output.description());
     assert_eq!(output.predicate_evaluation_errors(), expected_errors);

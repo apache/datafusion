@@ -31,6 +31,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::task::{JoinHandle, JoinSet};
 
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
+use crate::datasource::statistics::create_max_min_accs;
 use arrow::datatypes::SchemaRef;
 use arrow::datatypes::{Fields, Schema};
 use async_trait::async_trait;
@@ -61,7 +62,7 @@ use crate::datasource::physical_plan::{
     FileGroupDisplay, FileMeta, FileSinkConfig, ParquetExec, SchemaAdapter,
 };
 
-use crate::datasource::{create_max_min_accs, get_col_stats};
+use crate::datasource::get_col_stats;
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
@@ -555,7 +556,7 @@ async fn fetch_statistics(
         }
     }
 
-    let column_stats = if has_statistics {
+    let column_stats: Vec<datafusion_common::ColumnStatistics> = if has_statistics {
         get_col_stats(&table_schema, null_counts, &mut max_values, &mut min_values)
     } else {
         Statistics::unbounded_column_statistics(&table_schema)

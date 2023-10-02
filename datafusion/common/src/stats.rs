@@ -25,14 +25,14 @@ use std::fmt::{self, Display};
 /// To deal with information whose exactness is not guaranteed, it can be wrapped with [`Sharpness`]
 /// to express its reliability, such as in Statistics.
 #[derive(Clone, PartialEq, Eq, Default)]
-pub enum Sharpness<T: Debug + Clone + PartialEq + Eq + Display + PartialOrd> {
+pub enum Sharpness<T: Debug + Clone + PartialEq + Eq + PartialOrd> {
     Exact(T),
     Inexact(T),
     #[default]
     Absent,
 }
 
-impl<T: Debug + Clone + PartialEq + Eq + Display + PartialOrd> Sharpness<T> {
+impl<T: Debug + Clone + PartialEq + Eq + PartialOrd> Sharpness<T> {
     /// If the information is known somehow, it returns the value. Otherwise, it returns None.
     pub fn get_value(&self) -> Option<T> {
         match self {
@@ -142,9 +142,33 @@ impl Sharpness<usize> {
     }
 }
 
-impl<T: fmt::Debug + Clone + PartialEq + Eq + Display + PartialOrd> Debug
-    for Sharpness<T>
-{
+impl Sharpness<ScalarValue> {
+    /// Calculates the sum of two exact or inexact values in the type of [`ScalarValue`].
+    /// If one of them is a [`Sharpness::Absent`], it returns [`Sharpness::Absent`].
+    pub fn add(&self, other: &Sharpness<ScalarValue>) -> Sharpness<ScalarValue> {
+        match (self, other) {
+            (Sharpness::Exact(a), Sharpness::Exact(b)) => {
+                if let Ok(res) = a.add(b) {
+                    Sharpness::Exact(res)
+                } else {
+                    Sharpness::Absent
+                }
+            }
+            (Sharpness::Inexact(a), Sharpness::Exact(b))
+            | (Sharpness::Exact(a), Sharpness::Inexact(b))
+            | (Sharpness::Inexact(a), Sharpness::Inexact(b)) => {
+                if let Ok(res) = a.add(b) {
+                    Sharpness::Inexact(res)
+                } else {
+                    Sharpness::Absent
+                }
+            }
+            (_, _) => Sharpness::Absent,
+        }
+    }
+}
+
+impl<T: fmt::Debug + Clone + PartialEq + Eq + PartialOrd> Debug for Sharpness<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Sharpness::Exact(inner) => write!(f, "Exact({:?})", inner),
@@ -154,13 +178,11 @@ impl<T: fmt::Debug + Clone + PartialEq + Eq + Display + PartialOrd> Debug
     }
 }
 
-impl<T: fmt::Debug + Clone + PartialEq + Eq + Display + PartialOrd> Display
-    for Sharpness<T>
-{
+impl<T: fmt::Debug + Clone + PartialEq + Eq + PartialOrd> Display for Sharpness<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Sharpness::Exact(inner) => write!(f, "Exact({})", inner),
-            Sharpness::Inexact(inner) => write!(f, "Inexact({})", inner),
+            Sharpness::Exact(inner) => write!(f, "Exact({:?})", inner),
+            Sharpness::Inexact(inner) => write!(f, "Inexact({:?})", inner),
             Sharpness::Absent => write!(f, "Absent"),
         }
     }

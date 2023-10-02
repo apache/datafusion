@@ -42,5 +42,5 @@ pub use self::memory::MemTable;
 pub use self::provider::TableProvider;
 pub use self::view::ViewTable;
 pub use crate::logical_expr::TableType;
+pub(crate) use statistics::get_col_stats;
 pub use statistics::get_statistics_with_limit;
-pub(crate) use statistics::{create_max_min_accs, get_col_stats};
