@@ -2271,27 +2271,20 @@ impl ScalarValue {
 
                 ScalarValue::ListArr(arr)
             }
-            // TODO: Add test for this
+            // TODO: There is no test for FixedSizeList now, add it later
             DataType::FixedSizeList(nested_type, _len) => {
                 let list_array = as_fixed_size_list_array(array)?;
-
-                match list_array.is_null(index) {
+                let arr = match list_array.is_null(index) {
                     true => {
-                        ScalarValue::ListArr(new_null_array(nested_type.data_type(), 0))
+                        new_null_array(nested_type.data_type(), 0)
                     }
                     false => {
                         let nested_array = list_array.value(index);
-                        let scalar_vec = (0..nested_array.len())
-                            .map(|i| ScalarValue::try_from_array(&nested_array, i))
-                            .collect::<Result<Vec<_>>>()?;
-
-                        let arr = ScalarValue::list_to_array(
-                            &scalar_vec,
-                            nested_array.data_type(),
-                        );
-                        ScalarValue::ListArr(arr)
+                        Arc::new(wrap_into_list_array(nested_array))
                     }
-                }
+                };
+
+                ScalarValue::ListArr(arr)
             }
             DataType::Date32 => {
                 typed_cast!(array, index, Date32Array, Date32)
