@@ -1018,6 +1018,7 @@ mod tests {
 
     use arrow::datatypes::{DataType, Schema};
     use arrow::record_batch::RecordBatch;
+    use datafusion_common::stats::Sharpness;
     use datafusion_common::{assert_contains, GetExt, ScalarValue};
     use datafusion_expr::{BinaryExpr, LogicalPlanBuilder, Operator};
     use rstest::*;
