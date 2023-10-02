@@ -2085,8 +2085,7 @@ mod tests {
         config.optimizer.enable_round_robin_repartition = false;
         config.optimizer.repartition_file_scans = false;
         config.optimizer.repartition_file_min_size = 1024;
-        config.optimizer.prefer_exising_sort =
-            bounded_order_preserving_variants;
+        config.optimizer.prefer_exising_sort = bounded_order_preserving_variants;
         ensure_distribution(distribution_context, &config).map(|item| item.into().plan)
     }
 
