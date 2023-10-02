@@ -189,6 +189,11 @@ async fn select_with_limit() -> Result<()> {
 }
 
 #[tokio::test]
+async fn select_without_limit() -> Result<()> {
+    roundtrip_fill_na("SELECT * FROM data OFFSET 10").await
+}
+
+#[tokio::test]
 async fn select_with_limit_offset() -> Result<()> {
     roundtrip("SELECT * FROM data LIMIT 200 OFFSET 10").await
 }

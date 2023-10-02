@@ -121,6 +121,22 @@ impl TableProvider for CustomDataSource {
 
 With this, and the implementation of the omitted methods, we can now use the `CustomDataSource` as a `TableProvider` in DataFusion.
 
+##### Additional `TableProvider` Methods
+
+`scan` has no default implementation, so it needed to be written. There are other methods on the `TableProvider` that have default implementations, but can be overridden if needed to provide additional functionality.
+
+###### `supports_filters_pushdown`
+
+The `supports_filters_pushdown` method can be overridden to indicate which filter expressions support being pushed down to the data source and within that the specificity of the pushdown.
+
+This returns a `Vec` of `TableProviderFilterPushDown` enums where each enum represents a filter that can be pushed down. The `TableProviderFilterPushDown` enum has three variants:
+
+- `TableProviderFilterPushDown::Unsupported` - the filter cannot be pushed down
+- `TableProviderFilterPushDown::Exact` - the filter can be pushed down and the data source can guarantee that the filter will be applied completely to all rows. This is the highest performance option.
+- `TableProviderFilterPushDown::Inexact` - the filter can be pushed down, but the data source cannot guarantee that the filter will be applied to all rows. DataFusion will apply `Inexact` filters again after the scan to ensure correctness.
+
+For filters that can be pushed down, they'll be passed to the `scan` method as the `filters` parameter and they can be made use of there.
+
 ## Using the Custom Table Provider
 
 In order to use the custom table provider, we need to register it with DataFusion. This is done by creating a `TableProvider` and registering it with the `ExecutionContext`.

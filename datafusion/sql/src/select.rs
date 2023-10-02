@@ -42,7 +42,8 @@ use datafusion_expr::{
     Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning,
 };
 use sqlparser::ast::{
-    Distinct, Expr as SQLExpr, ReplaceSelectItem, WildcardAdditionalOptions, WindowType,
+    Distinct, Expr as SQLExpr, GroupByExpr, ReplaceSelectItem, WildcardAdditionalOptions,
+    WindowType,
 };
 use sqlparser::ast::{NamedWindowDefinition, Select, SelectItem, TableWithJoins};
 
@@ -136,29 +137,49 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let aggr_exprs = find_aggregate_exprs(&aggr_expr_haystack);
 
         // All of the group by expressions
-        let group_by_exprs = select
-            .group_by
-            .into_iter()
-            .map(|e| {
-                let group_by_expr =
-                    self.sql_expr_to_logical_expr(e, &combined_schema, planner_context)?;
-                // aliases from the projection can conflict with same-named expressions in the input
-                let mut alias_map = alias_map.clone();
-                for f in plan.schema().fields() {
-                    alias_map.remove(f.name());
-                }
-                let group_by_expr = resolve_aliases_to_exprs(&group_by_expr, &alias_map)?;
-                let group_by_expr =
-                    resolve_positions_to_exprs(&group_by_expr, &select_exprs)
-                        .unwrap_or(group_by_expr);
-                let group_by_expr = normalize_col(group_by_expr, &projected_plan)?;
-                self.validate_schema_satisfies_exprs(
-                    plan.schema(),
-                    &[group_by_expr.clone()],
-                )?;
-                Ok(group_by_expr)
-            })
-            .collect::<Result<Vec<Expr>>>()?;
+        let group_by_exprs = if let GroupByExpr::Expressions(exprs) = select.group_by {
+            exprs
+                .into_iter()
+                .map(|e| {
+                    let group_by_expr = self.sql_expr_to_logical_expr(
+                        e,
+                        &combined_schema,
+                        planner_context,
+                    )?;
+                    // aliases from the projection can conflict with same-named expressions in the input
+                    let mut alias_map = alias_map.clone();
+                    for f in plan.schema().fields() {
+                        alias_map.remove(f.name());
+                    }
+                    let group_by_expr =
+                        resolve_aliases_to_exprs(&group_by_expr, &alias_map)?;
+                    let group_by_expr =
+                        resolve_positions_to_exprs(&group_by_expr, &select_exprs)
+                            .unwrap_or(group_by_expr);
+                    let group_by_expr = normalize_col(group_by_expr, &projected_plan)?;
+                    self.validate_schema_satisfies_exprs(
+                        plan.schema(),
+                        &[group_by_expr.clone()],
+                    )?;
+                    Ok(group_by_expr)
+                })
+                .collect::<Result<Vec<Expr>>>()?
+        } else {
+            // 'group by all' groups wrt. all select expressions except 'AggregateFunction's.
+            // Filter and collect non-aggregate select expressions
+            select_exprs
+                .iter()
+                .filter(|select_expr| match select_expr {
+                    Expr::AggregateFunction(_) | Expr::AggregateUDF(_) => false,
+                    Expr::Alias(Alias { expr, name: _ }) => !matches!(
+                        **expr,
+                        Expr::AggregateFunction(_) | Expr::AggregateUDF(_)
+                    ),
+                    _ => true,
+                })
+                .cloned()
+                .collect()
+        };
 
         // process group by, aggregation or having
         let (plan, mut select_exprs_post_aggr, having_expr_post_aggr) = if !group_by_exprs

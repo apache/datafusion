@@ -24,7 +24,6 @@ use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use crate::hash_utils::HashValue;
 use crate::physical_expr::down_cast_any_ref;
 use crate::utils::expr_list_eq_any_order;
 use crate::PhysicalExpr;
@@ -37,6 +36,7 @@ use arrow::datatypes::*;
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_iterator::BitIndexIterator;
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
+use datafusion_common::hash_utils::HashValue;
 use datafusion_common::{
     cast::{as_boolean_array, as_generic_binary_array, as_string_array},
     internal_err, not_impl_err, DataFusionError, Result, ScalarValue,

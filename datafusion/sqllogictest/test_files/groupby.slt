@@ -1922,6 +1922,63 @@ SELECT DISTINCT + col1 FROM tab2 AS cor0 GROUP BY cor0.col1
 59
 61
 
+# Group By All tests
+statement ok
+CREATE TABLE tab3(col0 INTEGER, col1 INTEGER, col2 INTEGER, col3 INTEGER)
+
+statement ok
+INSERT INTO tab3 VALUES(0,1,12,-1)
+
+statement ok
+INSERT INTO tab3 VALUES(0,2,13,-1)
+
+statement ok
+INSERT INTO tab3 VALUES(0,1,10,-2)
+
+statement ok
+INSERT INTO tab3 VALUES(0,2,15,-2)
+
+statement ok
+INSERT INTO tab3 VALUES(1, NULL, 10, -2)
+
+query IRI rowsort
+SELECT col1, AVG(col2), col0 FROM tab3 GROUP BY ALL
+----
+1 11 0
+2 14 0
+NULL 10 1
+
+query IIR rowsort
+SELECT sub.col1, sub.col0, AVG(sub.col2) AS avg_col2
+FROM (
+  SELECT col1, col0, col2
+  FROM tab3
+  WHERe col3 = -1
+  GROUP BY ALL
+) AS sub
+GROUP BY ALL;
+----
+1 0 12
+2 0 13
+
+query IIR rowsort
+SELECT sub.col1, sub.col0, sub."AVG(tab3.col2)" AS avg_col2
+FROM (
+  SELECT col1, AVG(col2), col0 FROM tab3 GROUP BY ALL
+) AS sub
+GROUP BY ALL;
+----
+1 0 11
+2 0 14
+NULL 1 10
+
+query IIII rowsort
+SELECT col0, col1, COUNT(col2), SUM(col3) FROM tab3 GROUP BY ALL
+----
+0 1 2 -3
+0 2 2 -3
+1 NULL 1 -2
+
 # query below should work in multi partition, successfully.
 query II
 SELECT l.col0, LAST_VALUE(r.col1 ORDER BY r.col0) as last_col1
@@ -1957,9 +2014,9 @@ Sort: l.col0 ASC NULLS LAST
 ----------TableScan: tab0 projection=[col0, col1]
 physical_plan
 SortPreservingMergeExec: [col0@0 ASC NULLS LAST]
---ProjectionExec: expr=[col0@0 as col0, LAST_VALUE(r.col1) ORDER BY [r.col0 ASC NULLS LAST]@3 as last_col1]
-----AggregateExec: mode=FinalPartitioned, gby=[col0@0 as col0, col1@1 as col1, col2@2 as col2], aggr=[LAST_VALUE(r.col1)], ordering_mode=PartiallyOrdered
-------SortExec: expr=[col0@0 ASC NULLS LAST]
+--SortExec: expr=[col0@0 ASC NULLS LAST]
+----ProjectionExec: expr=[col0@0 as col0, LAST_VALUE(r.col1) ORDER BY [r.col0 ASC NULLS LAST]@3 as last_col1]
+------AggregateExec: mode=FinalPartitioned, gby=[col0@0 as col0, col1@1 as col1, col2@2 as col2], aggr=[LAST_VALUE(r.col1)]
 --------CoalesceBatchesExec: target_batch_size=8192
 ----------RepartitionExec: partitioning=Hash([col0@0, col1@1, col2@2], 4), input_partitions=4
 ------------AggregateExec: mode=Partial, gby=[col0@0 as col0, col1@1 as col1, col2@2 as col2], aggr=[LAST_VALUE(r.col1)], ordering_mode=PartiallyOrdered
@@ -3249,6 +3306,13 @@ SELECT l.sn, l.amount, SUM(l.amount)
 ORDER BY l.sn
 ----
 0 30 30
+
+# Should support grouping by list column
+query ?I
+SELECT column1, COUNT(*) as column2 FROM (VALUES (['a', 'b'], 1), (['c', 'd', 'e'], 2), (['a', 'b'], 3)) as values0 GROUP BY column1 ORDER BY column2;
+----
+[c, d, e] 1
+[a, b] 2
 
 
 # primary key should be aware from which columns it is associated

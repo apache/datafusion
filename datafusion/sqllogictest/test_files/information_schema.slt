@@ -150,12 +150,13 @@ datafusion.execution.aggregate.scalar_update_factor 10
 datafusion.execution.batch_size 8192
 datafusion.execution.coalesce_batches true
 datafusion.execution.collect_statistics false
+datafusion.execution.meta_fetch_concurrency 32
 datafusion.execution.parquet.allow_single_file_parallelism false
 datafusion.execution.parquet.bloom_filter_enabled false
 datafusion.execution.parquet.bloom_filter_fpp NULL
 datafusion.execution.parquet.bloom_filter_ndv NULL
 datafusion.execution.parquet.column_index_truncate_length NULL
-datafusion.execution.parquet.compression NULL
+datafusion.execution.parquet.compression zstd(3)
 datafusion.execution.parquet.created_by datafusion
 datafusion.execution.parquet.data_page_row_count_limit 18446744073709551615
 datafusion.execution.parquet.data_pagesize_limit 1048576

@@ -23,8 +23,8 @@ use self::metrics::MetricsSet;
 use self::{
     coalesce_partitions::CoalescePartitionsExec, display::DisplayableExecutionPlan,
 };
-use datafusion_common::Result;
 pub use datafusion_common::{internal_err, ColumnStatistics, Statistics};
+use datafusion_common::{plan_err, Result};
 use datafusion_physical_expr::PhysicalSortExpr;
 pub use visitor::{accept, visit_execution_plan, ExecutionPlanVisitor};
 
@@ -74,7 +74,11 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// If the plan does not support pipelining, but its input(s) are
     /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, _children: &[bool]) -> Result<bool> {
-        Ok(false)
+        if _children.iter().any(|&x| x) {
+            plan_err!("Plan does not support infinite stream from its children")
+        } else {
+            Ok(false)
+        }
     }
 
     /// If the output of this operator within each partition is sorted,
@@ -326,6 +330,17 @@ pub fn execute_stream_partitioned(
     Ok(streams)
 }
 
+// Get output (un)boundedness information for the given `plan`.
+pub fn unbounded_output(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    let children_unbounded_output = plan
+        .children()
+        .iter()
+        .map(unbounded_output)
+        .collect::<Vec<_>>();
+    plan.unbounded_output(&children_unbounded_output)
+        .unwrap_or(true)
+}
+
 use datafusion_physical_expr::expressions::Column;
 pub use datafusion_physical_expr::window::WindowExpr;
 use datafusion_physical_expr::PhysicalSortRequirement;
@@ -348,7 +363,6 @@ pub mod memory;
 pub mod metrics;
 pub mod projection;
 pub mod repartition;
-mod row_converter;
 pub mod sorts;
 pub mod stream;
 pub mod streaming;
@@ -361,10 +375,11 @@ pub mod windows;
 
 use crate::repartition::RepartitionExec;
 use crate::sorts::sort_preserving_merge::SortPreservingMergeExec;
+pub use datafusion_common::hash_utils;
 pub use datafusion_common::utils::project_schema;
 use datafusion_execution::TaskContext;
 pub use datafusion_physical_expr::{
-    expressions, functions, hash_utils, ordering_equivalence_properties_helper, udf,
+    expressions, functions, ordering_equivalence_properties_helper, udf,
 };
 
 #[cfg(test)]

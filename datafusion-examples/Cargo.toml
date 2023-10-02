@@ -46,13 +46,13 @@ futures = "0.3"
 log = "0.4"
 mimalloc = { version = "0.1", default-features = false }
 num_cpus = "1.13.0"
-object_store = { version = "0.7.0", features = ["aws"] }
-prost = { version = "0.11", default-features = false }
+object_store = { version = "0.7.0", features = ["aws", "http"] }
+prost = { version = "0.12", default-features = false }
 prost-derive = { version = "0.11", default-features = false }
 serde = { version = "1.0.136", features = ["derive"] }
 serde_json = "1.0.82"
 tempfile = "3"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot"] }
-tonic = "0.9"
+tonic = "0.10"
 url = "2.2"
 uuid = "1.2"
