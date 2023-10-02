@@ -24,9 +24,9 @@ use crate::expressions::PhysicalSortExpr;
 use crate::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
 };
-use crate::topk::TopK;
 use crate::sorts::merge::streaming_merge;
 use crate::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
+use crate::topk::TopK;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionPlan,
     Partitioning, SendableRecordBatchStream, Statistics,

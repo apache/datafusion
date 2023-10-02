@@ -25,9 +25,9 @@ use self::{
     coalesce_partitions::CoalescePartitionsExec, display::DisplayableExecutionPlan,
 };
 pub use datafusion_common::{internal_err, ColumnStatistics, Statistics};
-pub use topk::TopK;
 use datafusion_common::{plan_err, Result};
 use datafusion_physical_expr::PhysicalSortExpr;
+pub use topk::TopK;
 pub use visitor::{accept, visit_execution_plan, ExecutionPlanVisitor};
 
 use arrow::datatypes::SchemaRef;
