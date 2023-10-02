@@ -317,28 +317,6 @@ fn get_working_mode(
         .iter()
         .map(|(item, _)| item.clone())
         .collect::<Vec<_>>();
-    // Find where each expression of the GROUP BY clause occurs in the existing
-    // ordering (if it occurs):
-
-    // let mut ordered_indices =
-    //     get_indices_of_matching_exprs(&groupby_exprs, &ordering_exprs);
-    // ordered_indices.sort();
-    // // Find out how many expressions of the existing ordering define ordering
-    // // for expressions in the GROUP BY clause. For example, if the input is
-    // // ordered by a, b, c, d and we group by b, a, d; the result below would be.
-    // // 2, meaning 2 elements (a, b) among the GROUP BY columns define ordering.
-    // let first_n = longest_consecutive_prefix(ordered_indices);
-    // if first_n == 0 {
-    //     // No GROUP by columns are ordered, we can not do streaming execution.
-    //     return None;
-    // }
-    // let ordered_exprs = ordering_exprs[0..first_n].to_vec();
-    // // Find indices for the GROUP BY expressions such that when we iterate with
-    // // these indices, we would match existing ordering. For the example above,
-    // // this would produce 1, 0; meaning 1st and 0th entries (a, b) among the
-    // // GROUP BY expressions b, a, d match input ordering.
-    // let ordered_group_by_indices =
-    //     get_indices_of_matching_exprs(&ordered_exprs, &groupby_exprs);
 
     input
         .ordering_equivalence_properties()
@@ -1019,24 +997,6 @@ impl ExecutionPlan for AggregateExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        // println!("self.columns_map: {:?}", self.columns_map);
-
-        // if self.mode.is_first_stage() {
-        //     println!("aggregate self.input().ordering_equivalence_properties():\n {:?}", self.input().ordering_equivalence_properties());
-        //     println!("self.source_to_target_mapping: {:?}", self.source_to_target_mapping);
-        //     println!("aggregate self.ordering_equivalence_properties():\n {:?}", self.ordering_equivalence_properties());
-        // }
-
-        // println!("self.aggregation_ordering:{:?}", self.aggregation_ordering);
-        // println!("aggregate self.required_input_ordering: {:?}", self.required_input_ordering);
-
-        // let groupby_exprs = self.group_by
-        //     .expr
-        //     .iter()
-        //     .map(|(item, _)| item.clone())
-        //     .collect::<Vec<_>>();
-        // let res = self.input.ordering_equivalence_properties().set_satisfy(&groupby_exprs);
-        // println!("res:{:?}", res);
         self.execute_typed(partition, context)
             .map(|stream| stream.into())
     }

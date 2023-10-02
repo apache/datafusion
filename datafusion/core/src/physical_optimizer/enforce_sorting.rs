@@ -51,7 +51,7 @@ use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::physical_plan::windows::{
-    get_best_fitting_window, BoundedWindowAggExec, PartitionSearchMode, WindowAggExec,
+    get_best_fitting_window, BoundedWindowAggExec, WindowAggExec,
 };
 use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
 
@@ -59,6 +59,7 @@ use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_common::{plan_err, DataFusionError};
 use datafusion_physical_expr::{PhysicalSortExpr, PhysicalSortRequirement};
 
+use datafusion_physical_expr::equivalence::PartitionSearchMode;
 use itertools::izip;
 
 /// This rule inspects [`SortExec`]'s in the given physical plan and removes the
@@ -3177,7 +3178,7 @@ mod tmp_tests {
             WITH ORDER (c ASC)
             LOCATION '../core/tests/data/window_2.csv'",
         )
-            .await?;
+        .await?;
 
         let sql = "SELECT LAST_VALUE(l.d ORDER BY l.a) AS amount_usd
                 FROM multiple_ordered_table AS l
@@ -3237,9 +3238,9 @@ mod tmp_tests {
             WITH ORDER (c ASC)
             LOCATION '../core/tests/data/window_2.csv'",
         )
-            .await?;
+        .await?;
 
-        let sql = "EXPLAIN VERBOSE SELECT MIN(d) OVER(ORDER BY c ASC) as min1,
+        let sql = "SELECT MIN(d) OVER(ORDER BY c ASC) as min1,
                   MAX(d) OVER(PARTITION BY b, a ORDER BY c ASC) as max1
                 FROM multiple_ordered_table";
 
@@ -3256,11 +3257,11 @@ mod tmp_tests {
             "        CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c, d], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], has_header=true",
         ];
         // Get string representation of the plan
-        // let actual = get_plan_string(&physical_plan);
-        // assert_eq!(
-        //     expected, actual,
-        //     "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-        // );
+        let actual = get_plan_string(&physical_plan);
+        assert_eq!(
+            expected, actual,
+            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
 
         let actual = collect(physical_plan, ctx.task_ctx()).await?;
         print_batches(&actual)?;

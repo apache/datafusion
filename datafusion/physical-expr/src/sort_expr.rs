@@ -24,6 +24,7 @@ use crate::PhysicalExpr;
 
 use arrow::compute::kernels::sort::{SortColumn, SortOptions};
 use arrow::record_batch::RecordBatch;
+use arrow_schema::Schema;
 use datafusion_common::plan_err;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
@@ -88,6 +89,30 @@ impl PhysicalSortExpr {
             && requirement
                 .options
                 .map_or(true, |opts| self.options == opts)
+    }
+
+    /// Check whether sort expression satisfies [`PhysicalSortRequirement`].
+    ///
+    /// If sort options is Some in `PhysicalSortRequirement`, `expr`
+    /// and `options` field are compared for equality.
+    ///
+    /// If sort options is None in `PhysicalSortRequirement`, only
+    /// `expr` is compared for equality.
+    pub fn satisfy_with_schema(
+        &self,
+        requirement: &PhysicalSortRequirement,
+        schema: &Schema,
+    ) -> bool {
+        let nullable = self.expr.nullable(schema).unwrap_or(true);
+        if nullable {
+            self.satisfy(requirement)
+        } else {
+            self.expr.eq(&requirement.expr)
+                && requirement
+                    .options
+                    // If the column is not nullable, NULLS FIRST/LAST is not important.
+                    .map_or(true, |opts| self.options.descending == opts.descending)
+        }
     }
 }
 

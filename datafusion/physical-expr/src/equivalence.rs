@@ -18,8 +18,8 @@
 use crate::expressions::{CastExpr, Column};
 use crate::utils::get_indices_of_matching_exprs;
 use crate::{
-    physical_exprs_contains, LexOrdering, LexOrderingRef, LexOrderingReq, PhysicalExpr,
-    PhysicalSortExpr, PhysicalSortRequirement,
+    physical_exprs_contains, reverse_order_bys, LexOrdering, LexOrderingRef,
+    LexOrderingReq, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
 };
 
 use arrow::datatypes::SchemaRef;
@@ -800,10 +800,6 @@ impl OrderingEquivalenceProperties {
         exprs: &[Arc<dyn PhysicalExpr>],
     ) -> Option<Vec<(usize, SortOptions)>> {
         let exprs_normalized = self.eq_groups.normalize_exprs(exprs);
-        // println!("exprs: {:?}", exprs);
-        // println!("exprs_normalized: {:?}", exprs_normalized);
-        // println!("self.eq_classes: {:?}", self.eq_classes);
-        // println!("self.oeq_class: {:?}", self.oeq_class);
         let mut best = vec![];
 
         for ordering in self.oeq_group.iter() {
@@ -812,11 +808,8 @@ impl OrderingEquivalenceProperties {
                 .iter()
                 .map(|sort_expr| sort_expr.expr.clone())
                 .collect::<Vec<_>>();
-            // let ordering_exprs = self.normalize_exprs(&ordering);
-            // println!("exprs_normalized: {:?}, normalized_ordering_exprs:{:?}", exprs_normalized, ordering_exprs);
             let mut ordered_indices =
                 get_indices_of_matching_exprs(&exprs_normalized, &ordering_exprs);
-            // println!("ordered_indices: {:?}", ordered_indices);
             ordered_indices.sort();
             // Find out how many expressions of the existing ordering define ordering
             // for expressions in the GROUP BY clause. For example, if the input is
@@ -831,7 +824,6 @@ impl OrderingEquivalenceProperties {
                 // GROUP BY expressions b, a, d match input ordering.
                 let indices =
                     get_indices_of_matching_exprs(&ordered_exprs, &exprs_normalized);
-                // println!("indices:{:?}, ordered_exprs: {:?}, exprs_normalized:{:?}", indices, ordered_exprs, exprs_normalized);
                 best = indices
                     .iter()
                     .enumerate()
@@ -867,20 +859,9 @@ impl OrderingEquivalenceProperties {
     pub fn ordering_satisfy_concrete(&self, required: &[PhysicalSortExpr]) -> bool {
         let required_normalized = self.normalize_sort_exprs(required);
         let provided_normalized = self.oeq_group().output_ordering().unwrap_or(vec![]);
-        // println!("required: {:?}", required);
-        // println!("self.oeq_class():{:?}", self.oeq_class());
-        // println!("required_normalized:{:?}", required_normalized);
-        // println!("provided_normalized:{:?}", provided_normalized);
         if required_normalized.len() > provided_normalized.len() {
             return false;
         }
-
-        // let res = required_normalized
-        //     .into_iter()
-        //     .zip(provided_normalized)
-        //     .all(|(req, given)| given == req);
-        // // println!("res:{:?}", res);
-        // res
 
         required_normalized
             .into_iter()
@@ -964,20 +945,17 @@ impl OrderingEquivalenceProperties {
     /// provided [`PhysicalSortExpr`]s.
     pub fn ordering_satisfy_requirement_concrete(
         &self,
-        // provided: &[PhysicalSortExpr],
         required: &[PhysicalSortRequirement],
     ) -> bool {
-        // let eq_properties = equal_properties();
         let provided_normalized = self.oeq_group().output_ordering().unwrap_or(vec![]);
         let required_normalized = self.normalize_sort_requirements(required);
-        // let provided_normalized = self.normalize_sort_exprs2(provided);
         if required_normalized.len() > provided_normalized.len() {
             return false;
         }
         required_normalized
             .into_iter()
             .zip(provided_normalized)
-            .all(|(req, given)| given.satisfy(&req))
+            .all(|(req, given)| given.satisfy_with_schema(&req, &self.schema))
     }
 
     /// Checks whether the given [`PhysicalSortRequirement`]s are equal or more
@@ -1013,6 +991,89 @@ impl OrderingEquivalenceProperties {
             .zip(provided_normalized)
             .all(|(req, given)| given.compatible(&req))
     }
+
+    /// Compares physical ordering (output ordering of the `input` operator) with
+    /// `partitionby_exprs` and `orderby_keys` to decide whether existing ordering
+    /// is sufficient to run the current window operator.
+    /// - A `None` return value indicates that we can not remove the sort in question
+    ///   (input ordering is not sufficient to run current window executor).
+    /// - A `Some((bool, PartitionSearchMode))` value indicates that the window operator
+    ///   can run with existing input ordering, so we can remove `SortExec` before it.
+    /// The `bool` field in the return value represents whether we should reverse window
+    /// operator to remove `SortExec` before it. The `PartitionSearchMode` field represents
+    /// the mode this window operator should work in to accomodate the existing ordering.
+    pub fn get_window_mode(
+        &self,
+        partitionby_exprs: &[Arc<dyn PhysicalExpr>],
+        orderby_keys: &[PhysicalSortExpr],
+    ) -> Result<Option<(bool, PartitionSearchMode)>> {
+        let partitionby_exprs = self.eq_groups.normalize_exprs(partitionby_exprs);
+        let partition_by_oeq = self.clone().with_constants(partitionby_exprs.clone());
+        let mut orderby_keys = self.eq_groups.normalize_sort_exprs(orderby_keys);
+        // Keep the order by expressions that are not inside partition by expressions.
+        orderby_keys.retain(|sort_expr| {
+            !physical_exprs_contains(&partitionby_exprs, &sort_expr.expr)
+        });
+        let mut partition_search_mode = PartitionSearchMode::Linear;
+        let mut partition_by_reqs: Vec<PhysicalSortRequirement> = vec![];
+        if partitionby_exprs.is_empty() {
+            partition_search_mode = PartitionSearchMode::Sorted;
+        } else if let Some(indices_and_ordering) = self.set_satisfy(&partitionby_exprs) {
+            let indices = indices_and_ordering
+                .iter()
+                .map(|(idx, _options)| *idx)
+                .collect::<Vec<_>>();
+            let elem = indices
+                .iter()
+                .map(|&idx| PhysicalSortRequirement {
+                    expr: partitionby_exprs[idx].clone(),
+                    options: None,
+                })
+                .collect::<Vec<_>>();
+            partition_by_reqs.extend(elem);
+            if indices.len() == partitionby_exprs.len() {
+                partition_search_mode = PartitionSearchMode::Sorted;
+            } else if !indices.is_empty() {
+                partition_search_mode = PartitionSearchMode::PartiallySorted(indices);
+            }
+        }
+
+        let order_by_reqs = PhysicalSortRequirement::from_sort_exprs(&orderby_keys);
+        let req = [partition_by_reqs.clone(), order_by_reqs].concat();
+        let req = collapse_lex_req(req);
+        if req.is_empty() {
+            // When requirement is empty,
+            // prefer None. Instead of Linear.
+            return Ok(None);
+        }
+        println!("req1:{:?}", req);
+        println!("partition_by_oeq: {:?}", partition_by_oeq);
+        if partition_by_oeq.ordering_satisfy_requirement_concrete(&req) {
+            // Window can be run with existing ordering
+            return Ok(Some((false, partition_search_mode)));
+        }
+        let reverse_order_by_reqs =
+            PhysicalSortRequirement::from_sort_exprs(&reverse_order_bys(&orderby_keys));
+        let req = [partition_by_reqs, reverse_order_by_reqs].concat();
+        let req = collapse_lex_req(req);
+        println!("req2:{:?}", req);
+        if partition_by_oeq.ordering_satisfy_requirement_concrete(&req) {
+            // Window can be run with existing ordering, if the ordering requirements would be reversed
+            return Ok(Some((true, partition_search_mode)));
+        }
+        Ok(None)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+/// Specifies partition column properties in terms of input ordering
+pub enum PartitionSearchMode {
+    /// None of the columns among the partition columns is ordered.
+    Linear,
+    /// Some columns of the partition columns are ordered but not all
+    PartiallySorted(Vec<usize>),
+    /// All Partition columns are ordered (Also empty case)
+    Sorted,
 }
 
 type ProjectionMapping = Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>;
