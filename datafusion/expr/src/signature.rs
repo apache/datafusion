@@ -40,12 +40,17 @@ pub enum Volatility {
     /// A stable function may return different values given the same input across different
     /// queries but must return the same value for a given input within a query. An example of
     /// this is [super::BuiltinScalarFunction::Now]. DataFusion
-    /// will attempt to inline immutable functions during planning, when possible.
+    /// will attempt to inline `Stable` functions during planning, when possible.
+    /// For query `select col1, now() from t1`, it might take a while to execute but
+    /// `now()` column will be the same for each output row, which is evaluated
+    /// during planning.
     Stable,
     /// A volatile function may change the return value from evaluation to evaluation.
     /// Multiple invocations of a volatile function may return different results when used in the
     /// same query. An example of this is [super::BuiltinScalarFunction::Random]. DataFusion
     /// can not evaluate such functions during planning.
+    /// In the query `select col1, random() from t1`, `random()` function will be evaluated
+    /// for each output row, resulting in a unique random value for each row.
     Volatile,
 }
 
