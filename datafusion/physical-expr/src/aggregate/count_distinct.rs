@@ -168,14 +168,11 @@ impl Accumulator for DistinctCountAccumulator {
             return Ok(());
         }
         let arr = &states[0];
-
         let scalar_vec = ScalarValue::convert_array_to_scalar_vec(arr)?;
-        for scalars in scalar_vec.into_iter() {
-            scalars.iter().for_each(|scalar| {
-                if !ScalarValue::is_null(scalar) {
-                    self.values.insert(scalar.clone());
-                }
-            });
+        // Expected arr is ListArray[PrimitiveArray<>[]], scalar_vec is [[...]]
+        assert_eq!(scalar_vec.len(), 1);
+        for scalars in scalar_vec.iter() {
+            self.values.extend(scalars.iter().cloned())
         }
         Ok(())
     }

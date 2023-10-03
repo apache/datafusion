@@ -281,7 +281,6 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
 }
 
 impl OrderSensitiveArrayAggAccumulator {
-    // in_data is Vec<ScalarValue> where ScalarValue does not include ScalarValue::List
     fn convert_array_agg_to_orderings(
         &self,
         array_agg: Vec<Vec<ScalarValue>>,
