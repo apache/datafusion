@@ -53,7 +53,6 @@ use datafusion_physical_expr::expressions::{Column, NoOp};
 use datafusion_physical_expr::utils::map_columns_before_projection;
 use datafusion_physical_expr::{
     expr_list_eq_strict_order, OrderingEquivalenceProperties, PhysicalExpr,
-    PhysicalSortRequirement,
 };
 use datafusion_physical_plan::unbounded_output;
 
@@ -1209,6 +1208,15 @@ fn replace_order_preserving_variants_helper(
     exec_tree.plan.clone().with_new_children(updated_children)
 }
 
+#[allow(dead_code)]
+fn print_plan(plan: &Arc<dyn ExecutionPlan>) {
+    let formatted = crate::physical_plan::displayable(plan.as_ref())
+        .indent(true)
+        .to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    println!("{:#?}", actual);
+}
+
 /// This function checks whether we need to add additional data exchange
 /// operators to satisfy distribution requirements. Since this function
 /// takes care of such requirements, we should avoid manually adding data
@@ -1358,10 +1366,7 @@ fn ensure_distribution(
                     // make sure ordering requirements are still satisfied after.
                     if ordering_satisfied {
                         // Make sure to satisfy ordering requirement:
-                        let sort_expr = PhysicalSortRequirement::to_sort_exprs(
-                            required_input_ordering.clone(),
-                        );
-                        add_sort_above(&mut child, sort_expr, None)?;
+                        add_sort_above(&mut child, required_input_ordering, None)?;
                     }
                 }
                 // Stop tracking distribution changing operators
@@ -1699,7 +1704,7 @@ mod tests {
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
     use datafusion_physical_expr::{
         expressions, expressions::binary, expressions::lit, expressions::Column,
-        LexOrdering, PhysicalExpr, PhysicalSortExpr,
+        LexOrdering, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
     };
 
     /// Models operators like BoundedWindowExec that require an input

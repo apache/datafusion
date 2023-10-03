@@ -3397,6 +3397,8 @@ WITH ORDER (a ASC, b ASC)
 WITH ORDER (c ASC)
 LOCATION '../core/tests/data/window_2.csv';
 
+# All of the window execs in the physical plan should work in the
+# sorted mode.
 query TT
 EXPLAIN SELECT MIN(d) OVER(ORDER BY c ASC) as min1,
   MAX(d) OVER(PARTITION BY b, a ORDER BY c ASC) as max1

@@ -517,6 +517,7 @@ impl AggregateExec {
         let req = PhysicalSortRequirement::from_sort_exprs(&ordering_req);
         new_requirement.extend(req);
         new_requirement = collapse_lex_req(new_requirement);
+        println!("new_requirement: {:?}", new_requirement);
 
         // construct a map from the input columns to the output columns of the Aggregation
         let mut columns_map: HashMap<Column, Vec<Column>> = HashMap::new();

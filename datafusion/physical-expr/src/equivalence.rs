@@ -859,6 +859,8 @@ impl OrderingEquivalenceProperties {
     pub fn ordering_satisfy_concrete(&self, required: &[PhysicalSortExpr]) -> bool {
         let required_normalized = self.normalize_sort_exprs(required);
         let provided_normalized = self.oeq_group().output_ordering().unwrap_or(vec![]);
+        println!("required_normalized: {:?}", required_normalized);
+        println!("provided_normalized: {:?}", provided_normalized);
         if required_normalized.len() > provided_normalized.len() {
             return false;
         }
@@ -932,7 +934,6 @@ impl OrderingEquivalenceProperties {
     /// provided [`PhysicalSortExpr`]s.
     pub fn ordering_satisfy_requirement(
         &self,
-        // provided: Option<&[PhysicalSortExpr]>,
         required: Option<&[PhysicalSortRequirement]>,
     ) -> bool {
         match required {
@@ -949,6 +950,8 @@ impl OrderingEquivalenceProperties {
     ) -> bool {
         let provided_normalized = self.oeq_group().output_ordering().unwrap_or(vec![]);
         let required_normalized = self.normalize_sort_requirements(required);
+        println!("req required_normalized: {:?}", required_normalized);
+        println!("req provided_normalized: {:?}", provided_normalized);
         if required_normalized.len() > provided_normalized.len() {
             return false;
         }
@@ -1046,8 +1049,6 @@ impl OrderingEquivalenceProperties {
             // prefer None. Instead of Linear.
             return Ok(None);
         }
-        println!("req1:{:?}", req);
-        println!("partition_by_oeq: {:?}", partition_by_oeq);
         if partition_by_oeq.ordering_satisfy_requirement_concrete(&req) {
             // Window can be run with existing ordering
             return Ok(Some((false, partition_search_mode)));
@@ -1056,7 +1057,6 @@ impl OrderingEquivalenceProperties {
             PhysicalSortRequirement::from_sort_exprs(&reverse_order_bys(&orderby_keys));
         let req = [partition_by_reqs, reverse_order_by_reqs].concat();
         let req = collapse_lex_req(req);
-        println!("req2:{:?}", req);
         if partition_by_oeq.ordering_satisfy_requirement_concrete(&req) {
             // Window can be run with existing ordering, if the ordering requirements would be reversed
             return Ok(Some((true, partition_search_mode)));
