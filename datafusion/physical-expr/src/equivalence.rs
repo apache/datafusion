@@ -44,10 +44,13 @@ pub struct EquivalentGroups {
 }
 
 impl EquivalentGroups {
+    /// Creates an empty ordering equivalent group
     fn empty() -> Self {
         EquivalentGroups { inner: vec![] }
     }
 
+    /// Creates ordering equivalent groups from given vectors
+    /// Each vector corresponds to a group
     fn new(entries: Vec<Vec<Arc<dyn PhysicalExpr>>>) -> Self {
         let mut res = EquivalentGroups { inner: entries };
         res.remove_redundant_entries();
@@ -100,12 +103,16 @@ impl EquivalentGroups {
                 }
             }
             (Some(group_idx), None) => {
+                // Extend existing group with new entry
                 self.inner[group_idx].push(second.clone());
             }
             (None, Some(group_idx)) => {
+                // Extend existing group with new entry
                 self.inner[group_idx].push(first.clone());
             }
             (None, None) => {
+                // None of the expressions, is among existing groups
+                // Create a new group.
                 self.inner.push(vec![first.clone(), second.clone()]);
             }
         }
@@ -124,11 +131,11 @@ impl EquivalentGroups {
                 (unique_eq_group.len() > 1).then_some(unique_eq_group)
             })
             .collect();
-
+        // Bridge groups that have common expressions
         self.bridge_groups()
     }
 
-    /// This utils bridges groups that have common entry
+    /// This utils bridges groups that have common expressions
     fn bridge_groups(&mut self) {
         let mut out_groups = vec![];
         for group in &self.inner {
@@ -154,7 +161,6 @@ impl EquivalentGroups {
     }
 
     fn extend(&mut self, other: EquivalentGroups) {
-        // TODO: Add check for redundancy
         self.inner.extend(other.inner);
         self.remove_redundant_entries();
     }
@@ -181,12 +187,10 @@ impl EquivalentGroups {
         &self,
         exprs: &[Arc<dyn PhysicalExpr>],
     ) -> Vec<Arc<dyn PhysicalExpr>> {
-        let res = exprs
+        exprs
             .iter()
             .map(|expr| self.normalize_expr(expr.clone()))
-            .collect::<Vec<_>>();
-        // TODO: Add deduplication check here after normalization
-        res
+            .collect::<Vec<_>>()
     }
 
     /// This function normalizes `sort_requirement` according to `EquivalenceClasses` in the `self`.
@@ -241,24 +245,78 @@ impl EquivalentGroups {
         PhysicalSortRequirement::to_sort_exprs(normalized_sort_requirement)
     }
 
-    /// Calculate updated version of the expression, according to projection mapping
-    /// returns `None`, if expression is not valid after projection.
-    fn get_aliased_expr(
+    /// Projects given expression according to mapping in the `source_to_target_mapping`.
+    /// If expression is not valid after projection returns `None`.
+    fn project_expr(
+        &self,
         source_to_target_mapping: &ProjectionMapping,
         expr: &Arc<dyn PhysicalExpr>,
     ) -> Option<Arc<dyn PhysicalExpr>> {
-        for (source, target) in source_to_target_mapping {
-            if expr.eq(source) {
-                return Some(target.clone());
+        let children = expr.children();
+        if children.is_empty() {
+            for (source, target) in source_to_target_mapping.iter() {
+                // if source matches expr, expr can be projected
+                if source.eq(expr) {
+                    return Some(target.clone());
+                }
+                // if equivalent group of source contains expr, expr can be projected
+                else if let Some(group) = self.get_equivalent_group(source) {
+                    if physical_exprs_contains(&group, expr) {
+                        return Some(target.clone());
+                    }
+                }
             }
+            // After projection, expression is not valid.
+            None
         }
-        None
+        // All of the childrens can be projected
+        else if let Some(children) = children
+            .into_iter()
+            .map(|child| self.project_expr(source_to_target_mapping, &child))
+            .collect::<Option<Vec<_>>>()
+        {
+            Some(expr.clone().with_new_children(children).unwrap())
+        } else {
+            None
+        }
     }
 
-    /// Construct equivalent groups according to projection mapping
-    /// Each inner vector contains equivalents sets. Outer vector corresponds to
+    /// Projects given ordering according to mapping in the `source_to_target_mapping`.
+    /// If ordering is not valid after projection returns `None`.
+    fn project_ordering(
+        &self,
+        source_to_target_mapping: &ProjectionMapping,
+        ordering: &[PhysicalSortExpr],
+    ) -> Option<Vec<PhysicalSortExpr>> {
+        let mut res = vec![];
+        for order in ordering {
+            if let Some(new_expr) =
+                self.project_expr(source_to_target_mapping, &order.expr)
+            {
+                res.push(PhysicalSortExpr {
+                    expr: new_expr,
+                    options: order.options,
+                })
+            } else {
+                // Expression is not valid, rest of the ordering shouldn't be projected also.
+                // e.g if input ordering is [a ASC, b ASC, c ASC], and column b is not valid
+                // after projection
+                // we should return projected ordering as [a ASC] not as [a ASC, c ASC] even if
+                // column c is valid after projection.
+                break;
+            }
+        }
+        if res.is_empty() {
+            None
+        } else {
+            Some(res)
+        }
+    }
+
+    /// Construct equivalent groups according to projection mapping.
+    /// In the result, each inner vector contains equivalents sets. Outer vector corresponds to
     /// distinct equivalent groups
-    fn get_equivalent_groups(
+    fn calculate_new_projection_equivalent_groups(
         source_to_target_mapping: &ProjectionMapping,
     ) -> Vec<Vec<Arc<dyn PhysicalExpr>>> {
         // TODO: Convert below algorithm to the version that use HashMap.
@@ -291,13 +349,14 @@ impl EquivalentGroups {
         for eq_class in self.iter() {
             let new_eq_class = eq_class
                 .iter()
-                .filter_map(|expr| Self::get_aliased_expr(source_to_target_mapping, expr))
+                .filter_map(|expr| self.project_expr(source_to_target_mapping, expr))
                 .collect::<Vec<_>>();
             if new_eq_class.len() > 1 {
                 new_eq_classes.push(new_eq_class.clone());
             }
         }
-        let new_classes = Self::get_equivalent_groups(source_to_target_mapping);
+        let new_classes =
+            Self::calculate_new_projection_equivalent_groups(source_to_target_mapping);
         new_eq_classes.extend(new_classes);
 
         let mut projection_eq_groups = EquivalentGroups::new(new_eq_classes);
@@ -338,16 +397,20 @@ pub struct OrderingEquivalentGroup {
 }
 
 impl OrderingEquivalentGroup {
+    /// Creates new empty ordering equivalent group
     fn empty() -> Self {
         OrderingEquivalentGroup { inner: vec![] }
     }
 
+    /// Creates new ordering equivalent from given vector
     pub fn new(entries: Vec<LexOrdering>) -> Self {
         let mut res = OrderingEquivalentGroup { inner: entries };
+        // Make sure ordering equivalences doesn't contain something redundant
         res.remove_redundant_entries();
         res
     }
 
+    /// Check whether ordering is in the state.
     pub fn contains(&self, other: &LexOrdering) -> bool {
         self.inner.contains(other)
     }
@@ -356,16 +419,15 @@ impl OrderingEquivalentGroup {
         if !self.contains(&other) {
             self.inner.push(other);
         }
-        // TODO: remove below check
+        // Make sure that after new entry there is no redundant
+        // entry in the state.
         self.remove_redundant_entries();
     }
 
     /// Adds new ordering into the ordering equivalent group.
     pub fn add_new_orderings(&mut self, orderings: &[LexOrdering]) {
         for ordering in orderings.iter() {
-            if !self.contains(ordering) {
-                self.push(ordering.clone());
-            }
+            self.push(ordering.clone());
         }
         self.remove_redundant_entries();
     }
@@ -392,6 +454,7 @@ impl OrderingEquivalentGroup {
         self.inner = res;
     }
 
+    /// Check whether ordering equivalent group is empty
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
@@ -409,6 +472,7 @@ impl OrderingEquivalentGroup {
         self.inner.len()
     }
 
+    /// Extend ordering equivalent group with other group
     pub fn extend(&mut self, other: OrderingEquivalentGroup) {
         for ordering in other.iter() {
             if !self.contains(ordering) {
@@ -418,6 +482,8 @@ impl OrderingEquivalentGroup {
         self.remove_redundant_entries();
     }
 
+    /// Get first ordering entry in the ordering equivalences
+    /// This is one of the many valid orderings (if available)
     pub fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
         self.inner.first().cloned()
     }
@@ -484,7 +550,9 @@ impl OrderingEquivalentGroup {
 /// and treat `a ASC` and `b DESC` as the same ordering requirement.
 #[derive(Debug, Clone)]
 pub struct OrderingEquivalenceProperties {
+    /// Keeps track of expressions that have equivalent value.
     eq_groups: EquivalentGroups,
+    /// Keeps track of valid ordering that satisfied table.
     oeq_group: OrderingEquivalentGroup,
     /// Keeps track of expressions that have constant value.
     constants: Vec<Arc<dyn PhysicalExpr>>,
@@ -662,74 +730,6 @@ impl OrderingEquivalenceProperties {
             .any(|ordering| ordering[0].eq(leading_ordering))
     }
 
-    /// Projects given expression according to mapping in the `source_to_target_mapping`.
-    /// If expression is not valid after projection returns `None`.
-    fn project_expr(
-        &self,
-        source_to_target_mapping: &ProjectionMapping,
-        expr: &Arc<dyn PhysicalExpr>,
-    ) -> Option<Arc<dyn PhysicalExpr>> {
-        let children = expr.children();
-        if children.is_empty() {
-            for (source, target) in source_to_target_mapping.iter() {
-                // if source matches expr, expr can be projected
-                if source.eq(expr) {
-                    return Some(target.clone());
-                }
-                // if equivalent group of source contains expr, expr can be projected
-                else if let Some(group) = self.eq_groups.get_equivalent_group(source) {
-                    if physical_exprs_contains(&group, expr) {
-                        return Some(target.clone());
-                    }
-                }
-            }
-            // After projection, expression is not valid.
-            None
-        }
-        // All of the childrens can be projected
-        else if let Some(children) = children
-            .into_iter()
-            .map(|child| self.project_expr(source_to_target_mapping, &child))
-            .collect::<Option<Vec<_>>>()
-        {
-            Some(expr.clone().with_new_children(children).unwrap())
-        } else {
-            None
-        }
-    }
-
-    /// Projects given ordering according to mapping in the `source_to_target_mapping`.
-    /// If ordering is not valid after projection returns `None`.
-    fn project_ordering(
-        &self,
-        source_to_target_mapping: &ProjectionMapping,
-        ordering: &[PhysicalSortExpr],
-    ) -> Option<Vec<PhysicalSortExpr>> {
-        let mut res = vec![];
-        for order in ordering {
-            if let Some(new_expr) =
-                self.project_expr(source_to_target_mapping, &order.expr)
-            {
-                res.push(PhysicalSortExpr {
-                    expr: new_expr,
-                    options: order.options,
-                })
-            } else {
-                // Expression is not valid, rest of the ordering shouldn't be projected also.
-                // e.g if input ordering is [a ASC, b ASC, c ASC], and column b is not valid
-                // after projection
-                // we should return projected ordering as [a ASC] not as [a ASC, c ASC] even if
-                // column c is valid after projection.
-                break;
-            }
-        }
-        if res.is_empty() {
-            None
-        } else {
-            Some(res)
-        }
-    }
-
     /// Projects `OrderingEquivalenceProperties` according to mapping given in `source_to_target_mapping`.
     pub fn project(
         &self,
@@ -744,7 +744,10 @@ impl OrderingEquivalenceProperties {
         let projected_orderings = self
             .oeq_group
             .iter()
-            .filter_map(|order| self.project_ordering(source_to_target_mapping, order))
+            .filter_map(|order| {
+                self.eq_groups
+                    .project_ordering(source_to_target_mapping, order)
+            })
             .collect::<Vec<_>>();
 
         // if empty, no need to track projected_orderings.
@@ -1157,36 +1160,6 @@ impl OrderingEquivalenceBuilder {
         self.ordering_eq_properties
     }
 }
-
-// /// This function applies the given projection to the given ordering
-// /// equivalence properties to compute the resulting (projected) ordering
-// /// equivalence properties; e.g.
-// /// 1) Adding an alias, which can introduce additional ordering equivalence
-// ///    properties, as in Projection(a, a as a1, a as a2) extends global ordering
-// ///    of a to a1 and a2.
-// /// 2) Truncate the [`OrderingEquivalentClass`]es that are not in the output schema.
-// pub fn project_ordering_equivalence_properties(
-//     input_eq: OrderingEquivalenceProperties,
-//     columns_map: &HashMap<Column, Vec<Column>>,
-//     output_eq: &mut OrderingEquivalenceProperties,
-// ) {
-//     // Get schema and fields of projection output
-//     let schema = output_eq.schema();
-//     let fields = schema.fields();
-//
-//     let mut oeq_class = input_eq.oeq_class().clone();
-//     let mut oeq_alias_map = vec![];
-//     for (column, columns) in columns_map {
-//         if is_column_invalid_in_new_schema(column, fields) {
-//             oeq_alias_map.push((column.clone(), columns[0].clone()));
-//         }
-//     }
-//     oeq_class = update_with_aliases(&oeq_class, &oeq_alias_map, fields);
-//
-//     if oeq_class.len() > 1 {
-//         output_eq.extend(oeq_class);
-//     }
-// }
 
 /// Update `ordering` if it contains cast expression with target column
 /// after projection, if there is no cast expression among `ordering` expressions,
