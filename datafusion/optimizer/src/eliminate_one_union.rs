@@ -40,9 +40,7 @@ impl OptimizerRule for EliminateOneUnion {
         _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         match plan {
-            LogicalPlan::Union(union) if union.inputs.len() == 1 => {
-                let Union { inputs, schema: _ } = union;
-
+            LogicalPlan::Union(Union { inputs, .. }) if inputs.len() == 1 => {
                 Ok(inputs.first().map(|input| input.as_ref().clone()))
             }
             _ => Ok(None),
@@ -103,7 +101,7 @@ mod tests {
     }
 
     #[test]
-    fn eliminate_nested_union() -> Result<()> {
+    fn eliminate_one_union() -> Result<()> {
         let table_plan = coerce_plan_expr_for_schema(
             &table_scan(Some("table"), &schema(), None)?.build()?,
             &schema().to_dfschema()?,

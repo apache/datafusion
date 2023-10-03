@@ -18,13 +18,10 @@
 //! Optimizer rule to replace nested unions to single union.
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
-use datafusion_expr::{
-    builder::project_with_column_index,
-    expr_rewriter::coerce_plan_expr_for_schema,
-    logical_plan::{LogicalPlan, Projection, Union},
-};
+use datafusion_expr::logical_plan::{LogicalPlan, Union};
 
 use crate::optimizer::ApplyOrder;
+use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
 use std::sync::Arc;
 
 #[derive(Default)]
@@ -44,36 +41,27 @@ impl OptimizerRule for EliminateNestedUnion {
         plan: &LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
+        // TODO: Add optimization for nested distinct unions.
         match plan {
-            LogicalPlan::Union(union) => {
-                let Union { inputs, schema } = union;
-
-                let union_schema = schema.clone();
-
+            LogicalPlan::Union(Union { inputs, schema }) => {
                 let inputs = inputs
                     .into_iter()
-                    .flat_map(|plan| match Arc::as_ref(plan) {
-                        LogicalPlan::Union(Union { inputs, .. }) => inputs.clone(),
-                        _ => vec![Arc::clone(plan)],
+                    .flat_map(|plan| match plan.as_ref() {
+                        LogicalPlan::Union(Union { inputs, schema }) => inputs
+                            .into_iter()
+                            .map(|plan| {
+                                Arc::new(
+                                    coerce_plan_expr_for_schema(plan, schema).unwrap(),
+                                )
+                            })
+                            .collect::<Vec<_>>(),
+                        _ => vec![plan.clone()],
                     })
-                    .map(|plan| {
-                        let plan = coerce_plan_expr_for_schema(&plan, &union_schema)?;
-                        match plan {
-                            LogicalPlan::Projection(Projection {
-                                expr, input, ..
-                            }) => Ok(Arc::new(project_with_column_index(
-                                expr,
-                                input,
-                                union_schema.clone(),
-                            )?)),
-                            _ => Ok(Arc::new(plan)),
-                        }
-                    })
-                    .collect::<Result<Vec<_>>>()?;
+                    .collect::<Vec<_>>();
 
                 Ok(Some(LogicalPlan::Union(Union {
                     inputs,
-                    schema: union_schema,
+                    schema: schema.clone(),
                 })))
             }
             _ => Ok(None),
@@ -94,13 +82,13 @@ mod tests {
     use super::*;
     use crate::test::*;
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_expr::logical_plan::table_scan;
+    use datafusion_expr::{col, logical_plan::table_scan};
 
     fn schema() -> Schema {
         Schema::new(vec![
             Field::new("id", DataType::Int32, false),
             Field::new("key", DataType::Utf8, false),
-            Field::new("value", DataType::Int32, false),
+            Field::new("value", DataType::Float64, false),
         ])
     }
 
@@ -141,6 +129,83 @@ mod tests {
         \n  TableScan: table\
         \n  TableScan: table\
         \n  TableScan: table";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    // We don't need to use project_with_column_index in logical optimizer,
+    // after LogicalPlanBuilder::union, we already have all equal expression aliases
+    #[test]
+    fn eliminate_nested_union_with_projection() -> Result<()> {
+        let plan_builder = table_scan(Some("table"), &schema(), None)?;
+
+        let plan = plan_builder
+            .clone()
+            .union(
+                plan_builder
+                    .clone()
+                    .project(vec![col("id").alias("table_id"), col("key"), col("value")])?
+                    .build()?,
+            )?
+            .union(
+                plan_builder
+                    .clone()
+                    .project(vec![col("id").alias("_id"), col("key"), col("value")])?
+                    .build()?,
+            )?
+            .build()?;
+
+        let expected = "Union\
+        \n  TableScan: table\
+        \n  Projection: table.id AS id, table.key, table.value\
+        \n    TableScan: table\
+        \n  Projection: table.id AS id, table.key, table.value\
+        \n    TableScan: table";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn eliminate_nested_union_with_type_cast_projection() -> Result<()> {
+        let table_1 = table_scan(
+            Some("table_1"),
+            &Schema::new(vec![
+                Field::new("id", DataType::Int64, false),
+                Field::new("key", DataType::Utf8, false),
+                Field::new("value", DataType::Float64, false),
+            ]),
+            None,
+        )?;
+
+        let table_2 = table_scan(
+            Some("table_1"),
+            &Schema::new(vec![
+                Field::new("id", DataType::Int32, false),
+                Field::new("key", DataType::Utf8, false),
+                Field::new("value", DataType::Float32, false),
+            ]),
+            None,
+        )?;
+
+        let table_3 = table_scan(
+            Some("table_1"),
+            &Schema::new(vec![
+                Field::new("id", DataType::Int16, false),
+                Field::new("key", DataType::Utf8, false),
+                Field::new("value", DataType::Float32, false),
+            ]),
+            None,
+        )?;
+
+        let plan = table_1
+            .union(table_2.build()?)?
+            .union(table_3.build()?)?
+            .build()?;
+
+        let expected = "Union\
+        \n  TableScan: table_1\
+        \n  Projection: CAST(table_1.id AS Int64) AS id, table_1.key, CAST(table_1.value AS Float64) AS value\
+        \n    TableScan: table_1\
+        \n  Projection: CAST(table_1.id AS Int64) AS id, table_1.key, CAST(table_1.value AS Float64) AS value\
+        \n    TableScan: table_1";
         assert_optimized_plan_equal(&plan, expected)
     }
 }
