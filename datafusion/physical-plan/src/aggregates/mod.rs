@@ -39,7 +39,6 @@ use datafusion_physical_expr::{
     PhysicalSortRequirement,
 };
 
-use arrow_schema::SortOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use itertools::{izip, Itertools};
 use std::any::Any;
@@ -250,18 +249,6 @@ impl From<StreamType> for SendableRecordBatchStream {
     }
 }
 
-/// This object encapsulates ordering-related information on GROUP BY columns.
-#[derive(Debug, Clone)]
-pub(crate) struct AggregationOrdering {
-    /// Specifies whether the GROUP BY columns are partially or fully ordered.
-    mode: GroupByOrderMode,
-    /// Stores indices such that when we iterate with these indices, GROUP BY
-    /// expressions match input ordering.
-    order_indices: Vec<usize>,
-    /// Actual ordering information of the GROUP BY columns.
-    ordering: LexOrdering,
-}
-
 /// Hash aggregate execution plan
 #[derive(Debug)]
 pub struct AggregateExec {
@@ -291,72 +278,9 @@ pub struct AggregateExec {
     source_to_target_mapping: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>,
     /// Execution Metrics
     metrics: ExecutionPlanMetricsSet,
-    /// Stores mode and output ordering information for the `AggregateExec`.
-    aggregation_ordering: Option<AggregationOrdering>,
     required_input_ordering: Option<LexOrderingReq>,
     partition_search_mode: PartitionSearchMode,
     output_ordering: Option<LexOrdering>,
-}
-
-/// Calculates the working mode for `GROUP BY` queries.
-/// - If no GROUP BY expression has an ordering, returns `None`.
-/// - If some GROUP BY expressions have an ordering, returns `Some(GroupByOrderMode::PartiallyOrdered)`.
-/// - If all GROUP BY expressions have orderings, returns `Some(GroupByOrderMode::Ordered)`.
-fn get_working_mode(
-    input: &Arc<dyn ExecutionPlan>,
-    group_by: &PhysicalGroupBy,
-) -> Option<(GroupByOrderMode, Vec<(usize, SortOptions)>)> {
-    if !group_by.is_single() {
-        // We do not currently support streaming execution if we have more
-        // than one group (e.g. we have grouping sets).
-        return None;
-    };
-
-    // let output_ordering = input.output_ordering().unwrap_or(&[]);
-    // Since direction of the ordering is not important for GROUP BY columns,
-    // we convert PhysicalSortExpr to PhysicalExpr in the existing ordering.
-    // let ordering_exprs = convert_to_expr(output_ordering);
-    let groupby_exprs = group_by
-        .expr
-        .iter()
-        .map(|(item, _)| item.clone())
-        .collect::<Vec<_>>();
-
-    input
-        .ordering_equivalence_properties()
-        .set_satisfy(&groupby_exprs)
-        .map(|ordered_group_by_info| {
-            if ordered_group_by_info.len() == group_by.expr.len() {
-                (GroupByOrderMode::FullyOrdered, ordered_group_by_info)
-            } else {
-                (GroupByOrderMode::PartiallyOrdered, ordered_group_by_info)
-            }
-        })
-}
-
-/// This function gathers the ordering information for the GROUP BY columns.
-fn calc_aggregation_ordering(
-    input: &Arc<dyn ExecutionPlan>,
-    group_by: &PhysicalGroupBy,
-) -> Option<AggregationOrdering> {
-    get_working_mode(input, group_by).map(|(mode, order_info)| {
-        // let existing_ordering = input.output_ordering().unwrap_or(&[]);
-        let out_group_expr = output_group_expr_helper(group_by);
-        // Calculate output ordering information for the operator:
-        let out_ordering = order_info
-            .iter()
-            .map(|(idx, sort_options)| PhysicalSortExpr {
-                expr: out_group_expr[*idx].clone(),
-                options: *sort_options,
-            })
-            .collect::<Vec<_>>();
-        let order_indices = order_info.iter().map(|(idx, _)| *idx).collect();
-        AggregationOrdering {
-            mode,
-            order_indices,
-            ordering: out_ordering,
-        }
-    })
 }
 
 /// This function returns grouping expressions as they occur in the output schema.
@@ -616,7 +540,6 @@ impl AggregateExec {
             source_to_target_mapping.push((source_expr, target_expr));
         }
 
-        let aggregation_ordering = calc_aggregation_ordering(&input, &group_by);
         let required_input_ordering = if new_requirement.is_empty() {
             None
         } else {
@@ -638,7 +561,6 @@ impl AggregateExec {
             columns_map,
             source_to_target_mapping,
             metrics: ExecutionPlanMetricsSet::new(),
-            aggregation_ordering,
             required_input_ordering,
             limit: None,
             partition_search_mode,
@@ -1205,18 +1127,16 @@ pub(crate) fn evaluate_group_by(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::aggregates::GroupByOrderMode::{FullyOrdered, PartiallyOrdered};
     use crate::aggregates::{
-        get_finest_requirement, get_working_mode, AggregateExec, AggregateMode,
-        PhysicalGroupBy,
+        get_finest_requirement, AggregateExec, AggregateMode, PhysicalGroupBy,
     };
     use crate::coalesce_batches::CoalesceBatchesExec;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::common;
     use crate::expressions::{col, Avg};
     use crate::memory::MemoryExec;
+    use crate::test::assert_is_pending;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
-    use crate::test::{assert_is_pending, mem_exec};
     use crate::{
         DisplayAs, ExecutionPlan, Partitioning, RecordBatchStream,
         SendableRecordBatchStream, Statistics,
@@ -1255,96 +1175,6 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![a, b, c, d, e]));
 
         Ok(schema)
-    }
-
-    /// make PhysicalSortExpr with default options
-    fn sort_expr(name: &str, schema: &Schema) -> PhysicalSortExpr {
-        sort_expr_options(name, schema, SortOptions::default())
-    }
-
-    /// PhysicalSortExpr with specified options
-    fn sort_expr_options(
-        name: &str,
-        schema: &Schema,
-        options: SortOptions,
-    ) -> PhysicalSortExpr {
-        PhysicalSortExpr {
-            expr: col(name, schema).unwrap(),
-            options,
-        }
-    }
-
-    #[tokio::test]
-    async fn test_get_working_mode() -> Result<()> {
-        let test_schema = create_test_schema()?;
-        // Source is sorted by a ASC NULLS FIRST, b ASC NULLS FIRST, c ASC NULLS FIRST
-        // Column d, e is not ordered.
-        let sort_exprs = vec![
-            sort_expr("a", &test_schema),
-            sort_expr("b", &test_schema),
-            sort_expr("c", &test_schema),
-        ];
-        let input = mem_exec(1).with_sort_information(vec![sort_exprs]);
-        let input = Arc::new(input) as _;
-
-        // test cases consists of vector of tuples. Where each tuple represents a single test case.
-        // First field in the tuple is Vec<str> where each element in the vector represents GROUP BY columns
-        // For instance `vec!["a", "b"]` corresponds to GROUP BY a, b
-        // Second field in the tuple is Option<GroupByOrderMode>, which corresponds to expected algorithm mode.
-        // None represents that existing ordering is not sufficient to run executor with any one of the algorithms
-        // (We need to add SortExec to be able to run it).
-        // Some(GroupByOrderMode) represents, we can run algorithm with existing ordering; and algorithm should work in
-        // GroupByOrderMode.
-        let options = SortOptions::default();
-        let test_cases = vec![
-            (vec!["a"], Some((FullyOrdered, vec![(0, options)]))),
-            (vec!["b"], None),
-            (vec!["c"], None),
-            (
-                vec!["b", "a"],
-                Some((FullyOrdered, vec![(1, options), (0, options)])),
-            ),
-            (vec!["c", "b"], None),
-            (vec!["c", "a"], Some((PartiallyOrdered, vec![(1, options)]))),
-            (
-                vec!["c", "b", "a"],
-                Some((FullyOrdered, vec![(2, options), (1, options), (0, options)])),
-            ),
-            (vec!["d", "a"], Some((PartiallyOrdered, vec![(1, options)]))),
-            (vec!["d", "b"], None),
-            (vec!["d", "c"], None),
-            (
-                vec!["d", "b", "a"],
-                Some((PartiallyOrdered, vec![(2, options), (1, options)])),
-            ),
-            (vec!["d", "c", "b"], None),
-            (
-                vec!["d", "c", "a"],
-                Some((PartiallyOrdered, vec![(2, options)])),
-            ),
-            (
-                vec!["d", "c", "b", "a"],
-                Some((
-                    PartiallyOrdered,
-                    vec![(3, options), (2, options), (1, options)],
-                )),
-            ),
-        ];
-        for (case_idx, test_case) in test_cases.iter().enumerate() {
-            let (group_by_columns, expected) = &test_case;
-            let mut group_by_exprs = vec![];
-            for col_name in group_by_columns {
-                group_by_exprs.push((col(col_name, &test_schema)?, col_name.to_string()));
-            }
-            let group_bys = PhysicalGroupBy::new_single(group_by_exprs);
-            let res = get_working_mode(&input, &group_bys);
-            assert_eq!(
-                res, *expected,
-                "Unexpected result for in unbounded test case#: {case_idx:?}, case: {test_case:?}"
-            );
-        }
-
-        Ok(())
     }
 
     /// some mock data to aggregates
