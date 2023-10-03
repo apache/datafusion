@@ -626,7 +626,8 @@ impl InformationSchemaDfSettings {
     fn new(config: InformationSchemaConfig) -> Self {
         let schema = Arc::new(Schema::new(vec![
             Field::new("name", DataType::Utf8, false),
-            Field::new("setting", DataType::Utf8, true),
+            Field::new("value", DataType::Utf8, true),
+            Field::new("description", DataType::Utf8, true),
         ]));
 
         Self { schema, config }
@@ -635,7 +636,8 @@ impl InformationSchemaDfSettings {
     fn builder(&self) -> InformationSchemaDfSettingsBuilder {
         InformationSchemaDfSettingsBuilder {
             names: StringBuilder::new(),
-            settings: StringBuilder::new(),
+            values: StringBuilder::new(),
+            descriptions: StringBuilder::new(),
             schema: self.schema.clone(),
         }
     }
@@ -664,13 +666,15 @@ impl PartitionStream for InformationSchemaDfSettings {
 struct InformationSchemaDfSettingsBuilder {
     schema: SchemaRef,
     names: StringBuilder,
-    settings: StringBuilder,
+    values: StringBuilder,
+    descriptions: StringBuilder,
 }
 
 impl InformationSchemaDfSettingsBuilder {
     fn add_setting(&mut self, entry: ConfigEntry) {
         self.names.append_value(entry.key);
-        self.settings.append_option(entry.value);
+        self.values.append_option(entry.value);
+        self.descriptions.append_value(entry.description);
     }
 
     fn finish(&mut self) -> RecordBatch {
@@ -678,7 +682,8 @@ impl InformationSchemaDfSettingsBuilder {
             self.schema.clone(),
             vec![
                 Arc::new(self.names.finish()),
-                Arc::new(self.settings.finish()),
+                Arc::new(self.values.finish()),
+                Arc::new(self.descriptions.finish()),
             ],
         )
         .unwrap()

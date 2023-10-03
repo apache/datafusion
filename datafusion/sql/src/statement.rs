@@ -766,19 +766,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
 
         let variable_lower = variable.to_lowercase();
+        let base_query =
+            "SELECT name, value, description FROM information_schema.df_settings";
 
         let query = if variable_lower == "all" {
             // Add an ORDER BY so the output comes out in a consistent order
-            String::from(
-                "SELECT name, setting FROM information_schema.df_settings ORDER BY name",
-            )
+            format!("{base_query} ORDER BY name")
         } else if variable_lower == "timezone" || variable_lower == "time.zone" {
             // we could introduce alias in OptionDefinition if this string matching thing grows
-            String::from("SELECT name, setting FROM information_schema.df_settings WHERE name = 'datafusion.execution.time_zone'")
+            format!("{base_query} WHERE name = 'datafusion.execution.time_zone'")
         } else {
-            format!(
-                "SELECT name, setting FROM information_schema.df_settings WHERE name = '{variable}'"
-            )
+            format!("{base_query} WHERE name = '{variable}'")
         };
 
         let mut rewrite = DFParser::parse_sql(&query)?;

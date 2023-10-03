@@ -22,10 +22,10 @@ set datafusion.catalog.information_schema = true
 statement ok
 SET datafusion.execution.batch_size to 1
 
-query TT
+query TTT
 SHOW datafusion.execution.batch_size
 ----
-datafusion.execution.batch_size 1
+datafusion.execution.batch_size 1 Default batch size while creating new batches, it's especially useful for buffer-in-memory batches since creating tiny batches would result in too much metadata memory consumption
 
 # set variable to value with equal sign
 
@@ -35,10 +35,10 @@ set datafusion.catalog.information_schema = true
 statement ok
 SET datafusion.execution.batch_size = 1
 
-query TT
+query TTT
 SHOW datafusion.execution.batch_size
 ----
-datafusion.execution.batch_size 1
+datafusion.execution.batch_size 1 Default batch size while creating new batches, it's especially useful for buffer-in-memory batches since creating tiny batches would result in too much metadata memory consumption
 
 # set variable to value with single quoted string
 statement ok
@@ -47,10 +47,10 @@ set datafusion.catalog.information_schema = true
 statement ok
 SET datafusion.execution.batch_size to '1'
 
-query TT
+query TTT
 SHOW datafusion.execution.batch_size
 ----
-datafusion.execution.batch_size 1
+datafusion.execution.batch_size 1 Default batch size while creating new batches, it's especially useful for buffer-in-memory batches since creating tiny batches would result in too much metadata memory consumption
 
 # set variable to value case insensitive
 statement ok
@@ -59,10 +59,10 @@ set datafusion.catalog.information_schema = true
 statement ok
 SET datafusion.EXECUTION.batch_size to '1'
 
-query TT
+query TTT
 SHOW datafusion.execution.batch_size
 ----
-datafusion.execution.batch_size 1
+datafusion.execution.batch_size 1 Default batch size while creating new batches, it's especially useful for buffer-in-memory batches since creating tiny batches would result in too much metadata memory consumption
 
 # set variable unknown variable
 statement error DataFusion error: External error: could not find config namespace for key "aabbcc"
@@ -75,18 +75,18 @@ set datafusion.catalog.information_schema = true
 statement ok
 SET datafusion.execution.coalesce_batches to true
 
-query TT
+query TTT
 SHOW datafusion.execution.coalesce_batches
 ----
-datafusion.execution.coalesce_batches true
+datafusion.execution.coalesce_batches true When set to true, record batches will be examined between each operator and small batches will be coalesced into larger batches. This is helpful when there are highly selective filters or joins that could produce tiny output batches. The target batch size is determined by the configuration setting
 
 statement ok
 SET datafusion.execution.coalesce_batches to 'false'
 
-query TT
+query TTT
 SHOW datafusion.execution.coalesce_batches
 ----
-datafusion.execution.coalesce_batches false
+datafusion.execution.coalesce_batches false When set to true, record batches will be examined between each operator and small batches will be coalesced into larger batches. This is helpful when there are highly selective filters or joins that could produce tiny output batches. The target batch size is determined by the configuration setting
 
 # set bool variable bad value
 
@@ -106,26 +106,26 @@ set datafusion.catalog.information_schema = true
 statement ok
 SET datafusion.execution.batch_size to 0
 
-query TT
+query TTT
 SHOW datafusion.execution.batch_size
 ----
-datafusion.execution.batch_size 0
+datafusion.execution.batch_size 0 Default batch size while creating new batches, it's especially useful for buffer-in-memory batches since creating tiny batches would result in too much metadata memory consumption
 
 statement ok
 SET datafusion.execution.batch_size to '1'
 
-query TT
+query TTT
 SHOW datafusion.execution.batch_size
 ----
-datafusion.execution.batch_size 1
+datafusion.execution.batch_size 1 Default batch size while creating new batches, it's especially useful for buffer-in-memory batches since creating tiny batches would result in too much metadata memory consumption
 
 statement ok
 SET datafusion.execution.batch_size to +2
 
-query TT
+query TTT
 SHOW datafusion.execution.batch_size
 ----
-datafusion.execution.batch_size 2
+datafusion.execution.batch_size 2 Default batch size while creating new batches, it's especially useful for buffer-in-memory batches since creating tiny batches would result in too much metadata memory consumption
 
 # set u64 variable bad value
 
@@ -148,10 +148,10 @@ set datafusion.catalog.information_schema = true
 statement ok
 SET datafusion.execution.time_zone = '+08:00'
 
-query TT
+query TTT
 SHOW datafusion.execution.time_zone
 ----
-datafusion.execution.time_zone +08:00
+datafusion.execution.time_zone +08:00 The default time zone Some functions, e.g. `EXTRACT(HOUR from SOME_TIME)`, shift the underlying datetime according to this time zone, and then extract the hour
 
 # set time zone with alias variable name
 statement ok
@@ -160,18 +160,18 @@ set datafusion.catalog.information_schema = true
 statement ok
 SET TIME ZONE = '+08:00'
 
-query TT
+query TTT
 SHOW TIME ZONE
 ----
-datafusion.execution.time_zone +08:00
+datafusion.execution.time_zone +08:00 The default time zone Some functions, e.g. `EXTRACT(HOUR from SOME_TIME)`, shift the underlying datetime according to this time zone, and then extract the hour
 
 statement ok
 SET TIMEZONE = '+07:00'
 
-query TT
+query TTT
 SHOW TIMEZONE
 ----
-datafusion.execution.time_zone +07:00
+datafusion.execution.time_zone +07:00 The default time zone Some functions, e.g. `EXTRACT(HOUR from SOME_TIME)`, shift the underlying datetime according to this time zone, and then extract the hour
 
 # set time zone good time zone format
 statement ok
