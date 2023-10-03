@@ -282,18 +282,6 @@ impl ExecutionPlan for SortMergeJoinExec {
         Self::maintains_input_order(self.join_type)
     }
 
-    // fn equivalence_properties(&self) -> EquivalenceProperties {
-    //     let left_columns_len = self.left.schema().fields.len();
-    //     combine_join_equivalence_properties(
-    //         self.join_type,
-    //         self.left.equivalence_properties(),
-    //         self.right.equivalence_properties(),
-    //         left_columns_len,
-    //         self.on(),
-    //         self.schema(),
-    //     )
-    // }
-
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
         combine_join_ordering_equivalence_properties(
             &self.join_type,

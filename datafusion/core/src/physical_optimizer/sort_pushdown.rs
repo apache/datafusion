@@ -264,13 +264,13 @@ fn pushdown_requirement_to_children(
     // && plan.ordering_equivalence_properties().get_finer_ordering()
     // )
     {
-        println!("parent_required if:{:?}", parent_required);
+        // println!("parent_required if:{:?}", parent_required);
         // If the current plan is a leaf node or can not maintain any of the input ordering, can not pushed down requirements.
         // For RepartitionExec, we always choose to not push down the sort requirements even the RepartitionExec(input_partition=1) could maintain input ordering.
         // Pushing down is not beneficial
         Ok(None)
     } else {
-        println!("parent_required else:{:?}", parent_required);
+        // println!("parent_required else:{:?}", parent_required);
         Ok(Some(
             maintains_input_order
                 .iter()

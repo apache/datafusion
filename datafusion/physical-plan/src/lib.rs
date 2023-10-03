@@ -147,11 +147,6 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
             .collect()
     }
 
-    // /// Get the EquivalenceProperties within the plan
-    // fn equivalence_properties(&self) -> EquivalenceProperties {
-    //     EquivalenceProperties::new(self.schema())
-    // }
-
     /// Get the OrderingEquivalenceProperties within the plan
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
         OrderingEquivalenceProperties::new(self.schema())

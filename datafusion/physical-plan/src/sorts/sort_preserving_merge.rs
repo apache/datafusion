@@ -170,10 +170,6 @@ impl ExecutionPlan for SortPreservingMergeExec {
         vec![true]
     }
 
-    // fn equivalence_properties(&self) -> EquivalenceProperties {
-    //     self.input.equivalence_properties()
-    // }
-
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
         self.input.ordering_equivalence_properties()
     }

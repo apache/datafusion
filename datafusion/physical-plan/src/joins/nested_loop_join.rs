@@ -190,18 +190,6 @@ impl ExecutionPlan for NestedLoopJoinExec {
         distribution_from_join_type(&self.join_type)
     }
 
-    // fn equivalence_properties(&self) -> EquivalenceProperties {
-    //     let left_columns_len = self.left.schema().fields.len();
-    //     combine_join_equivalence_properties(
-    //         self.join_type,
-    //         self.left.equivalence_properties(),
-    //         self.right.equivalence_properties(),
-    //         left_columns_len,
-    //         &[], // empty join keys
-    //         self.schema(),
-    //     )
-    // }
-
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![self.left.clone(), self.right.clone()]
     }

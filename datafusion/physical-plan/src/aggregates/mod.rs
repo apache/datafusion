@@ -811,16 +811,6 @@ impl ExecutionPlan for AggregateExec {
         vec![self.required_input_ordering.clone()]
     }
 
-    // fn equivalence_properties(&self) -> EquivalenceProperties {
-    //     let mut new_properties = EquivalenceProperties::new(self.schema());
-    //     project_equivalence_properties(
-    //         self.input.equivalence_properties(),
-    //         &self.columns_map,
-    //         &mut new_properties,
-    //     );
-    //     new_properties
-    // }
-
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
         self.input
             .ordering_equivalence_properties()

@@ -214,10 +214,6 @@ impl ExecutionPlan for WindowAggExec {
         }
     }
 
-    // fn equivalence_properties(&self) -> EquivalenceProperties {
-    //     self.input().equivalence_properties()
-    // }
-
     /// Get the OrderingEquivalenceProperties within the plan
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
         window_ordering_equivalence(&self.schema, &self.input, &self.window_expr)

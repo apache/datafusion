@@ -136,10 +136,6 @@ impl ExecutionPlan for CoalesceBatchesExec {
         vec![false]
     }
 
-    // fn equivalence_properties(&self) -> EquivalenceProperties {
-    //     self.input.equivalence_properties()
-    // }
-
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
         self.input.ordering_equivalence_properties()
     }

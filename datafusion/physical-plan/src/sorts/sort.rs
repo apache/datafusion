@@ -825,10 +825,6 @@ impl ExecutionPlan for SortExec {
         Some(&self.expr)
     }
 
-    // fn equivalence_properties(&self) -> EquivalenceProperties {
-    //     self.input.equivalence_properties()
-    // }
-
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
         let input_oeq = self.input.ordering_equivalence_properties();
         // println!("sort input: {:?}", input_oeq);
