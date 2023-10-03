@@ -60,6 +60,7 @@ use datafusion_physical_expr::aggregate::is_order_sensitive;
 use datafusion_physical_expr::equivalence::{collapse_lex_req, PartitionSearchMode};
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
 use datafusion_physical_expr::expressions::{Max, Min};
+use crate::joins::StreamJoinPartitionMode::Partitioned;
 
 use super::DisplayAs;
 
@@ -295,6 +296,7 @@ pub struct AggregateExec {
     aggregation_ordering: Option<AggregationOrdering>,
     required_input_ordering: Option<LexOrderingReq>,
     partition_search_mode: PartitionSearchMode,
+    output_ordering: Option<LexOrdering>,
 }
 
 /// Calculates the working mode for `GROUP BY` queries.
@@ -451,114 +453,6 @@ fn print_plan(plan: &Arc<dyn ExecutionPlan>) {
     println!("{:#?}", actual);
 }
 
-/// Calculate the required input ordering for the [`AggregateExec`] by considering
-/// ordering requirements of order-sensitive aggregation functions.
-fn calc_required_input_ordering(
-    input: &Arc<dyn ExecutionPlan>,
-    aggr_exprs: &mut [Arc<dyn AggregateExpr>],
-    order_by_exprs: &mut [Option<LexOrdering>],
-    aggregator_reqs: LexOrderingReq,
-    aggregator_reverse_reqs: Option<LexOrderingReq>,
-    aggregation_ordering: &mut Option<AggregationOrdering>,
-    mode: &AggregateMode,
-) -> Result<Option<LexOrderingReq>> {
-    let mut required_input_ordering = vec![];
-    // Boolean shows that whether `required_input_ordering` stored comes from
-    // `aggregator_reqs` or `aggregator_reverse_reqs`
-    let mut reverse_req = false;
-    // If reverse aggregator is None, there is no way to run aggregators in reverse mode. Hence ignore it during analysis
-    let aggregator_requirements =
-        if let Some(aggregator_reverse_reqs) = aggregator_reverse_reqs {
-            // If existing ordering doesn't satisfy requirement, we should do calculations
-            // on naive requirement (by convention, otherwise the final plan will be unintuitive),
-            // even if reverse ordering is possible.
-            // Hence, while iterating consider naive requirement last, by this way
-            // we prioritize naive requirement over reverse requirement, when
-            // reverse requirement is not helpful with removing SortExec from the plan.
-            vec![(true, aggregator_reverse_reqs), (false, aggregator_reqs)]
-        } else {
-            vec![(false, aggregator_reqs)]
-        };
-    for (is_reverse, aggregator_requirement) in aggregator_requirements.into_iter() {
-        if let Some(AggregationOrdering {
-            // If the mode is FullyOrdered or PartiallyOrdered (i.e. we are
-            // running with bounded memory, without breaking the pipeline),
-            // then we append the aggregator ordering requirement to the existing
-            // ordering. This way, we can still run with bounded memory.
-            mode: GroupByOrderMode::FullyOrdered | GroupByOrderMode::PartiallyOrdered,
-            order_indices,
-            ..
-        }) = aggregation_ordering
-        {
-            // Get the section of the input ordering that enables us to run in
-            // FullyOrdered or PartiallyOrdered modes:
-            let requirement_prefix =
-                if let Some(existing_ordering) = input.output_ordering() {
-                    // print_plan(&input);
-                    // println!("existing ordering:{:?}", existing_ordering);
-                    &existing_ordering[0..order_indices.len()]
-                } else {
-                    &[]
-                };
-            let mut requirement =
-                PhysicalSortRequirement::from_sort_exprs(requirement_prefix.iter());
-            for req in aggregator_requirement {
-                // Final and FinalPartitioned modes don't enforce ordering
-                // requirements since order-sensitive aggregators handle such
-                // requirements during merging.
-                if mode.is_first_stage()
-                    && requirement.iter().all(|item| req.expr.ne(&item.expr))
-                {
-                    requirement.push(req);
-                }
-            }
-            required_input_ordering = requirement;
-        } else if mode.is_first_stage() {
-            required_input_ordering = aggregator_requirement;
-        }
-        // Keep track of the direction from which required_input_ordering is constructed:
-        reverse_req = is_reverse;
-        // If all the order-sensitive aggregate functions are reversible (e.g. all the
-        // order-sensitive aggregators are either FIRST_VALUE or LAST_VALUE), then we can
-        // run aggregate expressions either in the given required ordering, (i.e. finest
-        // requirement that satisfies every aggregate function requirement) or its reverse
-        // (opposite) direction. We analyze these two possibilities, and use the version that
-        // satisfies existing ordering. This enables us to avoid an extra sort step in the final
-        // plan. If neither version satisfies the existing ordering, we use the given ordering
-        // requirement. In short, if running aggregators in reverse order help us to avoid a
-        // sorting step, we do so. Otherwise, we use the aggregators as is.
-        if input
-            .ordering_equivalence_properties()
-            .ordering_satisfy_requirement_concrete(&required_input_ordering)
-        {
-            break;
-        }
-    }
-    // If `required_input_ordering` is constructed using the reverse requirement, we
-    // should reverse each `aggr_expr` in order to correctly calculate their results
-    // in reverse order.
-    if reverse_req {
-        aggr_exprs
-            .iter_mut()
-            .zip(order_by_exprs.iter_mut())
-            .map(|(aggr_expr, ob_expr)| {
-                if is_order_sensitive(aggr_expr) {
-                    if let Some(reverse) = aggr_expr.reverse_expr() {
-                        *aggr_expr = reverse;
-                        *ob_expr = ob_expr.as_ref().map(|obs| reverse_order_bys(obs));
-                    } else {
-                        return plan_err!(
-                            "Aggregate expression should have a reverse expression"
-                        );
-                    }
-                }
-                Ok(())
-            })
-            .collect::<Result<Vec<_>>>()?;
-    }
-    Ok((!required_input_ordering.is_empty()).then_some(required_input_ordering))
-}
-
 /// Check whether group by expression contains all of the expression inside `requirement`
 // As an example Group By (c,b,a) contains all of the expressions in the `requirement`: (a ASC, b DESC)
 fn group_by_contains_all_requirements(
@@ -643,71 +537,60 @@ impl AggregateExec {
             .map(|(item, _)| item.clone())
             .collect::<Vec<_>>();
         let mut partition_search_mode = PartitionSearchMode::Linear;
-        let mut new_requirement: Vec<PhysicalSortRequirement> = vec![];
-        let indices = get_ordered_partition_by_indices(&groupby_exprs, &input);
-        let elem = indices
-            .into_iter()
-            .map(|idx| PhysicalSortRequirement {
-                expr: groupby_exprs[idx].clone(),
-                options: None,
-            })
-            .collect::<Vec<_>>();
-        new_requirement.extend(elem);
         let input_oeq = input.ordering_equivalence_properties();
-        if let Some((should_reverse, mode)) =
-            input_oeq.get_window_mode(&groupby_exprs, &req)?
-        {
-            let all_reversible = aggr_expr
-                .iter()
-                .all(|expr| !is_order_sensitive(expr) || expr.reverse_expr().is_some());
-            if should_reverse && all_reversible {
-                izip!(aggr_expr.iter_mut(), order_by_expr.iter_mut()).for_each(
-                    |(aggr, order_by)| {
-                        if let Some(reverse) = aggr.reverse_expr() {
-                            *aggr = reverse;
-                        } else {
-                            unreachable!();
-                        }
-                        *order_by = order_by.as_ref().map(|ob| reverse_order_bys(ob));
-                    },
-                );
-                let reverse_req = PhysicalSortRequirement::from_sort_exprs(
-                    reverse_order_bys(&req).iter(),
-                );
-                new_requirement.extend(reverse_req);
+        let mut new_requirement: Vec<PhysicalSortRequirement> = vec![];
+        if group_by.is_single() && !groupby_exprs.is_empty(){
+            println!("groupby_exprs: {:?}, req:{:?}", groupby_exprs, req);
+            println!("input_oeq: {:?}", input_oeq);
+            let indices = get_ordered_partition_by_indices(&groupby_exprs, &input);
+            let elem = indices
+                .into_iter()
+                .map(|idx| PhysicalSortRequirement {
+                    expr: groupby_exprs[idx].clone(),
+                    options: None,
+                })
+                .collect::<Vec<_>>();
+            new_requirement.extend(elem);
+            if let Some((should_reverse, mode)) =
+                input_oeq.get_window_mode(&groupby_exprs, &req)?
+            {
+                let all_reversible = aggr_expr
+                    .iter()
+                    .all(|expr| !is_order_sensitive(expr) || expr.reverse_expr().is_some());
+                if should_reverse && all_reversible {
+                    izip!(aggr_expr.iter_mut(), order_by_expr.iter_mut()).for_each(
+                        |(aggr, order_by)| {
+                            if let Some(reverse) = aggr.reverse_expr() {
+                                *aggr = reverse;
+                            } else {
+                                unreachable!();
+                            }
+                            *order_by = order_by.as_ref().map(|ob| reverse_order_bys(ob));
+                        },
+                    );
+                    let reverse_req = PhysicalSortRequirement::from_sort_exprs(
+                        reverse_order_bys(&req).iter(),
+                    );
+                    new_requirement.extend(reverse_req);
+                } else {
+                    let req = PhysicalSortRequirement::from_sort_exprs(&req);
+                    new_requirement.extend(req);
+                }
+                partition_search_mode = mode;
             } else {
                 let req = PhysicalSortRequirement::from_sort_exprs(&req);
                 new_requirement.extend(req);
             }
-            partition_search_mode = mode;
         } else {
             let req = PhysicalSortRequirement::from_sort_exprs(&req);
             new_requirement.extend(req);
         }
-        new_requirement = collapse_lex_req(new_requirement);
 
-        // let aggregator_requirement = requirement
-        //     .as_ref()
-        //     .map(|exprs| PhysicalSortRequirement::from_sort_exprs(exprs.iter()));
-        // let aggregator_reqs = aggregator_requirement.unwrap_or(vec![]);
-        // // If all aggregate expressions are reversible, also consider reverse
-        // // requirement(s). The reason is that existing ordering may satisfy the
-        // // given requirement or its reverse. By considering both, we can generate better plans.
-        // if aggr_expr
-        //     .iter()
-        //     .all(|expr| !is_order_sensitive(expr) || expr.reverse_expr().is_some())
-        // {
-        //     aggregator_reverse_reqs = requirement.map(|reqs| {
-        //         PhysicalSortRequirement::from_sort_exprs(reverse_order_bys(&reqs).iter())
-        //     });
-        // }
+        new_requirement = collapse_lex_req(new_requirement);
 
         // construct a map from the input columns to the output columns of the Aggregation
         let mut columns_map: HashMap<Column, Vec<Column>> = HashMap::new();
         let mut source_to_target_mapping = vec![];
-        // println!(" group_by.expr: {:?}",  group_by.expr);
-        // println!("input schema: {:?}",  input.schema());
-        // println!("input_schema: {:?}",  _input_schema);
         let schema_of_input = input.schema();
         for (expr_idx, (expression, name)) in group_by.expr.iter().enumerate() {
             if let Some(column) = expression.as_any().downcast_ref::<Column>() {
@@ -734,24 +617,14 @@ impl AggregateExec {
             source_to_target_mapping.push((source_expr, target_expr));
         }
 
-        // println!("source_to_target_mapping: {:?}", source_to_target_mapping);
         let mut aggregation_ordering = calc_aggregation_ordering(&input, &group_by);
         let required_input_ordering = if new_requirement.is_empty() {
             None
         } else {
             Some(new_requirement)
         };
-        // // println!("start aggregation_ordering: {:?}", aggregation_ordering);
-        // let required_input_ordering = calc_required_input_ordering(
-        //     &input,
-        //     &mut aggr_expr,
-        //     &mut order_by_expr,
-        //     aggregator_reqs,
-        //     aggregator_reverse_reqs,
-        //     &mut aggregation_ordering,
-        //     &mode,
-        // )?;
-        // // println!("end aggregation_ordering: {:?}", aggregation_ordering);
+        let aggregate_oeq =  input_oeq.project(&source_to_target_mapping, schema.clone());
+        let output_ordering = aggregate_oeq.oeq_group().output_ordering();
 
         Ok(AggregateExec {
             mode,
@@ -769,6 +642,7 @@ impl AggregateExec {
             required_input_ordering,
             limit: None,
             partition_search_mode,
+            output_ordering,
         })
     }
 
@@ -927,8 +801,8 @@ impl DisplayAs for AggregateExec {
                     write!(f, ", lim=[{limit}]")?;
                 }
 
-                if let Some(aggregation_ordering) = &self.aggregation_ordering {
-                    write!(f, ", ordering_mode={:?}", aggregation_ordering.mode)?;
+                if self.partition_search_mode != PartitionSearchMode::Linear {
+                    write!(f, ", ordering_mode={:?}", self.partition_search_mode)?;
                 }
             }
         }
@@ -978,7 +852,7 @@ impl ExecutionPlan for AggregateExec {
     /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         if children[0] {
-            if self.aggregation_ordering.is_none() {
+            if self.partition_search_mode == PartitionSearchMode::Linear {
                 // Cannot run without breaking pipeline.
                 plan_err!(
                     "Aggregate Error: `GROUP BY` clauses with columns without ordering and GROUPING SETS are not supported for unbounded inputs."
@@ -992,9 +866,7 @@ impl ExecutionPlan for AggregateExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.aggregation_ordering
-            .as_ref()
-            .map(|item: &AggregationOrdering| item.ordering.as_slice())
+        self.output_ordering.as_deref()
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {

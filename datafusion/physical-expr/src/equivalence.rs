@@ -662,9 +662,9 @@ impl OrderingEquivalenceProperties {
         if children.is_empty() {
             for (source, target) in source_to_target_mapping.iter() {
                 if source.eq(expr)
-                    || old_eq_class
-                        .iter()
-                        .any(|eq_class| eq_class.iter().any(|item| item.eq(source)))
+                    // || old_eq_class
+                    //     .iter()
+                    //     .any(|eq_class| eq_class.iter().any(|item| item.eq(expr)))
                 {
                     return Some(target.clone());
                 } else if let Some(group) = Self::get_eq_class_group(old_eq_class, source)

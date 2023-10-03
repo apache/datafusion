@@ -2304,7 +2304,7 @@ mod tmp_tests {
 
         let expected_optimized_lines: Vec<&str> = vec![
             "ProjectionExec: expr=[col0@0 as col0, LAST_VALUE(r.col1) ORDER BY [r.col0 ASC NULLS LAST]@3 as last_col1]",
-            "  AggregateExec: mode=Single, gby=[col0@0 as col0, col1@1 as col1, col2@2 as col2], aggr=[LAST_VALUE(r.col1)], ordering_mode=PartiallyOrdered",
+            "  AggregateExec: mode=Single, gby=[col0@0 as col0, col1@1 as col1, col2@2 as col2], aggr=[LAST_VALUE(r.col1)], ordering_mode=PartiallySorted([0])",
             "    SortExec: expr=[col0@3 ASC NULLS LAST]",
             "      CoalesceBatchesExec: target_batch_size=8192",
             "        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(col0@0, col0@0)]",
@@ -2351,7 +2351,7 @@ mod tmp_tests {
             "      AggregateExec: mode=FinalPartitioned, gby=[col0@0 as col0, col1@1 as col1, col2@2 as col2], aggr=[LAST_VALUE(r.col1)]",
             "        CoalesceBatchesExec: target_batch_size=8192",
             "          RepartitionExec: partitioning=Hash([col0@0, col1@1, col2@2], 2), input_partitions=2",
-            "            AggregateExec: mode=Partial, gby=[col0@0 as col0, col1@1 as col1, col2@2 as col2], aggr=[LAST_VALUE(r.col1)], ordering_mode=PartiallyOrdered",
+            "            AggregateExec: mode=Partial, gby=[col0@0 as col0, col1@1 as col1, col2@2 as col2], aggr=[LAST_VALUE(r.col1)], ordering_mode=PartiallySorted([0])",
             "              SortExec: expr=[col0@3 ASC NULLS LAST]",
             "                CoalesceBatchesExec: target_batch_size=8192",
             "                  HashJoinExec: mode=Partitioned, join_type=Inner, on=[(col0@0, col0@0)]",
@@ -2698,7 +2698,7 @@ mod tmp_tests {
 
         let expected_optimized_lines: Vec<&str> = vec![
             "ProjectionExec: expr=[a@1 as a, d@0 as d, SUM(annotated_data_infinite2.c) ORDER BY [annotated_data_infinite2.a DESC NULLS FIRST]@2 as summation1]",
-            "  AggregateExec: mode=Single, gby=[d@2 as d, a@0 as a], aggr=[SUM(annotated_data_infinite2.c)], ordering_mode=PartiallyOrdered",
+            "  AggregateExec: mode=Single, gby=[d@2 as d, a@0 as a], aggr=[SUM(annotated_data_infinite2.c)], ordering_mode=PartiallySorted([1])",
             "    CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
 
@@ -2999,7 +2999,7 @@ mod tmp_tests {
 
         let expected_optimized_lines: Vec<&str> = vec![
             "ProjectionExec: expr=[a@0 as a, LAST_VALUE(r.b) ORDER BY [r.a ASC NULLS LAST]@3 as last_col1]",
-            "  AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b, c@2 as c], aggr=[LAST_VALUE(r.b)], ordering_mode=PartiallyOrdered",
+            "  AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b, c@2 as c], aggr=[LAST_VALUE(r.b)], ordering_mode=PartiallySorted([0])",
             "    CoalesceBatchesExec: target_batch_size=8192",
             "      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0)]",
             "        CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true",
@@ -3060,7 +3060,7 @@ mod tmp_tests {
             "      AggregateExec: mode=FinalPartitioned, gby=[a@0 as a, b@1 as b, c@2 as c], aggr=[LAST_VALUE(r.b)]",
             "        CoalesceBatchesExec: target_batch_size=8192",
             "          RepartitionExec: partitioning=Hash([a@0, b@1, c@2], 4), input_partitions=4",
-            "            AggregateExec: mode=Partial, gby=[a@0 as a, b@1 as b, c@2 as c], aggr=[LAST_VALUE(r.b)], ordering_mode=PartiallyOrdered",
+            "            AggregateExec: mode=Partial, gby=[a@0 as a, b@1 as b, c@2 as c], aggr=[LAST_VALUE(r.b)], ordering_mode=PartiallySorted([0])",
             "              CoalesceBatchesExec: target_batch_size=8192",
             "                HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0)]",
             "                  CoalesceBatchesExec: target_batch_size=8192",
@@ -3136,7 +3136,7 @@ mod tmp_tests {
         let expected = vec![
             "ProjectionExec: expr=[amount_usd@0 as amount_usd]",
             "  ProjectionExec: expr=[LAST_VALUE(lineitem.l_d) ORDER BY [lineitem.l_a ASC NULLS LAST]@1 as amount_usd, row_n@0 as row_n]",
-            "    AggregateExec: mode=Single, gby=[row_n@2 as row_n], aggr=[LAST_VALUE(lineitem.l_d)], ordering_mode=FullyOrdered",
+            "    AggregateExec: mode=Single, gby=[row_n@2 as row_n], aggr=[LAST_VALUE(lineitem.l_d)], ordering_mode=Sorted",
             "      ProjectionExec: expr=[l_a@0 as l_a, l_d@1 as l_d, row_n@4 as row_n]",
             "        CoalesceBatchesExec: target_batch_size=8192",
             "          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(l_d@1, o_d@1)], filter=CAST(l_a@0 AS Int64) >= CAST(o_a@1 AS Int64) - 10",
@@ -3196,7 +3196,7 @@ mod tmp_tests {
         let expected = vec![
             "ProjectionExec: expr=[amount_usd@0 as amount_usd]",
             "  ProjectionExec: expr=[LAST_VALUE(l.d) ORDER BY [l.a ASC NULLS LAST]@1 as amount_usd, row_n@0 as row_n]",
-            "    AggregateExec: mode=Single, gby=[row_n@2 as row_n], aggr=[LAST_VALUE(l.d)], ordering_mode=FullyOrdered",
+            "    AggregateExec: mode=Single, gby=[row_n@2 as row_n], aggr=[LAST_VALUE(l.d)], ordering_mode=Sorted",
             "      ProjectionExec: expr=[a@0 as a, d@1 as d, row_n@4 as row_n]",
             "        CoalesceBatchesExec: target_batch_size=8192",
             "          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(d@1, d@1)], filter=CAST(a@0 AS Int64) >= CAST(a@1 AS Int64) - 10",
