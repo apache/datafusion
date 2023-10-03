@@ -622,8 +622,8 @@ impl BuiltinScalarFunction {
                     Timestamp(Nanosecond, None) | Utf8 | Null => {
                         Ok(Timestamp(Nanosecond, None))
                     }
-                    Timestamp(Nanosecond, Some(tz)) => {
-                        Ok(Timestamp(Nanosecond, Some(Arc::clone(tz))))
+                    Timestamp(Nanosecond, tz_opt) => {
+                        Ok(Timestamp(Nanosecond, tz_opt.clone())))
                     }
                     Timestamp(Microsecond, tz_opt) => {
                         Ok(Timestamp(Microsecond, tz_opt.clone()))
