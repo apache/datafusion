@@ -433,7 +433,8 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                                 granularity.as_str(),
                             )
                         })
-                        .collect::<Result<TimestampSecondArray>>()?;
+                        .collect::<Result<TimestampSecondArray>>()?
+                        .with_timezone_opt(tz_opt.clone());
                     ColumnarValue::Array(Arc::new(array))
                 }
                 DataType::Timestamp(TimeUnit::Millisecond, tz_opt) => {
@@ -449,7 +450,8 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                                 granularity.as_str(),
                             )
                         })
-                        .collect::<Result<TimestampMillisecondArray>>()?;
+                        .collect::<Result<TimestampMillisecondArray>>()?
+                        .with_timezone_opt(tz_opt.clone());
                     ColumnarValue::Array(Arc::new(array))
                 }
                 DataType::Timestamp(TimeUnit::Microsecond, tz_opt) => {
@@ -465,7 +467,25 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                                 granularity.as_str(),
                             )
                         })
-                        .collect::<Result<TimestampMicrosecondArray>>()?;
+                        .collect::<Result<TimestampMicrosecondArray>>()?
+                        .with_timezone_opt(tz_opt.clone());
+                    ColumnarValue::Array(Arc::new(array))
+                }
+                DataType::Timestamp(TimeUnit::Nanosecond, tz_opt) => {
+                    let parsed_tz = parse_tz(tz_opt)?;
+                    let array = as_timestamp_nanosecond_array(array)?;
+                    let array = array
+                        .iter()
+                        .map(|x| {
+                            _date_trunc(
+                                TimeUnit::Nanosecond,
+                                &x,
+                                parsed_tz,
+                                granularity.as_str(),
+                            )
+                        })
+                        .collect::<Result<TimestampNanosecondArray>>()?
+                        .with_timezone_opt(tz_opt.clone());
                     ColumnarValue::Array(Arc::new(array))
                 }
                 _ => {
@@ -713,35 +733,39 @@ fn date_bin_impl(
             ))
         }
         ColumnarValue::Array(array) => match array.data_type() {
-            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+            DataType::Timestamp(TimeUnit::Nanosecond, tz_opt) => {
                 let array = as_timestamp_nanosecond_array(array)?
                     .iter()
                     .map(f_nanos)
-                    .collect::<TimestampNanosecondArray>();
+                    .collect::<TimestampNanosecondArray>()
+                    .with_timezone_opt(tz_opt.clone());
 
                 ColumnarValue::Array(Arc::new(array))
             }
-            DataType::Timestamp(TimeUnit::Microsecond, _) => {
+            DataType::Timestamp(TimeUnit::Microsecond, tz_opt) => {
                 let array = as_timestamp_microsecond_array(array)?
                     .iter()
                     .map(f_micros)
-                    .collect::<TimestampMicrosecondArray>();
+                    .collect::<TimestampMicrosecondArray>()
+                    .with_timezone_opt(tz_opt.clone());
 
                 ColumnarValue::Array(Arc::new(array))
             }
-            DataType::Timestamp(TimeUnit::Millisecond, _) => {
+            DataType::Timestamp(TimeUnit::Millisecond, tz_opt) => {
                 let array = as_timestamp_millisecond_array(array)?
                     .iter()
                     .map(f_millis)
-                    .collect::<TimestampMillisecondArray>();
+                    .collect::<TimestampMillisecondArray>()
+                    .with_timezone_opt(tz_opt.clone());
 
                 ColumnarValue::Array(Arc::new(array))
             }
-            DataType::Timestamp(TimeUnit::Second, _) => {
+            DataType::Timestamp(TimeUnit::Second, tz_opt) => {
                 let array = as_timestamp_second_array(array)?
                     .iter()
                     .map(f_secs)
-                    .collect::<TimestampSecondArray>();
+                    .collect::<TimestampSecondArray>()
+                    .with_timezone_opt(tz_opt.clone());
 
                 ColumnarValue::Array(Arc::new(array))
             }
@@ -925,7 +949,9 @@ where
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::{ArrayRef, Int64Array, IntervalDayTimeArray, StringBuilder};
+    use arrow::array::{
+        as_primitive_array, ArrayRef, Int64Array, IntervalDayTimeArray, StringBuilder,
+    };
 
     use super::*;
 
@@ -1048,6 +1074,91 @@ mod tests {
             let right = string_to_timestamp_nanos(expected).unwrap();
             let result = date_trunc_coarse(granularity, left, None).unwrap();
             assert_eq!(result, right, "{original} = {expected}");
+        });
+    }
+
+    #[test]
+    fn test_date_trunc_timezones() {
+        let cases = vec![
+            (
+                vec![
+                    "2020-09-08T00:00:00Z",
+                    "2020-09-08T01:00:00Z",
+                    "2020-09-08T02:00:00Z",
+                    "2020-09-08T03:00:00Z",
+                    "2020-09-08T04:00:00Z",
+                ],
+                Some("+00".into()),
+                vec![
+                    "2020-09-08T00:00:00Z",
+                    "2020-09-08T00:00:00Z",
+                    "2020-09-08T00:00:00Z",
+                    "2020-09-08T00:00:00Z",
+                    "2020-09-08T00:00:00Z",
+                ],
+            ),
+            (
+                vec![
+                    "2020-09-08T00:00:00Z",
+                    "2020-09-08T01:00:00Z",
+                    "2020-09-08T02:00:00Z",
+                    "2020-09-08T03:00:00Z",
+                    "2020-09-08T04:00:00Z",
+                ],
+                None,
+                vec![
+                    "2020-09-08T00:00:00Z",
+                    "2020-09-08T00:00:00Z",
+                    "2020-09-08T00:00:00Z",
+                    "2020-09-08T00:00:00Z",
+                    "2020-09-08T00:00:00Z",
+                ],
+            ),
+            (
+                vec![
+                    "2020-09-08T00:00:00Z",
+                    "2020-09-08T01:00:00Z",
+                    "2020-09-08T02:00:00Z",
+                    "2020-09-08T03:00:00Z",
+                    "2020-09-08T04:00:00Z",
+                ],
+                Some("-02".into()),
+                vec![
+                    "2020-09-07T02:00:00Z",
+                    "2020-09-07T02:00:00Z",
+                    "2020-09-08T02:00:00Z",
+                    "2020-09-08T02:00:00Z",
+                    "2020-09-08T02:00:00Z",
+                ],
+            ),
+        ];
+
+        cases.iter().for_each(|(original, tz_opt, expected)| {
+            let input = original
+                .iter()
+                .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
+                .collect::<TimestampNanosecondArray>()
+                .with_timezone_opt(tz_opt.clone());
+            let right = expected
+                .iter()
+                .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
+                .collect::<TimestampNanosecondArray>()
+                .with_timezone_opt(tz_opt.clone());
+            let result = date_trunc(&[
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("day".to_string()))),
+                ColumnarValue::Array(Arc::new(input)),
+            ])
+            .unwrap();
+            if let ColumnarValue::Array(result) = result {
+                assert_eq!(
+                    result.data_type(),
+                    &DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone())
+                );
+                let left = as_primitive_array::<TimestampNanosecondType>(&result);
+                assert_eq!(left, &right);
+            } else {
+                panic!("unexpected column type");
+            }
         });
     }
 
@@ -1250,6 +1361,95 @@ mod tests {
             res.err().unwrap().strip_backtrace(),
             "This feature is not implemented: DATE_BIN only supports literal values for the origin argument, not arrays"
         );
+    }
+
+    #[test]
+    fn test_date_bin_timezones() {
+        let cases = vec![
+            (
+                vec![
+                    "2020-09-08T00:00:00Z",
+                    "2020-09-08T01:00:00Z",
+                    "2020-09-08T02:00:00Z",
+                    "2020-09-08T03:00:00Z",
+                    "2020-09-08T04:00:00Z",
+                ],
+                Some("+00".into()),
+                vec![
+                    "2020-09-08T00:00:00Z",
+                    "2020-09-08T00:00:00Z",
+                    "2020-09-08T00:00:00Z",
+                    "2020-09-08T00:00:00Z",
+                    "2020-09-08T00:00:00Z",
+                ],
+            ),
+            (
+                vec![
+                    "2020-09-08T00:00:00Z",
+                    "2020-09-08T01:00:00Z",
+                    "2020-09-08T02:00:00Z",
+                    "2020-09-08T03:00:00Z",
+                    "2020-09-08T04:00:00Z",
+                ],
+                None,
+                vec![
+                    "2020-09-08T00:00:00Z",
+                    "2020-09-08T00:00:00Z",
+                    "2020-09-08T00:00:00Z",
+                    "2020-09-08T00:00:00Z",
+                    "2020-09-08T00:00:00Z",
+                ],
+            ),
+            (
+                vec![
+                    "2020-09-08T00:00:00Z",
+                    "2020-09-08T01:00:00Z",
+                    "2020-09-08T02:00:00Z",
+                    "2020-09-08T03:00:00Z",
+                    "2020-09-08T04:00:00Z",
+                ],
+                Some("-02".into()),
+                vec![
+                    "2020-09-08T00:00:00Z",
+                    "2020-09-08T00:00:00Z",
+                    "2020-09-08T00:00:00Z",
+                    "2020-09-08T00:00:00Z",
+                    "2020-09-08T00:00:00Z",
+                ],
+            ),
+        ];
+
+        cases.iter().for_each(|(original, tz_opt, expected)| {
+            let input = original
+                .iter()
+                .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
+                .collect::<TimestampNanosecondArray>()
+                .with_timezone_opt(tz_opt.clone());
+            let right = expected
+                .iter()
+                .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
+                .collect::<TimestampNanosecondArray>()
+                .with_timezone_opt(tz_opt.clone());
+            let result = date_bin(&[
+                ColumnarValue::Scalar(ScalarValue::new_interval_dt(1, 0)),
+                ColumnarValue::Array(Arc::new(input)),
+                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
+                    Some(0),
+                    Some("+00".into()),
+                )),
+            ])
+            .unwrap();
+            if let ColumnarValue::Array(result) = result {
+                assert_eq!(
+                    result.data_type(),
+                    &DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone())
+                );
+                let left = as_primitive_array::<TimestampNanosecondType>(&result);
+                assert_eq!(left, &right);
+            } else {
+                panic!("unexpected column type");
+            }
+        });
     }
 
     #[test]
