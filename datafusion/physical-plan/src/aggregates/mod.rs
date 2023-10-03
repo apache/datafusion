@@ -412,13 +412,6 @@ fn get_aggregate_search_mode(
     Ok(partition_search_mode)
 }
 
-#[allow(dead_code)]
-fn print_plan(plan: &Arc<dyn ExecutionPlan>) {
-    let formatted = displayable(plan.as_ref()).indent(true).to_string();
-    let actual: Vec<&str> = formatted.trim().lines().collect();
-    println!("{:#?}", actual);
-}
-
 /// Check whether group by expression contains all of the expression inside `requirement`
 // As an example Group By (c,b,a) contains all of the expressions in the `requirement`: (a ASC, b DESC)
 fn group_by_contains_all_requirements(

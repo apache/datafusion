@@ -307,15 +307,6 @@ impl TreeNode for PlanWithCorrespondingCoalescePartitions {
     }
 }
 
-#[allow(dead_code)]
-fn print_plan(plan: &Arc<dyn ExecutionPlan>) {
-    let formatted = crate::physical_plan::displayable(plan.as_ref())
-        .indent(true)
-        .to_string();
-    let actual: Vec<&str> = formatted.trim().lines().collect();
-    println!("{:#?}", actual);
-}
-
 /// The boolean flag `repartition_sorts` defined in the config indicates
 /// whether we elect to transform [`CoalescePartitionsExec`] + [`SortExec`] cascades
 /// into [`SortExec`] + [`SortPreservingMergeExec`] cascades, which enables us to
@@ -352,10 +343,8 @@ impl PhysicalOptimizerRule for EnforceSorting {
 
         // Execute a top-down traversal to exploit sort push-down opportunities
         // missed by the bottom-up traversal:
-        // print_plan(&updated_plan.plan);
         let sort_pushdown = SortPushDown::init(updated_plan.plan);
         let adjusted = sort_pushdown.transform_down(&pushdown_sorts)?;
-        // print_plan(&adjusted.plan);
         Ok(adjusted.plan)
     }
 
@@ -447,7 +436,6 @@ fn ensure_sorting(
     let plan = requirements.plan;
     let mut children = plan.children();
     let mut sort_onwards = requirements.sort_onwards;
-    // print_plan(&plan);
     if let Some(result) = analyze_immediate_sort_removal(&plan, &sort_onwards) {
         return Ok(Transformed::Yes(result));
     }
@@ -461,10 +449,6 @@ fn ensure_sorting(
         let physical_ordering = child.output_ordering();
         match (required_ordering, physical_ordering) {
             (Some(required_ordering), Some(_)) => {
-                // println!("child");
-                // print_plan(&child);
-                // println!("required_ordering: {:?}", required_ordering);
-                // println!("child.ordering_equivalence_properties(): {:?}", child.ordering_equivalence_properties());
                 if !child
                     .ordering_equivalence_properties()
                     .ordering_satisfy_requirement_concrete(&required_ordering)
@@ -526,20 +510,6 @@ fn analyze_immediate_sort_removal(
 ) -> Option<PlanWithCorrespondingSort> {
     if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
         let sort_input = sort_exec.input().clone();
-        // println!("sort input");
-        // print_plan(&plan);
-        // println!(
-        //     "sort_input.output_ordering(): {:?}",
-        //     sort_input.output_ordering()
-        // );
-        // println!(
-        //     "sort_exec.output_ordering(): {:?}",
-        //     sort_exec.output_ordering()
-        // );
-        // println!(
-        //     "sort_input.ordering_equivalence_properties(): {:?}",
-        //     sort_input.ordering_equivalence_properties()
-        // );
 
         // If this sort is unnecessary, we should remove it:
         if sort_input

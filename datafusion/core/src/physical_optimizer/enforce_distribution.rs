@@ -1208,15 +1208,6 @@ fn replace_order_preserving_variants_helper(
     exec_tree.plan.clone().with_new_children(updated_children)
 }
 
-#[allow(dead_code)]
-fn print_plan(plan: &Arc<dyn ExecutionPlan>) {
-    let formatted = crate::physical_plan::displayable(plan.as_ref())
-        .indent(true)
-        .to_string();
-    let actual: Vec<&str> = formatted.trim().lines().collect();
-    println!("{:#?}", actual);
-}
-
 /// This function checks whether we need to add additional data exchange
 /// operators to satisfy distribution requirements. Since this function
 /// takes care of such requirements, we should avoid manually adding data
