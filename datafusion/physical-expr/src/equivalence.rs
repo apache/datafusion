@@ -608,6 +608,8 @@ impl OrderingEquivalenceProperties {
     }
 
     /// Normalizes state according to equivalent classes
+    /// This util makes sure that all of the entries that have have equivalent groups among the ordering equivalent group
+    /// uses representative expression of corresponding equivalent group (first entry in the group).
     fn normalize_state(&mut self) {
         let normalized_ordering = self
             .oeq_group
@@ -624,6 +626,7 @@ impl OrderingEquivalenceProperties {
             .collect::<Vec<Vec<_>>>();
         // Create new oeq group normalized according to equivalent groups.
         self.oeq_group = OrderingEquivalentGroup::new(normalized_ordering);
+        // TODO: Add normalization with constant also.
     }
 
     /// Add physical expression that have constant value to the `self.constants`
