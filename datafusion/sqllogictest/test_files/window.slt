@@ -2673,7 +2673,7 @@ SELECT
   LEAD(inc_col, -1, 1001) OVER(ORDER BY ts DESC RANGE BETWEEN 1 PRECEDING and 10 FOLLOWING) AS leadr1,
   LEAD(inc_col, 4, 1004) OVER(ORDER BY ts DESC ROWS BETWEEN 10 PRECEDING and 1 FOLLOWING) as leadr2
   FROM annotated_data_finite
-  ORDER BY ts DESC
+  ORDER BY ts DESC, fv2
   LIMIT 5;
 ----
 264 289 266 305 305 305 278 99 99 99 99 86 86 296 291 296 1004 305 305 301 296 305 1002 305 286
@@ -3274,13 +3274,13 @@ drop table annotated_data_infinite2
 query IRR
 SELECT
   C3,
-  MAX(c12) OVER window1,
-  MIN(c12) OVER window2 as max1
+  MAX(c12) OVER window1 as max1,
+  MIN(c12) OVER window2 as max2
   FROM aggregate_test_100
   WINDOW window1 AS (ORDER BY C12),
   window2 AS (PARTITION BY C11),
   window3 AS (ORDER BY C1)
-  ORDER BY C3
+  ORDER BY C3, max2
   LIMIT 5
 ----
 -117 0.850672105305 0.850672105305
@@ -3329,7 +3329,7 @@ SELECT
   MIN(c12) OVER window1 as max1
   FROM aggregate_test_100
   WINDOW window1 AS (ORDER BY C12)
-  ORDER BY C3
+  ORDER BY C3, min1
   LIMIT 5
 ----
 -117 0.850672105305 0.014793053078
