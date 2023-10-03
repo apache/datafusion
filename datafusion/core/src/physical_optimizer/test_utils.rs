@@ -326,7 +326,6 @@ pub fn repartition_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan>
 }
 
 pub fn aggregate_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
-    let schema = input.schema();
     Arc::new(
         AggregateExec::try_new(
             AggregateMode::Final,
@@ -335,7 +334,6 @@ pub fn aggregate_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
             vec![],
             vec![],
             input,
-            schema,
         )
         .unwrap(),
     )

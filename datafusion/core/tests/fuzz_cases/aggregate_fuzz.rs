@@ -116,7 +116,6 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
             vec![None],
             vec![None],
             running_source,
-            schema.clone(),
         )
         .unwrap(),
     ) as Arc<dyn ExecutionPlan>;
@@ -129,7 +128,6 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
             vec![None],
             vec![None],
             usual_source,
-            schema.clone(),
         )
         .unwrap(),
     ) as Arc<dyn ExecutionPlan>;
