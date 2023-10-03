@@ -54,13 +54,13 @@ mod topk;
 mod topk_stream;
 
 use crate::aggregates::topk_stream::GroupedTopKAggregateStream;
+use crate::joins::StreamJoinPartitionMode::Partitioned;
 use crate::windows::get_ordered_partition_by_indices;
 pub use datafusion_expr::AggregateFunction;
 use datafusion_physical_expr::aggregate::is_order_sensitive;
 use datafusion_physical_expr::equivalence::{collapse_lex_req, PartitionSearchMode};
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
 use datafusion_physical_expr::expressions::{Max, Min};
-use crate::joins::StreamJoinPartitionMode::Partitioned;
 
 use super::DisplayAs;
 
@@ -539,7 +539,7 @@ impl AggregateExec {
         let mut partition_search_mode = PartitionSearchMode::Linear;
         let input_oeq = input.ordering_equivalence_properties();
         let mut new_requirement: Vec<PhysicalSortRequirement> = vec![];
-        if group_by.is_single() && !groupby_exprs.is_empty(){
+        if group_by.is_single() && !groupby_exprs.is_empty() {
             println!("groupby_exprs: {:?}, req:{:?}", groupby_exprs, req);
             println!("input_oeq: {:?}", input_oeq);
             let indices = get_ordered_partition_by_indices(&groupby_exprs, &input);
@@ -554,9 +554,9 @@ impl AggregateExec {
             if let Some((should_reverse, mode)) =
                 input_oeq.get_window_mode(&groupby_exprs, &req)?
             {
-                let all_reversible = aggr_expr
-                    .iter()
-                    .all(|expr| !is_order_sensitive(expr) || expr.reverse_expr().is_some());
+                let all_reversible = aggr_expr.iter().all(|expr| {
+                    !is_order_sensitive(expr) || expr.reverse_expr().is_some()
+                });
                 if should_reverse && all_reversible {
                     izip!(aggr_expr.iter_mut(), order_by_expr.iter_mut()).for_each(
                         |(aggr, order_by)| {
@@ -623,7 +623,8 @@ impl AggregateExec {
         } else {
             Some(new_requirement)
         };
-        let aggregate_oeq =  input_oeq.project(&source_to_target_mapping, schema.clone());
+
+        let aggregate_oeq = input_oeq.project(&source_to_target_mapping, schema.clone());
         let output_ordering = aggregate_oeq.oeq_group().output_ordering();
 
         Ok(AggregateExec {
