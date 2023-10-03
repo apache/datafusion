@@ -2999,12 +2999,11 @@ mod tmp_tests {
 
         let expected_optimized_lines: Vec<&str> = vec![
             "ProjectionExec: expr=[a@0 as a, LAST_VALUE(r.b) ORDER BY [r.a ASC NULLS LAST]@3 as last_col1]",
-            "  AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b, c@2 as c], aggr=[FIRST_VALUE(r.b)], ordering_mode=PartiallyOrdered",
-            "    AggregateExec: mode=Partial, gby=[a@0 as a, b@1 as b, c@2 as c], aggr=[FIRST_VALUE(r.b)], ordering_mode=PartiallyOrdered",
-            "      CoalesceBatchesExec: target_batch_size=8192",
-            "        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0)]",
-            "          CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true",
-            "          CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], has_header=true",
+            "  AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b, c@2 as c], aggr=[LAST_VALUE(r.b)], ordering_mode=PartiallyOrdered",
+            "    CoalesceBatchesExec: target_batch_size=8192",
+            "      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0)]",
+            "        CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true",
+            "        CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], has_header=true",
         ];
 
         // Get string representation of the plan
@@ -3058,21 +3057,20 @@ mod tmp_tests {
             "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
             "  SortExec: expr=[a@0 ASC NULLS LAST]",
             "    ProjectionExec: expr=[a@0 as a, LAST_VALUE(r.b) ORDER BY [r.a ASC NULLS LAST]@3 as last_col1]",
-            "      AggregateExec: mode=FinalPartitioned, gby=[a@0 as a, b@1 as b, c@2 as c], aggr=[FIRST_VALUE(r.b)]",
+            "      AggregateExec: mode=FinalPartitioned, gby=[a@0 as a, b@1 as b, c@2 as c], aggr=[LAST_VALUE(r.b)]",
             "        CoalesceBatchesExec: target_batch_size=8192",
             "          RepartitionExec: partitioning=Hash([a@0, b@1, c@2], 4), input_partitions=4",
-            "            AggregateExec: mode=Partial, gby=[a@0 as a, b@1 as b, c@2 as c], aggr=[FIRST_VALUE(r.b)], ordering_mode=PartiallyOrdered",
-            "              SortExec: expr=[a@3 DESC]",
-            "                CoalesceBatchesExec: target_batch_size=8192",
-            "                  HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0)]",
-            "                    CoalesceBatchesExec: target_batch_size=8192",
-            "                      RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4",
-            "                        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1",
-            "                          CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true",
-            "                    CoalesceBatchesExec: target_batch_size=8192",
-            "                      RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4",
-            "                        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1",
-            "                          CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], has_header=true",
+            "            AggregateExec: mode=Partial, gby=[a@0 as a, b@1 as b, c@2 as c], aggr=[LAST_VALUE(r.b)], ordering_mode=PartiallyOrdered",
+            "              CoalesceBatchesExec: target_batch_size=8192",
+            "                HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0)]",
+            "                  CoalesceBatchesExec: target_batch_size=8192",
+            "                    RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4",
+            "                      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1",
+            "                        CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true",
+            "                  CoalesceBatchesExec: target_batch_size=8192",
+            "                    SortPreservingRepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4",
+            "                      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1",
+            "                        CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], has_header=true",
         ];
 
         // Get string representation of the plan

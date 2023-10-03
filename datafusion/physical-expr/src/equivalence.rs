@@ -1409,7 +1409,7 @@ pub fn ordering_equivalence_properties_helper(
 /// entries that have same physical expression inside the given vector `input`.
 /// `vec![a Some(Asc), a Some(Desc)]` is collapsed to the `vec![a Some(Asc)]`. Since
 /// when same expression is already seen before, following expressions are redundant.
-fn collapse_lex_req(input: LexOrderingReq) -> LexOrderingReq {
+pub fn collapse_lex_req(input: LexOrderingReq) -> LexOrderingReq {
     let mut output = vec![];
     for item in input {
         if output
