@@ -36,7 +36,10 @@ pub async fn get_statistics_with_limit(
 ) -> Result<(Vec<PartitionedFile>, Statistics)> {
     let mut result_files = vec![];
     let mut null_counts = vec![Sharpness::Exact(0_usize); file_schema.fields().len()];
-    let (mut max_values, mut min_values) = create_max_min_vecs(&file_schema);
+    let (mut max_values, mut min_values) = (
+        create_max_min_vec(&file_schema),
+        create_max_min_vec(&file_schema),
+    );
 
     // The number of rows and the total byte size can be calculated as long as
     // at least one file has them. If none of the files provide them, then they
@@ -69,55 +72,9 @@ pub async fn get_statistics_with_limit(
                 null_counts[i].add(&cs.null_count)
             };
 
-            if let Sharpness::Exact(max) = &cs.max_value {
-                match max_values[i].clone() {
-                    Sharpness::Exact(val) => {
-                        if val < *max {
-                            max_values[i] = Sharpness::Exact(max.clone())
-                        }
-                    }
-                    Sharpness::Inexact(val) => {
-                        max_values[i] = max_values[i].clone().to_inexact();
-                        if val < *max {
-                            max_values[i] = Sharpness::Inexact(max.clone())
-                        }
-                    }
-                    Sharpness::Absent => {
-                        max_values[i] = max_values[i].clone().to_inexact()
-                    }
-                }
-            } else if let Sharpness::Inexact(max) = &cs.max_value {
-                if let Some(val) = max_values[i].get_value() {
-                    if val < *max {
-                        max_values[i] = Sharpness::Inexact(max.clone())
-                    }
-                }
-            }
+            set_max_if_greater(&mut max_values[i], &cs.max_value);
 
-            if let Sharpness::Exact(min) = &cs.min_value {
-                match min_values[i].clone() {
-                    Sharpness::Exact(val) => {
-                        if val > *min {
-                            min_values[i] = Sharpness::Exact(min.clone())
-                        }
-                    }
-                    Sharpness::Inexact(val) => {
-                        min_values[i] = min_values[i].clone().to_inexact();
-                        if val > *min {
-                            min_values[i] = Sharpness::Inexact(min.clone())
-                        }
-                    }
-                    Sharpness::Absent => {
-                        min_values[i] = min_values[i].clone().to_inexact()
-                    }
-                }
-            } else if let Sharpness::Inexact(min) = &cs.min_value {
-                if let Some(val) = min_values[i].get_value() {
-                    if val > *min {
-                        min_values[i] = Sharpness::Inexact(min.clone())
-                    }
-                }
-            }
+            set_min_if_lesser(&mut min_values[i], &cs.min_value);
         }
         // If the number of rows exceeds the limit, we can stop processing
         // files. This only applies when we know the number of rows. It also
@@ -152,35 +109,20 @@ pub async fn get_statistics_with_limit(
     Ok((result_files, statistics))
 }
 
-pub(crate) fn create_max_min_vecs(
-    schema: &Schema,
-) -> (Vec<Sharpness<ScalarValue>>, Vec<Sharpness<ScalarValue>>) {
-    (
-        schema
-            .fields()
-            .iter()
-            .map(|field| {
-                let dt = ScalarValue::try_from(field.data_type());
-                if let Ok(dt) = dt {
-                    Sharpness::Exact(dt)
-                } else {
-                    Sharpness::Absent
-                }
-            })
-            .collect::<Vec<_>>(),
-        schema
-            .fields()
-            .iter()
-            .map(|field| {
-                let dt = ScalarValue::try_from(field.data_type());
-                if let Ok(dt) = dt {
-                    Sharpness::Exact(dt)
-                } else {
-                    Sharpness::Absent
-                }
-            })
-            .collect::<Vec<_>>(),
-    )
+/// It is the [`Sharpness::Exact`] version of `ColumnStatistics::new_with_unbounded_column` function.
+pub(crate) fn create_max_min_vec(schema: &Schema) -> Vec<Sharpness<ScalarValue>> {
+    schema
+        .fields()
+        .iter()
+        .map(|field| {
+            let dt = ScalarValue::try_from(field.data_type());
+            if let Ok(dt) = dt {
+                Sharpness::Exact(dt)
+            } else {
+                Sharpness::Absent
+            }
+        })
+        .collect::<Vec<_>>()
 }
 
 pub(crate) fn create_max_min_accs(
@@ -239,4 +181,64 @@ pub(crate) fn get_col_stats(
             }
         })
         .collect()
+}
+
+/// If the given value is numerically greater than the original value,
+/// it set the new max value with the exactness information.
+fn set_max_if_greater(
+    max_values: &mut Sharpness<ScalarValue>,
+    max_value: &Sharpness<ScalarValue>,
+) {
+    if let Sharpness::Exact(max) = &max_value {
+        match max_values.clone() {
+            Sharpness::Exact(val) => {
+                if val < *max {
+                    *max_values = Sharpness::Exact(max.clone())
+                }
+            }
+            Sharpness::Inexact(val) => {
+                *max_values = max_values.clone().to_inexact();
+                if val < *max {
+                    *max_values = Sharpness::Inexact(max.clone())
+                }
+            }
+            Sharpness::Absent => *max_values = max_values.clone().to_inexact(),
+        }
+    } else if let Sharpness::Inexact(max) = &max_value {
+        if let Some(val) = max_values.get_value() {
+            if val < *max {
+                *max_values = Sharpness::Inexact(max.clone())
+            }
+        }
+    }
+}
+
+/// If the given value is numerically lesser than the original value,
+/// it set the new min value with the exactness information.
+fn set_min_if_lesser(
+    max_values: &mut Sharpness<ScalarValue>,
+    max_value: &Sharpness<ScalarValue>,
+) {
+    if let Sharpness::Exact(max) = &max_value {
+        match max_values.clone() {
+            Sharpness::Exact(val) => {
+                if val < *max {
+                    *max_values = Sharpness::Exact(max.clone())
+                }
+            }
+            Sharpness::Inexact(val) => {
+                *max_values = max_values.clone().to_inexact();
+                if val < *max {
+                    *max_values = Sharpness::Inexact(max.clone())
+                }
+            }
+            Sharpness::Absent => *max_values = max_values.clone().to_inexact(),
+        }
+    } else if let Sharpness::Inexact(max) = &max_value {
+        if let Some(val) = max_values.get_value() {
+            if val < *max {
+                *max_values = Sharpness::Inexact(max.clone())
+            }
+        }
+    }
 }

@@ -680,7 +680,7 @@ mod tests_statistical {
 
         let medium = Arc::new(StatisticsExec::new(
             Statistics {
-                num_rows: Sharpness::Inexact(0_000),
+                num_rows: Sharpness::Inexact(10_000),
                 column_statistics: create_column_stats(
                     Some(1000),
                     Some(5000),
@@ -927,7 +927,7 @@ mod tests_statistical {
             "      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(small_col@0, big_col@0)]",
             "        StatisticsExec: col_count=1, row_count=Inexact(1000)",
             "        StatisticsExec: col_count=1, row_count=Inexact(100000)",
-            "    StatisticsExec: col_count=1, row_count=Inexact(0)",
+            "    StatisticsExec: col_count=1, row_count=Inexact(10000)",
             "",
         ];
         assert_optimized!(expected, join);
