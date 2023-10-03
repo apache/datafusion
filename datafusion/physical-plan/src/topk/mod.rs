@@ -142,7 +142,7 @@ impl TopK {
         })
     }
 
-    /// Insert `batch`, remembering it if any of its values are among
+    /// Insert `batch`, remembering if any of its values are among
     /// the top k seen so far.
     pub fn insert_batch(&mut self, batch: RecordBatch) -> Result<()> {
         // Updates on drop
