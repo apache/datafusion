@@ -222,9 +222,7 @@ impl EquivalentGroups {
             .iter()
             .map(|sort_req| self.normalize_sort_requirement(sort_req.clone()))
             .collect::<Vec<_>>();
-        // TODO: Add deduplication check here after normalization
         collapse_lex_req(normalized_sort_reqs)
-        // collapse_vec(normalized_sort_reqs)
     }
 
     /// Similar to the \[`normalize_sort_requirements`] this function normalizes
@@ -306,6 +304,20 @@ impl EquivalentGroups {
         // Make sure there is no redundant entry after projection.
         projection_eq_groups.remove_redundant_entries();
         projection_eq_groups
+    }
+
+    /// Returns the equivalent group that contains `expr`
+    /// If none of the groups contains `expr`, returns None.
+    fn get_equivalent_group(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+    ) -> Option<Vec<Arc<dyn PhysicalExpr>>> {
+        for eq_class in self.iter() {
+            if physical_exprs_contains(eq_class, expr) {
+                return Some(eq_class.to_vec());
+            }
+        }
+        None
     }
 }
 
@@ -542,21 +554,8 @@ impl OrderingEquivalenceProperties {
                 PhysicalSortRequirement::to_sort_exprs(req)
             })
             .collect::<Vec<Vec<_>>>();
-        let mut res: Vec<LexOrdering> = vec![];
-        for ordering in normalized_ordering.into_iter() {
-            let mut is_inside = false;
-            for item in &mut res {
-                if let Some(finer) = self.get_finer_ordering(item, &ordering) {
-                    *item = finer.to_vec();
-                    is_inside = true;
-                }
-            }
-            if !is_inside {
-                res.push(ordering);
-            }
-        }
-        self.oeq_group = OrderingEquivalentGroup::new(res);
-        self.oeq_group.remove_redundant_entries();
+        // Create new oeq group normalized according to equivalent groups.
+        self.oeq_group = OrderingEquivalentGroup::new(normalized_ordering);
     }
 
     /// Add physical expression that have constant value to the `self.constants`
@@ -570,6 +569,7 @@ impl OrderingEquivalenceProperties {
         self
     }
 
+    /// Get schema.
     pub fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
@@ -611,8 +611,6 @@ impl OrderingEquivalenceProperties {
         &self,
         sort_reqs: &[PhysicalSortRequirement],
     ) -> Vec<PhysicalSortRequirement> {
-        // println!("sort_reqs: {:?}", sort_reqs);
-        // println!("self.oeq_class: {:?}", self.oeq_class);
         let normalized_sort_reqs = self.eq_groups.normalize_sort_requirements(sort_reqs);
         let normalized_sort_reqs =
             prune_sort_reqs_with_constants(&normalized_sort_reqs, &self.constants);
@@ -631,9 +629,6 @@ impl OrderingEquivalenceProperties {
             let ranges = get_compatible_ranges(&normalized_sort_reqs, &item);
             let mut offset: i64 = 0;
             for Range { start, end } in ranges {
-                // let head = PhysicalSortRequirement::from_sort_exprs(&self.oeq_class[0]);
-                // let head = self.normalize_with_eq_classes(&head);
-                // let mut head = prune_sort_reqs_with_constants(&head, &self.constants);
                 let mut head =
                     prune_sort_reqs_with_constants(&first_entry, &self.constants);
                 let updated_start = (start as i64 + offset) as usize;
@@ -653,9 +648,6 @@ impl OrderingEquivalenceProperties {
         }
         normalized_sort_reqs = simplify_lex_req(normalized_sort_reqs, &self.oeq_group);
 
-        // let res = collapse_lex_req(normalized_sort_reqs);
-        // // println!("normalzied sort_reqs:{:?}", res);
-        // res
         collapse_lex_req(normalized_sort_reqs)
     }
 
@@ -670,49 +662,34 @@ impl OrderingEquivalenceProperties {
             .any(|ordering| ordering[0].eq(leading_ordering))
     }
 
-    fn get_eq_class_group(
-        old_eq_class: &EquivalentGroups,
-        expr: &Arc<dyn PhysicalExpr>,
-    ) -> Option<Vec<Arc<dyn PhysicalExpr>>> {
-        for eq_class in old_eq_class.iter() {
-            if physical_exprs_contains(eq_class, expr) {
-                return Some(eq_class.to_vec());
-            }
-        }
-        None
-    }
-
-    fn get_corresponding_expr(
-        old_eq_class: &EquivalentGroups,
+    /// Projects given expression according to mapping in the `source_to_target_mapping`.
+    /// If expression is not valid after projection returns `None`.
+    fn project_expr(
+        &self,
         source_to_target_mapping: &ProjectionMapping,
         expr: &Arc<dyn PhysicalExpr>,
     ) -> Option<Arc<dyn PhysicalExpr>> {
         let children = expr.children();
         if children.is_empty() {
             for (source, target) in source_to_target_mapping.iter() {
-                if source.eq(expr)
-                // || old_eq_class
-                //     .iter()
-                //     .any(|eq_class| eq_class.iter().any(|item| item.eq(expr)))
-                {
+                // if source matches expr, expr can be projected
+                if source.eq(expr) {
                     return Some(target.clone());
-                } else if let Some(group) = Self::get_eq_class_group(old_eq_class, source)
-                {
+                }
+                // if equivalent group of source contains expr, expr can be projected
+                else if let Some(group) = self.eq_groups.get_equivalent_group(source) {
                     if physical_exprs_contains(&group, expr) {
                         return Some(target.clone());
                     }
                 }
             }
+            // After projection, expression is not valid.
             None
-        } else if let Some(children) = children
+        }
+        // All of the childrens can be projected
+        else if let Some(children) = children
             .into_iter()
-            .map(|child| {
-                Self::get_corresponding_expr(
-                    old_eq_class,
-                    source_to_target_mapping,
-                    &child,
-                )
-            })
+            .map(|child| self.project_expr(source_to_target_mapping, &child))
             .collect::<Option<Vec<_>>>()
         {
             Some(expr.clone().with_new_children(children).unwrap())
@@ -721,27 +698,28 @@ impl OrderingEquivalenceProperties {
         }
     }
 
-    fn get_projected_ordering(
-        old_eq_class: &EquivalentGroups,
+    /// Projects given ordering according to mapping in the `source_to_target_mapping`.
+    /// If ordering is not valid after projection returns `None`.
+    fn project_ordering(
+        &self,
         source_to_target_mapping: &ProjectionMapping,
         ordering: &[PhysicalSortExpr],
     ) -> Option<Vec<PhysicalSortExpr>> {
-        // println!("old_eq_class: {:?}", old_eq_class);
-        // println!("ordering: {:?}", ordering);
         let mut res = vec![];
         for order in ordering {
-            // println!("order.expr:{:?}", order.expr);
-            if let Some(new_expr) = Self::get_corresponding_expr(
-                old_eq_class,
-                source_to_target_mapping,
-                &order.expr,
-            ) {
-                // println!("new_expr:{:?}", new_expr);
+            if let Some(new_expr) =
+                self.project_expr(source_to_target_mapping, &order.expr)
+            {
                 res.push(PhysicalSortExpr {
                     expr: new_expr,
                     options: order.options,
                 })
             } else {
+                // Expression is not valid, rest of the ordering shouldn't be projected also.
+                // e.g if input ordering is [a ASC, b ASC, c ASC], and column b is not valid
+                // after projection
+                // we should return projected ordering as [a ASC] not as [a ASC, c ASC] even if
+                // column c is valid after projection.
                 break;
             }
         }
@@ -752,32 +730,27 @@ impl OrderingEquivalenceProperties {
         }
     }
 
+    /// Projects `OrderingEquivalenceProperties` according to mapping given in `source_to_target_mapping`.
     pub fn project(
         &self,
         source_to_target_mapping: &ProjectionMapping,
         output_schema: SchemaRef,
     ) -> OrderingEquivalenceProperties {
-        // println!("source_to_target_mapping: {:?}", source_to_target_mapping);
         let mut projected_properties = OrderingEquivalenceProperties::new(output_schema);
 
         let projected_eq_groups = self.eq_groups.project(source_to_target_mapping);
         projected_properties.eq_groups = projected_eq_groups;
 
-        // println!("old oeq class: {:?}", oeq_class);
-        let new_ordering = self
+        let projected_orderings = self
             .oeq_group
             .iter()
-            .filter_map(|order| {
-                Self::get_projected_ordering(
-                    &self.eq_groups,
-                    source_to_target_mapping,
-                    order,
-                )
-            })
+            .filter_map(|order| self.project_ordering(source_to_target_mapping, order))
             .collect::<Vec<_>>();
-        // println!("new_ordering: {:?}", new_ordering);
-        if !new_ordering.is_empty() {
-            projected_properties.oeq_group = OrderingEquivalentGroup::new(new_ordering);
+
+        // if empty, no need to track projected_orderings.
+        if !projected_orderings.is_empty() {
+            projected_properties.oeq_group =
+                OrderingEquivalentGroup::new(projected_orderings);
         }
 
         for (source, target) in source_to_target_mapping {
@@ -798,28 +771,28 @@ impl OrderingEquivalenceProperties {
                 }
             }
         }
-        // TODO: Add redundancy check, for ordering equivalences
-
+        // Remove redundant entries from ordering group if any.
+        // projected_properties.oeq_group.remove_redundant_entries();
         projected_properties
     }
 
+    /// Re-creates `OrderingEquivalenceProperties` given that
+    /// schema is re-ordered by `sort_expr` in the argument.
     pub fn with_reorder(
         mut self,
         sort_expr: Vec<PhysicalSortExpr>,
     ) -> OrderingEquivalenceProperties {
-        // TODO: In some cases, existing ordering equivalences may still be valid add this analysis
-        // Equivalences and constants are still valid after reorder
-        let sort_expr = sort_expr
-            .into_iter()
-            .map(|PhysicalSortExpr { expr, options }| {
-                let new_expr = self.eq_groups.normalize_expr(expr);
-                PhysicalSortExpr {
-                    expr: new_expr,
-                    options,
-                }
-            })
-            .collect::<Vec<_>>();
-        // TODO: Add deduplicate
+        // TODO: In some cases, existing ordering equivalences may still be valid add this analysis.
+
+        // Normalize sort_expr according to equivalences
+        let sort_expr = self.eq_groups.normalize_sort_exprs(&sort_expr);
+
+        // Remove redundant entries from the lex ordering.
+        let sort_expr = collapse_lex_ordering(sort_expr);
+
+        // Reset ordering equivalent group with the new ordering.
+        // Constants, and equivalent groups are still valid after re-sort.
+        // Hence only `oeq_group` is overwritten.
         self.oeq_group = OrderingEquivalentGroup::new(vec![sort_expr]);
         self
     }
@@ -870,6 +843,7 @@ impl OrderingEquivalenceProperties {
         }
     }
 
+    /// Empties the `oeq_group` inside self, When existing orderings are invalidated.
     pub fn with_empty_ordering_equivalence(mut self) -> OrderingEquivalenceProperties {
         self.oeq_group = OrderingEquivalentGroup::empty();
         self
@@ -888,8 +862,6 @@ impl OrderingEquivalenceProperties {
     pub fn ordering_satisfy_concrete(&self, required: &[PhysicalSortExpr]) -> bool {
         let required_normalized = self.normalize_sort_exprs(required);
         let provided_normalized = self.oeq_group().output_ordering().unwrap_or(vec![]);
-        println!("required_normalized: {:?}", required_normalized);
-        println!("provided_normalized: {:?}", provided_normalized);
         if required_normalized.len() > provided_normalized.len() {
             return false;
         }
@@ -979,8 +951,6 @@ impl OrderingEquivalenceProperties {
     ) -> bool {
         let provided_normalized = self.oeq_group().output_ordering().unwrap_or(vec![]);
         let required_normalized = self.normalize_sort_requirements(required);
-        println!("req required_normalized: {:?}", required_normalized);
-        println!("req provided_normalized: {:?}", provided_normalized);
         if required_normalized.len() > provided_normalized.len() {
             return false;
         }
@@ -1040,7 +1010,6 @@ impl OrderingEquivalenceProperties {
         orderby_keys: &[PhysicalSortExpr],
     ) -> Result<Option<(bool, PartitionSearchMode)>> {
         let partitionby_exprs = self.eq_groups.normalize_exprs(partitionby_exprs);
-        let partition_by_oeq = self.clone().with_constants(partitionby_exprs.clone());
         let mut orderby_keys = self.eq_groups.normalize_sort_exprs(orderby_keys);
         // Keep the order by expressions that are not inside partition by expressions.
         orderby_keys.retain(|sort_expr| {
@@ -1078,6 +1047,8 @@ impl OrderingEquivalenceProperties {
             // prefer None. Instead of Linear.
             return Ok(None);
         }
+        // Treat partition by exprs as constant. During analysis of requirements are satisfied.
+        let partition_by_oeq = self.clone().with_constants(partitionby_exprs.clone());
         if partition_by_oeq.ordering_satisfy_requirement_concrete(&req) {
             // Window can be run with existing ordering
             return Ok(Some((false, partition_search_mode)));
@@ -1135,6 +1106,9 @@ impl OrderingEquivalenceBuilder {
         new_ordering_eq_properties: OrderingEquivalenceProperties,
     ) -> Self {
         self.ordering_eq_properties
+            .eq_groups
+            .extend(new_ordering_eq_properties.eq_groups);
+        self.ordering_eq_properties
             .extend(new_ordering_eq_properties.oeq_group);
         self
     }
@@ -1148,11 +1122,6 @@ impl OrderingEquivalenceBuilder {
         }
         self
     }
-
-    // pub fn with_equivalences(mut self, new_eq_properties: EquivalenceProperties) -> Self {
-    //     self.eq_properties = new_eq_properties;
-    //     self
-    // }
 
     pub fn add_equal_conditions(
         &mut self,
@@ -1307,6 +1276,23 @@ pub fn collapse_lex_req(input: LexOrderingReq) -> LexOrderingReq {
         if output
             .iter()
             .all(|elem: &PhysicalSortRequirement| !elem.expr.eq(&item.expr))
+        {
+            output.push(item);
+        }
+    }
+    output
+}
+
+/// This function constructs a duplicate-free `LexOrdering` by filtering out duplicate
+/// entries that have same physical expression inside the given vector `input`.
+/// `vec![a ASC, a DESC]` is collapsed to the `vec![a ASC]`. Since
+/// when same expression is already seen before, following expressions are redundant.
+pub fn collapse_lex_ordering(input: LexOrdering) -> LexOrdering {
+    let mut output = vec![];
+    for item in input {
+        if output
+            .iter()
+            .all(|elem: &PhysicalSortExpr| !elem.expr.eq(&item.expr))
         {
             output.push(item);
         }
@@ -1543,8 +1529,6 @@ pub fn combine_join_equivalence_properties2(
             let new_lhs = Arc::new(lhs.clone()) as _;
             let new_rhs =
                 Arc::new(Column::new(rhs.name(), rhs.index() + left_columns_len)) as _;
-            // (new_lhs, new_rhs)
-            // println!("new_lhs: {:?}, new_rhs: {:?}", new_lhs, new_rhs);
             out_properties.add_equal_conditions((&new_lhs, &new_rhs));
         });
     }
@@ -1987,7 +1971,7 @@ mod tests {
                 },
             ],
         ]);
-        // All of the orderings [a ASC, [d ASC, f ASC], [e ASC]]
+        // All of the orderings [a ASC], [d ASC, f ASC], [e ASC]]
         // are valid for the table
         // Also Columns a and c are equal
 

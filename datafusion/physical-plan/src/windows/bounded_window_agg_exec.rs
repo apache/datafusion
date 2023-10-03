@@ -283,10 +283,6 @@ impl ExecutionPlan for BoundedWindowAggExec {
         }
     }
 
-    // fn equivalence_properties(&self) -> EquivalenceProperties {
-    //     self.input().equivalence_properties()
-    // }
-
     /// Get the OrderingEquivalenceProperties within the plan
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
         window_ordering_equivalence(&self.schema, &self.input, &self.window_expr)
@@ -315,8 +311,6 @@ impl ExecutionPlan for BoundedWindowAggExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let input = self.input.execute(partition, context)?;
-        // println!("window self.input.ordering_equivalence_properties(): {:?}", self.input.ordering_equivalence_properties());
-        // println!("window self.ordering_equivalence_properties(): {:?}", self.ordering_equivalence_properties());
         let search_mode = self.get_search_algo()?;
         let stream = Box::pin(BoundedWindowAggStream::new(
             self.schema.clone(),

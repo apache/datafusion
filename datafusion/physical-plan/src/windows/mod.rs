@@ -335,7 +335,6 @@ pub(crate) fn window_ordering_equivalence(
     // We need to update the schema, so we can not directly use
     // `input.ordering_equivalence_properties()`.
     let mut builder = OrderingEquivalenceBuilder::new(schema.clone())
-        // .with_equivalences(input.equivalence_properties())
         .with_existing_ordering(input.output_ordering().map(|elem| elem.to_vec()))
         .extend(input.ordering_equivalence_properties());
 

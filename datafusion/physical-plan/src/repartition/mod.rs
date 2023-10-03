@@ -455,10 +455,6 @@ impl ExecutionPlan for RepartitionExec {
         }
     }
 
-    // fn equivalence_properties(&self) -> EquivalenceProperties {
-    //     self.input.equivalence_properties()
-    // }
-
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
         if !self.maintains_input_order()[0] {
             self.input
