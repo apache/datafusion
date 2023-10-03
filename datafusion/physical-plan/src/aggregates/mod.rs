@@ -54,7 +54,6 @@ mod topk;
 mod topk_stream;
 
 use crate::aggregates::topk_stream::GroupedTopKAggregateStream;
-use crate::joins::StreamJoinPartitionMode::Partitioned;
 use crate::windows::get_ordered_partition_by_indices;
 pub use datafusion_expr::AggregateFunction;
 use datafusion_physical_expr::aggregate::is_order_sensitive;
@@ -617,7 +616,7 @@ impl AggregateExec {
             source_to_target_mapping.push((source_expr, target_expr));
         }
 
-        let mut aggregation_ordering = calc_aggregation_ordering(&input, &group_by);
+        let aggregation_ordering = calc_aggregation_ordering(&input, &group_by);
         let required_input_ordering = if new_requirement.is_empty() {
             None
         } else {
