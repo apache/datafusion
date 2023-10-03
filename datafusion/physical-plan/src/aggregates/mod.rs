@@ -369,6 +369,49 @@ fn get_finest_requirement<F2: Fn() -> OrderingEquivalenceProperties>(
     Ok(finest_req)
 }
 
+/// Calculates search_mode for the aggregation
+fn get_aggregate_search_mode(
+    group_by: &PhysicalGroupBy,
+    input: &Arc<dyn ExecutionPlan>,
+    aggr_expr: &mut [Arc<dyn AggregateExpr>],
+    order_by_expr: &mut [Option<LexOrdering>],
+    ordering_req: &mut Vec<PhysicalSortExpr>,
+) -> Result<PartitionSearchMode> {
+    let groupby_exprs = group_by
+        .expr
+        .iter()
+        .map(|(item, _)| item.clone())
+        .collect::<Vec<_>>();
+    let mut partition_search_mode = PartitionSearchMode::Linear;
+    let input_oeq = input.ordering_equivalence_properties();
+    if !group_by.is_single() || groupby_exprs.is_empty() {
+        return Ok(partition_search_mode);
+    }
+
+    if let Some((should_reverse, mode)) =
+        input_oeq.get_window_mode(&groupby_exprs, ordering_req)?
+    {
+        let all_reversible = aggr_expr
+            .iter()
+            .all(|expr| !is_order_sensitive(expr) || expr.reverse_expr().is_some());
+        if should_reverse && all_reversible {
+            izip!(aggr_expr.iter_mut(), order_by_expr.iter_mut()).for_each(
+                |(aggr, order_by)| {
+                    if let Some(reverse) = aggr.reverse_expr() {
+                        *aggr = reverse;
+                    } else {
+                        unreachable!();
+                    }
+                    *order_by = order_by.as_ref().map(|ob| reverse_order_bys(ob));
+                },
+            );
+            *ordering_req = reverse_order_bys(ordering_req);
+        }
+        partition_search_mode = mode;
+    }
+    Ok(partition_search_mode)
+}
+
 #[allow(dead_code)]
 fn print_plan(plan: &Arc<dyn ExecutionPlan>) {
     let formatted = displayable(plan.as_ref()).indent(true).to_string();
@@ -441,74 +484,38 @@ impl AggregateExec {
                 })
             })
             .collect::<Vec<_>>();
-        // let mut aggregator_reverse_reqs = None;
-        // Currently we support order-sensitive aggregation only in `Single` mode.
-        // For `Final` and `FinalPartitioned` modes, we cannot guarantee they will receive
-        // data according to ordering requirements. As long as we cannot produce correct result
-        // in `Final` mode, it is not important to produce correct result in `Partial` mode.
-        // We only support `Single` mode, where we are sure that output produced is final, and it
-        // is produced in a single step.
-
         let requirement =
             get_finest_requirement(&mut aggr_expr, &mut order_by_expr, || {
                 input.ordering_equivalence_properties()
             })?;
-        let req = requirement.unwrap_or(vec![]);
+        let mut ordering_req = requirement.unwrap_or(vec![]);
+        let partition_search_mode = get_aggregate_search_mode(
+            &group_by,
+            &input,
+            &mut aggr_expr,
+            &mut order_by_expr,
+            &mut ordering_req,
+        )?;
+
+        // get group by exprs
         let groupby_exprs = group_by
             .expr
             .iter()
             .map(|(item, _)| item.clone())
             .collect::<Vec<_>>();
-        let mut partition_search_mode = PartitionSearchMode::Linear;
-        let input_oeq = input.ordering_equivalence_properties();
-        let mut new_requirement: Vec<PhysicalSortRequirement> = vec![];
-        if group_by.is_single() && !groupby_exprs.is_empty() {
-            println!("groupby_exprs: {:?}, req:{:?}", groupby_exprs, req);
-            println!("input_oeq: {:?}", input_oeq);
-            let indices = get_ordered_partition_by_indices(&groupby_exprs, &input);
-            let elem = indices
-                .into_iter()
-                .map(|idx| PhysicalSortRequirement {
-                    expr: groupby_exprs[idx].clone(),
-                    options: None,
-                })
-                .collect::<Vec<_>>();
-            new_requirement.extend(elem);
-            if let Some((should_reverse, mode)) =
-                input_oeq.get_window_mode(&groupby_exprs, &req)?
-            {
-                let all_reversible = aggr_expr.iter().all(|expr| {
-                    !is_order_sensitive(expr) || expr.reverse_expr().is_some()
-                });
-                if should_reverse && all_reversible {
-                    izip!(aggr_expr.iter_mut(), order_by_expr.iter_mut()).for_each(
-                        |(aggr, order_by)| {
-                            if let Some(reverse) = aggr.reverse_expr() {
-                                *aggr = reverse;
-                            } else {
-                                unreachable!();
-                            }
-                            *order_by = order_by.as_ref().map(|ob| reverse_order_bys(ob));
-                        },
-                    );
-                    let reverse_req = PhysicalSortRequirement::from_sort_exprs(
-                        reverse_order_bys(&req).iter(),
-                    );
-                    new_requirement.extend(reverse_req);
-                } else {
-                    let req = PhysicalSortRequirement::from_sort_exprs(&req);
-                    new_requirement.extend(req);
-                }
-                partition_search_mode = mode;
-            } else {
-                let req = PhysicalSortRequirement::from_sort_exprs(&req);
-                new_requirement.extend(req);
-            }
-        } else {
-            let req = PhysicalSortRequirement::from_sort_exprs(&req);
-            new_requirement.extend(req);
-        }
-
+        // If existing ordering satisfies a prefix of groupby expression, prefix requirement
+        // with this section. In this case, group by will work more efficient
+        let indices = get_ordered_partition_by_indices(&groupby_exprs, &input);
+        let mut new_requirement = indices
+            .into_iter()
+            .map(|idx| PhysicalSortRequirement {
+                expr: groupby_exprs[idx].clone(),
+                options: None,
+            })
+            .collect::<Vec<_>>();
+        // Postfix ordering requirement of the aggregation to the requirement.
+        let req = PhysicalSortRequirement::from_sort_exprs(&ordering_req);
+        new_requirement.extend(req);
         new_requirement = collapse_lex_req(new_requirement);
 
         // construct a map from the input columns to the output columns of the Aggregation
@@ -546,7 +553,9 @@ impl AggregateExec {
             Some(new_requirement)
         };
 
-        let aggregate_oeq = input_oeq.project(&source_to_target_mapping, schema.clone());
+        let aggregate_oeq = input
+            .ordering_equivalence_properties()
+            .project(&source_to_target_mapping, schema.clone());
         let output_ordering = aggregate_oeq.oeq_group().output_ordering();
 
         Ok(AggregateExec {
