@@ -122,6 +122,8 @@ impl TopK {
             })
             .collect::<Result<_>>()?;
 
+        // TODO there is potential to add special cases for single column sort fields
+        // to improve performance
         let row_converter = RowConverter::new(sort_fields)?;
         let scratch_rows = row_converter.empty_rows(
             batch_size,
