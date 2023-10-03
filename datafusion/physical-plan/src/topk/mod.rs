@@ -360,10 +360,8 @@ impl TopKHeap {
     pub fn emit_with_state(&mut self) -> Result<(RecordBatch, Vec<TopKRow>)> {
         let schema = self.store.schema().clone();
 
-        let mut topk_rows = std::mem::take(&mut self.inner).into_vec();
-
-        // sort low to high (reverse the reverse)
-        topk_rows.sort();
+        // generate sorted rows
+        let topk_rows = std::mem::take(&mut self.inner).into_sorted_vec();
 
         if self.store.is_empty() {
             return Ok((RecordBatch::new_empty(schema), topk_rows));
