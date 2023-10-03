@@ -358,13 +358,17 @@ impl OrderingEquivalentGroup {
         self.remove_redundant_entries();
     }
 
+    /// Removes redundant orderings from the state.
+    /// For instance, If we already know that
+    /// ordering: [a ASC, b ASC, c DESC] is valid for the schema.
+    /// There is no need to keep ordering [a ASC, b ASC] in the state.
     fn remove_redundant_entries(&mut self) {
         // Make sure there is no redundant entry
         let mut res: Vec<LexOrdering> = vec![];
         for ordering in self.iter() {
             let mut is_inside = false;
             for item in &mut res {
-                if let Some(finer) = get_finer(item, ordering) {
+                if let Some(finer) = Self::get_finer_strict(item, ordering) {
                     *item = finer;
                     is_inside = true;
                 }
@@ -423,6 +427,31 @@ impl OrderingEquivalentGroup {
             }
         }
         OrderingEquivalentGroup::new(res)
+    }
+
+    /// Adds `offset` value to the index of each expression inside `OrderingEquivalentGroup`.
+    pub fn add_offset(&self, offset: usize) -> Result<OrderingEquivalentGroup> {
+        let res = self
+            .inner
+            .iter()
+            .map(|ordering| add_offset_to_lex_ordering(ordering, offset))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(OrderingEquivalentGroup::new(res))
+    }
+
+    /// Return finer ordering between lhs and rhs.
+    fn get_finer_strict(
+        lhs: &[PhysicalSortExpr],
+        rhs: &[PhysicalSortExpr],
+    ) -> Option<Vec<PhysicalSortExpr>> {
+        if izip!(lhs.iter(), rhs.iter()).all(|(lhs, rhs)| lhs.eq(rhs)) {
+            if lhs.len() > rhs.len() {
+                return Some(lhs.to_vec());
+            } else {
+                return Some(rhs.to_vec());
+            }
+        }
+        None
     }
 }
 
@@ -517,8 +546,8 @@ impl OrderingEquivalenceProperties {
         for ordering in normalized_ordering.into_iter() {
             let mut is_inside = false;
             for item in &mut res {
-                if let Some(finer) = get_finer(item, &ordering) {
-                    *item = finer;
+                if let Some(finer) = self.get_finer_ordering(item, &ordering) {
+                    *item = finer.to_vec();
                     is_inside = true;
                 }
             }
@@ -527,7 +556,7 @@ impl OrderingEquivalenceProperties {
             }
         }
         self.oeq_group = OrderingEquivalentGroup::new(res);
-        // TODO: Add redundant entry check
+        self.oeq_group.remove_redundant_entries();
     }
 
     /// Add physical expression that have constant value to the `self.constants`
@@ -1076,146 +1105,9 @@ pub enum PartitionSearchMode {
     Sorted,
 }
 
+// Stores the mapping between source expression and target expression during projection
+// Indices in the vector corresponds to index after projection.
 type ProjectionMapping = Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>;
-
-/// Adds `offset` value to the index of each expression inside `self.head` and `self.others`.
-pub fn add_offset(
-    in_data: &OrderingEquivalentGroup,
-    offset: usize,
-) -> Result<OrderingEquivalentGroup> {
-    let res = in_data
-        .iter()
-        .map(|ordering| add_offset_to_lex_ordering(ordering, offset))
-        .collect::<Result<Vec<_>>>()?;
-    Ok(OrderingEquivalentGroup::new(res))
-}
-
-fn get_finer(
-    lhs: &[PhysicalSortExpr],
-    rhs: &[PhysicalSortExpr],
-) -> Option<Vec<PhysicalSortExpr>> {
-    if izip!(lhs.iter(), rhs.iter()).all(|(lhs, rhs)| lhs.eq(rhs)) {
-        if lhs.len() > rhs.len() {
-            return Some(lhs.to_vec());
-        } else {
-            return Some(rhs.to_vec());
-        }
-    }
-    None
-}
-
-// impl OrderingEquivalentClass {
-//     /// This function updates ordering equivalences with alias information.
-//     /// For instance, assume columns `a` and `b` are aliases (a as b), and
-//     /// orderings `a ASC` and `c DESC` are equivalent. Here, we replace column
-//     /// `a` with `b` in ordering equivalence expressions. After this function,
-//     /// `a ASC`, `c DESC` will be converted to the `b ASC`, `c DESC`.
-//     fn update_with_aliases(
-//         &mut self,
-//         oeq_alias_map: &[(Column, Column)],
-//         fields: &Fields,
-//     ) {
-//         let is_head_invalid = self.head.iter().any(|sort_expr| {
-//             collect_columns(&sort_expr.expr)
-//                 .iter()
-//                 .any(|col| is_column_invalid_in_new_schema(col, fields))
-//         });
-//         // If head is invalidated, update head with alias expressions
-//         if is_head_invalid {
-//             self.head = update_with_alias(self.head.clone(), oeq_alias_map);
-//         } else {
-//             let new_oeq_expr = update_with_alias(self.head.clone(), oeq_alias_map);
-//             self.insert(new_oeq_expr);
-//         }
-//         for ordering in self.others.clone().into_iter() {
-//             self.insert(update_with_alias(ordering, oeq_alias_map));
-//         }
-//     }
-//
-//     /// Adds `offset` value to the index of each expression inside `self.head` and `self.others`.
-//     pub fn add_offset(&self, offset: usize) -> Result<OrderingEquivalentClass> {
-//         let head = add_offset_to_lex_ordering(self.head(), offset)?;
-//         let others = self
-//             .others()
-//             .iter()
-//             .map(|ordering| add_offset_to_lex_ordering(ordering, offset))
-//             .collect::<Result<Vec<_>>>()?;
-//         Ok(OrderingEquivalentClass::new(head, others))
-//     }
-//
-//     // /// This function normalizes `OrderingEquivalenceProperties` according to `eq_properties`.
-//     // /// More explicitly, it makes sure that expressions in `oeq_class` are head entries
-//     // /// in `eq_properties`, replacing any non-head entries with head entries if necessary.
-//     // pub fn normalize_with_equivalence_properties(
-//     //     &self,
-//     //     eq_properties: &EquivalenceProperties,
-//     // ) -> OrderingEquivalentClass {
-//     //     let head = eq_properties.normalize_sort_exprs(self.head());
-//     //
-//     //     let others = self
-//     //         .others()
-//     //         .iter()
-//     //         .map(|other| eq_properties.normalize_sort_exprs(other))
-//     //         .collect();
-//     //
-//     //     EquivalentClass::new(head, others)
-//     // }
-//
-//     /// Prefix with existing ordering.
-//     pub fn prefix_ordering_equivalent_class_with_existing_ordering(
-//         &self,
-//         existing_ordering: &[PhysicalSortExpr],
-//     ) -> OrderingEquivalentClass {
-//         // let existing_ordering = eq_properties.normalize_sort_exprs(existing_ordering);
-//         // let normalized_head = eq_properties.normalize_sort_exprs(self.head());
-//         let normalized_head = self.head();
-//         let updated_head = merge_vectors(&existing_ordering, &normalized_head);
-//         let updated_others = self
-//             .others()
-//             .iter()
-//             .map(|ordering| {
-//                 // let normalized_ordering = eq_properties.normalize_sort_exprs(ordering);
-//                 let normalized_ordering = ordering;
-//                 merge_vectors(&existing_ordering, &normalized_ordering)
-//             })
-//             .collect();
-//         OrderingEquivalentClass::new(updated_head, updated_others)
-//     }
-//
-//     fn get_finer(
-//         lhs: &[PhysicalSortExpr],
-//         rhs: &[PhysicalSortExpr],
-//     ) -> Option<Vec<PhysicalSortExpr>> {
-//         if izip!(lhs.iter(), rhs.iter()).all(|(lhs, rhs)| lhs.eq(rhs)) {
-//             if lhs.len() > rhs.len() {
-//                 return Some(lhs.to_vec());
-//             } else {
-//                 return Some(rhs.to_vec());
-//             }
-//         }
-//         None
-//     }
-//
-//     fn add_new_ordering(&mut self, ordering: &[PhysicalSortExpr]) {
-//         let mut is_redundant = false;
-//         let mut new_res = vec![];
-//         for existing_ordering in self.iter() {
-//             if let Some(finer) = Self::get_finer(existing_ordering, ordering) {
-//                 // existing_ordering = finer;
-//                 new_res.push(finer);
-//                 is_redundant = true;
-//             } else {
-//                 new_res.push(existing_ordering.to_vec());
-//             }
-//         }
-//         if !is_redundant {
-//             new_res.push(ordering.to_vec());
-//         }
-//         let head = new_res[0].clone();
-//         let others = new_res[1..].to_vec();
-//         *self = OrderingEquivalentClass::new(head, others);
-//     }
-// }
 
 /// This is a builder object facilitating incremental construction
 /// for ordering equivalences.

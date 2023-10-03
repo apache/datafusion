@@ -49,7 +49,7 @@ use datafusion_physical_expr::{
 
 use crate::joins::hash_join_utils::{build_filter_input_order, SortedFilterExpr};
 use datafusion_physical_expr::equivalence::{
-    add_offset, combine_join_equivalence_properties2, OrderingEquivalentGroup,
+    combine_join_equivalence_properties2, OrderingEquivalentGroup,
 };
 use datafusion_physical_expr::intervals::ExprIntervalGraph;
 use datafusion_physical_expr::utils::merge_vectors;
@@ -247,19 +247,18 @@ pub fn calculate_join_output_ordering(
 /// it can thereafter safely be used for ordering equivalence normalization.
 fn get_updated_right_ordering_equivalent_class(
     join_type: &JoinType,
-    right_oeq_class: &OrderingEquivalentGroup,
+    right_oeq_group: &OrderingEquivalentGroup,
     left_columns_len: usize,
 ) -> Result<OrderingEquivalentGroup> {
     match join_type {
         // In these modes, indices of the right schema should be offset by
         // the left table size.
         JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
-            let right_oeq_class = add_offset(right_oeq_class, left_columns_len)?;
-            return Ok(right_oeq_class);
+            return right_oeq_group.add_offset(left_columns_len)
         }
         _ => {}
     };
-    Ok(right_oeq_class.clone())
+    Ok(right_oeq_group.clone())
 }
 
 /// Calculate ordering equivalence properties for the given join operation.
