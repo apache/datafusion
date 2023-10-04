@@ -618,13 +618,20 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ConcatWithSeparator => Ok(Utf8),
             BuiltinScalarFunction::DatePart => Ok(Float64),
             BuiltinScalarFunction::DateBin | BuiltinScalarFunction::DateTrunc => {
-                match input_expr_types[1] {
-                    Timestamp(Nanosecond, _) | Utf8 | Null => {
+                match &input_expr_types[1] {
+                    Timestamp(Nanosecond, None) | Utf8 | Null => {
                         Ok(Timestamp(Nanosecond, None))
                     }
-                    Timestamp(Microsecond, _) => Ok(Timestamp(Microsecond, None)),
-                    Timestamp(Millisecond, _) => Ok(Timestamp(Millisecond, None)),
-                    Timestamp(Second, _) => Ok(Timestamp(Second, None)),
+                    Timestamp(Nanosecond, tz_opt) => {
+                        Ok(Timestamp(Nanosecond, tz_opt.clone()))
+                    }
+                    Timestamp(Microsecond, tz_opt) => {
+                        Ok(Timestamp(Microsecond, tz_opt.clone()))
+                    }
+                    Timestamp(Millisecond, tz_opt) => {
+                        Ok(Timestamp(Millisecond, tz_opt.clone()))
+                    }
+                    Timestamp(Second, tz_opt) => Ok(Timestamp(Second, tz_opt.clone())),
                     _ => plan_err!(
                     "The {self} function can only accept timestamp as the second arg."
                 ),
