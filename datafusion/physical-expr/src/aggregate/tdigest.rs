@@ -608,7 +608,8 @@ impl TDigest {
             ScalarValue::List(arr) => {
                 let list_array = as_list_array(arr);
                 let arr = list_array.values();
-                let f64arr = as_primitive_array::<Float64Type>(arr).unwrap();
+                
+                let f64arr = as_primitive_array::<Float64Type>(arr).expect("expected f64 array");
                 f64arr
                     .values()
                     .chunks(2)
