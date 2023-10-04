@@ -26,6 +26,7 @@ use arrow::datatypes::SchemaRef;
 
 use crate::physical_expr::{deduplicate_physical_exprs, have_common_entries};
 use crate::sort_properties::{ExprOrdering, SortProperties};
+use arrow_schema::SortOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::utils::longest_consecutive_prefix;
 use datafusion_common::{DataFusionError, JoinSide, JoinType, Result};
@@ -573,6 +574,18 @@ impl OrderingEquivalentGroup {
                 return Some(lhs.to_vec());
             } else {
                 return Some(rhs.to_vec());
+            }
+        }
+        None
+    }
+
+    /// Get leading ordering of the expression if it is ordered.
+    /// `None` means expression is not ordered.
+    fn get_ordering(&self, expr: &Arc<dyn PhysicalExpr>) -> Option<SortOptions> {
+        for ordering in self.iter() {
+            let leading_ordering = &ordering[0];
+            if expr.eq(&leading_ordering.expr) {
+                return Some(leading_ordering.options);
             }
         }
         None
@@ -1551,17 +1564,16 @@ pub fn update_ordering(
         Ok(Transformed::Yes(node))
     } else if node.expr.as_any().is::<Column>() {
         // We have a Column, which is one of the two possible leaf node types:
-        // TODO: Make this a method of ordering equivalence
-        for ordering in ordering_equal_properties.oeq_group().iter() {
-            let global_ordering = &ordering[0];
-            if node.expr.eq(&global_ordering.expr) {
-                node.state = Some(SortProperties::Ordered(global_ordering.options));
-                return Ok(Transformed::Yes(node));
-            }
+        if let Some(options) = ordering_equal_properties
+            .oeq_group()
+            .get_ordering(&node.expr)
+        {
+            node.state = Some(SortProperties::Ordered(options));
+            Ok(Transformed::Yes(node))
+        } else {
+            node.state = None;
+            Ok(Transformed::No(node))
         }
-
-        node.state = None;
-        Ok(Transformed::No(node))
     } else {
         // We have a Literal, which is the other possible leaf node type:
         node.state = Some(node.expr.get_ordering(&[]));
