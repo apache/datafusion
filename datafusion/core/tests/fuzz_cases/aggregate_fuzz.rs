@@ -77,7 +77,7 @@ mod tests {
 async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str>) {
     let schema = input1[0].schema();
     let session_config = SessionConfig::new().with_batch_size(50);
-    let ctx = SessionContext::with_config(session_config);
+    let ctx = SessionContext::new_with_config(session_config);
     let mut sort_keys = vec![];
     for ordering_col in ["a", "b", "c"] {
         sort_keys.push(PhysicalSortExpr {

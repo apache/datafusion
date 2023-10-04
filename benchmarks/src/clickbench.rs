@@ -81,7 +81,7 @@ impl RunOpt {
         };
 
         let config = self.common.config();
-        let ctx = SessionContext::with_config(config);
+        let ctx = SessionContext::new_with_config(config);
         self.register_hits(&ctx).await?;
 
         let iterations = self.common.iterations;

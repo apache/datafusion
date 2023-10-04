@@ -78,7 +78,7 @@ impl ConvertOpt {
                 .file_extension(".tbl");
 
             let config = SessionConfig::new().with_batch_size(self.batch_size);
-            let ctx = SessionContext::with_config(config);
+            let ctx = SessionContext::new_with_config(config);
 
             // build plan to read the TBL file
             let mut csv = ctx.read_csv(&input_path, options).await?;

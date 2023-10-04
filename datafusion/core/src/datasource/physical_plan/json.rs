@@ -675,8 +675,9 @@ mod tests {
     #[tokio::test]
     async fn write_json_results() -> Result<()> {
         // create partitioned input file and context
-        let ctx =
-            SessionContext::with_config(SessionConfig::new().with_target_partitions(8));
+        let ctx = SessionContext::new_with_config(
+            SessionConfig::new().with_target_partitions(8),
+        );
 
         let path = format!("{TEST_DATA_BASE}/1.json");
 

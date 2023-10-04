@@ -110,7 +110,7 @@ impl RunOpt {
             .common
             .config()
             .with_collect_statistics(!self.disable_statistics);
-        let ctx = SessionContext::with_config(config);
+        let ctx = SessionContext::new_with_config(config);
 
         // register tables
         self.register_tables(&ctx).await?;

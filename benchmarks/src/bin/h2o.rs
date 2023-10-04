@@ -72,7 +72,7 @@ async fn group_by(opt: &GroupBy) -> Result<()> {
     let mut config = ConfigOptions::from_env()?;
     config.execution.batch_size = 65535;
 
-    let ctx = SessionContext::with_config(config.into());
+    let ctx = SessionContext::new_with_config(config.into());
 
     let schema = Schema::new(vec![
         Field::new("id1", DataType::Utf8, false),

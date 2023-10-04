@@ -159,7 +159,7 @@ mod tests {
     #[tokio::test]
     async fn issue_3242() -> Result<()> {
         // regression test for https://github.com/apache/arrow-datafusion/pull/3242
-        let session_ctx = SessionContext::with_config(
+        let session_ctx = SessionContext::new_with_config(
             SessionConfig::new().with_information_schema(true),
         );
 
@@ -199,7 +199,7 @@ mod tests {
 
     #[tokio::test]
     async fn query_view() -> Result<()> {
-        let session_ctx = SessionContext::with_config(
+        let session_ctx = SessionContext::new_with_config(
             SessionConfig::new().with_information_schema(true),
         );
 
@@ -237,7 +237,7 @@ mod tests {
 
     #[tokio::test]
     async fn query_view_with_alias() -> Result<()> {
-        let session_ctx = SessionContext::with_config(SessionConfig::new());
+        let session_ctx = SessionContext::new_with_config(SessionConfig::new());
 
         session_ctx
             .sql("CREATE TABLE abc AS VALUES (1,2,3), (4,5,6)")
@@ -270,7 +270,7 @@ mod tests {
 
     #[tokio::test]
     async fn query_view_with_inline_alias() -> Result<()> {
-        let session_ctx = SessionContext::with_config(SessionConfig::new());
+        let session_ctx = SessionContext::new_with_config(SessionConfig::new());
 
         session_ctx
             .sql("CREATE TABLE abc AS VALUES (1,2,3), (4,5,6)")
@@ -303,7 +303,7 @@ mod tests {
 
     #[tokio::test]
     async fn query_view_with_projection() -> Result<()> {
-        let session_ctx = SessionContext::with_config(
+        let session_ctx = SessionContext::new_with_config(
             SessionConfig::new().with_information_schema(true),
         );
 
@@ -341,7 +341,7 @@ mod tests {
 
     #[tokio::test]
     async fn query_view_with_filter() -> Result<()> {
-        let session_ctx = SessionContext::with_config(
+        let session_ctx = SessionContext::new_with_config(
             SessionConfig::new().with_information_schema(true),
         );
 
@@ -378,7 +378,7 @@ mod tests {
 
     #[tokio::test]
     async fn query_join_views() -> Result<()> {
-        let session_ctx = SessionContext::with_config(
+        let session_ctx = SessionContext::new_with_config(
             SessionConfig::new().with_information_schema(true),
         );
 
@@ -481,7 +481,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_view_plan() -> Result<()> {
-        let session_ctx = SessionContext::with_config(
+        let session_ctx = SessionContext::new_with_config(
             SessionConfig::new().with_information_schema(true),
         );
 
@@ -534,7 +534,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_or_replace_view() -> Result<()> {
-        let session_ctx = SessionContext::with_config(
+        let session_ctx = SessionContext::new_with_config(
             SessionConfig::new().with_information_schema(true),
         );
 
