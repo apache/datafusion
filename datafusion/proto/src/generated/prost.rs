@@ -2008,9 +2008,6 @@ pub struct AggregateExecNode {
     pub group_expr_name: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(string, repeated, tag = "6")]
     pub aggr_expr_name: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
-    /// we need the input schema to the partial aggregate to pass to the final aggregate
-    #[prost(message, optional, tag = "7")]
-    pub input_schema: ::core::option::Option<Schema>,
     #[prost(message, repeated, tag = "8")]
     pub null_expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
     #[prost(bool, repeated, tag = "9")]

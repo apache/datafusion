@@ -24,9 +24,6 @@ impl serde::Serialize for AggregateExecNode {
         if !self.aggr_expr_name.is_empty() {
             len += 1;
         }
-        if self.input_schema.is_some() {
-            len += 1;
-        }
         if !self.null_expr.is_empty() {
             len += 1;
         }
@@ -60,9 +57,6 @@ impl serde::Serialize for AggregateExecNode {
         if !self.aggr_expr_name.is_empty() {
             struct_ser.serialize_field("aggrExprName", &self.aggr_expr_name)?;
         }
-        if let Some(v) = self.input_schema.as_ref() {
-            struct_ser.serialize_field("inputSchema", v)?;
-        }
         if !self.null_expr.is_empty() {
             struct_ser.serialize_field("nullExpr", &self.null_expr)?;
         }
@@ -95,8 +89,6 @@ impl<'de> serde::Deserialize<'de> for AggregateExecNode {
             "groupExprName",
             "aggr_expr_name",
             "aggrExprName",
-            "input_schema",
-            "inputSchema",
             "null_expr",
             "nullExpr",
             "groups",
@@ -114,7 +106,6 @@ impl<'de> serde::Deserialize<'de> for AggregateExecNode {
             Input,
             GroupExprName,
             AggrExprName,
-            InputSchema,
             NullExpr,
             Groups,
             FilterExpr,
@@ -146,7 +137,6 @@ impl<'de> serde::Deserialize<'de> for AggregateExecNode {
                             "input" => Ok(GeneratedField::Input),
                             "groupExprName" | "group_expr_name" => Ok(GeneratedField::GroupExprName),
                             "aggrExprName" | "aggr_expr_name" => Ok(GeneratedField::AggrExprName),
-                            "inputSchema" | "input_schema" => Ok(GeneratedField::InputSchema),
                             "nullExpr" | "null_expr" => Ok(GeneratedField::NullExpr),
                             "groups" => Ok(GeneratedField::Groups),
                             "filterExpr" | "filter_expr" => Ok(GeneratedField::FilterExpr),
@@ -176,7 +166,6 @@ impl<'de> serde::Deserialize<'de> for AggregateExecNode {
                 let mut input__ = None;
                 let mut group_expr_name__ = None;
                 let mut aggr_expr_name__ = None;
-                let mut input_schema__ = None;
                 let mut null_expr__ = None;
                 let mut groups__ = None;
                 let mut filter_expr__ = None;
@@ -219,12 +208,6 @@ impl<'de> serde::Deserialize<'de> for AggregateExecNode {
                             }
                             aggr_expr_name__ = Some(map_.next_value()?);
                         }
-                        GeneratedField::InputSchema => {
-                            if input_schema__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("inputSchema"));
-                            }
-                            input_schema__ = map_.next_value()?;
-                        }
                         GeneratedField::NullExpr => {
                             if null_expr__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("nullExpr"));
@@ -258,7 +241,6 @@ impl<'de> serde::Deserialize<'de> for AggregateExecNode {
                     input: input__,
                     group_expr_name: group_expr_name__.unwrap_or_default(),
                     aggr_expr_name: aggr_expr_name__.unwrap_or_default(),
-                    input_schema: input_schema__,
                     null_expr: null_expr__.unwrap_or_default(),
                     groups: groups__.unwrap_or_default(),
                     filter_expr: filter_expr__.unwrap_or_default(),

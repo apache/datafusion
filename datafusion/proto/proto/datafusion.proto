@@ -1424,8 +1424,7 @@ message AggregateExecNode {
   PhysicalPlanNode input = 4;
   repeated string group_expr_name = 5;
   repeated string aggr_expr_name = 6;
-  // we need the input schema to the partial aggregate to pass to the final aggregate
-  Schema input_schema = 7;
+  reserved 7; // was input_schema
   repeated PhysicalExprNode null_expr = 8;
   repeated bool groups = 9;
   repeated MaybeFilter filter_expr = 10;

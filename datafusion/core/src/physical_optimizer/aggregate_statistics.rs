@@ -404,7 +404,6 @@ mod tests {
     async fn test_count_partial_direct_child() -> Result<()> {
         // basic test case with the aggregation applied on a source with exact statistics
         let source = mock_data()?;
-        let schema = source.schema();
         let agg = TestAggregate::new_count_star();
 
         let partial_agg = AggregateExec::try_new(
@@ -414,7 +413,6 @@ mod tests {
             vec![None],
             vec![None],
             source,
-            Arc::clone(&schema),
         )?;
 
         let final_agg = AggregateExec::try_new(
@@ -424,7 +422,6 @@ mod tests {
             vec![None],
             vec![None],
             Arc::new(partial_agg),
-            Arc::clone(&schema),
         )?;
 
         assert_count_optim_success(final_agg, agg).await?;
@@ -446,7 +443,6 @@ mod tests {
             vec![None],
             vec![None],
             source,
-            Arc::clone(&schema),
         )?;
 
         let final_agg = AggregateExec::try_new(
@@ -456,7 +452,6 @@ mod tests {
             vec![None],
             vec![None],
             Arc::new(partial_agg),
-            Arc::clone(&schema),
         )?;
 
         assert_count_optim_success(final_agg, agg).await?;
@@ -467,7 +462,6 @@ mod tests {
     #[tokio::test]
     async fn test_count_partial_indirect_child() -> Result<()> {
         let source = mock_data()?;
-        let schema = source.schema();
         let agg = TestAggregate::new_count_star();
 
         let partial_agg = AggregateExec::try_new(
@@ -477,7 +471,6 @@ mod tests {
             vec![None],
             vec![None],
             source,
-            Arc::clone(&schema),
         )?;
 
         // We introduce an intermediate optimization step between the partial and final aggregtator
@@ -490,7 +483,6 @@ mod tests {
             vec![None],
             vec![None],
             Arc::new(coalesce),
-            Arc::clone(&schema),
         )?;
 
         assert_count_optim_success(final_agg, agg).await?;
@@ -511,7 +503,6 @@ mod tests {
             vec![None],
             vec![None],
             source,
-            Arc::clone(&schema),
         )?;
 
         // We introduce an intermediate optimization step between the partial and final aggregtator
@@ -524,7 +515,6 @@ mod tests {
             vec![None],
             vec![None],
             Arc::new(coalesce),
-            Arc::clone(&schema),
         )?;
 
         assert_count_optim_success(final_agg, agg).await?;
@@ -556,7 +546,6 @@ mod tests {
             vec![None],
             vec![None],
             filter,
-            Arc::clone(&schema),
         )?;
 
         let final_agg = AggregateExec::try_new(
@@ -566,7 +555,6 @@ mod tests {
             vec![None],
             vec![None],
             Arc::new(partial_agg),
-            Arc::clone(&schema),
         )?;
 
         let conf = ConfigOptions::new();
@@ -603,7 +591,6 @@ mod tests {
             vec![None],
             vec![None],
             filter,
-            Arc::clone(&schema),
         )?;
 
         let final_agg = AggregateExec::try_new(
@@ -613,7 +600,6 @@ mod tests {
             vec![None],
             vec![None],
             Arc::new(partial_agg),
-            Arc::clone(&schema),
         )?;
 
         let conf = ConfigOptions::new();
