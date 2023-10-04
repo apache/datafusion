@@ -1492,37 +1492,39 @@ mod tests {
             ),
         ];
 
-        cases.iter().for_each(|(original, tz_opt, origin, expected)| {
-            let input = original
-                .iter()
-                .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
-                .collect::<TimestampNanosecondArray>()
-                .with_timezone_opt(tz_opt.clone());
-            let right = expected
-                .iter()
-                .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
-                .collect::<TimestampNanosecondArray>()
-                .with_timezone_opt(tz_opt.clone());
-            let result = date_bin(&[
-                ColumnarValue::Scalar(ScalarValue::new_interval_dt(1, 0)),
-                ColumnarValue::Array(Arc::new(input)),
-                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
-                    Some(string_to_timestamp_nanos(origin).unwrap()),
-                    tz_opt.clone(),
-                )),
-            ])
-            .unwrap();
-            if let ColumnarValue::Array(result) = result {
-                assert_eq!(
-                    result.data_type(),
-                    &DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone())
-                );
-                let left = as_primitive_array::<TimestampNanosecondType>(&result);
-                assert_eq!(left, &right);
-            } else {
-                panic!("unexpected column type");
-            }
-        });
+        cases
+            .iter()
+            .for_each(|(original, tz_opt, origin, expected)| {
+                let input = original
+                    .iter()
+                    .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
+                    .collect::<TimestampNanosecondArray>()
+                    .with_timezone_opt(tz_opt.clone());
+                let right = expected
+                    .iter()
+                    .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
+                    .collect::<TimestampNanosecondArray>()
+                    .with_timezone_opt(tz_opt.clone());
+                let result = date_bin(&[
+                    ColumnarValue::Scalar(ScalarValue::new_interval_dt(1, 0)),
+                    ColumnarValue::Array(Arc::new(input)),
+                    ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
+                        Some(string_to_timestamp_nanos(origin).unwrap()),
+                        tz_opt.clone(),
+                    )),
+                ])
+                .unwrap();
+                if let ColumnarValue::Array(result) = result {
+                    assert_eq!(
+                        result.data_type(),
+                        &DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone())
+                    );
+                    let left = as_primitive_array::<TimestampNanosecondType>(&result);
+                    assert_eq!(left, &right);
+                } else {
+                    panic!("unexpected column type");
+                }
+            });
     }
 
     #[test]
