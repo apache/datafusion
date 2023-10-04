@@ -213,12 +213,7 @@ mod tests {
             let list_arr = as_list_array(&arr).unwrap();
             let arr = list_arr.values();
             let arr = as_primitive_array::<$DATA_TYPE>(arr)?;
-
-            let mut values = vec![];
-            for v in arr.values().iter() {
-                values.push(v.to_owned());
-            }
-            values
+            arr.values().iter().cloned().collect::<Vec<_>>()
         }};
     }
 
@@ -255,13 +250,8 @@ mod tests {
         let arr = ScalarValue::raw_data(sv)?;
         let list_arr = as_list_array(&arr)?;
         let arr = list_arr.values();
-        let arr = as_boolean_array(arr)?;
-
-        let mut state_vec = vec![];
-        for v in arr.values().iter() {
-            state_vec.push(v);
-        }
-        Ok(state_vec)
+        let bool_arr = as_boolean_array(arr)?;
+        Ok(bool_arr.iter().flatten().collect())
     }
 
     fn run_update_batch(arrays: &[ArrayRef]) -> Result<(Vec<ScalarValue>, ScalarValue)> {

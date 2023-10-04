@@ -150,10 +150,9 @@ impl Accumulator for DistinctArrayAggAccumulator {
             "array_agg_distinct states must contain single array"
         );
 
-        let array = &states[0];
-        let scalars = ScalarValue::convert_array_to_scalar_vec(array)?;
-        for scalar in scalars {
-            self.values.extend(scalar)
+        let scalar_vec = ScalarValue::convert_array_to_scalar_vec(&states[0])?;
+        for scalars in scalar_vec {
+            self.values.extend(scalars)
         }
 
         Ok(())
