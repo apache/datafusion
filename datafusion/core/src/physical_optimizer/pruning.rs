@@ -17,6 +17,8 @@
 
 //! [`PruningPredicate`] to apply filter [`Expr`] to prune "containers"
 //! based on statistics (e.g. Parquet Row Groups)
+//!
+//! [`Expr`]: crate::prelude::Expr
 use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::sync::Arc;
@@ -44,7 +46,7 @@ use log::trace;
 
 /// Interface to pass statistics (min/max/nulls) information to [`PruningPredicate`].
 ///
-/// Returns statistics for containers / files as Arrow [`ArrayRefs`], so the
+/// Returns statistics for containers / files as Arrow [`ArrayRef`], so the
 /// evaluation happens once on a single `RecordBatch`, amortizing the overhead
 /// of evaluating of the predicate. This is important when pruning 1000s of
 /// containers which often happens in analytic systems.
@@ -179,7 +181,7 @@ impl PruningPredicate {
     /// expressions like `b = false`, but it does handle the
     /// simplified version `b`. See [`ExprSimplifier`] to simplify expressions.
     ///
-    /// [`ExprSimplifier`]: datafusion::optimizer::simplify_expressions::ExprSimplifier
+    /// [`ExprSimplifier`]: crate::optimizer::simplify_expressions::ExprSimplifier
     pub fn prune<S: PruningStatistics>(&self, statistics: &S) -> Result<Vec<bool>> {
         // build a RecordBatch that contains the min/max values in the
         // appropriate statistics columns
