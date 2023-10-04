@@ -153,9 +153,9 @@
 //! [`TableProvider`]: crate::datasource::TableProvider
 //! [`CatalogProvider`]: crate::catalog::CatalogProvider
 //! [`LogicalPlanBuilder`]: datafusion_expr::logical_plan::builder::LogicalPlanBuilder
-//! [`ScalarUDF`]: physical_plan::udf::ScalarUDF
-//! [`AggregateUDF`]: physical_plan::udaf::AggregateUDF
-//! [`WindowUDF`]: physical_plan::udwf::WindowUDF
+//! [`ScalarUDF`]: crate::logical_expr::ScalarUDF
+//! [`AggregateUDF`]: crate::logical_expr::AggregateUDF
+//! [`WindowUDF`]: crate::logical_expr::WindowUDF
 //! [`QueryPlanner`]: execution::context::QueryPlanner
 //! [`OptimizerRule`]: datafusion_optimizer::optimizer::OptimizerRule
 //! [`PhysicalOptimizerRule`]: crate::physical_optimizer::optimizer::PhysicalOptimizerRule
