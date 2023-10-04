@@ -284,7 +284,7 @@ impl SessionContext {
     /// Creates a new `SessionContext` using the provided
     /// [`SessionConfig`] and a new [`RuntimeEnv`].
     ///
-    /// See [`Self::with_config_rt`] for more details on resource
+    /// See [`Self::new_with_config_rt`] for more details on resource
     /// limits.
     pub fn new_with_config(config: SessionConfig) -> Self {
         let runtime = Arc::new(RuntimeEnv::default());
@@ -293,7 +293,7 @@ impl SessionContext {
 
     /// Creates a new `SessionContext` using the provided
     /// [`SessionConfig`] and a new [`RuntimeEnv`].
-    #[deprecated(since = "23.0.0", note = "Use SessionContext::new_with_config")]
+    #[deprecated(since = "32.0.0", note = "Use SessionContext::new_with_config")]
     pub fn with_config(config: SessionConfig) -> Self {
         Self::new_with_config(config)
     }
@@ -1428,7 +1428,8 @@ impl SessionState {
     }
 
     /// Returns new [`SessionState`] using the provided
-    /// [`SessionConfig`] and [`RuntimeEnv`].    #[deprecated(since = "32.0.0", note = "Use SessionState::new_with_config_rt")]
+    /// [`SessionConfig`] and [`RuntimeEnv`].
+    #[deprecated(since = "32.0.0", note = "Use SessionState::new_with_config_rt")]
     pub fn with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
         Self::new_with_config_rt(config, runtime)
     }
@@ -1494,7 +1495,7 @@ impl SessionState {
     }
     /// Returns new [`SessionState`] using the provided
     /// [`SessionConfig`] and [`RuntimeEnv`].
-    #[deprecated(since = "32.0.0", note = "Use SessionState::new_with_config_rt")]
+    #[deprecated(since = "32.0.0", note = "Use SessionState::new_with_config_rt_and_catalog_list")]
     pub fn with_config_rt_and_catalog_list(
         config: SessionConfig,
         runtime: Arc<RuntimeEnv>,
