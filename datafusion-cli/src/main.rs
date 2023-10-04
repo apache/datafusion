@@ -178,7 +178,7 @@ pub async fn main() -> Result<()> {
     let runtime_env = create_runtime_env(rn_config.clone())?;
 
     let mut ctx =
-        SessionContext::with_config_rt(session_config.clone(), Arc::new(runtime_env));
+        SessionContext::new_with_config_rt(session_config.clone(), Arc::new(runtime_env));
     ctx.refresh_catalogs().await?;
     // install dynamic catalog provider that knows how to open files
     ctx.register_catalog_list(Arc::new(DynamicFileCatalog::new(
