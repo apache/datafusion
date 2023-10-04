@@ -27,7 +27,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         array_exprs: Vec<SQLExpr>,
         planner_context: &mut PlannerContext,
-        options: UnnestOptions,
+        array_options: Vec<UnnestOptions>,
     ) -> Result<LogicalPlan> {
         // No pre-defiend schema for Unnest
         let schema = DFSchema::empty();
@@ -40,7 +40,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let plan = LogicalPlanBuilder::empty(true).build()?;
 
         LogicalPlanBuilder::from(plan)
-            .unnest_arrays(exprs, options)?
+            .unnest_arrays(exprs, array_options)?
             .build()
     }
 }

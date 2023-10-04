@@ -48,7 +48,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             crate::utils::normalize_ident(function.name.0[0].clone())
         };
 
-        // TOOD: add options in args
+        // Unnest Expression
+        // TOOD: Configure UnnestOptions, set default for now
         let options: UnnestOptions = Default::default();
         if name == "unnest" {
             let array_exprs =

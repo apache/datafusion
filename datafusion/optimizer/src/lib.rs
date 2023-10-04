@@ -39,7 +39,6 @@ pub mod rewrite_disjunctive_predicate;
 pub mod scalar_subquery_to_join;
 pub mod simplify_expressions;
 pub mod single_distinct_to_groupby;
-pub mod unnest_expressions;
 pub mod unwrap_cast_in_comparison;
 pub mod utils;
 

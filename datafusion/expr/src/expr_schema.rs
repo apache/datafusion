@@ -88,10 +88,7 @@ impl ExprSchemable for Expr {
                     .collect::<Result<Vec<_>>>()?;
                 Ok((fun.return_type)(&data_types)?.as_ref().clone())
             }
-            Expr::Unnest(Unnest {
-                array_exprs,
-                options,
-            }) => {
+            Expr::Unnest(Unnest { array_exprs, .. }) => {
                 let data_types = array_exprs
                     .iter()
                     .map(|e| e.get_type(schema))
@@ -108,9 +105,9 @@ impl ExprSchemable for Expr {
 
                 // If there is more than one unique data type, return an error
                 if unique_data_types.len() > 1 {
-                    return Err(DataFusionError::NotImplemented(
-                        "Unnest does not support inconsistent data types".to_string(),
-                    ));
+                    return Err(DataFusionError::NotImplemented(format!(
+                        "Unnest does not support inconsistent data types: {data_types:?}"
+                    )));
                 }
 
                 // Extract the common data type since there is only one unique data type

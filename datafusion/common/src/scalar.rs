@@ -3047,7 +3047,6 @@ mod tests {
     use std::cmp::Ordering;
     use std::sync::Arc;
 
-    use crate::Result;
     use arrow::compute::kernels;
     use arrow::compute::{concat, is_null};
     use arrow::datatypes::ArrowPrimitiveType;
