@@ -538,6 +538,7 @@ fn reorder_aggregate_keys(
                             agg_exec.filter_expr().to_vec(),
                             agg_exec.order_by_expr().to_vec(),
                             agg_exec.input().clone(),
+                            agg_exec.input_schema.clone(),
                         )?))
                     } else {
                         None
@@ -569,6 +570,7 @@ fn reorder_aggregate_keys(
                         agg_exec.filter_expr().to_vec(),
                         agg_exec.order_by_expr().to_vec(),
                         partial_agg,
+                        agg_exec.input_schema().clone(),
                     )?);
 
                     // Need to create a new projection to change the expr ordering back
@@ -1931,6 +1933,7 @@ mod tests {
         input: Arc<dyn ExecutionPlan>,
         alias_pairs: Vec<(String, String)>,
     ) -> Arc<dyn ExecutionPlan> {
+        let schema = schema();
         let mut group_by_expr: Vec<(Arc<dyn PhysicalExpr>, String)> = vec![];
         for (column, alias) in alias_pairs.iter() {
             group_by_expr
@@ -1966,9 +1969,11 @@ mod tests {
                         vec![],
                         vec![],
                         input,
+                        schema.clone(),
                     )
                     .unwrap(),
                 ),
+                schema,
             )
             .unwrap(),
         )

@@ -302,6 +302,7 @@ fn rountrip_aggregate() -> Result<()> {
         vec![None],
         vec![None],
         Arc::new(EmptyExec::new(false, schema.clone())),
+        schema,
     )?))
 }
 
@@ -369,6 +370,7 @@ fn roundtrip_aggregate_udaf() -> Result<()> {
             vec![None],
             vec![None],
             Arc::new(EmptyExec::new(false, schema.clone())),
+            schema,
         )?),
         ctx,
     )
@@ -582,6 +584,7 @@ fn roundtrip_distinct_count() -> Result<()> {
         vec![None],
         vec![None],
         Arc::new(EmptyExec::new(false, schema.clone())),
+        schema,
     )?))
 }
 

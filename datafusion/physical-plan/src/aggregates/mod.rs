@@ -283,6 +283,10 @@ pub struct AggregateExec {
     pub input: Arc<dyn ExecutionPlan>,
     /// Schema after the aggregate is applied
     schema: SchemaRef,
+    /// Input schema before any aggregation is applied. For partial aggregate this will be the
+    /// same as input.schema() but for the final aggregate it will be the same as the input
+    /// to the partial aggregate
+    pub input_schema: SchemaRef,
     /// The columns map used to normalize out expressions like Partitioning and PhysicalSortExpr
     /// The key is the column from the input schema and the values are the columns from the output schema
     columns_map: HashMap<Column, Vec<Column>>,
@@ -608,6 +612,7 @@ impl AggregateExec {
         // Ordering requirement of each aggregate expression
         mut order_by_expr: Vec<Option<LexOrdering>>,
         input: Arc<dyn ExecutionPlan>,
+        input_schema: SchemaRef,
     ) -> Result<Self> {
         let schema = create_schema(
             &input.schema(),
@@ -700,6 +705,7 @@ impl AggregateExec {
             order_by_expr,
             input,
             schema,
+            input_schema,
             columns_map,
             metrics: ExecutionPlanMetricsSet::new(),
             aggregation_ordering,
@@ -748,8 +754,9 @@ impl AggregateExec {
         &self.input
     }
 
+    /// Get the input schema before any aggregates are applied
     pub fn input_schema(&self) -> SchemaRef {
-        self.input.schema().clone()
+        self.input_schema.clone()
     }
 
     fn execute_typed(
@@ -975,6 +982,7 @@ impl ExecutionPlan for AggregateExec {
             self.filter_expr.clone(),
             self.order_by_expr.clone(),
             children[0].clone(),
+            self.input_schema.clone(),
         )?;
         me.limit = self.limit;
         Ok(Arc::new(me))
@@ -1524,6 +1532,7 @@ mod tests {
             vec![None],
             vec![None],
             input,
+            input_schema.clone(),
         )?);
 
         let result =
@@ -1602,6 +1611,7 @@ mod tests {
             vec![None],
             vec![None],
             merge,
+            input_schema,
         )?);
 
         let result =
@@ -1667,6 +1677,7 @@ mod tests {
             vec![None],
             vec![None],
             input,
+            input_schema.clone(),
         )?);
 
         let result =
@@ -1714,6 +1725,7 @@ mod tests {
             vec![None],
             vec![None],
             merge,
+            input_schema,
         )?);
 
         let result =
@@ -1976,6 +1988,7 @@ mod tests {
                 vec![None; 3],
                 vec![None; 3],
                 input.clone(),
+                input_schema.clone(),
             )?);
 
             let stream = partial_aggregate.execute_typed(0, task_ctx.clone())?;
@@ -2031,6 +2044,7 @@ mod tests {
             vec![None],
             vec![None],
             blocking_exec,
+            schema,
         )?);
 
         let fut = crate::collect(aggregate_exec, task_ctx);
@@ -2069,6 +2083,7 @@ mod tests {
             vec![None],
             vec![None],
             blocking_exec,
+            schema,
         )?);
 
         let fut = crate::collect(aggregate_exec, task_ctx);
@@ -2170,6 +2185,7 @@ mod tests {
             vec![None],
             vec![Some(ordering_req.clone())],
             memory_exec,
+            schema.clone(),
         )?);
         let coalesce = if use_coalesce_batches {
             let coalesce = Arc::new(CoalescePartitionsExec::new(aggregate_exec));
@@ -2185,6 +2201,7 @@ mod tests {
             vec![None],
             vec![Some(ordering_req)],
             coalesce,
+            schema,
         )?) as Arc<dyn ExecutionPlan>;
 
         let result = crate::collect(aggregate_final, task_ctx).await?;

@@ -500,6 +500,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     physical_filter_expr,
                     physical_order_by_expr,
                     input,
+                    Arc::new((&input_schema).try_into()?),
                 )?))
             }
             PhysicalPlanType::HashJoin(hashjoin) => {

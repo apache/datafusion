@@ -91,6 +91,7 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
                                             input_agg_exec.filter_expr().to_vec(),
                                             input_agg_exec.order_by_expr().to_vec(),
                                             input_agg_exec.input().clone(),
+                                            input_agg_exec.input_schema().clone(),
                                         )
                                         .ok()
                                         .map(Arc::new)
@@ -264,6 +265,7 @@ mod tests {
         group_by: PhysicalGroupBy,
         aggr_expr: Vec<Arc<dyn AggregateExpr>>,
     ) -> Arc<dyn ExecutionPlan> {
+        let schema = input.schema();
         Arc::new(
             AggregateExec::try_new(
                 AggregateMode::Partial,
@@ -272,6 +274,7 @@ mod tests {
                 vec![],
                 vec![],
                 input,
+                schema,
             )
             .unwrap(),
         )
@@ -282,6 +285,7 @@ mod tests {
         group_by: PhysicalGroupBy,
         aggr_expr: Vec<Arc<dyn AggregateExpr>>,
     ) -> Arc<dyn ExecutionPlan> {
+        let schema = input.schema();
         Arc::new(
             AggregateExec::try_new(
                 AggregateMode::Final,
@@ -290,6 +294,7 @@ mod tests {
                 vec![],
                 vec![],
                 input,
+                schema,
             )
             .unwrap(),
         )
