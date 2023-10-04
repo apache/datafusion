@@ -281,7 +281,7 @@ impl RequiredStatColumns {
     /// `self.columns` for details)
     pub(crate) fn iter(
         &self,
-    ) -> impl Iterator<Item=&(phys_expr::Column, StatisticsType, Field)> {
+    ) -> impl Iterator<Item = &(phys_expr::Column, StatisticsType, Field)> {
         self.columns.iter()
     }
 
@@ -830,10 +830,10 @@ fn build_predicate_expression(
             (left, Operator::And, _) if is_always_true(left) => right_expr,
             (_, Operator::And, right) if is_always_true(right) => left_expr,
             (left, Operator::Or, right)
-            if is_always_true(left) || is_always_true(right) =>
-                {
-                    unhandled
-                }
+                if is_always_true(left) || is_always_true(right) =>
+            {
+                unhandled
+            }
             _ => Arc::new(phys_expr::BinaryExpr::new(left_expr, op, right_expr)),
         };
         return expr;
@@ -980,8 +980,8 @@ mod tests {
 
     impl ContainerStats {
         fn new_decimal128(
-            min: impl IntoIterator<Item=Option<i128>>,
-            max: impl IntoIterator<Item=Option<i128>>,
+            min: impl IntoIterator<Item = Option<i128>>,
+            max: impl IntoIterator<Item = Option<i128>>,
             precision: u8,
             scale: i8,
         ) -> Self {
@@ -1003,8 +1003,8 @@ mod tests {
         }
 
         fn new_i64(
-            min: impl IntoIterator<Item=Option<i64>>,
-            max: impl IntoIterator<Item=Option<i64>>,
+            min: impl IntoIterator<Item = Option<i64>>,
+            max: impl IntoIterator<Item = Option<i64>>,
         ) -> Self {
             Self {
                 min: Arc::new(min.into_iter().collect::<Int64Array>()),
@@ -1014,8 +1014,8 @@ mod tests {
         }
 
         fn new_i32(
-            min: impl IntoIterator<Item=Option<i32>>,
-            max: impl IntoIterator<Item=Option<i32>>,
+            min: impl IntoIterator<Item = Option<i32>>,
+            max: impl IntoIterator<Item = Option<i32>>,
         ) -> Self {
             Self {
                 min: Arc::new(min.into_iter().collect::<Int32Array>()),
@@ -1025,8 +1025,8 @@ mod tests {
         }
 
         fn new_utf8<'a>(
-            min: impl IntoIterator<Item=Option<&'a str>>,
-            max: impl IntoIterator<Item=Option<&'a str>>,
+            min: impl IntoIterator<Item = Option<&'a str>>,
+            max: impl IntoIterator<Item = Option<&'a str>>,
         ) -> Self {
             Self {
                 min: Arc::new(min.into_iter().collect::<StringArray>()),
@@ -1036,8 +1036,8 @@ mod tests {
         }
 
         fn new_bool(
-            min: impl IntoIterator<Item=Option<bool>>,
-            max: impl IntoIterator<Item=Option<bool>>,
+            min: impl IntoIterator<Item = Option<bool>>,
+            max: impl IntoIterator<Item = Option<bool>>,
         ) -> Self {
             Self {
                 min: Arc::new(min.into_iter().collect::<BooleanArray>()),
@@ -1067,7 +1067,7 @@ mod tests {
         /// there are containers
         fn with_null_counts(
             mut self,
-            counts: impl IntoIterator<Item=Option<i64>>,
+            counts: impl IntoIterator<Item = Option<i64>>,
         ) -> Self {
             // take stats out and update them
             let null_counts: ArrayRef =
@@ -1106,7 +1106,7 @@ mod tests {
         fn with_null_counts(
             mut self,
             name: impl Into<String>,
-            counts: impl IntoIterator<Item=Option<i64>>,
+            counts: impl IntoIterator<Item = Option<i64>>,
         ) -> Self {
             let col = Column::from_name(name.into());
 
@@ -2401,7 +2401,7 @@ mod tests {
             &right_input,
             df_schema.clone(),
         )
-            .unwrap();
+        .unwrap();
         assert_eq!(result_left.to_string(), left_input.to_string());
         assert_eq!(result_right.to_string(), right_input.to_string());
 
@@ -2416,7 +2416,7 @@ mod tests {
             &right_input,
             df_schema.clone(),
         )
-            .unwrap();
+        .unwrap();
         assert_eq!(result_left.to_string(), left_input.to_string());
         assert_eq!(result_right.to_string(), right_input.to_string());
 
