@@ -426,6 +426,10 @@ impl EquivalentGroups {
     }
 }
 
+/// Stores the mapping between source expression and target expression during projection
+/// Indices in the vector corresponds to index after projection.
+pub type ProjectionMapping = Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>;
+
 /// `LexOrdering` stores the lexicographical ordering for a schema.
 /// OrderingEquivalentClass keeps track of different alternative orderings than can
 /// describe the schema.
@@ -835,12 +839,8 @@ impl OrderingEquivalenceProperties {
                     expr: target.clone(),
                     options: sort_options,
                 };
-                if !projected_properties
-                    .oeq_group
-                    .contains(&vec![sort_expr.clone()])
-                {
-                    projected_properties.oeq_group.push(vec![sort_expr]);
-                }
+                // Push new ordering to the state.
+                projected_properties.oeq_group.push(vec![sort_expr]);
             }
         }
         // Remove redundant entries from ordering group if any.
@@ -871,7 +871,10 @@ impl OrderingEquivalenceProperties {
 
     /// Check whether any permutation of the argument has a prefix with existing ordering.
     /// Return indices that describes ordering and their ordering information.
-    pub fn set_satisfy(&self, exprs: &[Arc<dyn PhysicalExpr>]) -> Option<Vec<usize>> {
+    fn set_satisfy_helper(
+        &self,
+        exprs: &[Arc<dyn PhysicalExpr>],
+    ) -> Option<Vec<(usize, SortOptions)>> {
         let exprs_normalized = self.eq_groups.normalize_exprs(exprs);
         let mut best = vec![];
 
@@ -895,7 +898,15 @@ impl OrderingEquivalenceProperties {
                 // these indices, we would match existing ordering. For the example above,
                 // this would produce 1, 0; meaning 1st and 0th entries (a, b) among the
                 // GROUP BY expressions b, a, d match input ordering.
-                best = get_indices_of_exprs_strict(&ordered_exprs, &exprs_normalized)
+                let indices =
+                    get_indices_of_exprs_strict(&ordered_exprs, &exprs_normalized);
+                best = indices
+                    .iter()
+                    .enumerate()
+                    .map(|(order_idx, &match_idx)| {
+                        (match_idx, ordering[order_idx].options)
+                    })
+                    .collect();
             }
         }
 
@@ -904,6 +915,32 @@ impl OrderingEquivalenceProperties {
         } else {
             Some(best)
         }
+    }
+
+    /// Check whether any permutation of the argument has a prefix with existing ordering.
+    /// Return indices that describes ordering and their ordering information.
+    pub fn set_satisfy(&self, exprs: &[Arc<dyn PhysicalExpr>]) -> Option<Vec<usize>> {
+        self.set_satisfy_helper(exprs).map(|indices_and_orders| {
+            indices_and_orders
+                .into_iter()
+                .map(|(idx, _options)| idx)
+                .collect()
+        })
+    }
+
+    /// Check whether one of the permutation of the exprs satisfies existing ordering.
+    /// If so, return indices and their orderings.
+    /// None, indicates that there is no permutation that satisfies ordering.
+    pub fn set_exactly_satisfy(
+        &self,
+        exprs: &[Arc<dyn PhysicalExpr>],
+    ) -> Option<Vec<(usize, SortOptions)>> {
+        if let Some(indices_and_orders) = self.set_satisfy_helper(exprs) {
+            if indices_and_orders.len() == exprs.len() {
+                return Some(indices_and_orders);
+            }
+        }
+        None
     }
 
     /// Empties the `oeq_group` inside self, When existing orderings are invalidated.
@@ -1215,10 +1252,6 @@ pub enum PartitionSearchMode {
     /// All Partition columns are ordered (Also empty case)
     Sorted,
 }
-
-// Stores the mapping between source expression and target expression during projection
-// Indices in the vector corresponds to index after projection.
-type ProjectionMapping = Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>;
 
 /// This is a builder object facilitating incremental construction
 /// for ordering equivalences.

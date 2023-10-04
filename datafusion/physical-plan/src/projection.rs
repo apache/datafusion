@@ -38,11 +38,9 @@ use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::expressions::Literal;
-use datafusion_physical_expr::{
-    normalize_out_expr_with_columns_map, OrderingEquivalenceProperties,
-};
+use datafusion_physical_expr::{project_out_expr, OrderingEquivalenceProperties};
 
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use crate::common::calculate_projection_mapping;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -57,9 +55,8 @@ pub struct ProjectionExec {
     input: Arc<dyn ExecutionPlan>,
     /// The output ordering
     output_ordering: Option<Vec<PhysicalSortExpr>>,
-    /// The columns map used to normalize out expressions like Partitioning and PhysicalSortExpr
-    /// The key is the column from the input schema and the values are the columns from the output schema
-    columns_map: HashMap<Column, Vec<Column>>,
+    /// The source_to_target_mapping used to normalize out expressions like Partitioning and PhysicalSortExpr
+    /// The key is the expression from the input schema and the value is the expression from the output schema
     source_to_target_mapping: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
@@ -94,46 +91,9 @@ impl ProjectionExec {
             input_schema.metadata().clone(),
         ));
 
-        // construct a map from the input columns to the output columns of the Projection
-        let mut columns_map: HashMap<Column, Vec<Column>> = HashMap::new();
-        let mut source_to_target_mapping = vec![];
-        for (expr_idx, (expression, name)) in expr.iter().enumerate() {
-            let target_expr =
-                Arc::new(Column::new(name, expr_idx)) as Arc<dyn PhysicalExpr>;
-
-            let source_expr = expression.clone().transform_down(&|e| match e
-                .as_any()
-                .downcast_ref::<Column>(
-            ) {
-                Some(col) => {
-                    let idx = col.index();
-                    let matching_input_field = input_schema.field(idx);
-                    let matching_input_column =
-                        Column::new(matching_input_field.name(), idx);
-                    Ok(Transformed::Yes(Arc::new(matching_input_column)))
-                }
-                None => Ok(Transformed::No(e)),
-            })?;
-
-            source_to_target_mapping.push((source_expr, target_expr));
-        }
-        // println!("source_to_target_mapping: {:?}", source_to_target_mapping);
-        for (expr_idx, (expression, name)) in expr.iter().enumerate() {
-            if let Some(column) = expression.as_any().downcast_ref::<Column>() {
-                // For some executors, logical and physical plan schema fields
-                // are not the same. The information in a `Column` comes from
-                // the logical plan schema. Therefore, to produce correct results
-                // we use the field in the input schema with the same index. This
-                // corresponds to the physical plan `Column`.
-                let idx = column.index();
-                let matching_input_field = input_schema.field(idx);
-                let matching_input_column = Column::new(matching_input_field.name(), idx);
-                let entry = columns_map
-                    .entry(matching_input_column)
-                    .or_insert_with(Vec::new);
-                entry.push(Column::new(name, expr_idx));
-            };
-        }
+        // construct a map from the input expressions to the output expression of the Projection
+        let source_to_target_mapping =
+            calculate_projection_mapping(&expr, &input_schema)?;
 
         let input_oeq = input.ordering_equivalence_properties();
         let project_oeq = input_oeq.project(&source_to_target_mapping, schema.clone());
@@ -145,7 +105,6 @@ impl ProjectionExec {
             schema,
             input,
             output_ordering,
-            columns_map,
             source_to_target_mapping,
             metrics: ExecutionPlanMetricsSet::new(),
         })
@@ -219,9 +178,7 @@ impl ExecutionPlan for ProjectionExec {
             Partitioning::Hash(exprs, part) => {
                 let normalized_exprs = exprs
                     .into_iter()
-                    .map(|expr| {
-                        normalize_out_expr_with_columns_map(expr, &self.columns_map)
-                    })
+                    .map(|expr| project_out_expr(expr, &self.source_to_target_mapping))
                     .collect::<Vec<_>>();
 
                 Partitioning::Hash(normalized_exprs, part)

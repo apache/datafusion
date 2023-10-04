@@ -23,8 +23,10 @@ use crate::{ColumnStatistics, ExecutionPlan, Statistics};
 use arrow::datatypes::Schema;
 use arrow::ipc::writer::{FileWriter, IpcWriteOptions};
 use arrow::record_batch::RecordBatch;
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
+use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 use futures::{Future, StreamExt, TryStreamExt};
@@ -368,6 +370,34 @@ impl IPCWriter {
 #[deprecated(since = "28.0.0", note = "RecordBatch::get_array_memory_size")]
 pub fn batch_byte_size(batch: &RecordBatch) -> usize {
     batch.get_array_memory_size()
+}
+
+/// Constructs projection mapping between input and output
+pub fn calculate_projection_mapping(
+    expr: &[(Arc<dyn PhysicalExpr>, String)],
+    input_schema: &Arc<Schema>,
+) -> Result<ProjectionMapping> {
+    // construct a map from the input expressions to the output expression of the Projection
+    let mut source_to_target_mapping = vec![];
+    for (expr_idx, (expression, name)) in expr.iter().enumerate() {
+        let target_expr = Arc::new(Column::new(name, expr_idx)) as Arc<dyn PhysicalExpr>;
+
+        let source_expr = expression.clone().transform_down(&|e| match e
+            .as_any()
+            .downcast_ref::<Column>()
+        {
+            Some(col) => {
+                let idx = col.index();
+                let matching_input_field = input_schema.field(idx);
+                let matching_input_column = Column::new(matching_input_field.name(), idx);
+                Ok(Transformed::Yes(Arc::new(matching_input_column)))
+            }
+            None => Ok(Transformed::No(e)),
+        })?;
+
+        source_to_target_mapping.push((source_expr, target_expr));
+    }
+    Ok(source_to_target_mapping)
 }
 
 #[cfg(test)]

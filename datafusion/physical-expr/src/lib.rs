@@ -69,8 +69,7 @@ pub use sort_expr::{
     LexOrdering, LexOrderingRef, LexOrderingReq, PhysicalSortExpr,
     PhysicalSortRequirement,
 };
-pub use sort_properties::update_ordering;
 pub use utils::{
-    expr_list_eq_any_order, expr_list_eq_strict_order,
-    normalize_out_expr_with_columns_map, reverse_order_bys, split_conjunction,
+    expr_list_eq_any_order, expr_list_eq_strict_order, project_out_expr,
+    reverse_order_bys, split_conjunction,
 };

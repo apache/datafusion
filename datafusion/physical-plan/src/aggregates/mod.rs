@@ -33,16 +33,13 @@ use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Accumulator;
 use datafusion_physical_expr::{
-    expressions::Column, normalize_out_expr_with_columns_map, physical_exprs_contains,
-    reverse_order_bys, AggregateExpr, LexOrdering, LexOrderingReq,
-    OrderingEquivalenceProperties, PhysicalExpr, PhysicalSortExpr,
-    PhysicalSortRequirement,
+    expressions::Column, physical_exprs_contains, project_out_expr, reverse_order_bys,
+    AggregateExpr, LexOrdering, LexOrderingReq, OrderingEquivalenceProperties,
+    PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
 };
 
-use datafusion_common::tree_node::{Transformed, TreeNode};
 use itertools::{izip, Itertools};
 use std::any::Any;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 mod group_values;
@@ -53,6 +50,7 @@ mod topk;
 mod topk_stream;
 
 use crate::aggregates::topk_stream::GroupedTopKAggregateStream;
+use crate::common::calculate_projection_mapping;
 use crate::windows::get_ordered_partition_by_indices;
 pub use datafusion_expr::AggregateFunction;
 use datafusion_physical_expr::aggregate::is_order_sensitive;
@@ -213,6 +211,25 @@ impl PhysicalGroupBy {
     pub fn is_single(&self) -> bool {
         self.null_expr.is_empty()
     }
+
+    /// Calculate group by expressions according to input schema.
+    pub fn input_exprs(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        self.expr
+            .iter()
+            .map(|(expr, _alias)| expr.clone())
+            .collect::<Vec<_>>()
+    }
+
+    /// This function returns grouping expressions as they occur in the output schema.
+    fn output_exprs(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        // Update column indices. Since the group by columns come first in the output schema, their
+        // indices are simply 0..self.group_expr(len).
+        self.expr
+            .iter()
+            .enumerate()
+            .map(|(index, (_, name))| Arc::new(Column::new(name, index)) as _)
+            .collect()
+    }
 }
 
 impl PartialEq for PhysicalGroupBy {
@@ -272,27 +289,14 @@ pub struct AggregateExec {
     /// same as input.schema() but for the final aggregate it will be the same as the input
     /// to the partial aggregate
     pub input_schema: SchemaRef,
-    /// The columns map used to normalize out expressions like Partitioning and PhysicalSortExpr
-    /// The key is the column from the input schema and the values are the columns from the output schema
-    columns_map: HashMap<Column, Vec<Column>>,
+    /// The source_to_target_mapping used to normalize out expressions like Partitioning and PhysicalSortExpr
+    /// The key is the expression from the input schema and the value is the expression from the output schema.
     source_to_target_mapping: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>,
     /// Execution Metrics
     metrics: ExecutionPlanMetricsSet,
     required_input_ordering: Option<LexOrderingReq>,
     partition_search_mode: PartitionSearchMode,
     output_ordering: Option<LexOrdering>,
-}
-
-/// This function returns grouping expressions as they occur in the output schema.
-fn output_group_expr_helper(group_by: &PhysicalGroupBy) -> Vec<Arc<dyn PhysicalExpr>> {
-    // Update column indices. Since the group by columns come first in the output schema, their
-    // indices are simply 0..self.group_expr(len).
-    group_by
-        .expr()
-        .iter()
-        .enumerate()
-        .map(|(index, (_, name))| Arc::new(Column::new(name, index)) as _)
-        .collect()
 }
 
 /// This function returns the ordering requirement of the first non-reversible
@@ -417,11 +421,7 @@ fn group_by_contains_all_requirements(
     group_by: &PhysicalGroupBy,
     requirement: &LexOrdering,
 ) -> bool {
-    let physical_exprs = group_by
-        .expr()
-        .iter()
-        .map(|(expr, _alias)| expr.clone())
-        .collect::<Vec<_>>();
+    let physical_exprs = group_by.input_exprs();
     // When we have multiple groups (grouping set)
     // since group by may be calculated on the subset of the group_by.expr()
     // it is not guaranteed to have all of the requirements among group by expressions.
@@ -490,11 +490,7 @@ impl AggregateExec {
         )?;
 
         // get group by exprs
-        let groupby_exprs = group_by
-            .expr
-            .iter()
-            .map(|(item, _)| item.clone())
-            .collect::<Vec<_>>();
+        let groupby_exprs = group_by.input_exprs();
         // If existing ordering satisfies a prefix of groupby expression, prefix requirement
         // with this section. In this case, group by will work more efficient
         let indices = get_ordered_partition_by_indices(&groupby_exprs, &input);
@@ -510,34 +506,9 @@ impl AggregateExec {
         new_requirement.extend(req);
         new_requirement = collapse_lex_req(new_requirement);
 
-        // construct a map from the input columns to the output columns of the Aggregation
-        let mut columns_map: HashMap<Column, Vec<Column>> = HashMap::new();
-        let mut source_to_target_mapping = vec![];
-        let schema_of_input = input.schema();
-        for (expr_idx, (expression, name)) in group_by.expr.iter().enumerate() {
-            if let Some(column) = expression.as_any().downcast_ref::<Column>() {
-                let new_col_idx = schema.index_of(name)?;
-                let entry = columns_map.entry(column.clone()).or_insert_with(Vec::new);
-                entry.push(Column::new(name, new_col_idx));
-            };
-
-            let target_expr =
-                Arc::new(Column::new(name, expr_idx)) as Arc<dyn PhysicalExpr>;
-            let source_expr = expression.clone().transform_down(&|e| match e
-                .as_any()
-                .downcast_ref::<Column>(
-            ) {
-                Some(col) => {
-                    let idx = col.index();
-                    let matching_input_field = schema_of_input.field(idx);
-                    let matching_input_column =
-                        Column::new(matching_input_field.name(), idx);
-                    Ok(Transformed::Yes(Arc::new(matching_input_column)))
-                }
-                None => Ok(Transformed::No(e)),
-            })?;
-            source_to_target_mapping.push((source_expr, target_expr));
-        }
+        // construct a map from the input expression to the output expression of the Aggregation group by
+        let source_to_target_mapping =
+            calculate_projection_mapping(&group_by.expr, &input.schema())?;
 
         let required_input_ordering = if new_requirement.is_empty() {
             None
@@ -559,7 +530,6 @@ impl AggregateExec {
             input,
             schema,
             input_schema,
-            columns_map,
             source_to_target_mapping,
             metrics: ExecutionPlanMetricsSet::new(),
             required_input_ordering,
@@ -586,7 +556,7 @@ impl AggregateExec {
 
     /// Grouping expressions as they occur in the output schema
     pub fn output_group_expr(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        output_group_expr_helper(&self.group_by)
+        self.group_by.output_exprs()
     }
 
     /// Aggregate expressions
@@ -754,10 +724,7 @@ impl ExecutionPlan for AggregateExec {
                         let normalized_exprs = exprs
                             .into_iter()
                             .map(|expr| {
-                                normalize_out_expr_with_columns_map(
-                                    expr,
-                                    &self.columns_map,
-                                )
+                                project_out_expr(expr, &self.source_to_target_mapping)
                             })
                             .collect::<Vec<_>>();
                         Partitioning::Hash(normalized_exprs, part)
