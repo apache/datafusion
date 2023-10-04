@@ -67,7 +67,7 @@ use super::metrics::{BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuil
 /// input before discarding everything other than the top 3 elements.
 ///
 /// The same answer can be produced by simply keeping track of the top
-/// N elements, reducing the total amount of required buffer memory.
+/// K=3 elements, reducing the total amount of required buffer memory.
 ///
 /// # Structure
 ///
