@@ -41,7 +41,7 @@ use datafusion::physical_plan::{
     functions, Partitioning,
 };
 use datafusion::physical_plan::{ColumnStatistics, PhysicalExpr, Statistics};
-use datafusion_common::{not_impl_err, DataFusionError, Result};
+use datafusion_common::{not_impl_err, DataFusionError, JoinSide, Result};
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use std::convert::{TryFrom, TryInto};
@@ -52,7 +52,6 @@ use crate::common::proto_error;
 use crate::convert_required;
 use crate::logical_plan;
 use crate::protobuf::physical_expr_node::ExprType;
-use datafusion::physical_plan::joins::utils::JoinSide;
 use datafusion::physical_plan::sorts::sort::SortOptions;
 
 impl From<&protobuf::PhysicalColumn> for Column {

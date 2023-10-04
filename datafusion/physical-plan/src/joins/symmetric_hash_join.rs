@@ -49,7 +49,6 @@ use crate::{
         utils::{
             build_batch_from_indices, build_join_schema, check_join_is_valid,
             partitioned_join_output_partitioning, ColumnIndex, JoinFilter, JoinOn,
-            JoinSide,
         },
     },
     metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
@@ -62,7 +61,7 @@ use arrow::compute::concat_batches;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::bisect;
-use datafusion_common::{internal_err, plan_err, JoinType};
+use datafusion_common::{internal_err, plan_err, JoinSide, JoinType};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;

@@ -34,8 +34,7 @@ use crate::expressions::Column;
 use crate::expressions::PhysicalSortExpr;
 use crate::joins::utils::{
     build_join_schema, calculate_join_output_ordering, check_join_is_valid,
-    combine_join_ordering_equivalence_properties, estimate_join_statistics,
-    partitioned_join_output_partitioning, JoinOn, JoinSide,
+    estimate_join_statistics, partitioned_join_output_partitioning, JoinOn,
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use crate::{
@@ -49,7 +48,7 @@ use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{
-    internal_err, not_impl_err, plan_err, DataFusionError, JoinType, Result,
+    internal_err, not_impl_err, plan_err, DataFusionError, JoinSide, JoinType, Result,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
@@ -283,10 +282,11 @@ impl ExecutionPlan for SortMergeJoinExec {
     }
 
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        combine_join_ordering_equivalence_properties(
+        let left = self.left.ordering_equivalence_properties();
+        let right = self.right.ordering_equivalence_properties();
+        left.join(
             &self.join_type,
-            &self.left,
-            &self.right,
+            &right,
             self.schema(),
             &self.maintains_input_order(),
             Some(Self::probe_side(&self.join_type)),

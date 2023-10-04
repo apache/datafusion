@@ -95,3 +95,31 @@ pub enum JoinConstraint {
     /// Join USING
     Using,
 }
+
+impl Display for JoinSide {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            JoinSide::Left => write!(f, "left"),
+            JoinSide::Right => write!(f, "right"),
+        }
+    }
+}
+
+/// Used in ColumnIndex to distinguish which side the index is for
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum JoinSide {
+    /// Left side of the join
+    Left,
+    /// Right side of the join
+    Right,
+}
+
+impl JoinSide {
+    /// Inverse the join side
+    pub fn negate(&self) -> Self {
+        match self {
+            JoinSide::Left => JoinSide::Right,
+            JoinSide::Right => JoinSide::Left,
+        }
+    }
+}

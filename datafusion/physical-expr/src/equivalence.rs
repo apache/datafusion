@@ -28,7 +28,7 @@ use crate::physical_expr::{deduplicate_physical_exprs, have_common_entries};
 use crate::sort_properties::{ExprOrdering, SortProperties};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::utils::longest_consecutive_prefix;
-use datafusion_common::{JoinType, Result};
+use datafusion_common::{DataFusionError, JoinSide, JoinType, Result};
 use itertools::izip;
 use std::hash::Hash;
 use std::ops::Range;
@@ -382,6 +382,47 @@ impl EquivalentGroups {
         }
         None
     }
+
+    /// Combine EquivalentGroups of the given join children.
+    pub fn join(
+        &self,
+        join_type: &JoinType,
+        right_eq_classes: &EquivalentGroups,
+        left_columns_len: usize,
+        on: &[(Column, Column)],
+    ) -> Result<EquivalentGroups> {
+        let mut res = EquivalentGroups::empty();
+        match join_type {
+            JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
+                res.extend(self.clone());
+                let updated_eq_classes = right_eq_classes
+                    .iter()
+                    .map(|eq_class| {
+                        add_offset_to_exprs(eq_class.to_vec(), left_columns_len)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                res.extend(EquivalentGroups::new(updated_eq_classes));
+            }
+            JoinType::LeftSemi | JoinType::LeftAnti => {
+                res.extend(self.clone());
+            }
+            JoinType::RightSemi | JoinType::RightAnti => {
+                res.extend(right_eq_classes.clone());
+            }
+        }
+        // In the inner join, expressions in the on are equal at the resulting table.
+        if *join_type == JoinType::Inner {
+            on.iter().for_each(|(lhs, rhs)| {
+                let new_lhs = Arc::new(lhs.clone()) as _;
+                let new_rhs =
+                    Arc::new(Column::new(rhs.name(), rhs.index() + left_columns_len))
+                        as _;
+                res.add_equal_conditions((&new_lhs, &new_rhs));
+            });
+        }
+        Ok(res)
+    }
 }
 
 /// `LexOrdering` stores the lexicographical ordering for a schema.
@@ -601,6 +642,12 @@ impl OrderingEquivalenceProperties {
     /// Adds new ordering into the ordering equivalent group.
     pub fn add_new_orderings(&mut self, orderings: &[LexOrdering]) {
         self.oeq_group.add_new_orderings(orderings);
+        self.normalize_state();
+    }
+
+    /// Add new equivalent group to state.
+    pub fn add_equivalent_groups(&mut self, other_eq_group: EquivalentGroups) {
+        self.eq_groups.extend(other_eq_group);
         self.normalize_state();
     }
 
@@ -1062,6 +1109,87 @@ impl OrderingEquivalenceProperties {
         }
         Ok(None)
     }
+
+    /// Calculate ordering equivalence properties for the given join operation.
+    pub fn join(
+        &self,
+        join_type: &JoinType,
+        right: &OrderingEquivalenceProperties,
+        join_schema: SchemaRef,
+        maintains_input_order: &[bool],
+        probe_side: Option<JoinSide>,
+        on: &[(Column, Column)],
+    ) -> Result<OrderingEquivalenceProperties> {
+        let left_columns_len = self.schema.fields.len();
+        let mut new_properties = OrderingEquivalenceProperties::new(join_schema);
+
+        let join_eq_groups =
+            self.eq_groups()
+                .join(join_type, right.eq_groups(), left_columns_len, on)?;
+        new_properties.add_equivalent_groups(join_eq_groups);
+
+        // All joins have 2 children
+        assert_eq!(maintains_input_order.len(), 2);
+        let left_maintains = maintains_input_order[0];
+        let right_maintains = maintains_input_order[1];
+        let left_oeq_class = self.oeq_group();
+        let right_oeq_class = right.oeq_group();
+        match (left_maintains, right_maintains) {
+            (true, true) => {
+                return Err(DataFusionError::Plan(
+                    "Cannot maintain ordering of both sides".to_string(),
+                ))
+            }
+            (true, false) => {
+                // In this special case, right side ordering can be prefixed with left side ordering.
+                if let (Some(JoinSide::Left), JoinType::Inner) = (probe_side, join_type) {
+                    let updated_right_oeq = get_updated_right_ordering_equivalent_group(
+                        join_type,
+                        right_oeq_class,
+                        left_columns_len,
+                    )?;
+
+                    // Right side ordering equivalence properties should be prepended with
+                    // those of the left side while constructing output ordering equivalence
+                    // properties since stream side is the left side.
+                    //
+                    // If the right table ordering equivalences contain `b ASC`, and the output
+                    // ordering of the left table is `a ASC`, then the ordering equivalence `b ASC`
+                    // for the right table should be converted to `a ASC, b ASC` before it is added
+                    // to the ordering equivalences of the join.
+                    let out_oeq_class = left_oeq_class.join_postfix(&updated_right_oeq);
+                    new_properties.extend(out_oeq_class);
+                } else {
+                    new_properties.extend(left_oeq_class.clone());
+                }
+            }
+            (false, true) => {
+                let updated_right_oeq = get_updated_right_ordering_equivalent_group(
+                    join_type,
+                    right.oeq_group(),
+                    left_columns_len,
+                )?;
+                // In this special case, left side ordering can be prefixed with right side ordering.
+                if let (Some(JoinSide::Right), JoinType::Inner) = (probe_side, join_type)
+                {
+                    // Left side ordering equivalence properties should be prepended with
+                    // those of the right side while constructing output ordering equivalence
+                    // properties since stream side is the right side.
+                    //
+                    // If the right table ordering equivalences contain `b ASC`, and the output
+                    // ordering of the left table is `a ASC`, then the ordering equivalence `b ASC`
+                    // for the right table should be converted to `a ASC, b ASC` before it is added
+                    // to the ordering equivalences of the join.
+                    let out_oeq_class = updated_right_oeq.join_postfix(left_oeq_class);
+                    new_properties.extend(out_oeq_class);
+                } else {
+                    new_properties.extend(updated_right_oeq);
+                }
+            }
+            (false, false) => {}
+        }
+        Ok(new_properties)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1182,15 +1310,6 @@ pub fn update_ordering_equivalence_with_cast(
     cast_exprs: &[(CastExpr, Column)],
     input_oeq: &mut OrderingEquivalenceProperties,
 ) {
-    // if let Some(cls) = &mut input_oeq.oeq_class {
-    //     for ordering in
-    //         std::iter::once(cls.head().clone()).chain(cls.others().clone().into_iter())
-    //     {
-    //         if let Some(updated_ordering) = update_with_cast_exprs(cast_exprs, ordering) {
-    //             cls.insert(updated_ordering);
-    //         }
-    //     }
-    // }
     let mut new_casts = vec![];
     for ordering in input_oeq.oeq_group.iter() {
         if let Some(updated_ordering) =
@@ -1219,20 +1338,6 @@ pub fn ordering_equivalence_properties_helper(
         oep.extend(OrderingEquivalentGroup::new(eq_orderings.to_vec()));
         oep
     }
-    // oep.extend(Some(OrderingEquivalentClass::new()))
-    // let first_ordering = if let Some(first) = eq_orderings.first() {
-    //     first
-    // } else {
-    //     // Return an empty OrderingEquivalenceProperties:
-    //     return oep;
-    // };
-    // // First entry among eq_orderings is the head, skip it:
-    // for ordering in eq_orderings.iter().skip(1) {
-    //     if !ordering.is_empty() {
-    //         oep.add_ordering_equal_conditions((first_ordering, ordering))
-    //     }
-    // }
-    // oep
 }
 
 /// This function constructs a duplicate-free `LexOrderingReq` by filtering out duplicate
@@ -1462,46 +1567,36 @@ pub fn update_ordering(
         node.state = Some(node.expr.get_ordering(&[]));
         Ok(Transformed::Yes(node))
     }
-    // Ok(Transformed::Yes(node))
 }
 
-/// Combine equivalence properties of the given join inputs.
-pub fn combine_join_equivalence_properties2(
+/// Update right table ordering equivalences so that:
+/// - They point to valid indices at the output of the join schema, and
+/// - They are normalized with respect to equivalence columns.
+///
+/// To do so, we increment column indices by the size of the left table when
+/// join schema consists of a combination of left and right schema (Inner,
+/// Left, Full, Right joins). Then, we normalize the sort expressions of
+/// ordering equivalences one by one. We make sure that each expression in the
+/// ordering equivalence is either:
+/// - The head of the one of the equivalent classes, or
+/// - Doesn't have an equivalent column.
+///
+/// This way; once we normalize an expression according to equivalence properties,
+/// it can thereafter safely be used for ordering equivalence normalization.
+fn get_updated_right_ordering_equivalent_group(
     join_type: &JoinType,
-    left_eq_classes: &EquivalentGroups,
-    right_eq_classes: &EquivalentGroups,
+    right_oeq_group: &OrderingEquivalentGroup,
     left_columns_len: usize,
-    on: &[(Column, Column)],
-    out_properties: &mut OrderingEquivalenceProperties,
-) -> Result<()> {
-    let mut res = EquivalentGroups::empty();
+) -> Result<OrderingEquivalentGroup> {
     match join_type {
+        // In these modes, indices of the right schema should be offset by
+        // the left table size.
         JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
-            res.extend(left_eq_classes.clone());
-            let updated_eq_classes = right_eq_classes
-                .iter()
-                .map(|eq_class| add_offset_to_exprs(eq_class.to_vec(), left_columns_len))
-                .collect::<Result<Vec<_>>>()?;
-
-            res.extend(EquivalentGroups::new(updated_eq_classes));
+            return right_oeq_group.add_offset(left_columns_len)
         }
-        JoinType::LeftSemi | JoinType::LeftAnti => {
-            res.extend(left_eq_classes.clone());
-        }
-        JoinType::RightSemi | JoinType::RightAnti => {
-            res.extend(right_eq_classes.clone());
-        }
-    }
-    out_properties.eq_groups = res;
-    if *join_type == JoinType::Inner {
-        on.iter().for_each(|(lhs, rhs)| {
-            let new_lhs = Arc::new(lhs.clone()) as _;
-            let new_rhs =
-                Arc::new(Column::new(rhs.name(), rhs.index() + left_columns_len)) as _;
-            out_properties.add_equal_conditions((&new_lhs, &new_rhs));
-        });
-    }
-    Ok(())
+        _ => {}
+    };
+    Ok(right_oeq_group.clone())
 }
 
 #[cfg(test)]
@@ -1512,7 +1607,7 @@ mod tests {
     use datafusion_common::Result;
 
     use crate::physical_expr::physical_exprs_equal;
-    use arrow_schema::SortOptions;
+    use arrow_schema::{Fields, SortOptions};
     use std::sync::Arc;
 
     // Generate a schema which consists of 5 columns (a, b, c, d, e)
@@ -2047,6 +2142,89 @@ mod tests {
 
         assert!(physical_exprs_equal(&eq_groups[0], &expected[0]));
         assert!(physical_exprs_equal(&eq_groups[1], &expected[1]));
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_updated_right_ordering_equivalence_properties() -> Result<()> {
+        let join_type = JoinType::Inner;
+
+        let options = SortOptions::default();
+        let right_oeq_class = OrderingEquivalentGroup::new(vec![
+            vec![
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("x", 0)),
+                    options,
+                },
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("y", 1)),
+                    options,
+                },
+            ],
+            vec![
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("z", 2)),
+                    options,
+                },
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("w", 3)),
+                    options,
+                },
+            ],
+        ]);
+
+        let left_columns_len = 4;
+
+        let fields: Fields = ["a", "b", "c", "d", "x", "y", "z", "w"]
+            .into_iter()
+            .map(|name| Field::new(name, DataType::Int32, true))
+            .collect();
+
+        let schema = Schema::new(fields);
+        let col_a_expr = col("a", &schema)?;
+        let col_d_expr = col("d", &schema)?;
+        let col_x_expr = col("x", &schema)?;
+        let col_y_expr = col("y", &schema)?;
+        let col_z_expr = col("z", &schema)?;
+        let col_w_expr = col("w", &schema)?;
+
+        let mut join_eq_properties = OrderingEquivalenceProperties::new(Arc::new(schema));
+        join_eq_properties.add_equal_conditions((&col_a_expr, &col_x_expr));
+        join_eq_properties.add_equal_conditions((&col_d_expr, &col_w_expr));
+
+        let result = get_updated_right_ordering_equivalent_group(
+            &join_type,
+            &right_oeq_class,
+            left_columns_len,
+        )?;
+        join_eq_properties.extend(result);
+        let result = join_eq_properties.oeq_group().clone();
+
+        let expected = OrderingEquivalentGroup::new(vec![
+            vec![
+                PhysicalSortExpr {
+                    expr: col_a_expr,
+                    options,
+                },
+                PhysicalSortExpr {
+                    expr: col_y_expr,
+                    options,
+                },
+            ],
+            vec![
+                PhysicalSortExpr {
+                    expr: col_z_expr,
+                    options,
+                },
+                PhysicalSortExpr {
+                    expr: col_d_expr,
+                    options,
+                },
+            ],
+        ]);
+
+        assert_eq!(result, expected);
+
         Ok(())
     }
 }

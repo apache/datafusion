@@ -25,7 +25,6 @@ use std::{any::Any, sync::Arc, task::Poll};
 use arrow::datatypes::{Fields, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 
-use crate::joins::utils::combine_join_ordering_equivalence_properties;
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::DisplayAs;
 use crate::{
@@ -216,10 +215,11 @@ impl ExecutionPlan for CrossJoinExec {
     }
 
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        combine_join_ordering_equivalence_properties(
+        let left = self.left.ordering_equivalence_properties();
+        let right = self.right.ordering_equivalence_properties();
+        left.join(
             &JoinType::Full,
-            self.left(),
-            self.right(),
+            &right,
             self.schema(),
             &[false, false],
             None,

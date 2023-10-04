@@ -71,9 +71,8 @@ use crate::protobuf::{
 use datafusion::logical_expr::BuiltinScalarFunction;
 use datafusion::physical_expr::expressions::{GetFieldAccessExpr, GetIndexedFieldExpr};
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
-use datafusion::physical_plan::joins::utils::JoinSide;
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
-use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
+use datafusion_common::{internal_err, not_impl_err, DataFusionError, JoinSide, Result};
 
 impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
     type Error = DataFusionError;
