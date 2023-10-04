@@ -456,6 +456,7 @@ impl ExecutionPlan for RepartitionExec {
     }
 
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+        // If ordering is not preserved, reset ordering equivalent group.
         if !self.maintains_input_order()[0] {
             self.input
                 .ordering_equivalence_properties()

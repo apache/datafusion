@@ -635,9 +635,16 @@ impl OrderingEquivalenceProperties {
         }
     }
 
+    /// Add OrderingEquivalenceProperties of the other to the state.
+    pub fn extend(mut self, other: OrderingEquivalenceProperties) -> Self {
+        self.eq_groups.extend(other.eq_groups);
+        self.oeq_group.extend(other.oeq_group);
+        self.with_constants(other.constants)
+    }
+
     /// Extends `OrderingEquivalenceProperties` by adding ordering inside the `other`
     /// to the `self.oeq_class`.
-    pub fn extend(&mut self, other: OrderingEquivalentGroup) {
+    pub fn add_ordering_equivalent_group(&mut self, other: OrderingEquivalentGroup) {
         for ordering in other.into_iter() {
             if !self.oeq_group.contains(&ordering) {
                 self.oeq_group.push(ordering);
@@ -1208,9 +1215,9 @@ impl OrderingEquivalenceProperties {
                     // for the right table should be converted to `a ASC, b ASC` before it is added
                     // to the ordering equivalences of the join.
                     let out_oeq_class = left_oeq_class.join_postfix(&updated_right_oeq);
-                    new_properties.extend(out_oeq_class);
+                    new_properties.add_ordering_equivalent_group(out_oeq_class);
                 } else {
-                    new_properties.extend(left_oeq_class.clone());
+                    new_properties.add_ordering_equivalent_group(left_oeq_class.clone());
                 }
             }
             (false, true) => {
@@ -1231,9 +1238,9 @@ impl OrderingEquivalenceProperties {
                     // for the right table should be converted to `a ASC, b ASC` before it is added
                     // to the ordering equivalences of the join.
                     let out_oeq_class = updated_right_oeq.join_postfix(left_oeq_class);
-                    new_properties.extend(out_oeq_class);
+                    new_properties.add_ordering_equivalent_group(out_oeq_class);
                 } else {
-                    new_properties.extend(updated_right_oeq);
+                    new_properties.add_ordering_equivalent_group(updated_right_oeq);
                 }
             }
             (false, false) => {}
@@ -1253,84 +1260,6 @@ pub enum PartitionSearchMode {
     Sorted,
 }
 
-/// This is a builder object facilitating incremental construction
-/// for ordering equivalences.
-pub struct OrderingEquivalenceBuilder {
-    // eq_properties: EquivalenceProperties,
-    ordering_eq_properties: OrderingEquivalenceProperties,
-    existing_ordering: Vec<PhysicalSortExpr>,
-    schema: SchemaRef,
-}
-
-impl OrderingEquivalenceBuilder {
-    pub fn new(schema: SchemaRef) -> Self {
-        // let eq_properties = EquivalenceProperties::new(schema.clone());
-        let ordering_eq_properties = OrderingEquivalenceProperties::new(schema.clone());
-        Self {
-            // eq_properties,
-            ordering_eq_properties,
-            existing_ordering: vec![],
-            schema,
-        }
-    }
-
-    pub fn extend(
-        mut self,
-        new_ordering_eq_properties: OrderingEquivalenceProperties,
-    ) -> Self {
-        self.ordering_eq_properties
-            .eq_groups
-            .extend(new_ordering_eq_properties.eq_groups);
-        self.ordering_eq_properties
-            .extend(new_ordering_eq_properties.oeq_group);
-        self
-    }
-
-    pub fn with_existing_ordering(
-        mut self,
-        existing_ordering: Option<Vec<PhysicalSortExpr>>,
-    ) -> Self {
-        if let Some(existing_ordering) = existing_ordering {
-            self.existing_ordering = existing_ordering;
-        }
-        self
-    }
-
-    pub fn add_equal_conditions(
-        &mut self,
-        new_equivalent_ordering: Vec<PhysicalSortExpr>,
-    ) {
-        let mut normalized_out_ordering = vec![];
-        for item in &self.existing_ordering {
-            // To account for ordering equivalences, first normalize the expression:
-            // let normalized = self.eq_properties.normalize_expr(item.expr.clone());
-            normalized_out_ordering.push(PhysicalSortExpr {
-                expr: item.expr.clone(),
-                options: item.options,
-            });
-        }
-        // If there is an existing ordering, add new ordering as an equivalence:
-        if !normalized_out_ordering.is_empty() {
-            self.ordering_eq_properties
-                .add_new_orderings(&[normalized_out_ordering, new_equivalent_ordering]);
-        }
-    }
-
-    /// Return a reference to the schema with which this builder was constructed with
-    pub fn schema(&self) -> &SchemaRef {
-        &self.schema
-    }
-
-    /// Return a reference to the existing ordering
-    pub fn existing_ordering(&self) -> &LexOrdering {
-        &self.existing_ordering
-    }
-
-    pub fn build(self) -> OrderingEquivalenceProperties {
-        self.ordering_eq_properties
-    }
-}
-
 /// Retrieves the ordering equivalence properties for a given schema and output ordering.
 pub fn ordering_equivalence_properties_helper(
     schema: SchemaRef,
@@ -1341,7 +1270,9 @@ pub fn ordering_equivalence_properties_helper(
         // Return an empty OrderingEquivalenceProperties:
         oep
     } else {
-        oep.extend(OrderingEquivalentGroup::new(eq_orderings.to_vec()));
+        oep.add_ordering_equivalent_group(OrderingEquivalentGroup::new(
+            eq_orderings.to_vec(),
+        ));
         oep
     }
 }
@@ -2202,7 +2133,7 @@ mod tests {
             &right_oeq_class,
             left_columns_len,
         )?;
-        join_eq_properties.extend(result);
+        join_eq_properties.add_ordering_equivalent_group(result);
         let result = join_eq_properties.oeq_group().clone();
 
         let expected = OrderingEquivalentGroup::new(vec![

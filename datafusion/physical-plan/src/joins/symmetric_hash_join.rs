@@ -69,6 +69,7 @@ use datafusion_physical_expr::intervals::ExprIntervalGraph;
 
 use crate::joins::utils::prepare_sorted_exprs;
 use ahash::RandomState;
+use datafusion_physical_expr::OrderingEquivalenceProperties;
 use futures::stream::{select, BoxStream};
 use futures::{Stream, StreamExt};
 use hashbrown::HashSet;
@@ -429,6 +430,21 @@ impl ExecutionPlan for SymmetricHashJoinExec {
     // TODO: Output ordering might be kept for some cases.
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         None
+    }
+
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+        let left = self.left.ordering_equivalence_properties();
+        let right = self.right.ordering_equivalence_properties();
+        left.join(
+            &self.join_type,
+            &right,
+            self.schema(),
+            &self.maintains_input_order(),
+            // Has alternating probe side
+            None,
+            self.on(),
+        )
+        .unwrap()
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

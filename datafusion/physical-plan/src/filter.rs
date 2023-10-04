@@ -143,16 +143,6 @@ impl ExecutionPlan for FilterExec {
         vec![true]
     }
 
-    // fn equivalence_properties(&self) -> EquivalenceProperties {
-    //     // Combine the equal predicates with the input equivalence properties
-    //     let mut input_properties = self.input.equivalence_properties();
-    //     let (equal_pairs, _ne_pairs) = collect_columns_from_predicate(&self.predicate);
-    //     for new_condition in equal_pairs {
-    //         input_properties.add_equal_conditions(new_condition)
-    //     }
-    //     input_properties
-    // }
-
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
         let stats = self.statistics();
         // Combine the equal predicates with the input equivalence properties
@@ -170,10 +160,6 @@ impl ExecutionPlan for FilterExec {
                 .filter(|column| col_stats[column.index()].is_singleton())
                 .map(|column| Arc::new(column) as Arc<dyn PhysicalExpr>)
                 .collect::<Vec<_>>();
-            // // let filter_oeq = self.input.ordering_equivalence_properties();
-            // let res = filter_oeq.with_constants(constants);
-            // println!("filter res:{:?}", res);
-            // res
             filter_oeq.with_constants(constants)
         } else {
             filter_oeq

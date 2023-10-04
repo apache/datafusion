@@ -387,6 +387,10 @@ pub fn calculate_projection_mapping(
             .downcast_ref::<Column>()
         {
             Some(col) => {
+                // Sometimes, expression and its name in the input_schema doesn't match.
+                // This can cause problems. Hence in here we make sure that expression name
+                // matches with the name in the inout_schema.
+                // Conceptually, source_expr and expression should be same.
                 let idx = col.index();
                 let matching_input_field = input_schema.field(idx);
                 let matching_input_column = Column::new(matching_input_field.name(), idx);

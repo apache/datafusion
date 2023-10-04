@@ -827,13 +827,7 @@ impl ExecutionPlan for SortExec {
 
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
         let input_oeq = self.input.ordering_equivalence_properties();
-        // println!("sort input: {:?}", input_oeq);
-        // let mut res = OrderingEquivalenceProperties::new(self.schema());
-
-        // let res = input_oeq.with_reorder(self.expr.to_vec());
-        // // println!("sort output: {:?}", res);
-        // res
-
+        // reset ordering equivalent group with new ordering.
         input_oeq.with_reorder(self.expr.to_vec())
     }
 

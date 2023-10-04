@@ -235,13 +235,10 @@ impl ExecutionPlan for UnionExec {
         let mut union_oeq = OrderingEquivalenceProperties::new(self.schema());
         for elem in first_oeq.iter() {
             if child_oeqs.iter().all(|child_oeq| child_oeq.contains(elem)) {
-                // res.push(elem);
-                // Search meet instead of exact
+                // TODO: Search meet instead of exact
                 union_oeq.add_new_orderings(&[elem.clone()])
             }
         }
-        // let mut union_oeq = OrderingEquivalenceProperties::new(self.schema());
-        // union_oeq.add_ordering_equal_conditions()
         union_oeq
     }
 

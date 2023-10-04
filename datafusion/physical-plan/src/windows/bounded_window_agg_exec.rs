@@ -68,17 +68,6 @@ use hashbrown::raw::RawTable;
 use indexmap::IndexMap;
 use log::debug;
 
-// #[derive(Debug, Clone, PartialEq)]
-// /// Specifies partition column properties in terms of input ordering
-// pub enum PartitionSearchMode {
-//     /// None of the columns among the partition columns is ordered.
-//     Linear,
-//     /// Some columns of the partition columns are ordered but not all
-//     PartiallySorted(Vec<usize>),
-//     /// All Partition columns are ordered (Also empty case)
-//     Sorted,
-// }
-
 /// Window execution plan
 #[derive(Debug)]
 pub struct BoundedWindowAggExec {

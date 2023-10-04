@@ -1130,7 +1130,8 @@ mod tests {
                 options: sort_options,
             }],
         ];
-        equal_properties.extend(OrderingEquivalentGroup::new(others));
+        equal_properties
+            .add_ordering_equivalent_group(OrderingEquivalentGroup::new(others));
 
         let mut expected_oeq = OrderingEquivalenceProperties::new(Arc::new(schema));
         expected_oeq.add_new_orderings(&[

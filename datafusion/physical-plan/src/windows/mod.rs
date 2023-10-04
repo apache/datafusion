@@ -38,7 +38,6 @@ use datafusion_expr::{
     PartitionEvaluator, WindowFrame, WindowUDF,
 };
 use datafusion_physical_expr::{
-    equivalence::OrderingEquivalenceBuilder,
     window::{BuiltInWindowFunctionExpr, SlidingAggregateWindowExpr},
     AggregateExpr, OrderingEquivalenceProperties, PhysicalSortRequirement,
 };
@@ -331,18 +330,17 @@ pub(crate) fn window_ordering_equivalence(
 ) -> OrderingEquivalenceProperties {
     // We need to update the schema, so we can not directly use
     // `input.ordering_equivalence_properties()`.
-    let mut builder = OrderingEquivalenceBuilder::new(schema.clone())
-        .with_existing_ordering(input.output_ordering().map(|elem| elem.to_vec()))
+    let mut window_oeq_properties = OrderingEquivalenceProperties::new(schema.clone())
         .extend(input.ordering_equivalence_properties());
 
     for expr in window_expr {
         if let Some(builtin_window_expr) =
             expr.as_any().downcast_ref::<BuiltInWindowExpr>()
         {
-            builtin_window_expr.add_equal_orderings(&mut builder);
+            builtin_window_expr.add_equal_orderings(&mut window_oeq_properties);
         }
     }
-    builder.build()
+    window_oeq_properties
 }
 
 /// Constructs the best-fitting windowing operator (a `WindowAggExec` or a

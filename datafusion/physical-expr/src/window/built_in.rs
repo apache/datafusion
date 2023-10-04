@@ -23,12 +23,10 @@ use std::sync::Arc;
 
 use super::BuiltInWindowFunctionExpr;
 use super::WindowExpr;
-use crate::equivalence::OrderingEquivalenceBuilder;
 use crate::expressions::PhysicalSortExpr;
-use crate::utils::{convert_to_expr, get_indices_of_exprs_strict};
 use crate::window::window_expr::{get_orderby_values, WindowFn};
 use crate::window::{PartitionBatches, PartitionWindowAggStates, WindowState};
-use crate::{reverse_order_bys, PhysicalExpr};
+use crate::{reverse_order_bys, OrderingEquivalenceProperties, PhysicalExpr};
 use arrow::array::{new_empty_array, ArrayRef};
 use arrow::compute::SortOptions;
 use arrow::datatypes::Field;
@@ -75,12 +73,15 @@ impl BuiltInWindowExpr {
     /// If `self.expr` doesn't have an ordering, ordering equivalence properties
     /// are not updated. Otherwise, ordering equivalence properties are updated
     /// by the ordering of `self.expr`.
-    pub fn add_equal_orderings(&self, builder: &mut OrderingEquivalenceBuilder) {
-        let schema = builder.schema();
-        if let Some(fn_res_ordering) = self.expr.get_result_ordering(schema) {
+    pub fn add_equal_orderings(
+        &self,
+        oeq_properties: &mut OrderingEquivalenceProperties,
+    ) {
+        let schema = oeq_properties.schema();
+        if let Some(fn_res_ordering) = self.expr.get_result_ordering(&schema) {
             if self.partition_by.is_empty() {
                 // In the absence of a PARTITION BY, ordering of `self.expr` is global:
-                builder.add_equal_conditions(vec![fn_res_ordering]);
+                oeq_properties.add_new_orderings(&[vec![fn_res_ordering]]);
             } else {
                 // If we have a PARTITION BY, built-in functions can not introduce
                 // a global ordering unless the existing ordering is compatible
@@ -88,22 +89,18 @@ impl BuiltInWindowExpr {
                 // expressions and existing ordering expressions are equal (w.r.t.
                 // set equality), we can prefix the ordering of `self.expr` with
                 // the existing ordering.
-                let existing_ordering = builder.existing_ordering();
-                let existing_ordering_exprs = convert_to_expr(existing_ordering);
-                // Get indices of the PARTITION BY expressions among input ordering expressions:
-                let pb_indices = get_indices_of_exprs_strict(
-                    &self.partition_by,
-                    &existing_ordering_exprs,
-                );
-                // Existing ordering should match exactly with PARTITION BY expressions.
-                // There should be no missing/extra entries in the existing ordering.
-                // Otherwise, prefixing wouldn't work.
-                if pb_indices.len() == self.partition_by.len()
-                    && pb_indices.len() == existing_ordering.len()
+                if let Some(indices_and_orders) =
+                    oeq_properties.set_exactly_satisfy(&self.partition_by)
                 {
-                    let mut new_ordering = existing_ordering.to_vec();
-                    new_ordering.push(fn_res_ordering);
-                    builder.add_equal_conditions(new_ordering);
+                    let mut ordering = indices_and_orders
+                        .into_iter()
+                        .map(|(idx, options)| PhysicalSortExpr {
+                            expr: self.partition_by[idx].clone(),
+                            options,
+                        })
+                        .collect::<Vec<_>>();
+                    ordering.push(fn_res_ordering);
+                    oeq_properties.add_new_orderings(&[ordering]);
                 }
             }
         }
