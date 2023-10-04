@@ -18,6 +18,7 @@
 //! Defines BitAnd, BitOr, and BitXor Aggregate accumulators
 
 use ahash::RandomState;
+use datafusion_common::cast::as_list_array;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -669,12 +670,11 @@ where
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        if states.is_empty() {
-            return Ok(());
-        }
-
-        for x in states[0].as_list::<i32>().iter().flatten() {
-            self.update_batch(&[x])?
+        if let Some(state) = states.first() {
+            let list_arr = as_list_array(state)?;
+            for arr in list_arr.iter().filter_map(|arr| arr) {
+                self.update_batch(&[arr])?;
+            }
         }
         Ok(())
     }
