@@ -120,6 +120,7 @@ impl ArrayAggAccumulator {
 }
 
 impl Accumulator for ArrayAggAccumulator {
+
     // Append value like Int64Array(1,2,3)
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         if values.is_empty() {
@@ -137,13 +138,15 @@ impl Accumulator for ArrayAggAccumulator {
             return Ok(());
         }
         assert!(states.len() == 1, "array_agg states must be singleton!");
-        let arr = &states[0];
 
-        (0..arr.len()).try_for_each(|index| {
-            let arr = as_list_array(&arr)?;
-            self.values.push(arr.value(index));
-            Ok(())
-        })
+        let list_arr = as_list_array(&states[0])?;
+        for arr in list_arr.iter() {
+            if let Some(arr) = arr {
+                self.values.push(arr);
+            }
+        }
+        Ok(())
+
     }
 
     fn state(&self) -> Result<Vec<ScalarValue>> {
