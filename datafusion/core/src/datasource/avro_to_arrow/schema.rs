@@ -35,7 +35,7 @@ pub fn to_arrow_schema(avro_schema: &apache_avro::Schema) -> Result<Schema> {
                 schema_fields.push(schema_to_field_with_props(
                     &field.schema,
                     Some(&field.name),
-                    false,
+                    field.is_nullable(),
                     Some(external_props(&field.schema)),
                 )?)
             }
@@ -73,7 +73,7 @@ fn schema_to_field_with_props(
         AvroSchema::Bytes => DataType::Binary,
         AvroSchema::String => DataType::Utf8,
         AvroSchema::Array(item_schema) => DataType::List(Arc::new(
-            schema_to_field_with_props(item_schema, None, false, None)?,
+            schema_to_field_with_props(item_schema, Some("element"), false, None)?,
         )),
         AvroSchema::Map(value_schema) => {
             let value_field =
@@ -116,7 +116,7 @@ fn schema_to_field_with_props(
                 DataType::Union(UnionFields::new(type_ids, fields), UnionMode::Dense)
             }
         }
-        AvroSchema::Record(RecordSchema { name, fields, .. }) => {
+        AvroSchema::Record(RecordSchema { fields, .. }) => {
             let fields: Result<_> = fields
                 .iter()
                 .map(|field| {
@@ -129,7 +129,7 @@ fn schema_to_field_with_props(
                     }*/
                     schema_to_field_with_props(
                         &field.schema,
-                        Some(&format!("{}.{}", name.fullname(None), field.name)),
+                        Some(&field.name),
                         false,
                         Some(props),
                     )
@@ -440,6 +440,58 @@ mod test {
             Field::new("timestamp_col", Timestamp(Microsecond, None), true),
         ]);
         assert_eq!(arrow_schema.unwrap(), expected);
+    }
+
+    #[test]
+    fn test_nested_schema() {
+        let avro_schema = apache_avro::Schema::parse_str(
+            r#"
+            {
+              "type": "record",
+              "name": "r1",
+              "fields": [
+                {
+                  "name": "col1",
+                  "type": [
+                    "null",
+                    {
+                      "type": "record",
+                      "name": "r2",
+                      "fields": [
+                        {
+                          "name": "col2",
+                          "type": "string"
+                        },
+                        {
+                          "name": "col3",
+                          "type": ["null", "string"],
+                          "default": null
+                        }
+                      ]
+                    }
+                  ],
+                  "default": null
+                }
+              ]
+            }"#,
+        )
+        .unwrap();
+        // should not use Avro Record names.
+        let expected_arrow_schema = Schema::new(vec![Field::new(
+            "col1",
+            arrow::datatypes::DataType::Struct(
+                vec![
+                    Field::new("col2", Utf8, false),
+                    Field::new("col3", Utf8, true),
+                ]
+                .into(),
+            ),
+            true,
+        )]);
+        assert_eq!(
+            to_arrow_schema(&avro_schema).unwrap(),
+            expected_arrow_schema
+        );
     }
 
     #[test]
