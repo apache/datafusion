@@ -163,9 +163,8 @@ impl TopK {
         self.row_converter.append(rows, &sort_keys)?;
 
         // TODO make this algorithmically better?:
-        // 1. only check topk values in rows
-        // 2. only do one update through top_k
-
+        // Idea: filter out rows >= self.heap.max() early (before passing to `RowConverter`)
+        //       this avoids some work and also might be better vectorizable.
         let mut batch_entry = self.heap.register_batch(batch);
         for (index, row) in rows.iter().enumerate() {
             match self.heap.max() {
@@ -409,9 +408,9 @@ impl TopKHeap {
         let max_unused_rows = (20 * self.batch_size) + self.k;
         let unused_rows = self.store.unused_rows();
 
-        // don't compact if the store has only one batch or
+        // don't compact if the store has one extra batch or
+        // unused rows is under the threshold
         if self.store.len() <= 2 || unused_rows < max_unused_rows {
-            //if self.store.len() <= 2 {
             return Ok(());
         }
         // at first, compact the entire thing always into a new batch
