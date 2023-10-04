@@ -167,12 +167,10 @@ impl Accumulator for DistinctCountAccumulator {
         if states.is_empty() {
             return Ok(());
         }
-        let arr = &states[0];
-        let scalar_vec = ScalarValue::convert_array_to_scalar_vec(arr)?;
-        // Expected arr is ListArray[PrimitiveArray<>[]], scalar_vec is [[...]]
-        assert_eq!(scalar_vec.len(), 1);
-        for scalars in scalar_vec.iter() {
-            self.values.extend(scalars.iter().cloned())
+        assert_eq!(states.len(), 1, "array_agg states must be singleton!");
+        let scalar_vec = ScalarValue::convert_array_to_scalar_vec(&states[0])?;
+        for scalars in scalar_vec.into_iter() {
+            self.values.extend(scalars)
         }
         Ok(())
     }
