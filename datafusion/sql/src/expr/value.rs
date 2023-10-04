@@ -159,7 +159,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             not_impl_err!("Arrays with different types are not supported: {data_types:?}")
         } else {
             let data_type = values[0].data_type();
-            let arr = ScalarValue::list_to_array(&values, &data_type);
+            let arr = ScalarValue::scalars_to_list_array(&values, &data_type);
             Ok(lit(ScalarValue::List(arr)))
         }
     }

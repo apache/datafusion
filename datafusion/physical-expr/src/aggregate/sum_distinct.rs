@@ -166,7 +166,7 @@ impl<T: ArrowPrimitiveType> Accumulator for DistinctSumAccumulator<T> {
                     &self.data_type,
                 ))
             });
-            vec![ScalarValue::List(ScalarValue::list_to_array(
+            vec![ScalarValue::List(ScalarValue::scalars_to_list_array(
                 &distinct_values,
                 &self.data_type,
             ))]

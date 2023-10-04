@@ -156,7 +156,7 @@ impl Accumulator for ArrayAggAccumulator {
             self.values.iter().map(|a| a.as_ref()).collect();
 
         if element_arrays.is_empty() {
-            let arr = ScalarValue::list_to_array(&[], &self.datatype);
+            let arr = ScalarValue::scalars_to_list_array(&[], &self.datatype);
             return Ok(ScalarValue::List(arr));
         }
 

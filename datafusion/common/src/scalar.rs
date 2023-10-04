@@ -1741,8 +1741,35 @@ impl ScalarValue {
             .unwrap()
     }
 
-    /// Converts `Vec<ScalaValue>` to ArrayRef, simplified version of ScalarValue::to_array
-    pub fn list_to_array(values: &[ScalarValue], data_type: &DataType) -> ArrayRef {
+    /// Converts `Vec<ScalaValue>` to ListArray, simplified version of ScalarValue::to_array
+    ///
+    /// Example
+    /// ```
+    /// use datafusion_common::ScalarValue;
+    /// use arrow::array::{ListArray, Int32Array};
+    /// use arrow::datatypes::{DataType, Int32Type};
+    /// use datafusion_common::cast::as_list_array;
+    ///
+    /// let scalars = vec![
+    ///    ScalarValue::Int32(Some(1)),
+    ///    ScalarValue::Int32(None),
+    ///    ScalarValue::Int32(Some(2))
+    /// ];
+    ///
+    /// let array = ScalarValue::scalars_to_list_array(&scalars, &DataType::Int32);
+    /// let result = as_list_array(&array).unwrap();
+    ///
+    /// let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(
+    ///     vec![
+    ///        Some(vec![Some(1), None, Some(2)])
+    ///     ]);
+    ///
+    /// assert_eq!(result, &expected);
+    /// ```
+    pub fn scalars_to_list_array(
+        values: &[ScalarValue],
+        data_type: &DataType,
+    ) -> ArrayRef {
         Arc::new(match data_type {
             DataType::Boolean => build_values_list!(BooleanBuilder, Boolean, values, 1),
             DataType::Int8 => build_values_list!(Int8Builder, Int8, values, 1),
@@ -2075,6 +2102,33 @@ impl ScalarValue {
     }
 
     /// Retrieve ScalarValue for each row in `array`
+    ///
+    /// Example
+    /// ```
+    /// use datafusion_common::ScalarValue;
+    /// use arrow::array::ListArray;
+    /// use arrow::datatypes::{DataType, Int32Type};
+    ///
+    /// let list_arr = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+    ///    Some(vec![Some(1), Some(2), Some(3)]),
+    ///    None,
+    ///    Some(vec![Some(4), Some(5)])
+    /// ]);
+    ///
+    /// let scalar_vec = ScalarValue::convert_array_to_scalar_vec(&list_arr).unwrap();
+    ///
+    /// let expected = vec![
+    ///   vec![
+    ///     ScalarValue::Int32(Some(1)),
+    ///     ScalarValue::Int32(Some(2)),
+    ///     ScalarValue::Int32(Some(3)),
+    ///   ],
+    ///   vec![],
+    ///   vec![ScalarValue::Int32(Some(4)), ScalarValue::Int32(Some(5))]
+    /// ];
+    ///
+    /// assert_eq!(scalar_vec, expected);
+    /// ```
     pub fn convert_array_to_scalar_vec(array: &dyn Array) -> Result<Vec<Vec<Self>>> {
         let mut scalars = Vec::with_capacity(array.len());
 
@@ -3116,26 +3170,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_list_to_array_primitive() {
-        let scalars = vec![
-            ScalarValue::Int32(Some(1)),
-            ScalarValue::Int32(Some(2)),
-            ScalarValue::Int32(Some(3)),
-        ];
-
-        let array = ScalarValue::list_to_array(&scalars, &DataType::Int32);
-
-        let expected =
-            ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
-                Some(1),
-                Some(2),
-                Some(3),
-            ])]);
-        let result = as_list_array(&array);
-        assert_eq!(result, &expected);
-    }
-
-    #[test]
     fn test_list_to_array_string() {
         let scalars = vec![
             ScalarValue::Utf8(Some(String::from("rust"))),
@@ -3143,7 +3177,8 @@ mod tests {
             ScalarValue::Utf8(Some(String::from("data-fusion"))),
         ];
 
-        let array = ScalarValue::list_to_array(scalars.as_slice(), &DataType::Utf8);
+        let array =
+            ScalarValue::scalars_to_list_array(scalars.as_slice(), &DataType::Utf8);
 
         let expected = wrap_into_list_array(Arc::new(StringArray::from(vec![
             "rust",
@@ -3493,7 +3528,7 @@ mod tests {
 
     #[test]
     fn scalar_list_null_to_array() {
-        let list_array_ref = ScalarValue::list_to_array(&[], &DataType::UInt64);
+        let list_array_ref = ScalarValue::scalars_to_list_array(&[], &DataType::UInt64);
         let list_array = as_list_array(&list_array_ref);
 
         assert_eq!(list_array.len(), 1);
@@ -3507,7 +3542,8 @@ mod tests {
             ScalarValue::UInt64(None),
             ScalarValue::UInt64(Some(101)),
         ];
-        let list_array_ref = ScalarValue::list_to_array(&values, &DataType::UInt64);
+        let list_array_ref =
+            ScalarValue::scalars_to_list_array(&values, &DataType::UInt64);
         let list_array = as_list_array(&list_array_ref);
         assert_eq!(list_array.len(), 1);
         assert_eq!(list_array.values().len(), 3);
@@ -5020,7 +5056,7 @@ mod tests {
     #[test]
     fn test_build_timestamp_millisecond_list() {
         let values = vec![ScalarValue::TimestampMillisecond(Some(1), None)];
-        let arr = ScalarValue::list_to_array(
+        let arr = ScalarValue::scalars_to_list_array(
             &values,
             &DataType::Timestamp(TimeUnit::Millisecond, None),
         );
