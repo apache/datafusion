@@ -258,10 +258,6 @@ impl TopKMetrics {
 ///
 /// Using the `Row` format handles things such as ascending vs
 /// descending and nulls first vs nulls last.
-///
-/// It doesn't use `BinaryHeap` in the Rust standard library because
-/// it is important to check the current minimum value in the heap
-/// prior to creating a new value to insert.
 struct TopKHeap {
     /// The maximum number of elemenents to store in this heap.
     k: usize,
