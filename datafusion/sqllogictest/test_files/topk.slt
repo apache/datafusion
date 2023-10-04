@@ -18,10 +18,10 @@
 # Tests for development
 
 statement ok
-create table aal(x int) as values (10), (2), (3), (0), (5), (4), (3), (2), (1), (3), (8);
+create table topk(x int) as values (10), (2), (3), (0), (5), (4), (3), (2), (1), (3), (8);
 
 query I
-select * from aal order by x;
+select * from topk order by x;
 ----
 0
 1
@@ -36,14 +36,14 @@ select * from aal order by x;
 10
 
 query I
-select * from aal order by x limit 3;
+select * from topk order by x limit 3;
 ----
 0
 1
 2
 
 query I
-select * from aal order by x desc limit 3;
+select * from topk order by x desc limit 3;
 ----
 10
 8
