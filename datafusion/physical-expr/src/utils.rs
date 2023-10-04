@@ -1034,7 +1034,12 @@ mod tests {
         ]]);
         assert_eq!(
             ordering_equal_properties.set_exactly_satisfy(&required_columns),
-            Some(vec![(0, sort_options_not), (1, sort_options)])
+            Some(vec![0, 1])
+        );
+
+        assert_eq!(
+            ordering_equal_properties.get_lex_ordering(&required_columns),
+            Some(vec![sort_options_not, sort_options])
         );
 
         let required_columns = [
@@ -1066,7 +1071,12 @@ mod tests {
         ]);
         assert_eq!(
             ordering_equal_properties.set_exactly_satisfy(&required_columns),
-            Some(vec![(0, sort_options_not), (1, sort_options)])
+            Some(vec![0, 1])
+        );
+
+        assert_eq!(
+            ordering_equal_properties.get_lex_ordering(&required_columns),
+            Some(vec![sort_options_not, sort_options])
         );
 
         let required_columns = [

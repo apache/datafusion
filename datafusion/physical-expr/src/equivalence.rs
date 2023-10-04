@@ -878,10 +878,7 @@ impl OrderingEquivalenceProperties {
 
     /// Check whether any permutation of the argument has a prefix with existing ordering.
     /// Return indices that describes ordering and their ordering information.
-    fn set_satisfy_helper(
-        &self,
-        exprs: &[Arc<dyn PhysicalExpr>],
-    ) -> Option<Vec<(usize, SortOptions)>> {
+    pub fn set_satisfy(&self, exprs: &[Arc<dyn PhysicalExpr>]) -> Option<Vec<usize>> {
         let exprs_normalized = self.eq_groups.normalize_exprs(exprs);
         let mut best = vec![];
 
@@ -905,15 +902,7 @@ impl OrderingEquivalenceProperties {
                 // these indices, we would match existing ordering. For the example above,
                 // this would produce 1, 0; meaning 1st and 0th entries (a, b) among the
                 // GROUP BY expressions b, a, d match input ordering.
-                let indices =
-                    get_indices_of_exprs_strict(&ordered_exprs, &exprs_normalized);
-                best = indices
-                    .iter()
-                    .enumerate()
-                    .map(|(order_idx, &match_idx)| {
-                        (match_idx, ordering[order_idx].options)
-                    })
-                    .collect();
+                best = get_indices_of_exprs_strict(&ordered_exprs, &exprs_normalized);
             }
         }
 
@@ -924,27 +913,44 @@ impl OrderingEquivalenceProperties {
         }
     }
 
-    /// Check whether any permutation of the argument has a prefix with existing ordering.
-    /// Return indices that describes ordering and their ordering information.
-    pub fn set_satisfy(&self, exprs: &[Arc<dyn PhysicalExpr>]) -> Option<Vec<usize>> {
-        self.set_satisfy_helper(exprs).map(|indices_and_orders| {
-            indices_and_orders
-                .into_iter()
-                .map(|(idx, _options)| idx)
-                .collect()
-        })
-    }
-
     /// Check whether one of the permutation of the exprs satisfies existing ordering.
     /// If so, return indices and their orderings.
     /// None, indicates that there is no permutation that satisfies ordering.
     pub fn set_exactly_satisfy(
         &self,
         exprs: &[Arc<dyn PhysicalExpr>],
-    ) -> Option<Vec<(usize, SortOptions)>> {
-        if let Some(indices_and_orders) = self.set_satisfy_helper(exprs) {
-            if indices_and_orders.len() == exprs.len() {
-                return Some(indices_and_orders);
+    ) -> Option<Vec<usize>> {
+        if let Some(indices) = self.set_satisfy(exprs) {
+            // A permutation of the exprs satisfies one of the existing orderings.
+            if indices.len() == exprs.len() {
+                return Some(indices);
+            }
+        }
+        None
+    }
+
+    /// Get ordering of the expressions in the argument
+    /// Assumes arguments define lexicographical ordering.
+    /// None, represents none of the existing ordering satisfy
+    /// lexicographical ordering of the exprs.
+    pub fn get_lex_ordering(
+        &self,
+        exprs: &[Arc<dyn PhysicalExpr>],
+    ) -> Option<Vec<SortOptions>> {
+        let normalized_exprs = self.eq_groups.normalize_exprs(exprs);
+        for ordering in self.oeq_group.iter() {
+            if normalized_exprs.len() <= ordering.len() {
+                let mut ordering_options = vec![];
+                for (expr, sort_expr) in izip!(normalized_exprs.iter(), ordering.iter()) {
+                    if sort_expr.expr.eq(expr) {
+                        ordering_options.push(sort_expr.options);
+                    } else {
+                        break;
+                    }
+                    if ordering_options.len() == normalized_exprs.len() {
+                        return Some(ordering_options);
+                    }
+                }
             }
         }
         None

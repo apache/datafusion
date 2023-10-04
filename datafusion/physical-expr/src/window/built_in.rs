@@ -36,6 +36,7 @@ use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::window_state::WindowAggState;
 use datafusion_expr::window_state::WindowFrameContext;
 use datafusion_expr::WindowFrame;
+use itertools::izip;
 
 /// A window expr that takes the form of a [`BuiltInWindowFunctionExpr`].
 #[derive(Debug)]
@@ -89,18 +90,25 @@ impl BuiltInWindowExpr {
                 // expressions and existing ordering expressions are equal (w.r.t.
                 // set equality), we can prefix the ordering of `self.expr` with
                 // the existing ordering.
-                if let Some(indices_and_orders) =
+                if let Some(indices) =
                     oeq_properties.set_exactly_satisfy(&self.partition_by)
                 {
-                    let mut ordering = indices_and_orders
+                    let lex_partition_by = indices
                         .into_iter()
-                        .map(|(idx, options)| PhysicalSortExpr {
-                            expr: self.partition_by[idx].clone(),
-                            options,
-                        })
+                        .map(|idx| self.partition_by[idx].clone())
                         .collect::<Vec<_>>();
-                    ordering.push(fn_res_ordering);
-                    oeq_properties.add_new_orderings(&[ordering]);
+                    if let Some(ordering_options) =
+                        oeq_properties.get_lex_ordering(&lex_partition_by)
+                    {
+                        let mut ordering = izip!(
+                            lex_partition_by.into_iter(),
+                            ordering_options.into_iter()
+                        )
+                        .map(|(expr, options)| PhysicalSortExpr { expr, options })
+                        .collect::<Vec<_>>();
+                        ordering.push(fn_res_ordering);
+                        oeq_properties.add_new_orderings(&[ordering]);
+                    }
                 }
             }
         }
