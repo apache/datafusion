@@ -22,7 +22,7 @@ use crate::datasource::TableProvider;
 use crate::execution::context::SessionState;
 use async_trait::async_trait;
 use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::{DFSchema, DataFusionError, OwnedTableReference};
+use datafusion_common::{DFSchema, DataFusionError, OwnedTableReference, Constraints};
 use datafusion_expr::CreateExternalTable;
 use futures::TryStreamExt;
 use itertools::Itertools;
@@ -149,6 +149,7 @@ impl ListingSchemaProvider {
                             order_exprs: vec![],
                             unbounded: false,
                             options: Default::default(),
+                            constraints: Constraints::empty(),
                         },
                     )
                     .await?;

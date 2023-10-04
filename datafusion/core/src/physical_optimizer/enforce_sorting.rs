@@ -2235,3 +2235,102 @@ mod tests {
         Ok(())
     }
 }
+
+
+mod tmp_tests {
+    use crate::assert_batches_eq;
+    use crate::physical_plan::{collect, displayable, ExecutionPlan};
+    use crate::prelude::SessionContext;
+    use arrow::util::pretty::print_batches;
+    use datafusion_common::Result;
+    use datafusion_execution::config::SessionConfig;
+    use std::sync::Arc;
+
+    fn print_plan(plan: &Arc<dyn ExecutionPlan>) -> Result<()> {
+        let formatted = displayable(plan.as_ref()).indent(true).to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        println!("{:#?}", actual);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_query() -> Result<()> {
+        let config = SessionConfig::new().with_target_partitions(1);
+        let ctx = SessionContext::with_config(config);
+
+        ctx.sql(
+            "CREATE EXTERNAL TABLE multiple_ordered_table2 (
+              a0 INTEGER,
+              a INTEGER,
+              b INTEGER,
+              c INTEGER,
+              d INTEGER,
+              primary key(c)
+            )
+            STORED AS CSV
+            WITH HEADER ROW
+            LOCATION 'tests/data/window_2.csv';",
+        )
+            .await?;
+
+        // ctx.sql(
+        //     "CREATE EXTERNAL TABLE multiple_ordered_table2 (
+        //       a0 INTEGER,
+        //       a INTEGER,
+        //       b INTEGER,
+        //       c INTEGER primary key,
+        //       d INTEGER
+        //     )
+        //     STORED AS CSV
+        //     WITH HEADER ROW
+        //     LOCATION 'tests/data/window_2.csv';",
+        // )
+        //     .await?;
+
+        let sql = "SELECT c, b, SUM(d)
+        FROM multiple_ordered_table2
+        GROUP BY c;";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        print_plan(&physical_plan)?;
+        let actual = collect(physical_plan, ctx.task_ctx()).await?;
+        print_batches(&actual)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_query2() -> Result<()> {
+        let config = SessionConfig::new().with_target_partitions(1);
+        let ctx = SessionContext::with_config(config);
+
+        ctx.sql(
+            "CREATE TABLE sales_global_with_pk (zip_code INT,
+          country VARCHAR(3),
+          sn INT primary key,
+          ts TIMESTAMP,
+          currency VARCHAR(3),
+          amount FLOAT
+        ) as VALUES
+          (0, 'GRC', 0, '2022-01-01 06:00:00'::timestamp, 'EUR', 30.0),
+          (1, 'FRA', 1, '2022-01-01 08:00:00'::timestamp, 'EUR', 50.0),
+          (1, 'TUR', 2, '2022-01-01 11:30:00'::timestamp, 'TRY', 75.0),
+          (1, 'FRA', 3, '2022-01-02 12:00:00'::timestamp, 'EUR', 200.0),
+          (1, 'TUR', 4, '2022-01-03 10:00:00'::timestamp, 'TRY', 100.0)",
+        )
+            .await?;
+
+        let sql = "SELECT sn, ts, SUM(amount)
+        FROM sales_global_with_pk
+        GROUP BY sn;";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        print_plan(&physical_plan)?;
+        let actual = collect(physical_plan, ctx.task_ctx()).await?;
+        print_batches(&actual)?;
+        Ok(())
+    }
+}

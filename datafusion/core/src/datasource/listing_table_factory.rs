@@ -254,7 +254,7 @@ mod tests {
 
     use crate::execution::context::SessionContext;
     use datafusion_common::parsers::CompressionTypeVariant;
-    use datafusion_common::{DFSchema, OwnedTableReference};
+    use datafusion_common::{Constraints, DFSchema, OwnedTableReference};
 
     #[tokio::test]
     async fn test_create_using_non_std_file_ext() {
@@ -282,6 +282,7 @@ mod tests {
             order_exprs: vec![],
             unbounded: false,
             options: HashMap::new(),
+            constraints: Constraints::empty(),
         };
         let table_provider = factory.create(&state, &cmd).await.unwrap();
         let listing_table = table_provider

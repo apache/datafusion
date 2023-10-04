@@ -681,7 +681,21 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             order_exprs,
             unbounded,
             options,
+            constraints,
         } = statement;
+
+        let mut constraints = constraints;
+        for column in &columns {
+            for option in &column.options {
+                if let ast::ColumnOption::Unique { is_primary } = option.option {
+                    constraints.push(ast::TableConstraint::Unique {
+                        name: None,
+                        columns: vec![column.name.clone()],
+                        is_primary,
+                    })
+                }
+            }
+        }
 
         if (file_type == "PARQUET" || file_type == "AVRO" || file_type == "ARROW")
             && file_compression_type != CompressionTypeVariant::UNCOMPRESSED
@@ -699,7 +713,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // External tables do not support schemas at the moment, so the name is just a table name
         let name = OwnedTableReference::bare(name);
-
+        let constraints =
+            Constraints::new_from_table_constraints(&constraints, &df_schema)?;
         Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
             PlanCreateExternalTable {
                 schema: df_schema,
@@ -715,6 +730,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 order_exprs: ordered_exprs,
                 unbounded,
                 options,
+                constraints,
             },
         )))
     }

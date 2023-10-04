@@ -676,6 +676,7 @@ fn get_updated_group_by_exprs(
         .iter()
         .map(|group_by_expr| group_by_expr.display_name())
         .collect::<Result<Vec<_>>>()?;
+    println!("schema.functional_dependencies(): {:?}", schema.functional_dependencies());
     // Get targets that can be used in a select, even if they do not occur in aggregation:
     if let Some(target_indices) =
         get_target_functional_dependencies(schema, &group_by_expr_names)
