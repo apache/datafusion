@@ -1518,16 +1518,16 @@ pub fn update_ordering(
     mut node: ExprOrdering,
     ordering_equal_properties: &OrderingEquivalenceProperties,
 ) -> Result<Transformed<ExprOrdering>> {
+    let eq_groups = &ordering_equal_properties.eq_groups;
+    let oeq_group = &ordering_equal_properties.oeq_group;
     if let Some(children_sort_options) = &node.children_states {
         // We have an intermediate (non-leaf) node, account for its children:
         node.state = Some(node.expr.get_ordering(children_sort_options));
         Ok(Transformed::Yes(node))
     } else if node.expr.as_any().is::<Column>() {
         // We have a Column, which is one of the two possible leaf node types:
-        if let Some(options) = ordering_equal_properties
-            .oeq_group()
-            .get_ordering(&node.expr)
-        {
+        let normalized_expr = eq_groups.normalize_expr(node.expr.clone());
+        if let Some(options) = oeq_group.get_ordering(&normalized_expr) {
             node.state = Some(SortProperties::Ordered(options));
             Ok(Transformed::Yes(node))
         } else {
