@@ -672,7 +672,7 @@ where
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         if let Some(state) = states.first() {
             let list_arr = as_list_array(state)?;
-            for arr in list_arr.iter().filter_map(|arr| arr) {
+            for arr in list_arr.iter().flatten() {
                 self.update_batch(&[arr])?;
             }
         }
