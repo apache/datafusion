@@ -135,28 +135,10 @@ impl ProjectionExec {
             };
         }
 
-        // let orderings = find_orderings_of_exprs(
-        //     &expr,
-        //     input.output_ordering(),
-        //     input.ordering_equivalence_properties(),
-        // )?;
-
-        // println!("source_to_target_mapping:{:?}", source_to_target_mapping);
-        // println!("input.ordering_equivalence_properties():{:?}", input.ordering_equivalence_properties());
-        // println!("ordering_equivalence_properties():{:?}", input
-        //     .ordering_equivalence_properties()
-        //     .project(&columns_map, &source_to_target_mapping, schema.clone()));
-
-        // let output_ordering =
-        //     validate_output_ordering(output_ordering, &orderings, &expr);
-
         let input_oeq = input.ordering_equivalence_properties();
-        // println!("input.ordering_equivalence_properties(): {:?}", input_oeq);
         let project_oeq = input_oeq.project(&source_to_target_mapping, schema.clone());
         let project_orderings = project_oeq.oeq_group();
-        // println!("project_oeq: {:?}", project_oeq);
         let output_ordering = project_orderings.output_ordering();
-        // println!("output ordering:{:?}", output_ordering);
 
         Ok(Self {
             expr,
@@ -289,16 +271,6 @@ impl ExecutionPlan for ProjectionExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         trace!("Start ProjectionExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
-        // println!(
-        //     "proj self.input.ordering_equivalence_properties(): {:?}",
-        //     self.input.ordering_equivalence_properties()
-        // );
-        // println!(
-        //     "proj self.ordering_equivalence_properties(): {:?}",
-        //     self.ordering_equivalence_properties()
-        // );
-        // println!("self.source_to_target_mapping: {:?}", self.source_to_target_mapping);
-        // println!("proj self.output ordering: {:?}", self.output_ordering());
         Ok(Box::pin(ProjectionStream {
             schema: self.schema.clone(),
             expr: self.expr.iter().map(|x| x.0.clone()).collect(),
