@@ -97,7 +97,7 @@ pub trait PruningStatistics {
 ///
 /// 1. Arbitrary expressions expressions (including user defined functions)
 ///
-/// 2. Anything that implements the [`PruningStatistics`] interface, not just
+/// 2. Anything that implements the [`PruningStatistics`] trait, not just
 /// Parquet metadata, allowing it to be used by other systems to prune entities
 /// (e.g. entire files) if the statistics are known via some other source, such
 /// as a catalog.
@@ -172,7 +172,7 @@ impl PruningPredicate {
     ///
     /// `true`: There MAY be rows that match the predicate
     ///
-    /// `false`: There are no rows that could possible match the predicate
+    /// `false`: There are no rows that could possibly match the predicate
     ///
     /// Note: the predicate passed to `prune` should already be simplified as
     /// much as possible (e.g. this pass doesn't handle some
