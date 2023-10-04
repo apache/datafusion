@@ -158,13 +158,13 @@ impl Accumulator for ArrayAggAccumulator {
 
         if element_arrays.is_empty() {
             let arr = ScalarValue::list_to_array(&[], &self.datatype);
-            return Ok(ScalarValue::ListArr(arr));
+            return Ok(ScalarValue::List(arr));
         }
 
         let concated_array = arrow::compute::concat(&element_arrays)?;
         let list_array = wrap_into_list_array(concated_array);
 
-        Ok(ScalarValue::ListArr(Arc::new(list_array)))
+        Ok(ScalarValue::List(Arc::new(list_array)))
     }
 
     fn size(&self) -> usize {
@@ -207,7 +207,7 @@ mod tests {
             Some(4),
             Some(5),
         ])]);
-        let list = ScalarValue::ListArr(Arc::new(list));
+        let list = ScalarValue::List(Arc::new(list));
 
         generic_test_op!(a, DataType::Int32, ArrayAgg, list, DataType::Int32)
     }
@@ -258,10 +258,10 @@ mod tests {
             arrow::compute::concat(&[&l1, &l2, &l3])?,
             None,
         );
-        let list = ScalarValue::ListArr(Arc::new(list));
-        let l1 = ScalarValue::ListArr(Arc::new(l1));
-        let l2 = ScalarValue::ListArr(Arc::new(l2));
-        let l3 = ScalarValue::ListArr(Arc::new(l3));
+        let list = ScalarValue::List(Arc::new(list));
+        let l1 = ScalarValue::List(Arc::new(l1));
+        let l2 = ScalarValue::List(Arc::new(l2));
+        let l3 = ScalarValue::List(Arc::new(l3));
 
         let array = ScalarValue::iter_to_array(vec![l1, l2, l3]).unwrap();
 

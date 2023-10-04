@@ -162,7 +162,7 @@ impl Accumulator for DistinctArrayAggAccumulator {
     fn evaluate(&self) -> Result<ScalarValue> {
         let values: Vec<ScalarValue> = self.values.iter().cloned().collect();
         let arr = ScalarValue::list_to_array(&values, &self.datatype);
-        Ok(ScalarValue::ListArr(arr))
+        Ok(ScalarValue::List(arr))
     }
 
     fn size(&self) -> usize {
@@ -194,7 +194,7 @@ mod tests {
     ) -> Result<()> {
         for expected in expected_values {
             match (expected, &actual) {
-                (ScalarValue::ListArr(arr1), ScalarValue::ListArr(arr2)) => {
+                (ScalarValue::List(arr1), ScalarValue::List(arr2)) => {
                     if arr1.eq(arr2) {
                         return Ok(());
                     }
@@ -265,7 +265,7 @@ mod tests {
                 .into_iter()
                 .map(|x| Some(*x))
                 .collect::<Vec<_>>();
-            expected_values.push(ScalarValue::ListArr(Arc::new(
+            expected_values.push(ScalarValue::List(Arc::new(
                 ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(value)]),
             )));
         }
@@ -337,9 +337,9 @@ mod tests {
             None,
         );
 
-        let l1 = ScalarValue::ListArr(Arc::new(l1));
-        let l2 = ScalarValue::ListArr(Arc::new(l2));
-        let l3 = ScalarValue::ListArr(Arc::new(l3));
+        let l1 = ScalarValue::List(Arc::new(l1));
+        let l2 = ScalarValue::List(Arc::new(l2));
+        let l3 = ScalarValue::List(Arc::new(l3));
 
         // Duplicate l1 in the input array and check that it is deduped in the output.
         let array = ScalarValue::iter_to_array(vec![l1.clone(), l2, l3, l1]).unwrap();
@@ -399,9 +399,9 @@ mod tests {
             None,
         );
 
-        let l1 = ScalarValue::ListArr(Arc::new(l1));
-        let l2 = ScalarValue::ListArr(Arc::new(l2));
-        let l3 = ScalarValue::ListArr(Arc::new(l3));
+        let l1 = ScalarValue::List(Arc::new(l1));
+        let l2 = ScalarValue::List(Arc::new(l2));
+        let l3 = ScalarValue::List(Arc::new(l3));
 
         // Duplicate l1 in the input array and check that it is deduped in the output.
         let input1 = ScalarValue::iter_to_array(vec![l1.clone(), l2]).unwrap();

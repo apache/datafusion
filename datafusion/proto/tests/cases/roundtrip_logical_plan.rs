@@ -708,10 +708,10 @@ fn round_trip_scalar_list() {
         ]));
 
     let should_pass: Vec<ScalarValue> = vec![
-        ScalarValue::ListArr(i32arr),
-        ScalarValue::ListArr(f32arr),
-        ScalarValue::ListArr(null_arr),
-        ScalarValue::ListArr(f32arr_with_null),
+        ScalarValue::List(i32arr),
+        ScalarValue::List(f32arr),
+        ScalarValue::List(null_arr),
+        ScalarValue::List(f32arr_with_null),
     ];
 
     for test_case in should_pass.into_iter() {
@@ -942,7 +942,6 @@ fn roundtrip_null_scalar_values() {
         ScalarValue::Date32(None),
         ScalarValue::TimestampMicrosecond(None, None),
         ScalarValue::TimestampNanosecond(None, None),
-        // ScalarValue::List(None, Arc::new(Field::new("item", DataType::Boolean, false))),
     ];
 
     for test_case in test_types.into_iter() {

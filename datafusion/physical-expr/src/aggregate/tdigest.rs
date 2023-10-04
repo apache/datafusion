@@ -584,7 +584,7 @@ impl TDigest {
             ScalarValue::Float64(Some(self.count)),
             ScalarValue::Float64(Some(self.max)),
             ScalarValue::Float64(Some(self.min)),
-            ScalarValue::ListArr(arr),
+            ScalarValue::List(arr),
         ]
     }
 
@@ -605,7 +605,7 @@ impl TDigest {
         };
 
         let centroids: Vec<_> = match &state[5] {
-            ScalarValue::ListArr(arr) => {
+            ScalarValue::List(arr) => {
                 let list_array = as_list_array(arr);
                 let arr = list_array.values();
                 let f64arr = as_primitive_array::<Float64Type>(arr).unwrap();

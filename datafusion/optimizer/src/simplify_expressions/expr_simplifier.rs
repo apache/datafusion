@@ -396,7 +396,7 @@ impl<'a> ConstEvaluator<'a> {
                         a.len()
                     )
                 } else if as_list_array(&a).is_ok() || as_large_list_array(&a).is_ok() {
-                    Ok(ScalarValue::ListArr(a))
+                    Ok(ScalarValue::List(a))
                 } else {
                     // Non-ListArray
                     ScalarValue::try_from_array(&a, 0)

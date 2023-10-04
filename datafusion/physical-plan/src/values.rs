@@ -70,7 +70,7 @@ impl ValuesExec {
                         match r {
                             Ok(ColumnarValue::Scalar(scalar)) => Ok(scalar),
                             Ok(ColumnarValue::Array(a)) if a.len() == 1 => {
-                                Ok(ScalarValue::ListArr(a))
+                                Ok(ScalarValue::List(a))
                             }
                             Ok(ColumnarValue::Array(a)) => {
                                 plan_err!(

@@ -1145,8 +1145,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 "Proto serialization error: ScalarValue::Fixedsizelist not supported"
                     .to_string(),
             )),
-            ScalarValue::List(..) => unimplemented!("Deprecated"),
-            ScalarValue::ListArr(arr) => {
+            ScalarValue::List(arr) => {
                 let batch =
                     RecordBatch::try_from_iter(vec![("field_name", arr.to_owned())])
                         .unwrap();

@@ -153,7 +153,7 @@ impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
             .collect();
 
         let arr = ScalarValue::list_to_array(&all_values, &self.data_type);
-        Ok(vec![ScalarValue::ListArr(arr)])
+        Ok(vec![ScalarValue::List(arr)])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {

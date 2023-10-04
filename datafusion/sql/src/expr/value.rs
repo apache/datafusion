@@ -154,16 +154,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             values.iter().map(|e| e.data_type()).collect();
 
         if data_types.is_empty() {
-            Ok(lit(ScalarValue::ListArr(new_null_array(
-                &DataType::Null,
-                0,
-            ))))
+            Ok(lit(ScalarValue::List(new_null_array(&DataType::Null, 0))))
         } else if data_types.len() > 1 {
             not_impl_err!("Arrays with different types are not supported: {data_types:?}")
         } else {
             let data_type = values[0].data_type();
             let arr = ScalarValue::list_to_array(&values, &data_type);
-            Ok(lit(ScalarValue::ListArr(arr)))
+            Ok(lit(ScalarValue::List(arr)))
         }
     }
 

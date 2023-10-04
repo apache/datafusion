@@ -421,7 +421,7 @@ fn array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
         None => {
             let null_arr = new_null_array(&DataType::Null, 0);
             let list_arr = Arc::new(wrap_into_list_array(null_arr));
-            Ok(ColumnarValue::Scalar(ScalarValue::ListArr(list_arr)))
+            Ok(ColumnarValue::Scalar(ScalarValue::List(list_arr)))
         }
         // all nulls, set default data type as int32
         Some(DataType::Null) => {

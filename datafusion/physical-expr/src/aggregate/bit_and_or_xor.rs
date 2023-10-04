@@ -644,7 +644,7 @@ where
                 .collect();
 
             let arr = ScalarValue::list_to_array(&values, &T::DATA_TYPE);
-            vec![ScalarValue::ListArr(arr)]
+            vec![ScalarValue::List(arr)]
         };
         Ok(state_out)
     }

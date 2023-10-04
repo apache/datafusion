@@ -679,7 +679,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 )
                 .unwrap();
                 let arr = record_batch.column(0);
-                Self::ListArr(arr.to_owned())
+                Self::List(arr.to_owned())
             }
             Value::NullValue(v) => {
                 let null_type: DataType = v.try_into()?;
