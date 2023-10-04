@@ -645,12 +645,12 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
             Value::Float32Value(v) => Self::Float32(Some(*v)),
             Value::Float64Value(v) => Self::Float64(Some(*v)),
             Value::Date32Value(v) => Self::Date32(Some(*v)),
-            Value::ListValue(scalr_list_arr) => {
+            Value::ListValue(scalr_list) => {
                 let protobuf::ScalarListValue {
                     ipc_message,
                     arrow_data,
                     schema,
-                } = &scalr_list_arr;
+                } = &scalr_list;
 
                 let schema: Schema = if let Some(schema_ref) = schema {
                     schema_ref.try_into()?

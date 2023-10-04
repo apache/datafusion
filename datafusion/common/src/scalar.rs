@@ -1576,95 +1576,6 @@ impl ScalarValue {
         Ok(array)
     }
 
-    /// Build a list array from non-list and non-null scalars
-    pub fn build_a_list_array_from_scalars(
-        scalars: Vec<ScalarValue>,
-        data_type: &DataType,
-    ) -> Result<ArrayRef> {
-        macro_rules! build_a_list_array_from_scalars {
-            ($ARRAY_TY:ty, $SCALAR_TY:ident) => {{
-                let s = scalars
-                    .into_iter()
-                    .map(|sv| match sv {
-                        ScalarValue::$SCALAR_TY(Some(x)) => Some(x),
-                        _ => {
-                            panic!(
-                                "Inconsistent types in ScalarValue::iter_to_array. \
-                                Expected List, got {:?}",
-                                sv
-                            )
-                        }
-                    })
-                    .collect::<Vec<_>>();
-                Arc::new(ListArray::from_iter_primitive::<$ARRAY_TY, _, _>(vec![
-                    Some(s),
-                ]))
-            }};
-        }
-
-        let arr = match data_type {
-            DataType::Int8 => {
-                build_a_list_array_from_scalars!(Int8Type, Int8)
-            }
-            DataType::Int16 => {
-                build_a_list_array_from_scalars!(Int16Type, Int16)
-            }
-            DataType::Int32 => {
-                build_a_list_array_from_scalars!(Int32Type, Int32)
-            }
-            DataType::Int64 => {
-                build_a_list_array_from_scalars!(Int64Type, Int64)
-            }
-            DataType::UInt8 => {
-                build_a_list_array_from_scalars!(UInt8Type, UInt8)
-            }
-            DataType::UInt16 => {
-                build_a_list_array_from_scalars!(UInt16Type, UInt16)
-            }
-            DataType::UInt32 => {
-                build_a_list_array_from_scalars!(UInt32Type, UInt32)
-            }
-            DataType::UInt64 => {
-                build_a_list_array_from_scalars!(UInt64Type, UInt64)
-            }
-            DataType::Float32 => {
-                build_a_list_array_from_scalars!(Float32Type, Float32)
-            }
-            DataType::Float64 => {
-                build_a_list_array_from_scalars!(Float64Type, Float64)
-            }
-            DataType::Utf8 => {
-                let mut strings = Vec::with_capacity(scalars.len());
-                for scalar in scalars.into_iter() {
-                    if let ScalarValue::Utf8(v) = scalar {
-                        strings.push(v);
-                    }
-                }
-                let arr = StringArray::from(strings);
-                let list_arr = wrap_into_list_array(Arc::new(arr));
-                Arc::new(list_arr)
-            }
-            DataType::Boolean => {
-                let mut bools = Vec::with_capacity(scalars.len());
-                for scalar in scalars.into_iter() {
-                    if let ScalarValue::Boolean(v) = scalar {
-                        bools.push(v);
-                    }
-                }
-                let arr = BooleanArray::from(bools);
-                let list_arr = wrap_into_list_array(Arc::new(arr));
-                Arc::new(list_arr)
-            }
-            _ => {
-                return _not_impl_err!(
-                    "Unsupported data type for DistinctCountAccumulator: {:?}",
-                    data_type
-                )
-            }
-        };
-        Ok(arr)
-    }
-
     fn iter_to_null_array(scalars: impl IntoIterator<Item = ScalarValue>) -> ArrayRef {
         let length =
             scalars
@@ -3019,6 +2930,7 @@ impl fmt::Display for ScalarValue {
                 )?,
                 None => write!(f, "NULL")?,
             },
+            // Array does not implement Display
             ScalarValue::List(arr) => {
                 write!(f, "{:?}", arr)?;
             }
@@ -3204,16 +3116,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn build_a_list_array_from_scalars_primitive_test() {
+    fn test_list_to_array_primitive() {
         let scalars = vec![
             ScalarValue::Int32(Some(1)),
             ScalarValue::Int32(Some(2)),
             ScalarValue::Int32(Some(3)),
         ];
 
-        let array =
-            ScalarValue::build_a_list_array_from_scalars(scalars, &DataType::Int32)
-                .unwrap();
+        let array = ScalarValue::list_to_array(&scalars, &DataType::Int32);
+
         let expected =
             ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
                 Some(1),
@@ -3225,16 +3136,15 @@ mod tests {
     }
 
     #[test]
-    fn build_a_list_array_from_scalars_string_test() {
+    fn test_list_to_array_string() {
         let scalars = vec![
             ScalarValue::Utf8(Some(String::from("rust"))),
             ScalarValue::Utf8(Some(String::from("arrow"))),
             ScalarValue::Utf8(Some(String::from("data-fusion"))),
         ];
 
-        let array =
-            ScalarValue::build_a_list_array_from_scalars(scalars, &DataType::Utf8)
-                .unwrap();
+        let array = ScalarValue::list_to_array(scalars.as_slice(), &DataType::Utf8);
+
         let expected = wrap_into_list_array(Arc::new(StringArray::from(vec![
             "rust",
             "arrow",
