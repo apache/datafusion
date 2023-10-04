@@ -1368,10 +1368,11 @@ impl QueryPlanner for DefaultQueryPlanner {
 }
 
 /// Execution context for registering data sources and executing queries.
+/// See [`SessionContext`] for a higher level API.
 ///
 /// Note that there is no `Default` or `new()` for SessionState,
 /// to avoid accidentally running queries or other operations without passing through
-/// the [`SessionConfig`] or [`RuntimeEnv`].
+/// the [`SessionConfig`] or [`RuntimeEnv`]. See [`SessionContext`].
 #[derive(Clone)]
 pub struct SessionState {
     /// A unique UUID that identifies the session
@@ -1495,7 +1496,10 @@ impl SessionState {
     }
     /// Returns new [`SessionState`] using the provided
     /// [`SessionConfig`] and [`RuntimeEnv`].
-    #[deprecated(since = "32.0.0", note = "Use SessionState::new_with_config_rt_and_catalog_list")]
+    #[deprecated(
+        since = "32.0.0",
+        note = "Use SessionState::new_with_config_rt_and_catalog_list"
+    )]
     pub fn with_config_rt_and_catalog_list(
         config: SessionConfig,
         runtime: Arc<RuntimeEnv>,
@@ -2248,16 +2252,13 @@ mod tests {
     use crate::execution::context::QueryPlanner;
     use crate::execution::memory_pool::MemoryConsumer;
     use crate::execution::runtime_env::RuntimeConfig;
-    use crate::physical_plan::expressions::AvgAccumulator;
     use crate::test;
     use crate::test_util::parquet_test_data;
     use crate::variable::VarType;
-    use arrow::array::ArrayRef;
     use arrow::record_batch::RecordBatch;
     use arrow_schema::{Field, Schema};
     use async_trait::async_trait;
-    use datafusion_expr::{create_udaf, create_udf, Expr, Volatility};
-    use datafusion_physical_expr::functions::make_scalar_function;
+    use datafusion_expr::Expr;
     use std::fs::File;
     use std::path::PathBuf;
     use std::sync::Weak;
@@ -2352,87 +2353,6 @@ mod tests {
 
         assert!(ctx.deregister_table("dual")?.is_some());
         assert!(ctx.deregister_table("dual")?.is_none());
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn case_sensitive_identifiers_user_defined_functions() -> Result<()> {
-        let ctx = SessionContext::new();
-        ctx.register_table("t", test::table_with_sequence(1, 1).unwrap())
-            .unwrap();
-
-        let myfunc = |args: &[ArrayRef]| Ok(Arc::clone(&args[0]));
-        let myfunc = make_scalar_function(myfunc);
-
-        ctx.register_udf(create_udf(
-            "MY_FUNC",
-            vec![DataType::Int32],
-            Arc::new(DataType::Int32),
-            Volatility::Immutable,
-            myfunc,
-        ));
-
-        // doesn't work as it was registered with non lowercase
-        let err = plan_and_collect(&ctx, "SELECT MY_FUNC(i) FROM t")
-            .await
-            .unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("Error during planning: Invalid function \'my_func\'"));
-
-        // Can call it if you put quotes
-        let result = plan_and_collect(&ctx, "SELECT \"MY_FUNC\"(i) FROM t").await?;
-
-        let expected = [
-            "+--------------+",
-            "| MY_FUNC(t.i) |",
-            "+--------------+",
-            "| 1            |",
-            "+--------------+",
-        ];
-        assert_batches_eq!(expected, &result);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn case_sensitive_identifiers_user_defined_aggregates() -> Result<()> {
-        let ctx = SessionContext::new();
-        ctx.register_table("t", test::table_with_sequence(1, 1).unwrap())
-            .unwrap();
-
-        // Note capitalization
-        let my_avg = create_udaf(
-            "MY_AVG",
-            vec![DataType::Float64],
-            Arc::new(DataType::Float64),
-            Volatility::Immutable,
-            Arc::new(|_| Ok(Box::<AvgAccumulator>::default())),
-            Arc::new(vec![DataType::UInt64, DataType::Float64]),
-        );
-
-        ctx.register_udaf(my_avg);
-
-        // doesn't work as it was registered as non lowercase
-        let err = plan_and_collect(&ctx, "SELECT MY_AVG(i) FROM t")
-            .await
-            .unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("Error during planning: Invalid function \'my_avg\'"));
-
-        // Can call it if you put quotes
-        let result = plan_and_collect(&ctx, "SELECT \"MY_AVG\"(i) FROM t").await?;
-
-        let expected = [
-            "+-------------+",
-            "| MY_AVG(t.i) |",
-            "+-------------+",
-            "| 1.0         |",
-            "+-------------+",
-        ];
-        assert_batches_eq!(expected, &result);
 
         Ok(())
     }

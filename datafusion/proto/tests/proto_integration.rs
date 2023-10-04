@@ -15,14 +15,5 @@
 // specific language governing permissions and limitations
 // under the License.
 
-/// Tests for user defined Scalar functions
-mod user_defined_scalar_functions;
-
-/// Tests for User Defined Aggregate Functions
-mod user_defined_aggregates;
-
-/// Tests for User Defined Plans
-mod user_defined_plan;
-
-/// Tests for User Defined Window Functions
-mod user_defined_window_functions;
+/// Run all tests that are found in the `cases` directory
+mod cases;

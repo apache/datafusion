@@ -1287,15 +1287,16 @@ impl TableProvider for DataFrameTableProvider {
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let mut expr = LogicalPlanBuilder::from(self.plan.clone());
-        if let Some(p) = projection {
-            expr = expr.select(p.iter().copied())?
-        }
-
         // Add filter when given
         let filter = filters.iter().cloned().reduce(|acc, new| acc.and(new));
         if let Some(filter) = filter {
             expr = expr.filter(filter)?
         }
+
+        if let Some(p) = projection {
+            expr = expr.select(p.iter().copied())?
+        }
+
         // add a limit if given
         if let Some(l) = limit {
             expr = expr.limit(0, Some(l))?

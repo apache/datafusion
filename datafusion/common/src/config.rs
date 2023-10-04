@@ -307,7 +307,7 @@ config_namespace! {
         /// lzo, brotli(level), lz4, zstd(level), and lz4_raw.
         /// These values are not case sensitive. If NULL, uses
         /// default parquet writer setting
-        pub compression: Option<String>, default = None
+        pub compression: Option<String>, default = Some("zstd(3)".into())
 
         /// Sets if dictionary encoding is enabled. If NULL, uses
         /// default parquet writer setting

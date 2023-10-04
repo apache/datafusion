@@ -58,15 +58,6 @@ pub fn is_null(dt: &DataType) -> bool {
     *dt == DataType::Null
 }
 
-/// Determine whether the given data type `dt` represents numeric values.
-pub fn is_numeric(dt: &DataType) -> bool {
-    is_signed_numeric(dt)
-        || matches!(
-            dt,
-            DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64
-        )
-}
-
 /// Determine whether the given data type `dt` is a `Timestamp`.
 pub fn is_timestamp(dt: &DataType) -> bool {
     matches!(dt, DataType::Timestamp(_, _))

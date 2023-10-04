@@ -41,7 +41,7 @@ use apache_avro::{
     types::Value,
     AvroResult, Error as AvroError, Reader as AvroReader,
 };
-use arrow::array::{BinaryArray, GenericListArray};
+use arrow::array::{BinaryArray, FixedSizeBinaryArray, GenericListArray};
 use arrow::datatypes::{Fields, SchemaRef};
 use arrow::error::ArrowError::SchemaError;
 use arrow::error::Result as ArrowResult;
@@ -734,6 +734,15 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                             .collect::<BinaryArray>(),
                     )
                         as ArrayRef,
+                    DataType::FixedSizeBinary(ref size) => {
+                        Arc::new(FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+                            rows.iter().map(|row| {
+                                let maybe_value = self.field_lookup(field.name(), row);
+                                maybe_value.and_then(|v| resolve_fixed(v, *size as usize))
+                            }),
+                            *size,
+                        )?) as ArrayRef
+                    }
                     DataType::List(ref list_field) => {
                         match list_field.data_type() {
                             DataType::Dictionary(ref key_ty, _) => {
@@ -893,6 +902,7 @@ fn resolve_string(v: &Value) -> ArrowResult<Option<String>> {
         Value::Bytes(bytes) => String::from_utf8(bytes.to_vec())
             .map_err(AvroError::ConvertToUtf8)
             .map(Some),
+        Value::Enum(_, s) => Ok(Some(s.clone())),
         Value::Null => Ok(None),
         other => Err(AvroError::GetString(other.into())),
     }
@@ -933,6 +943,20 @@ fn resolve_bytes(v: &Value) -> Option<Vec<u8>> {
         Value::Bytes(s) => Some(s),
         _ => None,
     })
+}
+
+fn resolve_fixed(v: &Value, size: usize) -> Option<Vec<u8>> {
+    let v = if let Value::Union(_, b) = v { b } else { v };
+    match v {
+        Value::Fixed(n, bytes) => {
+            if *n == size {
+                Some(bytes.clone())
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
 }
 
 fn resolve_boolean(value: &Value) -> Option<bool> {
