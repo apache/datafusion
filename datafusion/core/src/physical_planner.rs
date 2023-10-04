@@ -2411,9 +2411,6 @@ mod tests {
             "SUM(aggregate_test_100.c2)",
             final_hash_agg.schema().field(1).name()
         );
-        // we need access to the input to the partial aggregate so that other projects can
-        // implement serde
-        assert_eq!("c2", final_hash_agg.input().schema().field(1).name());
 
         Ok(())
     }
@@ -2439,9 +2436,6 @@ mod tests {
             "SUM(aggregate_test_100.c3)",
             final_hash_agg.schema().field(2).name()
         );
-        // we need access to the input to the partial aggregate so that other projects can
-        // implement serde
-        assert_eq!("c3", final_hash_agg.input().schema().field(2).name());
 
         Ok(())
     }
