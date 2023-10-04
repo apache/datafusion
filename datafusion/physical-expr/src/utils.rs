@@ -17,8 +17,6 @@
 
 use crate::equivalence::OrderingEquivalenceProperties;
 use crate::expressions::{BinaryExpr, Column, UnKnownColumn};
-use crate::sort_properties::{ExprOrdering, SortProperties};
-use crate::update_ordering;
 use crate::{PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement};
 
 use arrow::array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData};
@@ -500,57 +498,6 @@ pub fn get_indices_of_matching_sort_exprs_with_order_eq(
 
     // If no match found, return `None`:
     None
-}
-
-/// Calculates the output orderings for a set of expressions within the context of a given
-/// execution plan. The resulting orderings are all in the type of [`Column`], since these
-/// expressions become [`Column`] after the projection step. The expressions having an alias
-/// are renamed with those aliases in the returned [`PhysicalSortExpr`]'s. If an expression
-/// is found to be unordered, the corresponding entry in the output vector is `None`.
-///
-/// # Arguments
-///
-/// * `expr` - A slice of tuples containing expressions and their corresponding aliases.
-///
-/// * `input_output_ordering` - Output ordering of the input plan.
-///
-/// * `input_equal_properties` - Equivalence properties of the columns in the input plan.
-///
-/// * `input_ordering_equal_properties` - Ordering equivalence properties of the columns in the input plan.
-///
-/// # Returns
-///
-/// A `Result` containing a vector of optional [`PhysicalSortExpr`]'s. Each element of the
-/// vector corresponds to an expression from the input slice. If an expression can be ordered,
-/// the corresponding entry is `Some(PhysicalSortExpr)`. If an expression cannot be ordered,
-/// the entry is `None`.
-pub fn find_orderings_of_exprs(
-    expr: &[(Arc<dyn PhysicalExpr>, String)],
-    input_output_ordering: Option<&[PhysicalSortExpr]>,
-    input_ordering_equal_properties: OrderingEquivalenceProperties,
-) -> Result<Vec<Option<PhysicalSortExpr>>> {
-    let mut orderings: Vec<Option<PhysicalSortExpr>> = vec![];
-    if let Some(leading_ordering) =
-        input_output_ordering.and_then(|output_ordering| output_ordering.first())
-    {
-        for (index, (expression, name)) in expr.iter().enumerate() {
-            let initial_expr = ExprOrdering::new(expression.clone());
-            let transformed = initial_expr.transform_up(&|expr| {
-                update_ordering(expr, leading_ordering, &input_ordering_equal_properties)
-            })?;
-            if let Some(SortProperties::Ordered(sort_options)) = transformed.state {
-                orderings.push(Some(PhysicalSortExpr {
-                    expr: Arc::new(Column::new(name, index)),
-                    options: sort_options,
-                }));
-            } else {
-                orderings.push(None);
-            }
-        }
-    } else {
-        orderings.extend(expr.iter().map(|_| None));
-    }
-    Ok(orderings)
 }
 
 /// Merge left and right sort expressions, checking for duplicates.
@@ -1309,26 +1256,39 @@ mod tests {
             Field::new("b", DataType::Int32, true),
             Field::new("c", DataType::Int32, true),
         ]);
-        let orderings = find_orderings_of_exprs(
-            &[
-                (Arc::new(Column::new("b", 1)), "b_new".to_string()),
-                (Arc::new(Column::new("a", 0)), "a_new".to_string()),
-            ],
-            Some(&[PhysicalSortExpr {
-                expr: Arc::new(Column::new("b", 1)),
-                options: SortOptions::default(),
-            }]),
-            OrderingEquivalenceProperties::new(Arc::new(schema.clone())),
-        )?;
+        let mut oeq_properties =
+            OrderingEquivalenceProperties::new(Arc::new(schema.clone()));
+        let ordering = vec![PhysicalSortExpr {
+            expr: Arc::new(Column::new("b", 1)),
+            options: SortOptions::default(),
+        }];
+        oeq_properties.add_new_orderings(&[ordering]);
+        let source_to_target_mapping = vec![
+            (
+                Arc::new(Column::new("b", 1)) as _,
+                Arc::new(Column::new("b_new", 0)) as _,
+            ),
+            (
+                Arc::new(Column::new("a", 0)) as _,
+                Arc::new(Column::new("a_new", 1)) as _,
+            ),
+        ];
+        let projection_schema = Arc::new(Schema::new(vec![
+            Field::new("b_new", DataType::Int32, true),
+            Field::new("a_new", DataType::Int32, true),
+        ]));
+        let projected_oeq =
+            oeq_properties.project(&source_to_target_mapping, projection_schema);
+        let orderings = projected_oeq
+            .oeq_group()
+            .output_ordering()
+            .unwrap_or(vec![]);
 
         assert_eq!(
-            vec![
-                Some(PhysicalSortExpr {
-                    expr: Arc::new(Column::new("b_new", 0)),
-                    options: SortOptions::default(),
-                }),
-                None,
-            ],
+            vec![PhysicalSortExpr {
+                expr: Arc::new(Column::new("b_new", 0)),
+                options: SortOptions::default(),
+            }],
             orderings
         );
 
@@ -1337,16 +1297,25 @@ mod tests {
             Field::new("b", DataType::Int32, true),
             Field::new("c", DataType::Int32, true),
         ]);
-        let orderings = find_orderings_of_exprs(
-            &[
-                (Arc::new(Column::new("c", 2)), "c_new".to_string()),
-                (Arc::new(Column::new("b", 1)), "b_new".to_string()),
-            ],
-            Some(&[]),
-            OrderingEquivalenceProperties::new(Arc::new(schema)),
-        )?;
-
-        assert_eq!(vec![None, None], orderings);
+        let oeq_properties = OrderingEquivalenceProperties::new(Arc::new(schema.clone()));
+        let source_to_target_mapping = vec![
+            (
+                Arc::new(Column::new("c", 2)) as _,
+                Arc::new(Column::new("c_new", 0)) as _,
+            ),
+            (
+                Arc::new(Column::new("b", 1)) as _,
+                Arc::new(Column::new("b_new", 1)) as _,
+            ),
+        ];
+        let projection_schema = Arc::new(Schema::new(vec![
+            Field::new("c_new", DataType::Int32, true),
+            Field::new("b_new", DataType::Int32, true),
+        ]));
+        let projected_oeq =
+            oeq_properties.project(&source_to_target_mapping, projection_schema);
+        // After projection there is no ordering.
+        assert!(projected_oeq.oeq_group().output_ordering().is_none());
 
         Ok(())
     }
