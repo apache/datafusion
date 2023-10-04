@@ -340,10 +340,6 @@ fn try_pushdown_requirements_to_join(
     let finer_req = smj
         .ordering_equivalence_properties()
         .get_finer_requirement(&new_output_ordering, parent_required.unwrap_or(&[]));
-    println!(
-        "finer_req:{:?}, new_output_ordering:{:?}, parent_required:{:?}",
-        finer_req, new_output_ordering, parent_required
-    );
     let mut should_pushdown = false;
     if let Some(finer_req) = finer_req {
         should_pushdown = finer_req.eq(&new_output_ordering);

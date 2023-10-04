@@ -23,7 +23,6 @@ use crate::{
 };
 
 use arrow::datatypes::SchemaRef;
-use arrow_schema::SortOptions;
 
 use crate::physical_expr::{deduplicate_physical_exprs, have_common_entries};
 use crate::sort_properties::{ExprOrdering, SortProperties};
@@ -76,6 +75,9 @@ impl EquivalentGroups {
         self.inner.into_iter()
     }
 
+    /// Adds tuple argument to the equivalent groups
+    /// It is known that first and second entry in the tuple will have same values in the table.
+    /// This can arise after filter(a=b), alias(a, a as b), etc.
     pub fn add_equal_conditions(
         &mut self,
         new_conditions: (&Arc<dyn PhysicalExpr>, &Arc<dyn PhysicalExpr>),
@@ -160,6 +162,7 @@ impl EquivalentGroups {
         self.inner = out_groups;
     }
 
+    /// Extend equivalent group with other equivalent groups
     fn extend(&mut self, other: EquivalentGroups) {
         self.inner.extend(other.inner);
         self.remove_redundant_entries();
@@ -320,6 +323,7 @@ impl EquivalentGroups {
         source_to_target_mapping: &ProjectionMapping,
     ) -> Vec<Vec<Arc<dyn PhysicalExpr>>> {
         // TODO: Convert below algorithm to the version that use HashMap.
+        //  once `Arc<dyn PhysicalExpr>` can be stored in `HashMap`.
         let mut res = vec![];
         for (source, target) in source_to_target_mapping {
             if res.is_empty() {
@@ -415,6 +419,7 @@ impl OrderingEquivalentGroup {
         self.inner.contains(other)
     }
 
+    /// Pushes new ordering to the state.
     fn push(&mut self, other: LexOrdering) {
         if !self.contains(&other) {
             self.inner.push(other);
@@ -456,7 +461,7 @@ impl OrderingEquivalentGroup {
 
     /// Check whether ordering equivalent group is empty
     pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
+        self.len() == 0
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &LexOrdering> {
@@ -467,7 +472,7 @@ impl OrderingEquivalentGroup {
         self.inner.into_iter()
     }
 
-    #[allow(dead_code)]
+    /// Get length of the entries in the ordering equivalent group
     fn len(&self) -> usize {
         self.inner.len()
     }
@@ -555,6 +560,8 @@ pub struct OrderingEquivalenceProperties {
     /// Keeps track of valid ordering that satisfied table.
     oeq_group: OrderingEquivalentGroup,
     /// Keeps track of expressions that have constant value.
+    /// TODO: We do not need to track constants separately, they can be tracked
+    ///  inside `eq_groups` as `Literal` expressions.
     constants: Vec<Arc<dyn PhysicalExpr>>,
     schema: SchemaRef,
 }
@@ -616,7 +623,9 @@ impl OrderingEquivalenceProperties {
             .inner
             .iter()
             .map(|ordering| {
+                // Use a representative version of the each equivalent group inside ordering expressions.
                 let ordering = self.eq_groups.normalize_sort_exprs(ordering);
+                // Prune with constants
                 let req = prune_sort_reqs_with_constants(
                     &PhysicalSortRequirement::from_sort_exprs(&ordering),
                     &self.constants,
@@ -626,7 +635,6 @@ impl OrderingEquivalenceProperties {
             .collect::<Vec<Vec<_>>>();
         // Create new oeq group normalized according to equivalent groups.
         self.oeq_group = OrderingEquivalentGroup::new(normalized_ordering);
-        // TODO: Add normalization with constant also.
     }
 
     /// Add physical expression that have constant value to the `self.constants`
@@ -683,6 +691,7 @@ impl OrderingEquivalenceProperties {
         sort_reqs: &[PhysicalSortRequirement],
     ) -> Vec<PhysicalSortRequirement> {
         let normalized_sort_reqs = self.eq_groups.normalize_sort_requirements(sort_reqs);
+        // Remove entries that are known to be constant from requirement expression.
         let normalized_sort_reqs =
             prune_sort_reqs_with_constants(&normalized_sort_reqs, &self.constants);
         let mut normalized_sort_reqs = collapse_lex_req(normalized_sort_reqs);
@@ -692,16 +701,13 @@ impl OrderingEquivalenceProperties {
         let first_entry =
             PhysicalSortRequirement::from_sort_exprs(&self.oeq_group.inner[0]);
         let first_entry = self.eq_groups.normalize_sort_requirements(&first_entry);
-        let first_entry = prune_sort_reqs_with_constants(&first_entry, &self.constants);
         for item in self.oeq_group.iter() {
             let item = PhysicalSortRequirement::from_sort_exprs(item);
             let item = self.eq_groups.normalize_sort_requirements(&item);
-            let item = prune_sort_reqs_with_constants(&item, &self.constants);
             let ranges = get_compatible_ranges(&normalized_sort_reqs, &item);
             let mut offset: i64 = 0;
             for Range { start, end } in ranges {
-                let mut head =
-                    prune_sort_reqs_with_constants(&first_entry, &self.constants);
+                let mut head = first_entry.clone();
                 let updated_start = (start as i64 + offset) as usize;
                 let updated_end = (end as i64 + offset) as usize;
                 let range = end - start;
@@ -803,10 +809,9 @@ impl OrderingEquivalenceProperties {
         self
     }
 
-    pub fn set_satisfy(
-        &self,
-        exprs: &[Arc<dyn PhysicalExpr>],
-    ) -> Option<Vec<(usize, SortOptions)>> {
+    /// Check whether any permutation of the argument has a prefix with existing ordering.
+    /// Return indices that describes ordering and their ordering information.
+    pub fn set_satisfy(&self, exprs: &[Arc<dyn PhysicalExpr>]) -> Option<Vec<usize>> {
         let exprs_normalized = self.eq_groups.normalize_exprs(exprs);
         let mut best = vec![];
 
@@ -830,15 +835,7 @@ impl OrderingEquivalenceProperties {
                 // these indices, we would match existing ordering. For the example above,
                 // this would produce 1, 0; meaning 1st and 0th entries (a, b) among the
                 // GROUP BY expressions b, a, d match input ordering.
-                let indices =
-                    get_indices_of_exprs_strict(&ordered_exprs, &exprs_normalized);
-                best = indices
-                    .iter()
-                    .enumerate()
-                    .map(|(order_idx, &match_idx)| {
-                        (match_idx, ordering[order_idx].options)
-                    })
-                    .collect();
+                best = get_indices_of_exprs_strict(&ordered_exprs, &exprs_normalized)
             }
         }
 
@@ -1025,11 +1022,7 @@ impl OrderingEquivalenceProperties {
         let mut partition_by_reqs: Vec<PhysicalSortRequirement> = vec![];
         if partitionby_exprs.is_empty() {
             partition_search_mode = PartitionSearchMode::Sorted;
-        } else if let Some(indices_and_ordering) = self.set_satisfy(&partitionby_exprs) {
-            let indices = indices_and_ordering
-                .iter()
-                .map(|(idx, _options)| *idx)
-                .collect::<Vec<_>>();
+        } else if let Some(indices) = self.set_satisfy(&partitionby_exprs) {
             let elem = indices
                 .iter()
                 .map(|&idx| PhysicalSortRequirement {

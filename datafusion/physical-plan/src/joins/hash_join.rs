@@ -406,15 +406,6 @@ impl ExecutionPlan for HashJoinExec {
         let left_partitions = self.left.output_partitioning().partition_count();
         let right_partitions = self.right.output_partitioning().partition_count();
 
-        // for child in self.children(){
-        //     println!("hash join child ordering_equivalence_properties()\n{:?}", child.ordering_equivalence_properties());
-        // }
-        println!(
-            "hash join self.ordering_equivalence_properties()\n{:?}",
-            self.ordering_equivalence_properties()
-        );
-        println!("hash join output ordering: {:?}", self.output_ordering());
-
         if self.mode == PartitionMode::Partitioned && left_partitions != right_partitions
         {
             return internal_err!(

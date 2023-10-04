@@ -336,7 +336,6 @@ fn get_finest_requirement<F2: Fn() -> OrderingEquivalenceProperties>(
         };
 
         if let Some(finest_req) = &mut finest_req {
-            println!("finest_req{:?}, fn_req:{:?}", finest_req, fn_req);
             if let Some(finer) = oeq_properties.get_finer_ordering(finest_req, fn_req) {
                 *finest_req = finer.to_vec();
                 continue;

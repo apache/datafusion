@@ -314,14 +314,11 @@ pub(crate) fn get_ordered_partition_by_indices(
     partition_by_exprs: &[Arc<dyn PhysicalExpr>],
     input: &Arc<dyn ExecutionPlan>,
 ) -> Vec<usize> {
-    if let Some(indices_and_orderings) = input
+    if let Some(indices) = input
         .ordering_equivalence_properties()
         .set_satisfy(partition_by_exprs)
     {
-        indices_and_orderings
-            .into_iter()
-            .map(|(idx, _options)| idx)
-            .collect()
+        indices
     } else {
         vec![]
     }
