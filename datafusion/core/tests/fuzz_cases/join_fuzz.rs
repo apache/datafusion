@@ -102,7 +102,7 @@ async fn run_join_test(
     let batch_sizes = [1, 2, 7, 49, 50, 51, 100];
     for batch_size in batch_sizes {
         let session_config = SessionConfig::new().with_batch_size(batch_size);
-        let ctx = SessionContext::with_config(session_config);
+        let ctx = SessionContext::new_with_config(session_config);
         let task_ctx = ctx.task_ctx();
 
         let schema1 = input1[0].schema();

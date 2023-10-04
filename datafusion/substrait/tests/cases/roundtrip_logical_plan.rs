@@ -726,12 +726,12 @@ async fn function_extension_info(sql: &str) -> Result<(Vec<String>, Vec<u32>)> {
 }
 
 async fn create_context() -> Result<SessionContext> {
-    let state = SessionState::with_config_rt(
+    let state = SessionState::new_with_config_rt(
         SessionConfig::default(),
         Arc::new(RuntimeEnv::default()),
     )
     .with_serializer_registry(Arc::new(MockSerializerRegistry));
-    let ctx = SessionContext::with_state(state);
+    let ctx = SessionContext::new_with_state(state);
     let mut explicit_options = CsvReadOptions::new();
     let schema = Schema::new(vec![
         Field::new("a", DataType::Int64, true),

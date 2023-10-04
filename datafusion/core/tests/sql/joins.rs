@@ -81,7 +81,7 @@ async fn null_aware_left_anti_join() -> Result<()> {
 #[tokio::test]
 async fn join_change_in_planner() -> Result<()> {
     let config = SessionConfig::new().with_target_partitions(8);
-    let ctx = SessionContext::with_config(config);
+    let ctx = SessionContext::new_with_config(config);
     let tmp_dir = TempDir::new().unwrap();
     let left_file_path = tmp_dir.path().join("left.csv");
     File::create(left_file_path.clone()).unwrap();
@@ -152,7 +152,7 @@ async fn join_change_in_planner() -> Result<()> {
 #[tokio::test]
 async fn join_change_in_planner_without_sort() -> Result<()> {
     let config = SessionConfig::new().with_target_partitions(8);
-    let ctx = SessionContext::with_config(config);
+    let ctx = SessionContext::new_with_config(config);
     let tmp_dir = TempDir::new()?;
     let left_file_path = tmp_dir.path().join("left.csv");
     File::create(left_file_path.clone())?;
@@ -209,7 +209,7 @@ async fn join_change_in_planner_without_sort_not_allowed() -> Result<()> {
     let config = SessionConfig::new()
         .with_target_partitions(8)
         .with_allow_symmetric_joins_without_pruning(false);
-    let ctx = SessionContext::with_config(config);
+    let ctx = SessionContext::new_with_config(config);
     let tmp_dir = TempDir::new()?;
     let left_file_path = tmp_dir.path().join("left.csv");
     File::create(left_file_path.clone())?;
