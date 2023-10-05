@@ -335,16 +335,10 @@ fn try_pushdown_requirements_to_join(
         &smj.maintains_input_order(),
         Some(SortMergeJoinExec::probe_side(&smj.join_type())),
     )?;
-    // TODO: use hypothetical new ordering. Add support for this API.
-    let new_output_ordering =
-        PhysicalSortRequirement::from_sort_exprs(&new_output_ordering.unwrap_or(vec![]));
-    let finer_req = smj
-        .ordering_equivalence_properties()
-        .get_finer_requirement(&new_output_ordering, parent_required.unwrap_or(&[]));
-    let mut should_pushdown = false;
-    if let Some(finer_req) = finer_req {
-        should_pushdown = finer_req.eq(&new_output_ordering);
-    }
+    let mut smj_oeq = smj.ordering_equivalence_properties();
+    // smj will have this ordering when its input changes.
+    smj_oeq = smj_oeq.with_reorder(new_output_ordering.unwrap_or(vec![]));
+    let should_pushdown = smj_oeq.ordering_satisfy_requirement(parent_required);
     Ok(should_pushdown.then(|| {
         let required_input_ordering = smj.required_input_ordering();
         let new_req = Some(PhysicalSortRequirement::from_sort_exprs(&sort_expr));

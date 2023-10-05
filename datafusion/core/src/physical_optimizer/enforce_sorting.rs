@@ -1600,7 +1600,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_window_multi_path_sort() -> Result<()> {
         let schema = create_test_schema()?;
 

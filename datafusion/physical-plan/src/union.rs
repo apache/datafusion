@@ -229,14 +229,33 @@ impl ExecutionPlan for UnionExec {
         let child_oeqs = self
             .inputs
             .iter()
-            .map(|child| child.ordering_equivalence_properties().oeq_group().clone())
+            .map(|child| child.ordering_equivalence_properties())
             .collect::<Vec<_>>();
-        let first_oeq = child_oeqs[0].clone();
         let mut union_oeq = OrderingEquivalenceProperties::new(self.schema());
-        for elem in first_oeq.iter() {
-            if child_oeqs.iter().all(|child_oeq| child_oeq.contains(elem)) {
-                // TODO: Search meet instead of exact
-                union_oeq.add_new_orderings(&[elem.clone()])
+        // Iterate ordering equivalent group of first child
+        for elem in child_oeqs[0].oeq_group().iter() {
+            let mut meet = None;
+            for child_oeq in &child_oeqs {
+                let mut meet_found = false;
+                for ordering in child_oeq.oeq_group().iter() {
+                    if let Some(coarse_ordering) =
+                        child_oeq.get_meet_ordering(ordering, elem)
+                    {
+                        meet = Some(coarse_ordering.to_vec());
+                        meet_found = true;
+                    }
+                }
+                // If either of the child doesn't have a meet
+                // There is no meet.
+                if !meet_found {
+                    meet = None;
+                    break;
+                }
+            }
+            // All of the children have a common meet ordering.
+            // This ordering can be propagated in Union.
+            if let Some(meet) = meet {
+                union_oeq.add_new_orderings(&[meet])
             }
         }
         union_oeq

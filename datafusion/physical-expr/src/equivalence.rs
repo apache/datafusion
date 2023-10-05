@@ -1007,6 +1007,26 @@ impl OrderingEquivalenceProperties {
         None
     }
 
+    /// Find the coarser requirement among `req1` and `req2`
+    /// If `None`, this means that `req1` and `req2` are not compatible
+    pub fn get_meet_ordering<'a>(
+        &self,
+        req1: &'a [PhysicalSortExpr],
+        req2: &'a [PhysicalSortExpr],
+    ) -> Option<&'a [PhysicalSortExpr]> {
+        let lhs = self.normalize_sort_exprs(req1);
+        let rhs = self.normalize_sort_exprs(req2);
+        if izip!(lhs.iter(), rhs.iter()).all(|(lhs, rhs)| lhs.eq(rhs)) {
+            if lhs.len() < rhs.len() {
+                return Some(req1);
+            } else {
+                return Some(req2);
+            }
+        }
+        // Neither `provided` nor `req` satisfies one another, they are incompatible.
+        None
+    }
+
     /// Find the finer requirement among `req1` and `req2`
     /// If `None`, this means that `req1` and `req2` are not compatible
     /// e.g there is no requirement that satisfies both
