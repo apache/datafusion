@@ -47,9 +47,11 @@ impl Constraints {
         Constraints::new(vec![])
     }
 
-    // This method is private.
-    // Outside callers can either create empty constraint using `Constraints::empty` API.
-    // or create constraint from table constraints using `Constraints::new_from_table_constraints` API.
+    /// Create a new `Constraints` from given `constraints`.
+    /// Users should use `empty` or `new_from_table_constraints`
+    /// API, for constructing `Constraints`. This API doesn't check
+    /// whether argument is valid. User is responsible with
+    /// giving correct `Vec<Constraint>`
     pub fn new(constraints: Vec<Constraint>) -> Self {
         Self { inner: constraints }
     }
