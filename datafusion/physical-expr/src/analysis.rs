@@ -92,10 +92,18 @@ impl ExprBoundaries {
             column: Column::new(&col, index),
             interval: Interval::new(
                 IntervalBound::new_closed(
-                    stats.min_value.get_value().unwrap_or(ScalarValue::Null),
+                    stats
+                        .min_value
+                        .get_value()
+                        .cloned()
+                        .unwrap_or(ScalarValue::Null),
                 ),
                 IntervalBound::new_closed(
-                    stats.max_value.get_value().unwrap_or(ScalarValue::Null),
+                    stats
+                        .max_value
+                        .get_value()
+                        .cloned()
+                        .unwrap_or(ScalarValue::Null),
                 ),
             ),
             distinct_count: stats.distinct_count.clone(),

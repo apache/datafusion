@@ -21,7 +21,7 @@ use std::any::Any;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use crate::intervals::{Interval, IntervalBound};
+use crate::intervals::Interval;
 use crate::physical_expr::down_cast_any_ref;
 use crate::sort_properties::SortProperties;
 use crate::PhysicalExpr;
@@ -111,14 +111,8 @@ impl PhysicalExpr for NegativeExpr {
     /// Ex: (a, b] => [-b, a)
     fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
         Ok(Interval::new(
-            IntervalBound::new(
-                children[0].upper.value.arithmetic_negate()?,
-                children[0].upper.open,
-            ),
-            IntervalBound::new(
-                children[0].lower.value.arithmetic_negate()?,
-                children[0].lower.open,
-            ),
+            children[0].upper.negate()?,
+            children[0].lower.negate()?,
         ))
     }
 
@@ -130,16 +124,9 @@ impl PhysicalExpr for NegativeExpr {
         children: &[&Interval],
     ) -> Result<Vec<Option<Interval>>> {
         let child_interval = children[0];
-        let negated_interval = Interval::new(
-            IntervalBound::new(
-                interval.upper.value.arithmetic_negate()?,
-                interval.upper.open,
-            ),
-            IntervalBound::new(
-                interval.lower.value.arithmetic_negate()?,
-                interval.lower.open,
-            ),
-        );
+        let negated_interval =
+            Interval::new(interval.upper.negate()?, interval.lower.negate()?);
+
         Ok(vec![child_interval.intersect(negated_interval)?])
     }
 
@@ -187,7 +174,6 @@ mod tests {
     use arrow::array::*;
     use arrow::datatypes::*;
     use arrow_schema::DataType::{Float32, Float64, Int16, Int32, Int64, Int8};
-    use datafusion_common::ScalarValue;
     use datafusion_common::{cast::as_primitive_array, Result};
     use paste::paste;
 
@@ -232,14 +218,8 @@ mod tests {
         let negative_expr = NegativeExpr {
             arg: Arc::new(Column::new("a", 0)),
         };
-        let child_interval = Interval::new(
-            IntervalBound::new(ScalarValue::Int64(Some(-2)), true),
-            IntervalBound::new(ScalarValue::Int64(Some(1)), false),
-        );
-        let negative_expr_interval = Interval::new(
-            IntervalBound::new(ScalarValue::Int64(Some(-1)), false),
-            IntervalBound::new(ScalarValue::Int64(Some(2)), true),
-        );
+        let child_interval = Interval::make(Some(-2), Some(1), (true, false));
+        let negative_expr_interval = Interval::make(Some(-1), Some(2), (false, true));
         assert_eq!(
             negative_expr.evaluate_bounds(&[&child_interval])?,
             negative_expr_interval
@@ -248,22 +228,14 @@ mod tests {
     }
 
     #[test]
-    fn propagate_constraints() -> Result<()> {
+    fn test_propagate_constraints() -> Result<()> {
         let negative_expr = NegativeExpr {
             arg: Arc::new(Column::new("a", 0)),
         };
-        let original_child_interval = Interval::new(
-            IntervalBound::new(ScalarValue::Int64(Some(-2)), false),
-            IntervalBound::new(ScalarValue::Int64(Some(3)), false),
-        );
-        let negative_expr_interval = Interval::new(
-            IntervalBound::new(ScalarValue::Int64(Some(0)), true),
-            IntervalBound::new(ScalarValue::Int64(Some(4)), false),
-        );
-        let after_propagation = vec![Some(Interval::new(
-            IntervalBound::new(ScalarValue::Int64(Some(-2)), false),
-            IntervalBound::new(ScalarValue::Int64(Some(0)), true),
-        ))];
+        let original_child_interval = Interval::make(Some(-2), Some(3), (false, false));
+        let negative_expr_interval = Interval::make(Some(0), Some(4), (true, false));
+        let after_propagation =
+            vec![Some(Interval::make(Some(-2), Some(0), (false, true)))];
         assert_eq!(
             negative_expr.propagate_constraints(
                 &negative_expr_interval,

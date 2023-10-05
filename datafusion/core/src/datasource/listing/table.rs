@@ -1114,8 +1114,8 @@ mod tests {
         let table = ListingTable::try_new(config)?;
 
         let exec = table.scan(&state, None, &[], None).await?;
-        assert_eq!(exec.statistics()?.num_rows, Sharpness::Inexact(0));
-        assert_eq!(exec.statistics()?.total_byte_size, Sharpness::Inexact(0));
+        assert_eq!(exec.statistics()?.num_rows, Sharpness::Absent);
+        assert_eq!(exec.statistics()?.total_byte_size, Sharpness::Absent);
 
         Ok(())
     }

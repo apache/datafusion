@@ -794,7 +794,7 @@ fn estimate_join_cardinality(
             };
 
             Some(PartialJoinStatistics {
-                num_rows: cardinality.get_value()?,
+                num_rows: *cardinality.get_value()?,
                 // We don't do anything specific here, just combine the existing
                 // statistics which might yield subpar results (although it is
                 // true, esp regarding min/max). For a better estimation, we need
@@ -910,7 +910,7 @@ fn max_distinct_count(
             // The number can never be greater than the number of rows we have (minus
             // the nulls, since they don't count as distinct values).
             let ceiling =
-                num_rows.get_value()? - stats.null_count.get_value().unwrap_or(0);
+                num_rows.get_value()? - stats.null_count.get_value().unwrap_or(&0);
             Some(
                 if num_rows.is_exact().unwrap_or(false)
                     && stats.max_value.is_exact().unwrap_or(false)
@@ -927,8 +927,8 @@ fn max_distinct_count(
 }
 
 /// Return the numeric range between the given min and max values.
-fn get_int_range(min: ScalarValue, max: ScalarValue) -> Option<usize> {
-    let delta = &max.sub(&min).ok()?;
+fn get_int_range(min: &ScalarValue, max: &ScalarValue) -> Option<usize> {
+    let delta = &max.sub(min).ok()?;
     match delta {
         ScalarValue::Int8(Some(delta)) if *delta >= 0 => Some(*delta as usize),
         ScalarValue::Int16(Some(delta)) if *delta >= 0 => Some(*delta as usize),

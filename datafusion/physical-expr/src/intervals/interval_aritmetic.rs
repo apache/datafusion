@@ -88,6 +88,13 @@ impl IntervalBound {
             .map(|value| IntervalBound::new(value, self.open))
     }
 
+    pub fn negate(&self) -> Result<IntervalBound> {
+        self.value.arithmetic_negate().map(|value| IntervalBound {
+            value,
+            open: self.open,
+        })
+    }
+
     /// This function adds the given `IntervalBound` to this `IntervalBound`.
     /// The result is unbounded if either is; otherwise, their values are
     /// added. The result is closed if both original bounds are closed, or open

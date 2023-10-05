@@ -98,9 +98,9 @@ fn supports_collect_by_size(
         return false;
     };
     if let Some(size) = stats.total_byte_size.get_value() {
-        size != 0 && size < collection_size_threshold
+        *size != 0 && *size < collection_size_threshold
     } else if let Some(row_count) = stats.num_rows.get_value() {
-        row_count != 0 && row_count < collection_size_threshold
+        *row_count != 0 && *row_count < collection_size_threshold
     } else {
         false
     }

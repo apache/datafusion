@@ -44,8 +44,8 @@ pub async fn get_statistics_with_limit(
     // at least one file has them. If none of the files provide them, then they
     // will be omitted from the statistics. The missing values will be counted
     // as zero.
-    let mut num_rows = Sharpness::Exact(0);
-    let mut total_byte_size = Sharpness::Exact(0);
+    let mut num_rows: Option<Sharpness<usize>> = None;
+    let mut total_byte_size: Option<Sharpness<usize>> = None;
 
     // fusing the stream allows us to call next safely even once it is finished
     let mut all_files = Box::pin(all_files.fuse());
@@ -56,15 +56,24 @@ pub async fn get_statistics_with_limit(
         // Number of rows, total byte size and null counts are added for each file.
         // In case of an absent information or inexact value coming from the file,
         // it changes the statistic sharpness to inexact.
-        num_rows = match (file_stats.num_rows, &num_rows) {
-            (Sharpness::Absent, _) => num_rows.to_inexact(),
-            (lhs, Sharpness::Absent) => lhs.to_inexact(),
-            (lhs, rhs) => lhs.add(rhs),
+        num_rows = if let Some(some_num_rows) = num_rows {
+            Some(match (file_stats.num_rows, &some_num_rows) {
+                (Sharpness::Absent, _) => some_num_rows.to_inexact(),
+                (lhs, Sharpness::Absent) => lhs.to_inexact(),
+                (lhs, rhs) => lhs.add(rhs),
+            })
+        } else {
+            Some(file_stats.num_rows)
         };
-        total_byte_size = match (file_stats.total_byte_size, &total_byte_size) {
-            (Sharpness::Absent, _) => total_byte_size.to_inexact(),
-            (lhs, Sharpness::Absent) => lhs.to_inexact(),
-            (lhs, rhs) => lhs.add(rhs),
+
+        total_byte_size = if let Some(some_total_byte_size) = total_byte_size {
+            Some(match (file_stats.total_byte_size, &some_total_byte_size) {
+                (Sharpness::Absent, _) => some_total_byte_size.to_inexact(),
+                (lhs, Sharpness::Absent) => lhs.to_inexact(),
+                (lhs, rhs) => lhs.add(rhs),
+            })
+        } else {
+            Some(file_stats.total_byte_size)
         };
 
         for (i, cs) in file_stats.column_statistics.iter().enumerate() {
@@ -118,7 +127,13 @@ pub async fn get_statistics_with_limit(
         // files. This only applies when we know the number of rows. It also
         // currently ignores tables that have no statistics regarding the
         // number of rows.
-        if num_rows.get_value().unwrap_or(usize::MIN) > limit.unwrap_or(usize::MAX) {
+        if num_rows
+            .as_ref()
+            .unwrap_or(&Sharpness::Absent)
+            .get_value()
+            .unwrap_or(&usize::MIN)
+            > &limit.unwrap_or(usize::MAX)
+        {
             break;
         }
     }
@@ -128,8 +143,8 @@ pub async fn get_statistics_with_limit(
     let column_stats = get_col_stats_vec(null_counts, max_values, min_values);
 
     let mut statistics = Statistics {
-        num_rows,
-        total_byte_size,
+        num_rows: num_rows.unwrap_or(Sharpness::Absent),
+        total_byte_size: total_byte_size.unwrap_or(Sharpness::Absent),
         column_statistics: column_stats,
     };
     if all_files.next().await.is_some() {

@@ -217,11 +217,11 @@ impl ExecutionPlan for FilterExec {
 
         let selectivity = analysis_ctx.selectivity.unwrap_or(1.0);
         let num_rows = match num_rows.get_value() {
-            Some(nr) => Sharpness::Inexact((nr as f64 * selectivity).ceil() as usize),
+            Some(nr) => Sharpness::Inexact((*nr as f64 * selectivity).ceil() as usize),
             None => Sharpness::Absent,
         };
         let total_byte_size = match total_byte_size.get_value() {
-            Some(tbs) => Sharpness::Inexact((tbs as f64 * selectivity).ceil() as usize),
+            Some(tbs) => Sharpness::Inexact((*tbs as f64 * selectivity).ceil() as usize),
             None => Sharpness::Absent,
         };
 
@@ -268,13 +268,13 @@ fn collect_new_statistics(
                 let closed_interval = interval.close_bounds();
                 ColumnStatistics {
                     null_count: match input_column_stats[idx].null_count.get_value() {
-                        Some(nc) => Sharpness::Inexact(nc),
+                        Some(nc) => Sharpness::Inexact(*nc),
                         None => Sharpness::Absent,
                     },
                     max_value: Sharpness::Inexact(closed_interval.upper.value),
                     min_value: Sharpness::Inexact(closed_interval.lower.value),
                     distinct_count: match distinct_count.get_value() {
-                        Some(dc) => Sharpness::Inexact(dc),
+                        Some(dc) => Sharpness::Inexact(*dc),
                         None => Sharpness::Absent,
                     },
                 }
@@ -740,11 +740,11 @@ mod tests {
                         let expected_max = expected.max_value.get_value().unwrap();
                         let eps = ScalarValue::Float32(Some(1e-6));
 
-                        assert!(actual_min.sub(&expected_min).unwrap() < eps);
-                        assert!(actual_min.sub(&expected_min).unwrap() < eps);
+                        assert!(actual_min.sub(expected_min).unwrap() < eps);
+                        assert!(actual_min.sub(expected_min).unwrap() < eps);
 
-                        assert!(actual_max.sub(&expected_max).unwrap() < eps);
-                        assert!(actual_max.sub(&expected_max).unwrap() < eps);
+                        assert!(actual_max.sub(expected_max).unwrap() < eps);
+                        assert!(actual_max.sub(expected_max).unwrap() < eps);
                     } else {
                         assert_eq!(actual, expected);
                     }
