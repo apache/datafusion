@@ -17,6 +17,7 @@
 
 //! Traits for physical query plan, supporting parallel execution for partitioned relations.
 
+mod topk;
 mod visitor;
 pub use self::metrics::Metric;
 use self::metrics::MetricsSet;
@@ -26,6 +27,7 @@ use self::{
 pub use datafusion_common::{internal_err, ColumnStatistics, Statistics};
 use datafusion_common::{plan_err, Result};
 use datafusion_physical_expr::PhysicalSortExpr;
+pub use topk::TopK;
 pub use visitor::{accept, visit_execution_plan, ExecutionPlanVisitor};
 
 use arrow::datatypes::SchemaRef;
