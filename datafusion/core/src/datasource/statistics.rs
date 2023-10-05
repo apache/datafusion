@@ -23,6 +23,7 @@ use datafusion_common::stats::Sharpness;
 use datafusion_common::ScalarValue;
 use futures::Stream;
 use futures::StreamExt;
+use itertools::izip;
 
 use super::listing::PartitionedFile;
 
@@ -81,10 +82,13 @@ pub async fn get_statistics_with_limit(
             }
         } else {
             // If it is the first file, we set it directly from the file statistics.
-            let mut new_col_stats_max = vec![];
-            for cs in file_stats.column_statistics.iter() {
-                new_col_stats_max.push(cs.max_value.clone());
-            }
+            let mut new_col_stats_max = file_stats
+                .column_statistics
+                .iter()
+                .map(|cs| cs.max_value.clone())
+                .collect::<Vec<_>>();
+            // file schema may have additional fields other than each file (such as partition, guaranteed to be at the end)
+            // Hence, push rest of the fields with information Absent.
             for _ in 0..file_schema.fields().len() - file_stats.column_statistics.len() {
                 new_col_stats_max.push(Sharpness::Absent)
             }
@@ -96,10 +100,14 @@ pub async fn get_statistics_with_limit(
                 set_min_if_lesser(some_min_values, cs.min_value.clone(), i);
             }
         } else {
-            let mut new_col_stats_min = vec![];
-            for cs in file_stats.column_statistics.iter() {
-                new_col_stats_min.push(cs.min_value.clone());
-            }
+            // If it is the first file, we set it directly from the file statistics.
+            let mut new_col_stats_min = file_stats
+                .column_statistics
+                .iter()
+                .map(|cs| cs.min_value.clone())
+                .collect::<Vec<_>>();
+            // file schema may have additional fields other than each file (such as partition, guaranteed to be at the end)
+            // Hence, push rest of the fields with information Absent.
             for _ in 0..file_schema.fields().len() - file_stats.column_statistics.len() {
                 new_col_stats_min.push(Sharpness::Absent)
             }
@@ -114,29 +122,36 @@ pub async fn get_statistics_with_limit(
             break;
         }
     }
+    let max_values = max_values.unwrap_or(create_inf_stats(&file_schema));
+    let min_values = min_values.unwrap_or(create_inf_stats(&file_schema));
 
-    let column_stats =
-        get_col_stats_vec(&file_schema, null_counts, max_values, min_values);
+    let column_stats = get_col_stats_vec(null_counts, max_values, min_values);
 
-    let statistics = if all_files.next().await.is_some() {
+    let mut statistics = Statistics {
+        num_rows,
+        total_byte_size,
+        column_statistics: column_stats,
+    };
+    if all_files.next().await.is_some() {
         // if we still have files in the stream, it means that the limit kicked
         // in and the statistic could have been different if we have
         // processed the files in a different order.
-        Statistics {
-            num_rows,
-            total_byte_size,
-            column_statistics: column_stats,
-        }
-        .make_inexact()
-    } else {
-        Statistics {
-            num_rows,
-            total_byte_size,
-            column_statistics: column_stats,
-        }
-    };
+        statistics = statistics.make_inexact()
+    }
 
     Ok((result_files, statistics))
+}
+
+fn create_inf_stats(file_schema: &Schema) -> Vec<Sharpness<ScalarValue>> {
+    file_schema
+        .fields
+        .iter()
+        .map(|field| {
+            ScalarValue::try_from(field.data_type())
+                .map(Sharpness::Inexact)
+                .unwrap_or(Sharpness::Absent)
+        })
+        .collect()
 }
 
 pub(crate) fn create_max_min_accs(
@@ -156,35 +171,16 @@ pub(crate) fn create_max_min_accs(
 }
 
 pub(crate) fn get_col_stats_vec(
-    schema: &Schema,
     null_counts: Vec<Sharpness<usize>>,
-    max_values: Option<Vec<Sharpness<ScalarValue>>>,
-    min_values: Option<Vec<Sharpness<ScalarValue>>>,
+    max_values: Vec<Sharpness<ScalarValue>>,
+    min_values: Vec<Sharpness<ScalarValue>>,
 ) -> Vec<ColumnStatistics> {
-    (0..schema.fields().len())
-        .map(|i| {
-            let max_value = if let Some(some_max_values) = &max_values {
-                some_max_values[i].clone()
-            } else {
-                match ScalarValue::try_from(schema.fields[i].data_type()) {
-                    Ok(dt) => Sharpness::Inexact(dt),
-                    Err(_) => Sharpness::Absent,
-                }
-            };
-            let min_value = if let Some(some_min_values) = &min_values {
-                some_min_values[i].clone()
-            } else {
-                match ScalarValue::try_from(schema.fields[i].data_type()) {
-                    Ok(dt) => Sharpness::Inexact(dt),
-                    Err(_) => Sharpness::Absent,
-                }
-            };
-            ColumnStatistics {
-                null_count: null_counts[i].clone(),
-                max_value,
-                min_value,
-                distinct_count: Sharpness::Absent,
-            }
+    izip!(null_counts, max_values, min_values)
+        .map(|(null_count, max_value, min_value)| ColumnStatistics {
+            null_count,
+            max_value,
+            min_value,
+            distinct_count: Sharpness::Absent,
         })
         .collect()
 }
