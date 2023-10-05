@@ -19,6 +19,7 @@ use crate::arrow::datatypes::{Schema, SchemaRef};
 use crate::error::Result;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
 use crate::physical_plan::{Accumulator, ColumnStatistics, Statistics};
+use arrow_array::Scalar;
 use datafusion_common::stats::Sharpness;
 use datafusion_common::ScalarValue;
 use futures::Stream;
@@ -36,10 +37,10 @@ pub async fn get_statistics_with_limit(
 ) -> Result<(Vec<PartitionedFile>, Statistics)> {
     let mut result_files = vec![];
     let mut null_counts = vec![Sharpness::Exact(0_usize); file_schema.fields().len()];
-    let (mut max_values, mut min_values) = (
-        create_max_min_vec(&file_schema),
-        create_max_min_vec(&file_schema),
-    );
+    let (mut max_values, mut min_values): (
+        Option<Vec<Sharpness<ScalarValue>>>,
+        Option<Vec<Sharpness<ScalarValue>>>,
+    ) = (None, None);
 
     // The number of rows and the total byte size can be calculated as long as
     // at least one file has them. If none of the files provide them, then they
@@ -71,11 +72,38 @@ pub async fn get_statistics_with_limit(
             } else {
                 null_counts[i].add(&cs.null_count)
             };
-
-            set_max_if_greater(&mut max_values[i], &cs.max_value);
-
-            set_min_if_lesser(&mut min_values[i], &cs.min_value);
         }
+
+        if let Some(some_max_values) = &mut max_values {
+            for (i, cs) in file_stats.column_statistics.iter().enumerate() {
+                set_max_if_greater(&mut some_max_values[i], &cs.max_value);
+            }
+        } else {
+            let mut new_col_stats_max = vec![];
+            for cs in file_stats.column_statistics.iter() {
+                new_col_stats_max.push(cs.max_value.clone());
+            }
+            for _ in 0..file_schema.fields().len() - file_stats.column_statistics.len() {
+                new_col_stats_max.push(Sharpness::Absent)
+            }
+            max_values = Some(new_col_stats_max);
+        };
+
+        if let Some(some_min_values) = &mut min_values {
+            for (i, cs) in file_stats.column_statistics.iter().enumerate() {
+                set_min_if_lesser(&mut some_min_values[i], &cs.min_value);
+            }
+        } else {
+            let mut new_col_stats_min = vec![];
+            for cs in file_stats.column_statistics.iter() {
+                new_col_stats_min.push(cs.min_value.clone());
+            }
+            for _ in 0..file_schema.fields().len() - file_stats.column_statistics.len() {
+                new_col_stats_min.push(Sharpness::Absent)
+            }
+            min_values = Some(new_col_stats_min);
+        };
+
         // If the number of rows exceeds the limit, we can stop processing
         // files. This only applies when we know the number of rows. It also
         // currently ignores tables that have no statistics regarding the
@@ -86,7 +114,7 @@ pub async fn get_statistics_with_limit(
     }
 
     let column_stats =
-        get_col_stats_vec(&file_schema, null_counts, &max_values, &min_values);
+        get_col_stats_vec(&file_schema, null_counts, max_values, min_values);
 
     let statistics = if all_files.next().await.is_some() {
         // if we still have files in the stream, it means that the limit kicked
@@ -144,15 +172,33 @@ pub(crate) fn create_max_min_accs(
 pub(crate) fn get_col_stats_vec(
     schema: &Schema,
     null_counts: Vec<Sharpness<usize>>,
-    max_values: &[Sharpness<ScalarValue>],
-    min_values: &[Sharpness<ScalarValue>],
+    max_values: Option<Vec<Sharpness<ScalarValue>>>,
+    min_values: Option<Vec<Sharpness<ScalarValue>>>,
 ) -> Vec<ColumnStatistics> {
     (0..schema.fields().len())
-        .map(|i| ColumnStatistics {
-            null_count: null_counts[i].clone(),
-            max_value: max_values[i].clone(),
-            min_value: min_values[i].clone(),
-            distinct_count: Sharpness::Absent,
+        .map(|i| {
+            let max_value = if let Some(some_max_values) = &max_values {
+                some_max_values[i].clone()
+            } else {
+                match ScalarValue::try_from(schema.fields[i].data_type()) {
+                    Ok(dt) => Sharpness::Inexact(dt),
+                    Err(_) => Sharpness::Absent,
+                }
+            };
+            let min_value = if let Some(some_min_values) = &min_values {
+                some_min_values[i].clone()
+            } else {
+                match ScalarValue::try_from(schema.fields[i].data_type()) {
+                    Ok(dt) => Sharpness::Inexact(dt),
+                    Err(_) => Sharpness::Absent,
+                }
+            };
+            ColumnStatistics {
+                null_count: null_counts[i].clone(),
+                max_value,
+                min_value,
+                distinct_count: Sharpness::Absent,
+            }
         })
         .collect()
 }
