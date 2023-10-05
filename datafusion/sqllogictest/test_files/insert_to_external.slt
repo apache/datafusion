@@ -47,6 +47,32 @@ set datafusion.execution.target_partitions = 8;
 
 statement ok
 CREATE EXTERNAL TABLE
+ordered_insert_test(a bigint, b bigint)
+STORED AS csv
+LOCATION 'test_files/scratch/insert_to_external/insert_to_ordered/'
+WITH ORDER (a ASC, B DESC)
+OPTIONS(
+create_local_path 'true',
+insert_mode 'append_new_files',
+);
+
+query II
+INSERT INTO ordered_insert_test values (5, 1), (4, 2), (7,7), (3, 3), (2, 4), (1, 5);
+----
+6
+
+query II
+SELECT * from ordered_insert_test;
+----
+1 5
+2 4
+3 3
+4 2
+5 1
+7 7
+
+statement ok
+CREATE EXTERNAL TABLE
 single_file_test(a bigint, b bigint)
 STORED AS csv
 LOCATION 'test_files/scratch/insert_to_external/single_csv_table.csv'
