@@ -757,22 +757,30 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     fn show_variable_to_plan(&self, variable: &[Ident]) -> Result<LogicalPlan> {
-        let variable = object_name_to_string(&ObjectName(variable.to_vec()));
-
         if !self.has_table("information_schema", "df_settings") {
             return plan_err!(
                 "SHOW [VARIABLE] is not supported unless information_schema is enabled"
             );
         }
 
-        let variable_lower = variable.to_lowercase();
-        let base_query =
-            "SELECT name, value, description FROM information_schema.df_settings";
+        let verbose = variable
+            .last()
+            .map(|s| ident_to_string(s) == "verbose")
+            .unwrap_or(false);
+        let mut variable_vec = variable.to_vec();
+        let mut columns: String = "name, value".to_owned();
 
-        let query = if variable_lower == "all" {
+        if verbose {
+            columns = format!("{columns}, description");
+            variable_vec = variable_vec.split_at(variable_vec.len() - 1).0.to_vec();
+        }
+
+        let variable = object_name_to_string(&ObjectName(variable_vec));
+        let base_query = format!("SELECT {columns} FROM information_schema.df_settings");
+        let query = if variable == "all" {
             // Add an ORDER BY so the output comes out in a consistent order
             format!("{base_query} ORDER BY name")
-        } else if variable_lower == "timezone" || variable_lower == "time.zone" {
+        } else if variable == "timezone" || variable == "time.zone" {
             // we could introduce alias in OptionDefinition if this string matching thing grows
             format!("{base_query} WHERE name = 'datafusion.execution.time_zone'")
         } else {
