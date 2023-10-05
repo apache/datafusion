@@ -217,7 +217,7 @@ d 1 -72 25590 1188089983 3090286296481837049 241 832 3542840110 5885937420286765
 a 1 -5 12636 794623392 2909750622865366631 15 24022 2669374863 4776679784701509574 0.29877836 0.253725340799 waIGbOGl1PM6gnzZ4uuZt4E2yDWRHs
 
 
-## make an example for
+## make an example for dictionary encoding
 
 statement ok
 create table dict as select c1, c2, c3, c13, arrow_cast(c13, 'Dictionary(Int32, Utf8)') as c13_dict from aggregate_test_100;
