@@ -70,7 +70,7 @@ impl SimplifyExpressions {
             // schema to resolve predicates against, so it must be handled specially
             //
             // Note that this is not `plan.schema()` which is the *output*
-            // shema, and reflects any pushed down projection. The output schema
+            // schema, and reflects any pushed down projection. The output schema
             // will not contain columns that *only* appear in pushed down predicates
             // (and no where else) in the plan.
             //
