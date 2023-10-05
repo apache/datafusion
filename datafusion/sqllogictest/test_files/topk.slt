@@ -1,0 +1,232 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests for development
+
+statement ok
+create table topk(x int) as values (10), (2), (3), (0), (5), (4), (3), (2), (1), (3), (8);
+
+query I
+select * from topk order by x;
+----
+0
+1
+2
+2
+3
+3
+3
+4
+5
+8
+10
+
+query I
+select * from topk order by x limit 3;
+----
+0
+1
+2
+
+query I
+select * from topk order by x desc limit 3;
+----
+10
+8
+5
+
+
+
+
+statement ok
+CREATE EXTERNAL TABLE aggregate_test_100 (
+  c1  VARCHAR NOT NULL,
+  c2  TINYINT NOT NULL,
+  c3  SMALLINT NOT NULL,
+  c4  SMALLINT,
+  c5  INT,
+  c6  BIGINT NOT NULL,
+  c7  SMALLINT NOT NULL,
+  c8  INT NOT NULL,
+  c9  BIGINT UNSIGNED NOT NULL,
+  c10 VARCHAR NOT NULL,
+  c11 FLOAT NOT NULL,
+  c12 DOUBLE NOT NULL,
+  c13 VARCHAR NOT NULL
+)
+STORED AS CSV
+WITH HEADER ROW
+LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+
+query TT
+explain select * from aggregate_test_100 ORDER BY c13 desc limit 5;
+----
+logical_plan
+Limit: skip=0, fetch=5
+--Sort: aggregate_test_100.c13 DESC NULLS FIRST, fetch=5
+----TableScan: aggregate_test_100 projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13]
+physical_plan
+GlobalLimitExec: skip=0, fetch=5
+--SortExec: fetch=5, expr=[c13@12 DESC]
+----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13], has_header=true
+
+
+
+
+query T
+select c13 from aggregate_test_100 ORDER BY c13;
+----
+0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm
+0keZ5G8BffGwgF2RwQD59TFzMStxCB
+0og6hSkhbX8AC1ktFS4kounvTzy8Vo
+1aOcrEGd0cOqZe2I5XBOm0nDcwtBZO
+2T3wSlHdEmASmO0xcXHnndkKEt6bz8
+3BEOHQsMEFZ58VcNTOJYShTBpAPzbt
+4HX6feIvmNXBN7XGqgO4YVBkhu8GDI
+4JznSdBajNWhu4hRQwjV1FjTTxY68i
+52mKlRE3aHCBZtjECq6sY9OqVf8Dze
+56MZa5O1hVtX4c5sbnCfxuX5kDChqI
+6FPJlLAcaQ5uokyOWZ9HGdLZObFvOZ
+6WfVFBVGJSQb7FhA7E0lBwdvjfZnSW
+6oIXZuIPIqEoPBvFmbt2Nxy3tryGUE
+6x93sxYioWuq5c9Kkk8oTAAORM7cH0
+802bgTGl6Bk5TlkPYYTxp5JkKyaYUA
+8LIh0b6jmDGm87BmIyjdxNIpX4ugjD
+90gAtmGEeIqUTbo1ZrxCvWtsseukXC
+9UbObCsVkmYpJGcGrgfK90qOnwb2Lj
+AFGCj7OWlEB5QfniEFgonMq90Tq5uH
+ALuRhobVWbnQTTWZdSOk0iVe8oYFhW
+Amn2K87Db5Es3dFQO9cw9cvpAM6h35
+AyYVExXK6AR2qUTxNZ7qRHQOVGMLcz
+BJqx5WokrmrrezZA0dUbleMYkG5U2O
+BPtQMxnuSPpxMExYV9YkDa6cAN7GP3
+BsM5ZAYifRh5Lw3Y8X1r53I0cTJnfE
+C2GT5KVyOPZpgKVl110TyZO0NcJ434
+DuJNG8tufSqW0ZstHqWj3aGvFLMg4A
+EcCuckwsF3gV1Ecgmh5v4KM8g1ozif
+ErJFw6hzZ5fmI5r8bhE4JzlscnhKZU
+F7NSTjWvQJyBburN7CXRUlbgp2dIrA
+Fi4rJeTQq4eXj8Lxg3Hja5hBVTVV5u
+H5j5ZHy1FGesOAHjkQEDYCucbpKWRu
+HKSMQ9nTnwXCJIte1JrM1dtYnDtJ8g
+IWl0G3ZlMNf7WT8yjIB49cx7MmYOmr
+IZTkHMLvIKuiLjhDjYMmIHxh166we4
+Ig1QcuKsjHXkproePdERo2w0mYzIqd
+JHNgc2UCaiXOdmkxwDDyGhRlO0mnBQ
+JN0VclewmjwYlSl8386MlWv5rEhWCz
+JafwVLSVk5AVoXFuzclesQ000EE2k1
+KJFcmTVjdkCMv94wYCtfHMFhzyRsmH
+Ktb7GQ0N1DrxwkCkEUsTaIXk0xYinn
+Ld2ej8NEv5zNcqU60FwpHeZKBhfpiV
+LiEBxds3X0Uw0lxiYjDqrkAaAwoiIW
+MXhhH1Var3OzzJCtI9VNyYvA0q8UyJ
+MeSTAXq8gVxVjbEjgkvU9YLte0X9uE
+NEhyk8uIx4kEULJGa8qIyFjjBcP2G6
+O66j6PaYuZhEUtqV6fuU7TyjM2WxC5
+OF7fQ37GzaZ5ikA2oMyvleKtgnLjXh
+OPwBqCEK5PWTjWaiOyL45u2NLTaDWv
+Oq6J4Rx6nde0YlhOIJkFsX2MsSvAQ0
+Ow5PGpfTm4dXCfTDsXAOTatXRoAydR
+QEHVvcP8gxI6EMJIrvcnIhgzPNjIvv
+QJYm7YRA3YetcBHI5wkMZeLXVmfuNy
+QYlaIAnJA6r8rlAb6f59wcxvcPcWFf
+RilTlL1tKkPOUFuzmLydHAVZwv1OGl
+Sfx0vxv1skzZWT1PqVdoRDdO6Sb6xH
+TTQUwpMNSXZqVBKAFvXu7OlWvKXJKX
+TtDKUZxzVxsq758G6AWPSYuZgVgbcl
+VDhtJkYjAYPykCgOU9x3v7v3t4SO1a
+VY0zXmXeksCT8BzvpzpPLbmU9Kp9Y4
+Vp3gmWunM5A7wOC9YW2JroFqTWjvTi
+WHmjWk2AY4c6m7DA4GitUx6nmb1yYS
+XemNcT1xp61xcM1Qz3wZ1VECCnq06O
+Z2sWcQr0qyCJRMHDpRy3aQr7PkHtkK
+aDxBtor7Icd9C5hnTvvw5NrIre740e
+akiiY5N0I44CMwEnBL6RTBk7BRkxEj
+b3b9esRhTzFEawbs6XhpKnD9ojutHB
+bgK1r6v3BCTh0aejJUhkA1Hn6idXGp
+cBGc0kSm32ylBDnxogG727C0uhZEYZ
+cq4WSAIFwx3wwTUS5bp1wCe71R6U5I
+dVdvo6nUD5FgCgsbOZLds28RyGTpnx
+e2Gh6Ov8XkXoFdJWhl0EjwEHlMDYyG
+f9ALCzwDAKmdu7Rk2msJaB1wxe5IBX
+fuyvs0w7WsKSlXqJ1e6HFSoLmx03AG
+gTpyQnEODMcpsPnJMZC66gh33i3m0b
+gpo8K5qtYePve6jyPt6xgJx4YOVjms
+gxfHWUF8XgY2KdFxigxvNEXe2V2XMl
+i6RQVXKUh7MzuGMDaNclUYnFUAireU
+ioEncce3mPOXD2hWhpZpCPWGATG6GU
+jQimhdepw3GKmioWUlVSWeBVRKFkY3
+l7uwDoTepWwnAP0ufqtHJS3CRi7RfP
+lqhzgLsXZ8JhtpeeUWWNbMz8PHI705
+m6jD0LBIQWaMfenwRCTANI9eOdyyto
+mhjME0zBHbrK6NMkytMTQzOssOa1gF
+mzbkwXKrPeZnxg2Kn1LRF5hYSsmksS
+nYVJnVicpGRqKZibHyBAmtmzBXAFfT
+oHJMNvWuunsIMIWFnYG31RCfkOo2V7
+oLZ21P2JEDooxV1pU31cIxQHEeeoLu
+okOkcWflkNXIy4R8LzmySyY1EC3sYd
+pLk3i59bZwd5KBZrI1FiweYTd5hteG
+pTeu0WMjBRTaNRT15rLCuEh3tBJVc5
+qnPOOmslCJaT45buUisMRnM0rc77EK
+t6fQUjJejPcjc04wHvHTPe55S65B4V
+ukOiFGGFnQJDHFgZxHMpvhD3zybF0M
+ukyD7b0Efj7tNlFSRmzZ0IqkEzg2a8
+waIGbOGl1PM6gnzZ4uuZt4E2yDWRHs
+wwXqSGKLyBQyPkonlzBNYUJTCo4LRS
+xipQ93429ksjNcXPX5326VSg1xJZcW
+y7C453hRWd4E7ImjNDWlpexB8nUqjh
+ydkwycaISlYSlEq3TlkS2m15I2pcp8
+
+
+query TIIIIIIIITRRT
+select * from aggregate_test_100 ORDER BY c13 desc limit 5;
+----
+a 4 -38 20744 762932956 308913475857409919 7 45465 1787652631 878137512938218976 0.7459874 0.021825780392 ydkwycaISlYSlEq3TlkS2m15I2pcp8
+d 1 -98 13630 -1991133944 1184110014998006843 220 2986 225513085 9634106610243643486 0.89651865 0.164088254508 y7C453hRWd4E7ImjNDWlpexB8nUqjh
+e 2 52 -12056 -1090239422 9011500141803970147 238 4168 2013662838 12565360638488684051 0.6694766 0.391444365692 xipQ93429ksjNcXPX5326VSg1xJZcW
+d 1 -72 25590 1188089983 3090286296481837049 241 832 3542840110 5885937420286765261 0.41980565 0.215354023438 wwXqSGKLyBQyPkonlzBNYUJTCo4LRS
+a 1 -5 12636 794623392 2909750622865366631 15 24022 2669374863 4776679784701509574 0.29877836 0.253725340799 waIGbOGl1PM6gnzZ4uuZt4E2yDWRHs
+
+
+
+## -- make tiny batches to trigger batch compaction
+statement ok
+set datafusion.execution.batch_size = 2
+
+query TIIIIIIIITRRT
+select * from aggregate_test_100 ORDER BY c13 desc limit 5;
+----
+a 4 -38 20744 762932956 308913475857409919 7 45465 1787652631 878137512938218976 0.7459874 0.021825780392 ydkwycaISlYSlEq3TlkS2m15I2pcp8
+d 1 -98 13630 -1991133944 1184110014998006843 220 2986 225513085 9634106610243643486 0.89651865 0.164088254508 y7C453hRWd4E7ImjNDWlpexB8nUqjh
+e 2 52 -12056 -1090239422 9011500141803970147 238 4168 2013662838 12565360638488684051 0.6694766 0.391444365692 xipQ93429ksjNcXPX5326VSg1xJZcW
+d 1 -72 25590 1188089983 3090286296481837049 241 832 3542840110 5885937420286765261 0.41980565 0.215354023438 wwXqSGKLyBQyPkonlzBNYUJTCo4LRS
+a 1 -5 12636 794623392 2909750622865366631 15 24022 2669374863 4776679784701509574 0.29877836 0.253725340799 waIGbOGl1PM6gnzZ4uuZt4E2yDWRHs
+
+
+## make an example for dictionary encoding
+
+statement ok
+create table dict as select c1, c2, c3, c13, arrow_cast(c13, 'Dictionary(Int32, Utf8)') as c13_dict from aggregate_test_100;
+
+query TIIT?
+select * from dict order by c13 desc limit 5;
+----
+a 4 -38 ydkwycaISlYSlEq3TlkS2m15I2pcp8 ydkwycaISlYSlEq3TlkS2m15I2pcp8
+d 1 -98 y7C453hRWd4E7ImjNDWlpexB8nUqjh y7C453hRWd4E7ImjNDWlpexB8nUqjh
+e 2 52 xipQ93429ksjNcXPX5326VSg1xJZcW xipQ93429ksjNcXPX5326VSg1xJZcW
+d 1 -72 wwXqSGKLyBQyPkonlzBNYUJTCo4LRS wwXqSGKLyBQyPkonlzBNYUJTCo4LRS
+a 1 -5 waIGbOGl1PM6gnzZ4uuZt4E2yDWRHs waIGbOGl1PM6gnzZ4uuZt4E2yDWRHs
