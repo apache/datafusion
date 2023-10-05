@@ -23,19 +23,19 @@ use std::{any::Any, sync::Arc};
 use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
 use super::PartitionedFile;
 
-use crate::datasource::file_format::file_compression_type::{
-    FileCompressionType, FileTypeExt,
-};
-use crate::datasource::physical_plan::{
-    is_plan_streaming, FileScanConfig, FileSinkConfig,
-};
 use crate::datasource::{
     file_format::{
-        arrow::ArrowFormat, avro::AvroFormat, csv::CsvFormat, json::JsonFormat,
-        parquet::ParquetFormat, FileFormat,
+        arrow::ArrowFormat,
+        avro::AvroFormat,
+        csv::CsvFormat,
+        file_compression_type::{FileCompressionType, FileTypeExt},
+        json::JsonFormat,
+        parquet::ParquetFormat,
+        FileFormat,
     },
     get_statistics_with_limit,
     listing::ListingTableUrl,
+    physical_plan::{is_plan_streaming, FileScanConfig, FileSinkConfig},
     TableProvider, TableType,
 };
 use crate::logical_expr::TableProviderFilterPushDown;
@@ -46,6 +46,7 @@ use crate::{
     logical_expr::Expr,
     physical_plan::{empty::EmptyExec, ExecutionPlan, Statistics},
 };
+
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
 use arrow_schema::Schema;

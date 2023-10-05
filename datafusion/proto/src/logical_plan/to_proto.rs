@@ -30,6 +30,7 @@ use crate::protobuf::{
     AnalyzedLogicalPlanType, CubeNode, EmptyMessage, GroupingSetNode, LogicalExprList,
     OptimizedLogicalPlanType, OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
 };
+
 use arrow::datatypes::{
     DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, SchemaRef, TimeUnit,
     UnionMode,
@@ -1624,14 +1625,14 @@ impl From<JoinConstraint> for protobuf::JoinConstraint {
     }
 }
 
-impl From<datafusion_common::Constraints> for protobuf::Constraints {
+impl From<Constraints> for protobuf::Constraints {
     fn from(value: Constraints) -> Self {
         let constraints = value.into_iter().map(|item| item.into()).collect();
         protobuf::Constraints { constraints }
     }
 }
 
-impl From<datafusion_common::Constraint> for protobuf::Constraint {
+impl From<Constraint> for protobuf::Constraint {
     fn from(value: Constraint) -> Self {
         let res = match value {
             Constraint::PrimaryKey(indices) => {

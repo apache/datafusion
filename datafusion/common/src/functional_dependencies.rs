@@ -18,12 +18,14 @@
 //! FunctionalDependencies keeps track of functional dependencies
 //! inside DFSchema.
 
-use crate::{DFSchema, DFSchemaRef, DataFusionError, JoinType, Result};
-use sqlparser::ast::TableConstraint;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use std::ops::Deref;
 use std::vec::IntoIter;
+
+use crate::{DFSchema, DFSchemaRef, DataFusionError, JoinType, Result};
+
+use sqlparser::ast::TableConstraint;
 
 /// This object defines a constraint on a table.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -44,15 +46,15 @@ pub struct Constraints {
 impl Constraints {
     /// Create empty constraints
     pub fn empty() -> Self {
-        Constraints::new(vec![])
+        Constraints::new_private(vec![])
     }
 
-    /// Create a new `Constraints` from given `constraints`.
-    /// Users should use `empty` or `new_from_table_constraints`
-    /// API, for constructing `Constraints`. This API doesn't check
-    /// whether argument is valid. User is responsible with
-    /// giving correct `Vec<Constraint>`
-    pub fn new(constraints: Vec<Constraint>) -> Self {
+    /// Create a new `Constraints` object from the given `constraints`.
+    /// Users should use the `empty` or `new_from_table_constraints` functions
+    /// for constructing `Constraints`. This constructor is for internal
+    /// purposes only and does not check whether the argument is valid. The user
+    /// is responsible for supplying a valid vector of `Constraint` objects.
+    pub fn new_private(constraints: Vec<Constraint>) -> Self {
         Self { inner: constraints }
     }
 
@@ -107,7 +109,7 @@ impl Constraints {
                 )),
             })
             .collect::<Result<Vec<_>>>()?;
-        Ok(Constraints::new(constraints))
+        Ok(Constraints::new_private(constraints))
     }
 
     /// Check whether constraints is empty
@@ -546,7 +548,7 @@ mod tests {
 
     #[test]
     fn constraints_iter() {
-        let constraints = Constraints::new(vec![
+        let constraints = Constraints::new_private(vec![
             Constraint::PrimaryKey(vec![10]),
             Constraint::Unique(vec![20]),
         ]);

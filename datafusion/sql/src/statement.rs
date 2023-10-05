@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::Arc;
+
 use crate::parser::{
     CopyToSource, CopyToStatement, CreateExternalTable, DFParser, DescribeTableStmt,
     ExplainStatement, LexOrdering, Statement as DFStatement,
@@ -28,8 +31,8 @@ use arrow_schema::DataType;
 use datafusion_common::file_options::StatementOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    not_impl_err, unqualified_field_not_found, Column, Constraints, DFField, DFSchema,
-    DFSchemaRef, DataFusionError, ExprSchema, OwnedTableReference, Result,
+    not_impl_err, plan_err, unqualified_field_not_found, Column, Constraints, DFField,
+    DFSchema, DFSchemaRef, DataFusionError, ExprSchema, OwnedTableReference, Result,
     SchemaReference, TableReference, ToDFSchema,
 };
 use datafusion_expr::dml::{CopyOptions, CopyTo};
@@ -54,10 +57,6 @@ use sqlparser::ast::{
     TableWithJoins, TransactionMode, UnaryOperator, Value,
 };
 use sqlparser::parser::ParserError::ParserError;
-
-use datafusion_common::plan_err;
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::Arc;
 
 fn ident_to_string(ident: &Ident) -> String {
     normalize_ident(ident.to_owned())

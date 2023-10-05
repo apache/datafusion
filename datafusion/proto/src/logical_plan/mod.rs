@@ -15,6 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::fmt::Debug;
+use std::str::FromStr;
+use std::sync::Arc;
+
 use crate::common::{byte_to_string, proto_error, str_to_byte};
 use crate::protobuf::logical_plan_node::LogicalPlanType::CustomScan;
 use crate::protobuf::{CustomTableScanNode, LogicalExprNodeCollection};
@@ -25,6 +29,7 @@ use crate::{
         logical_plan_node::LogicalPlanType, LogicalExtensionNode, LogicalPlanNode,
     },
 };
+
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion::{
     datasource::{
@@ -38,27 +43,22 @@ use datafusion::{
     datasource::{provider_as_source, source_as_provider},
     prelude::SessionContext,
 };
-use datafusion_common::not_impl_err;
 use datafusion_common::{
-    context, internal_err, parsers::CompressionTypeVariant, DataFusionError,
-    OwnedTableReference, Result,
+    context, internal_err, not_impl_err, parsers::CompressionTypeVariant,
+    DataFusionError, OwnedTableReference, Result,
 };
-use datafusion_expr::logical_plan::DdlStatement;
-use datafusion_expr::DropView;
 use datafusion_expr::{
     logical_plan::{
         builder::project, Aggregate, CreateCatalog, CreateCatalogSchema,
-        CreateExternalTable, CreateView, CrossJoin, Distinct, EmptyRelation, Extension,
-        Join, JoinConstraint, Limit, Prepare, Projection, Repartition, Sort,
-        SubqueryAlias, TableScan, Values, Window,
+        CreateExternalTable, CreateView, CrossJoin, DdlStatement, Distinct,
+        EmptyRelation, Extension, Join, JoinConstraint, Limit, Prepare, Projection,
+        Repartition, Sort, SubqueryAlias, TableScan, Values, Window,
     },
-    Expr, LogicalPlan, LogicalPlanBuilder,
+    DropView, Expr, LogicalPlan, LogicalPlanBuilder,
 };
+
 use prost::bytes::BufMut;
 use prost::Message;
-use std::fmt::Debug;
-use std::str::FromStr;
-use std::sync::Arc;
 
 pub mod from_proto;
 pub mod to_proto;

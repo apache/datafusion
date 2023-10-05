@@ -31,8 +31,8 @@ use arrow::datatypes::{
 };
 use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{
-    internal_err, Column, DFField, DFSchema, DFSchemaRef, DataFusionError,
-    OwnedTableReference, Result, ScalarValue,
+    internal_err, Column, Constraint, Constraints, DFField, DFSchema, DFSchemaRef,
+    DataFusionError, OwnedTableReference, Result, ScalarValue,
 };
 use datafusion_expr::{
     abs, acos, acosh, array, array_append, array_concat, array_dims, array_element,
@@ -880,9 +880,9 @@ impl From<protobuf::JoinConstraint> for JoinConstraint {
     }
 }
 
-impl From<protobuf::Constraints> for datafusion_common::Constraints {
+impl From<protobuf::Constraints> for Constraints {
     fn from(constraints: protobuf::Constraints) -> Self {
-        datafusion_common::Constraints::new(
+        Constraints::new_private(
             constraints
                 .constraints
                 .into_iter()
@@ -892,19 +892,17 @@ impl From<protobuf::Constraints> for datafusion_common::Constraints {
     }
 }
 
-impl From<protobuf::Constraint> for datafusion_common::Constraint {
+impl From<protobuf::Constraint> for Constraint {
     fn from(value: protobuf::Constraint) -> Self {
         match value.constraint_mode.unwrap() {
             protobuf::constraint::ConstraintMode::PrimaryKey(elem) => {
-                datafusion_common::Constraint::PrimaryKey(
+                Constraint::PrimaryKey(
                     elem.indices.into_iter().map(|item| item as usize).collect(),
                 )
             }
-            protobuf::constraint::ConstraintMode::Unique(elem) => {
-                datafusion_common::Constraint::Unique(
-                    elem.indices.into_iter().map(|item| item as usize).collect(),
-                )
-            }
+            protobuf::constraint::ConstraintMode::Unique(elem) => Constraint::Unique(
+                elem.indices.into_iter().map(|item| item as usize).collect(),
+            ),
         }
     }
 }
