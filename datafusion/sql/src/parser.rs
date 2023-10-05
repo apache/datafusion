@@ -903,6 +903,7 @@ mod tests {
             file_compression_type: UNCOMPRESSED,
             unbounded: false,
             options: HashMap::new(),
+            constraints: vec![],
         });
         expect_parse_ok(sql, expected)?;
 
@@ -921,6 +922,7 @@ mod tests {
             file_compression_type: UNCOMPRESSED,
             unbounded: false,
             options: HashMap::new(),
+            constraints: vec![],
         });
         expect_parse_ok(sql, expected)?;
 
@@ -940,6 +942,7 @@ mod tests {
             file_compression_type: UNCOMPRESSED,
             unbounded: false,
             options: HashMap::new(),
+            constraints: vec![],
         });
         expect_parse_ok(sql, expected)?;
 
@@ -959,6 +962,7 @@ mod tests {
             file_compression_type: UNCOMPRESSED,
             unbounded: false,
             options: HashMap::new(),
+            constraints: vec![],
         });
         expect_parse_ok(sql, expected)?;
 
@@ -978,6 +982,7 @@ mod tests {
             file_compression_type: UNCOMPRESSED,
             unbounded: false,
             options: HashMap::new(),
+            constraints: vec![],
         });
         expect_parse_ok(sql, expected)?;
 
@@ -1000,6 +1005,7 @@ mod tests {
                 file_compression_type: UNCOMPRESSED,
                 unbounded: false,
                 options: HashMap::new(),
+                constraints: vec![],
             });
             expect_parse_ok(sql, expected)?;
         }
@@ -1027,6 +1033,7 @@ mod tests {
                 )?,
                 unbounded: false,
                 options: HashMap::new(),
+                constraints: vec![],
             });
             expect_parse_ok(sql, expected)?;
         }
@@ -1046,6 +1053,7 @@ mod tests {
             file_compression_type: UNCOMPRESSED,
             unbounded: false,
             options: HashMap::new(),
+            constraints: vec![],
         });
         expect_parse_ok(sql, expected)?;
 
@@ -1064,6 +1072,7 @@ mod tests {
             file_compression_type: UNCOMPRESSED,
             unbounded: false,
             options: HashMap::new(),
+            constraints: vec![],
         });
         expect_parse_ok(sql, expected)?;
 
@@ -1082,6 +1091,7 @@ mod tests {
             file_compression_type: UNCOMPRESSED,
             unbounded: false,
             options: HashMap::new(),
+            constraints: vec![],
         });
         expect_parse_ok(sql, expected)?;
 
@@ -1101,6 +1111,7 @@ mod tests {
             file_compression_type: UNCOMPRESSED,
             unbounded: false,
             options: HashMap::new(),
+            constraints: vec![],
         });
         expect_parse_ok(sql, expected)?;
 
@@ -1125,6 +1136,7 @@ mod tests {
             file_compression_type: UNCOMPRESSED,
             unbounded: false,
             options: HashMap::from([("k1".into(), "v1".into())]),
+            constraints: vec![],
         });
         expect_parse_ok(sql, expected)?;
 
@@ -1147,6 +1159,7 @@ mod tests {
                 ("k1".into(), "v1".into()),
                 ("k2".into(), "v2".into()),
             ]),
+            constraints: vec![],
         });
         expect_parse_ok(sql, expected)?;
 
@@ -1192,6 +1205,7 @@ mod tests {
                 file_compression_type: UNCOMPRESSED,
                 unbounded: false,
                 options: HashMap::new(),
+                constraints: vec![],
             });
             expect_parse_ok(sql, expected)?;
         }
@@ -1232,6 +1246,7 @@ mod tests {
             file_compression_type: UNCOMPRESSED,
             unbounded: false,
             options: HashMap::new(),
+            constraints: vec![],
         });
         expect_parse_ok(sql, expected)?;
 
@@ -1268,6 +1283,7 @@ mod tests {
             file_compression_type: UNCOMPRESSED,
             unbounded: false,
             options: HashMap::new(),
+            constraints: vec![],
         });
         expect_parse_ok(sql, expected)?;
 
@@ -1316,6 +1332,7 @@ mod tests {
                 ("ROW_GROUP_SIZE".into(), "1024".into()),
                 ("TRUNCATE".into(), "NO".into()),
             ]),
+            constraints: vec![],
         });
         expect_parse_ok(sql, expected)?;
 
