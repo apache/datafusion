@@ -899,6 +899,15 @@ impl TableProvider for ListingTable {
 
         let unsorted: Vec<Vec<Expr>> = vec![];
         let order_requirements = if self.options().file_sort_order != unsorted {
+            if matches!(
+                self.options().insert_mode,
+                ListingTableInsertMode::AppendToFile
+            ) {
+                return Err(DataFusionError::Plan(
+                    "Cannot insert into a sorted ListingTable with mode append!".into(),
+                ));
+            }
+            // Converts Vec<Vec<SortExpr>> into type required by execution plan to specify its required input ordering
             Some(
                 self.try_create_output_ordering()?
                     .into_iter()
