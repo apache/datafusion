@@ -234,24 +234,27 @@ impl ExecutionPlan for UnionExec {
         let mut union_oeq = OrderingEquivalenceProperties::new(self.schema());
         // Iterate ordering equivalent group of first child
         for elem in child_oeqs[0].oeq_group().iter() {
-            let mut meet = None;
-            for child_oeq in &child_oeqs {
-                let mut meet_found = false;
-                for ordering in child_oeq.oeq_group().iter() {
-                    if let Some(coarse_ordering) =
-                        child_oeq.get_meet_ordering(ordering, elem)
-                    {
-                        meet = Some(coarse_ordering.to_vec());
-                        meet_found = true;
+            // Seed for the meet.
+            let mut meet = Some(elem.clone());
+            child_oeqs.iter().for_each(|child_oeq| {
+                if let Some(meet_vec) = &meet {
+                    // let mut meet_found = false;
+                    let res = child_oeq
+                        .oeq_group()
+                        .iter()
+                        .filter_map(|ordering| {
+                            child_oeq.get_meet_ordering(ordering, meet_vec)
+                        })
+                        .collect::<Vec<_>>();
+                    if let Some(new_meet) = res.first() {
+                        meet = Some(new_meet.to_vec());
+                    } else {
+                        // If none of the child doesn't have a meet
+                        // There is no meet.
+                        meet = None;
                     }
                 }
-                // If either of the child doesn't have a meet
-                // There is no meet.
-                if !meet_found {
-                    meet = None;
-                    break;
-                }
-            }
+            });
             // All of the children have a common meet ordering.
             // This ordering can be propagated in Union.
             if let Some(meet) = meet {
