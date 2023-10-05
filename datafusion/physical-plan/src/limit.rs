@@ -33,7 +33,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::OrderingEquivalenceProperties;
+use datafusion_physical_expr::SchemaProperties;
 
 use futures::stream::Stream;
 use futures::stream::StreamExt;
@@ -133,8 +133,8 @@ impl ExecutionPlan for GlobalLimitExec {
         self.input.output_ordering()
     }
 
-    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        self.input.ordering_equivalence_properties()
+    fn schema_properties(&self) -> SchemaProperties {
+        self.input.schema_properties()
     }
 
     fn with_new_children(
@@ -310,8 +310,8 @@ impl ExecutionPlan for LocalLimitExec {
         vec![true]
     }
 
-    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        self.input.ordering_equivalence_properties()
+    fn schema_properties(&self) -> SchemaProperties {
+        self.input.schema_properties()
     }
 
     fn unbounded_output(&self, _children: &[bool]) -> Result<bool> {

@@ -40,7 +40,7 @@ use datafusion_expr::{
 use datafusion_physical_expr::{
     reverse_order_bys,
     window::{BuiltInWindowFunctionExpr, SlidingAggregateWindowExpr},
-    AggregateExpr, OrderingEquivalenceProperties, PhysicalSortRequirement,
+    AggregateExpr, PhysicalSortRequirement, SchemaProperties,
 };
 
 mod bounded_window_agg_exec;
@@ -325,10 +325,7 @@ pub(crate) fn get_ordered_partition_by_indices(
     partition_by_exprs: &[Arc<dyn PhysicalExpr>],
     input: &Arc<dyn ExecutionPlan>,
 ) -> Vec<usize> {
-    if let Some(indices) = input
-        .ordering_equivalence_properties()
-        .set_satisfy(partition_by_exprs)
-    {
+    if let Some(indices) = input.schema_properties().set_satisfy(partition_by_exprs) {
         indices
     } else {
         vec![]
@@ -339,11 +336,11 @@ pub(crate) fn window_ordering_equivalence(
     schema: &SchemaRef,
     input: &Arc<dyn ExecutionPlan>,
     window_expr: &[Arc<dyn WindowExpr>],
-) -> OrderingEquivalenceProperties {
+) -> SchemaProperties {
     // We need to update the schema, so we can not directly use
-    // `input.ordering_equivalence_properties()`.
-    let mut window_oeq_properties = OrderingEquivalenceProperties::new(schema.clone())
-        .extend(input.ordering_equivalence_properties());
+    // `input.schema_properties()`.
+    let mut window_oeq_properties =
+        SchemaProperties::new(schema.clone()).extend(input.schema_properties());
 
     for expr in window_expr {
         if let Some(builtin_window_expr) =
@@ -449,7 +446,7 @@ pub fn get_window_mode(
     orderby_keys: &[PhysicalSortExpr],
     input: &Arc<dyn ExecutionPlan>,
 ) -> Result<Option<(bool, PartitionSearchMode)>> {
-    let input_oeq = input.ordering_equivalence_properties();
+    let input_oeq = input.schema_properties();
     let mut partition_search_mode = PartitionSearchMode::Linear;
     let mut partition_by_reqs: Vec<PhysicalSortRequirement> = vec![];
     if partitionby_exprs.is_empty() {

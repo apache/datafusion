@@ -33,7 +33,7 @@ use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::OrderingEquivalenceProperties;
+use datafusion_physical_expr::SchemaProperties;
 
 use super::expressions::PhysicalSortExpr;
 use super::metrics::{BaselineMetrics, MetricsSet};
@@ -136,8 +136,8 @@ impl ExecutionPlan for CoalesceBatchesExec {
         vec![false]
     }
 
-    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        self.input.ordering_equivalence_properties()
+    fn schema_properties(&self) -> SchemaProperties {
+        self.input.schema_properties()
     }
 
     fn with_new_children(

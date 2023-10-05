@@ -20,7 +20,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use crate::{expr_list_eq_strict_order, OrderingEquivalenceProperties, PhysicalExpr};
+use crate::{expr_list_eq_strict_order, PhysicalExpr, SchemaProperties};
 
 /// Partitioning schemes supported by operators.
 #[derive(Debug, Clone)]
@@ -63,7 +63,7 @@ impl Partitioning {
 
     /// Returns true when the guarantees made by this [[Partitioning]] are sufficient to
     /// satisfy the partitioning scheme mandated by the `required` [[Distribution]]
-    pub fn satisfy<F: FnOnce() -> OrderingEquivalenceProperties>(
+    pub fn satisfy<F: FnOnce() -> SchemaProperties>(
         &self,
         required: Distribution,
         equal_properties: F,
@@ -200,19 +200,19 @@ mod tests {
         for distribution in distribution_types {
             let result = (
                 single_partition.satisfy(distribution.clone(), || {
-                    OrderingEquivalenceProperties::new(schema.clone())
+                    SchemaProperties::new(schema.clone())
                 }),
                 unspecified_partition.satisfy(distribution.clone(), || {
-                    OrderingEquivalenceProperties::new(schema.clone())
+                    SchemaProperties::new(schema.clone())
                 }),
                 round_robin_partition.satisfy(distribution.clone(), || {
-                    OrderingEquivalenceProperties::new(schema.clone())
+                    SchemaProperties::new(schema.clone())
                 }),
                 hash_partition1.satisfy(distribution.clone(), || {
-                    OrderingEquivalenceProperties::new(schema.clone())
+                    SchemaProperties::new(schema.clone())
                 }),
                 hash_partition2.satisfy(distribution.clone(), || {
-                    OrderingEquivalenceProperties::new(schema.clone())
+                    SchemaProperties::new(schema.clone())
                 }),
             );
 

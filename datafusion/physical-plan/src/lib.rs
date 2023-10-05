@@ -34,7 +34,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::DataPtr;
 pub use datafusion_expr::Accumulator;
 pub use datafusion_expr::ColumnarValue;
-use datafusion_physical_expr::equivalence::OrderingEquivalenceProperties;
+use datafusion_physical_expr::equivalence::SchemaProperties;
 pub use display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
 use futures::stream::TryStreamExt;
 use std::fmt::Debug;
@@ -147,9 +147,9 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
             .collect()
     }
 
-    /// Get the OrderingEquivalenceProperties within the plan
-    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        OrderingEquivalenceProperties::new(self.schema())
+    /// Get the `SchemaProperties` within the plan
+    fn schema_properties(&self) -> SchemaProperties {
+        SchemaProperties::new(self.schema())
     }
 
     /// Get a list of child execution plans that provide the input for this plan. The returned list

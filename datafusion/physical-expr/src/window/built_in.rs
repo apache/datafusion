@@ -26,7 +26,7 @@ use super::WindowExpr;
 use crate::expressions::PhysicalSortExpr;
 use crate::window::window_expr::{get_orderby_values, WindowFn};
 use crate::window::{PartitionBatches, PartitionWindowAggStates, WindowState};
-use crate::{reverse_order_bys, OrderingEquivalenceProperties, PhysicalExpr};
+use crate::{reverse_order_bys, PhysicalExpr, SchemaProperties};
 use arrow::array::{new_empty_array, ArrayRef};
 use arrow::compute::SortOptions;
 use arrow::datatypes::Field;
@@ -74,10 +74,7 @@ impl BuiltInWindowExpr {
     /// If `self.expr` doesn't have an ordering, ordering equivalence properties
     /// are not updated. Otherwise, ordering equivalence properties are updated
     /// by the ordering of `self.expr`.
-    pub fn add_equal_orderings(
-        &self,
-        oeq_properties: &mut OrderingEquivalenceProperties,
-    ) {
+    pub fn add_equal_orderings(&self, oeq_properties: &mut SchemaProperties) {
         let schema = oeq_properties.schema();
         if let Some(fn_res_ordering) = self.expr.get_result_ordering(&schema) {
             if self.partition_by.is_empty() {

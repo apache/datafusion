@@ -38,7 +38,7 @@ use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::expressions::Literal;
-use datafusion_physical_expr::{project_out_expr, OrderingEquivalenceProperties};
+use datafusion_physical_expr::{project_out_expr, SchemaProperties};
 
 use crate::common::calculate_projection_mapping;
 use futures::stream::{Stream, StreamExt};
@@ -95,7 +95,7 @@ impl ProjectionExec {
         let source_to_target_mapping =
             calculate_projection_mapping(&expr, &input_schema)?;
 
-        let input_oeq = input.ordering_equivalence_properties();
+        let input_oeq = input.schema_properties();
         let project_oeq = input_oeq.project(&source_to_target_mapping, schema.clone());
         let project_orderings = project_oeq.oeq_group();
         let output_ordering = project_orderings.output_ordering();
@@ -196,9 +196,9 @@ impl ExecutionPlan for ProjectionExec {
         vec![true]
     }
 
-    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+    fn schema_properties(&self) -> SchemaProperties {
         self.input
-            .ordering_equivalence_properties()
+            .schema_properties()
             .project(&self.source_to_target_mapping, self.schema())
     }
 

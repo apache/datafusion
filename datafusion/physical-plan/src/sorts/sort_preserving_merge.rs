@@ -33,7 +33,7 @@ use datafusion_execution::memory_pool::MemoryConsumer;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{OrderingEquivalenceProperties, PhysicalSortRequirement};
+use datafusion_physical_expr::{PhysicalSortRequirement, SchemaProperties};
 
 use log::{debug, trace};
 
@@ -170,8 +170,8 @@ impl ExecutionPlan for SortPreservingMergeExec {
         vec![true]
     }
 
-    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        self.input.ordering_equivalence_properties()
+    fn schema_properties(&self) -> SchemaProperties {
+        self.input.schema_properties()
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

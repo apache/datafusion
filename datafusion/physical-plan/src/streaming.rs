@@ -25,9 +25,7 @@ use async_trait::async_trait;
 use futures::stream::StreamExt;
 
 use datafusion_common::{internal_err, plan_err, DataFusionError, Result, Statistics};
-use datafusion_physical_expr::{
-    LexOrdering, OrderingEquivalenceProperties, PhysicalSortExpr,
-};
+use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr, SchemaProperties};
 use log::debug;
 
 use crate::display::{OutputOrderingDisplay, ProjectSchemaDisplay};
@@ -159,8 +157,8 @@ impl ExecutionPlan for StreamingTableExec {
         self.projected_output_ordering.as_deref()
     }
 
-    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        let mut oeq = OrderingEquivalenceProperties::new(self.schema());
+    fn schema_properties(&self) -> SchemaProperties {
+        let mut oeq = SchemaProperties::new(self.schema());
         if let Some(ordering) = &self.projected_output_ordering {
             oeq.add_new_orderings(&[ordering.clone()])
         }

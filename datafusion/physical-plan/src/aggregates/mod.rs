@@ -34,8 +34,8 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::Accumulator;
 use datafusion_physical_expr::{
     expressions::Column, physical_exprs_contains, project_out_expr, reverse_order_bys,
-    AggregateExpr, LexOrdering, LexOrderingReq, OrderingEquivalenceProperties,
-    PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
+    AggregateExpr, LexOrdering, LexOrderingReq, PhysicalExpr, PhysicalSortExpr,
+    PhysicalSortRequirement, SchemaProperties,
 };
 
 use itertools::{izip, Itertools};
@@ -327,7 +327,7 @@ fn get_init_req(
 /// This function gets the finest ordering requirement among all the aggregation
 /// functions. If requirements are conflicting, (i.e. we can not compute the
 /// aggregations in a single [`AggregateExec`]), the function returns an error.
-fn get_finest_requirement<F2: Fn() -> OrderingEquivalenceProperties>(
+fn get_finest_requirement<F2: Fn() -> SchemaProperties>(
     aggr_expr: &mut [Arc<dyn AggregateExpr>],
     order_by_expr: &mut [Option<LexOrdering>],
     ordering_eq_properties: F2,
@@ -479,7 +479,7 @@ impl AggregateExec {
             .collect::<Vec<_>>();
         let requirement =
             get_finest_requirement(&mut aggr_expr, &mut order_by_expr, || {
-                input.ordering_equivalence_properties()
+                input.schema_properties()
             })?;
         let mut ordering_req = requirement.unwrap_or(vec![]);
         let partition_search_mode = get_aggregate_search_mode(
@@ -518,7 +518,7 @@ impl AggregateExec {
         };
 
         let aggregate_oeq = input
-            .ordering_equivalence_properties()
+            .schema_properties()
             .project(&source_to_target_mapping, schema.clone());
         let output_ordering = aggregate_oeq.oeq_group().output_ordering();
 
@@ -778,9 +778,9 @@ impl ExecutionPlan for AggregateExec {
         vec![self.required_input_ordering.clone()]
     }
 
-    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+    fn schema_properties(&self) -> SchemaProperties {
         self.input
-            .ordering_equivalence_properties()
+            .schema_properties()
             .project(&self.source_to_target_mapping, self.schema())
     }
 
@@ -1114,7 +1114,7 @@ mod tests {
         lit, ApproxDistinct, Column, Count, FirstValue, LastValue, Median,
     };
     use datafusion_physical_expr::{
-        AggregateExpr, OrderingEquivalenceProperties, PhysicalExpr, PhysicalSortExpr,
+        AggregateExpr, PhysicalExpr, PhysicalSortExpr, SchemaProperties,
     };
 
     use std::any::Any;
@@ -1992,7 +1992,7 @@ mod tests {
         let col_d = Column::new("d", 3);
         let col_a_expr = Arc::new(col_a.clone()) as Arc<dyn PhysicalExpr>;
         let col_b_expr = Arc::new(col_b.clone()) as Arc<dyn PhysicalExpr>;
-        let mut ordering_eq_properties = OrderingEquivalenceProperties::new(test_schema);
+        let mut ordering_eq_properties = SchemaProperties::new(test_schema);
         // Columns a and b are equal.
         ordering_eq_properties.add_equal_conditions((&col_a_expr, &col_b_expr));
         // [a ASC], [c DESC] describes ordering of the schema.

@@ -37,7 +37,7 @@ use datafusion_common::{plan_err, DataFusionError, JoinType};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::OrderingEquivalenceProperties;
+use datafusion_physical_expr::SchemaProperties;
 
 use super::utils::{
     adjust_right_output_partitioning, BuildProbeJoinMetrics, OnceAsync, OnceFut,
@@ -214,9 +214,9 @@ impl ExecutionPlan for CrossJoinExec {
         None
     }
 
-    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        let left = self.left.ordering_equivalence_properties();
-        let right = self.right.ordering_equivalence_properties();
+    fn schema_properties(&self) -> SchemaProperties {
+        let left = self.left.schema_properties();
+        let right = self.right.schema_properties();
         left.join(
             &JoinType::Full,
             &right,

@@ -34,7 +34,7 @@ use arrow::csv;
 use arrow::datatypes::SchemaRef;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{
-    ordering_equivalence_properties_helper, LexOrdering, OrderingEquivalenceProperties,
+    ordering_equivalence_properties_helper, LexOrdering, SchemaProperties,
 };
 use tokio::io::AsyncWriteExt;
 
@@ -186,7 +186,7 @@ impl ExecutionPlan for CsvExec {
             .map(|ordering| ordering.as_slice())
     }
 
-    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+    fn schema_properties(&self) -> SchemaProperties {
         ordering_equivalence_properties_helper(
             self.schema(),
             &self.projected_output_ordering,

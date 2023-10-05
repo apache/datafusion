@@ -49,9 +49,7 @@ use tokio::task::JoinSet;
 
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::error::ArrowError;
-use datafusion_physical_expr::{
-    LexOrdering, OrderingEquivalenceProperties, PhysicalExpr,
-};
+use datafusion_physical_expr::{LexOrdering, PhysicalExpr, SchemaProperties};
 
 use bytes::Bytes;
 use futures::future::BoxFuture;
@@ -321,7 +319,7 @@ impl ExecutionPlan for ParquetExec {
             .map(|ordering| ordering.as_slice())
     }
 
-    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+    fn schema_properties(&self) -> SchemaProperties {
         ordering_equivalence_properties_helper(
             self.schema(),
             &self.projected_output_ordering,

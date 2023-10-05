@@ -67,7 +67,7 @@ use datafusion_common::{
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::OrderingEquivalenceProperties;
+use datafusion_physical_expr::SchemaProperties;
 
 use ahash::RandomState;
 use arrow::compute::kernels::cmp::{eq, not_distinct};
@@ -364,9 +364,9 @@ impl ExecutionPlan for HashJoinExec {
         Self::maintains_input_order(self.join_type)
     }
 
-    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        let left = self.left.ordering_equivalence_properties();
-        let right = self.right.ordering_equivalence_properties();
+    fn schema_properties(&self) -> SchemaProperties {
+        let left = self.left.schema_properties();
+        let right = self.right.schema_properties();
         left.join(
             &self.join_type,
             &right,

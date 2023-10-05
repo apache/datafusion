@@ -46,7 +46,7 @@ use crate::stream::ObservedStream;
 use crate::{expressions, metrics::BaselineMetrics};
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::OrderingEquivalenceProperties;
+use datafusion_physical_expr::SchemaProperties;
 use tokio::macros::support::thread_rng_n;
 
 /// `UnionExec`: `UNION ALL` execution plan.
@@ -225,13 +225,13 @@ impl ExecutionPlan for UnionExec {
         }
     }
 
-    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+    fn schema_properties(&self) -> SchemaProperties {
         let child_oeqs = self
             .inputs
             .iter()
-            .map(|child| child.ordering_equivalence_properties())
+            .map(|child| child.schema_properties())
             .collect::<Vec<_>>();
-        let mut union_oeq = OrderingEquivalenceProperties::new(self.schema());
+        let mut union_oeq = SchemaProperties::new(self.schema());
         // Iterate ordering equivalent group of first child
         for elem in child_oeqs[0].oeq_group().iter() {
             // Seed for the meet.

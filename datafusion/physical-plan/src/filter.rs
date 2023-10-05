@@ -42,8 +42,8 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::BinaryExpr;
 use datafusion_physical_expr::{
-    analyze, split_conjunction, AnalysisContext, ExprBoundaries,
-    OrderingEquivalenceProperties, PhysicalExpr,
+    analyze, split_conjunction, AnalysisContext, ExprBoundaries, PhysicalExpr,
+    SchemaProperties,
 };
 
 use datafusion_physical_expr::intervals::utils::check_support;
@@ -143,10 +143,10 @@ impl ExecutionPlan for FilterExec {
         vec![true]
     }
 
-    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+    fn schema_properties(&self) -> SchemaProperties {
         let stats = self.statistics();
         // Combine the equal predicates with the input equivalence properties
-        let mut filter_oeq = self.input.ordering_equivalence_properties();
+        let mut filter_oeq = self.input.schema_properties();
         let (equal_pairs, _ne_pairs) = collect_columns_from_predicate(&self.predicate);
         for (lhs, rhs) in equal_pairs {
             let lhs_expr = Arc::new(lhs.clone()) as _;

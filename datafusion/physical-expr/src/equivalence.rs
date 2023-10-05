@@ -67,13 +67,9 @@ impl EquivalentGroups {
         self.len() == 0
     }
 
+    /// Iterate over inner vector.
     fn iter(&self) -> impl Iterator<Item = &Vec<Arc<dyn PhysicalExpr>>> {
         self.inner.iter()
-    }
-
-    #[allow(dead_code)]
-    fn into_iter(self) -> impl Iterator<Item = Vec<Arc<dyn PhysicalExpr>>> {
-        self.inner.into_iter()
     }
 
     /// Adds tuple argument to the equivalent groups
@@ -317,6 +313,31 @@ impl EquivalentGroups {
         }
     }
 
+    /// Projects EquivalentGroups according to projection mapping described in `source_to_target_mapping`.
+    pub fn project(
+        &self,
+        source_to_target_mapping: &ProjectionMapping,
+    ) -> EquivalentGroups {
+        let mut new_eq_classes = vec![];
+        for eq_class in self.iter() {
+            let new_eq_class = eq_class
+                .iter()
+                .filter_map(|expr| self.project_expr(source_to_target_mapping, expr))
+                .collect::<Vec<_>>();
+            if new_eq_class.len() > 1 {
+                new_eq_classes.push(new_eq_class.clone());
+            }
+        }
+        let new_classes =
+            Self::calculate_new_projection_equivalent_groups(source_to_target_mapping);
+        new_eq_classes.extend(new_classes);
+
+        let mut projection_eq_groups = EquivalentGroups::new(new_eq_classes);
+        // Make sure there is no redundant entry after projection.
+        projection_eq_groups.remove_redundant_entries();
+        projection_eq_groups
+    }
+
     /// Construct equivalent groups according to projection mapping.
     /// In the result, each inner vector contains equivalents sets. Outer vector corresponds to
     /// distinct equivalent groups
@@ -343,31 +364,6 @@ impl EquivalentGroups {
         res.into_iter()
             .filter_map(|(_key, values)| (values.len() > 1).then_some(values))
             .collect()
-    }
-
-    /// Projects EquivalentGroups according to projection mapping described in `source_to_target_mapping`.
-    pub fn project(
-        &self,
-        source_to_target_mapping: &ProjectionMapping,
-    ) -> EquivalentGroups {
-        let mut new_eq_classes = vec![];
-        for eq_class in self.iter() {
-            let new_eq_class = eq_class
-                .iter()
-                .filter_map(|expr| self.project_expr(source_to_target_mapping, expr))
-                .collect::<Vec<_>>();
-            if new_eq_class.len() > 1 {
-                new_eq_classes.push(new_eq_class.clone());
-            }
-        }
-        let new_classes =
-            Self::calculate_new_projection_equivalent_groups(source_to_target_mapping);
-        new_eq_classes.extend(new_classes);
-
-        let mut projection_eq_groups = EquivalentGroups::new(new_eq_classes);
-        // Make sure there is no redundant entry after projection.
-        projection_eq_groups.remove_redundant_entries();
-        projection_eq_groups
     }
 
     /// Returns the equivalent group that contains `expr`
@@ -475,6 +471,34 @@ impl OrderingEquivalentGroup {
         self.remove_redundant_entries();
     }
 
+    /// Check whether ordering equivalent group is empty
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &LexOrdering> {
+        self.inner.iter()
+    }
+
+    fn into_iter(self) -> impl Iterator<Item = LexOrdering> {
+        self.inner.into_iter()
+    }
+
+    /// Get length of the entries in the ordering equivalent group
+    fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    /// Extend ordering equivalent group with other group
+    pub fn extend(&mut self, other: OrderingEquivalentGroup) {
+        for ordering in other.iter() {
+            if !self.contains(ordering) {
+                self.inner.push(ordering.clone())
+            }
+        }
+        self.remove_redundant_entries();
+    }
+
     /// Adds new ordering into the ordering equivalent group.
     pub fn add_new_orderings(&mut self, orderings: &[LexOrdering]) {
         for ordering in orderings.iter() {
@@ -503,34 +527,6 @@ impl OrderingEquivalentGroup {
             }
         }
         self.inner = res;
-    }
-
-    /// Check whether ordering equivalent group is empty
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = &LexOrdering> {
-        self.inner.iter()
-    }
-
-    fn into_iter(self) -> impl Iterator<Item = LexOrdering> {
-        self.inner.into_iter()
-    }
-
-    /// Get length of the entries in the ordering equivalent group
-    fn len(&self) -> usize {
-        self.inner.len()
-    }
-
-    /// Extend ordering equivalent group with other group
-    pub fn extend(&mut self, other: OrderingEquivalentGroup) {
-        for ordering in other.iter() {
-            if !self.contains(ordering) {
-                self.inner.push(ordering.clone())
-            }
-        }
-        self.remove_redundant_entries();
     }
 
     /// Get first ordering entry in the ordering equivalences
@@ -596,8 +592,11 @@ impl OrderingEquivalentGroup {
     }
 }
 
-/// `OrderingEquivalenceProperties` keeps track of columns that describe the
-/// global ordering of the schema. These columns are not necessarily same; e.g.
+/// `SchemaProperties` keeps track of useful information related to schema.
+/// Currently, it keeps track of
+/// - Equivalent columns, e.g columns that have same value.
+/// - Valid ordering sort expressions for the schema.
+///   Consider table below
 /// ```text
 /// ┌-------┐
 /// | a | b |
@@ -609,10 +608,24 @@ impl OrderingEquivalentGroup {
 /// └---┴---┘
 /// ```
 /// where both `a ASC` and `b DESC` can describe the table ordering. With
-/// `OrderingEquivalenceProperties`, we can keep track of these equivalences
+/// `SchemaProperties`, we can keep track of these different valid ordering expressions
 /// and treat `a ASC` and `b DESC` as the same ordering requirement.
+/// Similarly, as in the table below if we know that Column a and b have always same value.
+/// ```text
+/// ┌-------┐
+/// | a | b |
+/// |---|---|
+/// | 1 | 1 |
+/// | 2 | 2 |
+/// | 3 | 3 |
+/// | 5 | 5 |
+/// └---┴---┘
+/// ```
+/// We keep track of their equivalence inside schema properties. With this information
+/// if partition requirement is Hash(a), and output partitioning is Hash(b). We can deduce that
+/// existing partitioning satisfies the requirement.
 #[derive(Debug, Clone)]
-pub struct OrderingEquivalenceProperties {
+pub struct SchemaProperties {
     /// Keeps track of expressions that have equivalent value.
     eq_groups: EquivalentGroups,
     /// Keeps track of valid ordering that satisfied table.
@@ -624,8 +637,8 @@ pub struct OrderingEquivalenceProperties {
     schema: SchemaRef,
 }
 
-impl OrderingEquivalenceProperties {
-    /// Create an empty `OrderingEquivalenceProperties`
+impl SchemaProperties {
+    /// Create an empty `SchemaProperties`
     pub fn new(schema: SchemaRef) -> Self {
         Self {
             eq_groups: EquivalentGroups::empty(),
@@ -635,22 +648,9 @@ impl OrderingEquivalenceProperties {
         }
     }
 
-    /// Add OrderingEquivalenceProperties of the other to the state.
-    pub fn extend(mut self, other: OrderingEquivalenceProperties) -> Self {
-        self.eq_groups.extend(other.eq_groups);
-        self.oeq_group.extend(other.oeq_group);
-        self.with_constants(other.constants)
-    }
-
-    /// Extends `OrderingEquivalenceProperties` by adding ordering inside the `other`
-    /// to the `self.oeq_class`.
-    pub fn add_ordering_equivalent_group(&mut self, other: OrderingEquivalentGroup) {
-        for ordering in other.into_iter() {
-            if !self.oeq_group.contains(&ordering) {
-                self.oeq_group.push(ordering);
-            }
-        }
-        self.normalize_state();
+    /// Get schema.
+    pub fn schema(&self) -> SchemaRef {
+        self.schema.clone()
     }
 
     /// Return a reference to the ordering equivalent group
@@ -661,6 +661,30 @@ impl OrderingEquivalenceProperties {
     /// Return a reference to the equivalent groups
     pub fn eq_groups(&self) -> &EquivalentGroups {
         &self.eq_groups
+    }
+
+    /// Add SchemaProperties of the other to the state.
+    pub fn extend(mut self, other: SchemaProperties) -> Self {
+        self.eq_groups.extend(other.eq_groups);
+        self.oeq_group.extend(other.oeq_group);
+        self.with_constants(other.constants)
+    }
+
+    /// Empties the `oeq_group` inside self, When existing orderings are invalidated.
+    pub fn with_empty_ordering_equivalence(mut self) -> Self {
+        self.oeq_group = OrderingEquivalentGroup::empty();
+        self
+    }
+
+    /// Extends `SchemaProperties` by adding ordering inside the `other`
+    /// to the `self.oeq_class`.
+    pub fn add_ordering_equivalent_group(&mut self, other: OrderingEquivalentGroup) {
+        for ordering in other.into_iter() {
+            if !self.oeq_group.contains(&ordering) {
+                self.oeq_group.push(ordering);
+            }
+        }
+        self.normalize_state();
     }
 
     /// Adds new ordering into the ordering equivalent group.
@@ -718,11 +742,6 @@ impl OrderingEquivalenceProperties {
         });
         self.normalize_state();
         self
-    }
-
-    /// Get schema.
-    pub fn schema(&self) -> SchemaRef {
-        self.schema.clone()
     }
 
     /// Transform `sort_exprs` vector, to standardized version using `eq_properties` and `ordering_eq_properties`
@@ -811,13 +830,13 @@ impl OrderingEquivalenceProperties {
             .any(|ordering| ordering[0].eq(leading_ordering))
     }
 
-    /// Projects `OrderingEquivalenceProperties` according to mapping given in `source_to_target_mapping`.
+    /// Projects `SchemaProperties` according to mapping given in `source_to_target_mapping`.
     pub fn project(
         &self,
         source_to_target_mapping: &ProjectionMapping,
         output_schema: SchemaRef,
-    ) -> OrderingEquivalenceProperties {
-        let mut projected_properties = OrderingEquivalenceProperties::new(output_schema);
+    ) -> SchemaProperties {
+        let mut projected_properties = SchemaProperties::new(output_schema);
 
         let projected_eq_groups = self.eq_groups.project(source_to_target_mapping);
         projected_properties.eq_groups = projected_eq_groups;
@@ -856,12 +875,9 @@ impl OrderingEquivalenceProperties {
         projected_properties
     }
 
-    /// Re-creates `OrderingEquivalenceProperties` given that
+    /// Re-creates `SchemaProperties` given that
     /// schema is re-ordered by `sort_expr` in the argument.
-    pub fn with_reorder(
-        mut self,
-        sort_expr: Vec<PhysicalSortExpr>,
-    ) -> OrderingEquivalenceProperties {
+    pub fn with_reorder(mut self, sort_expr: Vec<PhysicalSortExpr>) -> SchemaProperties {
         // TODO: In some cases, existing ordering equivalences may still be valid add this analysis.
 
         // Normalize sort_expr according to equivalences
@@ -955,12 +971,6 @@ impl OrderingEquivalenceProperties {
             }
         }
         None
-    }
-
-    /// Empties the `oeq_group` inside self, When existing orderings are invalidated.
-    pub fn with_empty_ordering_equivalence(mut self) -> OrderingEquivalenceProperties {
-        self.oeq_group = OrderingEquivalentGroup::empty();
-        self
     }
 
     /// Checks whether given ordering requirements are satisfied by provided [PhysicalSortExpr]s.
@@ -1132,14 +1142,14 @@ impl OrderingEquivalenceProperties {
     pub fn join(
         &self,
         join_type: &JoinType,
-        right: &OrderingEquivalenceProperties,
+        right: &SchemaProperties,
         join_schema: SchemaRef,
         maintains_input_order: &[bool],
         probe_side: Option<JoinSide>,
         on: &[(Column, Column)],
-    ) -> Result<OrderingEquivalenceProperties> {
+    ) -> Result<SchemaProperties> {
         let left_columns_len = self.schema.fields.len();
-        let mut new_properties = OrderingEquivalenceProperties::new(join_schema);
+        let mut new_properties = SchemaProperties::new(join_schema);
 
         let join_eq_groups =
             self.eq_groups()
@@ -1214,10 +1224,10 @@ impl OrderingEquivalenceProperties {
 pub fn ordering_equivalence_properties_helper(
     schema: SchemaRef,
     eq_orderings: &[LexOrdering],
-) -> OrderingEquivalenceProperties {
-    let mut oep = OrderingEquivalenceProperties::new(schema);
+) -> SchemaProperties {
+    let mut oep = SchemaProperties::new(schema);
     if eq_orderings.is_empty() {
-        // Return an empty OrderingEquivalenceProperties:
+        // Return an empty `SchemaProperties`:
         oep
     } else {
         oep.add_ordering_equivalent_group(OrderingEquivalentGroup::new(
@@ -1430,7 +1440,7 @@ pub fn add_offset_to_lex_ordering(
 /// the order coming from the children.
 pub fn update_ordering(
     mut node: ExprOrdering,
-    ordering_equal_properties: &OrderingEquivalenceProperties,
+    ordering_equal_properties: &SchemaProperties,
 ) -> Result<Transformed<ExprOrdering>> {
     let eq_groups = &ordering_equal_properties.eq_groups;
     let oeq_group = &ordering_equal_properties.oeq_group;
@@ -1514,7 +1524,7 @@ mod tests {
     /// [a ASC], [d ASC, b ASC], [e DESC, f ASC, g ASC]
     /// and
     /// Column [a=c] (e.g they are aliases).
-    fn create_test_params() -> Result<(SchemaRef, OrderingEquivalenceProperties)> {
+    fn create_test_params() -> Result<(SchemaRef, SchemaProperties)> {
         let col_a = &Column::new("a", 0);
         let col_b = &Column::new("b", 1);
         let col_c = &Column::new("c", 2);
@@ -1533,8 +1543,7 @@ mod tests {
         let test_schema = create_test_schema()?;
         let col_a_expr = Arc::new(col_a.clone()) as _;
         let col_c_expr = Arc::new(col_c.clone()) as _;
-        let mut ordering_eq_properties =
-            OrderingEquivalenceProperties::new(test_schema.clone());
+        let mut ordering_eq_properties = SchemaProperties::new(test_schema.clone());
         ordering_eq_properties.add_equal_conditions((&col_a_expr, &col_c_expr));
         ordering_eq_properties.add_new_orderings(&[
             vec![PhysicalSortExpr {
@@ -1590,7 +1599,7 @@ mod tests {
             Field::new("y", DataType::Int64, true),
         ]));
 
-        let mut eq_properties = OrderingEquivalenceProperties::new(schema);
+        let mut eq_properties = SchemaProperties::new(schema);
         let col_a_expr = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
         let col_b_expr = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
         let col_c_expr = Arc::new(Column::new("c", 2)) as Arc<dyn PhysicalExpr>;
@@ -1647,7 +1656,7 @@ mod tests {
             Field::new("c", DataType::Int64, true),
         ]));
 
-        let mut input_properties = OrderingEquivalenceProperties::new(input_schema);
+        let mut input_properties = SchemaProperties::new(input_schema);
         let col_a_expr = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
         let col_b_expr = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
         let col_c_expr = Arc::new(Column::new("c", 2)) as Arc<dyn PhysicalExpr>;
@@ -1674,7 +1683,6 @@ mod tests {
             (col_a_expr.clone(), col_a3_expr.clone()),
             (col_a_expr.clone(), col_a4_expr.clone()),
         ];
-        // let mut out_properties = OrderingEquivalenceProperties::new(out_schema);
         let out_properties =
             input_properties.project(&source_to_target_mapping, out_schema);
 
@@ -1748,12 +1756,12 @@ mod tests {
         ];
         // finer ordering satisfies, crude ordering shoul return true
         let empty_schema = &Arc::new(Schema::empty());
-        let mut oeq_properties = OrderingEquivalenceProperties::new(empty_schema.clone());
+        let mut oeq_properties = SchemaProperties::new(empty_schema.clone());
         oeq_properties.oeq_group.push(finer.clone());
         assert!(oeq_properties.ordering_satisfy(Some(&crude)));
 
         // Crude ordering doesn't satisfy finer ordering. should return false
-        let mut oeq_properties = OrderingEquivalenceProperties::new(empty_schema.clone());
+        let mut oeq_properties = SchemaProperties::new(empty_schema.clone());
         oeq_properties.oeq_group.push(crude.clone());
         assert!(!oeq_properties.ordering_satisfy(Some(&finer)));
         Ok(())
@@ -1889,7 +1897,7 @@ mod tests {
             nulls_first: false,
         };
         // Column a and c are aliases.
-        let mut ordering_eq_properties = OrderingEquivalenceProperties::new(test_schema);
+        let mut ordering_eq_properties = SchemaProperties::new(test_schema);
         ordering_eq_properties.add_equal_conditions((&col_a_expr, &col_c_expr));
 
         // Column a and e are ordering equivalent (e.g global ordering of the table can be described both as a ASC and e ASC.)
@@ -2074,7 +2082,7 @@ mod tests {
         let col_z_expr = col("z", &schema)?;
         let col_w_expr = col("w", &schema)?;
 
-        let mut join_eq_properties = OrderingEquivalenceProperties::new(Arc::new(schema));
+        let mut join_eq_properties = SchemaProperties::new(Arc::new(schema));
         join_eq_properties.add_equal_conditions((&col_a_expr, &col_x_expr));
         join_eq_properties.add_equal_conditions((&col_d_expr, &col_w_expr));
 

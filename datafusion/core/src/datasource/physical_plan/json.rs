@@ -34,7 +34,7 @@ use datafusion_execution::TaskContext;
 use arrow::json::ReaderBuilder;
 use arrow::{datatypes::SchemaRef, json};
 use datafusion_physical_expr::{
-    ordering_equivalence_properties_helper, LexOrdering, OrderingEquivalenceProperties,
+    ordering_equivalence_properties_helper, LexOrdering, SchemaProperties,
 };
 
 use bytes::{Buf, Bytes};
@@ -121,7 +121,7 @@ impl ExecutionPlan for NdJsonExec {
             .map(|ordering| ordering.as_slice())
     }
 
-    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+    fn schema_properties(&self) -> SchemaProperties {
         ordering_equivalence_properties_helper(
             self.schema(),
             &self.projected_output_ordering,

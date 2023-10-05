@@ -258,7 +258,7 @@ pub(crate) fn replace_with_order_preserving_variants(
         )?;
         // If this sort is unnecessary, we should remove it and update the plan:
         if updated_sort_input
-            .ordering_equivalence_properties()
+            .schema_properties()
             .ordering_satisfy(plan.output_ordering())
         {
             return Ok(Transformed::Yes(OrderPreservationContext {
