@@ -23,6 +23,7 @@ use sqlparser::ast::TableConstraint;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use std::ops::Deref;
+use std::vec::IntoIter;
 
 /// This object defines a constraint on a table.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -49,7 +50,7 @@ impl Constraints {
     // This method is private.
     // Outside callers can either create empty constraint using `Constraints::empty` API.
     // or create constraint from table constraints using `Constraints::new_from_table_constraints` API.
-    fn new(constraints: Vec<Constraint>) -> Self {
+    pub fn new(constraints: Vec<Constraint>) -> Self {
         Self { inner: constraints }
     }
 
@@ -110,6 +111,15 @@ impl Constraints {
     /// Check whether constraints is empty
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
+    }
+}
+
+impl IntoIterator for Constraints {
+    type Item = Constraint;
+    type IntoIter = IntoIter<Constraint>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.inner.into_iter()
     }
 }
 

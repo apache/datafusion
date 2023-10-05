@@ -880,6 +880,35 @@ impl From<protobuf::JoinConstraint> for JoinConstraint {
     }
 }
 
+impl From<protobuf::Constraints> for datafusion_common::Constraints {
+    fn from(constraints: protobuf::Constraints) -> Self {
+        datafusion_common::Constraints::new(
+            constraints
+                .constraints
+                .into_iter()
+                .map(|item| item.into())
+                .collect(),
+        )
+    }
+}
+
+impl From<protobuf::Constraint> for datafusion_common::Constraint {
+    fn from(value: protobuf::Constraint) -> Self {
+        match value.constraint_mode.unwrap() {
+            protobuf::constraint::ConstraintMode::PrimaryKey(elem) => {
+                datafusion_common::Constraint::PrimaryKey(
+                    elem.indices.into_iter().map(|item| item as usize).collect(),
+                )
+            }
+            protobuf::constraint::ConstraintMode::Unique(elem) => {
+                datafusion_common::Constraint::Unique(
+                    elem.indices.into_iter().map(|item| item as usize).collect(),
+                )
+            }
+        }
+    }
+}
+
 pub fn parse_i32_to_time_unit(value: &i32) -> Result<TimeUnit, Error> {
     protobuf::TimeUnit::try_from(*value)
         .map(|t| t.into())

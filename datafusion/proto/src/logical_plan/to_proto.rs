@@ -35,7 +35,8 @@ use arrow::datatypes::{
     UnionMode,
 };
 use datafusion_common::{
-    Column, DFField, DFSchema, DFSchemaRef, OwnedTableReference, ScalarValue,
+    Column, Constraint, Constraints, DFField, DFSchema, DFSchemaRef, OwnedTableReference,
+    ScalarValue,
 };
 use datafusion_expr::expr::{
     self, Alias, Between, BinaryExpr, Cast, GetFieldAccess, GetIndexedField, GroupingSet,
@@ -1619,6 +1620,35 @@ impl From<JoinConstraint> for protobuf::JoinConstraint {
         match t {
             JoinConstraint::On => protobuf::JoinConstraint::On,
             JoinConstraint::Using => protobuf::JoinConstraint::Using,
+        }
+    }
+}
+
+impl From<datafusion_common::Constraints> for protobuf::Constraints {
+    fn from(value: Constraints) -> Self {
+        let constraints = value.into_iter().map(|item| item.into()).collect();
+        protobuf::Constraints { constraints }
+    }
+}
+
+impl From<datafusion_common::Constraint> for protobuf::Constraint {
+    fn from(value: Constraint) -> Self {
+        let res = match value {
+            Constraint::PrimaryKey(indices) => {
+                let indices = indices.into_iter().map(|item| item as u64).collect();
+                protobuf::constraint::ConstraintMode::PrimaryKey(
+                    protobuf::PrimaryKeyConstraint { indices },
+                )
+            }
+            Constraint::Unique(indices) => {
+                let indices = indices.into_iter().map(|item| item as u64).collect();
+                protobuf::constraint::ConstraintMode::PrimaryKey(
+                    protobuf::PrimaryKeyConstraint { indices },
+                )
+            }
+        };
+        protobuf::Constraint {
+            constraint_mode: Some(res),
         }
     }
 }
