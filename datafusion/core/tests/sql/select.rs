@@ -188,7 +188,6 @@ async fn query_nested_get_indexed_field_on_struct() -> Result<()> {
 }
 
 #[tokio::test]
-#[cfg(feature = "dictionary_expressions")]
 async fn query_on_string_dictionary() -> Result<()> {
     // Test to ensure DataFusion can operate on dictionary types
     // Use StringDictionary (32 bit indexes = keys)
@@ -214,7 +213,7 @@ async fn query_on_string_dictionary() -> Result<()> {
     // Basic SELECT
     let sql = "SELECT d1 FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+-------+",
         "| d1    |",
         "+-------+",
@@ -228,7 +227,7 @@ async fn query_on_string_dictionary() -> Result<()> {
     // basic filtering
     let sql = "SELECT d1 FROM test WHERE d1 IS NOT NULL";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+-------+",
         "| d1    |",
         "+-------+",
@@ -241,7 +240,7 @@ async fn query_on_string_dictionary() -> Result<()> {
     // comparison with constant
     let sql = "SELECT d1 FROM test WHERE d1 = 'three'";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+-------+",
         "| d1    |",
         "+-------+",
@@ -253,7 +252,7 @@ async fn query_on_string_dictionary() -> Result<()> {
     // comparison with another dictionary column
     let sql = "SELECT d1 FROM test WHERE d1 = d2";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+-------+",
         "| d1    |",
         "+-------+",
@@ -265,7 +264,7 @@ async fn query_on_string_dictionary() -> Result<()> {
     // order comparison with another dictionary column
     let sql = "SELECT d1 FROM test WHERE d1 <= d2";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+-------+",
         "| d1    |",
         "+-------+",
@@ -277,7 +276,7 @@ async fn query_on_string_dictionary() -> Result<()> {
     // comparison with a non dictionary column
     let sql = "SELECT d1 FROM test WHERE d1 = d3";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+-------+",
         "| d1    |",
         "+-------+",
@@ -289,7 +288,7 @@ async fn query_on_string_dictionary() -> Result<()> {
     // filtering with constant
     let sql = "SELECT d1 FROM test WHERE d1 = 'three'";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+-------+",
         "| d1    |",
         "+-------+",
@@ -301,7 +300,7 @@ async fn query_on_string_dictionary() -> Result<()> {
     // Expression evaluation
     let sql = "SELECT concat(d1, '-foo') FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+------------------------------+",
         "| concat(test.d1,Utf8(\"-foo\")) |",
         "+------------------------------+",
@@ -315,7 +314,7 @@ async fn query_on_string_dictionary() -> Result<()> {
     // Expression evaluation with two dictionaries
     let sql = "SELECT concat(d1, d2) FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+-------------------------+",
         "| concat(test.d1,test.d2) |",
         "+-------------------------+",
@@ -329,7 +328,7 @@ async fn query_on_string_dictionary() -> Result<()> {
     // aggregation
     let sql = "SELECT COUNT(d1) FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+----------------+",
         "| COUNT(test.d1) |",
         "+----------------+",
@@ -341,7 +340,7 @@ async fn query_on_string_dictionary() -> Result<()> {
     // aggregation min
     let sql = "SELECT MIN(d1) FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+--------------+",
         "| MIN(test.d1) |",
         "+--------------+",
@@ -353,7 +352,7 @@ async fn query_on_string_dictionary() -> Result<()> {
     // aggregation max
     let sql = "SELECT MAX(d1) FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+--------------+",
         "| MAX(test.d1) |",
         "+--------------+",
@@ -365,7 +364,7 @@ async fn query_on_string_dictionary() -> Result<()> {
     // grouping
     let sql = "SELECT d1, COUNT(*) FROM test group by d1";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+-------+----------+",
         "| d1    | COUNT(*) |",
         "+-------+----------+",
@@ -379,7 +378,7 @@ async fn query_on_string_dictionary() -> Result<()> {
     // window functions
     let sql = "SELECT d1, row_number() OVER (partition by d1) as rn1 FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+-------+-----+",
         "| d1    | rn1 |",
         "+-------+-----+",
@@ -408,7 +407,8 @@ async fn sort_on_window_null_string() -> Result<()> {
     ])
     .unwrap();
 
-    let ctx = SessionContext::with_config(SessionConfig::new().with_target_partitions(1));
+    let ctx =
+        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(1));
     ctx.register_batch("test", batch)?;
 
     let sql =
@@ -591,7 +591,7 @@ async fn boolean_literal() -> Result<()> {
 #[tokio::test]
 async fn unprojected_filter() {
     let config = SessionConfig::new();
-    let ctx = SessionContext::with_config(config);
+    let ctx = SessionContext::new_with_config(config);
     let df = ctx.read_table(table_with_sequence(1, 3).unwrap()).unwrap();
 
     let df = df

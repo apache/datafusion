@@ -16,6 +16,7 @@
 // under the License.
 
 //! Print format variants
+use crate::print_options::MaxRows;
 use arrow::csv::writer::WriterBuilder;
 use arrow::json::{ArrayWriter, LineDelimitedWriter};
 use arrow::util::pretty::pretty_format_batches_with_options;
@@ -70,17 +71,86 @@ fn print_batches_with_sep(batches: &[RecordBatch], delimiter: u8) -> Result<Stri
     Ok(formatted)
 }
 
+fn keep_only_maxrows(s: &str, maxrows: usize) -> String {
+    let lines: Vec<String> = s.lines().map(String::from).collect();
+
+    assert!(lines.len() >= maxrows + 4); // 4 lines for top and bottom border
+
+    let last_line = &lines[lines.len() - 1]; // bottom border line
+
+    let spaces = last_line.len().saturating_sub(4);
+    let dotted_line = format!("| .{:<spaces$}|", "", spaces = spaces);
+
+    let mut result = lines[0..(maxrows + 3)].to_vec(); // Keep top border and `maxrows` lines
+    result.extend(vec![dotted_line; 3]); // Append ... lines
+    result.push(last_line.clone());
+
+    result.join("\n")
+}
+
+fn format_batches_with_maxrows(
+    batches: &[RecordBatch],
+    maxrows: MaxRows,
+) -> Result<String> {
+    match maxrows {
+        MaxRows::Limited(maxrows) => {
+            // Only format enough batches for maxrows
+            let mut filtered_batches = Vec::new();
+            let mut batches = batches;
+            let row_count: usize = batches.iter().map(|b| b.num_rows()).sum();
+            if row_count > maxrows {
+                let mut accumulated_rows = 0;
+
+                for batch in batches {
+                    filtered_batches.push(batch.clone());
+                    if accumulated_rows + batch.num_rows() > maxrows {
+                        break;
+                    }
+                    accumulated_rows += batch.num_rows();
+                }
+
+                batches = &filtered_batches;
+            }
+
+            let mut formatted = format!(
+                "{}",
+                pretty_format_batches_with_options(batches, &DEFAULT_FORMAT_OPTIONS)?,
+            );
+
+            if row_count > maxrows {
+                formatted = keep_only_maxrows(&formatted, maxrows);
+            }
+
+            Ok(formatted)
+        }
+        MaxRows::Unlimited => {
+            // maxrows not specified, print all rows
+            Ok(format!(
+                "{}",
+                pretty_format_batches_with_options(batches, &DEFAULT_FORMAT_OPTIONS)?,
+            ))
+        }
+    }
+}
+
 impl PrintFormat {
     /// print the batches to stdout using the specified format
-    pub fn print_batches(&self, batches: &[RecordBatch]) -> Result<()> {
+    /// `maxrows` option is only used for `Table` format:
+    ///     If `maxrows` is Some(n), then at most n rows will be displayed
+    ///     If `maxrows` is None, then every row will be displayed
+    pub fn print_batches(&self, batches: &[RecordBatch], maxrows: MaxRows) -> Result<()> {
+        if batches.is_empty() {
+            return Ok(());
+        }
+
         match self {
             Self::Csv => println!("{}", print_batches_with_sep(batches, b',')?),
             Self::Tsv => println!("{}", print_batches_with_sep(batches, b'\t')?),
             Self::Table => {
-                println!(
-                    "{}",
-                    pretty_format_batches_with_options(batches, &DEFAULT_FORMAT_OPTIONS)?
-                )
+                if maxrows == MaxRows::Limited(0) {
+                    return Ok(());
+                }
+                println!("{}", format_batches_with_maxrows(batches, maxrows)?,)
             }
             Self::Json => println!("{}", batches_to_json!(ArrayWriter, batches)),
             Self::NdJson => {
@@ -155,6 +225,74 @@ mod tests {
 
         let r = batches_to_json!(LineDelimitedWriter, &batches);
         assert_eq!("{\"a\":1,\"b\":4,\"c\":7}\n{\"a\":2,\"b\":5,\"c\":8}\n{\"a\":3,\"b\":6,\"c\":9}\n", r);
+        Ok(())
+    }
+
+    #[test]
+    fn test_format_batches_with_maxrows() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+
+        let batch =
+            RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1, 2, 3]))])
+                .unwrap();
+
+        #[rustfmt::skip]
+        let all_rows_expected = [
+            "+---+",
+            "| a |",
+            "+---+",
+            "| 1 |",
+            "| 2 |",
+            "| 3 |",
+            "+---+",
+        ].join("\n");
+
+        #[rustfmt::skip]
+        let one_row_expected = [
+            "+---+",
+            "| a |",
+            "+---+",
+            "| 1 |",
+            "| . |",
+            "| . |",
+            "| . |",
+            "+---+",
+        ].join("\n");
+
+        #[rustfmt::skip]
+        let multi_batches_expected = [
+            "+---+",
+            "| a |",
+            "+---+",
+            "| 1 |",
+            "| 2 |",
+            "| 3 |",
+            "| 1 |",
+            "| 2 |",
+            "| . |",
+            "| . |",
+            "| . |",
+            "+---+",
+        ].join("\n");
+
+        let no_limit = format_batches_with_maxrows(&[batch.clone()], MaxRows::Unlimited)?;
+        assert_eq!(all_rows_expected, no_limit);
+
+        let maxrows_less_than_actual =
+            format_batches_with_maxrows(&[batch.clone()], MaxRows::Limited(1))?;
+        assert_eq!(one_row_expected, maxrows_less_than_actual);
+        let maxrows_more_than_actual =
+            format_batches_with_maxrows(&[batch.clone()], MaxRows::Limited(5))?;
+        assert_eq!(all_rows_expected, maxrows_more_than_actual);
+        let maxrows_equals_actual =
+            format_batches_with_maxrows(&[batch.clone()], MaxRows::Limited(3))?;
+        assert_eq!(all_rows_expected, maxrows_equals_actual);
+        let multi_batches = format_batches_with_maxrows(
+            &[batch.clone(), batch.clone(), batch.clone()],
+            MaxRows::Limited(5),
+        )?;
+        assert_eq!(multi_batches_expected, multi_batches);
+
         Ok(())
     }
 }

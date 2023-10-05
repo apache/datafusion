@@ -1238,7 +1238,7 @@ impl DataFrame {
     /// # }
     /// ```
     pub async fn cache(self) -> Result<DataFrame> {
-        let context = SessionContext::with_state(self.session_state.clone());
+        let context = SessionContext::new_with_state(self.session_state.clone());
         let mem_table = MemTable::try_new(
             SchemaRef::from(self.schema().clone()),
             self.collect_partitioned().await?,
@@ -1287,15 +1287,16 @@ impl TableProvider for DataFrameTableProvider {
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let mut expr = LogicalPlanBuilder::from(self.plan.clone());
-        if let Some(p) = projection {
-            expr = expr.select(p.iter().copied())?
-        }
-
         // Add filter when given
         let filter = filters.iter().cloned().reduce(|acc, new| acc.and(new));
         if let Some(filter) = filter {
             expr = expr.filter(filter)?
         }
+
+        if let Some(p) = projection {
+            expr = expr.select(p.iter().copied())?
+        }
+
         // add a limit if given
         if let Some(l) = limit {
             expr = expr.limit(0, Some(l))?
@@ -2010,7 +2011,7 @@ mod tests {
                 "datafusion.sql_parser.enable_ident_normalization".to_owned(),
                 "false".to_owned(),
             )]))?;
-        let mut ctx = SessionContext::with_config(config);
+        let mut ctx = SessionContext::new_with_config(config);
         let name = "aggregate_test_100";
         register_aggregate_csv(&mut ctx, name).await?;
         let df = ctx.table(name);

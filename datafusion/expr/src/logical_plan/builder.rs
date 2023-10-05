@@ -26,7 +26,9 @@ use crate::expr_rewriter::{
 };
 use crate::type_coercion::binary::comparison_coercion;
 use crate::utils::{columnize_expr, compare_sort_expr};
-use crate::{and, binary_expr, DmlStatement, Operator, WriteOp};
+use crate::{
+    and, binary_expr, DmlStatement, Operator, TableProviderFilterPushDown, WriteOp,
+};
 use crate::{
     logical_plan::{
         Aggregate, Analyze, CrossJoin, Distinct, EmptyRelation, Explain, Filter, Join,
@@ -1401,6 +1403,13 @@ impl TableSource for LogicalTableSource {
 
     fn schema(&self) -> SchemaRef {
         self.table_schema.clone()
+    }
+
+    fn supports_filters_pushdown(
+        &self,
+        filters: &[&Expr],
+    ) -> Result<Vec<crate::TableProviderFilterPushDown>> {
+        Ok(vec![TableProviderFilterPushDown::Exact; filters.len()])
     }
 }
 

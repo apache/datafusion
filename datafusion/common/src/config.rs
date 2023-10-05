@@ -251,6 +251,9 @@ config_namespace! {
         /// and sorted in a single RecordBatch rather than sorted in
         /// batches and merged.
         pub sort_in_place_threshold_bytes: usize, default = 1024 * 1024
+
+        /// Number of files to read in parallel when inferring schema and statistics
+        pub meta_fetch_concurrency: usize, default = 32
     }
 }
 
@@ -304,7 +307,7 @@ config_namespace! {
         /// lzo, brotli(level), lz4, zstd(level), and lz4_raw.
         /// These values are not case sensitive. If NULL, uses
         /// default parquet writer setting
-        pub compression: Option<String>, default = None
+        pub compression: Option<String>, default = Some("zstd(3)".into())
 
         /// Sets if dictionary encoding is enabled. If NULL, uses
         /// default parquet writer setting
@@ -450,11 +453,13 @@ config_namespace! {
         /// ```
         pub repartition_sorts: bool, default = true
 
-        /// When true, DataFusion will opportunistically remove sorts by replacing
-        /// `RepartitionExec` with `SortPreservingRepartitionExec`, and
-        /// `CoalescePartitionsExec` with `SortPreservingMergeExec`,
-        /// even when the query is bounded.
-        pub bounded_order_preserving_variants: bool, default = false
+        /// When true, DataFusion will opportunistically remove sorts when the data is already sorted,
+        /// (i.e. setting `preserve_order` to true on `RepartitionExec`  and
+        /// using `SortPreservingMergeExec`)
+        ///
+        /// When false, DataFusion will maximize plan parallelism using
+        /// `RepartitionExec` even if this requires subsequently resorting data using a `SortExec`.
+        pub prefer_existing_sort: bool, default = false
 
         /// When set to true, the logical plan optimizer will produce warning
         /// messages if any optimization rules produce errors and then proceed to the next

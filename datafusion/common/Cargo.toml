@@ -35,34 +35,23 @@ path = "src/lib.rs"
 [features]
 avro = ["apache-avro"]
 backtrace = []
-compression = ["xz2", "bzip2", "flate2", "zstd", "async-compression"]
-default = ["compression", "parquet"]
+default = ["parquet"]
 pyarrow = ["pyo3", "arrow/pyarrow"]
 
 [dependencies]
-apache-avro = { version = "0.15", default-features = false, features = ["snappy"], optional = true }
+ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
+apache-avro = { version = "0.16", default-features = false, features = ["bzip", "snappy", "xz", "zstandard"], optional = true }
 arrow = { workspace = true }
 arrow-array = { workspace = true }
-async-compression = { version = "0.4.0", features = ["bzip2", "gzip", "xz", "zstd", "futures-io", "tokio"], optional = true }
-bytes = "1.4"
-bzip2 = { version = "0.4.3", optional = true }
+arrow-buffer = { workspace = true }
+arrow-schema = { workspace = true }
 chrono = { workspace = true }
-flate2 = { version = "1.0.24", optional = true }
-futures = "0.3"
+half = { version = "2.1", default-features = false }
 num_cpus = "1.13.0"
 object_store = { version = "0.7.0", default-features = false, optional = true }
 parquet = { workspace = true, optional = true }
 pyo3 = { version = "0.19.0", optional = true }
 sqlparser = { workspace = true }
-tokio = { version = "1.28", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }
-tokio-util = { version = "0.7.4", features = ["io"] }
-xz2 = { version = "0.1", optional = true }
-zstd = { version = "0.12", optional = true }
-
-
-
-
-
 
 [dev-dependencies]
 rand = "0.8.4"

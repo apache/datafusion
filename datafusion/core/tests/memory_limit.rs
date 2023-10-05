@@ -239,9 +239,7 @@ async fn sort_preserving_merge() {
 
 #[tokio::test]
 async fn sort_spill_reservation() {
-    let scenario = Scenario::new_dictionary_strings(1)
-        // make the batches small enough to avoid triggering CardinalityAwareRowConverter
-        .with_single_row_batches(true);
+    let scenario = Scenario::new_dictionary_strings(1);
     let partition_size = scenario.partition_size();
 
     let base_config = SessionConfig::new()
@@ -267,15 +265,15 @@ async fn sort_spill_reservation() {
             // also merge, so we can ensure the sort could finish
             // given enough merging memory
             &[
-                "+---------------+----------------------------------------------------------------------------------------------------------+",
-                "| plan_type     | plan                                                                                                     |",
-                "+---------------+----------------------------------------------------------------------------------------------------------+",
-                "| logical_plan  | Sort: t.a ASC NULLS LAST, t.b DESC NULLS FIRST                                                           |",
-                "|               |   TableScan: t projection=[a, b]                                                                         |",
-                "| physical_plan | SortExec: expr=[a@0 ASC NULLS LAST,b@1 DESC]                                                             |",
-                "|               |   MemoryExec: partitions=1, partition_sizes=[245], output_ordering=a@0 ASC NULLS LAST,b@1 ASC NULLS LAST |",
-                "|               |                                                                                                          |",
-                "+---------------+----------------------------------------------------------------------------------------------------------+",
+                "+---------------+--------------------------------------------------------------------------------------------------------+",
+                "| plan_type     | plan                                                                                                   |",
+                "+---------------+--------------------------------------------------------------------------------------------------------+",
+                "| logical_plan  | Sort: t.a ASC NULLS LAST, t.b DESC NULLS FIRST                                                         |",
+                "|               |   TableScan: t projection=[a, b]                                                                       |",
+                "| physical_plan | SortExec: expr=[a@0 ASC NULLS LAST,b@1 DESC]                                                           |",
+                "|               |   MemoryExec: partitions=1, partition_sizes=[5], output_ordering=a@0 ASC NULLS LAST,b@1 ASC NULLS LAST |",
+                "|               |                                                                                                        |",
+                "+---------------+--------------------------------------------------------------------------------------------------------+",
             ]
         );
 
@@ -414,13 +412,13 @@ impl TestCase {
         let runtime = RuntimeEnv::new(rt_config).unwrap();
 
         // Configure execution
-        let state = SessionState::with_config_rt(config, Arc::new(runtime));
+        let state = SessionState::new_with_config_rt(config, Arc::new(runtime));
         let state = match scenario.rules() {
             Some(rules) => state.with_physical_optimizer_rules(rules),
             None => state,
         };
 
-        let ctx = SessionContext::with_state(state);
+        let ctx = SessionContext::new_with_state(state);
         ctx.register_table("t", table).expect("registering table");
 
         let query = query.expect("Test error: query not specified");
@@ -490,19 +488,6 @@ impl Scenario {
             partitions,
             single_row_batches: false,
         }
-    }
-
-    /// Should the input be split into 1 row batches?
-    fn with_single_row_batches(mut self, val: bool) -> Self {
-        if let Self::DictionaryStrings {
-            single_row_batches, ..
-        } = &mut self
-        {
-            *single_row_batches = val;
-        } else {
-            panic!("Scenario does not support single row batches");
-        }
-        self
     }
 
     /// return the size, in bytes, of each partition

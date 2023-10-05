@@ -17,7 +17,7 @@
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{not_impl_err, DFSchema, DataFusionError, Result};
-use datafusion_expr::{lit, Expr};
+use datafusion_expr::Expr;
 use sqlparser::ast::{Expr as SQLExpr, UnaryOperator, Value};
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -39,23 +39,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 match expr {
                     // optimization: if it's a number literal, we apply the negative operator
                     // here directly to calculate the new literal.
-                    SQLExpr::Value(Value::Number(n, _)) => match n.parse::<i64>() {
-                        Ok(n) => Ok(lit(-n)),
-                        Err(_) => Ok(lit(-n
-                            .parse::<f64>()
-                            .map_err(|_e| {
-                                DataFusionError::Plan(format!(
-                                    "negative operator can be only applied to integer and float operands, got: {n}"))
-                            })?)),
-                    },
-                    SQLExpr::Interval(interval) => self.sql_interval_to_expr(
-                        true,
-                        interval,
+                    SQLExpr::Value(Value::Number(n, _)) => {
+                        self.parse_sql_number(&n, true)
+                    }
+                    SQLExpr::Interval(interval) => {
+                        self.sql_interval_to_expr(true, interval, schema, planner_context)
+                    }
+                    // not a literal, apply negative operator on expression
+                    _ => Ok(Expr::Negative(Box::new(self.sql_expr_to_logical_expr(
+                        expr,
                         schema,
                         planner_context,
-                    ),
-                    // not a literal, apply negative operator on expression
-                    _ => Ok(Expr::Negative(Box::new(self.sql_expr_to_logical_expr(expr, schema, planner_context)?))),
+                    )?))),
                 }
             }
             _ => not_impl_err!("Unsupported SQL unary operator {op:?}"),

@@ -27,7 +27,7 @@ use arrow::datatypes::{
 use arrow::temporal_conversions::{MICROSECONDS, MILLISECONDS, NANOSECONDS};
 use datafusion_common::tree_node::{RewriteRecursion, TreeNodeRewriter};
 use datafusion_common::{
-    internal_err, DFSchemaRef, DataFusionError, Result, ScalarValue,
+    internal_err, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::expr::{BinaryExpr, Cast, InList, TryCast};
 use datafusion_expr::expr_rewriter::rewrite_preserving_name;
@@ -90,6 +90,12 @@ impl OptimizerRule for UnwrapCastInComparison {
         _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         let mut schema = merge_schema(plan.inputs());
+
+        if let LogicalPlan::TableScan(ts) = plan {
+            let source_schema =
+                DFSchema::try_from_qualified_schema(&ts.table_name, &ts.source.schema())?;
+            schema.merge(&source_schema);
+        }
 
         schema.merge(plan.schema());
 

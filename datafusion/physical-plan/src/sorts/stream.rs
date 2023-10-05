@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::row_converter::CardinalityAwareRowConverter;
 use crate::sorts::builder::SortOrder;
 use crate::sorts::cursor::{Cursor, FieldArray, FieldCursor, RowCursor};
 use crate::SendableRecordBatchStream;
@@ -24,7 +23,7 @@ use ahash::RandomState;
 use arrow::array::Array;
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
-use arrow::row::SortField;
+use arrow::row::{RowConverter, SortField};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
 use futures::stream::{Fuse, StreamExt};
@@ -110,7 +109,7 @@ impl FusedStreams {
 #[derive(Debug)]
 pub struct RowCursorStream {
     /// Converter to convert output of physical expressions
-    converter: CardinalityAwareRowConverter,
+    converter: RowConverter,
     /// The physical expressions to sort by
     column_expressions: Vec<Arc<dyn PhysicalExpr>>,
     /// Input streams
@@ -135,7 +134,7 @@ impl RowCursorStream {
             .collect::<Result<Vec<_>>>()?;
 
         let streams = streams.into_iter().map(|s| s.fuse()).collect();
-        let converter = CardinalityAwareRowConverter::new(sort_fields)?;
+        let converter = RowConverter::new(sort_fields)?;
         Ok(Self {
             converter,
             reservation,

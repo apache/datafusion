@@ -38,6 +38,7 @@ use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
 use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore};
 
 use super::{FileFormat, DEFAULT_SCHEMA_INFER_MAX_RECORD};
+use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::write::{
     create_writer, stateless_serialize_and_write_files, BatchSerializer, FileWriterMode,
 };
@@ -49,7 +50,6 @@ use crate::execution::context::SessionState;
 use crate::physical_plan::insert::{DataSink, FileSinkExec};
 use crate::physical_plan::{DisplayAs, DisplayFormatType, Statistics};
 use crate::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
-use datafusion_common::FileCompressionType;
 use rand::distributions::{Alphanumeric, DistString};
 
 /// Character Separated Value `FileFormat` implementation.
@@ -599,6 +599,7 @@ mod tests {
     use super::*;
     use crate::arrow::util::pretty;
     use crate::assert_batches_eq;
+    use crate::datasource::file_format::file_compression_type::FileCompressionType;
     use crate::datasource::file_format::test_util::VariableStream;
     use crate::datasource::listing::ListingOptions;
     use crate::physical_plan::collect;
@@ -609,7 +610,6 @@ mod tests {
     use chrono::DateTime;
     use datafusion_common::cast::as_string_array;
     use datafusion_common::internal_err;
-    use datafusion_common::FileCompressionType;
     use datafusion_common::FileType;
     use datafusion_common::GetExt;
     use datafusion_expr::{col, lit};
@@ -622,7 +622,7 @@ mod tests {
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {
         let config = SessionConfig::new().with_batch_size(2);
-        let session_ctx = SessionContext::with_config(config);
+        let session_ctx = SessionContext::new_with_config(config);
         let state = session_ctx.state();
         let task_ctx = state.task_ctx();
         // skip column 9 that overflows the automaticly discovered column type of i64 (u64 would work)
@@ -960,7 +960,7 @@ mod tests {
             .with_repartition_file_scans(true)
             .with_repartition_file_min_size(0)
             .with_target_partitions(n_partitions);
-        let ctx = SessionContext::with_config(config);
+        let ctx = SessionContext::new_with_config(config);
         let testdata = arrow_test_data();
         ctx.register_csv(
             "aggr",
@@ -997,7 +997,7 @@ mod tests {
             .has_header(true)
             .file_compression_type(FileCompressionType::GZIP)
             .file_extension("csv.gz");
-        let ctx = SessionContext::with_config(config);
+        let ctx = SessionContext::new_with_config(config);
         let testdata = arrow_test_data();
         ctx.register_csv(
             "aggr",
@@ -1033,7 +1033,7 @@ mod tests {
             .with_repartition_file_scans(true)
             .with_repartition_file_min_size(0)
             .with_target_partitions(n_partitions);
-        let ctx = SessionContext::with_config(config);
+        let ctx = SessionContext::new_with_config(config);
         ctx.register_csv(
             "empty",
             "tests/data/empty_0_byte.csv",
@@ -1066,7 +1066,7 @@ mod tests {
             .with_repartition_file_scans(true)
             .with_repartition_file_min_size(0)
             .with_target_partitions(n_partitions);
-        let ctx = SessionContext::with_config(config);
+        let ctx = SessionContext::new_with_config(config);
         ctx.register_csv(
             "empty",
             "tests/data/empty.csv",
@@ -1104,7 +1104,7 @@ mod tests {
             .with_repartition_file_scans(true)
             .with_repartition_file_min_size(0)
             .with_target_partitions(n_partitions);
-        let ctx = SessionContext::with_config(config);
+        let ctx = SessionContext::new_with_config(config);
         let file_format = CsvFormat::default().with_has_header(false);
         let listing_options = ListingOptions::new(Arc::new(file_format))
             .with_file_extension(FileType::CSV.get_ext());
@@ -1157,7 +1157,7 @@ mod tests {
             .with_repartition_file_scans(true)
             .with_repartition_file_min_size(0)
             .with_target_partitions(n_partitions);
-        let ctx = SessionContext::with_config(config);
+        let ctx = SessionContext::new_with_config(config);
         let file_format = CsvFormat::default().with_has_header(false);
         let listing_options = ListingOptions::new(Arc::new(file_format))
             .with_file_extension(FileType::CSV.get_ext());
@@ -1202,7 +1202,7 @@ mod tests {
             .with_repartition_file_scans(true)
             .with_repartition_file_min_size(0)
             .with_target_partitions(n_partitions);
-        let ctx = SessionContext::with_config(config);
+        let ctx = SessionContext::new_with_config(config);
 
         ctx.register_csv(
             "one_col",
@@ -1251,7 +1251,7 @@ mod tests {
             .with_repartition_file_scans(true)
             .with_repartition_file_min_size(0)
             .with_target_partitions(n_partitions);
-        let ctx = SessionContext::with_config(config);
+        let ctx = SessionContext::new_with_config(config);
         ctx.register_csv(
             "wide_rows",
             "tests/data/wide_rows.csv",

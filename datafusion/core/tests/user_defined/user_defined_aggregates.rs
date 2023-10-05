@@ -19,11 +19,14 @@
 //! user defined aggregate functions
 
 use arrow::{array::AsArray, datatypes::Fields};
+use arrow_array::Int32Array;
+use arrow_schema::Schema;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
 
+use datafusion::datasource::MemTable;
 use datafusion::{
     arrow::{
         array::{ArrayRef, Float64Array, TimestampNanosecondArray},
@@ -43,6 +46,8 @@ use datafusion::{
 use datafusion_common::{
     assert_contains, cast::as_primitive_array, exec_err, DataFusionError,
 };
+use datafusion_expr::create_udaf;
+use datafusion_physical_expr::expressions::AvgAccumulator;
 
 /// Test to show the contents of the setup
 #[tokio::test]
@@ -169,8 +174,128 @@ async fn test_udaf_returning_struct_subquery() {
     assert_batches_eq!(expected, &execute(&ctx, sql).await.unwrap());
 }
 
+#[tokio::test]
+async fn test_udaf_shadows_builtin_fn() {
+    let TestContext {
+        mut ctx,
+        test_state,
+    } = TestContext::new();
+    let sql = "SELECT sum(arrow_cast(time, 'Int64')) from t";
+
+    // compute with builtin `sum` aggregator
+    let expected = [
+        "+-------------+",
+        "| SUM(t.time) |",
+        "+-------------+",
+        "| 19000       |",
+        "+-------------+",
+    ];
+    assert_batches_eq!(expected, &execute(&ctx, sql).await.unwrap());
+
+    // Register `TimeSum` with name `sum`. This will shadow the builtin one
+    let sql = "SELECT sum(time) from t";
+    TimeSum::register(&mut ctx, test_state.clone(), "sum");
+    let expected = [
+        "+----------------------------+",
+        "| sum(t.time)                |",
+        "+----------------------------+",
+        "| 1970-01-01T00:00:00.000019 |",
+        "+----------------------------+",
+    ];
+    assert_batches_eq!(expected, &execute(&ctx, sql).await.unwrap());
+}
+
 async fn execute(ctx: &SessionContext, sql: &str) -> Result<Vec<RecordBatch>> {
     ctx.sql(sql).await?.collect().await
+}
+
+/// tests the creation, registration and usage of a UDAF
+#[tokio::test]
+async fn simple_udaf() -> Result<()> {
+    let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+
+    let batch1 = RecordBatch::try_new(
+        Arc::new(schema.clone()),
+        vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+    )?;
+    let batch2 = RecordBatch::try_new(
+        Arc::new(schema.clone()),
+        vec![Arc::new(Int32Array::from(vec![4, 5]))],
+    )?;
+
+    let ctx = SessionContext::new();
+
+    let provider = MemTable::try_new(Arc::new(schema), vec![vec![batch1], vec![batch2]])?;
+    ctx.register_table("t", Arc::new(provider))?;
+
+    // define a udaf, using a DataFusion's accumulator
+    let my_avg = create_udaf(
+        "my_avg",
+        vec![DataType::Float64],
+        Arc::new(DataType::Float64),
+        Volatility::Immutable,
+        Arc::new(|_| Ok(Box::<AvgAccumulator>::default())),
+        Arc::new(vec![DataType::UInt64, DataType::Float64]),
+    );
+
+    ctx.register_udaf(my_avg);
+
+    let result = ctx.sql("SELECT MY_AVG(a) FROM t").await?.collect().await?;
+
+    let expected = [
+        "+-------------+",
+        "| my_avg(t.a) |",
+        "+-------------+",
+        "| 3.0         |",
+        "+-------------+",
+    ];
+    assert_batches_eq!(expected, &result);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn case_sensitive_identifiers_user_defined_aggregates() -> Result<()> {
+    let ctx = SessionContext::new();
+    let arr = Int32Array::from(vec![1]);
+    let batch = RecordBatch::try_from_iter(vec![("i", Arc::new(arr) as _)])?;
+    ctx.register_batch("t", batch).unwrap();
+
+    // Note capitalization
+    let my_avg = create_udaf(
+        "MY_AVG",
+        vec![DataType::Float64],
+        Arc::new(DataType::Float64),
+        Volatility::Immutable,
+        Arc::new(|_| Ok(Box::<AvgAccumulator>::default())),
+        Arc::new(vec![DataType::UInt64, DataType::Float64]),
+    );
+
+    ctx.register_udaf(my_avg);
+
+    // doesn't work as it was registered as non lowercase
+    let err = ctx.sql("SELECT MY_AVG(i) FROM t").await.unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("Error during planning: Invalid function \'my_avg\'"));
+
+    // Can call it if you put quotes
+    let result = ctx
+        .sql("SELECT \"MY_AVG\"(i) FROM t")
+        .await?
+        .collect()
+        .await?;
+
+    let expected = [
+        "+-------------+",
+        "| MY_AVG(t.i) |",
+        "+-------------+",
+        "| 1.0         |",
+        "+-------------+",
+    ];
+    assert_batches_eq!(expected, &result);
+
+    Ok(())
 }
 
 /// Returns an context with a table "t" and the "first" and "time_sum"
@@ -214,7 +339,7 @@ impl TestContext {
         // Tell DataFusion about the "first" function
         FirstSelector::register(&mut ctx);
         // Tell DataFusion about the "time_sum" function
-        TimeSum::register(&mut ctx, Arc::clone(&test_state));
+        TimeSum::register(&mut ctx, Arc::clone(&test_state), "time_sum");
 
         Self { ctx, test_state }
     }
@@ -281,7 +406,7 @@ impl TimeSum {
         Self { sum: 0, test_state }
     }
 
-    fn register(ctx: &mut SessionContext, test_state: Arc<TestState>) {
+    fn register(ctx: &mut SessionContext, test_state: Arc<TestState>, name: &str) {
         let timestamp_type = DataType::Timestamp(TimeUnit::Nanosecond, None);
 
         // Returns the same type as its input
@@ -300,8 +425,6 @@ impl TimeSum {
         let captured_state = Arc::clone(&test_state);
         let accumulator: AccumulatorFactoryFunction =
             Arc::new(move |_| Ok(Box::new(Self::new(Arc::clone(&captured_state)))));
-
-        let name = "time_sum";
 
         let time_sum =
             AggregateUDF::new(name, &signature, &return_type, &accumulator, &state_type);

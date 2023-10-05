@@ -100,6 +100,40 @@ select * from foo where ts != '2000-02-01T00:00:00';
 statement ok
 drop table foo;
 
+
+##########
+## Timezone Handling Tests
+##########
+
+statement ok
+SET TIME ZONE = '+08'
+
+# should use execution timezone
+query P
+SELECT TIMESTAMPTZ '2000-01-01T01:01:01'
+----
+2000-01-01T01:01:01+08:00
+
+# casts return timezone to use execution timezone (same as postgresql)
+query P
+SELECT TIMESTAMPTZ '2000-01-01T01:01:01+07:00'
+----
+2000-01-01T02:01:01+08:00
+
+query P
+SELECT TIMESTAMPTZ '2000-01-01T01:01:01Z'
+----
+2000-01-01T09:01:01+08:00
+
+statement ok
+SET TIME ZONE = '+00'
+
+query P
+SELECT TIMESTAMPTZ '2000-01-01T01:01:01'
+----
+2000-01-01T01:01:01Z
+
+
 ##########
 ## to_timestamp tests
 ##########
@@ -1307,3 +1341,420 @@ drop table ts_data_millis
 
 statement ok
 drop table ts_data_secs
+
+
+
+##########
+## Timezone impact on builtin scalar functions
+#
+# server time = +07
+##########
+
+statement ok
+set timezone to '+07';
+
+# postgresql: 2000-01-01 01:00:00+07
+query P
+SELECT date_trunc('hour', TIMESTAMPTZ '2000-01-01T01:01:01') as ts
+----
+2000-01-01T01:00:00+07:00
+
+# postgresql: 2000-01-01 00:00:00+07
+query P
+SELECT date_trunc('day', TIMESTAMPTZ '2000-01-01T01:01:01') as ts
+----
+2000-01-01T00:00:00+07:00
+
+# postgresql: 2000-01-01 08:00:00+07
+query P
+SELECT date_trunc('hour', TIMESTAMPTZ '2000-01-01T01:01:01Z') as ts
+----
+2000-01-01T08:00:00+07:00
+
+# postgresql: 2000-01-01 00:00:00+07
+query P
+SELECT date_trunc('day', TIMESTAMPTZ '2000-01-01T01:01:01Z') as ts
+----
+2000-01-01T00:00:00+07:00
+
+# postgresql:  2022-01-01 00:00:00+07
+query P
+SELECT date_bin('1 day', TIMESTAMPTZ '2022-01-01 20:10:00', TIMESTAMPTZ '2020-01-01')
+----
+2022-01-01T00:00:00+07:00
+
+# postgresql: 2022-01-02 00:00:00+07
+query P
+SELECT date_bin('1 day', TIMESTAMPTZ '2022-01-01 20:10:00Z', TIMESTAMPTZ '2020-01-01')
+----
+2022-01-02T00:00:00+07:00
+
+# postgresql: 1
+query R
+SELECT date_part('hour', TIMESTAMPTZ '2000-01-01T01:01:01') as part
+----
+1
+
+# postgresql: 8
+query R
+SELECT date_part('hour', TIMESTAMPTZ '2000-01-01T01:01:01Z') as part
+----
+8
+
+
+
+##########
+## Timezone impact on builtin scalar functions
+#
+# server time = UTC
+##########
+
+statement ok
+set timezone to '+00';
+
+# postgresql: 2000-01-01T01:00:00+00
+query P
+SELECT date_trunc('hour', TIMESTAMPTZ '2000-01-01T01:01:01') as ts
+----
+2000-01-01T01:00:00Z
+
+# postgresql: 2000-01-01T00:00:00+00
+query P
+SELECT date_trunc('day', TIMESTAMPTZ '2000-01-01T01:01:01') as ts
+----
+2000-01-01T00:00:00Z
+
+# postgresql: 1999-12-31T18:00:00+00
+query P
+SELECT date_trunc('hour', TIMESTAMPTZ '2000-01-01T01:01:01+07') as ts
+----
+1999-12-31T18:00:00Z
+
+# postgresql: 1999-12-31T00:00:00+00
+query P
+SELECT date_trunc('day', TIMESTAMPTZ '2000-01-01T01:01:01+07') as ts
+----
+1999-12-31T00:00:00Z
+
+# postgresql: 2022-01-01 00:00:00+00
+query P
+SELECT date_bin('1 day', TIMESTAMPTZ '2022-01-01 20:10:00', TIMESTAMPTZ '2020-01-01')
+----
+2022-01-01T00:00:00Z
+
+# postgresql: 2021-12-31 00:00:00+00
+query P
+SELECT date_bin('1 day', TIMESTAMPTZ '2022-01-01 01:10:00+07', TIMESTAMPTZ '2020-01-01')
+----
+2021-12-31T00:00:00Z
+
+# postgresql: 2021-12-31 00:00:00+00
+query P
+SELECT date_bin('1 day', TIMESTAMPTZ '2022-01-01 01:10:00+07', '2020-01-01')
+----
+2021-12-31T00:00:00Z
+
+# postgresql: 2021-12-31 00:00:00+00
+query P
+SELECT date_bin('1 day', TIMESTAMPTZ '2022-01-01 01:10:00+07', '2020-01-01T00:00:00Z')
+----
+2021-12-31T00:00:00Z
+
+# postgresql: 2021-12-31 18:00:00+00
+query P
+SELECT date_bin('2 hour', TIMESTAMPTZ '2022-01-01 01:10:00+07', '2020-01-01')
+----
+2021-12-31T18:00:00Z
+
+# postgresql: 2021-12-31 18:00:00+00
+query P
+SELECT date_bin('2 hour', TIMESTAMPTZ '2022-01-01 01:10:00+07', '2020-01-01T00:00:00Z')
+----
+2021-12-31T18:00:00Z
+
+# postgresql: 1
+query R
+SELECT date_part('hour', TIMESTAMPTZ '2000-01-01T01:01:01') as part
+----
+1
+
+# postgresql: 18
+query R
+SELECT date_part('hour', TIMESTAMPTZ '2000-01-01T01:01:01+07') as part
+----
+18
+
+
+
+##########
+## Timezone impact on builtin scalar functions
+#
+# irregular offsets
+##########
+
+query P rowsort
+SELECT date_trunc('hour', TIMESTAMPTZ '2000-01-01T00:00:00+00:45') as ts_irregular_offset
+ UNION ALL
+SELECT date_trunc('hour', TIMESTAMPTZ '2000-01-01T00:00:00+00:30') as ts_irregular_offset
+ UNION ALL
+SELECT date_trunc('hour', TIMESTAMPTZ '2000-01-01T00:00:00+00:15') as ts_irregular_offset
+ UNION ALL
+SELECT date_trunc('hour', TIMESTAMPTZ '2000-01-01T00:00:00-00:15') as ts_irregular_offset
+ UNION ALL
+SELECT date_trunc('hour', TIMESTAMPTZ '2000-01-01T00:00:00-00:30') as ts_irregular_offset
+ UNION ALL
+SELECT date_trunc('hour', TIMESTAMPTZ '2000-01-01T00:00:00-00:45') as ts_irregular_offset
+----
+1999-12-31T23:00:00Z
+1999-12-31T23:00:00Z
+1999-12-31T23:00:00Z
+2000-01-01T00:00:00Z
+2000-01-01T00:00:00Z
+2000-01-01T00:00:00Z
+
+query P rowsort
+SELECT date_bin('1 day', TIMESTAMPTZ '2022-01-01 00:00:00+00:30', TIMESTAMPTZ '2020-01-01') as ts_irregular_offset
+ UNION ALL
+SELECT date_bin('1 day', TIMESTAMPTZ '2022-01-01 00:00:00+00:15', TIMESTAMPTZ '2020-01-01') as ts_irregular_offset
+ UNION ALL
+SELECT date_bin('1 day', TIMESTAMPTZ '2022-01-01 00:00:00-00:15', TIMESTAMPTZ '2020-01-01') as ts_irregular_offset
+ UNION ALL
+SELECT date_bin('1 day', TIMESTAMPTZ '2022-01-01 00:00:00-00:30', TIMESTAMPTZ '2020-01-01') as ts_irregular_offset
+----
+2021-12-31T00:00:00Z
+2021-12-31T00:00:00Z
+2022-01-01T00:00:00Z
+2022-01-01T00:00:00Z
+
+query P rowsort
+SELECT date_bin('1 hour', TIMESTAMPTZ '2022-01-01 00:00:00+01:15', TIMESTAMPTZ '2020-01-01') as ts_irregular_offset
+ UNION ALL
+SELECT date_bin('1 hour', TIMESTAMPTZ '2022-01-01 00:00:00+00:45', TIMESTAMPTZ '2020-01-01') as ts_irregular_offset
+ UNION ALL
+SELECT date_bin('1 hour', TIMESTAMPTZ '2022-01-01 00:00:00+00:30', TIMESTAMPTZ '2020-01-01') as ts_irregular_offset
+ UNION ALL
+SELECT date_bin('1 hour', TIMESTAMPTZ '2022-01-01 00:00:00+00:15', TIMESTAMPTZ '2020-01-01') as ts_irregular_offset
+ UNION ALL
+SELECT date_bin('1 hour', TIMESTAMPTZ '2022-01-01 00:00:00-00:15', TIMESTAMPTZ '2020-01-01') as ts_irregular_offset
+ UNION ALL
+SELECT date_bin('1 hour', TIMESTAMPTZ '2022-01-01 00:00:00-00:30', TIMESTAMPTZ '2020-01-01') as ts_irregular_offset
+ UNION ALL
+SELECT date_bin('1 hour', TIMESTAMPTZ '2022-01-01 00:00:00-00:45', TIMESTAMPTZ '2020-01-01') as ts_irregular_offset
+ UNION ALL
+SELECT date_bin('1 hour', TIMESTAMPTZ '2022-01-01 00:00:00-01:15', TIMESTAMPTZ '2020-01-01') as ts_irregular_offset
+----
+2021-12-31T22:00:00Z
+2021-12-31T23:00:00Z
+2021-12-31T23:00:00Z
+2021-12-31T23:00:00Z
+2022-01-01T00:00:00Z
+2022-01-01T00:00:00Z
+2022-01-01T00:00:00Z
+2022-01-01T01:00:00Z
+
+
+
+##########
+## Timezone acceptance bounds
+#
+# standard formats
+##########
+
+query P
+SELECT TIMESTAMPTZ '2022-01-01 01:10:00' as rfc3339_no_tz
+----
+2022-01-01T01:10:00Z
+
+# +00, +00:00, +0000
+# +01, +01:00, +0100
+# -01, -01:00, -0100
+query P rowsort
+SELECT TIMESTAMPTZ '2022-01-01 01:10:00+00' as rfc3339_offset_tz
+ UNION ALL
+SELECT TIMESTAMPTZ '2022-01-01 01:10:00+00:00' as rfc3339_offset_tz
+ UNION ALL
+SELECT TIMESTAMPTZ '2022-01-01 01:10:00+0000' as rfc3339_offset_tz
+ UNION ALL
+ SELECT TIMESTAMPTZ '2022-01-01 01:10:00+01' as rfc3339_offset_tz
+ UNION ALL
+SELECT TIMESTAMPTZ '2022-01-01 01:10:00+01:00' as rfc3339_offset_tz
+ UNION ALL
+SELECT TIMESTAMPTZ '2022-01-01 01:10:00+0100' as rfc3339_offset_tz
+ UNION ALL
+SELECT TIMESTAMPTZ '2022-01-01 01:10:00-01' as rfc3339_offset_tz
+ UNION ALL
+SELECT TIMESTAMPTZ '2022-01-01 01:10:00-01:00' as rfc3339_offset_tz
+ UNION ALL
+SELECT TIMESTAMPTZ '2022-01-01 01:10:00-0100' as rfc3339_offset_tz
+----
+2022-01-01T00:10:00Z
+2022-01-01T00:10:00Z
+2022-01-01T00:10:00Z
+2022-01-01T01:10:00Z
+2022-01-01T01:10:00Z
+2022-01-01T01:10:00Z
+2022-01-01T02:10:00Z
+2022-01-01T02:10:00Z
+2022-01-01T02:10:00Z
+
+query P
+SELECT TIMESTAMPTZ '2022-01-01T01:10:00' as iso8601_no_tz
+----
+2022-01-01T01:10:00Z
+
+# +00, +00:00, +0000
+# +01, +01:00, +0100
+# -01, -01:00, -0100
+query P rowsort
+SELECT TIMESTAMPTZ '2022-01-01T01:10:00+00' as iso8601_offset_tz
+ UNION ALL
+SELECT TIMESTAMPTZ '2022-01-01T01:10:00+00:00' as iso8601_offset_tz
+ UNION ALL
+SELECT TIMESTAMPTZ '2022-01-01T01:10:00+0000' as iso8601_offset_tz
+ UNION ALL
+ SELECT TIMESTAMPTZ '2022-01-01T01:10:00+01' as iso8601_offset_tz
+ UNION ALL
+SELECT TIMESTAMPTZ '2022-01-01T01:10:00+01:00' as iso8601_offset_tz
+ UNION ALL
+SELECT TIMESTAMPTZ '2022-01-01T01:10:00+0100' as iso8601_offset_tz
+ UNION ALL
+SELECT TIMESTAMPTZ '2022-01-01T01:10:00-01' as iso8601_offset_tz
+ UNION ALL
+SELECT TIMESTAMPTZ '2022-01-01T01:10:00-01:00' as iso8601_offset_tz
+ UNION ALL
+SELECT TIMESTAMPTZ '2022-01-01T01:10:00-0100' as iso8601_offset_tz
+----
+2022-01-01T00:10:00Z
+2022-01-01T00:10:00Z
+2022-01-01T00:10:00Z
+2022-01-01T01:10:00Z
+2022-01-01T01:10:00Z
+2022-01-01T01:10:00Z
+2022-01-01T02:10:00Z
+2022-01-01T02:10:00Z
+2022-01-01T02:10:00Z
+
+statement error
+SELECT TIMESTAMPTZ '2023‐W38‐5' as iso8601_week_designation
+
+statement error
+SELECT TIMESTAMPTZ '2022-01-01T01:10:00+Foo' as bad_tz
+
+statement error
+SELECT TIMESTAMPTZ '2022-01-01T01:10:00+42:00' as bad_tz
+
+query P rowsort
+SELECT TIMESTAMPTZ '2022-01-01 01:10:00 GMT' as ts_gmt
+----
+2022-01-01T01:10:00Z
+
+statement error
+SELECT TIMESTAMPTZ '2022-01-01 01:10:00 GMT-1' as ts_gmt_offset
+
+# will not accept non-GMT geo abbr
+# postgresql: accepts
+statement error
+SELECT TIMESTAMPTZ '2022-01-01 01:10:00 AEST'
+
+# ok to use geo longform
+query P rowsort
+SELECT TIMESTAMPTZ '2022-01-01 01:10:00 Australia/Sydney' as ts_geo
+ UNION ALL
+SELECT TIMESTAMPTZ '2022-01-01 01:10:00 Antarctica/Vostok' as ts_geo
+ UNION ALL
+SELECT TIMESTAMPTZ '2022-01-01 01:10:00 Africa/Johannesburg' as ts_geo
+ UNION ALL
+SELECT TIMESTAMPTZ '2022-01-01 01:10:00 America/Los_Angeles' as ts_geo
+----
+2021-12-31T14:10:00Z
+2021-12-31T19:10:00Z
+2021-12-31T23:10:00Z
+2022-01-01T09:10:00Z
+
+# geo longform timezones need whitespace converted to underscore
+statement error
+SELECT TIMESTAMPTZ '2022-01-01 01:10:00 America/Los Angeles' as ts_geo
+
+statement error
+SELECT TIMESTAMPTZ 'Sat, 1 Jan 2022 01:10:00 GMT' as rfc1123
+
+
+
+##########
+## Timezone acceptance bounds
+#
+# daylight savings
+##########
+
+# will not accept daylight savings designations as geo abbr (because not accepting geo abbr)
+# postgresql: accepts
+statement error
+SELECT TIMESTAMPTZ '2023-03-12 02:00:00 EDT'
+
+# ok to use geo longform
+query P
+SELECT TIMESTAMPTZ '2023-03-11 02:00:00 America/Los_Angeles' as ts_geo
+----
+2023-03-11T10:00:00Z
+
+# will error if provide geo longform with time not possible due to daylight savings
+# Arrow error: Parser error: Error parsing timestamp from '2023-03-12 02:00:00 America/Los_Angeles': error computing timezone offset
+# postgresql: accepts
+statement error
+SELECT TIMESTAMPTZ '2023-03-12 02:00:00 America/Los_Angeles' as ts_geo
+
+
+
+##########
+## Timezone column tests
+##########
+
+# create a table with a non-UTC time zone.
+statement ok
+SET TIME ZONE = '+05:00'
+
+statement ok
+CREATE TABLE foo (time TIMESTAMPTZ) AS VALUES
+    ('2020-01-01T00:00:00+05:00'), 
+    ('2020-01-01T01:00:00+05:00'),
+    ('2020-01-01T02:00:00+05:00'),
+    ('2020-01-01T03:00:00+05:00')
+
+statement ok
+SET TIME ZONE = '+00'
+
+# verify column type
+query T
+SELECT arrow_typeof(time) FROM foo LIMIT 1
+----
+Timestamp(Nanosecond, Some("+05:00"))
+
+# check date_trunc
+query P
+SELECT date_trunc('day', time) FROM foo
+----
+2020-01-01T00:00:00+05:00
+2020-01-01T00:00:00+05:00
+2020-01-01T00:00:00+05:00
+2020-01-01T00:00:00+05:00
+
+# verify date_trunc column type
+query T
+SELECT arrow_typeof(date_trunc('day', time)) FROM foo LIMIT 1
+----
+Timestamp(Nanosecond, Some("+05:00"))
+
+# check date_bin
+query P
+SELECT date_bin(INTERVAL '1 day', time, '1970-01-01T00:00:00+05:00') FROM foo
+----
+2020-01-01T00:00:00+05:00
+2020-01-01T00:00:00+05:00
+2020-01-01T00:00:00+05:00
+2020-01-01T00:00:00+05:00
+
+# verify date_trunc column type
+query T
+SELECT arrow_typeof(date_bin(INTERVAL '1 day', time, '1970-01-01T00:00:00+05:00')) FROM foo LIMIT 1
+----
+Timestamp(Nanosecond, Some("+05:00"))

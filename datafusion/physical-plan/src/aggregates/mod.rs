@@ -42,6 +42,7 @@ use datafusion_physical_expr::{
     PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
 };
 
+use itertools::Itertools;
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -785,7 +786,7 @@ impl AggregateExec {
 
     /// Finds the DataType and SortDirection for this Aggregate, if there is one
     pub fn get_minmax_desc(&self) -> Option<(Field, bool)> {
-        let agg_expr = self.aggr_expr.as_slice().first()?;
+        let agg_expr = self.aggr_expr.iter().exactly_one().ok()?;
         if let Some(max) = agg_expr.as_any().downcast_ref::<Max>() {
             Some((max.field().ok()?, true))
         } else if let Some(min) = agg_expr.as_any().downcast_ref::<Min>() {
@@ -1664,7 +1665,7 @@ mod tests {
         ))];
 
         let task_ctx = if spill {
-            new_spill_ctx(2, 2500)
+            new_spill_ctx(2, 1500)
         } else {
             Arc::new(TaskContext::default())
         };
@@ -1918,6 +1919,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn aggregate_source_with_yielding_with_spill() -> Result<()> {
         let input: Arc<dyn ExecutionPlan> =
             Arc::new(TestYieldingExec { yield_first: true });

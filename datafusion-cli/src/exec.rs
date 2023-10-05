@@ -24,7 +24,7 @@ use crate::{
         get_gcs_object_store_builder, get_oss_object_store_builder,
         get_s3_object_store_builder,
     },
-    print_options::PrintOptions,
+    print_options::{MaxRows, PrintOptions},
 };
 use datafusion::sql::{parser::DFParser, sqlparser::dialect::dialect_from_str};
 use datafusion::{
@@ -211,6 +211,15 @@ async fn exec_and_print(
     let statements = DFParser::parse_sql_with_dialect(&sql, dialect.as_ref())?;
     for statement in statements {
         let plan = ctx.state().statement_to_plan(statement).await?;
+
+        // For plans like `Explain` ignore `MaxRows` option and always display all rows
+        let should_ignore_maxrows = matches!(
+            plan,
+            LogicalPlan::Explain(_)
+                | LogicalPlan::DescribeTable(_)
+                | LogicalPlan::Analyze(_)
+        );
+
         let df = match &plan {
             LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) => {
                 create_external_table(ctx, cmd).await?;
@@ -220,8 +229,18 @@ async fn exec_and_print(
         };
 
         let results = df.collect().await?;
+
+        let print_options = if should_ignore_maxrows {
+            PrintOptions {
+                maxrows: MaxRows::Unlimited,
+                ..print_options.clone()
+            }
+        } else {
+            print_options.clone()
+        };
         print_options.print_batches(&results, now)?;
     }
+
     Ok(())
 }
 

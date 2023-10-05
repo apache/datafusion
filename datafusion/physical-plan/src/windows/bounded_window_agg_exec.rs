@@ -20,6 +20,13 @@
 //! the input data seen so far), which makes it appropriate when processing
 //! infinite inputs.
 
+use std::any::Any;
+use std::cmp::{min, Ordering};
+use std::collections::{HashMap, VecDeque};
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+
 use crate::expressions::PhysicalSortExpr;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::windows::{
@@ -29,37 +36,23 @@ use crate::{
     ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
     Partitioning, RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
 };
-use datafusion_common::{exec_err, plan_err, Result};
-use datafusion_execution::TaskContext;
 
-use ahash::RandomState;
 use arrow::{
     array::{Array, ArrayRef, UInt32Builder},
     compute::{concat, concat_batches, sort_to_indices},
     datatypes::{Schema, SchemaBuilder, SchemaRef},
     record_batch::RecordBatch,
 };
-use datafusion_expr::window_state::{PartitionBatchState, WindowAggState};
-use futures::stream::Stream;
-use futures::{ready, StreamExt};
-use hashbrown::raw::RawTable;
-use indexmap::IndexMap;
-use log::debug;
 
-use std::any::Any;
-use std::cmp::{min, Ordering};
-use std::collections::{HashMap, VecDeque};
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{Context, Poll};
-
+use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::{
     evaluate_partition_ranges, get_arrayref_at_indices, get_at_indices,
     get_record_batch_at_indices, get_row_at_idx,
 };
-use datafusion_common::DataFusionError;
+use datafusion_common::{exec_err, plan_err, DataFusionError, Result};
+use datafusion_execution::TaskContext;
+use datafusion_expr::window_state::{PartitionBatchState, WindowAggState};
 use datafusion_expr::ColumnarValue;
-use datafusion_physical_expr::hash_utils::create_hashes;
 use datafusion_physical_expr::window::{
     PartitionBatches, PartitionKey, PartitionWindowAggStates, WindowState,
 };
@@ -67,6 +60,13 @@ use datafusion_physical_expr::{
     EquivalenceProperties, OrderingEquivalenceProperties, PhysicalExpr,
     PhysicalSortRequirement,
 };
+
+use ahash::RandomState;
+use futures::stream::Stream;
+use futures::{ready, StreamExt};
+use hashbrown::raw::RawTable;
+use indexmap::IndexMap;
+use log::debug;
 
 #[derive(Debug, Clone, PartialEq)]
 /// Specifies partition column properties in terms of input ordering

@@ -154,6 +154,10 @@ impl ExecutionPlan for GlobalLimitExec {
         )))
     }
 
+    fn unbounded_output(&self, _children: &[bool]) -> Result<bool> {
+        Ok(false)
+    }
+
     fn execute(
         &self,
         partition: usize,
@@ -320,6 +324,10 @@ impl ExecutionPlan for LocalLimitExec {
         self.input.ordering_equivalence_properties()
     }
 
+    fn unbounded_output(&self, _children: &[bool]) -> Result<bool> {
+        Ok(false)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -434,7 +442,7 @@ impl LimitStream {
 
             match &poll {
                 Poll::Ready(Some(Ok(batch))) => {
-                    if batch.num_rows() > 0 && self.skip == 0 {
+                    if batch.num_rows() > 0 {
                         break poll;
                     } else {
                         // continue to poll input stream

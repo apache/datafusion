@@ -39,11 +39,8 @@ avro = ["apache-avro", "num-traits", "datafusion-common/avro"]
 backtrace = ["datafusion-common/backtrace"]
 compression = ["xz2", "bzip2", "flate2", "zstd", "async-compression"]
 crypto_expressions = ["datafusion-physical-expr/crypto_expressions", "datafusion-optimizer/crypto_expressions"]
-default = ["crypto_expressions", "encoding__expressions", "regex_expressions", "unicode_expressions", "compression"]
-# Enables support for non-scalar, binary operations on dictionaries
-# Note: this results in significant additional codegen
-dictionary_expressions = ["datafusion-physical-expr/dictionary_expressions", "datafusion-optimizer/dictionary_expressions"]
-encoding__expressions = ["datafusion-physical-expr/encoding_expressions"]
+default = ["crypto_expressions", "encoding_expressions", "regex_expressions", "unicode_expressions", "compression"]
+encoding_expressions = ["datafusion-physical-expr/encoding_expressions"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
 force_hash_collisions = []
 pyarrow = ["datafusion-common/pyarrow"]
@@ -53,7 +50,7 @@ unicode_expressions = ["datafusion-physical-expr/unicode_expressions", "datafusi
 
 [dependencies]
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
-apache-avro = { version = "0.15", optional = true }
+apache-avro = { version = "0.16", optional = true }
 arrow = { workspace = true }
 arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
@@ -112,11 +109,12 @@ rand_distr = "0.4.3"
 regex = "1.5.4"
 rstest = "0.18.0"
 rust_decimal = { version = "1.27.0", features = ["tokio-pg"] }
+serde_json = "1"
 test-utils = { path = "../../test-utils" }
 thiserror = "1.0.37"
 tokio-postgres = "0.7.7"
 [target.'cfg(not(target_os = "windows"))'.dev-dependencies]
-nix = "0.26.1"
+nix = { version = "0.27.1", features = ["fs"] }
 
 [[bench]]
 harness = false
