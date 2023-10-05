@@ -27,12 +27,10 @@ use crate::expr_rewriter::{
 use crate::type_coercion::binary::comparison_coercion;
 use crate::utils::{columnize_expr, compare_sort_expr};
 use crate::{
-    
-    and, binary_expr, expr, BuiltInWindowFunction, DmlStatement, Operator, TableProviderFilterPushDown, WindowFrame,
-    WriteOp,
+    and, binary_expr, expr, BuiltInWindowFunction, DmlStatement, Operator,
+    TableProviderFilterPushDown, WindowFrame, WriteOp,
 };
-use crate::{col, ident, WindowFunction,
-};
+use crate::{col, ident, WindowFunction};
 use crate::{
     logical_plan::{
         Aggregate, Analyze, CrossJoin, Distinct, EmptyRelation, Explain, Filter, Join,

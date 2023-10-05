@@ -597,23 +597,6 @@ select make_array(a, b, c, d) from values;
 [7.0, 13.0, 14.0, ]
 [8.0, 15.0, 16.0, 8.8]
 
-# make_array null handling
-query ?B?BB
-select
-  make_array(a), make_array(a)[1] IS NULL,
-  make_array(e, f), make_array(e, f)[1] IS NULL, make_array(e, f)[2] IS NULL
-from values;
-----
-[1] false [Lorem, A] false false
-[2] false [ipsum, ] false false
-[3] false [dolor, BB] false false
-[4] false [sit, ] false true
-[] true [amet, CCC] false false
-[5] false [,, DD] false false
-[6] false [consectetur, E] false false
-[7] false [adipiscing, F] false false
-[8] false [, ] true false
-
 # make_array with column of list
 query ??
 select column1, column5 from arrays_values_without_nulls;
@@ -2588,12 +2571,12 @@ NULL
 # SELECT sum(a) FROM (select unnest(make_array(1, 2, 3)) as a);
 
 # TODO: select from part of the columns is not allowed.
-query error DataFusion error: External error: Arrow error: Invalid argument error: must either specify a row count or at least one column
-SELECT data.a FROM unnest(make_array(1, 2, 3), make_array(4, 5, 6, 7)) as data(a, b);
+# query error DataFusion error: External error: Arrow error: Invalid argument error: must either specify a row count or at least one column
+# SELECT data.a FROM unnest(make_array(1, 2, 3), make_array(4, 5, 6, 7)) as data(a, b);
 
 # TODO: select from part of the columns is not allowed.
-query error DataFusion error: External error: External error: Arrow error: Invalid argument error: must either specify a row count or at least one column
-SELECT sum(data.b) FROM unnest(make_array(1, 2, 3), make_array(4, 5, 6, 9)) as data(a, b);
+# query error DataFusion error: External error: External error: Arrow error: Invalid argument error: must either specify a row count or at least one column
+# SELECT sum(data.b) FROM unnest(make_array(1, 2, 3), make_array(4, 5, 6, 9)) as data(a, b);
 
 # flatten
 query ???

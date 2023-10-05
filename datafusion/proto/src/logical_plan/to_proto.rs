@@ -35,9 +35,7 @@ use arrow::datatypes::{
     UnionMode,
 };
 use datafusion_common::{
-    not_impl_err, 
     Column, DFField, DFSchema, DFSchemaRef, OwnedTableReference, ScalarValue,
-,
 };
 use datafusion_expr::expr::{
     self, Alias, Between, BinaryExpr, Cast, GetFieldAccess, GetIndexedField, GroupingSet,
@@ -754,7 +752,9 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                 ))
             }
             Expr::Unnest(..) => {
-                return not_impl_err!("try_from() for Unnest is not implemented")
+                return Err(Error::NotImplemented(
+                    "try_from() for Unnest is not implemented".to_string(),
+                ))
             }
             Expr::ScalarFunction(ScalarFunction { fun, args }) => {
                 let fun: protobuf::ScalarFunction = fun.try_into()?;
