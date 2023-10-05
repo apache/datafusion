@@ -38,6 +38,7 @@ use datafusion_expr::{
     PartitionEvaluator, WindowFrame, WindowUDF,
 };
 use datafusion_physical_expr::{
+    reverse_order_bys,
     window::{BuiltInWindowFunctionExpr, SlidingAggregateWindowExpr},
     AggregateExpr, OrderingEquivalenceProperties, PhysicalSortRequirement,
 };
@@ -46,12 +47,23 @@ mod bounded_window_agg_exec;
 mod window_agg_exec;
 
 pub use bounded_window_agg_exec::BoundedWindowAggExec;
-use datafusion_physical_expr::equivalence::PartitionSearchMode;
+use datafusion_physical_expr::equivalence::collapse_lex_req;
 pub use window_agg_exec::WindowAggExec;
 
 pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
 };
+
+#[derive(Debug, Clone, PartialEq)]
+/// Specifies partition column properties in terms of input ordering
+pub enum PartitionSearchMode {
+    /// None of the columns among the partition columns is ordered.
+    Linear,
+    /// Some columns of the partition columns are ordered but not all
+    PartiallySorted(Vec<usize>),
+    /// All Partition columns are ordered (Also empty case)
+    Sorted,
+}
 
 /// Create a physical expression for window function
 pub fn create_window_expr(
@@ -366,9 +378,8 @@ pub fn get_best_fitting_window(
     let partitionby_exprs = window_exprs[0].partition_by();
     let orderby_keys = window_exprs[0].order_by();
     let (should_reverse, partition_search_mode) =
-        if let Some((should_reverse, partition_search_mode)) = input
-            .ordering_equivalence_properties()
-            .get_window_mode(partitionby_exprs, orderby_keys)?
+        if let Some((should_reverse, partition_search_mode)) =
+            get_window_mode(partitionby_exprs, orderby_keys, input)?
         {
             (should_reverse, partition_search_mode)
         } else {
@@ -423,6 +434,64 @@ pub fn get_best_fitting_window(
     }
 }
 
+/// Compares physical ordering (output ordering of the `input` operator) with
+/// `partitionby_exprs` and `orderby_keys` to decide whether existing ordering
+/// is sufficient to run the current window operator.
+/// - A `None` return value indicates that we can not remove the sort in question
+///   (input ordering is not sufficient to run current window executor).
+/// - A `Some((bool, PartitionSearchMode))` value indicates that the window operator
+///   can run with existing input ordering, so we can remove `SortExec` before it.
+/// The `bool` field in the return value represents whether we should reverse window
+/// operator to remove `SortExec` before it. The `PartitionSearchMode` field represents
+/// the mode this window operator should work in to accomodate the existing ordering.
+pub fn get_window_mode(
+    partitionby_exprs: &[Arc<dyn PhysicalExpr>],
+    orderby_keys: &[PhysicalSortExpr],
+    input: &Arc<dyn ExecutionPlan>,
+) -> Result<Option<(bool, PartitionSearchMode)>> {
+    let input_oeq = input.ordering_equivalence_properties();
+    let mut partition_search_mode = PartitionSearchMode::Linear;
+    let mut partition_by_reqs: Vec<PhysicalSortRequirement> = vec![];
+    if partitionby_exprs.is_empty() {
+        partition_search_mode = PartitionSearchMode::Sorted;
+    } else if let Some(indices) = input_oeq.set_satisfy(partitionby_exprs) {
+        let elem = indices
+            .iter()
+            .map(|&idx| PhysicalSortRequirement {
+                expr: partitionby_exprs[idx].clone(),
+                options: None,
+            })
+            .collect::<Vec<_>>();
+        partition_by_reqs.extend(elem);
+        if indices.len() == partitionby_exprs.len() {
+            partition_search_mode = PartitionSearchMode::Sorted;
+        } else if !indices.is_empty() {
+            partition_search_mode = PartitionSearchMode::PartiallySorted(indices);
+        }
+    }
+
+    // Treat partition by exprs as constant. During analysis of requirements are satisfied.
+    let partition_by_oeq = input_oeq.with_constants(partitionby_exprs.to_vec());
+    let order_by_reqs = PhysicalSortRequirement::from_sort_exprs(orderby_keys);
+    let reverse_order_by_reqs =
+        PhysicalSortRequirement::from_sort_exprs(&reverse_order_bys(orderby_keys));
+    for (should_swap, order_by_reqs) in
+        [(false, order_by_reqs), (true, reverse_order_by_reqs)]
+    {
+        let req = [partition_by_reqs.clone(), order_by_reqs].concat();
+        let req = collapse_lex_req(req);
+        if req.is_empty() {
+            // When requirement is empty,
+            // prefer None. Instead of Linear.
+            return Ok(None);
+        } else if partition_by_oeq.ordering_satisfy_requirement_concrete(&req) {
+            // Window can be run with existing ordering
+            return Ok(Some((should_swap, partition_search_mode)));
+        }
+    }
+    Ok(None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -437,10 +506,8 @@ mod tests {
     use arrow::datatypes::{DataType, Field, SchemaRef};
     use datafusion_execution::TaskContext;
 
-    use datafusion_physical_expr::equivalence::PartitionSearchMode::{
-        Linear, PartiallySorted, Sorted,
-    };
     use futures::FutureExt;
+    use PartitionSearchMode::{Linear, PartiallySorted, Sorted};
 
     fn create_test_schema() -> Result<SchemaRef> {
         let nullable_column = Field::new("nullable_col", DataType::Int32, true);
@@ -717,7 +784,7 @@ mod tests {
             (vec!["a"], vec!["a", "c"], None),
             (vec!["a"], vec!["a", "b", "c"], Some(Sorted)),
             (vec!["b"], vec!["a"], Some(Linear)),
-            (vec!["b"], vec!["b"], None),
+            (vec!["b"], vec!["b"], Some(Linear)),
             (vec!["b"], vec!["c"], None),
             (vec!["b"], vec!["a", "b"], Some(Linear)),
             (vec!["b"], vec!["b", "c"], None),
@@ -725,7 +792,7 @@ mod tests {
             (vec!["b"], vec!["a", "b", "c"], Some(Linear)),
             (vec!["c"], vec!["a"], Some(Linear)),
             (vec!["c"], vec!["b"], None),
-            (vec!["c"], vec!["c"], None),
+            (vec!["c"], vec!["c"], Some(Linear)),
             (vec!["c"], vec!["a", "b"], Some(Linear)),
             (vec!["c"], vec!["b", "c"], None),
             (vec!["c"], vec!["a", "c"], Some(Linear)),
@@ -738,10 +805,10 @@ mod tests {
             (vec!["b", "a"], vec!["a", "c"], Some(Sorted)),
             (vec!["b", "a"], vec!["a", "b", "c"], Some(Sorted)),
             (vec!["c", "b"], vec!["a"], Some(Linear)),
-            (vec!["c", "b"], vec!["b"], None),
-            (vec!["c", "b"], vec!["c"], None),
+            (vec!["c", "b"], vec!["b"], Some(Linear)),
+            (vec!["c", "b"], vec!["c"], Some(Linear)),
             (vec!["c", "b"], vec!["a", "b"], Some(Linear)),
-            (vec!["c", "b"], vec!["b", "c"], None),
+            (vec!["c", "b"], vec!["b", "c"], Some(Linear)),
             (vec!["c", "b"], vec!["a", "c"], Some(Linear)),
             (vec!["c", "b"], vec!["a", "b", "c"], Some(Linear)),
             (vec!["c", "a"], vec!["a"], Some(PartiallySorted(vec![1]))),
@@ -790,9 +857,8 @@ mod tests {
                 let options = SortOptions::default();
                 order_by_exprs.push(PhysicalSortExpr { expr, options });
             }
-            let res = exec_unbounded
-                .ordering_equivalence_properties()
-                .get_window_mode(&partition_by_exprs, &order_by_exprs)?;
+            let res =
+                get_window_mode(&partition_by_exprs, &order_by_exprs, &exec_unbounded)?;
             // Since reversibility is not important in this test. Convert Option<(bool, PartitionSearchMode)> to Option<PartitionSearchMode>
             let res = res.map(|(_, mode)| mode);
             assert_eq!(
@@ -956,7 +1022,7 @@ mod tests {
             }
 
             assert_eq!(
-                exec_unbounded.ordering_equivalence_properties().get_window_mode(&partition_by_exprs, &order_by_exprs)?,
+                get_window_mode(&partition_by_exprs, &order_by_exprs, &exec_unbounded)?,
                 *expected,
                 "Unexpected result for in unbounded test case#: {case_idx:?}, case: {test_case:?}"
             );

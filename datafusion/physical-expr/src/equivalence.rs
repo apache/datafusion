@@ -18,8 +18,8 @@
 use crate::expressions::Column;
 use crate::utils::get_indices_of_exprs_strict;
 use crate::{
-    physical_exprs_contains, reverse_order_bys, LexOrdering, LexOrderingRef,
-    LexOrderingReq, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
+    physical_exprs_contains, LexOrdering, LexOrderingRef, LexOrderingReq, PhysicalExpr,
+    PhysicalSortExpr, PhysicalSortRequirement,
 };
 
 use arrow::datatypes::SchemaRef;
@@ -710,6 +710,7 @@ impl OrderingEquivalenceProperties {
 
     /// Add physical expression that have constant value to the `self.constants`
     pub fn with_constants(mut self, constants: Vec<Arc<dyn PhysicalExpr>>) -> Self {
+        let constants = self.eq_groups.normalize_exprs(&constants);
         constants.into_iter().for_each(|constant| {
             if !physical_exprs_contains(&self.constants, &constant) {
                 self.constants.push(constant);
@@ -1107,72 +1108,6 @@ impl OrderingEquivalenceProperties {
             .all(|(req, given)| given.compatible(&req))
     }
 
-    /// Compares physical ordering (output ordering of the `input` operator) with
-    /// `partitionby_exprs` and `orderby_keys` to decide whether existing ordering
-    /// is sufficient to run the current window operator.
-    /// - A `None` return value indicates that we can not remove the sort in question
-    ///   (input ordering is not sufficient to run current window executor).
-    /// - A `Some((bool, PartitionSearchMode))` value indicates that the window operator
-    ///   can run with existing input ordering, so we can remove `SortExec` before it.
-    /// The `bool` field in the return value represents whether we should reverse window
-    /// operator to remove `SortExec` before it. The `PartitionSearchMode` field represents
-    /// the mode this window operator should work in to accomodate the existing ordering.
-    pub fn get_window_mode(
-        &self,
-        partitionby_exprs: &[Arc<dyn PhysicalExpr>],
-        orderby_keys: &[PhysicalSortExpr],
-    ) -> Result<Option<(bool, PartitionSearchMode)>> {
-        let partitionby_exprs = self.eq_groups.normalize_exprs(partitionby_exprs);
-        let mut orderby_keys = self.eq_groups.normalize_sort_exprs(orderby_keys);
-        // Keep the order by expressions that are not inside partition by expressions.
-        orderby_keys.retain(|sort_expr| {
-            !physical_exprs_contains(&partitionby_exprs, &sort_expr.expr)
-        });
-        let mut partition_search_mode = PartitionSearchMode::Linear;
-        let mut partition_by_reqs: Vec<PhysicalSortRequirement> = vec![];
-        if partitionby_exprs.is_empty() {
-            partition_search_mode = PartitionSearchMode::Sorted;
-        } else if let Some(indices) = self.set_satisfy(&partitionby_exprs) {
-            let elem = indices
-                .iter()
-                .map(|&idx| PhysicalSortRequirement {
-                    expr: partitionby_exprs[idx].clone(),
-                    options: None,
-                })
-                .collect::<Vec<_>>();
-            partition_by_reqs.extend(elem);
-            if indices.len() == partitionby_exprs.len() {
-                partition_search_mode = PartitionSearchMode::Sorted;
-            } else if !indices.is_empty() {
-                partition_search_mode = PartitionSearchMode::PartiallySorted(indices);
-            }
-        }
-
-        let order_by_reqs = PhysicalSortRequirement::from_sort_exprs(&orderby_keys);
-        let req = [partition_by_reqs.clone(), order_by_reqs].concat();
-        let req = collapse_lex_req(req);
-        if req.is_empty() {
-            // When requirement is empty,
-            // prefer None. Instead of Linear.
-            return Ok(None);
-        }
-        // Treat partition by exprs as constant. During analysis of requirements are satisfied.
-        let partition_by_oeq = self.clone().with_constants(partitionby_exprs.clone());
-        if partition_by_oeq.ordering_satisfy_requirement_concrete(&req) {
-            // Window can be run with existing ordering
-            return Ok(Some((false, partition_search_mode)));
-        }
-        let reverse_order_by_reqs =
-            PhysicalSortRequirement::from_sort_exprs(&reverse_order_bys(&orderby_keys));
-        let req = [partition_by_reqs, reverse_order_by_reqs].concat();
-        let req = collapse_lex_req(req);
-        if partition_by_oeq.ordering_satisfy_requirement_concrete(&req) {
-            // Window can be run with existing ordering, if the ordering requirements would be reversed
-            return Ok(Some((true, partition_search_mode)));
-        }
-        Ok(None)
-    }
-
     /// Calculate ordering equivalence properties for the given join operation.
     pub fn join(
         &self,
@@ -1253,17 +1188,6 @@ impl OrderingEquivalenceProperties {
         }
         Ok(new_properties)
     }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-/// Specifies partition column properties in terms of input ordering
-pub enum PartitionSearchMode {
-    /// None of the columns among the partition columns is ordered.
-    Linear,
-    /// Some columns of the partition columns are ordered but not all
-    PartiallySorted(Vec<usize>),
-    /// All Partition columns are ordered (Also empty case)
-    Sorted,
 }
 
 /// Retrieves the ordering equivalence properties for a given schema and output ordering.

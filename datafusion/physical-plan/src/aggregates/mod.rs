@@ -51,10 +51,12 @@ mod topk_stream;
 
 use crate::aggregates::topk_stream::GroupedTopKAggregateStream;
 use crate::common::calculate_projection_mapping;
-use crate::windows::get_ordered_partition_by_indices;
+use crate::windows::{
+    get_ordered_partition_by_indices, get_window_mode, PartitionSearchMode,
+};
 pub use datafusion_expr::AggregateFunction;
 use datafusion_physical_expr::aggregate::is_order_sensitive;
-use datafusion_physical_expr::equivalence::{collapse_lex_req, PartitionSearchMode};
+use datafusion_physical_expr::equivalence::collapse_lex_req;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
 use datafusion_physical_expr::expressions::{Max, Min};
 
@@ -386,13 +388,12 @@ fn get_aggregate_search_mode(
         .map(|(item, _)| item.clone())
         .collect::<Vec<_>>();
     let mut partition_search_mode = PartitionSearchMode::Linear;
-    let input_oeq = input.ordering_equivalence_properties();
     if !group_by.is_single() || groupby_exprs.is_empty() {
         return Ok(partition_search_mode);
     }
 
     if let Some((should_reverse, mode)) =
-        input_oeq.get_window_mode(&groupby_exprs, ordering_req)?
+        get_window_mode(&groupby_exprs, ordering_req, input)?
     {
         let all_reversible = aggr_expr
             .iter()

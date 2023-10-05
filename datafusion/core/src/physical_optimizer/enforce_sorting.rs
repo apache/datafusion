@@ -59,7 +59,7 @@ use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_common::{plan_err, DataFusionError};
 use datafusion_physical_expr::{PhysicalSortExpr, PhysicalSortRequirement};
 
-use datafusion_physical_expr::equivalence::PartitionSearchMode;
+use datafusion_physical_plan::windows::PartitionSearchMode;
 use itertools::izip;
 
 /// This rule inspects [`SortExec`]'s in the given physical plan and removes the

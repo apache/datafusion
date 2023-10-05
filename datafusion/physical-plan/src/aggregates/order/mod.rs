@@ -18,12 +18,12 @@
 use arrow_array::ArrayRef;
 use arrow_schema::Schema;
 use datafusion_common::Result;
-use datafusion_physical_expr::equivalence::PartitionSearchMode;
 use datafusion_physical_expr::{EmitTo, PhysicalSortExpr};
 
 mod full;
 mod partial;
 
+use crate::windows::PartitionSearchMode;
 pub(crate) use full::GroupOrderingFull;
 pub(crate) use partial::GroupOrderingPartial;
 

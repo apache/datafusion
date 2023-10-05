@@ -31,6 +31,7 @@ use crate::expressions::PhysicalSortExpr;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::windows::{
     calc_requirements, get_ordered_partition_by_indices, window_ordering_equivalence,
+    PartitionSearchMode,
 };
 use crate::{
     ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
@@ -61,7 +62,6 @@ use datafusion_physical_expr::{
 };
 
 use ahash::RandomState;
-use datafusion_physical_expr::equivalence::PartitionSearchMode;
 use futures::stream::Stream;
 use futures::{ready, StreamExt};
 use hashbrown::raw::RawTable;

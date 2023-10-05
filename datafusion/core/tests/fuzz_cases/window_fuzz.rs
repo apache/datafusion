@@ -40,15 +40,15 @@ use datafusion_expr::{
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::type_coercion::aggregates::coerce_types;
-use datafusion_physical_expr::equivalence::PartitionSearchMode;
 use datafusion_physical_expr::expressions::{cast, col, lit};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+use datafusion_physical_plan::windows::PartitionSearchMode;
 use test_utils::add_empty_batches;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion_physical_expr::equivalence::PartitionSearchMode::{
+    use datafusion_physical_plan::windows::PartitionSearchMode::{
         Linear, PartiallySorted, Sorted,
     };
 

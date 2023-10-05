@@ -46,7 +46,7 @@ use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 
 use async_trait::async_trait;
-use datafusion_physical_expr::equivalence::PartitionSearchMode;
+use datafusion_physical_plan::windows::PartitionSearchMode;
 
 async fn register_current_csv(
     ctx: &SessionContext,
