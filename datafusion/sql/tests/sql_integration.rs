@@ -1806,7 +1806,6 @@ fn create_external_table_csv() {
     quick_test(sql, expected);
 }
 
-
 #[test]
 fn create_external_table_with_pk() {
     let sql = "CREATE EXTERNAL TABLE t(c1 int, primary key(c1)) STORED AS CSV LOCATION 'foo.csv'";

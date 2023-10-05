@@ -232,7 +232,9 @@ impl TableProviderFactory for ListingTableFactory {
             .with_schema(resolved_schema);
         let provider = ListingTable::try_new(config)?
             .with_cache(state.runtime_env().cache_manager.get_file_statistic_cache());
-        let table = provider.with_definition(cmd.definition.clone());
+        let table = provider
+            .with_definition(cmd.definition.clone())
+            .with_constraints(cmd.constraints.clone());
         Ok(Arc::new(table))
     }
 }

@@ -50,8 +50,8 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
 use arrow_schema::Schema;
 use datafusion_common::{
-    internal_err, plan_err, project_schema, FileType, FileTypeWriterOptions, SchemaExt,
-    ToDFSchema,
+    internal_err, plan_err, project_schema, Constraints, FileType, FileTypeWriterOptions,
+    SchemaExt, ToDFSchema,
 };
 use datafusion_execution::cache::cache_manager::FileStatisticsCache;
 use datafusion_execution::cache::cache_unit::DefaultFileStatisticsCache;
@@ -590,6 +590,7 @@ pub struct ListingTable {
     definition: Option<String>,
     collected_statistics: FileStatisticsCache,
     infinite_source: bool,
+    constraints: Option<Constraints>,
 }
 
 impl ListingTable {
@@ -627,9 +628,18 @@ impl ListingTable {
             definition: None,
             collected_statistics: Arc::new(DefaultFileStatisticsCache::default()),
             infinite_source,
+            constraints: None,
         };
 
         Ok(table)
+    }
+
+    /// Assign constraints
+    pub fn with_constraints(mut self, constraints: Constraints) -> Self {
+        if !constraints.is_empty() {
+            self.constraints = Some(constraints);
+        }
+        self
     }
 
     /// Set the [`FileStatisticsCache`] used to cache parquet file statistics.
@@ -701,6 +711,10 @@ impl TableProvider for ListingTable {
 
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.table_schema)
+    }
+
+    fn constraints(&self) -> Option<&Constraints> {
+        self.constraints.as_ref()
     }
 
     fn table_type(&self) -> TableType {

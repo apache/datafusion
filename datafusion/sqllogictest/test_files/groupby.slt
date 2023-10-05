@@ -3563,3 +3563,81 @@ logical_plan
 Sort: multiple_ordered_table.c ASC NULLS LAST
 --TableScan: multiple_ordered_table projection=[c]
 physical_plan CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], has_header=true
+
+# Create an external table with primary key
+# column c
+statement ok
+CREATE EXTERNAL TABLE multiple_ordered_table_with_pk (
+  a0 INTEGER,
+  a INTEGER,
+  b INTEGER,
+  c INTEGER,
+  d INTEGER,
+  primary key(c)
+)
+STORED AS CSV
+WITH HEADER ROW
+WITH ORDER (a ASC, b ASC)
+WITH ORDER (c ASC)
+LOCATION '../core/tests/data/window_2.csv';
+
+# We can use column b during selection
+# even if it is not among group by expressions
+# because column c is primary key.
+query TT
+EXPLAIN SELECT c, b, SUM(d)
+FROM multiple_ordered_table_with_pk
+GROUP BY c;
+----
+logical_plan
+Aggregate: groupBy=[[multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.b]], aggr=[[SUM(CAST(multiple_ordered_table_with_pk.d AS Int64))]]
+--TableScan: multiple_ordered_table_with_pk projection=[b, c, d]
+physical_plan
+AggregateExec: mode=FinalPartitioned, gby=[c@0 as c, b@1 as b], aggr=[SUM(multiple_ordered_table_with_pk.d)], ordering_mode=PartiallyOrdered
+--SortExec: expr=[c@0 ASC NULLS LAST]
+----CoalesceBatchesExec: target_batch_size=8192
+------RepartitionExec: partitioning=Hash([c@0, b@1], 8), input_partitions=8
+--------AggregateExec: mode=Partial, gby=[c@1 as c, b@0 as b], aggr=[SUM(multiple_ordered_table_with_pk.d)], ordering_mode=PartiallyOrdered
+----------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[b, c, d], output_ordering=[c@1 ASC NULLS LAST], has_header=true
+
+# drop table multiple_ordered_table_with_pk
+statement ok
+drop table multiple_ordered_table_with_pk;
+
+# Create an external table with primary key
+# column c, in this case use alternative syntax
+# for defining primary key
+statement ok
+CREATE EXTERNAL TABLE multiple_ordered_table_with_pk (
+  a0 INTEGER,
+  a INTEGER,
+  b INTEGER,
+  c INTEGER primary key,
+  d INTEGER
+)
+STORED AS CSV
+WITH HEADER ROW
+WITH ORDER (a ASC, b ASC)
+WITH ORDER (c ASC)
+LOCATION '../core/tests/data/window_2.csv';
+
+# We can use column b during selection
+# even if it is not among group by expressions
+# because column c is primary key.
+query TT
+EXPLAIN SELECT c, b, SUM(d)
+FROM multiple_ordered_table_with_pk
+GROUP BY c;
+----
+logical_plan
+Aggregate: groupBy=[[multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.b]], aggr=[[SUM(CAST(multiple_ordered_table_with_pk.d AS Int64))]]
+--TableScan: multiple_ordered_table_with_pk projection=[b, c, d]
+physical_plan
+AggregateExec: mode=FinalPartitioned, gby=[c@0 as c, b@1 as b], aggr=[SUM(multiple_ordered_table_with_pk.d)], ordering_mode=PartiallyOrdered
+--SortExec: expr=[c@0 ASC NULLS LAST]
+----CoalesceBatchesExec: target_batch_size=8192
+------RepartitionExec: partitioning=Hash([c@0, b@1], 8), input_partitions=8
+--------AggregateExec: mode=Partial, gby=[c@1 as c, b@0 as b], aggr=[SUM(multiple_ordered_table_with_pk.d)], ordering_mode=PartiallyOrdered
+----------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[b, c, d], output_ordering=[c@1 ASC NULLS LAST], has_header=true
