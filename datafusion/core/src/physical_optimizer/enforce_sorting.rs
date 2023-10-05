@@ -2204,7 +2204,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_pushdown_through_spm() -> Result<()> {
         let schema = create_test_schema3()?;
         let sort_exprs = vec![sort_expr("a", &schema), sort_expr("b", &schema)];

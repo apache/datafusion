@@ -251,23 +251,26 @@ fn pushdown_requirement_to_children(
         || plan.as_any().is::<ProjectionExec>()
         || is_limit(plan)
         || plan.as_any().is::<HashJoinExec>()
-        // Do not push-down through SortPreservingMergeExec when
-        // ordering requirement invalidates requirement of sort preserving merge exec.
-        || is_sort_preserving_merge(plan)
-    // !ordering_satisfy(
-    // parent_required
-    //     .map(|req| PhysicalSortRequirement::to_sort_exprs(req.to_vec()))
-    //     .as_deref(),
-    // plan.output_ordering(),
-    // || plan.ordering_equivalence_properties(),
-    //     )
-    // && plan.ordering_equivalence_properties().get_finer_ordering()
-    // )
     {
         // If the current plan is a leaf node or can not maintain any of the input ordering, can not pushed down requirements.
         // For RepartitionExec, we always choose to not push down the sort requirements even the RepartitionExec(input_partition=1) could maintain input ordering.
         // Pushing down is not beneficial
         Ok(None)
+    } else if is_sort_preserving_merge(plan) {
+        let ordering_req = parent_required.unwrap_or(&[]);
+        let new_ordering = PhysicalSortRequirement::to_sort_exprs(ordering_req.to_vec());
+        let mut spm_oeq = plan.ordering_equivalence_properties();
+        // Sort preserving merge will have new ordering, one requirement above is pushed down to its below.
+        spm_oeq = spm_oeq.with_reorder(new_ordering);
+        // Do not push-down through SortPreservingMergeExec when
+        // ordering requirement invalidates requirement of sort preserving merge exec.
+        if !spm_oeq.ordering_satisfy(plan.output_ordering()) {
+            Ok(None)
+        } else {
+            // Can push-down through SortPreservingMergeExec, because parent requirement is finer
+            // than SortPreservingMergeExec output ordering.
+            Ok(Some(vec![parent_required.map(|elem| elem.to_vec())]))
+        }
     } else {
         Ok(Some(
             maintains_input_order
