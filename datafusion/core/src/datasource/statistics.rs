@@ -19,7 +19,6 @@ use crate::arrow::datatypes::{Schema, SchemaRef};
 use crate::error::Result;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
 use crate::physical_plan::{Accumulator, ColumnStatistics, Statistics};
-use arrow_array::Scalar;
 use datafusion_common::stats::Sharpness;
 use datafusion_common::ScalarValue;
 use futures::Stream;
@@ -37,10 +36,8 @@ pub async fn get_statistics_with_limit(
 ) -> Result<(Vec<PartitionedFile>, Statistics)> {
     let mut result_files = vec![];
     let mut null_counts = vec![Sharpness::Exact(0_usize); file_schema.fields().len()];
-    let (mut max_values, mut min_values): (
-        Option<Vec<Sharpness<ScalarValue>>>,
-        Option<Vec<Sharpness<ScalarValue>>>,
-    ) = (None, None);
+    let mut max_values: Option<Vec<Sharpness<ScalarValue>>> = None;
+    let mut min_values: Option<Vec<Sharpness<ScalarValue>>> = None;
 
     // The number of rows and the total byte size can be calculated as long as
     // at least one file has them. If none of the files provide them, then they
@@ -54,15 +51,19 @@ pub async fn get_statistics_with_limit(
     while let Some(res) = all_files.next().await {
         let (file, file_stats) = res?;
         result_files.push(file);
-        num_rows = match (file_stats.num_rows, num_rows.clone()) {
-            (Sharpness::Absent, rhs) => rhs.to_inexact(),
+
+        // Number of rows, total byte size and null counts are added for each file.
+        // In case of an absent information or inexact value coming from the file,
+        // it changes the statistic sharpness to inexact.
+        num_rows = match (file_stats.num_rows, &num_rows) {
+            (Sharpness::Absent, _) => num_rows.to_inexact(),
             (lhs, Sharpness::Absent) => lhs.to_inexact(),
-            (lhs, rhs) => lhs.add(&rhs),
+            (lhs, rhs) => lhs.add(rhs),
         };
-        total_byte_size = match (file_stats.total_byte_size, total_byte_size.clone()) {
-            (Sharpness::Absent, rhs) => rhs.to_inexact(),
+        total_byte_size = match (file_stats.total_byte_size, &total_byte_size) {
+            (Sharpness::Absent, _) => total_byte_size.to_inexact(),
             (lhs, Sharpness::Absent) => lhs.to_inexact(),
-            (lhs, rhs) => lhs.add(&rhs),
+            (lhs, rhs) => lhs.add(rhs),
         };
 
         for (i, cs) in file_stats.column_statistics.iter().enumerate() {
@@ -76,9 +77,10 @@ pub async fn get_statistics_with_limit(
 
         if let Some(some_max_values) = &mut max_values {
             for (i, cs) in file_stats.column_statistics.iter().enumerate() {
-                set_max_if_greater(&mut some_max_values[i], &cs.max_value);
+                set_max_if_greater(some_max_values, cs.max_value.clone(), i);
             }
         } else {
+            // If it is the first file, we set it directly from the file statistics.
             let mut new_col_stats_max = vec![];
             for cs in file_stats.column_statistics.iter() {
                 new_col_stats_max.push(cs.max_value.clone());
@@ -91,7 +93,7 @@ pub async fn get_statistics_with_limit(
 
         if let Some(some_min_values) = &mut min_values {
             for (i, cs) in file_stats.column_statistics.iter().enumerate() {
-                set_min_if_lesser(&mut some_min_values[i], &cs.min_value);
+                set_min_if_lesser(some_min_values, cs.min_value.clone(), i);
             }
         } else {
             let mut new_col_stats_min = vec![];
@@ -135,22 +137,6 @@ pub async fn get_statistics_with_limit(
     };
 
     Ok((result_files, statistics))
-}
-
-/// It is the [`Sharpness::Exact`] version of `ColumnStatistics::new_with_unbounded_column` function.
-pub(crate) fn create_max_min_vec(schema: &Schema) -> Vec<Sharpness<ScalarValue>> {
-    schema
-        .fields()
-        .iter()
-        .map(|field| {
-            let dt = ScalarValue::try_from(field.data_type());
-            if let Ok(dt) = dt {
-                Sharpness::Exact(dt)
-            } else {
-                Sharpness::Absent
-            }
-        })
-        .collect::<Vec<_>>()
 }
 
 pub(crate) fn create_max_min_accs(
@@ -232,59 +218,63 @@ pub(crate) fn get_col_stats(
 /// If the given value is numerically greater than the original value,
 /// it set the new max value with the exactness information.
 fn set_max_if_greater(
-    max_values: &mut Sharpness<ScalarValue>,
-    max_value: &Sharpness<ScalarValue>,
+    max_values: &mut [Sharpness<ScalarValue>],
+    max_nominee: Sharpness<ScalarValue>,
+    index: usize,
 ) {
-    if let Sharpness::Exact(max) = &max_value {
-        match max_values.clone() {
-            Sharpness::Exact(val) => {
-                if val < *max {
-                    *max_values = Sharpness::Exact(max.clone())
-                }
-            }
-            Sharpness::Inexact(val) => {
-                *max_values = max_values.clone().to_inexact();
-                if val < *max {
-                    *max_values = Sharpness::Inexact(max.clone())
-                }
-            }
-            Sharpness::Absent => *max_values = max_values.clone().to_inexact(),
-        }
-    } else if let Sharpness::Inexact(max) = &max_value {
-        if let Some(val) = max_values.get_value() {
-            if val < *max {
-                *max_values = Sharpness::Inexact(max.clone())
+    match (&max_values[index], &max_nominee) {
+        (Sharpness::Exact(val1), Sharpness::Exact(val2)) => {
+            if val1 < val2 {
+                max_values[index] = max_nominee;
             }
         }
+        (Sharpness::Exact(val1), Sharpness::Inexact(val2))
+        | (Sharpness::Inexact(val1), Sharpness::Inexact(val2))
+        | (Sharpness::Inexact(val1), Sharpness::Exact(val2)) => {
+            if val1 < val2 {
+                max_values[index] = max_nominee.to_inexact()
+            }
+        }
+        (Sharpness::Inexact(_), Sharpness::Absent)
+        | (Sharpness::Exact(_), Sharpness::Absent) => {
+            max_values[index] = max_values[index].clone().to_inexact()
+        }
+        (Sharpness::Absent, Sharpness::Exact(_))
+        | (Sharpness::Absent, Sharpness::Inexact(_)) => {
+            max_values[index] = max_nominee.to_inexact()
+        }
+        (Sharpness::Absent, Sharpness::Absent) => max_values[index] = Sharpness::Absent,
     }
 }
 
 /// If the given value is numerically lesser than the original value,
 /// it set the new min value with the exactness information.
 fn set_min_if_lesser(
-    max_values: &mut Sharpness<ScalarValue>,
-    max_value: &Sharpness<ScalarValue>,
+    min_values: &mut [Sharpness<ScalarValue>],
+    min_nominee: Sharpness<ScalarValue>,
+    index: usize,
 ) {
-    if let Sharpness::Exact(max) = &max_value {
-        match max_values.clone() {
-            Sharpness::Exact(val) => {
-                if val < *max {
-                    *max_values = Sharpness::Exact(max.clone())
-                }
-            }
-            Sharpness::Inexact(val) => {
-                *max_values = max_values.clone().to_inexact();
-                if val < *max {
-                    *max_values = Sharpness::Inexact(max.clone())
-                }
-            }
-            Sharpness::Absent => *max_values = max_values.clone().to_inexact(),
-        }
-    } else if let Sharpness::Inexact(max) = &max_value {
-        if let Some(val) = max_values.get_value() {
-            if val < *max {
-                *max_values = Sharpness::Inexact(max.clone())
+    match (&min_values[index], &min_nominee) {
+        (Sharpness::Exact(val1), Sharpness::Exact(val2)) => {
+            if val1 > val2 {
+                min_values[index] = min_nominee;
             }
         }
+        (Sharpness::Exact(val1), Sharpness::Inexact(val2))
+        | (Sharpness::Inexact(val1), Sharpness::Inexact(val2))
+        | (Sharpness::Inexact(val1), Sharpness::Exact(val2)) => {
+            if val1 > val2 {
+                min_values[index] = min_nominee.to_inexact()
+            }
+        }
+        (Sharpness::Inexact(_), Sharpness::Absent)
+        | (Sharpness::Exact(_), Sharpness::Absent) => {
+            min_values[index] = min_values[index].clone().to_inexact()
+        }
+        (Sharpness::Absent, Sharpness::Exact(_))
+        | (Sharpness::Absent, Sharpness::Inexact(_)) => {
+            min_values[index] = min_nominee.to_inexact()
+        }
+        (Sharpness::Absent, Sharpness::Absent) => min_values[index] = Sharpness::Absent,
     }
 }

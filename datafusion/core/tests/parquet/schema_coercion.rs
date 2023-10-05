@@ -62,8 +62,8 @@ async fn multi_parquet_coercion() {
         FileScanConfig {
             object_store_url: ObjectStoreUrl::local_filesystem(),
             file_groups: vec![file_groups],
-            file_schema: file_schema.clone(),
             statistics: Statistics::new_with_unbounded_columns(&file_schema),
+            file_schema,
             projection: None,
             limit: None,
             table_partition_cols: vec![],
@@ -126,8 +126,8 @@ async fn multi_parquet_coercion_projection() {
         FileScanConfig {
             object_store_url: ObjectStoreUrl::local_filesystem(),
             file_groups: vec![file_groups],
-            file_schema: file_schema.clone(),
             statistics: Statistics::new_with_unbounded_columns(&file_schema),
+            file_schema,
             projection: Some(vec![1, 0, 2]),
             limit: None,
             table_partition_cols: vec![],

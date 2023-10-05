@@ -860,8 +860,8 @@ mod tests {
                 FileScanConfig {
                     object_store_url: ObjectStoreUrl::local_filesystem(),
                     file_groups: vec![file_groups],
-                    file_schema: file_schema.clone(),
                     statistics: Statistics::new_with_unbounded_columns(&file_schema),
+                    file_schema,
                     projection,
                     limit: None,
                     table_partition_cols: vec![],
@@ -1517,8 +1517,8 @@ mod tests {
                 FileScanConfig {
                     object_store_url: ObjectStoreUrl::local_filesystem(),
                     file_groups,
-                    file_schema: file_schema.clone(),
                     statistics: Statistics::new_with_unbounded_columns(&file_schema),
+                    file_schema,
                     projection: None,
                     limit: None,
                     table_partition_cols: vec![],

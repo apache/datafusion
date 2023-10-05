@@ -852,10 +852,8 @@ fn estimate_inner_join_cardinality(
             };
         }
 
-        let left_max_distinct =
-            max_distinct_count(left_stats.num_rows.clone(), left_stat.clone())?;
-        let right_max_distinct =
-            max_distinct_count(right_stats.num_rows.clone(), right_stat.clone())?;
+        let left_max_distinct = max_distinct_count(&left_stats.num_rows, left_stat)?;
+        let right_max_distinct = max_distinct_count(&right_stats.num_rows, right_stat)?;
         let max_distinct = left_max_distinct.max(&right_max_distinct);
         if max_distinct.get_value().is_some() {
             // Seems like there are a few implementations of this algorithm that implement
@@ -892,8 +890,8 @@ fn estimate_inner_join_cardinality(
 /// has min/max values, then they might be used as a fallback option. Otherwise,
 /// returns None.
 fn max_distinct_count(
-    num_rows: Sharpness<usize>,
-    stats: ColumnStatistics,
+    num_rows: &Sharpness<usize>,
+    stats: &ColumnStatistics,
 ) -> Option<Sharpness<usize>> {
     match (
         &stats.distinct_count,
@@ -901,7 +899,7 @@ fn max_distinct_count(
         stats.min_value.get_value(),
     ) {
         (Sharpness::Exact(_), _, _) | (Sharpness::Inexact(_), _, _) => {
-            Some(stats.distinct_count)
+            Some(stats.distinct_count.clone())
         }
         (_, Some(max), Some(min)) => {
             // Note that float support is intentionally omitted here, since the computation
@@ -914,8 +912,9 @@ fn max_distinct_count(
             let ceiling =
                 num_rows.get_value()? - stats.null_count.get_value().unwrap_or(0);
             Some(
-                if let (Sharpness::Exact(_), Sharpness::Exact(_), Sharpness::Exact(_)) =
-                    (num_rows, stats.max_value, stats.min_value)
+                if num_rows.is_exact().unwrap_or(false)
+                    && stats.max_value.is_exact().unwrap_or(false)
+                    && stats.min_value.is_exact().unwrap_or(false)
                 {
                     Sharpness::Exact(numeric_range.min(ceiling))
                 } else {

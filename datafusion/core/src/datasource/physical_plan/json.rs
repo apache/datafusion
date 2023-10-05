@@ -457,8 +457,8 @@ mod tests {
             FileScanConfig {
                 object_store_url,
                 file_groups,
-                file_schema: file_schema.clone(),
                 statistics: Statistics::new_with_unbounded_columns(&file_schema),
+                file_schema,
                 projection: None,
                 limit: Some(3),
                 table_partition_cols: vec![],
@@ -536,8 +536,8 @@ mod tests {
             FileScanConfig {
                 object_store_url,
                 file_groups,
-                file_schema: file_schema.clone(),
                 statistics: Statistics::new_with_unbounded_columns(&file_schema),
+                file_schema,
                 projection: None,
                 limit: Some(3),
                 table_partition_cols: vec![],
@@ -584,8 +584,8 @@ mod tests {
             FileScanConfig {
                 object_store_url,
                 file_groups,
-                file_schema: file_schema.clone(),
                 statistics: Statistics::new_with_unbounded_columns(&file_schema),
+                file_schema,
                 projection: Some(vec![0, 2]),
                 limit: None,
                 table_partition_cols: vec![],
@@ -637,8 +637,8 @@ mod tests {
             FileScanConfig {
                 object_store_url,
                 file_groups,
-                file_schema: file_schema.clone(),
                 statistics: Statistics::new_with_unbounded_columns(&file_schema),
+                file_schema,
                 projection: Some(vec![3, 0, 2]),
                 limit: None,
                 table_partition_cols: vec![],

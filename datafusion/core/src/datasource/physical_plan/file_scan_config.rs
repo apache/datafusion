@@ -130,7 +130,7 @@ impl FileScanConfig {
         let mut table_cols_stats = vec![];
         for idx in proj_iter {
             if idx < self.file_schema.fields().len() {
-                let field = self.file_schema.field(idx).clone();
+                let field = self.file_schema.field(idx);
                 table_fields.push(field.clone());
                 table_cols_stats.push(self.statistics.column_statistics[idx].clone())
             } else {

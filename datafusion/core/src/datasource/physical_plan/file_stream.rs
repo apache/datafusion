@@ -660,9 +660,9 @@ mod tests {
 
             let config = FileScanConfig {
                 object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
-                file_schema: file_schema.clone(),
-                file_groups: vec![file_group],
                 statistics: Statistics::new_with_unbounded_columns(&file_schema),
+                file_schema,
+                file_groups: vec![file_group],
                 projection: None,
                 limit: self.limit,
                 table_partition_cols: vec![],

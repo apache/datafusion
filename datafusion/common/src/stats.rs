@@ -33,7 +33,7 @@ pub enum Sharpness<T: Debug + Clone + PartialEq + Eq + PartialOrd> {
 }
 
 impl<T: Debug + Clone + PartialEq + Eq + PartialOrd> Sharpness<T> {
-    /// If the information is known somehow, it returns the value. Otherwise, it returns None.
+    /// If the information is known somehow, it returns the cloned value. Otherwise, it returns None.
     pub fn get_value(&self) -> Option<T> {
         match self {
             Sharpness::Exact(val) | Sharpness::Inexact(val) => Some(val.clone()),
@@ -271,7 +271,7 @@ pub struct ColumnStatistics {
 impl ColumnStatistics {
     /// Column contains a single non null value (e.g constant).
     pub fn is_singleton(&self) -> bool {
-        match (&self.min_value.get_value(), &self.max_value.get_value()) {
+        match (self.min_value.get_value(), self.max_value.get_value()) {
             // Min and max values are the same and not infinity.
             (Some(min), Some(max)) => !min.is_null() && !max.is_null() && (min == max),
             (_, _) => false,
