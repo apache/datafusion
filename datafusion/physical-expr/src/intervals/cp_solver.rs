@@ -30,6 +30,7 @@ use crate::intervals::interval_aritmetic::{apply_operator, Interval};
 use crate::utils::{build_dag, ExprTreeNode};
 use crate::PhysicalExpr;
 
+use arrow::compute::CastOptions;
 use arrow_schema::DataType;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::type_coercion::binary::get_result_type;
@@ -305,6 +306,17 @@ pub fn propagate_comparison(
 ) -> Result<(Option<Interval>, Option<Interval>)> {
     let left_type = left_child.get_datatype()?;
     let right_type = right_child.get_datatype()?;
+    if let (DataType::Timestamp(..), DataType::Timestamp(..)) = (&left_type, &right_type)
+    {
+        return propagate_comparison_timestamp(
+            op,
+            left_child,
+            right_child,
+            &left_type,
+            &right_type,
+        );
+    }
+
     let parent = comparison_operator_target(&left_type, op, &right_type)?;
     match (&left_type, &right_type) {
         // We can not compare a Duration type with a time interval type
@@ -681,6 +693,33 @@ pub fn propagate_comparison_to_time_interval_at_right(
     }
 }
 
+/// Propagate the constraints arising from comparison operators on
+/// timestamp data types. Arithmetic on timestamps is treated specially,
+/// for example subtracting two timestamps results in duration rather
+/// than another timestamp. To work around this all values are converted
+/// to int64 before applying the proagation operation. The results are
+/// converted back to their original types before being returned.
+fn propagate_comparison_timestamp(
+    op: &Operator,
+    left_child: &Interval,
+    right_child: &Interval,
+    left_type: &DataType,
+    right_type: &DataType,
+) -> Result<(Option<Interval>, Option<Interval>)> {
+    let cast_options = CastOptions::default();
+    let left_child_i64 = left_child.cast_to(&DataType::Int64, &cast_options)?;
+    let right_child_i64 = right_child.cast_to(&DataType::Int64, &cast_options)?;
+    let (left_result_i64, right_result_i64) =
+        propagate_comparison(op, &left_child_i64, &right_child_i64)?;
+    let left_result = left_result_i64
+        .map(|interval| interval.cast_to(left_type, &cast_options))
+        .transpose()?;
+    let right_result = right_result_i64
+        .map(|interval| interval.cast_to(right_type, &cast_options))
+        .transpose()?;
+    Ok((left_result, right_result))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -688,6 +727,7 @@ mod tests {
 
     use crate::expressions::{BinaryExpr, Column};
     use crate::intervals::test_utils::gen_conjunctive_numerical_expr;
+    use arrow::datatypes::TimeUnit;
     use datafusion_common::ScalarValue;
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};
@@ -1413,5 +1453,131 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_propagate_comparison() {
+        let left = Interval::new(
+            IntervalBound::make_unbounded(DataType::Int64).unwrap(),
+            IntervalBound::make_unbounded(DataType::Int64).unwrap(),
+        );
+        let right = Interval::new(
+            IntervalBound::new(ScalarValue::Int64(Some(1000)), false),
+            IntervalBound::new(ScalarValue::Int64(Some(1000)), false),
+        );
+        assert_eq!(
+            (
+                Some(Interval::new(
+                    IntervalBound::make_unbounded(DataType::Int64).unwrap(),
+                    IntervalBound::new(ScalarValue::Int64(Some(1000)), true)
+                )),
+                Some(Interval::new(
+                    IntervalBound::new(ScalarValue::Int64(Some(1000)), false),
+                    IntervalBound::new(ScalarValue::Int64(Some(1000)), false)
+                )),
+            ),
+            propagate_comparison(&Operator::Lt, &left, &right).unwrap()
+        );
+
+        let left = Interval::new(
+            IntervalBound::make_unbounded(DataType::Timestamp(
+                TimeUnit::Nanosecond,
+                None,
+            ))
+            .unwrap(),
+            IntervalBound::make_unbounded(DataType::Timestamp(
+                TimeUnit::Nanosecond,
+                None,
+            ))
+            .unwrap(),
+        );
+        let right = Interval::new(
+            IntervalBound::new(ScalarValue::TimestampNanosecond(Some(1000), None), false),
+            IntervalBound::new(ScalarValue::TimestampNanosecond(Some(1000), None), false),
+        );
+        assert_eq!(
+            (
+                Some(Interval::new(
+                    IntervalBound::make_unbounded(DataType::Timestamp(
+                        TimeUnit::Nanosecond,
+                        None
+                    ))
+                    .unwrap(),
+                    IntervalBound::new(
+                        ScalarValue::TimestampNanosecond(Some(1000), None),
+                        true
+                    )
+                )),
+                Some(Interval::new(
+                    IntervalBound::new(
+                        ScalarValue::TimestampNanosecond(Some(1000), None),
+                        false
+                    ),
+                    IntervalBound::new(
+                        ScalarValue::TimestampNanosecond(Some(1000), None),
+                        false
+                    )
+                )),
+            ),
+            propagate_comparison(&Operator::Lt, &left, &right).unwrap()
+        );
+
+        let left = Interval::new(
+            IntervalBound::make_unbounded(DataType::Timestamp(
+                TimeUnit::Nanosecond,
+                Some("+05:00".into()),
+            ))
+            .unwrap(),
+            IntervalBound::make_unbounded(DataType::Timestamp(
+                TimeUnit::Nanosecond,
+                Some("+05:00".into()),
+            ))
+            .unwrap(),
+        );
+        let right = Interval::new(
+            IntervalBound::new(
+                ScalarValue::TimestampNanosecond(Some(1000), Some("+05:00".into())),
+                false,
+            ),
+            IntervalBound::new(
+                ScalarValue::TimestampNanosecond(Some(1000), Some("+05:00".into())),
+                false,
+            ),
+        );
+        assert_eq!(
+            (
+                Some(Interval::new(
+                    IntervalBound::make_unbounded(DataType::Timestamp(
+                        TimeUnit::Nanosecond,
+                        Some("+05:00".into()),
+                    ))
+                    .unwrap(),
+                    IntervalBound::new(
+                        ScalarValue::TimestampNanosecond(
+                            Some(1000),
+                            Some("+05:00".into())
+                        ),
+                        true
+                    )
+                )),
+                Some(Interval::new(
+                    IntervalBound::new(
+                        ScalarValue::TimestampNanosecond(
+                            Some(1000),
+                            Some("+05:00".into())
+                        ),
+                        false
+                    ),
+                    IntervalBound::new(
+                        ScalarValue::TimestampNanosecond(
+                            Some(1000),
+                            Some("+05:00".into())
+                        ),
+                        false
+                    )
+                )),
+            ),
+            propagate_comparison(&Operator::Lt, &left, &right).unwrap()
+        );
     }
 }
