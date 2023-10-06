@@ -30,6 +30,7 @@ use datafusion::{
     physical_plan::metrics::ExecutionPlanMetricsSet,
     test_util::aggr_test_schema,
 };
+
 use futures::StreamExt;
 use object_store::local::LocalFileSystem;
 
