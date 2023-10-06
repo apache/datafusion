@@ -314,7 +314,7 @@ pub fn to_substrait_rel(
                     None => join_on.map(Box::new), // the join expression will only contain `join_on` if filter doesn't exist
                 },
                 None => match &join_filter {
-                    Some(_) => join_filter.map(Box::new), // the join expression will only contain `join_file` if the `on` condition doesn't exist
+                    Some(_) => join_filter.map(Box::new), // the join expression will only contain `join_filter` if the `on` condition doesn't exist
                     None => None,
                 },
             };
@@ -325,7 +325,7 @@ pub fn to_substrait_rel(
                     left: Some(left),
                     right: Some(right),
                     r#type: join_type as i32,
-                    expression: join_expr,
+                    expression: join_expr.clone(),
                     post_join_filter: None,
                     advanced_extension: None,
                 }))),
