@@ -253,8 +253,7 @@ impl fmt::Display for Statement {
 
 /// Datafusion SQL Parser based on [`sqlparser`]
 ///
-/// Parses DataFusion's SQL dialect, often delegating to [`sqlparser`]'s
-/// [`Parser`](sqlparser::parser::Parser).
+/// Parses DataFusion's SQL dialect, often delegating to [`sqlparser`]'s [`Parser`].
 ///
 /// DataFusion mostly follows existing SQL dialects via
 /// `sqlparser`. However, certain statements such as `COPY` and

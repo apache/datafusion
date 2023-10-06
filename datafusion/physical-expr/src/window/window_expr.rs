@@ -59,7 +59,7 @@ use std::sync::Arc;
 /// [`PlainAggregateWindowExpr`]: crate::window::PlainAggregateWindowExpr
 /// [`SlidingAggregateWindowExpr`]: crate::window::SlidingAggregateWindowExpr
 pub trait WindowExpr: Send + Sync + Debug {
-    /// Returns the window expression as [`Any`](std::any::Any) so that it can be
+    /// Returns the window expression as [`Any`] so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
 
