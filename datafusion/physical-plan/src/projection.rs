@@ -404,15 +404,13 @@ fn stats_projection(
         .clone()
         .into_iter()
         .enumerate()
-        .map(|(index, e)| {
+        .map(|(_index, e)| {
             if let Some(col) = e.as_any().downcast_ref::<Column>() {
                 stats.column_statistics[col.index()].clone()
             } else {
                 // TODO stats: estimate more statistics from expressions
                 // (expressions should compute their statistics themselves)
-                ColumnStatistics::new_with_unbounded_column(
-                    schema.field(index).data_type(),
-                )
+                ColumnStatistics::new_unknown()
             }
         })
         .collect();

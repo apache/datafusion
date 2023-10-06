@@ -21,7 +21,7 @@ use std::fmt::{self, Debug, Display};
 
 use crate::ScalarValue;
 
-use arrow::datatypes::{DataType, Schema};
+use arrow::datatypes::Schema;
 
 /// To deal with information without exactness guarantees, we wrap it inside a
 /// [`Sharpness`] object to express its reliability. See [`Statistics`] for a usage.
@@ -228,7 +228,7 @@ impl Statistics {
         schema
             .fields()
             .iter()
-            .map(|field| ColumnStatistics::new_with_unbounded_column(field.data_type()))
+            .map(|_| ColumnStatistics::new_unknown())
             .collect()
     }
 
@@ -287,15 +287,12 @@ impl ColumnStatistics {
         }
     }
 
-    /// Returns the [`ColumnStatistics`] corresponding to the given datatype by assigning infinite bounds.
-    pub fn new_with_unbounded_column(dt: &DataType) -> ColumnStatistics {
-        let inf = ScalarValue::try_from(dt.clone())
-            .map(Sharpness::Inexact)
-            .unwrap_or(Sharpness::Absent);
+    /// Returns a [`ColumnStatistics`] instance having all [`Sharpness::Absent`] parameters.
+    pub fn new_unknown() -> ColumnStatistics {
         ColumnStatistics {
             null_count: Sharpness::Absent,
-            max_value: inf.clone(),
-            min_value: inf,
+            max_value: Sharpness::Absent,
+            min_value: Sharpness::Absent,
             distinct_count: Sharpness::Absent,
         }
     }

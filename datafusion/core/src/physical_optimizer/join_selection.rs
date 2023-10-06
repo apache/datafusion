@@ -612,9 +612,7 @@ mod tests_statistical {
             Statistics {
                 num_rows: Sharpness::Inexact(10),
                 total_byte_size: Sharpness::Inexact(100000),
-                column_statistics: vec![ColumnStatistics::new_with_unbounded_column(
-                    &DataType::Int32,
-                )],
+                column_statistics: vec![ColumnStatistics::new_unknown()],
             },
             Schema::new(vec![Field::new("big_col", DataType::Int32, false)]),
         ));
@@ -623,9 +621,7 @@ mod tests_statistical {
             Statistics {
                 num_rows: Sharpness::Inexact(100000),
                 total_byte_size: Sharpness::Inexact(10),
-                column_statistics: vec![ColumnStatistics::new_with_unbounded_column(
-                    &DataType::Int32,
-                )],
+                column_statistics: vec![ColumnStatistics::new_unknown()],
             },
             Schema::new(vec![Field::new("small_col", DataType::Int32, false)]),
         ));
@@ -1010,9 +1006,7 @@ mod tests_statistical {
             Statistics {
                 num_rows: Sharpness::Inexact(10000000),
                 total_byte_size: Sharpness::Inexact(10000000),
-                column_statistics: vec![ColumnStatistics::new_with_unbounded_column(
-                    &DataType::Int32,
-                )],
+                column_statistics: vec![ColumnStatistics::new_unknown()],
             },
             Schema::new(vec![Field::new("big_col", DataType::Int32, false)]),
         ));
@@ -1021,9 +1015,7 @@ mod tests_statistical {
             Statistics {
                 num_rows: Sharpness::Inexact(10),
                 total_byte_size: Sharpness::Inexact(10),
-                column_statistics: vec![ColumnStatistics::new_with_unbounded_column(
-                    &DataType::Int32,
-                )],
+                column_statistics: vec![ColumnStatistics::new_unknown()],
             },
             Schema::new(vec![Field::new("small_col", DataType::Int32, false)]),
         ));
@@ -1032,9 +1024,7 @@ mod tests_statistical {
             Statistics {
                 num_rows: Sharpness::Absent,
                 total_byte_size: Sharpness::Absent,
-                column_statistics: vec![ColumnStatistics::new_with_unbounded_column(
-                    &DataType::Int32,
-                )],
+                column_statistics: vec![ColumnStatistics::new_unknown()],
             },
             Schema::new(vec![Field::new("empty_col", DataType::Int32, false)]),
         ));
@@ -1094,9 +1084,7 @@ mod tests_statistical {
             Statistics {
                 num_rows: Sharpness::Inexact(10000000),
                 total_byte_size: Sharpness::Inexact(10000000),
-                column_statistics: vec![ColumnStatistics::new_with_unbounded_column(
-                    &DataType::Int32,
-                )],
+                column_statistics: vec![ColumnStatistics::new_unknown()],
             },
             Schema::new(vec![Field::new("big_col1", DataType::Int32, false)]),
         ));
@@ -1105,9 +1093,7 @@ mod tests_statistical {
             Statistics {
                 num_rows: Sharpness::Inexact(20000000),
                 total_byte_size: Sharpness::Inexact(20000000),
-                column_statistics: vec![ColumnStatistics::new_with_unbounded_column(
-                    &DataType::Int32,
-                )],
+                column_statistics: vec![ColumnStatistics::new_unknown()],
             },
             Schema::new(vec![Field::new("big_col2", DataType::Int32, false)]),
         ));
@@ -1116,9 +1102,7 @@ mod tests_statistical {
             Statistics {
                 num_rows: Sharpness::Absent,
                 total_byte_size: Sharpness::Absent,
-                column_statistics: vec![ColumnStatistics::new_with_unbounded_column(
-                    &DataType::Int32,
-                )],
+                column_statistics: vec![ColumnStatistics::new_unknown()],
             },
             Schema::new(vec![Field::new("empty_col", DataType::Int32, false)]),
         ));

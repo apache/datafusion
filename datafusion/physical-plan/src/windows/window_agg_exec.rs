@@ -265,15 +265,8 @@ impl ExecutionPlan for WindowAggExec {
         let mut column_statistics = Vec::with_capacity(win_cols + input_cols);
         // copy stats of the input to the beginning of the schema.
         column_statistics.extend(input_stat.column_statistics);
-        for index in 0..win_cols {
-            column_statistics.push(ColumnStatistics::new_with_unbounded_column(
-                self.schema().field(index + input_cols).data_type(),
-            ))
-        }
-        for index in 0..win_cols {
-            column_statistics.push(ColumnStatistics::new_with_unbounded_column(
-                self.schema().field(index + input_cols).data_type(),
-            ))
+        for _ in 0..win_cols {
+            column_statistics.push(ColumnStatistics::new_unknown())
         }
         Ok(Statistics {
             num_rows: input_stat.num_rows,

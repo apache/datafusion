@@ -64,11 +64,32 @@ impl AnalysisContext {
     ) -> Self {
         let mut column_boundaries = vec![];
         for (idx, stats) in statistics.iter().enumerate() {
-            column_boundaries.push(ExprBoundaries::from_column(
-                stats,
-                input_schema.fields()[idx].name().clone(),
-                idx,
-            ));
+            let field: &Arc<arrow_schema::Field> = &input_schema.fields()[idx];
+            if let Ok(inf_field) = ScalarValue::try_from(field.data_type()) {
+                let interval = Interval::new(
+                    IntervalBound::new_closed(
+                        stats
+                            .min_value
+                            .get_value()
+                            .cloned()
+                            .unwrap_or(inf_field.clone()),
+                    ),
+                    IntervalBound::new_closed(
+                        stats.max_value.get_value().cloned().unwrap_or(inf_field),
+                    ),
+                );
+                let column = Column::new(input_schema.fields()[idx].name(), idx);
+                column_boundaries.push(ExprBoundaries {
+                    column,
+                    interval,
+                    distinct_count: stats.distinct_count.clone(),
+                });
+            } else {
+                return AnalysisContext {
+                    boundaries: None,
+                    selectivity: None,
+                };
+            }
         }
         Self::new(column_boundaries)
     }
@@ -83,32 +104,6 @@ pub struct ExprBoundaries {
     pub interval: Interval,
     /// Maximum number of distinct values this expression can produce, if known.
     pub distinct_count: Sharpness<usize>,
-}
-
-impl ExprBoundaries {
-    /// Create a new `ExprBoundaries` object from column level statistics.
-    pub fn from_column(stats: &ColumnStatistics, col: String, index: usize) -> Self {
-        Self {
-            column: Column::new(&col, index),
-            interval: Interval::new(
-                IntervalBound::new_closed(
-                    stats
-                        .min_value
-                        .get_value()
-                        .cloned()
-                        .unwrap_or(ScalarValue::Null),
-                ),
-                IntervalBound::new_closed(
-                    stats
-                        .max_value
-                        .get_value()
-                        .cloned()
-                        .unwrap_or(ScalarValue::Null),
-                ),
-            ),
-            distinct_count: stats.distinct_count.clone(),
-        }
-    }
 }
 
 /// Attempts to refine column boundaries and compute a selectivity value.

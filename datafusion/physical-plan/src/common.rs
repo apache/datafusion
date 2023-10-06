@@ -147,11 +147,7 @@ pub fn compute_record_batch_statistics(
         None => (0..schema.fields().len()).collect(),
     };
 
-    let fields = schema.fields();
-    let mut column_statistics = projection
-        .iter()
-        .map(|&idx| ColumnStatistics::new_with_unbounded_column(fields[idx].data_type()))
-        .collect::<Vec<_>>();
+    let mut column_statistics = vec![ColumnStatistics::new_unknown(); projection.len()];
 
     for partition in batches.iter() {
         for batch in partition {
@@ -388,7 +384,6 @@ mod tests {
         datatypes::{DataType, Field, Schema},
         record_batch::RecordBatch,
     };
-    use datafusion_common::ScalarValue;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{col, Column};
 
@@ -703,14 +698,14 @@ mod tests {
             column_statistics: vec![
                 ColumnStatistics {
                     distinct_count: Sharpness::Absent,
-                    max_value: Sharpness::Inexact(ScalarValue::Float32(None)),
-                    min_value: Sharpness::Inexact(ScalarValue::Float32(None)),
+                    max_value: Sharpness::Absent,
+                    min_value: Sharpness::Absent,
                     null_count: Sharpness::Exact(0),
                 },
                 ColumnStatistics {
                     distinct_count: Sharpness::Absent,
-                    max_value: Sharpness::Inexact(ScalarValue::Float64(None)),
-                    min_value: Sharpness::Inexact(ScalarValue::Float64(None)),
+                    max_value: Sharpness::Absent,
+                    min_value: Sharpness::Absent,
                     null_count: Sharpness::Exact(0),
                 },
             ],

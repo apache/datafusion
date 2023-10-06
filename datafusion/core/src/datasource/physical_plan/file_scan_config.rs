@@ -139,7 +139,7 @@ impl FileScanConfig {
                 let dtype = &self.table_partition_cols[partition_idx].1;
                 table_fields.push(Field::new(name, dtype.to_owned(), false));
                 // TODO provide accurate stat for partition column (#1186)
-                table_cols_stats.push(ColumnStatistics::new_with_unbounded_column(dtype))
+                table_cols_stats.push(ColumnStatistics::new_unknown())
             }
         }
 

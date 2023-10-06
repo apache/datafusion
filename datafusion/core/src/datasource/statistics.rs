@@ -36,7 +36,7 @@ pub async fn get_statistics_with_limit(
     limit: Option<usize>,
 ) -> Result<(Vec<PartitionedFile>, Statistics)> {
     let mut result_files = vec![];
-    let mut null_counts = vec![Sharpness::Exact(0_usize); file_schema.fields().len()];
+    let mut null_counts: Option<Vec<Sharpness<usize>>> = None;
     let mut max_values: Option<Vec<Sharpness<ScalarValue>>> = None;
     let mut min_values: Option<Vec<Sharpness<ScalarValue>>> = None;
 
@@ -76,14 +76,29 @@ pub async fn get_statistics_with_limit(
             Some(file_stats.total_byte_size)
         };
 
-        for (i, cs) in file_stats.column_statistics.iter().enumerate() {
-            null_counts[i] = if cs.null_count == Sharpness::Absent {
-                // Downcast to inexact
-                null_counts[i].clone().to_inexact()
-            } else {
-                null_counts[i].add(&cs.null_count)
-            };
-        }
+        if let Some(some_null_counts) = &mut null_counts {
+            for (i, cs) in file_stats.column_statistics.iter().enumerate() {
+                some_null_counts[i] = if cs.null_count == Sharpness::Absent {
+                    // Downcast to inexact
+                    some_null_counts[i].clone().to_inexact()
+                } else {
+                    some_null_counts[i].add(&cs.null_count)
+                };
+            }
+        } else {
+            // If it is the first file, we set it directly from the file statistics.
+            let mut new_col_stats_nulls = file_stats
+                .column_statistics
+                .iter()
+                .map(|cs| cs.null_count.clone())
+                .collect::<Vec<_>>();
+            // file schema may have additional fields other than each file (such as partition, guaranteed to be at the end)
+            // Hence, push rest of the fields with information Absent.
+            for _ in 0..file_schema.fields().len() - file_stats.column_statistics.len() {
+                new_col_stats_nulls.push(Sharpness::Absent)
+            }
+            null_counts = Some(new_col_stats_nulls);
+        };
 
         if let Some(some_max_values) = &mut max_values {
             for (i, cs) in file_stats.column_statistics.iter().enumerate() {
@@ -137,8 +152,13 @@ pub async fn get_statistics_with_limit(
             break;
         }
     }
-    let max_values = max_values.unwrap_or(create_inf_stats(&file_schema));
-    let min_values = min_values.unwrap_or(create_inf_stats(&file_schema));
+
+    let null_counts =
+        null_counts.unwrap_or(vec![Sharpness::Absent; file_schema.fields().len()]);
+    let max_values =
+        max_values.unwrap_or(vec![Sharpness::Absent; file_schema.fields().len()]);
+    let min_values =
+        min_values.unwrap_or(vec![Sharpness::Absent; file_schema.fields().len()]);
 
     let column_stats = get_col_stats_vec(null_counts, max_values, min_values);
 
@@ -155,18 +175,6 @@ pub async fn get_statistics_with_limit(
     }
 
     Ok((result_files, statistics))
-}
-
-fn create_inf_stats(file_schema: &Schema) -> Vec<Sharpness<ScalarValue>> {
-    file_schema
-        .fields
-        .iter()
-        .map(|field| {
-            ScalarValue::try_from(field.data_type())
-                .map(Sharpness::Inexact)
-                .unwrap_or(Sharpness::Absent)
-        })
-        .collect()
 }
 
 pub(crate) fn create_max_min_accs(
