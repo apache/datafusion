@@ -112,7 +112,7 @@ impl OrderPreservationContext {
         self.plan
             .children()
             .into_iter()
-            .map(|child| OrderPreservationContext::new(child))
+            .map(OrderPreservationContext::new)
             .collect()
     }
 }
