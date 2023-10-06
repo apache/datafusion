@@ -36,9 +36,7 @@ use crate::{
         Statistics,
     },
 };
-use datafusion_physical_expr::{
-    ordering_equivalence_properties_helper, PhysicalSortExpr,
-};
+use datafusion_physical_expr::{schema_properties_helper, PhysicalSortExpr};
 use fmt::Debug;
 use object_store::path::Path;
 use std::any::Any;
@@ -320,10 +318,7 @@ impl ExecutionPlan for ParquetExec {
     }
 
     fn schema_properties(&self) -> SchemaProperties {
-        ordering_equivalence_properties_helper(
-            self.schema(),
-            &self.projected_output_ordering,
-        )
+        schema_properties_helper(self.schema(), &self.projected_output_ordering)
     }
 
     fn with_new_children(

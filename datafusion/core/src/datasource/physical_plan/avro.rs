@@ -26,9 +26,7 @@ use crate::physical_plan::{
 use datafusion_execution::TaskContext;
 
 use arrow::datatypes::SchemaRef;
-use datafusion_physical_expr::{
-    ordering_equivalence_properties_helper, LexOrdering, SchemaProperties,
-};
+use datafusion_physical_expr::{schema_properties_helper, LexOrdering, SchemaProperties};
 
 use std::any::Any;
 use std::sync::Arc;
@@ -102,10 +100,7 @@ impl ExecutionPlan for AvroExec {
     }
 
     fn schema_properties(&self) -> SchemaProperties {
-        ordering_equivalence_properties_helper(
-            self.schema(),
-            &self.projected_output_ordering,
-        )
+        schema_properties_helper(self.schema(), &self.projected_output_ordering)
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

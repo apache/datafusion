@@ -28,8 +28,7 @@ use arrow_schema::SchemaRef;
 use datafusion_common::Statistics;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{
-    ordering_equivalence_properties_helper, LexOrdering, PhysicalSortExpr,
-    SchemaProperties,
+    schema_properties_helper, LexOrdering, PhysicalSortExpr, SchemaProperties,
 };
 use futures::StreamExt;
 use object_store::{GetResultPayload, ObjectStore};
@@ -103,10 +102,7 @@ impl ExecutionPlan for ArrowExec {
     }
 
     fn schema_properties(&self) -> SchemaProperties {
-        ordering_equivalence_properties_helper(
-            self.schema(),
-            &self.projected_output_ordering,
-        )
+        schema_properties_helper(self.schema(), &self.projected_output_ordering)
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

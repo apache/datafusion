@@ -66,7 +66,7 @@ impl Partitioning {
     pub fn satisfy<F: FnOnce() -> SchemaProperties>(
         &self,
         required: Distribution,
-        equal_properties: F,
+        schema_properties: F,
     ) -> bool {
         match required {
             Distribution::UnspecifiedDistribution => true,
@@ -79,19 +79,19 @@ impl Partitioning {
                     Partitioning::Hash(partition_exprs, _) => {
                         let fast_match =
                             expr_list_eq_strict_order(&required_exprs, partition_exprs);
-                        // If the required exprs do not match, need to leverage the eq_properties provided by the child
-                        // and normalize both exprs based on the eq_properties
+                        // If the required exprs do not match, need to leverage the schema_properties provided by the child
+                        // and normalize both exprs based on the equivalent groups.
                         if !fast_match {
-                            let eq_properties = equal_properties();
-                            let eq_classes = eq_properties.eq_groups();
-                            if !eq_classes.is_empty() {
+                            let schema_properties = schema_properties();
+                            let eq_groups = schema_properties.eq_groups();
+                            if !eq_groups.is_empty() {
                                 let normalized_required_exprs = required_exprs
                                     .iter()
-                                    .map(|e| eq_classes.normalize_expr(e.clone()))
+                                    .map(|e| eq_groups.normalize_expr(e.clone()))
                                     .collect::<Vec<_>>();
                                 let normalized_partition_exprs = partition_exprs
                                     .iter()
-                                    .map(|e| eq_classes.normalize_expr(e.clone()))
+                                    .map(|e| eq_groups.normalize_expr(e.clone()))
                                     .collect::<Vec<_>>();
                                 expr_list_eq_strict_order(
                                     &normalized_required_exprs,

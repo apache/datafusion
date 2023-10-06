@@ -26,13 +26,12 @@ use arrow::datatypes::SchemaRef;
 
 use crate::physical_expr::{deduplicate_physical_exprs, have_common_entries};
 use crate::sort_properties::{ExprOrdering, SortProperties};
-use arrow_schema::SortOptions;
+use arrow_schema::{Schema, SortOptions};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::utils::longest_consecutive_prefix;
 use datafusion_common::{DataFusionError, JoinSide, JoinType, Result};
 use itertools::izip;
 use std::hash::Hash;
-use std::ops::Range;
 use std::sync::Arc;
 
 /// EquivalentClass is a set of [`Arc<dyn PhysicalExpr>`]s that are known
@@ -115,7 +114,6 @@ impl EquivalentGroups {
                 self.inner.push(vec![first.clone(), second.clone()]);
             }
         }
-        self.remove_redundant_entries();
     }
 
     /// Remove redundant entries from the state.
@@ -318,24 +316,22 @@ impl EquivalentGroups {
         &self,
         source_to_target_mapping: &ProjectionMapping,
     ) -> EquivalentGroups {
-        let mut new_eq_classes = vec![];
+        let mut projected_eq_groups = vec![];
         for eq_class in self.iter() {
             let new_eq_class = eq_class
                 .iter()
                 .filter_map(|expr| self.project_expr(source_to_target_mapping, expr))
                 .collect::<Vec<_>>();
             if new_eq_class.len() > 1 {
-                new_eq_classes.push(new_eq_class.clone());
+                projected_eq_groups.push(new_eq_class.clone());
             }
         }
-        let new_classes =
+        let new_eq_groups =
             Self::calculate_new_projection_equivalent_groups(source_to_target_mapping);
-        new_eq_classes.extend(new_classes);
+        projected_eq_groups.extend(new_eq_groups);
 
-        let mut projection_eq_groups = EquivalentGroups::new(new_eq_classes);
-        // Make sure there is no redundant entry after projection.
-        projection_eq_groups.remove_redundant_entries();
-        projection_eq_groups
+        // Return projected equivalent groups
+        EquivalentGroups::new(projected_eq_groups)
     }
 
     /// Construct equivalent groups according to projection mapping.
@@ -684,19 +680,16 @@ impl SchemaProperties {
                 self.oeq_group.push(ordering);
             }
         }
-        self.normalize_state();
     }
 
     /// Adds new ordering into the ordering equivalent group.
     pub fn add_new_orderings(&mut self, orderings: &[LexOrdering]) {
         self.oeq_group.add_new_orderings(orderings);
-        self.normalize_state();
     }
 
     /// Add new equivalent group to state.
     pub fn add_equivalent_groups(&mut self, other_eq_group: EquivalentGroups) {
         self.eq_groups.extend(other_eq_group);
-        self.normalize_state();
     }
 
     /// Adds new equality group into the equivalent groups.
@@ -706,30 +699,6 @@ impl SchemaProperties {
         new_conditions: (&Arc<dyn PhysicalExpr>, &Arc<dyn PhysicalExpr>),
     ) {
         self.eq_groups.add_equal_conditions(new_conditions);
-        self.normalize_state();
-    }
-
-    /// Normalizes state according to equivalent classes
-    /// This util makes sure that all of the entries that have have equivalent groups among the ordering equivalent group
-    /// uses representative expression of corresponding equivalent group (first entry in the group).
-    fn normalize_state(&mut self) {
-        let normalized_ordering = self
-            .oeq_group
-            .inner
-            .iter()
-            .map(|ordering| {
-                // Use a representative version of the each equivalent group inside ordering expressions.
-                let ordering = self.eq_groups.normalize_sort_exprs(ordering);
-                // Prune with constants
-                let req = prune_sort_reqs_with_constants(
-                    &PhysicalSortRequirement::from_sort_exprs(&ordering),
-                    &self.constants,
-                );
-                PhysicalSortRequirement::to_sort_exprs(req)
-            })
-            .collect::<Vec<Vec<_>>>();
-        // Create new oeq group normalized according to equivalent groups.
-        self.oeq_group = OrderingEquivalentGroup::new(normalized_ordering);
     }
 
     /// Add physical expression that have constant value to the `self.constants`
@@ -740,17 +709,16 @@ impl SchemaProperties {
                 self.constants.push(constant);
             }
         });
-        self.normalize_state();
         self
     }
 
-    /// Transform `sort_exprs` vector, to standardized version using `eq_properties` and `ordering_eq_properties`
-    /// Assume `eq_properties` states that `Column a` and `Column b` are aliases.
-    /// Also assume `ordering_eq_properties` states that ordering `vec![d ASC]` and `vec![a ASC, c ASC]` are
+    /// Transform `sort_exprs` vector, to standardized version using `eq_groups` and `oeq_group`
+    /// Assume `eq_groups` states that `Column a` and `Column b` are aliases.
+    /// Also assume `oeq_group` states that ordering `vec![d ASC]` and `vec![a ASC, c ASC]` are
     /// ordering equivalent (in the sense that both describe the ordering of the table).
     /// If the `sort_exprs` input to this function were `vec![b ASC, c ASC]`,
-    /// This function converts `sort_exprs` `vec![b ASC, c ASC]` to first `vec![a ASC, c ASC]` after considering `eq_properties`
-    /// Then converts `vec![a ASC, c ASC]` to `vec![d ASC]` after considering `ordering_eq_properties`.
+    /// This function converts `sort_exprs` `vec![b ASC, c ASC]` to first `vec![a ASC, c ASC]` after considering `eq_groups`
+    /// Then converts `vec![a ASC, c ASC]` to `vec![d ASC]` after considering `oeq_group`.
     /// Standardized version `vec![d ASC]` is used in subsequent operations.
     pub fn normalize_sort_exprs(
         &self,
@@ -766,16 +734,17 @@ impl SchemaProperties {
 
     /// This function normalizes `sort_reqs` by
     /// - removing expressions that have constant value from requirement
-    /// - replacing sections that are in the `self.oeq_class.others` with `self.oeq_class.head`
+    /// - replacing sections that are in the `self.oeq_group` with `oeq_group[0]` (e.g standard representative
+    ///   version of the group)
     /// - removing sections that satisfies global ordering that are in the post fix of requirement
     ///
-    /// Transform `sort_reqs` vector, to standardized version using `eq_properties` and `ordering_eq_properties`
-    /// Assume `eq_properties` states that `Column a` and `Column b` are aliases.
-    /// Also assume `ordering_eq_properties` states that ordering `vec![d ASC]` and `vec![a ASC, c ASC]` are
+    /// Transform `sort_reqs` vector, to standardized version using `eq_groups` and `oeq_group`
+    /// Assume `eq_groups` states that `Column a` and `Column b` are aliases.
+    /// Also assume `oeq_group` states that ordering `vec![d ASC]` and `vec![a ASC, c ASC]` are
     /// ordering equivalent (in the sense that both describe the ordering of the table).
     /// If the `sort_reqs` input to this function were `vec![b Some(ASC), c None]`,
-    /// This function converts `sort_exprs` `vec![b Some(ASC), c None]` to first `vec![a Some(ASC), c None]` after considering `eq_properties`
-    /// Then converts `vec![a Some(ASC), c None]` to `vec![d Some(ASC)]` after considering `ordering_eq_properties`.
+    /// This function converts `sort_exprs` `vec![b Some(ASC), c None]` to first `vec![a Some(ASC), c None]` after considering `eq_groups`
+    /// Then converts `vec![a Some(ASC), c None]` to `vec![d Some(ASC)]` after considering `oeq_group`.
     /// Standardized version `vec![d Some(ASC)]` is used in subsequent operations.
     pub fn normalize_sort_requirements(
         &self,
@@ -786,37 +755,70 @@ impl SchemaProperties {
         let normalized_sort_reqs =
             prune_sort_reqs_with_constants(&normalized_sort_reqs, &self.constants);
         let mut normalized_sort_reqs = collapse_lex_req(normalized_sort_reqs);
-        if self.oeq_group.is_empty() {
-            return normalized_sort_reqs;
+
+        // Prune redundant sections in the requirement.
+        normalized_sort_reqs = self.prune_lex_req(normalized_sort_reqs);
+
+        // Remove duplicates from expression.
+        let normalized_sort_reqs = collapse_lex_req(normalized_sort_reqs);
+
+        let oeq_group = self.oeq_group();
+        if normalized_sort_reqs.is_empty() && !oeq_group.is_empty() {
+            // By convention use first entry
+            PhysicalSortRequirement::from_sort_exprs(&oeq_group.inner[0])
+        } else {
+            normalized_sort_reqs
         }
-        let first_entry =
-            PhysicalSortRequirement::from_sort_exprs(&self.oeq_group.inner[0]);
-        let first_entry = self.eq_groups.normalize_sort_requirements(&first_entry);
-        for item in self.oeq_group.iter() {
-            let item = PhysicalSortRequirement::from_sort_exprs(item);
-            let item = self.eq_groups.normalize_sort_requirements(&item);
-            let ranges = get_compatible_ranges(&normalized_sort_reqs, &item);
-            let mut offset: i64 = 0;
-            for Range { start, end } in ranges {
-                let mut head = first_entry.clone();
-                let updated_start = (start as i64 + offset) as usize;
-                let updated_end = (end as i64 + offset) as usize;
-                let range = end - start;
-                offset += head.len() as i64 - range as i64;
-                let all_none = normalized_sort_reqs[updated_start..updated_end]
-                    .iter()
-                    .all(|req| req.options.is_none());
-                if all_none {
-                    for req in head.iter_mut() {
-                        req.options = None;
-                    }
+    }
+
+    /// This function simplifies lexicographical ordering requirement
+    /// inside `sort_req` by removing postfix lexicographical requirements
+    /// that satisfy global ordering (occurs inside the ordering equivalent class)
+    fn prune_lex_req(&self, sort_req: LexOrderingReq) -> LexOrderingReq {
+        let mut section = &sort_req[..];
+        // Eat up from the end of the sort_req until no section can be removed
+        // from the ending.
+        loop {
+            let n_prune = self.prune_last_n_that_is_in_oeq(section);
+            // Cannot prune entries from the end of requirement
+            if n_prune == 0 {
+                break;
+            }
+            section = &section[0..section.len() - n_prune];
+        }
+        section.to_vec()
+    }
+
+    /// Determines how many entries from the end can be deleted.
+    /// Last n entry satisfies global ordering, hence having them
+    /// as postfix in the lexicographical requirement is unnecessary.
+    /// Assume requirement is [a ASC, b ASC, c ASC], also assume that
+    /// existing ordering is [c ASC, d ASC]. In this case, since [c ASC]
+    /// is satisfied by the existing ordering (e.g corresponding section is global ordering),
+    /// [c ASC] can be pruned from the requirement: [a ASC, b ASC, c ASC]. In this case,
+    /// this function will return 1, to indicate last element can be removed from the requirement
+    fn prune_last_n_that_is_in_oeq(&self, sort_req: &[PhysicalSortRequirement]) -> usize {
+        let sort_req_len = sort_req.len();
+        let oeq_group = self.oeq_group();
+        let eq_groups = self.eq_groups();
+        for ordering in oeq_group.iter() {
+            let ordering = eq_groups.normalize_sort_exprs(ordering);
+            let req = prune_sort_reqs_with_constants(
+                &PhysicalSortRequirement::from_sort_exprs(&ordering),
+                &self.constants,
+            );
+            let ordering = PhysicalSortRequirement::to_sort_exprs(req);
+            let mut search_range = std::cmp::min(ordering.len(), sort_req_len);
+            while search_range > 0 {
+                let req_section = &sort_req[sort_req_len - search_range..];
+                if req_satisfied(&ordering, req_section, &self.schema) {
+                    return search_range;
+                } else {
+                    search_range -= 1;
                 }
-                normalized_sort_reqs.splice(updated_start..updated_end, head);
             }
         }
-        normalized_sort_reqs = simplify_lex_req(normalized_sort_reqs, &self.oeq_group);
-
-        collapse_lex_req(normalized_sort_reqs)
+        0
     }
 
     /// Checks whether `leading_ordering` is contained in any of the ordering
@@ -985,7 +987,8 @@ impl SchemaProperties {
     /// any of the existing orderings.
     pub fn ordering_satisfy_concrete(&self, required: &[PhysicalSortExpr]) -> bool {
         let required_normalized = self.normalize_sort_exprs(required);
-        let provided_normalized = self.oeq_group().output_ordering().unwrap_or(vec![]);
+        let provided_normalized = self.oeq_group().output_ordering().unwrap_or_default();
+
         if required_normalized.len() > provided_normalized.len() {
             return false;
         }
@@ -1093,7 +1096,7 @@ impl SchemaProperties {
         &self,
         required: &[PhysicalSortRequirement],
     ) -> bool {
-        let provided_normalized = self.oeq_group().output_ordering().unwrap_or(vec![]);
+        let provided_normalized = self.oeq_group().output_ordering().unwrap_or_default();
         let required_normalized = self.normalize_sort_requirements(required);
         if required_normalized.len() > provided_normalized.len() {
             return false;
@@ -1220,18 +1223,18 @@ impl SchemaProperties {
     }
 }
 
-/// Retrieves the ordering equivalence properties for a given schema and output ordering.
-pub fn ordering_equivalence_properties_helper(
+/// Constructs a `SchemaProperties` struct from the given `orderings`.
+pub fn schema_properties_helper(
     schema: SchemaRef,
-    eq_orderings: &[LexOrdering],
+    orderings: &[LexOrdering],
 ) -> SchemaProperties {
     let mut oep = SchemaProperties::new(schema);
-    if eq_orderings.is_empty() {
+    if orderings.is_empty() {
         // Return an empty `SchemaProperties`:
         oep
     } else {
         oep.add_ordering_equivalent_group(OrderingEquivalentGroup::new(
-            eq_orderings.to_vec(),
+            orderings.to_vec(),
         ));
         oep
     }
@@ -1271,96 +1274,19 @@ pub fn collapse_lex_ordering(input: LexOrdering) -> LexOrdering {
     output
 }
 
-/// This function simplifies lexicographical ordering requirement
-/// inside `input` by removing postfix lexicographical requirements
-/// that satisfy global ordering (occurs inside the ordering equivalent class)
-fn simplify_lex_req(
-    input: LexOrderingReq,
-    oeq_class: &OrderingEquivalentGroup,
-) -> LexOrderingReq {
-    let mut section = &input[..];
-    loop {
-        let n_prune = prune_last_n_that_is_in_oeq(section, oeq_class);
-        // Cannot prune entries from the end of requirement
-        if n_prune == 0 {
-            break;
-        }
-        section = &section[0..section.len() - n_prune];
-    }
-    if section.is_empty() {
-        // By convention use first entry
-        PhysicalSortRequirement::from_sort_exprs(&oeq_class.inner[0])
-    } else {
-        section.to_vec()
-    }
-}
-
-/// Determines how many entries from the end can be deleted.
-/// Last n entry satisfies global ordering, hence having them
-/// as postfix in the lexicographical requirement is unnecessary.
-/// Assume requirement is [a ASC, b ASC, c ASC], also assume that
-/// existing ordering is [c ASC, d ASC]. In this case, since [c ASC]
-/// is satisfied by the existing ordering (e.g corresponding section is global ordering),
-/// [c ASC] can be pruned from the requirement: [a ASC, b ASC, c ASC]. In this case,
-/// this function will return 1, to indicate last element can be removed from the requirement
-fn prune_last_n_that_is_in_oeq(
-    input: &[PhysicalSortRequirement],
-    oeq_class: &OrderingEquivalentGroup,
-) -> usize {
-    let input_len = input.len();
-    for ordering in oeq_class.iter() {
-        let mut search_range = std::cmp::min(ordering.len(), input_len);
-        while search_range > 0 {
-            let req_section = &input[input_len - search_range..];
-            // let given_section = &ordering[0..search_range];
-            if req_satisfied(ordering, req_section) {
-                return search_range;
-            } else {
-                search_range -= 1;
-            }
-        }
-    }
-    0
-}
-
 /// Checks whether given section satisfies req.
-fn req_satisfied(given: LexOrderingRef, req: &[PhysicalSortRequirement]) -> bool {
+fn req_satisfied(
+    given: LexOrderingRef,
+    req: &[PhysicalSortRequirement],
+    schema: &Arc<Schema>,
+) -> bool {
+    // Write below code as any/all
     for (given, req) in izip!(given.iter(), req.iter()) {
-        let PhysicalSortRequirement { expr, options } = req;
-        if let Some(options) = options {
-            if options != &given.options || !expr.eq(&given.expr) {
-                return false;
-            }
-        } else if !expr.eq(&given.expr) {
+        if !given.satisfy_with_schema(req, schema) {
             return false;
         }
     }
     true
-}
-
-/// This function searches for the slice `section` inside the slice `given`.
-/// It returns each range where `section` is compatible with the corresponding
-/// slice in `given`.
-fn get_compatible_ranges(
-    given: &[PhysicalSortRequirement],
-    section: &[PhysicalSortRequirement],
-) -> Vec<Range<usize>> {
-    let n_section = section.len();
-    let n_end = if given.len() >= n_section {
-        given.len() - n_section + 1
-    } else {
-        0
-    };
-    (0..n_end)
-        .filter_map(|idx| {
-            let end = idx + n_section;
-            given[idx..end]
-                .iter()
-                .zip(section)
-                .all(|(req, given)| given.compatible(req))
-                .then_some(Range { start: idx, end })
-        })
-        .collect()
 }
 
 /// Remove ordering requirements that have constant value
@@ -1543,9 +1469,9 @@ mod tests {
         let test_schema = create_test_schema()?;
         let col_a_expr = Arc::new(col_a.clone()) as _;
         let col_c_expr = Arc::new(col_c.clone()) as _;
-        let mut ordering_eq_properties = SchemaProperties::new(test_schema.clone());
-        ordering_eq_properties.add_equal_conditions((&col_a_expr, &col_c_expr));
-        ordering_eq_properties.add_new_orderings(&[
+        let mut schema_properties = SchemaProperties::new(test_schema.clone());
+        schema_properties.add_equal_conditions((&col_a_expr, &col_c_expr));
+        schema_properties.add_new_orderings(&[
             vec![PhysicalSortExpr {
                 expr: Arc::new(col_a.clone()),
                 options: option1,
@@ -1575,18 +1501,7 @@ mod tests {
                 },
             ],
         ]);
-        Ok((test_schema, ordering_eq_properties))
-    }
-
-    fn convert_to_requirement(
-        in_data: &[(&Column, Option<SortOptions>)],
-    ) -> Vec<PhysicalSortRequirement> {
-        in_data
-            .iter()
-            .map(|(col, options)| {
-                PhysicalSortRequirement::new(Arc::new((*col).clone()) as _, *options)
-            })
-            .collect::<Vec<_>>()
+        Ok((test_schema, schema_properties))
     }
 
     #[test]
@@ -1599,7 +1514,7 @@ mod tests {
             Field::new("y", DataType::Int64, true),
         ]));
 
-        let mut eq_properties = SchemaProperties::new(schema);
+        let mut schema_properties = SchemaProperties::new(schema);
         let col_a_expr = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
         let col_b_expr = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
         let col_c_expr = Arc::new(Column::new("c", 2)) as Arc<dyn PhysicalExpr>;
@@ -1607,43 +1522,43 @@ mod tests {
         let col_y_expr = Arc::new(Column::new("y", 4)) as Arc<dyn PhysicalExpr>;
 
         let new_condition = (&col_a_expr, &col_b_expr);
-        eq_properties.add_equal_conditions(new_condition);
-        assert_eq!(eq_properties.eq_groups().len(), 1);
+        schema_properties.add_equal_conditions(new_condition);
+        assert_eq!(schema_properties.eq_groups().len(), 1);
 
         let new_condition = (&col_b_expr, &col_a_expr);
-        eq_properties.add_equal_conditions(new_condition);
-        assert_eq!(eq_properties.eq_groups().len(), 1);
-        let eq_class = &eq_properties.eq_groups().inner[0];
-        assert_eq!(eq_class.len(), 2);
-        assert!(physical_exprs_contains(eq_class, &col_a_expr));
-        assert!(physical_exprs_contains(eq_class, &col_b_expr));
+        schema_properties.add_equal_conditions(new_condition);
+        assert_eq!(schema_properties.eq_groups().len(), 1);
+        let eq_groups = &schema_properties.eq_groups().inner[0];
+        assert_eq!(eq_groups.len(), 2);
+        assert!(physical_exprs_contains(eq_groups, &col_a_expr));
+        assert!(physical_exprs_contains(eq_groups, &col_b_expr));
 
         let new_condition = (&col_b_expr, &col_c_expr);
-        eq_properties.add_equal_conditions(new_condition);
-        assert_eq!(eq_properties.eq_groups().len(), 1);
-        let eq_class = &eq_properties.eq_groups().inner[0];
-        assert_eq!(eq_class.len(), 3);
-        assert!(physical_exprs_contains(eq_class, &col_a_expr));
-        assert!(physical_exprs_contains(eq_class, &col_b_expr));
-        assert!(physical_exprs_contains(eq_class, &col_c_expr));
+        schema_properties.add_equal_conditions(new_condition);
+        assert_eq!(schema_properties.eq_groups().len(), 1);
+        let eq_groups = &schema_properties.eq_groups().inner[0];
+        assert_eq!(eq_groups.len(), 3);
+        assert!(physical_exprs_contains(eq_groups, &col_a_expr));
+        assert!(physical_exprs_contains(eq_groups, &col_b_expr));
+        assert!(physical_exprs_contains(eq_groups, &col_c_expr));
 
         // This is a new set of equality. Hence equivalent class count should be 2.
         let new_condition = (&col_x_expr, &col_y_expr);
-        eq_properties.add_equal_conditions(new_condition);
-        assert_eq!(eq_properties.eq_groups().len(), 2);
+        schema_properties.add_equal_conditions(new_condition);
+        assert_eq!(schema_properties.eq_groups().len(), 2);
 
         // This equality bridges distinct equality sets.
         // Hence equivalent class count should decrease from 2 to 1.
         let new_condition = (&col_x_expr, &col_a_expr);
-        eq_properties.add_equal_conditions(new_condition);
-        assert_eq!(eq_properties.eq_groups().len(), 1);
-        let eq_class = &eq_properties.eq_groups().inner[0];
-        assert_eq!(eq_class.len(), 5);
-        assert!(physical_exprs_contains(eq_class, &col_a_expr));
-        assert!(physical_exprs_contains(eq_class, &col_b_expr));
-        assert!(physical_exprs_contains(eq_class, &col_c_expr));
-        assert!(physical_exprs_contains(eq_class, &col_x_expr));
-        assert!(physical_exprs_contains(eq_class, &col_y_expr));
+        schema_properties.add_equal_conditions(new_condition);
+        assert_eq!(schema_properties.eq_groups().len(), 1);
+        let eq_groups = &schema_properties.eq_groups().inner[0];
+        assert_eq!(eq_groups.len(), 5);
+        assert!(physical_exprs_contains(eq_groups, &col_a_expr));
+        assert!(physical_exprs_contains(eq_groups, &col_b_expr));
+        assert!(physical_exprs_contains(eq_groups, &col_c_expr));
+        assert!(physical_exprs_contains(eq_groups, &col_x_expr));
+        assert!(physical_exprs_contains(eq_groups, &col_y_expr));
 
         Ok(())
     }
@@ -1698,47 +1613,6 @@ mod tests {
     }
 
     #[test]
-    fn test_get_compatible_ranges() -> Result<()> {
-        let col_a = &Column::new("a", 0);
-        let col_b = &Column::new("b", 1);
-        let option1 = SortOptions {
-            descending: false,
-            nulls_first: false,
-        };
-        let test_data = vec![
-            (
-                vec![(col_a, Some(option1)), (col_b, Some(option1))],
-                vec![(col_a, Some(option1))],
-                vec![(0, 1)],
-            ),
-            (
-                vec![(col_a, None), (col_b, Some(option1))],
-                vec![(col_a, Some(option1))],
-                vec![(0, 1)],
-            ),
-            (
-                vec![
-                    (col_a, None),
-                    (col_b, Some(option1)),
-                    (col_a, Some(option1)),
-                ],
-                vec![(col_a, Some(option1))],
-                vec![(0, 1), (2, 3)],
-            ),
-        ];
-        for (searched, to_search, expected) in test_data {
-            let searched = convert_to_requirement(&searched);
-            let to_search = convert_to_requirement(&to_search);
-            let expected = expected
-                .into_iter()
-                .map(|(start, end)| Range { start, end })
-                .collect::<Vec<_>>();
-            assert_eq!(get_compatible_ranges(&searched, &to_search), expected);
-        }
-        Ok(())
-    }
-
-    #[test]
     fn test_ordering_satisfy() -> Result<()> {
         let crude = vec![PhysicalSortExpr {
             expr: Arc::new(Column::new("a", 0)),
@@ -1756,14 +1630,14 @@ mod tests {
         ];
         // finer ordering satisfies, crude ordering shoul return true
         let empty_schema = &Arc::new(Schema::empty());
-        let mut oeq_properties = SchemaProperties::new(empty_schema.clone());
-        oeq_properties.oeq_group.push(finer.clone());
-        assert!(oeq_properties.ordering_satisfy(Some(&crude)));
+        let mut schema_properties = SchemaProperties::new(empty_schema.clone());
+        schema_properties.oeq_group.push(finer.clone());
+        assert!(schema_properties.ordering_satisfy(Some(&crude)));
 
         // Crude ordering doesn't satisfy finer ordering. should return false
-        let mut oeq_properties = SchemaProperties::new(empty_schema.clone());
-        oeq_properties.oeq_group.push(crude.clone());
-        assert!(!oeq_properties.ordering_satisfy(Some(&finer)));
+        let mut schema_properties = SchemaProperties::new(empty_schema.clone());
+        schema_properties.oeq_group.push(crude.clone());
+        assert!(!schema_properties.ordering_satisfy(Some(&finer)));
         Ok(())
     }
 
@@ -1785,7 +1659,7 @@ mod tests {
             nulls_first: true,
         };
         // The schema is ordered by a ASC NULLS LAST, b ASC NULLS LAST
-        let (_test_schema, ordering_eq_properties) = create_test_params()?;
+        let (_test_schema, schema_properties) = create_test_params()?;
         // First element in the tuple stores vector of requirement, second element is the expected return value for ordering_satisfy function
         let requirements = vec![
             // `a ASC NULLS LAST`, expects `ordering_satisfy` to be `true`, since existing ordering `a ASC NULLS LAST, b ASC NULLS LAST` satisfies it
@@ -1875,7 +1749,7 @@ mod tests {
 
             let required = Some(&required[..]);
             assert_eq!(
-                ordering_eq_properties.ordering_satisfy(required),
+                schema_properties.ordering_satisfy(required),
                 expected,
                 "{err_msg}"
             );
@@ -1897,11 +1771,11 @@ mod tests {
             nulls_first: false,
         };
         // Column a and c are aliases.
-        let mut ordering_eq_properties = SchemaProperties::new(test_schema);
-        ordering_eq_properties.add_equal_conditions((&col_a_expr, &col_c_expr));
+        let mut schema_properties = SchemaProperties::new(test_schema);
+        schema_properties.add_equal_conditions((&col_a_expr, &col_c_expr));
 
         // Column a and e are ordering equivalent (e.g global ordering of the table can be described both as a ASC and e ASC.)
-        ordering_eq_properties.add_new_orderings(&[
+        schema_properties.add_new_orderings(&[
             vec![PhysicalSortExpr {
                 expr: col_a_expr.clone(),
                 options: option1,
@@ -1913,7 +1787,7 @@ mod tests {
         ]);
 
         // Column a and d,f are ordering equivalent (e.g global ordering of the table can be described both as [a ASC] and [d ASC, f ASC].)
-        ordering_eq_properties.add_new_orderings(&[
+        schema_properties.add_new_orderings(&[
             vec![PhysicalSortExpr {
                 expr: col_a_expr.clone(),
                 options: option1,
@@ -1958,28 +1832,28 @@ mod tests {
             options: option1,
         };
 
-        assert!(ordering_eq_properties.ordering_satisfy_concrete(
+        assert!(schema_properties.ordering_satisfy_concrete(
             // After normalization would be a ASC
             &[sort_req_c.clone(), sort_req_a.clone(), sort_req_e.clone(),],
         ));
-        assert!(!ordering_eq_properties.ordering_satisfy_concrete(
+        assert!(!schema_properties.ordering_satisfy_concrete(
             // After normalization would be a ASC, b ASC
             // which is not satisfied
             &[sort_req_c.clone(), sort_req_b.clone(),],
         ));
 
-        assert!(ordering_eq_properties.ordering_satisfy_concrete(
+        assert!(schema_properties.ordering_satisfy_concrete(
             // After normalization would be a ASC
             &[sort_req_c.clone(), sort_req_d.clone(),],
         ));
 
-        assert!(!ordering_eq_properties.ordering_satisfy_concrete(
+        assert!(!schema_properties.ordering_satisfy_concrete(
             // After normalization would be a ASC, b ASC
             // which is not satisfied
             &[sort_req_d.clone(), sort_req_f.clone(), sort_req_b.clone(),],
         ));
 
-        assert!(ordering_eq_properties.ordering_satisfy_concrete(
+        assert!(schema_properties.ordering_satisfy_concrete(
             // After normalization would be a ASC
             // which is satisfied
             &[sort_req_d.clone(), sort_req_f.clone()],
@@ -2082,22 +1956,22 @@ mod tests {
         let col_z_expr = col("z", &schema)?;
         let col_w_expr = col("w", &schema)?;
 
-        let mut join_eq_properties = SchemaProperties::new(Arc::new(schema));
-        join_eq_properties.add_equal_conditions((&col_a_expr, &col_x_expr));
-        join_eq_properties.add_equal_conditions((&col_d_expr, &col_w_expr));
+        let mut join_schema_properties = SchemaProperties::new(Arc::new(schema));
+        join_schema_properties.add_equal_conditions((&col_a_expr, &col_x_expr));
+        join_schema_properties.add_equal_conditions((&col_d_expr, &col_w_expr));
 
         let result = get_updated_right_ordering_equivalent_group(
             &join_type,
             &right_oeq_class,
             left_columns_len,
         )?;
-        join_eq_properties.add_ordering_equivalent_group(result);
-        let result = join_eq_properties.oeq_group().clone();
+        join_schema_properties.add_ordering_equivalent_group(result);
+        let result = join_schema_properties.oeq_group().clone();
 
         let expected = OrderingEquivalentGroup::new(vec![
             vec![
                 PhysicalSortExpr {
-                    expr: col_a_expr,
+                    expr: col_x_expr,
                     options,
                 },
                 PhysicalSortExpr {
@@ -2111,7 +1985,7 @@ mod tests {
                     options,
                 },
                 PhysicalSortExpr {
-                    expr: col_d_expr,
+                    expr: col_w_expr,
                     options,
                 },
             ],

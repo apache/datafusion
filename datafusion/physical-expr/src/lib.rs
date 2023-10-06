@@ -57,7 +57,7 @@ pub use aggregate::groups_accumulator::{
 pub use aggregate::AggregateExpr;
 pub use analysis::{analyze, AnalysisContext, ExprBoundaries};
 pub use equivalence::{
-    add_offset_to_lex_ordering, ordering_equivalence_properties_helper, SchemaProperties,
+    add_offset_to_lex_ordering, schema_properties_helper, SchemaProperties,
 };
 
 pub use partitioning::{Distribution, Partitioning};

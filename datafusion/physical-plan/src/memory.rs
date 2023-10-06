@@ -30,7 +30,7 @@ use std::any::Any;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::ordering_equivalence_properties_helper;
+use crate::schema_properties_helper;
 use datafusion_common::DataFusionError;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{LexOrdering, SchemaProperties};
@@ -121,7 +121,7 @@ impl ExecutionPlan for MemoryExec {
     }
 
     fn schema_properties(&self) -> SchemaProperties {
-        ordering_equivalence_properties_helper(self.schema(), &self.sort_information)
+        schema_properties_helper(self.schema(), &self.sort_information)
     }
 
     fn with_new_children(

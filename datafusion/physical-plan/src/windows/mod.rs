@@ -339,17 +339,17 @@ pub(crate) fn window_ordering_equivalence(
 ) -> SchemaProperties {
     // We need to update the schema, so we can not directly use
     // `input.schema_properties()`.
-    let mut window_oeq_properties =
+    let mut window_schema_properties =
         SchemaProperties::new(schema.clone()).extend(input.schema_properties());
 
     for expr in window_expr {
         if let Some(builtin_window_expr) =
             expr.as_any().downcast_ref::<BuiltInWindowExpr>()
         {
-            builtin_window_expr.add_equal_orderings(&mut window_oeq_properties);
+            builtin_window_expr.add_equal_orderings(&mut window_schema_properties);
         }
     }
-    window_oeq_properties
+    window_schema_properties
 }
 
 /// Constructs the best-fitting windowing operator (a `WindowAggExec` or a
@@ -1001,6 +1001,10 @@ mod tests {
             // ORDER BY b, a ASC NULLS FIRST
             (vec![], vec![("b", false, true), ("a", false, true)], None),
         ];
+        // let test_cases = vec![
+        //     // PARTITION BY a, ORDER BY b ASC NULLS LAST
+        //     (vec!["a"], vec![("b", false, false)], Some((false, Sorted))),
+        // ];
         for (case_idx, test_case) in test_cases.iter().enumerate() {
             let (partition_by_columns, order_by_params, expected) = &test_case;
             let mut partition_by_exprs = vec![];

@@ -330,10 +330,10 @@ fn get_init_req(
 fn get_finest_requirement<F2: Fn() -> SchemaProperties>(
     aggr_expr: &mut [Arc<dyn AggregateExpr>],
     order_by_expr: &mut [Option<LexOrdering>],
-    ordering_eq_properties: F2,
+    schema_properties: F2,
 ) -> Result<Option<LexOrdering>> {
     let mut finest_req = get_init_req(aggr_expr, order_by_expr);
-    let oeq_properties = ordering_eq_properties();
+    let properties = schema_properties();
     for (aggr_expr, fn_req) in aggr_expr.iter_mut().zip(order_by_expr.iter_mut()) {
         let fn_req = if let Some(fn_req) = fn_req {
             fn_req
@@ -342,7 +342,7 @@ fn get_finest_requirement<F2: Fn() -> SchemaProperties>(
         };
 
         if let Some(finest_req) = &mut finest_req {
-            if let Some(finer) = oeq_properties.get_finer_ordering(finest_req, fn_req) {
+            if let Some(finer) = properties.get_finer_ordering(finest_req, fn_req) {
                 *finest_req = finer.to_vec();
                 continue;
             }
@@ -351,7 +351,7 @@ fn get_finest_requirement<F2: Fn() -> SchemaProperties>(
             if let Some(reverse) = aggr_expr.reverse_expr() {
                 let fn_req_reverse = reverse_order_bys(fn_req);
                 if let Some(finer) =
-                    oeq_properties.get_finer_ordering(finest_req, &fn_req_reverse)
+                    properties.get_finer_ordering(finest_req, &fn_req_reverse)
                 {
                     // We need to update `aggr_expr` with its reverse, since only its
                     // reverse requirement is compatible with existing requirements:
@@ -1985,18 +1985,17 @@ mod tests {
             descending: true,
             nulls_first: true,
         };
-        // let mut eq_properties = EquivalenceProperties::new(test_schema.clone());
         let col_a = Column::new("a", 0);
         let col_b = Column::new("b", 1);
         let col_c = Column::new("c", 2);
         let col_d = Column::new("d", 3);
         let col_a_expr = Arc::new(col_a.clone()) as Arc<dyn PhysicalExpr>;
         let col_b_expr = Arc::new(col_b.clone()) as Arc<dyn PhysicalExpr>;
-        let mut ordering_eq_properties = SchemaProperties::new(test_schema);
+        let mut schema_properties = SchemaProperties::new(test_schema);
         // Columns a and b are equal.
-        ordering_eq_properties.add_equal_conditions((&col_a_expr, &col_b_expr));
+        schema_properties.add_equal_conditions((&col_a_expr, &col_b_expr));
         // [a ASC], [c DESC] describes ordering of the schema.
-        ordering_eq_properties.add_new_orderings(&[
+        schema_properties.add_new_orderings(&[
             vec![PhysicalSortExpr {
                 expr: Arc::new(col_a.clone()) as _,
                 options: options1,
@@ -2048,7 +2047,7 @@ mod tests {
         )) as _;
         let mut aggr_exprs = vec![aggr_expr; order_by_exprs.len()];
         let res = get_finest_requirement(&mut aggr_exprs, &mut order_by_exprs, || {
-            ordering_eq_properties.clone()
+            schema_properties.clone()
         })?;
         assert_eq!(res, order_by_exprs[4]);
         Ok(())
