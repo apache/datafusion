@@ -27,7 +27,6 @@ use arrow::datatypes::{
 use datafusion_common::Result;
 use datafusion_common::{plan_err, DataFusionError};
 
-use crate::type_coercion::is_numeric;
 use crate::Operator;
 
 /// The type signature of an instantiation of binary expression
@@ -310,10 +309,10 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
 fn string_numeric_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
-        (Utf8, _) if is_numeric(rhs_type) => Some(Utf8),
-        (LargeUtf8, _) if is_numeric(rhs_type) => Some(LargeUtf8),
-        (_, Utf8) if is_numeric(lhs_type) => Some(Utf8),
-        (_, LargeUtf8) if is_numeric(lhs_type) => Some(LargeUtf8),
+        (Utf8, _) if rhs_type.is_numeric() => Some(Utf8),
+        (LargeUtf8, _) if rhs_type.is_numeric() => Some(LargeUtf8),
+        (_, Utf8) if lhs_type.is_numeric() => Some(Utf8),
+        (_, LargeUtf8) if lhs_type.is_numeric() => Some(LargeUtf8),
         _ => None,
     }
 }
@@ -365,7 +364,7 @@ fn comparison_binary_numeric_coercion(
     rhs_type: &DataType,
 ) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
-    if !is_numeric(lhs_type) || !is_numeric(rhs_type) {
+    if !lhs_type.is_numeric() || !rhs_type.is_numeric() {
         return None;
     };
 
@@ -563,14 +562,18 @@ fn create_decimal256_type(precision: u8, scale: i8) -> DataType {
 fn both_numeric_or_null_and_numeric(lhs_type: &DataType, rhs_type: &DataType) -> bool {
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
-        (_, Null) => is_numeric(lhs_type),
-        (Null, _) => is_numeric(rhs_type),
+        (_, Null) => lhs_type.is_numeric(),
+        (Null, _) => rhs_type.is_numeric(),
         (Dictionary(_, lhs_value_type), Dictionary(_, rhs_value_type)) => {
-            is_numeric(lhs_value_type) && is_numeric(rhs_value_type)
+            lhs_value_type.is_numeric() && rhs_value_type.is_numeric()
         }
-        (Dictionary(_, value_type), _) => is_numeric(value_type) && is_numeric(rhs_type),
-        (_, Dictionary(_, value_type)) => is_numeric(lhs_type) && is_numeric(value_type),
-        _ => is_numeric(lhs_type) && is_numeric(rhs_type),
+        (Dictionary(_, value_type), _) => {
+            value_type.is_numeric() && rhs_type.is_numeric()
+        }
+        (_, Dictionary(_, value_type)) => {
+            lhs_type.is_numeric() && value_type.is_numeric()
+        }
+        _ => lhs_type.is_numeric() && rhs_type.is_numeric(),
     }
 }
 

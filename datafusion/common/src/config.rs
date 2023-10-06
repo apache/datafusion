@@ -453,11 +453,13 @@ config_namespace! {
         /// ```
         pub repartition_sorts: bool, default = true
 
-        /// When true, DataFusion will opportunistically remove sorts by replacing
-        /// `RepartitionExec` with `SortPreservingRepartitionExec`, and
-        /// `CoalescePartitionsExec` with `SortPreservingMergeExec`,
-        /// even when the query is bounded.
-        pub bounded_order_preserving_variants: bool, default = false
+        /// When true, DataFusion will opportunistically remove sorts when the data is already sorted,
+        /// (i.e. setting `preserve_order` to true on `RepartitionExec`  and
+        /// using `SortPreservingMergeExec`)
+        ///
+        /// When false, DataFusion will maximize plan parallelism using
+        /// `RepartitionExec` even if this requires subsequently resorting data using a `SortExec`.
+        pub prefer_existing_sort: bool, default = false
 
         /// When set to true, the logical plan optimizer will produce warning
         /// messages if any optimization rules produce errors and then proceed to the next

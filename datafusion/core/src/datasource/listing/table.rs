@@ -1890,7 +1890,7 @@ mod tests {
         let session_ctx = match session_config_map {
             Some(cfg) => {
                 let config = SessionConfig::from_string_hash_map(cfg)?;
-                SessionContext::with_config(config)
+                SessionContext::new_with_config(config)
             }
             None => SessionContext::new(),
         };
@@ -2059,7 +2059,7 @@ mod tests {
         let session_ctx = match session_config_map {
             Some(cfg) => {
                 let config = SessionConfig::from_string_hash_map(cfg)?;
-                SessionContext::with_config(config)
+                SessionContext::new_with_config(config)
             }
             None => SessionContext::new(),
         };
@@ -2265,7 +2265,7 @@ mod tests {
         let session_ctx = match session_config_map {
             Some(cfg) => {
                 let config = SessionConfig::from_string_hash_map(cfg)?;
-                SessionContext::with_config(config)
+                SessionContext::new_with_config(config)
             }
             None => SessionContext::new(),
         };

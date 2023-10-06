@@ -118,7 +118,7 @@ async fn run_merge_test(input: Vec<Vec<RecordBatch>>) {
         let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
 
         let session_config = SessionConfig::new().with_batch_size(batch_size);
-        let ctx = SessionContext::with_config(session_config);
+        let ctx = SessionContext::new_with_config(session_config);
         let task_ctx = ctx.task_ctx();
         let collected = collect(merge, task_ctx).await.unwrap();
 

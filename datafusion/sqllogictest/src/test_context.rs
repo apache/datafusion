@@ -67,7 +67,7 @@ impl TestContext {
             // hardcode target partitions so plans are deterministic
             .with_target_partitions(4);
 
-        let test_ctx = TestContext::new(SessionContext::with_config(config));
+        let test_ctx = TestContext::new(SessionContext::new_with_config(config));
 
         let file_name = relative_path.file_name().unwrap().to_str().unwrap();
         match file_name {

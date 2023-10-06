@@ -132,18 +132,19 @@
 //!
 //! ## Customization and Extension
 //!
-//! DataFusion is designed to be a "disaggregated" query engine.  This
-//! means that developers can mix and extend the parts of DataFusion
-//! they need for their usecase. For example, just the
-//! [`ExecutionPlan`] operators, or the [`SqlToRel`] SQL planner and
-//! optimizer.
+//! DataFusion is a "disaggregated" query engine.  This
+//! means developers can start with a working, full featured engine, and then
+//! extend the parts of DataFusion they need to specialize for their usecase. For example,
+//! some projects may add custom [`ExecutionPlan`] operators, or create their own
+//! query language that directly creates [`LogicalPlan`] rather than using the
+//! built in SQL planner, [`SqlToRel`].
 //!
 //! In order to achieve this, DataFusion supports extension at many points:
 //!
 //! * read from any datasource ([`TableProvider`])
 //! * define your own catalogs, schemas, and table lists ([`CatalogProvider`])
-//! * build your own query langue or plans using the ([`LogicalPlanBuilder`])
-//! * declare and use user-defined functions: ([`ScalarUDF`], and [`AggregateUDF`])
+//! * build your own query language or plans ([`LogicalPlanBuilder`])
+//! * declare and use user-defined functions ([`ScalarUDF`], and [`AggregateUDF`], [`WindowUDF`])
 //! * add custom optimizer rewrite passes ([`OptimizerRule`] and [`PhysicalOptimizerRule`])
 //! * extend the planner to use user-defined logical and physical nodes ([`QueryPlanner`])
 //!
@@ -152,8 +153,9 @@
 //! [`TableProvider`]: crate::datasource::TableProvider
 //! [`CatalogProvider`]: crate::catalog::CatalogProvider
 //! [`LogicalPlanBuilder`]: datafusion_expr::logical_plan::builder::LogicalPlanBuilder
-//! [`ScalarUDF`]: physical_plan::udf::ScalarUDF
-//! [`AggregateUDF`]: physical_plan::udaf::AggregateUDF
+//! [`ScalarUDF`]: crate::logical_expr::ScalarUDF
+//! [`AggregateUDF`]: crate::logical_expr::AggregateUDF
+//! [`WindowUDF`]: crate::logical_expr::WindowUDF
 //! [`QueryPlanner`]: execution::context::QueryPlanner
 //! [`OptimizerRule`]: datafusion_optimizer::optimizer::OptimizerRule
 //! [`PhysicalOptimizerRule`]: crate::physical_optimizer::optimizer::PhysicalOptimizerRule
@@ -279,7 +281,7 @@
 //! [`MemTable`]: crate::datasource::memory::MemTable
 //! [`StreamingTable`]: crate::datasource::streaming::StreamingTable
 //!
-//! ## Plans
+//! ## Plan Representations
 //!
 //! Logical planning yields [`LogicalPlan`]s nodes and [`Expr`]
 //! expressions which are [`Schema`] aware and represent statements

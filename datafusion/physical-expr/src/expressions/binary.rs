@@ -299,7 +299,7 @@ impl PhysicalExpr for BinaryExpr {
         };
 
         if let Some(result) = scalar_result {
-            return result.map(|a| ColumnarValue::Array(a));
+            return result.map(ColumnarValue::Array);
         }
 
         // if both arrays or both literals - extract arrays and continue execution
@@ -308,7 +308,7 @@ impl PhysicalExpr for BinaryExpr {
             rhs.into_array(batch.num_rows()),
         );
         self.evaluate_with_resolved_args(left, &left_data_type, right, &right_data_type)
-            .map(|a| ColumnarValue::Array(a))
+            .map(ColumnarValue::Array)
     }
 
     fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
