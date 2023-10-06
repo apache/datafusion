@@ -18,13 +18,13 @@
 use async_recursion::async_recursion;
 use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
 use datafusion::common::{not_impl_err, DFField, DFSchema, DFSchemaRef};
-use datafusion::logical_expr::utils::{can_hash, find_valid_equijoin_key_pair};
+
 use datafusion::logical_expr::{
     aggregate_function, window_function::find_df_window_func, BinaryExpr,
     BuiltinScalarFunction, Case, Expr, LogicalPlan, Operator,
 };
 use datafusion::logical_expr::{
-    expr, Cast, ExprSchemable, Extension, GroupingSet, Like, LogicalPlanBuilder,
+    expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder,
     WindowFrameBound, WindowFrameUnits,
 };
 use datafusion::prelude::JoinType;
