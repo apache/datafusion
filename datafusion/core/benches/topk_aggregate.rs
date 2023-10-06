@@ -28,6 +28,7 @@ use datafusion_execution::config::SessionConfig;
 use datafusion_execution::TaskContext;
 use rand_distr::Distribution;
 use rand_distr::{Normal, Pareto};
+use std::fmt::Write;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
@@ -130,8 +131,10 @@ fn make_data(
         let gen_id = |rng: &mut rand::rngs::SmallRng| {
             rng.gen::<[u8; 16]>()
                 .iter()
-                .map(|b| format!("{:02x}", b))
-                .collect::<String>()
+                .fold(String::new(), |mut output, b| {
+                    let _ = write!(output, "{b:02X}");
+                    output
+                })
         };
         let gen_sample_cnt =
             |mut rng: &mut rand::rngs::SmallRng| pareto.sample(&mut rng).ceil() as u32;

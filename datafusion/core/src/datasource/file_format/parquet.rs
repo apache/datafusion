@@ -1101,7 +1101,7 @@ pub(crate) mod test_util {
         Ok((meta, files))
     }
 
-    //// write batches chunk_size rows at a time
+    /// write batches chunk_size rows at a time
     fn write_in_chunks<W: std::io::Write + Send>(
         writer: &mut ArrowWriter<W>,
         batch: &RecordBatch,
