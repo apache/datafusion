@@ -719,7 +719,7 @@ fn rewrite_placeholder(expr: &mut Expr, other: &Expr, schema: &DFSchema) -> Resu
             let other_dt = other.get_type(schema);
             match other_dt {
                 Err(e) => {
-                    return Err(e.context(format!(
+                    Err(e.context(format!(
                         "Can not find type of {other} needed to infer type of {expr}"
                     )))?;
                 }
