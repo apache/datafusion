@@ -50,7 +50,7 @@ mod custom_sources_cases;
 
 use async_trait::async_trait;
 
-//// Custom source dataframe tests ////
+//--- Custom source dataframe tests ---//
 
 struct CustomTableProvider;
 #[derive(Debug, Clone)]

@@ -623,7 +623,7 @@ mod tests {
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {
         let config = SessionConfig::new().with_batch_size(2);
-        let session_ctx = SessionContext::with_config(config);
+        let session_ctx = SessionContext::new_with_config(config);
         let state = session_ctx.state();
         let task_ctx = state.task_ctx();
         // skip column 9 that overflows the automaticly discovered column type of i64 (u64 would work)
@@ -961,7 +961,7 @@ mod tests {
             .with_repartition_file_scans(true)
             .with_repartition_file_min_size(0)
             .with_target_partitions(n_partitions);
-        let ctx = SessionContext::with_config(config);
+        let ctx = SessionContext::new_with_config(config);
         let testdata = arrow_test_data();
         ctx.register_csv(
             "aggr",
@@ -998,7 +998,7 @@ mod tests {
             .has_header(true)
             .file_compression_type(FileCompressionType::GZIP)
             .file_extension("csv.gz");
-        let ctx = SessionContext::with_config(config);
+        let ctx = SessionContext::new_with_config(config);
         let testdata = arrow_test_data();
         ctx.register_csv(
             "aggr",
@@ -1034,7 +1034,7 @@ mod tests {
             .with_repartition_file_scans(true)
             .with_repartition_file_min_size(0)
             .with_target_partitions(n_partitions);
-        let ctx = SessionContext::with_config(config);
+        let ctx = SessionContext::new_with_config(config);
         ctx.register_csv(
             "empty",
             "tests/data/empty_0_byte.csv",
@@ -1067,7 +1067,7 @@ mod tests {
             .with_repartition_file_scans(true)
             .with_repartition_file_min_size(0)
             .with_target_partitions(n_partitions);
-        let ctx = SessionContext::with_config(config);
+        let ctx = SessionContext::new_with_config(config);
         ctx.register_csv(
             "empty",
             "tests/data/empty.csv",
@@ -1105,7 +1105,7 @@ mod tests {
             .with_repartition_file_scans(true)
             .with_repartition_file_min_size(0)
             .with_target_partitions(n_partitions);
-        let ctx = SessionContext::with_config(config);
+        let ctx = SessionContext::new_with_config(config);
         let file_format = CsvFormat::default().with_has_header(false);
         let listing_options = ListingOptions::new(Arc::new(file_format))
             .with_file_extension(FileType::CSV.get_ext());
@@ -1158,7 +1158,7 @@ mod tests {
             .with_repartition_file_scans(true)
             .with_repartition_file_min_size(0)
             .with_target_partitions(n_partitions);
-        let ctx = SessionContext::with_config(config);
+        let ctx = SessionContext::new_with_config(config);
         let file_format = CsvFormat::default().with_has_header(false);
         let listing_options = ListingOptions::new(Arc::new(file_format))
             .with_file_extension(FileType::CSV.get_ext());
@@ -1203,7 +1203,7 @@ mod tests {
             .with_repartition_file_scans(true)
             .with_repartition_file_min_size(0)
             .with_target_partitions(n_partitions);
-        let ctx = SessionContext::with_config(config);
+        let ctx = SessionContext::new_with_config(config);
 
         ctx.register_csv(
             "one_col",
@@ -1252,7 +1252,7 @@ mod tests {
             .with_repartition_file_scans(true)
             .with_repartition_file_min_size(0)
             .with_target_partitions(n_partitions);
-        let ctx = SessionContext::with_config(config);
+        let ctx = SessionContext::new_with_config(config);
         ctx.register_csv(
             "wide_rows",
             "tests/data/wide_rows.csv",

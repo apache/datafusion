@@ -168,10 +168,10 @@ async fn roundtrip_custom_tables() -> Result<()> {
     let cfg = RuntimeConfig::new();
     let env = RuntimeEnv::new(cfg).unwrap();
     let ses = SessionConfig::new();
-    let mut state = SessionState::with_config_rt(ses, Arc::new(env));
+    let mut state = SessionState::new_with_config_rt(ses, Arc::new(env));
     // replace factories
     *state.table_factories_mut() = table_factories;
-    let ctx = SessionContext::with_state(state);
+    let ctx = SessionContext::new_with_state(state);
 
     let sql = "CREATE EXTERNAL TABLE t STORED AS testtable LOCATION 's3://bucket/schema/table';";
     ctx.sql(sql).await.unwrap();

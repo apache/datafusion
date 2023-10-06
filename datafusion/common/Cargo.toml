@@ -40,7 +40,7 @@ pyarrow = ["pyo3", "arrow/pyarrow"]
 
 [dependencies]
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
-apache-avro = { version = "0.16", default-features = false, features = ["snappy"], optional = true }
+apache-avro = { version = "0.16", default-features = false, features = ["bzip", "snappy", "xz", "zstandard"], optional = true }
 arrow = { workspace = true }
 arrow-array = { workspace = true }
 arrow-buffer = { workspace = true }

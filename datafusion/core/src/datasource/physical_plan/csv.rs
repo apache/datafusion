@@ -1079,8 +1079,9 @@ mod tests {
     async fn write_csv_results() -> Result<()> {
         // create partitioned input file and context
         let tmp_dir = TempDir::new()?;
-        let ctx =
-            SessionContext::with_config(SessionConfig::new().with_target_partitions(8));
+        let ctx = SessionContext::new_with_config(
+            SessionConfig::new().with_target_partitions(8),
+        );
 
         let schema = populate_csv_partitions(&tmp_dir, 8, ".csv")?;
 

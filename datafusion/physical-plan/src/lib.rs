@@ -17,6 +17,7 @@
 
 //! Traits for physical query plan, supporting parallel execution for partitioned relations.
 
+mod topk;
 mod visitor;
 pub use self::metrics::Metric;
 use self::metrics::MetricsSet;
@@ -26,6 +27,7 @@ use self::{
 pub use datafusion_common::{internal_err, ColumnStatistics, Statistics};
 use datafusion_common::{plan_err, Result};
 use datafusion_physical_expr::PhysicalSortExpr;
+pub use topk::TopK;
 pub use visitor::{accept, visit_execution_plan, ExecutionPlanVisitor};
 
 use arrow::datatypes::SchemaRef;
@@ -60,7 +62,7 @@ pub use stream::EmptyRecordBatchStream;
 /// return value from [`displayable`] in addition to the (normally
 /// quite verbose) `Debug` output.
 pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
-    /// Returns the execution plan as [`Any`](std::any::Any) so that it can be
+    /// Returns the execution plan as [`Any`] so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
 

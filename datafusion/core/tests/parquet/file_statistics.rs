@@ -111,7 +111,7 @@ fn get_cache_runtime_state() -> (Arc<DefaultFileStatisticsCache>, SessionState) 
     let rt = Arc::new(
         RuntimeEnv::new(RuntimeConfig::new().with_cache_manager(cache_config)).unwrap(),
     );
-    let state = SessionContext::with_config_rt(SessionConfig::default(), rt).state();
+    let state = SessionContext::new_with_config_rt(SessionConfig::default(), rt).state();
 
     (cache1, state)
 }

@@ -39,8 +39,8 @@ avro = ["apache-avro", "num-traits", "datafusion-common/avro"]
 backtrace = ["datafusion-common/backtrace"]
 compression = ["xz2", "bzip2", "flate2", "zstd", "async-compression"]
 crypto_expressions = ["datafusion-physical-expr/crypto_expressions", "datafusion-optimizer/crypto_expressions"]
-default = ["crypto_expressions", "encoding__expressions", "regex_expressions", "unicode_expressions", "compression"]
-encoding__expressions = ["datafusion-physical-expr/encoding_expressions"]
+default = ["crypto_expressions", "encoding_expressions", "regex_expressions", "unicode_expressions", "compression"]
+encoding_expressions = ["datafusion-physical-expr/encoding_expressions"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
 force_hash_collisions = []
 pyarrow = ["datafusion-common/pyarrow"]
@@ -109,6 +109,7 @@ rand_distr = "0.4.3"
 regex = "1.5.4"
 rstest = "0.18.0"
 rust_decimal = { version = "1.27.0", features = ["tokio-pg"] }
+serde_json = "1"
 test-utils = { path = "../../test-utils" }
 thiserror = "1.0.37"
 tokio-postgres = "0.7.7"

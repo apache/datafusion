@@ -105,7 +105,7 @@ impl FlightSqlServiceImpl {
         let session_config = SessionConfig::from_env()
             .map_err(|e| Status::internal(format!("Error building plan: {e}")))?
             .with_information_schema(true);
-        let ctx = Arc::new(SessionContext::with_config(session_config));
+        let ctx = Arc::new(SessionContext::new_with_config(session_config));
 
         let testdata = datafusion::test_util::parquet_test_data();
 

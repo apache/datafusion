@@ -180,7 +180,7 @@ async fn test_issue5970_mini() -> Result<()> {
     let config = SessionConfig::new()
         .with_target_partitions(2)
         .with_repartition_sorts(true);
-    let ctx = SessionContext::with_config(config);
+    let ctx = SessionContext::new_with_config(config);
     let sql = "
 WITH
     m0(t) AS (
