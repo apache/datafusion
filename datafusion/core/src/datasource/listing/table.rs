@@ -591,7 +591,7 @@ pub struct ListingTable {
     definition: Option<String>,
     collected_statistics: FileStatisticsCache,
     infinite_source: bool,
-    constraints: Option<Constraints>,
+    constraints: Constraints,
 }
 
 impl ListingTable {
@@ -629,7 +629,7 @@ impl ListingTable {
             definition: None,
             collected_statistics: Arc::new(DefaultFileStatisticsCache::default()),
             infinite_source,
-            constraints: None,
+            constraints: Constraints::empty(),
         };
 
         Ok(table)
@@ -637,9 +637,7 @@ impl ListingTable {
 
     /// Assign constraints
     pub fn with_constraints(mut self, constraints: Constraints) -> Self {
-        if !constraints.is_empty() {
-            self.constraints = Some(constraints);
-        }
+        self.constraints = constraints;
         self
     }
 
@@ -715,7 +713,7 @@ impl TableProvider for ListingTable {
     }
 
     fn constraints(&self) -> Option<&Constraints> {
-        self.constraints.as_ref()
+        Some(&self.constraints)
     }
 
     fn table_type(&self) -> TableType {
