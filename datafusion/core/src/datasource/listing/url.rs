@@ -18,14 +18,17 @@
 use std::fs;
 
 use crate::datasource::object_store::ObjectStoreUrl;
+use crate::execution::context::SessionState;
 use datafusion_common::{DataFusionError, Result};
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use glob::Pattern;
 use itertools::Itertools;
+use log::debug;
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
 use percent_encoding;
+use std::sync::Arc;
 use url::Url;
 
 /// A parsed URL identifying files for a listing table, see [`ListingTableUrl::parse`]
@@ -185,28 +188,43 @@ impl ListingTableUrl {
     }
 
     /// List all files identified by this [`ListingTableUrl`] for the provided `file_extension`
-    pub(crate) fn list_all_files<'a>(
+    pub(crate) async fn list_all_files<'a>(
         &'a self,
+        ctx: &'a SessionState,
         store: &'a dyn ObjectStore,
         file_extension: &'a str,
-    ) -> BoxStream<'a, Result<ObjectMeta>> {
+    ) -> Result<BoxStream<'a, Result<ObjectMeta>>> {
         // If the prefix is a file, use a head request, otherwise list
         let is_dir = self.url.as_str().ends_with('/');
         let list = match is_dir {
-            true => futures::stream::once(store.list(Some(&self.prefix)))
-                .try_flatten()
-                .boxed(),
+            true => match ctx.runtime_env().cache_manager.get_list_files_cache() {
+                None => futures::stream::once(store.list(Some(&self.prefix)))
+                    .try_flatten()
+                    .boxed(),
+                Some(cache) => {
+                    if let Some(res) = cache.get(&self.prefix) {
+                        debug!("Hit list all files cache");
+                        futures::stream::iter(res.as_ref().clone().into_iter().map(Ok))
+                            .boxed()
+                    } else {
+                        let list_res = store.list(Some(&self.prefix)).await;
+                        let vec = list_res?.try_collect::<Vec<ObjectMeta>>().await?;
+                        cache.put(&self.prefix, Arc::new(vec.clone()));
+                        futures::stream::iter(vec.into_iter().map(Ok)).boxed()
+                    }
+                }
+            },
             false => futures::stream::once(store.head(&self.prefix)).boxed(),
         };
-
-        list.map_err(Into::into)
+        Ok(list
             .try_filter(move |meta| {
                 let path = &meta.location;
                 let extension_match = path.as_ref().ends_with(file_extension);
                 let glob_match = self.contains(path);
                 futures::future::ready(extension_match && glob_match)
             })
-            .boxed()
+            .map_err(DataFusionError::ObjectStore)
+            .boxed())
     }
 
     /// Returns this [`ListingTableUrl`] as a string

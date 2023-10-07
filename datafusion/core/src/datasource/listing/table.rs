@@ -165,7 +165,8 @@ impl ListingTableConfig {
             .table_paths
             .get(0)
             .unwrap()
-            .list_all_files(store.as_ref(), "")
+            .list_all_files(state, store.as_ref(), "")
+            .await?
             .next()
             .await
             .ok_or_else(|| DataFusionError::Internal("No files for table".into()))??;
@@ -507,7 +508,8 @@ impl ListingOptions {
         let store = state.runtime_env().object_store(table_path)?;
 
         let files: Vec<_> = table_path
-            .list_all_files(store.as_ref(), &self.file_extension)
+            .list_all_files(state, store.as_ref(), &self.file_extension)
+            .await?
             .try_collect()
             .await?;
 
@@ -844,6 +846,7 @@ impl TableProvider for ListingTable {
         let store = state.runtime_env().object_store(table_path)?;
 
         let file_list_stream = pruned_partition_list(
+            state,
             store.as_ref(),
             table_path,
             &[],
@@ -933,6 +936,7 @@ impl ListingTable {
         // list files (with partitions)
         let file_list = future::try_join_all(self.table_paths.iter().map(|table_path| {
             pruned_partition_list(
+                ctx,
                 store.as_ref(),
                 table_path,
                 filters,
