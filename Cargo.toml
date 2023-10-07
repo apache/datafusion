@@ -45,7 +45,7 @@ license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/apache/arrow-datafusion"
 rust-version = "1.70"
-version = "31.0.0"
+version = "32.0.0"
 
 [workspace.dependencies]
 arrow = { version = "47.0.0", features = ["prettyprint"] }
