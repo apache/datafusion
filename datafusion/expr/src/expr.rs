@@ -1652,4 +1652,40 @@ mod test {
 
         Ok(())
     }
+
+    #[test]
+    fn test_logical_ops() {
+        assert_eq!(
+            format!("{}", lit(1u32).eq(lit(2u32))),
+            "UInt32(1) = UInt32(2)"
+        );
+        assert_eq!(
+            format!("{}", lit(1u32).not_eq(lit(2u32))),
+            "UInt32(1) != UInt32(2)"
+        );
+        assert_eq!(
+            format!("{}", lit(1u32).gt(lit(2u32))),
+            "UInt32(1) > UInt32(2)"
+        );
+        assert_eq!(
+            format!("{}", lit(1u32).gt_eq(lit(2u32))),
+            "UInt32(1) >= UInt32(2)"
+        );
+        assert_eq!(
+            format!("{}", lit(1u32).lt(lit(2u32))),
+            "UInt32(1) < UInt32(2)"
+        );
+        assert_eq!(
+            format!("{}", lit(1u32).lt_eq(lit(2u32))),
+            "UInt32(1) <= UInt32(2)"
+        );
+        assert_eq!(
+            format!("{}", lit(1u32).and(lit(2u32))),
+            "UInt32(1) AND UInt32(2)"
+        );
+        assert_eq!(
+            format!("{}", lit(1u32).or(lit(2u32))),
+            "UInt32(1) OR UInt32(2)"
+        );
+    }
 }
