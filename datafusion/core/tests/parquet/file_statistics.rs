@@ -155,7 +155,7 @@ async fn get_listing_table(
 ) -> ListingTable {
     let schema = opt
         .infer_schema(
-            &SessionState::with_config_rt(
+            &SessionState::new_with_config_rt(
                 SessionConfig::default(),
                 Arc::new(RuntimeEnv::default()),
             ),
