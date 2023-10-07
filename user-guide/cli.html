@@ -822,10 +822,11 @@ DataFusion<span class="w"> </span>CLI<span class="w"> </span>v21.0.0
 <ul class="simple">
 <li><p>Show configuration options</p></li>
 </ul>
+<p><code class="docutils literal notranslate"><span class="pre">SHOW</span> <span class="pre">ALL</span> <span class="pre">[VERBOSE]</span></code></p>
 <div class="highlight-SQL notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">show</span><span class="w"> </span><span class="k">all</span><span class="p">;</span>
 
 <span class="o">+</span><span class="c1">-------------------------------------------------+---------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">name</span><span class="w">                                            </span><span class="o">|</span><span class="w"> </span><span class="n">setting</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="n">name</span><span class="w">                                            </span><span class="o">|</span><span class="w"> </span><span class="n">value</span><span class="w">   </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">-------------------------------------------------+---------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">batch_size</span><span class="w">                 </span><span class="o">|</span><span class="w"> </span><span class="mi">8192</span><span class="w">    </span><span class="o">|</span>
 <span class="o">|</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">coalesce_batches</span><span class="w">           </span><span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">    </span><span class="o">|</span>
@@ -834,6 +835,19 @@ DataFusion<span class="w"> </span>CLI<span class="w"> </span>v21.0.0
 <span class="o">|</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="k">explain</span><span class="p">.</span><span class="n">physical_plan_only</span><span class="w">           </span><span class="o">|</span><span class="w"> </span><span class="k">false</span><span class="w">   </span><span class="o">|</span>
 <span class="o">|</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">optimizer</span><span class="p">.</span><span class="n">filter_null_join_keys</span><span class="w">      </span><span class="o">|</span><span class="w"> </span><span class="k">false</span><span class="w">   </span><span class="o">|</span>
 <span class="o">|</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">optimizer</span><span class="p">.</span><span class="n">skip_failed_rules</span><span class="w">          </span><span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">    </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------------------------------------------------+---------+</span>
+</pre></div>
+</div>
+<ul class="simple">
+<li><p>Show specific configuration option</p></li>
+</ul>
+<p><code class="docutils literal notranslate"><span class="pre">SHOW</span> <span class="pre">xyz.abc.qwe</span> <span class="pre">[VERBOSE]</span></code></p>
+<div class="highlight-SQL notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">show</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">batch_size</span><span class="p">;</span>
+
+<span class="o">+</span><span class="c1">-------------------------------------------------+---------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">name</span><span class="w">                                            </span><span class="o">|</span><span class="w"> </span><span class="n">value</span><span class="w">   </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------------------------------------------------+---------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">batch_size</span><span class="w">                 </span><span class="o">|</span><span class="w"> </span><span class="mi">8192</span><span class="w">    </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">-------------------------------------------------+---------+</span>
 </pre></div>
 </div>
@@ -853,45 +867,45 @@ variable with an upper case name and all <code class="docutils literal notransla
 <p>For example, to set <code class="docutils literal notranslate"><span class="pre">datafusion.execution.batch_size</span></code> to <code class="docutils literal notranslate"><span class="pre">1024</span></code> you
 would set the <code class="docutils literal notranslate"><span class="pre">DATAFUSION_EXECUTION_BATCH_SIZE</span></code> environment variable
 appropriately:</p>
-<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>$<span class="w"> </span><span class="nv">DATAFUSION_EXECUTION_BATCH_SIZE</span><span class="o">=</span><span class="m">1024</span><span class="w"> </span>datafusion-cli
-DataFusion<span class="w"> </span>CLI<span class="w"> </span>v12.0.0
-❯<span class="w"> </span>show<span class="w"> </span>all<span class="p">;</span>
-+-------------------------------------------------+---------+
-<span class="p">|</span><span class="w"> </span>name<span class="w">                                            </span><span class="p">|</span><span class="w"> </span>setting<span class="w"> </span><span class="p">|</span>
-+-------------------------------------------------+---------+
-<span class="p">|</span><span class="w"> </span>datafusion.execution.batch_size<span class="w">                 </span><span class="p">|</span><span class="w"> </span><span class="m">1024</span><span class="w">    </span><span class="p">|</span>
-<span class="p">|</span><span class="w"> </span>datafusion.execution.coalesce_batches<span class="w">           </span><span class="p">|</span><span class="w"> </span><span class="nb">true</span><span class="w">    </span><span class="p">|</span>
-<span class="p">|</span><span class="w"> </span>datafusion.execution.time_zone<span class="w">                  </span><span class="p">|</span><span class="w"> </span>UTC<span class="w">     </span><span class="p">|</span>
-<span class="p">|</span><span class="w"> </span>datafusion.explain.logical_plan_only<span class="w">            </span><span class="p">|</span><span class="w"> </span><span class="nb">false</span><span class="w">   </span><span class="p">|</span>
-<span class="p">|</span><span class="w"> </span>datafusion.explain.physical_plan_only<span class="w">           </span><span class="p">|</span><span class="w"> </span><span class="nb">false</span><span class="w">   </span><span class="p">|</span>
-<span class="p">|</span><span class="w"> </span>datafusion.optimizer.filter_null_join_keys<span class="w">      </span><span class="p">|</span><span class="w"> </span><span class="nb">false</span><span class="w">   </span><span class="p">|</span>
-<span class="p">|</span><span class="w"> </span>datafusion.optimizer.skip_failed_rules<span class="w">          </span><span class="p">|</span><span class="w"> </span><span class="nb">true</span><span class="w">    </span><span class="p">|</span>
-+-------------------------------------------------+---------+
-<span class="m">8</span><span class="w"> </span>rows<span class="w"> </span><span class="k">in</span><span class="w"> </span>set.<span class="w"> </span>Query<span class="w"> </span>took<span class="w"> </span><span class="m">0</span>.002<span class="w"> </span>seconds.
+<div class="highlight-SQL notranslate"><div class="highlight"><pre><span></span><span class="err">$</span><span class="w"> </span><span class="n">DATAFUSION_EXECUTION_BATCH_SIZE</span><span class="o">=</span><span class="mi">1024</span><span class="w"> </span><span class="n">datafusion</span><span class="o">-</span><span class="n">cli</span>
+<span class="n">DataFusion</span><span class="w"> </span><span class="n">CLI</span><span class="w"> </span><span class="n">v12</span><span class="p">.</span><span class="mi">0</span><span class="p">.</span><span class="mi">0</span>
+<span class="err">❯</span><span class="w"> </span><span class="k">show</span><span class="w"> </span><span class="k">all</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">-------------------------------------------------+---------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">name</span><span class="w">                                            </span><span class="o">|</span><span class="w"> </span><span class="n">value</span><span class="w">   </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------------------------------------------------+---------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">batch_size</span><span class="w">                 </span><span class="o">|</span><span class="w"> </span><span class="mi">1024</span><span class="w">    </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">coalesce_batches</span><span class="w">           </span><span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">    </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">time_zone</span><span class="w">                  </span><span class="o">|</span><span class="w"> </span><span class="n">UTC</span><span class="w">     </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="k">explain</span><span class="p">.</span><span class="n">logical_plan_only</span><span class="w">            </span><span class="o">|</span><span class="w"> </span><span class="k">false</span><span class="w">   </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="k">explain</span><span class="p">.</span><span class="n">physical_plan_only</span><span class="w">           </span><span class="o">|</span><span class="w"> </span><span class="k">false</span><span class="w">   </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">optimizer</span><span class="p">.</span><span class="n">filter_null_join_keys</span><span class="w">      </span><span class="o">|</span><span class="w"> </span><span class="k">false</span><span class="w">   </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">optimizer</span><span class="p">.</span><span class="n">skip_failed_rules</span><span class="w">          </span><span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">    </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------------------------------------------------+---------+</span>
+<span class="mi">8</span><span class="w"> </span><span class="k">rows</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="k">set</span><span class="p">.</span><span class="w"> </span><span class="n">Query</span><span class="w"> </span><span class="n">took</span><span class="w"> </span><span class="mi">0</span><span class="p">.</span><span class="mi">002</span><span class="w"> </span><span class="n">seconds</span><span class="p">.</span>
 </pre></div>
 </div>
 <p>You can change the configuration options using <code class="docutils literal notranslate"><span class="pre">SET</span></code> statement as well</p>
-<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>$<span class="w"> </span>datafusion-cli
-DataFusion<span class="w"> </span>CLI<span class="w"> </span>v13.0.0
+<div class="highlight-SQL notranslate"><div class="highlight"><pre><span></span><span class="err">$</span><span class="w"> </span><span class="n">datafusion</span><span class="o">-</span><span class="n">cli</span>
+<span class="n">DataFusion</span><span class="w"> </span><span class="n">CLI</span><span class="w"> </span><span class="n">v13</span><span class="p">.</span><span class="mi">0</span><span class="p">.</span><span class="mi">0</span>
 
-❯<span class="w"> </span>show<span class="w"> </span>datafusion.execution.batch_size<span class="p">;</span>
-+---------------------------------+---------+
-<span class="p">|</span><span class="w"> </span>name<span class="w">                            </span><span class="p">|</span><span class="w"> </span>setting<span class="w"> </span><span class="p">|</span>
-+---------------------------------+---------+
-<span class="p">|</span><span class="w"> </span>datafusion.execution.batch_size<span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="m">8192</span><span class="w">    </span><span class="p">|</span>
-+---------------------------------+---------+
-<span class="m">1</span><span class="w"> </span>row<span class="w"> </span><span class="k">in</span><span class="w"> </span>set.<span class="w"> </span>Query<span class="w"> </span>took<span class="w"> </span><span class="m">0</span>.011<span class="w"> </span>seconds.
+<span class="err">❯</span><span class="w"> </span><span class="k">show</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">batch_size</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">---------------------------------+---------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">name</span><span class="w">                            </span><span class="o">|</span><span class="w"> </span><span class="n">value</span><span class="w">   </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------------------+---------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">batch_size</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">8192</span><span class="w">    </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------------------+---------+</span>
+<span class="mi">1</span><span class="w"> </span><span class="k">row</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="k">set</span><span class="p">.</span><span class="w"> </span><span class="n">Query</span><span class="w"> </span><span class="n">took</span><span class="w"> </span><span class="mi">0</span><span class="p">.</span><span class="mi">011</span><span class="w"> </span><span class="n">seconds</span><span class="p">.</span>
 
-❯<span class="w"> </span><span class="nb">set</span><span class="w"> </span>datafusion.execution.batch_size<span class="w"> </span>to<span class="w"> </span><span class="m">1024</span><span class="p">;</span>
-<span class="m">0</span><span class="w"> </span>rows<span class="w"> </span><span class="k">in</span><span class="w"> </span>set.<span class="w"> </span>Query<span class="w"> </span>took<span class="w"> </span><span class="m">0</span>.000<span class="w"> </span>seconds.
+<span class="err">❯</span><span class="w"> </span><span class="k">set</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">batch_size</span><span class="w"> </span><span class="k">to</span><span class="w"> </span><span class="mi">1024</span><span class="p">;</span>
+<span class="mi">0</span><span class="w"> </span><span class="k">rows</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="k">set</span><span class="p">.</span><span class="w"> </span><span class="n">Query</span><span class="w"> </span><span class="n">took</span><span class="w"> </span><span class="mi">0</span><span class="p">.</span><span class="mi">000</span><span class="w"> </span><span class="n">seconds</span><span class="p">.</span>
 
-❯<span class="w"> </span>show<span class="w"> </span>datafusion.execution.batch_size<span class="p">;</span>
-+---------------------------------+---------+
-<span class="p">|</span><span class="w"> </span>name<span class="w">                            </span><span class="p">|</span><span class="w"> </span>setting<span class="w"> </span><span class="p">|</span>
-+---------------------------------+---------+
-<span class="p">|</span><span class="w"> </span>datafusion.execution.batch_size<span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="m">1024</span><span class="w">    </span><span class="p">|</span>
-+---------------------------------+---------+
-<span class="m">1</span><span class="w"> </span>row<span class="w"> </span><span class="k">in</span><span class="w"> </span>set.<span class="w"> </span>Query<span class="w"> </span>took<span class="w"> </span><span class="m">0</span>.005<span class="w"> </span>seconds.
+<span class="err">❯</span><span class="w"> </span><span class="k">show</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">batch_size</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">---------------------------------+---------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">name</span><span class="w">                            </span><span class="o">|</span><span class="w"> </span><span class="n">value</span><span class="w">   </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------------------+---------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">batch_size</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">1024</span><span class="w">    </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------------------+---------+</span>
+<span class="mi">1</span><span class="w"> </span><span class="k">row</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="k">set</span><span class="p">.</span><span class="w"> </span><span class="n">Query</span><span class="w"> </span><span class="n">took</span><span class="w"> </span><span class="mi">0</span><span class="p">.</span><span class="mi">005</span><span class="w"> </span><span class="n">seconds</span><span class="p">.</span>
 </pre></div>
 </div>
 </section>
