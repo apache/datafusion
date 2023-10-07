@@ -216,10 +216,10 @@ impl ContextWithParquet {
         let pretty_input = pretty_format_batches(&input).unwrap().to_string();
 
         let state = self.ctx.state();
-        let logical_plan = state.optimize(&logical_plan).expect("optimizing plan");
+        let logical_plan = state.optimize(logical_plan).expect("optimizing plan");
 
         let physical_plan = state
-            .create_physical_plan(&logical_plan)
+            .create_physical_plan(logical_plan)
             .await
             .expect("creating physical plan");
 

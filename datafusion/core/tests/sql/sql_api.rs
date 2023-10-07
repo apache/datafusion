@@ -108,7 +108,7 @@ async fn ddl_can_not_be_planned_by_session_state() {
     // can not create a logical plan for catalog DDL
     let sql = "drop table test";
     let plan = state.create_logical_plan(sql).await.unwrap();
-    let physical_plan = state.create_physical_plan(&plan).await;
+    let physical_plan = state.create_physical_plan(plan).await;
     assert_eq!(
         physical_plan.unwrap_err().strip_backtrace(),
         "This feature is not implemented: Unsupported logical plan: DropTable"

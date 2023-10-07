@@ -2090,7 +2090,7 @@ mod tests {
         SessionState::new_with_config_rt(config, runtime)
     }
 
-    async fn plan(logical_plan: &LogicalPlan) -> Result<Arc<dyn ExecutionPlan>> {
+    async fn plan(logical_plan: LogicalPlan) -> Result<Arc<dyn ExecutionPlan>> {
         let session_state = make_session_state();
         // optimize the logical plan
         let logical_plan = session_state.optimize(logical_plan)?;
@@ -2112,7 +2112,7 @@ mod tests {
             .limit(3, Some(10))?
             .build()?;
 
-        let exec_plan = plan(&logical_plan).await?;
+        let exec_plan = plan(logical_plan).await?;
 
         // verify that the plan correctly casts u8 to i64
         // the cast from u8 to i64 for literal will be simplified, and get lit(int64(5))
@@ -2125,19 +2125,19 @@ mod tests {
     #[tokio::test]
     async fn test_create_cube_expr() -> Result<()> {
         let logical_plan = test_csv_scan().await?.build()?;
+        let logical_input_schema = logical_plan.schema().clone();
 
-        let plan = plan(&logical_plan).await?;
+        let plan = plan(logical_plan).await?;
 
         let exprs = vec![col("c1"), col("c2"), col("c3")];
 
         let physical_input_schema = plan.schema();
         let physical_input_schema = physical_input_schema.as_ref();
-        let logical_input_schema = logical_plan.schema();
         let session_state = make_session_state();
 
         let cube = create_cube_physical_expr(
             &exprs,
-            logical_input_schema,
+            logical_input_schema.as_ref(),
             physical_input_schema,
             &session_state,
         );
@@ -2152,19 +2152,19 @@ mod tests {
     #[tokio::test]
     async fn test_create_rollup_expr() -> Result<()> {
         let logical_plan = test_csv_scan().await?.build()?;
+        let logical_input_schema = logical_plan.schema().clone();
 
-        let plan = plan(&logical_plan).await?;
+        let plan = plan(logical_plan).await?;
 
         let exprs = vec![col("c1"), col("c2"), col("c3")];
 
         let physical_input_schema = plan.schema();
         let physical_input_schema = physical_input_schema.as_ref();
-        let logical_input_schema = logical_plan.schema();
         let session_state = make_session_state();
 
         let rollup = create_rollup_physical_expr(
             &exprs,
-            logical_input_schema,
+            logical_input_schema.as_ref(),
             physical_input_schema,
             &session_state,
         );
@@ -2204,7 +2204,7 @@ mod tests {
             .limit(3, None)?
             .build()?;
 
-        let plan = plan(&logical_plan).await?;
+        let plan = plan(logical_plan).await?;
 
         // c12 is f64, c7 is u8 -> cast c7 to f64
         // the cast here is implicit so has CastOptions with safe=true
@@ -2237,7 +2237,7 @@ mod tests {
     #[tokio::test]
     async fn test_with_zero_offset_plan() -> Result<()> {
         let logical_plan = test_csv_scan().await?.limit(0, None)?.build()?;
-        let plan = plan(&logical_plan).await?;
+        let plan = plan(logical_plan).await?;
         assert!(!format!("{plan:?}").contains("limit="));
         Ok(())
     }
@@ -2249,7 +2249,7 @@ mod tests {
         let logical_plan = scan_empty_with_partitions(Some("test"), &schema, None, 2)?
             .limit(3, Some(5))?
             .build()?;
-        let plan = plan(&logical_plan).await?;
+        let plan = plan(logical_plan).await?;
 
         assert!(format!("{plan:?}").contains("GlobalLimitExec"));
         assert!(format!("{plan:?}").contains("skip: 3, fetch: Some(5)"));
@@ -2356,7 +2356,7 @@ mod tests {
             .filter(col("c12").lt(lit(0.05)))?
             .project(vec![col("c1").in_list(list, false)])?
             .build()?;
-        let execution_plan = plan(&logical_plan).await?;
+        let execution_plan = plan(logical_plan).await?;
         // verify that the plan correctly adds cast from Int64(1) to Utf8, and the const will be evaluated.
 
         let expected = "expr: [(BinaryExpr { left: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"a\") } }, op: Or, right: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"1\") } } }";
@@ -2378,7 +2378,7 @@ mod tests {
             .filter(col("c12").lt(lit(0.05)))?
             .project(vec![col("c12").lt_eq(lit(0.025)).in_list(list, false)])?
             .build()?;
-        let e = plan(&logical_plan).await.unwrap_err().to_string();
+        let e = plan(logical_plan).await.unwrap_err().to_string();
 
         assert_contains!(
             &e,
@@ -2404,7 +2404,7 @@ mod tests {
             .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
             .build()?;
 
-        let execution_plan = plan(&logical_plan).await?;
+        let execution_plan = plan(logical_plan).await?;
         let final_hash_agg = execution_plan
             .as_any()
             .downcast_ref::<AggregateExec>()
@@ -2432,7 +2432,7 @@ mod tests {
             .aggregate(vec![grouping_set_expr], vec![sum(col("c3"))])?
             .build()?;
 
-        let execution_plan = plan(&logical_plan).await?;
+        let execution_plan = plan(logical_plan).await?;
         let final_hash_agg = execution_plan
             .as_any()
             .downcast_ref::<AggregateExec>()
@@ -2455,7 +2455,7 @@ mod tests {
             .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
             .build()?;
 
-        let execution_plan = plan(&logical_plan).await?;
+        let execution_plan = plan(logical_plan).await?;
         let formatted = format!("{execution_plan:?}");
 
         // Make sure the plan contains a FinalPartitioned, which means it will not use the Final
@@ -2486,7 +2486,7 @@ mod tests {
         .aggregate(vec![col("d1")], vec![sum(col("d2"))])?
         .build()?;
 
-        let execution_plan = plan(&logical_plan).await?;
+        let execution_plan = plan(logical_plan).await?;
         let formatted = format!("{execution_plan:?}");
 
         // Make sure the plan contains a FinalPartitioned, which means it will not use the Final
@@ -2507,7 +2507,7 @@ mod tests {
             .aggregate(vec![grouping_set_expr], vec![sum(col("c3"))])?
             .build()?;
 
-        let execution_plan = plan(&logical_plan).await?;
+        let execution_plan = plan(logical_plan).await?;
         let formatted = format!("{execution_plan:?}");
 
         // Make sure the plan contains a FinalPartitioned, which means it will not use the Final
@@ -2528,7 +2528,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let plan = plan(&logical_plan).await.unwrap();
+        let plan = plan(logical_plan).await.unwrap();
         if let Some(plan) = plan.as_any().downcast_ref::<ExplainExec>() {
             let stringified_plans = plan.stringified_plans();
             assert!(stringified_plans.len() >= 4);
@@ -2747,7 +2747,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let plan = plan(&logical_plan).await.unwrap();
+        let plan = plan(logical_plan).await.unwrap();
 
         let expected_graph = r#"
 // Begin DataFusion GraphViz Plan,
@@ -2777,7 +2777,7 @@ digraph {
             .build()
             .unwrap();
 
-        let plan = plan(&logical_plan).await.unwrap();
+        let plan = plan(logical_plan).await.unwrap();
 
         let expected_tooltip = ", tooltip=\"statistics=[";
 

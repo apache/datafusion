@@ -626,7 +626,7 @@ async fn assert_expected_plan(sql: &str, expected_plan_str: &str) -> Result<()> 
     let plan = df.into_optimized_plan()?;
     let proto = to_substrait_plan(&plan, &ctx)?;
     let plan2 = from_substrait_plan(&mut ctx, &proto).await?;
-    let plan2 = ctx.state().optimize(&plan2)?;
+    let plan2 = ctx.state().optimize(plan2)?;
     let plan2str = format!("{plan2:?}");
     assert_eq!(expected_plan_str, &plan2str);
     Ok(())
@@ -638,7 +638,7 @@ async fn roundtrip_fill_na(sql: &str) -> Result<()> {
     let plan1 = df.into_optimized_plan()?;
     let proto = to_substrait_plan(&plan1, &ctx)?;
     let plan2 = from_substrait_plan(&mut ctx, &proto).await?;
-    let plan2 = ctx.state().optimize(&plan2)?;
+    let plan2 = ctx.state().optimize(plan2)?;
 
     // Format plan string and replace all None's with 0
     let plan1str = format!("{plan1:?}").replace("None", "0");
@@ -677,7 +677,7 @@ async fn roundtrip(sql: &str) -> Result<()> {
     let plan = df.into_optimized_plan()?;
     let proto = to_substrait_plan(&plan, &ctx)?;
     let plan2 = from_substrait_plan(&mut ctx, &proto).await?;
-    let plan2 = ctx.state().optimize(&plan2)?;
+    let plan2 = ctx.state().optimize(plan2)?;
 
     println!("{plan:#?}");
     println!("{plan2:#?}");
@@ -694,7 +694,7 @@ async fn roundtrip_all_types(sql: &str) -> Result<()> {
     let plan = df.into_optimized_plan()?;
     let proto = to_substrait_plan(&plan, &ctx)?;
     let plan2 = from_substrait_plan(&mut ctx, &proto).await?;
-    let plan2 = ctx.state().optimize(&plan2)?;
+    let plan2 = ctx.state().optimize(plan2)?;
 
     println!("{plan:#?}");
     println!("{plan2:#?}");

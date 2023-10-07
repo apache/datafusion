@@ -200,7 +200,7 @@ ORDER BY 1, 2;
     // check phys. plan
     let dataframe = ctx.sql(sql).await.unwrap();
     let plan = dataframe.into_optimized_plan().unwrap();
-    let plan = ctx.state().create_physical_plan(&plan).await.unwrap();
+    let plan = ctx.state().create_physical_plan(plan).await.unwrap();
     let expected = vec![
         "SortPreservingMergeExec: [m@0 ASC NULLS LAST,t@1 ASC NULLS LAST]",
         "  SortExec: expr=[m@0 ASC NULLS LAST,t@1 ASC NULLS LAST]",

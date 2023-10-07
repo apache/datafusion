@@ -171,7 +171,7 @@ async fn projection_on_table_scan() -> Result<()> {
         .build()?;
 
     let state = ctx.state();
-    let optimized_plan = state.optimize(&logical_plan)?;
+    let optimized_plan = state.optimize(logical_plan)?;
     match &optimized_plan {
         LogicalPlan::TableScan(TableScan {
             source,
@@ -187,7 +187,7 @@ async fn projection_on_table_scan() -> Result<()> {
     let expected = "TableScan: test projection=[c2]";
     assert_eq!(format!("{optimized_plan:?}"), expected);
 
-    let physical_plan = state.create_physical_plan(&optimized_plan).await?;
+    let physical_plan = state.create_physical_plan(optimized_plan).await?;
 
     assert_eq!(1, physical_plan.schema().fields().len());
     assert_eq!("c2", physical_plan.schema().field(0).name().as_str());
@@ -281,7 +281,7 @@ async fn projection_on_memory_scan() -> Result<()> {
 
     let ctx = SessionContext::new();
     let state = ctx.state();
-    let optimized_plan = state.optimize(&plan)?;
+    let optimized_plan = state.optimize(plan)?;
     match &optimized_plan {
         LogicalPlan::TableScan(TableScan {
             source,
@@ -297,7 +297,7 @@ async fn projection_on_memory_scan() -> Result<()> {
     let expected = format!("TableScan: {UNNAMED_TABLE} projection=[b]");
     assert_eq!(format!("{optimized_plan:?}"), expected);
 
-    let physical_plan = state.create_physical_plan(&optimized_plan).await?;
+    let physical_plan = state.create_physical_plan(optimized_plan).await?;
 
     assert_eq!(1, physical_plan.schema().fields().len());
     assert_eq!("b", physical_plan.schema().field(0).name().as_str());

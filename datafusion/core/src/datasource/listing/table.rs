@@ -1942,7 +1942,7 @@ mod tests {
         // Create a physical plan from the insert plan
         let plan = session_ctx
             .state()
-            .create_physical_plan(&insert_into_table)
+            .create_physical_plan(insert_into_table.clone())
             .await?;
 
         // Execute the physical plan and collect the results
@@ -1986,7 +1986,7 @@ mod tests {
         // Create a physical plan from the insert plan
         let plan = session_ctx
             .state()
-            .create_physical_plan(&insert_into_table)
+            .create_physical_plan(insert_into_table)
             .await?;
 
         // Again, execute the physical plan and collect the results
@@ -2155,7 +2155,7 @@ mod tests {
         // Create a physical plan from the insert plan
         let plan = session_ctx
             .state()
-            .create_physical_plan(&insert_into_table)
+            .create_physical_plan(insert_into_table.clone())
             .await?;
         // Execute the physical plan and collect the results
         let res = collect(plan, session_ctx.task_ctx()).await?;
@@ -2195,7 +2195,7 @@ mod tests {
         // Create a physical plan from the insert plan
         let plan = session_ctx
             .state()
-            .create_physical_plan(&insert_into_table)
+            .create_physical_plan(insert_into_table)
             .await?;
 
         // Again, execute the physical plan and collect the results

@@ -114,8 +114,11 @@ pub fn assert_analyzed_plan_eq(
     expected: &str,
 ) -> Result<()> {
     let options = ConfigOptions::default();
-    let analyzed_plan =
-        Analyzer::with_rules(vec![rule]).execute_and_check(plan, &options, |_, _| {})?;
+    let analyzed_plan = Analyzer::with_rules(vec![rule]).execute_and_check(
+        plan.to_owned(),
+        &options,
+        |_, _| {},
+    )?;
     let formatted_plan = format!("{analyzed_plan:?}");
     assert_eq!(formatted_plan, expected);
 
@@ -127,8 +130,11 @@ pub fn assert_analyzed_plan_eq_display_indent(
     expected: &str,
 ) -> Result<()> {
     let options = ConfigOptions::default();
-    let analyzed_plan =
-        Analyzer::with_rules(vec![rule]).execute_and_check(plan, &options, |_, _| {})?;
+    let analyzed_plan = Analyzer::with_rules(vec![rule]).execute_and_check(
+        plan.to_owned(),
+        &options,
+        |_, _| {},
+    )?;
     let formatted_plan = analyzed_plan.display_indent_schema().to_string();
     assert_eq!(formatted_plan, expected);
 
@@ -141,8 +147,11 @@ pub fn assert_analyzer_check_err(
     expected: &str,
 ) {
     let options = ConfigOptions::default();
-    let analyzed_plan =
-        Analyzer::with_rules(rules).execute_and_check(plan, &options, |_, _| {});
+    let analyzed_plan = Analyzer::with_rules(rules).execute_and_check(
+        plan.to_owned(),
+        &options,
+        |_, _| {},
+    );
     match analyzed_plan {
         Ok(plan) => assert_eq!(format!("{}", plan.display_indent()), "An error"),
         Err(e) => {

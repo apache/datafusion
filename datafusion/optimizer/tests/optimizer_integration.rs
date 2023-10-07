@@ -352,7 +352,7 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
     let analyzer = Analyzer::new();
     let optimizer = Optimizer::new();
     // analyze and optimize the logical plan
-    let plan = analyzer.execute_and_check(&plan, config.options(), |_, _| {})?;
+    let plan = analyzer.execute_and_check(plan, config.options(), |_, _| {})?;
     optimizer.optimize(&plan, &config, |_, _| {})
 }
 

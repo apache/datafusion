@@ -558,7 +558,7 @@ mod tests {
         // Create a physical plan from the insert plan
         let plan = session_ctx
             .state()
-            .create_physical_plan(&insert_into_table)
+            .create_physical_plan(insert_into_table)
             .await?;
 
         // Execute the physical plan and collect the results

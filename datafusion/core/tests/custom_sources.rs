@@ -60,7 +60,7 @@ struct TestCustomRecordBatchStream {
     /// the nb of batches of TEST_CUSTOM_RECORD_BATCH generated
     nb_batch: i32,
 }
-macro_rules! TEST_CUSTOM_SCHEMA_REF {
+macro_rules! test_custom_schema_ref {
     () => {
         Arc::new(Schema::new(vec![
             Field::new("c1", DataType::Int32, false),
@@ -68,10 +68,10 @@ macro_rules! TEST_CUSTOM_SCHEMA_REF {
         ]))
     };
 }
-macro_rules! TEST_CUSTOM_RECORD_BATCH {
+macro_rules! test_custom_record_batch {
     () => {
         RecordBatch::try_new(
-            TEST_CUSTOM_SCHEMA_REF!(),
+            test_custom_schema_ref!(),
             vec![
                 Arc::new(Int32Array::from(vec![1, 10, 10, 100])),
                 Arc::new(Int32Array::from(vec![2, 12, 12, 120])),
@@ -82,7 +82,7 @@ macro_rules! TEST_CUSTOM_RECORD_BATCH {
 
 impl RecordBatchStream for TestCustomRecordBatchStream {
     fn schema(&self) -> SchemaRef {
-        TEST_CUSTOM_SCHEMA_REF!()
+        test_custom_schema_ref!()
     }
 }
 
@@ -95,7 +95,7 @@ impl Stream for TestCustomRecordBatchStream {
     ) -> Poll<Option<Self::Item>> {
         if self.nb_batch > 0 {
             self.get_mut().nb_batch -= 1;
-            Poll::Ready(Some(TEST_CUSTOM_RECORD_BATCH!().map_err(Into::into)))
+            Poll::Ready(Some(test_custom_record_batch!().map_err(Into::into)))
         } else {
             Poll::Ready(None)
         }
@@ -122,7 +122,7 @@ impl ExecutionPlan for CustomExecutionPlan {
     }
 
     fn schema(&self) -> SchemaRef {
-        let schema = TEST_CUSTOM_SCHEMA_REF!();
+        let schema = test_custom_schema_ref!();
         project_schema(&schema, self.projection.as_ref()).expect("projected schema")
     }
 
@@ -154,7 +154,7 @@ impl ExecutionPlan for CustomExecutionPlan {
     }
 
     fn statistics(&self) -> Statistics {
-        let batch = TEST_CUSTOM_RECORD_BATCH!().unwrap();
+        let batch = test_custom_record_batch!().unwrap();
         Statistics {
             is_exact: true,
             num_rows: Some(batch.num_rows()),
@@ -187,7 +187,7 @@ impl TableProvider for CustomTableProvider {
     }
 
     fn schema(&self) -> SchemaRef {
-        TEST_CUSTOM_SCHEMA_REF!()
+        test_custom_schema_ref!()
     }
 
     fn table_type(&self) -> TableType {
@@ -217,7 +217,7 @@ async fn custom_source_dataframe() -> Result<()> {
         .project(vec![col("c2")])?
         .build()?;
 
-    let optimized_plan = state.optimize(&logical_plan)?;
+    let optimized_plan = state.optimize(logical_plan)?;
     match &optimized_plan {
         LogicalPlan::TableScan(TableScan {
             source,
@@ -233,13 +233,13 @@ async fn custom_source_dataframe() -> Result<()> {
     let expected = format!("TableScan: {UNNAMED_TABLE} projection=[c2]");
     assert_eq!(format!("{optimized_plan:?}"), expected);
 
-    let physical_plan = state.create_physical_plan(&optimized_plan).await?;
+    let physical_plan = state.create_physical_plan(optimized_plan).await?;
 
     assert_eq!(1, physical_plan.schema().fields().len());
     assert_eq!("c2", physical_plan.schema().field(0).name().as_str());
 
     let batches = collect(physical_plan, state.task_ctx()).await?;
-    let origin_rec_batch = TEST_CUSTOM_RECORD_BATCH!()?;
+    let origin_rec_batch = test_custom_record_batch!()?;
     assert_eq!(1, batches.len());
     assert_eq!(2, batches[0].num_columns());
     assert_eq!(origin_rec_batch.num_rows(), batches[0].num_rows());

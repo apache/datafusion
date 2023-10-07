@@ -85,7 +85,7 @@ async fn main() -> Result<()> {
         .await
         ?;
     let logical_plan = ctx.table("t1").await?.into_optimized_plan()?;
-    let physical_plan = ctx.create_physical_plan(&logical_plan).await?;
+    let physical_plan = ctx.create_physical_plan(logical_plan).await?;
     let bytes = physical_plan_to_bytes(physical_plan.clone())?;
     let physical_round_trip = physical_plan_from_bytes(&bytes, &ctx)?;
     assert_eq!(format!("{:?}", physical_plan), format!("{:?}", physical_round_trip));

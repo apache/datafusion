@@ -178,7 +178,7 @@ async fn csv_explain_plans() {
     let msg = format!("Creating logical plan for '{sql}'");
     let dataframe = ctx.sql(sql).await.expect(&msg);
     let logical_schema = dataframe.schema();
-    let plan = dataframe.logical_plan();
+    let plan = dataframe.logical_plan().to_owned();
 
     //
     println!("SQL: {sql}");
@@ -326,7 +326,7 @@ async fn csv_explain_plans() {
     // Physical plan
     // Create plan
     let msg = format!("Creating physical plan for '{sql}': {plan:?}");
-    let plan = state.create_physical_plan(&plan).await.expect(&msg);
+    let plan = state.create_physical_plan(plan).await.expect(&msg);
     //
     // Execute plan
     let msg = format!("Executing physical plan for '{sql}': {plan:?}");
@@ -473,7 +473,7 @@ async fn csv_explain_verbose_plans() {
     // Optimized logical plan
     let msg = format!("Optimizing logical plan for '{sql}': {dataframe:?}");
     let (state, plan) = dataframe.into_parts();
-    let plan = state.optimize(&plan).expect(&msg);
+    let plan = state.optimize(plan).expect(&msg);
     let optimized_logical_schema = plan.schema();
     // Both schema has to be the same
     assert_eq!(&logical_schema, optimized_logical_schema.as_ref());
@@ -547,7 +547,7 @@ async fn csv_explain_verbose_plans() {
     // Physical plan
     // Create plan
     let msg = format!("Creating physical plan for '{sql}': {plan:?}");
-    let plan = state.create_physical_plan(&plan).await.expect(&msg);
+    let plan = state.create_physical_plan(plan).await.expect(&msg);
     //
     // Execute plan
     let msg = format!("Executing physical plan for '{sql}': {plan:?}");
