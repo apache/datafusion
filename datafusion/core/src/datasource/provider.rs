@@ -93,7 +93,7 @@ pub trait TableProvider: Sync + Send {
     ///
     /// In certain cases, a query may only use a certain column in a Filter that
     /// has been completely pushed down to the scan. In this case, the
-    /// projection wll not contain all the columns found in the filter
+    /// projection will not contain all the columns found in the filter
     /// expressions.
     ///
     /// For example, given the query `SELECT t.a FROM t WHERE t.b > 5`,
