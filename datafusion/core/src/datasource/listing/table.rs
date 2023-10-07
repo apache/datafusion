@@ -907,17 +907,19 @@ impl TableProvider for ListingTable {
                     "Cannot insert into a sorted ListingTable with mode append!".into(),
                 ));
             }
+            // Multiple sort orders in outer vec are equivalent, so we pass only the first one
+            let ordering = self
+                .try_create_output_ordering()?
+                .get(0)
+                .ok_or(DataFusionError::Internal(
+                    "Expected ListingTable to have a sort order, but none found!".into(),
+                ))?
+                .clone();
             // Converts Vec<Vec<SortExpr>> into type required by execution plan to specify its required input ordering
             Some(
-                self.try_create_output_ordering()?
+                ordering
                     .into_iter()
-                    .map(|v| {
-                        Some(
-                            v.into_iter()
-                                .map(PhysicalSortRequirement::from)
-                                .collect::<Vec<_>>(),
-                        )
-                    })
+                    .map(PhysicalSortRequirement::from)
                     .collect::<Vec<_>>(),
             )
         } else {

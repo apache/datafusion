@@ -56,6 +56,19 @@ create_local_path 'true',
 insert_mode 'append_new_files',
 );
 
+query TT
+EXPLAIN INSERT INTO ordered_insert_test values (5, 1), (4, 2), (7,7), (7,8), (7,9), (7,10), (3, 3), (2, 4), (1, 5);
+----
+logical_plan
+Dml: op=[Insert Into] table=[ordered_insert_test]
+--Projection: column1 AS a, column2 AS b
+----Values: (Int64(5), Int64(1)), (Int64(4), Int64(2)), (Int64(7), Int64(7)), (Int64(7), Int64(8)), (Int64(7), Int64(9))...
+physical_plan
+InsertExec: sink=CsvSink(writer_mode=PutMultipart, file_groups=[])
+--SortExec: expr=[a@0 ASC NULLS LAST,b@1 DESC]
+----ProjectionExec: expr=[column1@0 as a, column2@1 as b]
+------ValuesExec
+
 query II
 INSERT INTO ordered_insert_test values (5, 1), (4, 2), (7,7), (7,8), (7,9), (7,10), (3, 3), (2, 4), (1, 5);
 ----

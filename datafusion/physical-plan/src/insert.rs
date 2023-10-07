@@ -74,7 +74,7 @@ pub struct FileSinkExec {
     /// Schema describing the structure of the output data.
     count_schema: SchemaRef,
     /// Optional required sort order for output data.
-    sort_order: Option<Vec<Option<Vec<PhysicalSortRequirement>>>>,
+    sort_order: Option<Vec<PhysicalSortRequirement>>,
 }
 
 impl fmt::Debug for FileSinkExec {
@@ -89,7 +89,7 @@ impl FileSinkExec {
         input: Arc<dyn ExecutionPlan>,
         sink: Arc<dyn DataSink>,
         sink_schema: SchemaRef,
-        sort_order: Option<Vec<Option<Vec<PhysicalSortRequirement>>>>,
+        sort_order: Option<Vec<PhysicalSortRequirement>>,
     ) -> Self {
         Self {
             input,
@@ -204,7 +204,7 @@ impl ExecutionPlan for FileSinkExec {
         // More rationale:
         // https://github.com/apache/arrow-datafusion/pull/6354#discussion_r1195284178
         match &self.sort_order {
-            Some(requirements) => requirements.clone(),
+            Some(requirements) => vec![Some(requirements.clone())],
             None => vec![self
                 .input
                 .output_ordering()

@@ -99,7 +99,7 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
         _input: Arc<dyn ExecutionPlan>,
         _state: &SessionState,
         _conf: FileSinkConfig,
-        _order_requirements: Option<Vec<Option<Vec<PhysicalSortRequirement>>>>,
+        _order_requirements: Option<Vec<PhysicalSortRequirement>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         not_impl_err!("Writer not implemented for this format")
     }

@@ -174,7 +174,7 @@ impl FileFormat for JsonFormat {
         input: Arc<dyn ExecutionPlan>,
         _state: &SessionState,
         conf: FileSinkConfig,
-        order_requirements: Option<Vec<Option<Vec<PhysicalSortRequirement>>>>,
+        order_requirements: Option<Vec<PhysicalSortRequirement>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if conf.overwrite {
             return not_impl_err!("Overwrites are not implemented yet for Json");
