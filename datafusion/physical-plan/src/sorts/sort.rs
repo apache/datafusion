@@ -769,7 +769,7 @@ impl DisplayAs for SortExec {
                         write!(
                             f,
                             // TODO should this say topk?
-                            "SortExec: fetch={fetch}, expr=[{}]",
+                            "SortExec: TopK(fetch={fetch}), expr=[{}]",
                             expr.join(",")
                         )
                     }
