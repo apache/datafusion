@@ -87,7 +87,7 @@ impl Analyzer {
     /// do necessary check and fail the invalid plans
     pub fn execute_and_check<F>(
         &self,
-        plan: &LogicalPlan,
+        plan: LogicalPlan,
         config: &ConfigOptions,
         mut observer: F,
     ) -> Result<LogicalPlan>
@@ -95,7 +95,7 @@ impl Analyzer {
         F: FnMut(&LogicalPlan, &dyn AnalyzerRule),
     {
         let start_time = Instant::now();
-        let mut new_plan = plan.clone();
+        let mut new_plan = plan;
 
         // TODO add common rule executor for Analyzer and Optimizer
         for rule in &self.rules {

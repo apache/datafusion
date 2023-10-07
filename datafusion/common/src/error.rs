@@ -369,7 +369,7 @@ impl From<DataFusionError> for io::Error {
 }
 
 impl DataFusionError {
-    const BACK_TRACE_SEP: &str = "\n\nbacktrace: ";
+    const BACK_TRACE_SEP: &'static str = "\n\nbacktrace: ";
 
     /// Get deepest underlying [`DataFusionError`]
     ///

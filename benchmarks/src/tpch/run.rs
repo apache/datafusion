@@ -193,11 +193,11 @@ impl RunOpt {
             println!("=== Logical plan ===\n{plan:?}\n");
         }
 
-        let plan = state.optimize(&plan)?;
+        let plan = state.optimize(plan)?;
         if debug {
             println!("=== Optimized logical plan ===\n{plan:?}\n");
         }
-        let physical_plan = state.create_physical_plan(&plan).await?;
+        let physical_plan = state.create_physical_plan(plan).await?;
         if debug {
             println!(
                 "=== Physical plan ===\n{}\n",

@@ -529,7 +529,7 @@ impl SessionContext {
         } = cmd;
 
         let input = Arc::try_unwrap(input).unwrap_or_else(|e| e.as_ref().clone());
-        let input = self.state().optimize(&input)?;
+        let input = self.state().optimize(input)?;
         let table = self.table(&name).await;
         match (if_not_exists, or_replace, table) {
             (true, false, Ok(_)) => self.return_empty_dataframe(),
@@ -1252,7 +1252,7 @@ impl SessionContext {
         since = "23.0.0",
         note = "Use SessionState::optimize to ensure a consistent state for planning and execution"
     )]
-    pub fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
+    pub fn optimize(&self, plan: LogicalPlan) -> Result<LogicalPlan> {
         self.state.read().optimize(plan)
     }
 
@@ -1263,7 +1263,7 @@ impl SessionContext {
     )]
     pub async fn create_physical_plan(
         &self,
-        logical_plan: &LogicalPlan,
+        logical_plan: LogicalPlan,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         self.state().create_physical_plan(logical_plan).await
     }
@@ -1858,13 +1858,13 @@ impl SessionState {
     }
 
     /// Optimizes the logical plan by applying optimizer rules.
-    pub fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
+    pub fn optimize(&self, plan: LogicalPlan) -> Result<LogicalPlan> {
         if let LogicalPlan::Explain(e) = plan {
             let mut stringified_plans = e.stringified_plans.clone();
 
             // analyze & capture output of each rule
             let analyzed_plan = match self.analyzer.execute_and_check(
-                e.plan.as_ref(),
+                e.plan.as_ref().clone(),
                 self.options(),
                 |analyzed_plan, analyzer| {
                     let analyzer_name = analyzer.name().to_string();
@@ -1937,7 +1937,7 @@ impl SessionState {
     /// DDL `CREATE TABLE` must be handled by another layer.
     pub async fn create_physical_plan(
         &self,
-        logical_plan: &LogicalPlan,
+        logical_plan: LogicalPlan,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let logical_plan = self.optimize(logical_plan)?;
         self.query_planner
