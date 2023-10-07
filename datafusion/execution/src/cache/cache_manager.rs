@@ -79,8 +79,11 @@ pub struct CacheManagerConfig {
     /// Avoid get same file statistics repeatedly in same datafusion session.
     /// Default is disable. Fow now only supports Parquet files.
     pub table_files_statistics_cache: Option<FileStatisticsCache>,
-    /// Enable cache of files statistics when listing files.
-    /// Avoid get same files meta under same path repeatedly in same datafusion session.
+    /// Enable cache of file metadata when listing files.
+    /// This setting avoids listing file meta of the same path repeatedly 
+    /// in same session, which may be expensive in certain situations (e.g. remote object storage). 
+    /// Note that if this option is enabled, DataFusion will not see any updates to the underlying
+    /// location.  
     /// Default is disable.
     pub list_files_cache: Option<ListFilesCache>,
 }
