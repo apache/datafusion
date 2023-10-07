@@ -397,11 +397,13 @@ Available commands inside DataFusion CLI are:
 
 - Show configuration options
 
+`SHOW ALL [VERBOSE]`
+
 ```SQL
 > show all;
 
 +-------------------------------------------------+---------+
-| name                                            | setting |
+| name                                            | value   |
 +-------------------------------------------------+---------+
 | datafusion.execution.batch_size                 | 8192    |
 | datafusion.execution.coalesce_batches           | true    |
@@ -410,6 +412,21 @@ Available commands inside DataFusion CLI are:
 | datafusion.explain.physical_plan_only           | false   |
 | datafusion.optimizer.filter_null_join_keys      | false   |
 | datafusion.optimizer.skip_failed_rules          | true    |
++-------------------------------------------------+---------+
+
+```
+
+- Show specific configuration option
+
+`SHOW xyz.abc.qwe [VERBOSE]`
+
+```SQL
+> show datafusion.execution.batch_size;
+
++-------------------------------------------------+---------+
+| name                                            | value   |
++-------------------------------------------------+---------+
+| datafusion.execution.batch_size                 | 8192    |
 +-------------------------------------------------+---------+
 
 ```
@@ -432,12 +449,12 @@ For example, to set `datafusion.execution.batch_size` to `1024` you
 would set the `DATAFUSION_EXECUTION_BATCH_SIZE` environment variable
 appropriately:
 
-```shell
+```SQL
 $ DATAFUSION_EXECUTION_BATCH_SIZE=1024 datafusion-cli
 DataFusion CLI v12.0.0
 ❯ show all;
 +-------------------------------------------------+---------+
-| name                                            | setting |
+| name                                            | value   |
 +-------------------------------------------------+---------+
 | datafusion.execution.batch_size                 | 1024    |
 | datafusion.execution.coalesce_batches           | true    |
@@ -452,13 +469,13 @@ DataFusion CLI v12.0.0
 
 You can change the configuration options using `SET` statement as well
 
-```shell
+```SQL
 $ datafusion-cli
 DataFusion CLI v13.0.0
 
 ❯ show datafusion.execution.batch_size;
 +---------------------------------+---------+
-| name                            | setting |
+| name                            | value   |
 +---------------------------------+---------+
 | datafusion.execution.batch_size | 8192    |
 +---------------------------------+---------+
@@ -469,7 +486,7 @@ DataFusion CLI v13.0.0
 
 ❯ show datafusion.execution.batch_size;
 +---------------------------------+---------+
-| name                            | setting |
+| name                            | value   |
 +---------------------------------+---------+
 | datafusion.execution.batch_size | 1024    |
 +---------------------------------+---------+
