@@ -45,7 +45,7 @@ pub fn make_test_store_and_state(files: &[(&str, u64)]) -> (Arc<InMemory>, Sessi
 
     (
         Arc::new(memory),
-        SessionState::with_config_rt(
+        SessionState::new_with_config_rt(
             SessionConfig::default(),
             Arc::new(RuntimeEnv::default()),
         ),
