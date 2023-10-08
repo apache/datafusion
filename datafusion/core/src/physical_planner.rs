@@ -604,7 +604,7 @@ impl DefaultPhysicalPlanner {
                         FileType::ARROW => Arc::new(ArrowFormat {}),
                     };
 
-                    sink_format.create_writer_physical_plan(input_exec, session_state, config).await
+                    sink_format.create_writer_physical_plan(input_exec, session_state, config, None).await
                 }
                 LogicalPlan::Dml(DmlStatement {
                     table_name,
