@@ -34,11 +34,21 @@ pub fn create_physical_expr(
         .map(|e| e.data_type(input_schema))
         .collect::<Result<Vec<_>>>()?;
 
+    let mut literals = vec![];
+    input_phy_exprs.iter().enumerate().for_each(|(i, expr)| {
+        if let Some(literal) = expr.as_any().downcast_ref::<crate::expressions::Literal>()
+        {
+            literals.push((i, literal.value().clone()));
+        }
+    });
+
     Ok(Arc::new(ScalarFunctionExpr::new(
         &fun.name,
         fun.fun.clone(),
         input_phy_exprs.to_vec(),
-        (fun.return_type)(&input_exprs_types)?.as_ref(),
+        fun.return_type
+            .infer(&input_exprs_types, &literals)?
+            .as_ref(),
         None,
     )))
 }

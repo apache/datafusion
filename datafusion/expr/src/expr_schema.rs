@@ -87,7 +87,19 @@ impl ExprSchemable for Expr {
                     .iter()
                     .map(|e| e.get_type(schema))
                     .collect::<Result<Vec<_>>>()?;
-                Ok((fun.return_type)(&data_types)?.as_ref().clone())
+
+                let mut literals = vec![];
+                args.iter().enumerate().for_each(|(i, arg)| {
+                    if let Expr::Literal(scalar_value) = arg {
+                        literals.push((i, scalar_value.clone()));
+                    }
+                });
+
+                Ok(fun
+                    .return_type
+                    .infer(&data_types, &literals)?
+                    .as_ref()
+                    .clone())
             }
             Expr::ScalarFunction(ScalarFunction { fun, args }) => {
                 let arg_data_types = args
