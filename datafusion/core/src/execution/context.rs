@@ -1344,7 +1344,7 @@ pub trait QueryPlanner {
     /// Given a `LogicalPlan`, create an [`ExecutionPlan`] suitable for execution
     async fn create_physical_plan(
         &self,
-        logical_plan: &LogicalPlan,
+        logical_plan: LogicalPlan,
         session_state: &SessionState,
     ) -> Result<Arc<dyn ExecutionPlan>>;
 }
@@ -1357,7 +1357,7 @@ impl QueryPlanner for DefaultQueryPlanner {
     /// Given a `LogicalPlan`, create an [`ExecutionPlan`] suitable for execution
     async fn create_physical_plan(
         &self,
-        logical_plan: &LogicalPlan,
+        logical_plan: LogicalPlan,
         session_state: &SessionState,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let planner = DefaultPhysicalPlanner::default();
@@ -1860,7 +1860,7 @@ impl SessionState {
     /// Optimizes the logical plan by applying optimizer rules.
     pub fn optimize(&self, plan: LogicalPlan) -> Result<LogicalPlan> {
         if let LogicalPlan::Explain(e) = plan {
-            let mut stringified_plans = e.stringified_plans.clone();
+            let mut stringified_plans = e.stringified_plans;
 
             // analyze & capture output of each rule
             let analyzed_plan = match self.analyzer.execute_and_check(
@@ -1895,7 +1895,7 @@ impl SessionState {
 
             // optimize the child plan, capturing the output of each optimizer
             let (plan, logical_optimization_succeeded) = match self.optimizer.optimize(
-                &analyzed_plan,
+                analyzed_plan,
                 self,
                 |optimized_plan, optimizer| {
                     let optimizer_name = optimizer.name().to_string();
@@ -1924,7 +1924,7 @@ impl SessionState {
             let analyzed_plan =
                 self.analyzer
                     .execute_and_check(plan, self.options(), |_, _| {})?;
-            self.optimizer.optimize(&analyzed_plan, self, |_, _| {})
+            self.optimizer.optimize(analyzed_plan, self, |_, _| {})
         }
     }
 
@@ -1941,7 +1941,7 @@ impl SessionState {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let logical_plan = self.optimize(logical_plan)?;
         self.query_planner
-            .create_physical_plan(&logical_plan, self)
+            .create_physical_plan(logical_plan, self)
             .await
     }
 
@@ -2714,7 +2714,7 @@ mod tests {
     impl PhysicalPlanner for MyPhysicalPlanner {
         async fn create_physical_plan(
             &self,
-            _logical_plan: &LogicalPlan,
+            _logical_plan: LogicalPlan,
             _session_state: &SessionState,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             not_impl_err!("query not supported")
@@ -2737,7 +2737,7 @@ mod tests {
     impl QueryPlanner for MyQueryPlanner {
         async fn create_physical_plan(
             &self,
-            logical_plan: &LogicalPlan,
+            logical_plan: LogicalPlan,
             session_state: &SessionState,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             let physical_planner = MyPhysicalPlanner {};

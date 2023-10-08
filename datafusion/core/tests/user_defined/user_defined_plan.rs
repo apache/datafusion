@@ -263,7 +263,7 @@ impl QueryPlanner for TopKQueryPlanner {
     /// `ExecutionPlan` suitable for execution
     async fn create_physical_plan(
         &self,
-        logical_plan: &LogicalPlan,
+        logical_plan: LogicalPlan,
         session_state: &SessionState,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Teach the default physical planner how to plan TopK nodes.

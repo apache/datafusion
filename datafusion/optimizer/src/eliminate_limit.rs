@@ -120,7 +120,7 @@ mod tests {
             Arc::new(EliminateLimit::new()),
         ]);
         let optimized_plan = optimizer
-            .optimize(plan, &config, observe)
+            .optimize(plan.clone(), &config, observe)
             .expect("failed to optimize plan");
         let formatted_plan = format!("{optimized_plan:?}");
         assert_eq!(formatted_plan, expected);

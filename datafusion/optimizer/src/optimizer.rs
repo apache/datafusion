@@ -268,7 +268,7 @@ impl Optimizer {
     /// invoking observer function after each call
     pub fn optimize<F>(
         &self,
-        plan: &LogicalPlan,
+        plan: LogicalPlan,
         config: &dyn OptimizerConfig,
         mut observer: F,
     ) -> Result<LogicalPlan>
@@ -276,7 +276,7 @@ impl Optimizer {
         F: FnMut(&LogicalPlan, &dyn OptimizerRule),
     {
         let options = config.options();
-        let mut new_plan = plan.clone();
+        let mut new_plan = plan;
 
         let start_time = Instant::now();
 
@@ -468,7 +468,7 @@ mod tests {
             produce_one_row: false,
             schema: Arc::new(DFSchema::empty()),
         });
-        opt.optimize(&plan, &config, &observe).unwrap();
+        opt.optimize(plan, &config, &observe).unwrap();
     }
 
     #[test]
@@ -479,7 +479,7 @@ mod tests {
             produce_one_row: false,
             schema: Arc::new(DFSchema::empty()),
         });
-        let err = opt.optimize(&plan, &config, &observe).unwrap_err();
+        let err = opt.optimize(plan, &config, &observe).unwrap_err();
         assert_eq!(
             "Optimizer rule 'bad rule' failed\ncaused by\n\
             Error during planning: rule failed",
@@ -495,7 +495,7 @@ mod tests {
             produce_one_row: false,
             schema: Arc::new(DFSchema::empty()),
         });
-        let err = opt.optimize(&plan, &config, &observe).unwrap_err();
+        let err = opt.optimize(plan, &config, &observe).unwrap_err();
         assert_eq!(
             "Optimizer rule 'get table_scan rule' failed\ncaused by\nget table_scan rule\ncaused by\n\
              Internal error: Failed due to generate a different schema, \
@@ -519,7 +519,7 @@ mod tests {
             produce_one_row: false,
             schema: Arc::new(DFSchema::empty()),
         });
-        opt.optimize(&plan, &config, &observe).unwrap();
+        opt.optimize(plan, &config, &observe).unwrap();
     }
 
     #[test]
@@ -540,7 +540,7 @@ mod tests {
 
         // optimizing should be ok, but the schema will have changed  (no metadata)
         assert_ne!(plan.schema().as_ref(), input_schema.as_ref());
-        let optimized_plan = opt.optimize(&plan, &config, &observe)?;
+        let optimized_plan = opt.optimize(plan, &config, &observe)?;
         // metadata was removed
         assert_eq!(optimized_plan.schema().as_ref(), input_schema.as_ref());
         Ok(())
@@ -561,7 +561,7 @@ mod tests {
 
         let mut plans: Vec<LogicalPlan> = Vec::new();
         let final_plan =
-            opt.optimize(&initial_plan, &config, |p, _| plans.push(p.clone()))?;
+            opt.optimize(initial_plan.clone(), &config, |p, _| plans.push(p.clone()))?;
 
         // initial_plan is not observed, so we have 3 plans
         assert_eq!(3, plans.len());
@@ -587,7 +587,7 @@ mod tests {
 
         let mut plans: Vec<LogicalPlan> = Vec::new();
         let final_plan =
-            opt.optimize(&initial_plan, &config, |p, _| plans.push(p.clone()))?;
+            opt.optimize(initial_plan, &config, |p, _| plans.push(p.clone()))?;
 
         // initial_plan is not observed, so we have 4 plans
         assert_eq!(4, plans.len());
