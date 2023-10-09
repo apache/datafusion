@@ -1312,7 +1312,9 @@ mod tests {
 
     use arrow::array::Int32Array;
     use arrow::datatypes::DataType;
+    use arrow_array::array;
 
+    use datafusion_common::{Constraint, Constraints};
     use datafusion_expr::{
         avg, cast, count, count_distinct, create_udf, expr, lit, max, min, sum,
         BuiltInWindowFunction, ScalarFunctionImplementation, Volatility, WindowFrame,
@@ -1335,6 +1337,25 @@ mod tests {
     use crate::{assert_batches_sorted_eq, execution::context::SessionContext};
 
     use super::*;
+
+    pub fn table_with_constraints() -> Arc<dyn TableProvider> {
+        let dual_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            dual_schema.clone(),
+            vec![
+                Arc::new(array::Int32Array::from(vec![1])),
+                Arc::new(array::StringArray::from(vec!["a"])),
+            ],
+        )
+        .unwrap();
+        let provider = MemTable::try_new(dual_schema, vec![vec![batch]])
+            .unwrap()
+            .with_constraints(Constraints::new(vec![Constraint::PrimaryKey(vec![0])]));
+        Arc::new(provider)
+    }
 
     #[tokio::test]
     async fn select_columns() -> Result<()> {
@@ -1440,6 +1461,50 @@ mod tests {
                 "| e  | 0.01479305307777301         | 0.9965400387585364          | 0.48600669271341534         | 10.206140546981722          | 21                            | 21                                     |",
                 "+----+-----------------------------+-----------------------------+-----------------------------+-----------------------------+-------------------------------+----------------------------------------+"],
             &df
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_with_pk() -> Result<()> {
+        // create the dataframe
+        let config = SessionConfig::new().with_target_partitions(1);
+        let ctx = SessionContext::new_with_config(config);
+
+        let table1 = table_with_constraints();
+        let df = ctx.read_table(table1)?;
+        let col_id = Expr::Column(datafusion_common::Column {
+            relation: None,
+            name: "id".to_string(),
+        });
+        let col_name = Expr::Column(datafusion_common::Column {
+            relation: None,
+            name: "name".to_string(),
+        });
+
+        // group by contains id column
+        let group_expr = vec![col_id.clone()];
+        let aggr_expr = vec![];
+        let df = df.aggregate(group_expr, aggr_expr)?;
+
+        // expr list contains id, name
+        let expr_list = vec![col_id, col_name];
+        let df = df.select(expr_list)?;
+        let physical_plan = df.clone().create_physical_plan().await?;
+
+        // Since id and name are functionally dependant, we can use name among expression
+        // even if it is not part of the group by expression.
+        let df_results = collect(physical_plan, ctx.task_ctx()).await?;
+
+        #[rustfmt::skip]
+        assert_batches_sorted_eq!(
+            ["+----+------+",
+             "| id | name |",
+             "+----+------+",
+             "| 1  | a    |",
+             "+----+------+",],
+            &df_results
         );
 
         Ok(())

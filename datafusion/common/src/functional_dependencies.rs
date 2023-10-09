@@ -49,7 +49,7 @@ impl Constraints {
     // This method is private.
     // Outside callers can either create empty constraint using `Constraints::empty` API.
     // or create constraint from table constraints using `Constraints::new_from_table_constraints` API.
-    fn new(constraints: Vec<Constraint>) -> Self {
+    pub fn new(constraints: Vec<Constraint>) -> Self {
         Self { inner: constraints }
     }
 

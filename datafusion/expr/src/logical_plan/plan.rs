@@ -1713,11 +1713,13 @@ pub struct Projection {
 impl Projection {
     /// Create a new Projection
     pub fn try_new(expr: Vec<Expr>, input: Arc<LogicalPlan>) -> Result<Self> {
+        let mut input = input.as_ref().clone();
+        let input_metadata = input.schema().metadata().clone();
         let schema = Arc::new(DFSchema::new_with_metadata(
-            exprlist_to_fields(&expr, &input)?,
-            input.schema().metadata().clone(),
+            exprlist_to_fields(&expr, &mut input)?,
+            input_metadata,
         )?);
-        Self::try_new_with_schema(expr, input, schema)
+        Self::try_new_with_schema(expr, Arc::new(input), schema)
     }
 
     /// Create a new Projection using the specified output schema
@@ -1854,9 +1856,10 @@ pub struct Window {
 impl Window {
     /// Create a new window operator.
     pub fn try_new(window_expr: Vec<Expr>, input: Arc<LogicalPlan>) -> Result<Self> {
+        let mut input = input.as_ref().clone();
         let mut window_fields: Vec<DFField> = input.schema().fields().clone();
         window_fields
-            .extend_from_slice(&exprlist_to_fields(window_expr.iter(), input.as_ref())?);
+            .extend_from_slice(&exprlist_to_fields(window_expr.iter(), &mut input)?);
         let metadata = input.schema().metadata().clone();
 
         // Update functional dependencies for window:
@@ -1865,7 +1868,7 @@ impl Window {
         window_func_dependencies.extend_target_indices(window_fields.len());
 
         Ok(Window {
-            input,
+            input: Arc::new(input),
             window_expr,
             schema: Arc::new(
                 DFSchema::new_with_metadata(window_fields, metadata)?
@@ -2075,16 +2078,22 @@ impl Aggregate {
         group_expr: Vec<Expr>,
         aggr_expr: Vec<Expr>,
     ) -> Result<Self> {
+        let mut input = input.as_ref().clone();
         let group_expr = enumerate_grouping_sets(group_expr)?;
         let grouping_expr: Vec<Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
         let all_expr = grouping_expr.iter().chain(aggr_expr.iter());
 
         let schema = DFSchema::new_with_metadata(
-            exprlist_to_fields(all_expr, &input)?,
+            exprlist_to_fields(all_expr, &mut input)?,
             input.schema().metadata().clone(),
         )?;
 
-        Self::try_new_with_schema(input, group_expr, aggr_expr, Arc::new(schema))
+        Self::try_new_with_schema(
+            Arc::new(input),
+            group_expr,
+            aggr_expr,
+            Arc::new(schema),
+        )
     }
 
     /// Create a new aggregate operator using the provided schema to avoid the overhead of

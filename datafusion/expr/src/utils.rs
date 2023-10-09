@@ -24,8 +24,8 @@ use crate::{Cast, Expr, ExprSchemable, GroupingSet, LogicalPlan, TryCast};
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_common::{
-    internal_err, plan_err, Column, DFField, DFSchema, DFSchemaRef, DataFusionError,
-    Result, ScalarValue, TableReference,
+    get_target_functional_dependencies, internal_err, plan_err, Column, DFField,
+    DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, TableReference,
 };
 use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem, WildcardAdditionalOptions};
 use std::cmp::Ordering;
@@ -732,20 +732,84 @@ fn agg_cols(agg: &Aggregate) -> Vec<Column> {
         .collect()
 }
 
+/// Update group by exprs, according to functional dependencies
+/// The query below
+///
+/// SELECT sn, amount
+/// FROM sales_global
+/// GROUP BY sn
+///
+/// cannot be calculated, because it has a column(`amount`) which is not
+/// part of group by expression.
+/// However, if we know that, `sn` is determinant of `amount`. We can
+/// safely, determine value of `amount` for each distinct `sn`. For these cases
+/// we rewrite the query above as
+///
+/// SELECT sn, amount
+/// FROM sales_global
+/// GROUP BY sn, amount
+///
+/// Both queries, are functionally same. \[Because, (`sn`, `amount`) and (`sn`)
+/// defines the identical groups. \]
+/// This function updates group by expressions such that select expressions that are
+/// not in group by expression, are added to the group by expressions if they are dependent
+/// of the sub-set of group by expressions.
+pub fn get_updated_group_by_exprs(
+    group_by_exprs: &[Expr],
+    select_exprs: &[Expr],
+    schema: &DFSchemaRef,
+) -> Result<Vec<Expr>> {
+    let mut new_group_by_exprs = group_by_exprs.to_vec();
+    let fields = schema.fields();
+    let group_by_expr_names = group_by_exprs
+        .iter()
+        .map(|group_by_expr| group_by_expr.display_name())
+        .collect::<Result<Vec<_>>>()?;
+    // Get targets that can be used in a select, even if they do not occur in aggregation:
+    if let Some(target_indices) =
+        get_target_functional_dependencies(schema, &group_by_expr_names)
+    {
+        // Calculate dependent fields names with determinant GROUP BY expression:
+        let associated_field_names = target_indices
+            .iter()
+            .map(|idx| fields[*idx].qualified_name())
+            .collect::<Vec<_>>();
+        // Expand GROUP BY expressions with select expressions: If a GROUP
+        // BY expression is a determinant key, we can use its dependent
+        // columns in select statements also.
+        for expr in select_exprs {
+            let expr_name = format!("{}", expr);
+            if !new_group_by_exprs.contains(expr)
+                && associated_field_names.contains(&expr_name)
+            {
+                new_group_by_exprs.push(expr.clone());
+            }
+        }
+    }
+
+    Ok(new_group_by_exprs)
+}
+
 fn exprlist_to_fields_aggregate(
     exprs: &[Expr],
-    plan: &LogicalPlan,
-    agg: &Aggregate,
+    agg: &mut Aggregate,
 ) -> Result<Vec<DFField>> {
     let agg_cols = agg_cols(agg);
     let mut fields = vec![];
+    let agg_input_schema = agg.input.schema();
+
+    // Get update group expr according to functional dependencies if available.
+    let new_group_expr =
+        get_updated_group_by_exprs(&agg.group_expr, exprs, agg_input_schema)?;
+    *agg = Aggregate::try_new(agg.input.clone(), new_group_expr, agg.aggr_expr.clone())?;
+    let agg_input_schema = agg.input.schema().clone();
     for expr in exprs {
         match expr {
             Expr::Column(c) if agg_cols.iter().any(|x| x == c) => {
                 // resolve against schema of input to aggregate
-                fields.push(expr.to_field(agg.input.schema())?);
+                fields.push(expr.to_field(&agg_input_schema)?);
             }
-            _ => fields.push(expr.to_field(plan.schema())?),
+            _ => fields.push(expr.to_field(&agg.schema)?),
         }
     }
     Ok(fields)
@@ -754,7 +818,7 @@ fn exprlist_to_fields_aggregate(
 /// Create field meta-data from an expression, for use in a result set schema
 pub fn exprlist_to_fields<'a>(
     expr: impl IntoIterator<Item = &'a Expr>,
-    plan: &LogicalPlan,
+    plan: &mut LogicalPlan,
 ) -> Result<Vec<DFField>> {
     let exprs: Vec<Expr> = expr.into_iter().cloned().collect();
     // when dealing with aggregate plans we cannot simply look in the aggregate output schema
@@ -763,14 +827,12 @@ pub fn exprlist_to_fields<'a>(
     // look at the input to the aggregate instead.
     let fields = match plan {
         LogicalPlan::Aggregate(agg) => {
-            Some(exprlist_to_fields_aggregate(&exprs, plan, agg))
+            let mut agg = agg.clone();
+            let fields = Some(exprlist_to_fields_aggregate(&exprs, &mut agg));
+            // Update plan with updated aggregation
+            *plan = LogicalPlan::Aggregate(agg);
+            fields
         }
-        LogicalPlan::Window(window) => match window.input.as_ref() {
-            LogicalPlan::Aggregate(agg) => {
-                Some(exprlist_to_fields_aggregate(&exprs, plan, agg))
-            }
-            _ => None,
-        },
         _ => None,
     };
     if let Some(fields) = fields {
