@@ -201,10 +201,7 @@ impl OptimizerRule for PushDownProjection {
                 }
                 // create schema of all used columns
                 let schema = DFSchema::new_with_metadata(
-                    exprlist_to_fields(
-                        &projection_column_exprs,
-                        &mut child_plan.clone(),
-                    )?,
+                    exprlist_to_fields(&projection_column_exprs, child_plan)?,
                     union.schema.metadata().clone(),
                 )?;
                 let new_union = LogicalPlan::Union(Union {

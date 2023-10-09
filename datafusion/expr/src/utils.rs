@@ -30,6 +30,7 @@ use datafusion_common::{
 use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem, WildcardAdditionalOptions};
 use std::cmp::Ordering;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 ///  The value to which `COUNT(*)` is expanded to in
 ///  `COUNT(<constant>)` expressions
@@ -790,18 +791,10 @@ pub fn get_updated_group_by_exprs(
     Ok(new_group_by_exprs)
 }
 
-fn exprlist_to_fields_aggregate(
-    exprs: &[Expr],
-    agg: &mut Aggregate,
-) -> Result<Vec<DFField>> {
+fn exprlist_to_fields_aggregate(exprs: &[Expr], agg: &Aggregate) -> Result<Vec<DFField>> {
     let agg_cols = agg_cols(agg);
     let mut fields = vec![];
-    let agg_input_schema = agg.input.schema();
 
-    // Get update group expr according to functional dependencies if available.
-    let new_group_expr =
-        get_updated_group_by_exprs(&agg.group_expr, exprs, agg_input_schema)?;
-    *agg = Aggregate::try_new(agg.input.clone(), new_group_expr, agg.aggr_expr.clone())?;
     let agg_input_schema = agg.input.schema().clone();
     for expr in exprs {
         match expr {
@@ -815,10 +808,39 @@ fn exprlist_to_fields_aggregate(
     Ok(fields)
 }
 
+/// Rewrite the aggregate plan according to expression
+/// If some of expressions are among functional dependencies and
+/// they are not part of group by expressions. We can rewrite group by
+/// section of the aggregate to support seemingly invalid query.
+pub fn rewrite_plan<'a>(
+    expr: impl IntoIterator<Item = &'a Expr>,
+    plan: &Arc<LogicalPlan>,
+) -> Result<Arc<LogicalPlan>> {
+    let exprs: Vec<Expr> = expr.into_iter().cloned().collect();
+    // when dealing with aggregate plans we cannot simply look in the aggregate output schema
+    // because it will contain columns representing complex expressions (such a column named
+    // `GROUPING(person.state)` so in order to resolve `person.state` in this case we need to
+    // look at the input to the aggregate instead.
+    Ok(match plan.as_ref() {
+        LogicalPlan::Aggregate(agg) => {
+            // Get update group expr according to functional dependencies if available.
+            let new_group_expr =
+                get_updated_group_by_exprs(&agg.group_expr, &exprs, agg.input.schema())?;
+            // Update plan with updated aggregation
+            Arc::new(LogicalPlan::Aggregate(Aggregate::try_new(
+                agg.input.clone(),
+                new_group_expr,
+                agg.aggr_expr.clone(),
+            )?))
+        }
+        _ => plan.clone(),
+    })
+}
+
 /// Create field meta-data from an expression, for use in a result set schema
 pub fn exprlist_to_fields<'a>(
     expr: impl IntoIterator<Item = &'a Expr>,
-    plan: &mut LogicalPlan,
+    plan: &LogicalPlan,
 ) -> Result<Vec<DFField>> {
     let exprs: Vec<Expr> = expr.into_iter().cloned().collect();
     // when dealing with aggregate plans we cannot simply look in the aggregate output schema
@@ -826,13 +848,7 @@ pub fn exprlist_to_fields<'a>(
     // `GROUPING(person.state)` so in order to resolve `person.state` in this case we need to
     // look at the input to the aggregate instead.
     let fields = match plan {
-        LogicalPlan::Aggregate(agg) => {
-            let mut agg = agg.clone();
-            let fields = Some(exprlist_to_fields_aggregate(&exprs, &mut agg));
-            // Update plan with updated aggregation
-            *plan = LogicalPlan::Aggregate(agg);
-            fields
-        }
+        LogicalPlan::Aggregate(agg) => Some(exprlist_to_fields_aggregate(&exprs, agg)),
         _ => None,
     };
     if let Some(fields) = fields {
