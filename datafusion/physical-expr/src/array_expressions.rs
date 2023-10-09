@@ -324,7 +324,7 @@ fn array_array(args: &[ArrayRef], data_type: DataType) -> Result<ArrayRef> {
                         array_lengths.push(0);
                         valid.append(false);
                     } else {
-                        let list_arr = as_list_array(arg).unwrap();
+                        let list_arr = as_list_array(arg)?;
                         let arr = list_arr.value(index);
                         array_lengths.push(arr.len());
                         arrays.push(arr);
