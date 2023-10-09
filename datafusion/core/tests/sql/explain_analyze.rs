@@ -804,7 +804,7 @@ async fn explain_physical_plan_only() {
 
     let expected = vec![vec![
         "physical_plan",
-        "ProjectionExec: expr=[2 as COUNT(UInt8(1))]\
+        "ProjectionExec: expr=[2 as COUNT(*)]\
         \n  EmptyExec: produce_one_row=true\
         \n",
     ]];

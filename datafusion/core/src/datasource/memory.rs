@@ -54,7 +54,7 @@ pub type PartitionData = Arc<RwLock<Vec<RecordBatch>>>;
 pub struct MemTable {
     schema: SchemaRef,
     pub(crate) batches: Vec<PartitionData>,
-    constraints: Option<Constraints>,
+    constraints: Constraints,
 }
 
 impl MemTable {
@@ -77,15 +77,13 @@ impl MemTable {
                 .into_iter()
                 .map(|e| Arc::new(RwLock::new(e)))
                 .collect::<Vec<_>>(),
-            constraints: None,
+            constraints: Constraints::empty(),
         })
     }
 
     /// Assign constraints
     pub fn with_constraints(mut self, constraints: Constraints) -> Self {
-        if !constraints.is_empty() {
-            self.constraints = Some(constraints);
-        }
+        self.constraints = constraints;
         self
     }
 
@@ -164,7 +162,7 @@ impl TableProvider for MemTable {
     }
 
     fn constraints(&self) -> Option<&Constraints> {
-        self.constraints.as_ref()
+        Some(&self.constraints)
     }
 
     fn table_type(&self) -> TableType {
@@ -223,6 +221,7 @@ impl TableProvider for MemTable {
             input,
             sink,
             self.schema.clone(),
+            None,
         )))
     }
 }

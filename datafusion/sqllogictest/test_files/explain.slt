@@ -93,7 +93,7 @@ query TT
 EXPLAIN select count(*) from (values ('a', 1, 100), ('a', 2, 150)) as t (c1,c2,c3)
 ----
 physical_plan
-ProjectionExec: expr=[2 as COUNT(UInt8(1))]
+ProjectionExec: expr=[2 as COUNT(*)]
 --EmptyExec: produce_one_row=true
 
 statement ok

@@ -42,6 +42,11 @@ pub trait TableProvider: Sync + Send {
     fn schema(&self) -> SchemaRef;
 
     /// Get a reference to the constraints of the table.
+    /// Returns:
+    /// - `None` for tables that do not support constraints.
+    /// - `Some(&Constraints)` for tables supporting constraints.
+    /// Therefore, a `Some(&Constraints::empty())` return value indicates that
+    /// this table supports constraints, but there are no constraints.
     fn constraints(&self) -> Option<&Constraints> {
         None
     }
@@ -54,24 +59,87 @@ pub trait TableProvider: Sync + Send {
         None
     }
 
-    /// Get the Logical Plan of this table, if available.
+    /// Get the [`LogicalPlan`] of this table, if available
     fn get_logical_plan(&self) -> Option<&LogicalPlan> {
         None
     }
 
-    /// Create an ExecutionPlan that will scan the table.
-    /// The table provider will be usually responsible of grouping
-    /// the source data into partitions that can be efficiently
-    /// parallelized or distributed.
+    /// Create an [`ExecutionPlan`] for scanning the table with optionally
+    /// specified `projection`, `filter` and `limit`, described below.
+    ///
+    /// The `ExecutionPlan` is responsible scanning the datasource's
+    /// partitions in a streaming, parallelized fashion.
+    ///
+    /// # Projection
+    ///
+    /// If specified, only a subset of columns should be returned, in the order
+    /// specified. The projection is a set of indexes of the fields in
+    /// [`Self::schema`].
+    ///
+    /// DataFusion provides the projection to scan only the columns actually
+    /// used in the query to improve performance, an optimization  called
+    /// "Projection Pushdown". Some datasources, such as Parquet, can use this
+    /// information to go significantly faster when only a subset of columns is
+    /// required.
+    ///
+    /// # Filters
+    ///
+    /// A list of boolean filter [`Expr`]s to evaluate *during* the scan, in the
+    /// manner specified by [`Self::supports_filters_pushdown`]. Only rows for
+    /// which *all* of the `Expr`s evaluate to `true` must be returned (aka the
+    /// expressions are `AND`ed together).
+    ///
+    /// DataFusion pushes filtering into the scans whenever possible
+    /// ("Projection Pushdown"), and depending on the format and the
+    /// implementation of the format, evaluating the predicate during the scan
+    /// can increase performance significantly.
+    ///
+    /// ## Note: Some columns may appear *only* in Filters
+    ///
+    /// In certain cases, a query may only use a certain column in a Filter that
+    /// has been completely pushed down to the scan. In this case, the
+    /// projection will not contain all the columns found in the filter
+    /// expressions.
+    ///
+    /// For example, given the query `SELECT t.a FROM t WHERE t.b > 5`,
+    ///
+    /// ```text
+    /// ┌────────────────────┐
+    /// │  Projection(t.a)   │
+    /// └────────────────────┘
+    ///            ▲
+    ///            │
+    ///            │
+    /// ┌────────────────────┐     Filter     ┌────────────────────┐   Projection    ┌────────────────────┐
+    /// │  Filter(t.b > 5)   │────Pushdown──▶ │  Projection(t.a)   │ ───Pushdown───▶ │  Projection(t.a)   │
+    /// └────────────────────┘                └────────────────────┘                 └────────────────────┘
+    ///            ▲                                     ▲                                      ▲
+    ///            │                                     │                                      │
+    ///            │                                     │                           ┌────────────────────┐
+    /// ┌────────────────────┐                ┌────────────────────┐                 │        Scan        │
+    /// │        Scan        │                │        Scan        │                 │  filter=(t.b > 5)  │
+    /// └────────────────────┘                │  filter=(t.b > 5)  │                 │  projection=(t.a)  │
+    ///                                       └────────────────────┘                 └────────────────────┘
+    ///
+    /// Initial Plan                  If `TableProviderFilterPushDown`           Projection pushdown notes that
+    ///                               returns true, filter pushdown              the scan only needs t.a
+    ///                               pushes the filter into the scan
+    ///                                                                          BUT internally evaluating the
+    ///                                                                          predicate still requires t.b
+    /// ```
+    ///
+    /// # Limit
+    ///
+    /// If `limit` is specified,  must only produce *at least* this many rows,
+    /// (though it may return more).  Like Projection Pushdown and Filter
+    /// Pushdown, DataFusion pushes `LIMIT`s  as far down in the plan as
+    /// possible, called "Limit Pushdown" as some sources can use this
+    /// information to improve their performance.
     async fn scan(
         &self,
         state: &SessionState,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
-        // limit can be used to reduce the amount scanned
-        // from the datasource as a performance optimization.
-        // If set, it contains the amount of rows needed by the `LogicalPlan`,
-        // The datasource should return *at least* this number of rows if available.
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>>;
 
