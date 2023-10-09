@@ -30,7 +30,6 @@ use crate::intervals::interval_aritmetic::{apply_operator, Interval};
 use crate::utils::{build_dag, ExprTreeNode};
 use crate::PhysicalExpr;
 
-use arrow::compute::CastOptions;
 use arrow_schema::DataType;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::type_coercion::binary::get_result_type;
@@ -306,17 +305,6 @@ pub fn propagate_comparison(
 ) -> Result<(Option<Interval>, Option<Interval>)> {
     let left_type = left_child.get_datatype()?;
     let right_type = right_child.get_datatype()?;
-    if let (DataType::Timestamp(..), DataType::Timestamp(..)) = (&left_type, &right_type)
-    {
-        return propagate_comparison_timestamp(
-            op,
-            left_child,
-            right_child,
-            &left_type,
-            &right_type,
-        );
-    }
-
     let parent = comparison_operator_target(&left_type, op, &right_type)?;
     match (&left_type, &right_type) {
         // We can not compare a Duration type with a time interval type
@@ -691,33 +679,6 @@ pub fn propagate_comparison_to_time_interval_at_right(
                     "Interval type has a non-zero month field, cannot compare with a Duration type".to_string(),
                 ))
     }
-}
-
-/// Propagate the constraints arising from comparison operators on
-/// timestamp data types. Arithmetic on timestamps is treated specially,
-/// for example subtracting two timestamps results in duration rather
-/// than another timestamp. To work around this all values are converted
-/// to int64 before applying the proagation operation. The results are
-/// converted back to their original types before being returned.
-fn propagate_comparison_timestamp(
-    op: &Operator,
-    left_child: &Interval,
-    right_child: &Interval,
-    left_type: &DataType,
-    right_type: &DataType,
-) -> Result<(Option<Interval>, Option<Interval>)> {
-    let cast_options = CastOptions::default();
-    let left_child_i64 = left_child.cast_to(&DataType::Int64, &cast_options)?;
-    let right_child_i64 = right_child.cast_to(&DataType::Int64, &cast_options)?;
-    let (left_result_i64, right_result_i64) =
-        propagate_comparison(op, &left_child_i64, &right_child_i64)?;
-    let left_result = left_result_i64
-        .map(|interval| interval.cast_to(left_type, &cast_options))
-        .transpose()?;
-    let right_result = right_result_i64
-        .map(|interval| interval.cast_to(right_type, &cast_options))
-        .transpose()?;
-    Ok((left_result, right_result))
 }
 
 #[cfg(test)]
