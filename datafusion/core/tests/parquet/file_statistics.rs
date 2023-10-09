@@ -60,7 +60,7 @@ async fn load_table_stats_with_session_level_cache() {
         exec1.statistics().unwrap().total_byte_size,
         Sharpness::Exact(671)
     );
-    assert_eq!(get_cache_size(&state1), 1);
+    assert_eq!(get_static_cache_size(&state1), 1);
 
     //Session 2 first time list files
     //check session 1 cache result not show in session 2
@@ -71,7 +71,7 @@ async fn load_table_stats_with_session_level_cache() {
         exec2.statistics().unwrap().total_byte_size,
         Sharpness::Exact(671)
     );
-    assert_eq!(get_cache_size(&state2), 1);
+    assert_eq!(get_static_cache_size(&state2), 1);
 
     //Session 1 second time list files
     //check session 1 cache result not show in session 2
