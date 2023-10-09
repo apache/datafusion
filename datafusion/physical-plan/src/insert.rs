@@ -51,11 +51,11 @@ pub trait DataSink: DisplayAs + Debug + Send + Sync {
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
 
-    /// Return a snapshot of the set of [`Metric`]s for this
+    /// Return a snapshot of the [`MetricsSet`] for this
     /// [`ExecutionPlan`].
     ///
     /// While the values of the metrics in the returned
-    /// [`MetricsSet`]s may change as execution progresses, the
+    /// [`MetricsSet`] may change as execution progresses, the
     /// specific metrics will not.
     ///
     /// Once `self.execute()` has returned (technically the future is
