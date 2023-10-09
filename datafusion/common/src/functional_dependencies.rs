@@ -18,11 +18,14 @@
 //! FunctionalDependencies keeps track of functional dependencies
 //! inside DFSchema.
 
-use crate::{DFSchema, DFSchemaRef, DataFusionError, JoinType, Result};
-use sqlparser::ast::TableConstraint;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use std::ops::Deref;
+use std::vec::IntoIter;
+
+use crate::{DFSchema, DFSchemaRef, DataFusionError, JoinType, Result};
+
+use sqlparser::ast::TableConstraint;
 
 /// This object defines a constraint on a table.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -43,13 +46,15 @@ pub struct Constraints {
 impl Constraints {
     /// Create empty constraints
     pub fn empty() -> Self {
-        Constraints::new(vec![])
+        Constraints::new_unverified(vec![])
     }
 
-    // This method is private.
-    // Outside callers can either create empty constraint using `Constraints::empty` API.
-    // or create constraint from table constraints using `Constraints::new_from_table_constraints` API.
-    fn new(constraints: Vec<Constraint>) -> Self {
+    /// Create a new `Constraints` object from the given `constraints`.
+    /// Users should use the `empty` or `new_from_table_constraints` functions
+    /// for constructing `Constraints`. This constructor is for internal
+    /// purposes only and does not check whether the argument is valid. The user
+    /// is responsible for supplying a valid vector of `Constraint` objects.
+    pub fn new_unverified(constraints: Vec<Constraint>) -> Self {
         Self { inner: constraints }
     }
 
@@ -104,12 +109,21 @@ impl Constraints {
                 )),
             })
             .collect::<Result<Vec<_>>>()?;
-        Ok(Constraints::new(constraints))
+        Ok(Constraints::new_unverified(constraints))
     }
 
     /// Check whether constraints is empty
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
+    }
+}
+
+impl IntoIterator for Constraints {
+    type Item = Constraint;
+    type IntoIter = IntoIter<Constraint>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.inner.into_iter()
     }
 }
 
@@ -534,7 +548,7 @@ mod tests {
 
     #[test]
     fn constraints_iter() {
-        let constraints = Constraints::new(vec![
+        let constraints = Constraints::new_unverified(vec![
             Constraint::PrimaryKey(vec![10]),
             Constraint::Unique(vec![20]),
         ]);
