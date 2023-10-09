@@ -882,7 +882,7 @@ impl From<protobuf::JoinConstraint> for JoinConstraint {
 
 impl From<protobuf::Constraints> for Constraints {
     fn from(constraints: protobuf::Constraints) -> Self {
-        Constraints::new_private(
+        Constraints::new_unverified(
             constraints
                 .constraints
                 .into_iter()

@@ -46,7 +46,7 @@ pub struct Constraints {
 impl Constraints {
     /// Create empty constraints
     pub fn empty() -> Self {
-        Constraints::new_private(vec![])
+        Constraints::new_unverified(vec![])
     }
 
     /// Create a new `Constraints` object from the given `constraints`.
@@ -54,7 +54,7 @@ impl Constraints {
     /// for constructing `Constraints`. This constructor is for internal
     /// purposes only and does not check whether the argument is valid. The user
     /// is responsible for supplying a valid vector of `Constraint` objects.
-    pub fn new_private(constraints: Vec<Constraint>) -> Self {
+    pub fn new_unverified(constraints: Vec<Constraint>) -> Self {
         Self { inner: constraints }
     }
 
@@ -109,7 +109,7 @@ impl Constraints {
                 )),
             })
             .collect::<Result<Vec<_>>>()?;
-        Ok(Constraints::new_private(constraints))
+        Ok(Constraints::new_unverified(constraints))
     }
 
     /// Check whether constraints is empty
@@ -548,7 +548,7 @@ mod tests {
 
     #[test]
     fn constraints_iter() {
-        let constraints = Constraints::new_private(vec![
+        let constraints = Constraints::new_unverified(vec![
             Constraint::PrimaryKey(vec![10]),
             Constraint::Unique(vec![20]),
         ]);

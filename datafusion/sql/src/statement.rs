@@ -52,9 +52,9 @@ use datafusion_expr::{
 };
 use sqlparser::ast;
 use sqlparser::ast::{
-    Assignment, Expr as SQLExpr, Expr, Ident, ObjectName, ObjectType, Query, SchemaName,
-    SetExpr, ShowCreateObject, ShowStatementFilter, Statement, TableFactor,
-    TableWithJoins, TransactionMode, UnaryOperator, Value,
+    Assignment, ColumnDef, Expr as SQLExpr, Expr, Ident, ObjectName, ObjectType, Query,
+    SchemaName, SetExpr, ShowCreateObject, ShowStatementFilter, Statement,
+    TableConstraint, TableFactor, TableWithJoins, TransactionMode, UnaryOperator, Value,
 };
 use sqlparser::parser::ParserError::ParserError;
 
@@ -81,6 +81,61 @@ fn get_schema_name(schema_name: &SchemaName) -> String {
             ident_to_string(auth)
         ),
     }
+}
+
+// Construct TableConstraint(s) for a column (one column may have more than constraint).
+fn calc_table_constraints_from_column(column: &ColumnDef) -> Vec<TableConstraint> {
+    let mut constraints = vec![];
+    for ast::ColumnOptionDef { name, option } in &column.options {
+        match &option {
+            ast::ColumnOption::Unique { is_primary } => {
+                constraints.push(ast::TableConstraint::Unique {
+                    name: name.clone(),
+                    columns: vec![column.name.clone()],
+                    is_primary: *is_primary,
+                })
+            }
+            ast::ColumnOption::ForeignKey {
+                foreign_table,
+                referred_columns,
+                on_delete,
+                on_update,
+            } => constraints.push(ast::TableConstraint::ForeignKey {
+                name: name.clone(),
+                columns: vec![],
+                foreign_table: foreign_table.clone(),
+                referred_columns: referred_columns.to_vec(),
+                on_delete: *on_delete,
+                on_update: *on_update,
+            }),
+            ast::ColumnOption::Check(expr) => {
+                constraints.push(ast::TableConstraint::Check {
+                    name: name.clone(),
+                    expr: Box::new(expr.clone()),
+                })
+            }
+            // Other options are not constraint related.
+            ast::ColumnOption::Default(_)
+            | ast::ColumnOption::Null
+            | ast::ColumnOption::NotNull
+            | ast::ColumnOption::DialectSpecific(_)
+            | ast::ColumnOption::CharacterSet(_)
+            | ast::ColumnOption::Generated { .. }
+            | ast::ColumnOption::Comment(_)
+            | ast::ColumnOption::OnUpdate(_) => {}
+        }
+    }
+    constraints
+}
+
+// Construct TableConstraint for all columns.
+fn calc_table_constraints_from_column_options(
+    columns: &[ColumnDef],
+) -> Vec<ast::TableConstraint> {
+    columns.iter().fold(vec![], |mut constraints, column| {
+        constraints.extend(calc_table_constraints_from_column(column));
+        constraints
+    })
 }
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -154,17 +209,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 ..
             } if table_properties.is_empty() && with_options.is_empty() => {
                 let mut constraints = constraints;
-                for column in &columns {
-                    for option in &column.options {
-                        if let ast::ColumnOption::Unique { is_primary } = option.option {
-                            constraints.push(ast::TableConstraint::Unique {
-                                name: None,
-                                columns: vec![column.name.clone()],
-                                is_primary,
-                            })
-                        }
-                    }
-                }
+                let new_constraint = calc_table_constraints_from_column_options(&columns);
+                constraints.extend(new_constraint);
                 match query {
                     Some(query) => {
                         let plan = self.query_to_plan(*query, planner_context)?;
@@ -684,17 +730,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         } = statement;
 
         let mut constraints = constraints;
-        for column in &columns {
-            for option in &column.options {
-                if let ast::ColumnOption::Unique { is_primary } = option.option {
-                    constraints.push(ast::TableConstraint::Unique {
-                        name: None,
-                        columns: vec![column.name.clone()],
-                        is_primary,
-                    })
-                }
-            }
-        }
+        let new_constraint = calc_table_constraints_from_column_options(&columns);
+        constraints.extend(new_constraint);
 
         if (file_type == "PARQUET" || file_type == "AVRO" || file_type == "ARROW")
             && file_compression_type != CompressionTypeVariant::UNCOMPRESSED
