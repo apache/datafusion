@@ -28,7 +28,7 @@ use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{
     internal_err, plan_err, Column, DFField, DFSchema, DataFusionError, ExprSchema,
-    Result,
+    Result, not_impl_err,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -95,9 +95,7 @@ impl ExprSchemable for Expr {
                     .collect::<Result<Vec<_>>>()?;
 
                 if data_types.is_empty() {
-                    return Err(DataFusionError::NotImplemented(
-                        "Unnest does not support empty data types".to_string(),
-                    ));
+                    return internal_err!("Empty expression is not allowed")
                 }
 
                 // Use a HashSet to efficiently check for unique data types
@@ -105,9 +103,7 @@ impl ExprSchemable for Expr {
 
                 // If there is more than one unique data type, return an error
                 if unique_data_types.len() > 1 {
-                    return Err(DataFusionError::NotImplemented(format!(
-                        "Unnest does not support inconsistent data types: {data_types:?}"
-                    )));
+                    return not_impl_err!("Unnest does not support inconsistent data types: {data_types:?}");
                 }
 
                 // Extract the common data type since there is only one unique data type
