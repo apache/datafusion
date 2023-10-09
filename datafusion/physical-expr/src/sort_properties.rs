@@ -168,7 +168,7 @@ impl ExprOrdering {
         self.expr
             .children()
             .into_iter()
-            .map(|e| ExprOrdering::new(e))
+            .map(ExprOrdering::new)
             .collect()
     }
 

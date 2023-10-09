@@ -141,14 +141,13 @@ impl QueryCase {
     async fn run_case(&self, ctx: SessionContext, error: Option<&String>) -> Result<()> {
         let dataframe = ctx.sql(self.sql.as_str()).await?;
         let plan = dataframe.create_physical_plan().await;
-        if error.is_some() {
+        if let Some(error) = error {
             let plan_error = plan.unwrap_err();
-            let initial = error.unwrap().to_string();
             assert!(
-                plan_error.to_string().contains(initial.as_str()),
+                plan_error.to_string().contains(error.as_str()),
                 "plan_error: {:?} doesn't contain message: {:?}",
                 plan_error,
-                initial.as_str()
+                error.as_str()
             );
         } else {
             assert!(plan.is_ok())

@@ -289,7 +289,9 @@ pub struct AggregateExec {
     schema: SchemaRef,
     /// Input schema before any aggregation is applied. For partial aggregate this will be the
     /// same as input.schema() but for the final aggregate it will be the same as the input
-    /// to the partial aggregate
+    /// to the partial aggregate, i.e., partial and final aggregates have same `input_schema`.
+    /// We need the input schema of partial aggregate to be able to deserialize aggregate
+    /// expressions from protobuf for final aggregate.
     pub input_schema: SchemaRef,
     /// The source_to_target_mapping used to normalize out expressions like Partitioning and PhysicalSortExpr
     /// The key is the expression from the input schema and the value is the expression from the output schema.
@@ -1608,7 +1610,7 @@ mod tests {
         }
     }
 
-    //// Tests ////
+    //--- Tests ---//
 
     #[tokio::test]
     async fn aggregate_source_not_yielding() -> Result<()> {

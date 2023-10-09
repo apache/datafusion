@@ -35,9 +35,33 @@ Here are links to some important information
 - [Python DataFrame API](https://arrow.apache.org/datafusion-python/)
 - [Architecture](https://docs.rs/datafusion/latest/datafusion/index.html#architecture)
 
-## Building your project with DataFusion
+## What can you do with this crate?
 
-DataFusion is great for building projects and products like SQL interfaces, time series platforms, and domain specific query engines. [Click Here](https://arrow.apache.org/datafusion/user-guide/introduction.html#known-users) to see a list known users.
+DataFusion is great for building projects such as domain specific query engines, new database platforms and data pipelines, query languages and more.
+It lets you start quickly from a fully working engine, and then customize those features specific to your use. [Click Here](https://arrow.apache.org/datafusion/user-guide/introduction.html#known-users) to see a list known users.
+
+## Crate features
+
+Default features:
+
+- `compression`: reading files compressed with `xz2`, `bzip2`, `flate2`, and `zstd`
+- `crypto_expressions`: cryptographic functions such as `md5` and `sha256`
+- `encoding_expressions`: `encode` and `decode` functions
+- `regex_expressions`: regular expression functions, such as `regexp_match`
+- `unicode_expressions`: Include unicode aware functions such as `character_length`
+
+Optional features:
+
+- `avro`: support for reading the [Apache Avro] format
+- `backtrace`: include backtrace information in error messages
+- `pyarrow`: conversions between PyArrow and DataFusion types
+- `simd`: enable arrow-rs's manual `SIMD` kernels (requires Rust `nightly`)
+
+[apache avro]: https://avro.apache.org/
+
+## Rust Version Compatibility
+
+This crate is tested with the latest stable version of Rust. We do not currently test against other, older versions of the Rust compiler.
 
 ## Contributing to DataFusion
 

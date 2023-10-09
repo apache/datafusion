@@ -19,9 +19,9 @@
 
 # Example Usage
 
-In this example some simple processing is performed on the [`example.csv`](../../../datafusion/core/tests/data/example.csv) file.
+In this example some simple processing is performed on the [`example.csv`](https://github.com/apache/arrow-datafusion/blob/main/datafusion/core/tests/data/example.csv) file.
 
-Even [`more code examples`](../../../datafusion-examples) attached to the project
+Even [`more code examples`](https://github.com/apache/arrow-datafusion/tree/main/datafusion-examples) attached to the project.
 
 ## Update `Cargo.toml`
 
@@ -186,10 +186,6 @@ DataFusion is designed to be extensible at all points. To that end, you can prov
 - [x] User Defined `Optimizer` passes (plan rewrites)
 - [x] User Defined `LogicalPlan` nodes
 - [x] User Defined `ExecutionPlan` nodes
-
-## Rust Version Compatibility
-
-This crate is tested with the latest stable version of Rust. We do not currently test against other, older versions of the Rust compiler.
 
 ## Optimized Configuration
 

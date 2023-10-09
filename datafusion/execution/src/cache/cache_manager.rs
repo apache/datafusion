@@ -29,7 +29,16 @@ use std::sync::Arc;
 pub type FileStatisticsCache =
     Arc<dyn CacheAccessor<Path, Arc<Statistics>, Extra = ObjectMeta>>;
 
+pub type ListFilesCache =
+    Arc<dyn CacheAccessor<Path, Arc<Vec<ObjectMeta>>, Extra = ObjectMeta>>;
+
 impl Debug for dyn CacheAccessor<Path, Arc<Statistics>, Extra = ObjectMeta> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Cache name: {} with length: {}", self.name(), self.len())
+    }
+}
+
+impl Debug for dyn CacheAccessor<Path, Arc<Vec<ObjectMeta>>, Extra = ObjectMeta> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "Cache name: {} with length: {}", self.name(), self.len())
     }
@@ -38,6 +47,7 @@ impl Debug for dyn CacheAccessor<Path, Arc<Statistics>, Extra = ObjectMeta> {
 #[derive(Default, Debug)]
 pub struct CacheManager {
     file_statistic_cache: Option<FileStatisticsCache>,
+    list_files_cache: Option<ListFilesCache>,
 }
 
 impl CacheManager {
@@ -46,12 +56,20 @@ impl CacheManager {
         if let Some(cc) = &config.table_files_statistics_cache {
             manager.file_statistic_cache = Some(cc.clone())
         }
+        if let Some(lc) = &config.list_files_cache {
+            manager.list_files_cache = Some(lc.clone())
+        }
         Ok(Arc::new(manager))
     }
 
     /// Get the cache of listing files statistics.
     pub fn get_file_statistic_cache(&self) -> Option<FileStatisticsCache> {
         self.file_statistic_cache.clone()
+    }
+
+    /// Get the cache of objectMeta under same path.
+    pub fn get_list_files_cache(&self) -> Option<ListFilesCache> {
+        self.list_files_cache.clone()
     }
 }
 
@@ -61,6 +79,13 @@ pub struct CacheManagerConfig {
     /// Avoid get same file statistics repeatedly in same datafusion session.
     /// Default is disable. Fow now only supports Parquet files.
     pub table_files_statistics_cache: Option<FileStatisticsCache>,
+    /// Enable cache of file metadata when listing files.
+    /// This setting avoids listing file meta of the same path repeatedly
+    /// in same session, which may be expensive in certain situations (e.g. remote object storage).
+    /// Note that if this option is enabled, DataFusion will not see any updates to the underlying
+    /// location.  
+    /// Default is disable.
+    pub list_files_cache: Option<ListFilesCache>,
 }
 
 impl CacheManagerConfig {
@@ -69,6 +94,11 @@ impl CacheManagerConfig {
         cache: Option<FileStatisticsCache>,
     ) -> Self {
         self.table_files_statistics_cache = cache;
+        self
+    }
+
+    pub fn with_list_files_cache(mut self, cache: Option<ListFilesCache>) -> Self {
+        self.list_files_cache = cache;
         self
     }
 }

@@ -57,7 +57,9 @@ use datafusion_execution::cache::cache_manager::FileStatisticsCache;
 use datafusion_execution::cache::cache_unit::DefaultFileStatisticsCache;
 use datafusion_expr::expr::Sort;
 use datafusion_optimizer::utils::conjunction;
-use datafusion_physical_expr::{create_physical_expr, LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr::{
+    create_physical_expr, LexOrdering, PhysicalSortExpr, PhysicalSortRequirement,
+};
 
 use async_trait::async_trait;
 use futures::{future, stream, StreamExt, TryStreamExt};
@@ -165,7 +167,8 @@ impl ListingTableConfig {
             .table_paths
             .get(0)
             .unwrap()
-            .list_all_files(store.as_ref(), "")
+            .list_all_files(state, store.as_ref(), "")
+            .await?
             .next()
             .await
             .ok_or_else(|| DataFusionError::Internal("No files for table".into()))??;
@@ -507,7 +510,8 @@ impl ListingOptions {
         let store = state.runtime_env().object_store(table_path)?;
 
         let files: Vec<_> = table_path
-            .list_all_files(store.as_ref(), &self.file_extension)
+            .list_all_files(state, store.as_ref(), &self.file_extension)
+            .await?
             .try_collect()
             .await?;
 
@@ -826,24 +830,12 @@ impl TableProvider for ListingTable {
             );
         }
 
-        // TODO support inserts to sorted tables which preserve sort_order
-        // Inserts currently make no effort to preserve sort_order. This could lead to
-        // incorrect query results on the table after inserting incorrectly sorted data.
-        let unsorted: Vec<Vec<Expr>> = vec![];
-        if self.options.file_sort_order != unsorted {
-            return Err(
-                DataFusionError::NotImplemented(
-                    "Writing to a sorted listing table via insert into is not supported yet. \
-                    To write to this table in the meantime, register an equivalent table with \
-                    file_sort_order = vec![]".into())
-            );
-        }
-
         let table_path = &self.table_paths()[0];
         // Get the object store for the table path.
         let store = state.runtime_env().object_store(table_path)?;
 
         let file_list_stream = pruned_partition_list(
+            state,
             store.as_ref(),
             table_path,
             &[],
@@ -908,9 +900,38 @@ impl TableProvider for ListingTable {
             file_type_writer_options,
         };
 
+        let unsorted: Vec<Vec<Expr>> = vec![];
+        let order_requirements = if self.options().file_sort_order != unsorted {
+            if matches!(
+                self.options().insert_mode,
+                ListingTableInsertMode::AppendToFile
+            ) {
+                return Err(DataFusionError::Plan(
+                    "Cannot insert into a sorted ListingTable with mode append!".into(),
+                ));
+            }
+            // Multiple sort orders in outer vec are equivalent, so we pass only the first one
+            let ordering = self
+                .try_create_output_ordering()?
+                .get(0)
+                .ok_or(DataFusionError::Internal(
+                    "Expected ListingTable to have a sort order, but none found!".into(),
+                ))?
+                .clone();
+            // Converts Vec<Vec<SortExpr>> into type required by execution plan to specify its required input ordering
+            Some(
+                ordering
+                    .into_iter()
+                    .map(PhysicalSortRequirement::from)
+                    .collect::<Vec<_>>(),
+            )
+        } else {
+            None
+        };
+
         self.options()
             .format
-            .create_writer_physical_plan(input, state, config)
+            .create_writer_physical_plan(input, state, config, order_requirements)
             .await
     }
 }
@@ -933,6 +954,7 @@ impl ListingTable {
         // list files (with partitions)
         let file_list = future::try_join_all(self.table_paths.iter().map(|table_path| {
             pruned_partition_list(
+                ctx,
                 store.as_ref(),
                 table_path,
                 filters,
@@ -1877,7 +1899,7 @@ mod tests {
         let session_ctx = match session_config_map {
             Some(cfg) => {
                 let config = SessionConfig::from_string_hash_map(cfg)?;
-                SessionContext::with_config(config)
+                SessionContext::new_with_config(config)
             }
             None => SessionContext::new(),
         };
@@ -2046,7 +2068,7 @@ mod tests {
         let session_ctx = match session_config_map {
             Some(cfg) => {
                 let config = SessionConfig::from_string_hash_map(cfg)?;
-                SessionContext::with_config(config)
+                SessionContext::new_with_config(config)
             }
             None => SessionContext::new(),
         };
@@ -2252,7 +2274,7 @@ mod tests {
         let session_ctx = match session_config_map {
             Some(cfg) => {
                 let config = SessionConfig::from_string_hash_map(cfg)?;
-                SessionContext::with_config(config)
+                SessionContext::new_with_config(config)
             }
             None => SessionContext::new(),
         };

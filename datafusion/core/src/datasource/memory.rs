@@ -223,6 +223,7 @@ impl TableProvider for MemTable {
             input,
             sink,
             self.schema.clone(),
+            None,
         )))
     }
 }

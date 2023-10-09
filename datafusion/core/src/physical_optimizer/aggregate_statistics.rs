@@ -38,7 +38,7 @@ use crate::error::Result;
 pub struct AggregateStatistics {}
 
 /// The name of the column corresponding to [`COUNT_STAR_EXPANSION`]
-const COUNT_STAR_NAME: &str = "COUNT(UInt8(1))";
+const COUNT_STAR_NAME: &str = "COUNT(*)";
 
 impl AggregateStatistics {
     #[allow(missing_docs)]

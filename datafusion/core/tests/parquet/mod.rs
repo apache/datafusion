@@ -154,7 +154,7 @@ impl ContextWithParquet {
         let parquet_path = file.path().to_string_lossy();
 
         // now, setup a the file as a data source and run a query against it
-        let ctx = SessionContext::with_config(config);
+        let ctx = SessionContext::new_with_config(config);
 
         ctx.register_parquet("t", &parquet_path, ParquetReadOptions::default())
             .await
