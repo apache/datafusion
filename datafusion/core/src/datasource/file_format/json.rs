@@ -24,6 +24,7 @@ use datafusion_common::not_impl_err;
 use datafusion_common::DataFusionError;
 use datafusion_common::FileType;
 use datafusion_execution::TaskContext;
+use datafusion_physical_plan::metrics::MetricsSet;
 use rand::distributions::Alphanumeric;
 use rand::distributions::DistString;
 use std::fmt;
@@ -269,6 +270,14 @@ impl JsonSink {
 
 #[async_trait]
 impl DataSink for JsonSink {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        None
+    }
+
     async fn write_all(
         &self,
         data: Vec<SendableRecordBatchStream>,

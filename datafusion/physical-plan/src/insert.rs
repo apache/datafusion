@@ -35,6 +35,7 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use crate::metrics::MetricsSet;
 use crate::stream::RecordBatchStreamAdapter;
 use datafusion_common::{exec_err, internal_err, DataFusionError};
 use datafusion_execution::TaskContext;
@@ -46,6 +47,23 @@ use datafusion_execution::TaskContext;
 /// output.
 #[async_trait]
 pub trait DataSink: DisplayAs + Debug + Send + Sync {
+    /// Returns the data sink as [`Any`](std::any::Any) so that it can be
+    /// downcast to a specific implementation.
+    fn as_any(&self) -> &dyn Any;
+
+    /// Return a snapshot of the set of [`Metric`]s for this
+    /// [`ExecutionPlan`].
+    ///
+    /// While the values of the metrics in the returned
+    /// [`MetricsSet`]s may change as execution progresses, the
+    /// specific metrics will not.
+    ///
+    /// Once `self.execute()` has returned (technically the future is
+    /// resolved) for all available partitions, the set of metrics
+    /// should be complete. If this function is called prior to
+    /// `execute()` new metrics may appear in subsequent calls.
+    fn metrics(&self) -> Option<MetricsSet>;
+
     // TODO add desired input ordering
     // How does this sink want its input ordered?
 
@@ -146,6 +164,16 @@ impl FileSinkExec {
             streams.push(self.execute_input_stream(part, context.clone())?);
         }
         Ok(streams)
+    }
+
+    /// Returns insert sink
+    pub fn sink(&self) -> &dyn DataSink {
+        self.sink.as_ref()
+    }
+
+    /// Returns the metrics of the underlying [DataSink]
+    pub fn metrics(&self) -> Option<MetricsSet> {
+        self.sink.metrics()
     }
 }
 
