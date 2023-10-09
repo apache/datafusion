@@ -1714,10 +1714,9 @@ impl Projection {
     /// Create a new Projection
     pub fn try_new(expr: Vec<Expr>, input: Arc<LogicalPlan>) -> Result<Self> {
         let input = rewrite_plan(&expr, &input)?;
-        let input_metadata = input.schema().metadata().clone();
         let schema = Arc::new(DFSchema::new_with_metadata(
             exprlist_to_fields(&expr, &input)?,
-            input_metadata,
+            input.schema().metadata().clone(),
         )?);
         Self::try_new_with_schema(expr, input, schema)
     }

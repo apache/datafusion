@@ -794,13 +794,11 @@ pub fn get_updated_group_by_exprs(
 fn exprlist_to_fields_aggregate(exprs: &[Expr], agg: &Aggregate) -> Result<Vec<DFField>> {
     let agg_cols = agg_cols(agg);
     let mut fields = vec![];
-
-    let agg_input_schema = agg.input.schema().clone();
     for expr in exprs {
         match expr {
             Expr::Column(c) if agg_cols.iter().any(|x| x == c) => {
                 // resolve against schema of input to aggregate
-                fields.push(expr.to_field(&agg_input_schema)?);
+                fields.push(expr.to_field(agg.input.schema())?);
             }
             _ => fields.push(expr.to_field(&agg.schema)?),
         }
