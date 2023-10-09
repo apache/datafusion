@@ -1419,7 +1419,7 @@ mod tests {
     #[test]
     fn test_propagate_comparison() {
         // In the examples below:
-        // `left` is unbounded: [?, ?], 
+        // `left` is unbounded: [?, ?],
         // `right` is known to be [1000,1000]
         // so `left` < `right` results in no new knowledge of `right` but knowing that `left` is now < 1000:` [?, 1000)
         let left = Interval::new(
