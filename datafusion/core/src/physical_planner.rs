@@ -604,7 +604,7 @@ impl DefaultPhysicalPlanner {
                         FileType::ARROW => Arc::new(ArrowFormat {}),
                     };
 
-                    sink_format.create_writer_physical_plan(input_exec, session_state, config).await
+                    sink_format.create_writer_physical_plan(input_exec, session_state, config, None).await
                 }
                 LogicalPlan::Dml(DmlStatement {
                     table_name,
@@ -2087,7 +2087,7 @@ mod tests {
         let runtime = Arc::new(RuntimeEnv::default());
         let config = SessionConfig::new().with_target_partitions(4);
         let config = config.set_bool("datafusion.optimizer.skip_failed_rules", false);
-        SessionState::with_config_rt(config, runtime)
+        SessionState::new_with_config_rt(config, runtime)
     }
 
     async fn plan(logical_plan: &LogicalPlan) -> Result<Arc<dyn ExecutionPlan>> {

@@ -1567,7 +1567,7 @@ async fn use_var_provider() -> Result<()> {
     let config = SessionConfig::new()
         .with_target_partitions(4)
         .set_bool("datafusion.optimizer.skip_failed_rules", false);
-    let ctx = SessionContext::with_config(config);
+    let ctx = SessionContext::new_with_config(config);
 
     ctx.register_table("csv_table", mem_table)?;
     ctx.register_variable(VarType::UserDefined, Arc::new(HardcodedIntProvider {}));

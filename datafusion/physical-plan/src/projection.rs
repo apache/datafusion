@@ -111,9 +111,7 @@ impl ProjectionExec {
                 let idx = column.index();
                 let matching_input_field = input_schema.field(idx);
                 let matching_input_column = Column::new(matching_input_field.name(), idx);
-                let entry = columns_map
-                    .entry(matching_input_column)
-                    .or_insert_with(Vec::new);
+                let entry = columns_map.entry(matching_input_column).or_default();
                 entry.push(Column::new(name, expr_idx));
             };
         }

@@ -37,7 +37,7 @@ use async_trait::async_trait;
 use bytes::{BufMut, BytesMut};
 use datafusion_common::{exec_err, not_impl_err, plan_err, DataFusionError, FileType};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
 use futures::{StreamExt, TryStreamExt};
 use hashbrown::HashMap;
 use object_store::{ObjectMeta, ObjectStore};
@@ -230,6 +230,7 @@ impl FileFormat for ParquetFormat {
         input: Arc<dyn ExecutionPlan>,
         _state: &SessionState,
         conf: FileSinkConfig,
+        order_requirements: Option<Vec<PhysicalSortRequirement>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if conf.overwrite {
             return not_impl_err!("Overwrites are not implemented yet for Parquet");
@@ -238,7 +239,12 @@ impl FileFormat for ParquetFormat {
         let sink_schema = conf.output_schema().clone();
         let sink = Arc::new(ParquetSink::new(conf));
 
-        Ok(Arc::new(FileSinkExec::new(input, sink, sink_schema)) as _)
+        Ok(Arc::new(FileSinkExec::new(
+            input,
+            sink,
+            sink_schema,
+            order_requirements,
+        )) as _)
     }
 
     fn file_type(&self) -> FileType {
@@ -1110,7 +1116,7 @@ pub(crate) mod test_util {
         Ok((meta, files))
     }
 
-    //// write batches chunk_size rows at a time
+    /// write batches chunk_size rows at a time
     fn write_in_chunks<W: std::io::Write + Send>(
         writer: &mut ArrowWriter<W>,
         batch: &RecordBatch,
@@ -1387,7 +1393,7 @@ mod tests {
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {
         let config = SessionConfig::new().with_batch_size(2);
-        let session_ctx = SessionContext::with_config(config);
+        let session_ctx = SessionContext::new_with_config(config);
         let state = session_ctx.state();
         let task_ctx = state.task_ctx();
         let projection = None;
@@ -1415,7 +1421,7 @@ mod tests {
     #[tokio::test]
     async fn capture_bytes_scanned_metric() -> Result<()> {
         let config = SessionConfig::new().with_batch_size(2);
-        let session = SessionContext::with_config(config);
+        let session = SessionContext::new_with_config(config);
         let ctx = session.state();
 
         // Read the full file

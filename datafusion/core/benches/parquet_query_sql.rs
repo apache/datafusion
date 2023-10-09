@@ -193,7 +193,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     let partitions = 4;
     let config = SessionConfig::new().with_target_partitions(partitions);
-    let context = SessionContext::with_config(config);
+    let context = SessionContext::new_with_config(config);
 
     let local_rt = tokio::runtime::Builder::new_current_thread()
         .build()

@@ -168,10 +168,10 @@ async fn roundtrip_custom_tables() -> Result<()> {
     let cfg = RuntimeConfig::new();
     let env = RuntimeEnv::new(cfg).unwrap();
     let ses = SessionConfig::new();
-    let mut state = SessionState::with_config_rt(ses, Arc::new(env));
+    let mut state = SessionState::new_with_config_rt(ses, Arc::new(env));
     // replace factories
     *state.table_factories_mut() = table_factories;
-    let ctx = SessionContext::with_state(state);
+    let ctx = SessionContext::new_with_state(state);
 
     let sql = "CREATE EXTERNAL TABLE t STORED AS testtable LOCATION 's3://bucket/schema/table';";
     ctx.sql(sql).await.unwrap();
@@ -182,6 +182,94 @@ async fn roundtrip_custom_tables() -> Result<()> {
     let logical_round_trip =
         logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
     assert_eq!(format!("{scan:?}"), format!("{logical_round_trip:?}"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_custom_memory_tables() -> Result<()> {
+    let ctx = SessionContext::new();
+    // Make sure during round-trip, constraint information is preserved
+    let query = "CREATE TABLE sales_global_with_pk (zip_code INT,
+          country VARCHAR(3),
+          sn INT,
+          ts TIMESTAMP,
+          currency VARCHAR(3),
+          amount FLOAT,
+          primary key(sn)
+        ) as VALUES
+          (0, 'GRC', 0, '2022-01-01 06:00:00'::timestamp, 'EUR', 30.0),
+          (1, 'FRA', 1, '2022-01-01 08:00:00'::timestamp, 'EUR', 50.0),
+          (1, 'TUR', 2, '2022-01-01 11:30:00'::timestamp, 'TRY', 75.0),
+          (1, 'FRA', 3, '2022-01-02 12:00:00'::timestamp, 'EUR', 200.0),
+          (1, 'TUR', 4, '2022-01-03 10:00:00'::timestamp, 'TRY', 100.0)";
+
+    let plan = ctx.sql(query).await?.into_optimized_plan()?;
+
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_custom_listing_tables() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    // Make sure during round-trip, constraint information is preserved
+    let query = "CREATE EXTERNAL TABLE multiple_ordered_table_with_pk (
+              a0 INTEGER,
+              a INTEGER,
+              b INTEGER,
+              c INTEGER,
+              d INTEGER,
+              primary key(c)
+            )
+            STORED AS CSV
+            WITH HEADER ROW
+            WITH ORDER (a ASC, b ASC)
+            WITH ORDER (c ASC)
+            LOCATION '../core/tests/data/window_2.csv';";
+
+    let plan = ctx.sql(query).await?.into_optimized_plan()?;
+
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_logical_plan_aggregation_with_pk() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    ctx.sql(
+        "CREATE EXTERNAL TABLE multiple_ordered_table_with_pk (
+              a0 INTEGER,
+              a INTEGER,
+              b INTEGER,
+              c INTEGER,
+              d INTEGER,
+              primary key(c)
+            )
+            STORED AS CSV
+            WITH HEADER ROW
+            WITH ORDER (a ASC, b ASC)
+            WITH ORDER (c ASC)
+            LOCATION '../core/tests/data/window_2.csv';",
+    )
+    .await?;
+
+    let query = "SELECT c, b, SUM(d)
+            FROM multiple_ordered_table_with_pk
+            GROUP BY c";
+    let plan = ctx.sql(query).await?.into_optimized_plan()?;
+
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+
     Ok(())
 }
 

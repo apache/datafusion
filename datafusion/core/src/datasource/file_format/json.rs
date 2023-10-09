@@ -25,6 +25,7 @@ use datafusion_common::DataFusionError;
 use datafusion_common::FileType;
 use datafusion_execution::TaskContext;
 use datafusion_physical_plan::metrics::MetricsSet;
+use datafusion_physical_expr::PhysicalSortRequirement;
 use rand::distributions::Alphanumeric;
 use rand::distributions::DistString;
 use std::fmt;
@@ -174,6 +175,7 @@ impl FileFormat for JsonFormat {
         input: Arc<dyn ExecutionPlan>,
         _state: &SessionState,
         conf: FileSinkConfig,
+        order_requirements: Option<Vec<PhysicalSortRequirement>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if conf.overwrite {
             return not_impl_err!("Overwrites are not implemented yet for Json");
@@ -185,7 +187,12 @@ impl FileFormat for JsonFormat {
         let sink_schema = conf.output_schema().clone();
         let sink = Arc::new(JsonSink::new(conf, self.file_compression_type));
 
-        Ok(Arc::new(FileSinkExec::new(input, sink, sink_schema)) as _)
+        Ok(Arc::new(FileSinkExec::new(
+            input,
+            sink,
+            sink_schema,
+            order_requirements,
+        )) as _)
     }
 
     fn file_type(&self) -> FileType {
@@ -398,7 +405,7 @@ mod tests {
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {
         let config = SessionConfig::new().with_batch_size(2);
-        let session_ctx = SessionContext::with_config(config);
+        let session_ctx = SessionContext::new_with_config(config);
         let state = session_ctx.state();
         let task_ctx = state.task_ctx();
         let projection = None;

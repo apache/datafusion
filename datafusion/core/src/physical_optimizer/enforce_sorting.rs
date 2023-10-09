@@ -151,7 +151,7 @@ impl PlanWithCorrespondingSort {
         self.plan
             .children()
             .into_iter()
-            .map(|child| PlanWithCorrespondingSort::new(child))
+            .map(PlanWithCorrespondingSort::new)
             .collect()
     }
 }
@@ -267,7 +267,7 @@ impl PlanWithCorrespondingCoalescePartitions {
         self.plan
             .children()
             .into_iter()
-            .map(|child| PlanWithCorrespondingCoalescePartitions::new(child))
+            .map(PlanWithCorrespondingCoalescePartitions::new)
             .collect()
     }
 }
@@ -602,7 +602,7 @@ fn analyze_window_sort_removal(
         let reqs = window_exec
             .required_input_ordering()
             .swap_remove(0)
-            .unwrap_or(vec![]);
+            .unwrap_or_default();
         let sort_expr = PhysicalSortRequirement::to_sort_exprs(reqs);
         // Satisfy the ordering requirement so that the window can run:
         add_sort_above(&mut window_child, sort_expr, None)?;
@@ -810,7 +810,7 @@ mod tests {
     macro_rules! assert_optimized {
         ($EXPECTED_PLAN_LINES: expr, $EXPECTED_OPTIMIZED_PLAN_LINES: expr, $PLAN: expr, $REPARTITION_SORTS: expr) => {
             let config = SessionConfig::new().with_repartition_sorts($REPARTITION_SORTS);
-            let session_ctx = SessionContext::with_config(config);
+            let session_ctx = SessionContext::new_with_config(config);
             let state = session_ctx.state();
 
             let physical_plan = $PLAN;

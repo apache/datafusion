@@ -37,7 +37,7 @@ use std::sync::Arc;
 /// `nth_value` need the value.
 #[allow(rustdoc::private_intra_doc_links)]
 pub trait BuiltInWindowFunctionExpr: Send + Sync + std::fmt::Debug {
-    /// Returns the aggregate expression as [`Any`](std::any::Any) so that it can be
+    /// Returns the aggregate expression as [`Any`] so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
 

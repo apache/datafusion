@@ -91,6 +91,8 @@ pub struct FileSinkExec {
     sink_schema: SchemaRef,
     /// Schema describing the structure of the output data.
     count_schema: SchemaRef,
+    /// Optional required sort order for output data.
+    sort_order: Option<Vec<PhysicalSortRequirement>>,
 }
 
 impl fmt::Debug for FileSinkExec {
@@ -105,12 +107,14 @@ impl FileSinkExec {
         input: Arc<dyn ExecutionPlan>,
         sink: Arc<dyn DataSink>,
         sink_schema: SchemaRef,
+        sort_order: Option<Vec<PhysicalSortRequirement>>,
     ) -> Self {
         Self {
             input,
             sink,
             sink_schema,
             count_schema: make_count_schema(),
+            sort_order,
         }
     }
 
@@ -220,16 +224,20 @@ impl ExecutionPlan for FileSinkExec {
     }
 
     fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
-        // Require that the InsertExec gets the data in the order the
+        // The input order is either exlicitly set (such as by a ListingTable),
+        // or require that the [FileSinkExec] gets the data in the order the
         // input produced it (otherwise the optimizer may chose to reorder
         // the input which could result in unintended / poor UX)
         //
         // More rationale:
         // https://github.com/apache/arrow-datafusion/pull/6354#discussion_r1195284178
-        vec![self
-            .input
-            .output_ordering()
-            .map(PhysicalSortRequirement::from_sort_exprs)]
+        match &self.sort_order {
+            Some(requirements) => vec![Some(requirements.clone())],
+            None => vec![self
+                .input
+                .output_ordering()
+                .map(PhysicalSortRequirement::from_sort_exprs)],
+        }
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
@@ -249,6 +257,7 @@ impl ExecutionPlan for FileSinkExec {
             sink: self.sink.clone(),
             sink_schema: self.sink_schema.clone(),
             count_schema: self.count_schema.clone(),
+            sort_order: self.sort_order.clone(),
         }))
     }
 

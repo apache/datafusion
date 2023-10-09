@@ -82,7 +82,7 @@ You will need a GitHub Personal Access Token for the following steps. Follow
 [these instructions](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/creating-a-personal-access-token)
 to generate one if you do not already have one.
 
-The changelog is generated using a Python script. There is a depency on `PyGitHub`, which can be installed using pip:
+The changelog is generated using a Python script. There is a dependency on `PyGitHub`, which can be installed using pip:
 
 ```bash
 pip3 install PyGitHub

@@ -52,8 +52,8 @@ As the writer of a library, you may want to use or create `Expr`s to represent c
 
 There are also executable examples for working with `Expr`s:
 
-- [rewrite_expr.rs](../../../datafusion-examples/examples/catalog.rs)
-- [expr_api.rs](../../../datafusion-examples/examples/expr_api.rs)
+- [rewrite_expr.rs](https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/rewrite_expr.rs)
+- [expr_api.rs](https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/expr_api.rs)
 
 ## A Scalar UDF Example
 

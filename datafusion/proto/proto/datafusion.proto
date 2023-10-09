@@ -180,6 +180,25 @@ message EmptyRelationNode {
   bool produce_one_row = 1;
 }
 
+message PrimaryKeyConstraint{
+  repeated uint64 indices = 1;
+}
+
+message UniqueConstraint{
+  repeated uint64 indices = 1;
+}
+
+message Constraint{
+  oneof constraint_mode{
+    PrimaryKeyConstraint primary_key = 1;
+    UniqueConstraint unique = 2;
+  }
+}
+
+message Constraints{
+  repeated Constraint constraints = 1;
+}
+
 message CreateExternalTableNode {
   reserved 1; // was string name
   OwnedTableReference name = 12;
@@ -195,6 +214,7 @@ message CreateExternalTableNode {
   repeated LogicalExprNodeCollection order_exprs = 13;
   bool unbounded = 14;
   map<string, string> options = 11;
+  Constraints constraints = 15;
 }
 
 message PrepareNode {
