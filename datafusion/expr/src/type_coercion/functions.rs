@@ -15,22 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::signature::TIMEZONE_WILDCARD;
 use crate::{Signature, TypeSignature};
 use arrow::{
     compute::can_cast_types,
     datatypes::{DataType, TimeUnit},
 };
 use datafusion_common::{plan_err, DataFusionError, Result};
-
-/// Constant that is used as a placeholder for any valid timezone.
-/// This is used where a function can accept a timestamp type with any
-/// valid timezone, it exists to avoid the need to enumerate all possible
-/// timezones.
-///
-/// Type coercion always ensures that functions will be executed using
-/// timestamp arrays that have a valid time zone. Functions must never
-/// return results with this timezone.
-pub(crate) const TIMEZONE_PLACEHOLDER: &str = "+TZ";
 
 /// Performs type coercion for function arguments.
 ///
@@ -232,7 +223,7 @@ fn coerced_from<'a>(
         Utf8 | LargeUtf8 => Some(type_into.clone()),
         Null if can_cast_types(type_from, type_into) => Some(type_into.clone()),
 
-        Timestamp(unit, Some(tz)) if tz.as_ref() == TIMEZONE_PLACEHOLDER => {
+        Timestamp(unit, Some(tz)) if tz.as_ref() == TIMEZONE_WILDCARD => {
             match type_from {
                 Timestamp(_, Some(from_tz)) => {
                     Some(Timestamp(unit.clone(), Some(from_tz.clone())))

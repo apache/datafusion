@@ -70,13 +70,23 @@ pub fn add_empty_batches(
 }
 
 /// "stagger" batches: split the batches into random sized batches
+///
+/// For example, if the input batch has 1000 rows, [`stagger_batch`] might return
+/// multiple batches
+/// ```text
+/// [
+///   RecordBatch(123 rows),
+///   RecordBatch(234 rows),
+///   RecordBatch(634 rows),
+/// ]
+/// ```
 pub fn stagger_batch(batch: RecordBatch) -> Vec<RecordBatch> {
     let seed = 42;
     stagger_batch_with_seed(batch, seed)
 }
 
-/// "stagger" batches: split the batches into random sized batches
-/// using the specified value for a rng seed
+/// "stagger" batches: split the batches into random sized batches using the
+/// specified value for a rng seed. See [`stagger_batch`] for more detail.
 pub fn stagger_batch_with_seed(batch: RecordBatch, seed: u64) -> Vec<RecordBatch> {
     let mut batches = vec![];
 
