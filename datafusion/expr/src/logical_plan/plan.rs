@@ -142,7 +142,7 @@ pub enum LogicalPlan {
     Prepare(Prepare),
     /// Data Manipulaton Language (DML): Insert / Update / Delete
     Dml(DmlStatement),
-    /// Data Definition Language (DDL): CREATE / DROP TABLES / VIEWS / SCHEMAs
+    /// Data Definition Language (DDL): CREATE / DROP TABLES / VIEWS / SCHEMAS
     Ddl(DdlStatement),
     /// `COPY TO` for writing plan results to files
     Copy(CopyTo),
