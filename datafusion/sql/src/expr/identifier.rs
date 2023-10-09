@@ -27,7 +27,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         id: Ident,
         schema: &DFSchema,
-        planner_context: &mut PlannerContext,
+        planner_context: &PlannerContext,
     ) -> Result<Expr> {
         if id.value.starts_with('@') {
             // TODO: figure out if ScalarVariables should be insensitive.
@@ -87,7 +87,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         ids: Vec<Ident>,
         schema: &DFSchema,
-        planner_context: &mut PlannerContext,
+        planner_context: &PlannerContext,
     ) -> Result<Expr> {
         if ids.len() < 2 {
             return internal_err!("Not a compound identifier: {ids:?}");

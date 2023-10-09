@@ -1115,7 +1115,7 @@ impl DefaultPhysicalPlanner {
                             let filter_df_schema = DFSchema::new_with_metadata(filter_df_fields, HashMap::new())?;
                             let filter_schema = Schema::new_with_metadata(filter_fields, HashMap::new());
                             let filter_expr = create_physical_expr(
-                                &expr,
+                                expr,
                                 &filter_df_schema,
                                 &filter_schema,
                                 session_state.execution_props(),
@@ -1139,7 +1139,7 @@ impl DefaultPhysicalPlanner {
                             physical_left,
                             physical_right,
                             join_filter,
-                            &join_type,
+                            join_type,
                         )?))
                     } else if session_state.config().target_partitions() > 1
                         && session_state.config().repartition_joins()
@@ -1176,7 +1176,7 @@ impl DefaultPhysicalPlanner {
                             physical_right,
                             join_on,
                             join_filter,
-                            &join_type,
+                            join_type,
                             partition_mode,
                             *null_equals_null,
                         )?))
@@ -1186,7 +1186,7 @@ impl DefaultPhysicalPlanner {
                             physical_right,
                             join_on,
                             join_filter,
-                            &join_type,
+                            join_type,
                             PartitionMode::CollectLeft,
                             *null_equals_null,
                         )?))
@@ -1280,7 +1280,7 @@ impl DefaultPhysicalPlanner {
                     "Unsupported logical plan: Analyze must be root of the plan"
                 ),
                 LogicalPlan::Extension(e) => {
-                    let physical_inputs = self.create_initial_plan_multi(e.node.inputs().into_iter().map(|plan| plan.clone()).collect::<Vec<LogicalPlan>>(), session_state).await?;
+                    let physical_inputs = self.create_initial_plan_multi(e.node.inputs().into_iter().cloned().collect::<Vec<LogicalPlan>>(), session_state).await?;
 
                     let mut maybe_plan = None;
                     for planner in &self.extension_planners {

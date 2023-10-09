@@ -1613,8 +1613,8 @@ mod tests {
 
     #[tokio::test]
     async fn registry() -> Result<()> {
-        let mut ctx = SessionContext::new();
-        register_aggregate_csv(&mut ctx, "aggregate_test_100").await?;
+        let ctx = SessionContext::new();
+        register_aggregate_csv(&ctx, "aggregate_test_100").await?;
 
         // declare the udf
         let my_fn: ScalarFunctionImplementation =
@@ -1747,14 +1747,14 @@ mod tests {
 
     /// Create a logical plan from a SQL query
     async fn create_plan(sql: &str) -> Result<LogicalPlan> {
-        let mut ctx = SessionContext::new();
-        register_aggregate_csv(&mut ctx, "aggregate_test_100").await?;
+        let ctx = SessionContext::new();
+        register_aggregate_csv(&ctx, "aggregate_test_100").await?;
         Ok(ctx.sql(sql).await?.into_unoptimized_plan())
     }
 
     async fn test_table_with_name(name: &str) -> Result<DataFrame> {
-        let mut ctx = SessionContext::new();
-        register_aggregate_csv(&mut ctx, name).await?;
+        let ctx = SessionContext::new();
+        register_aggregate_csv(&ctx, name).await?;
         ctx.table(name).await
     }
 
@@ -1763,7 +1763,7 @@ mod tests {
     }
 
     async fn register_aggregate_csv(
-        ctx: &mut SessionContext,
+        ctx: &SessionContext,
         table_name: &str,
     ) -> Result<()> {
         let schema = test_util::aggr_test_schema();
@@ -2011,9 +2011,9 @@ mod tests {
                 "datafusion.sql_parser.enable_ident_normalization".to_owned(),
                 "false".to_owned(),
             )]))?;
-        let mut ctx = SessionContext::new_with_config(config);
+        let ctx = SessionContext::new_with_config(config);
         let name = "aggregate_test_100";
-        register_aggregate_csv(&mut ctx, name).await?;
+        register_aggregate_csv(&ctx, name).await?;
         let df = ctx.table(name);
 
         let df = df
