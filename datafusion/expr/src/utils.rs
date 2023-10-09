@@ -806,6 +806,29 @@ fn exprlist_to_fields_aggregate(exprs: &[Expr], agg: &Aggregate) -> Result<Vec<D
     Ok(fields)
 }
 
+/// Create field meta-data from an expression, for use in a result set schema
+pub fn exprlist_to_fields<'a>(
+    expr: impl IntoIterator<Item = &'a Expr>,
+    plan: &LogicalPlan,
+) -> Result<Vec<DFField>> {
+    let exprs: Vec<Expr> = expr.into_iter().cloned().collect();
+    // when dealing with aggregate plans we cannot simply look in the aggregate output schema
+    // because it will contain columns representing complex expressions (such a column named
+    // `GROUPING(person.state)` so in order to resolve `person.state` in this case we need to
+    // look at the input to the aggregate instead.
+    let fields = match plan {
+        LogicalPlan::Aggregate(agg) => Some(exprlist_to_fields_aggregate(&exprs, agg)),
+        _ => None,
+    };
+    if let Some(fields) = fields {
+        fields
+    } else {
+        // look for exact match in plan's output schema
+        let input_schema = &plan.schema();
+        exprs.iter().map(|e| e.to_field(input_schema)).collect()
+    }
+}
+
 /// Rewrite the aggregate plan according to expression
 /// If some of expressions are among functional dependencies and
 /// they are not part of group by expressions. We can rewrite group by
@@ -833,29 +856,6 @@ pub fn rewrite_plan<'a>(
         }
         _ => plan.clone(),
     })
-}
-
-/// Create field meta-data from an expression, for use in a result set schema
-pub fn exprlist_to_fields<'a>(
-    expr: impl IntoIterator<Item = &'a Expr>,
-    plan: &LogicalPlan,
-) -> Result<Vec<DFField>> {
-    let exprs: Vec<Expr> = expr.into_iter().cloned().collect();
-    // when dealing with aggregate plans we cannot simply look in the aggregate output schema
-    // because it will contain columns representing complex expressions (such a column named
-    // `GROUPING(person.state)` so in order to resolve `person.state` in this case we need to
-    // look at the input to the aggregate instead.
-    let fields = match plan {
-        LogicalPlan::Aggregate(agg) => Some(exprlist_to_fields_aggregate(&exprs, agg)),
-        _ => None,
-    };
-    if let Some(fields) = fields {
-        fields
-    } else {
-        // look for exact match in plan's output schema
-        let input_schema = &plan.schema();
-        exprs.iter().map(|e| e.to_field(input_schema)).collect()
-    }
 }
 
 /// Convert an expression into Column expression if it's already provided as input plan.
