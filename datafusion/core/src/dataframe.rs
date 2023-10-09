@@ -1353,7 +1353,9 @@ mod tests {
         .unwrap();
         let provider = MemTable::try_new(dual_schema, vec![vec![batch]])
             .unwrap()
-            .with_constraints(Constraints::new(vec![Constraint::PrimaryKey(vec![0])]));
+            .with_constraints(Constraints::new_unverified(vec![Constraint::PrimaryKey(
+                vec![0],
+            )]));
         Arc::new(provider)
     }
 

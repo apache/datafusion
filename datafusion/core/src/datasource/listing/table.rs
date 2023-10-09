@@ -23,19 +23,19 @@ use std::{any::Any, sync::Arc};
 use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
 use super::PartitionedFile;
 
-use crate::datasource::file_format::file_compression_type::{
-    FileCompressionType, FileTypeExt,
-};
-use crate::datasource::physical_plan::{
-    is_plan_streaming, FileScanConfig, FileSinkConfig,
-};
 use crate::datasource::{
     file_format::{
-        arrow::ArrowFormat, avro::AvroFormat, csv::CsvFormat, json::JsonFormat,
-        parquet::ParquetFormat, FileFormat,
+        arrow::ArrowFormat,
+        avro::AvroFormat,
+        csv::CsvFormat,
+        file_compression_type::{FileCompressionType, FileTypeExt},
+        json::JsonFormat,
+        parquet::ParquetFormat,
+        FileFormat,
     },
     get_statistics_with_limit,
     listing::ListingTableUrl,
+    physical_plan::{is_plan_streaming, FileScanConfig, FileSinkConfig},
     TableProvider, TableType,
 };
 use crate::logical_expr::TableProviderFilterPushDown;
@@ -46,12 +46,13 @@ use crate::{
     logical_expr::Expr,
     physical_plan::{empty::EmptyExec, ExecutionPlan, Statistics},
 };
+
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
 use arrow_schema::Schema;
 use datafusion_common::{
-    internal_err, plan_err, project_schema, FileType, FileTypeWriterOptions, SchemaExt,
-    ToDFSchema,
+    internal_err, plan_err, project_schema, Constraints, FileType, FileTypeWriterOptions,
+    SchemaExt, ToDFSchema,
 };
 use datafusion_execution::cache::cache_manager::FileStatisticsCache;
 use datafusion_execution::cache::cache_unit::DefaultFileStatisticsCache;
@@ -594,6 +595,7 @@ pub struct ListingTable {
     definition: Option<String>,
     collected_statistics: FileStatisticsCache,
     infinite_source: bool,
+    constraints: Constraints,
 }
 
 impl ListingTable {
@@ -631,9 +633,16 @@ impl ListingTable {
             definition: None,
             collected_statistics: Arc::new(DefaultFileStatisticsCache::default()),
             infinite_source,
+            constraints: Constraints::empty(),
         };
 
         Ok(table)
+    }
+
+    /// Assign constraints
+    pub fn with_constraints(mut self, constraints: Constraints) -> Self {
+        self.constraints = constraints;
+        self
     }
 
     /// Set the [`FileStatisticsCache`] used to cache parquet file statistics.
@@ -705,6 +714,10 @@ impl TableProvider for ListingTable {
 
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.table_schema)
+    }
+
+    fn constraints(&self) -> Option<&Constraints> {
+        Some(&self.constraints)
     }
 
     fn table_type(&self) -> TableType {
