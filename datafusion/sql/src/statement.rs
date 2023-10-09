@@ -84,7 +84,7 @@ fn get_schema_name(schema_name: &SchemaName) -> String {
 }
 
 // Construct TableConstraint(s) for a column (one column may have more than constraint).
-fn calc_table_constraints_from_column(column: &ColumnDef) -> Vec<TableConstraint> {
+fn calc_inline_constraints_from_column(column: &ColumnDef) -> Vec<TableConstraint> {
     let mut constraints = vec![];
     for ast::ColumnOptionDef { name, option } in &column.options {
         match &option {
@@ -128,12 +128,12 @@ fn calc_table_constraints_from_column(column: &ColumnDef) -> Vec<TableConstraint
     constraints
 }
 
-// Construct TableConstraint for all columns.
-fn calc_table_constraints_from_column_options(
+// Construct TableConstraint(s) for all columns.
+fn calc_inline_constraints_from_columns(
     columns: &[ColumnDef],
 ) -> Vec<ast::TableConstraint> {
     columns.iter().fold(vec![], |mut constraints, column| {
-        constraints.extend(calc_table_constraints_from_column(column));
+        constraints.extend(calc_inline_constraints_from_column(column));
         constraints
     })
 }
@@ -208,9 +208,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 or_replace,
                 ..
             } if table_properties.is_empty() && with_options.is_empty() => {
+                // Merge inline constraints and existing constraints
                 let mut constraints = constraints;
-                let new_constraint = calc_table_constraints_from_column_options(&columns);
-                constraints.extend(new_constraint);
+                let inline_constraints = calc_inline_constraints_from_columns(&columns);
+                constraints.extend(inline_constraints);
                 match query {
                     Some(query) => {
                         let plan = self.query_to_plan(*query, planner_context)?;
@@ -729,9 +730,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             constraints,
         } = statement;
 
+        // Merge inline constraints and existing constraints
         let mut constraints = constraints;
-        let new_constraint = calc_table_constraints_from_column_options(&columns);
-        constraints.extend(new_constraint);
+        let inline_constraints = calc_inline_constraints_from_columns(&columns);
+        constraints.extend(inline_constraints);
 
         if (file_type == "PARQUET" || file_type == "AVRO" || file_type == "ARROW")
             && file_compression_type != CompressionTypeVariant::UNCOMPRESSED
