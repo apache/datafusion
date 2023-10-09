@@ -681,7 +681,7 @@ impl AggregateExec {
         for (expression, name) in group_by.expr.iter() {
             if let Some(column) = expression.as_any().downcast_ref::<Column>() {
                 let new_col_idx = schema.index_of(name)?;
-                let entry = columns_map.entry(column.clone()).or_insert_with(Vec::new);
+                let entry = columns_map.entry(column.clone()).or_default();
                 entry.push(Column::new(name, new_col_idx));
             };
         }

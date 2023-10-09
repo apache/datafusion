@@ -488,7 +488,7 @@ fn push_down_join(
         .filter
         .as_ref()
         .map(|e| utils::split_conjunction_owned(e.clone()))
-        .unwrap_or_else(Vec::new);
+        .unwrap_or_default();
 
     let mut is_inner_join = false;
     let infer_predicates = if join.join_type == JoinType::Inner {

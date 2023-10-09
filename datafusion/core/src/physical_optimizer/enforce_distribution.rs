@@ -1529,7 +1529,7 @@ impl DistributionContext {
         self.plan
             .children()
             .into_iter()
-            .map(|child| DistributionContext::new(child))
+            .map(DistributionContext::new)
             .collect()
     }
 }

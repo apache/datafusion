@@ -721,7 +721,7 @@ fn rewrite_placeholder(expr: &mut Expr, other: &Expr, schema: &DFSchema) -> Resu
                 Err(e) => {
                     return Err(e.context(format!(
                         "Can not find type of {other} needed to infer type of {expr}"
-                    )))?;
+                    )));
                 }
                 Ok(dt) => {
                     *data_type = Some(dt);
