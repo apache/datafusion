@@ -42,10 +42,11 @@ pub trait TableProvider: Sync + Send {
     fn schema(&self) -> SchemaRef;
 
     /// Get a reference to the constraints of the table.
-    /// Returns
-    /// - `None` for tables where constraint is not supported.
-    /// - `Some(&Constraints)` for tables, where constraint is supported
-    /// `Some(&Constraints::empty())` means, table supports constraint, yet there is no constraint.
+    /// Returns:
+    /// - `None` for tables that do not support constraints.
+    /// - `Some(&Constraints)` for tables supporting constraints.
+    /// Therefore, a `Some(&Constraints::empty())` return value indicates that
+    /// this table supports constraints, but there are no constraints.
     fn constraints(&self) -> Option<&Constraints> {
         None
     }

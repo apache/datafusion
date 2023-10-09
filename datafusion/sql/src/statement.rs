@@ -83,59 +83,52 @@ fn get_schema_name(schema_name: &SchemaName) -> String {
     }
 }
 
-// Construct TableConstraint(s) for a column (one column may have more than constraint).
-fn calc_inline_constraints_from_column(column: &ColumnDef) -> Vec<TableConstraint> {
+/// Construct `TableConstraint`(s) for the given columns by iterating over
+/// `columns` and extracting individual inline constraint definitions.
+fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConstraint> {
     let mut constraints = vec![];
-    for ast::ColumnOptionDef { name, option } in &column.options {
-        match &option {
-            ast::ColumnOption::Unique { is_primary } => {
-                constraints.push(ast::TableConstraint::Unique {
+    for column in columns {
+        for ast::ColumnOptionDef { name, option } in &column.options {
+            match option {
+                ast::ColumnOption::Unique { is_primary } => {
+                    constraints.push(ast::TableConstraint::Unique {
+                        name: name.clone(),
+                        columns: vec![column.name.clone()],
+                        is_primary: *is_primary,
+                    })
+                }
+                ast::ColumnOption::ForeignKey {
+                    foreign_table,
+                    referred_columns,
+                    on_delete,
+                    on_update,
+                } => constraints.push(ast::TableConstraint::ForeignKey {
                     name: name.clone(),
-                    columns: vec![column.name.clone()],
-                    is_primary: *is_primary,
-                })
+                    columns: vec![],
+                    foreign_table: foreign_table.clone(),
+                    referred_columns: referred_columns.to_vec(),
+                    on_delete: *on_delete,
+                    on_update: *on_update,
+                }),
+                ast::ColumnOption::Check(expr) => {
+                    constraints.push(ast::TableConstraint::Check {
+                        name: name.clone(),
+                        expr: Box::new(expr.clone()),
+                    })
+                }
+                // Other options are not constraint related.
+                ast::ColumnOption::Default(_)
+                | ast::ColumnOption::Null
+                | ast::ColumnOption::NotNull
+                | ast::ColumnOption::DialectSpecific(_)
+                | ast::ColumnOption::CharacterSet(_)
+                | ast::ColumnOption::Generated { .. }
+                | ast::ColumnOption::Comment(_)
+                | ast::ColumnOption::OnUpdate(_) => {}
             }
-            ast::ColumnOption::ForeignKey {
-                foreign_table,
-                referred_columns,
-                on_delete,
-                on_update,
-            } => constraints.push(ast::TableConstraint::ForeignKey {
-                name: name.clone(),
-                columns: vec![],
-                foreign_table: foreign_table.clone(),
-                referred_columns: referred_columns.to_vec(),
-                on_delete: *on_delete,
-                on_update: *on_update,
-            }),
-            ast::ColumnOption::Check(expr) => {
-                constraints.push(ast::TableConstraint::Check {
-                    name: name.clone(),
-                    expr: Box::new(expr.clone()),
-                })
-            }
-            // Other options are not constraint related.
-            ast::ColumnOption::Default(_)
-            | ast::ColumnOption::Null
-            | ast::ColumnOption::NotNull
-            | ast::ColumnOption::DialectSpecific(_)
-            | ast::ColumnOption::CharacterSet(_)
-            | ast::ColumnOption::Generated { .. }
-            | ast::ColumnOption::Comment(_)
-            | ast::ColumnOption::OnUpdate(_) => {}
         }
     }
     constraints
-}
-
-// Construct TableConstraint(s) for all columns.
-fn calc_inline_constraints_from_columns(
-    columns: &[ColumnDef],
-) -> Vec<ast::TableConstraint> {
-    columns.iter().fold(vec![], |mut constraints, column| {
-        constraints.extend(calc_inline_constraints_from_column(column));
-        constraints
-    })
 }
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -209,9 +202,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 ..
             } if table_properties.is_empty() && with_options.is_empty() => {
                 // Merge inline constraints and existing constraints
-                let mut constraints = constraints;
+                let mut all_constraints = constraints;
                 let inline_constraints = calc_inline_constraints_from_columns(&columns);
-                constraints.extend(inline_constraints);
+                all_constraints.extend(inline_constraints);
                 match query {
                     Some(query) => {
                         let plan = self.query_to_plan(*query, planner_context)?;
@@ -247,7 +240,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         };
 
                         let constraints = Constraints::new_from_table_constraints(
-                            &constraints,
+                            &all_constraints,
                             plan.schema(),
                         )?;
 
@@ -270,7 +263,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         };
                         let plan = LogicalPlan::EmptyRelation(plan);
                         let constraints = Constraints::new_from_table_constraints(
-                            &constraints,
+                            &all_constraints,
                             plan.schema(),
                         )?;
                         Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
@@ -731,9 +724,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         } = statement;
 
         // Merge inline constraints and existing constraints
-        let mut constraints = constraints;
+        let mut all_constraints = constraints;
         let inline_constraints = calc_inline_constraints_from_columns(&columns);
-        constraints.extend(inline_constraints);
+        all_constraints.extend(inline_constraints);
 
         if (file_type == "PARQUET" || file_type == "AVRO" || file_type == "ARROW")
             && file_compression_type != CompressionTypeVariant::UNCOMPRESSED
@@ -752,7 +745,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // External tables do not support schemas at the moment, so the name is just a table name
         let name = OwnedTableReference::bare(name);
         let constraints =
-            Constraints::new_from_table_constraints(&constraints, &df_schema)?;
+            Constraints::new_from_table_constraints(&all_constraints, &df_schema)?;
         Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
             PlanCreateExternalTable {
                 schema: df_schema,
