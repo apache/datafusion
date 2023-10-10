@@ -1610,7 +1610,7 @@ mod tests {
         // id=0
         let df = df.filter(predicate)?;
         // Select expression refers to id, and name columns.
-        // id, name 
+        // id, name
         let df = df.select(vec![col_id.clone(), col_name.clone()])?;
         let physical_plan = df.clone().create_physical_plan().await?;
         print_plan(&physical_plan);
