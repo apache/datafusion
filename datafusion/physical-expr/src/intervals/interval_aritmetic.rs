@@ -518,6 +518,7 @@ impl Interval {
     /// - If any of the bounds is an infinite bound
     /// - If the type is not implemented yet
     /// - If there is an overflow during a computation
+    /// In case of a malformed interval, the function returns an error.
     pub fn cardinality(&self) -> Result<Option<u64>> {
         let data_type = self.get_datatype()?;
         if data_type.is_integer() {
@@ -534,34 +535,53 @@ impl Interval {
         // binary representations as "indices" and subtract them. For details, see:
         // https://stackoverflow.com/questions/8875064/how-many-distinct-floating-point-numbers-in-a-specific-range
         else if data_type.is_floating() {
-            // If the minimum value is a negative number, we need to
-            // switch sides to ensure an unsigned result.
-            let new_zero = ScalarValue::new_zero(&self.lower.value.data_type())?;
-            let (min, max) = if self.lower.value < new_zero {
-                (self.upper.value.clone(), self.lower.value.clone())
-            } else {
-                (self.lower.value.clone(), self.upper.value.clone())
-            };
-
-            Ok(match (min, max) {
+            match (&self.lower.value, &self.upper.value) {
                 (
                     ScalarValue::Float32(Some(lower)),
                     ScalarValue::Float32(Some(upper)),
-                ) => Some(calculate_cardinality_based_on_bounds(
-                    self.lower.open,
-                    self.upper.open,
-                    (upper.to_bits().sub_checked(lower.to_bits())?) as u64,
-                )),
+                ) => {
+                    // Negative numbers are sorted in the reverse order. To always have a positive difference after the subtraction,
+                    // we perform following transformation:
+                    let transformed_lower = (lower.to_bits() as i32)
+                        ^ (((lower.to_bits() as i32) >> 31) & 0x7fffffff);
+                    let transformed_upper = (upper.to_bits() as i32)
+                        ^ (((upper.to_bits() as i32) >> 31) & 0x7fffffff);
+                    let diff = if let Ok(result) =
+                        transformed_upper.sub_checked(transformed_lower)
+                    {
+                        result
+                    } else {
+                        return Ok(None);
+                    };
+                    Ok(Some(calculate_cardinality_based_on_bounds(
+                        self.lower.open,
+                        self.upper.open,
+                        diff as u64,
+                    )))
+                }
                 (
                     ScalarValue::Float64(Some(lower)),
                     ScalarValue::Float64(Some(upper)),
-                ) => Some(calculate_cardinality_based_on_bounds(
-                    self.lower.open,
-                    self.upper.open,
-                    upper.to_bits().sub_checked(lower.to_bits())?,
-                )),
-                _ => None,
-            })
+                ) => {
+                    let transformed_lower = (lower.to_bits() as i64)
+                        ^ (((lower.to_bits() as i64) >> 63) & 0x7fffffffffffffff);
+                    let transformed_upper = (upper.to_bits() as i64)
+                        ^ (((upper.to_bits() as i64) >> 63) & 0x7fffffffffffffff);
+                    let diff = if let Ok(result) =
+                        transformed_upper.sub_checked(transformed_lower)
+                    {
+                        result
+                    } else {
+                        return Ok(None);
+                    };
+                    Ok(Some(calculate_cardinality_based_on_bounds(
+                        self.lower.open,
+                        self.upper.open,
+                        diff as u64,
+                    )))
+                }
+                _ => Ok(None),
+            }
         } else {
             Ok(None)
         }
@@ -1718,17 +1738,20 @@ mod tests {
             assert_eq!(interval.cardinality()?.unwrap(), distinct_f32);
         }
 
+        // If the floating numbers has showned a homogeneous distribution pattern, the result would to be
+        // (distinct_f64 * 2_048 = 9223372036854775808); however, due to subnormal numbers around 0,
+        // the result will be a specific value, close to the expected one.
         let interval = Interval::new(
             IntervalBound::new(ScalarValue::from(-0.0625), false),
             IntervalBound::new(ScalarValue::from(0.0625), true),
         );
-        assert_eq!(interval.cardinality()?.unwrap(), distinct_f64 * 2_048);
+        assert_eq!(interval.cardinality()?.unwrap(), 9178336040581070849);
 
         let interval = Interval::new(
             IntervalBound::new(ScalarValue::from(-0.0625_f32), false),
             IntervalBound::new(ScalarValue::from(0.0625_f32), true),
         );
-        assert_eq!(interval.cardinality()?.unwrap(), distinct_f32 * 256);
+        assert_eq!(interval.cardinality()?.unwrap(), 2063597569);
 
         Ok(())
     }
