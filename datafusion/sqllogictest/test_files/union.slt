@@ -174,6 +174,80 @@ UNION ALL
 Alice
 John
 
+# nested_union
+query T rowsort
+SELECT name FROM t1 UNION (SELECT name from t2 UNION SELECT name || '_new' from t2)
+----
+Alex
+Alex_new
+Alice
+Bob
+Bob_new
+John
+John_new
+
+# should be un-nested
+# https://github.com/apache/arrow-datafusion/issues/7786
+query TT
+EXPLAIN SELECT name FROM t1 UNION (SELECT name from t2 UNION SELECT name || '_new' from t2)
+----
+logical_plan
+Aggregate: groupBy=[[t1.name]], aggr=[[]]
+--Union
+----TableScan: t1 projection=[name]
+----Aggregate: groupBy=[[t2.name]], aggr=[[]]
+------Union
+--------TableScan: t2 projection=[name]
+--------Projection: t2.name || Utf8("_new") AS name
+----------TableScan: t2 projection=[name]
+physical_plan
+AggregateExec: mode=FinalPartitioned, gby=[name@0 as name], aggr=[]
+--CoalesceBatchesExec: target_batch_size=8192
+----RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=8
+------AggregateExec: mode=Partial, gby=[name@0 as name], aggr=[]
+--------UnionExec
+----------MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+----------AggregateExec: mode=FinalPartitioned, gby=[name@0 as name], aggr=[]
+------------CoalesceBatchesExec: target_batch_size=8192
+--------------RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=8
+----------------AggregateExec: mode=Partial, gby=[name@0 as name], aggr=[]
+------------------UnionExec
+--------------------MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+--------------------ProjectionExec: expr=[name@0 || _new as name]
+----------------------MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+
+# nested_union_all
+query T rowsort
+SELECT name FROM t1 UNION ALL (SELECT name from t2 UNION ALL SELECT name || '_new' from t2)
+----
+Alex
+Alex
+Alex_new
+Alice
+Bob
+Bob
+Bob_new
+John
+John_new
+
+# Plan is unnested
+query TT
+EXPLAIN SELECT name FROM t1 UNION ALL (SELECT name from t2 UNION ALL SELECT name || '_new' from t2)
+----
+logical_plan
+Union
+--TableScan: t1 projection=[name]
+--TableScan: t2 projection=[name]
+--Projection: t2.name || Utf8("_new") AS name
+----TableScan: t2 projection=[name]
+physical_plan
+UnionExec
+--MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+--MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+--ProjectionExec: expr=[name@0 || _new as name]
+----MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+
+
 # union_with_type_coercion
 query TT
 explain
