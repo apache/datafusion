@@ -833,15 +833,15 @@ impl ScalarValue {
             DataType::Interval(IntervalUnit::MonthDayNano) => {
                 ScalarValue::IntervalMonthDayNano(Some(0))
             }
-            DataType::Duration(TimeUnit::Second) => ScalarValue::DurationSecond(None),
+            DataType::Duration(TimeUnit::Second) => ScalarValue::DurationSecond(Some(0)),
             DataType::Duration(TimeUnit::Millisecond) => {
-                ScalarValue::DurationMillisecond(None)
+                ScalarValue::DurationMillisecond(Some(0))
             }
             DataType::Duration(TimeUnit::Microsecond) => {
-                ScalarValue::DurationMicrosecond(None)
+                ScalarValue::DurationMicrosecond(Some(0))
             }
             DataType::Duration(TimeUnit::Nanosecond) => {
-                ScalarValue::DurationNanosecond(None)
+                ScalarValue::DurationNanosecond(Some(0))
             }
             _ => {
                 return _not_impl_err!(

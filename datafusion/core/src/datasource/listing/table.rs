@@ -23,19 +23,19 @@ use std::{any::Any, sync::Arc};
 use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
 use super::PartitionedFile;
 
-use crate::datasource::file_format::file_compression_type::{
-    FileCompressionType, FileTypeExt,
-};
-use crate::datasource::physical_plan::{
-    is_plan_streaming, FileScanConfig, FileSinkConfig,
-};
 use crate::datasource::{
     file_format::{
-        arrow::ArrowFormat, avro::AvroFormat, csv::CsvFormat, json::JsonFormat,
-        parquet::ParquetFormat, FileFormat,
+        arrow::ArrowFormat,
+        avro::AvroFormat,
+        csv::CsvFormat,
+        file_compression_type::{FileCompressionType, FileTypeExt},
+        json::JsonFormat,
+        parquet::ParquetFormat,
+        FileFormat,
     },
     get_statistics_with_limit,
     listing::ListingTableUrl,
+    physical_plan::{is_plan_streaming, FileScanConfig, FileSinkConfig},
     TableProvider, TableType,
 };
 use crate::logical_expr::TableProviderFilterPushDown;
@@ -46,18 +46,21 @@ use crate::{
     logical_expr::Expr,
     physical_plan::{empty::EmptyExec, ExecutionPlan, Statistics},
 };
+
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
 use arrow_schema::Schema;
 use datafusion_common::{
-    internal_err, plan_err, project_schema, FileType, FileTypeWriterOptions, SchemaExt,
-    ToDFSchema,
+    internal_err, plan_err, project_schema, Constraints, FileType, FileTypeWriterOptions,
+    SchemaExt, ToDFSchema,
 };
 use datafusion_execution::cache::cache_manager::FileStatisticsCache;
 use datafusion_execution::cache::cache_unit::DefaultFileStatisticsCache;
 use datafusion_expr::expr::Sort;
 use datafusion_optimizer::utils::conjunction;
-use datafusion_physical_expr::{create_physical_expr, LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr::{
+    create_physical_expr, LexOrdering, PhysicalSortExpr, PhysicalSortRequirement,
+};
 
 use async_trait::async_trait;
 use futures::{future, stream, StreamExt, TryStreamExt};
@@ -165,7 +168,8 @@ impl ListingTableConfig {
             .table_paths
             .get(0)
             .unwrap()
-            .list_all_files(store.as_ref(), "")
+            .list_all_files(state, store.as_ref(), "")
+            .await?
             .next()
             .await
             .ok_or_else(|| DataFusionError::Internal("No files for table".into()))??;
@@ -507,7 +511,8 @@ impl ListingOptions {
         let store = state.runtime_env().object_store(table_path)?;
 
         let files: Vec<_> = table_path
-            .list_all_files(store.as_ref(), &self.file_extension)
+            .list_all_files(state, store.as_ref(), &self.file_extension)
+            .await?
             .try_collect()
             .await?;
 
@@ -590,6 +595,7 @@ pub struct ListingTable {
     definition: Option<String>,
     collected_statistics: FileStatisticsCache,
     infinite_source: bool,
+    constraints: Constraints,
 }
 
 impl ListingTable {
@@ -627,9 +633,16 @@ impl ListingTable {
             definition: None,
             collected_statistics: Arc::new(DefaultFileStatisticsCache::default()),
             infinite_source,
+            constraints: Constraints::empty(),
         };
 
         Ok(table)
+    }
+
+    /// Assign constraints
+    pub fn with_constraints(mut self, constraints: Constraints) -> Self {
+        self.constraints = constraints;
+        self
     }
 
     /// Set the [`FileStatisticsCache`] used to cache parquet file statistics.
@@ -701,6 +714,10 @@ impl TableProvider for ListingTable {
 
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.table_schema)
+    }
+
+    fn constraints(&self) -> Option<&Constraints> {
+        Some(&self.constraints)
     }
 
     fn table_type(&self) -> TableType {
@@ -826,24 +843,12 @@ impl TableProvider for ListingTable {
             );
         }
 
-        // TODO support inserts to sorted tables which preserve sort_order
-        // Inserts currently make no effort to preserve sort_order. This could lead to
-        // incorrect query results on the table after inserting incorrectly sorted data.
-        let unsorted: Vec<Vec<Expr>> = vec![];
-        if self.options.file_sort_order != unsorted {
-            return Err(
-                DataFusionError::NotImplemented(
-                    "Writing to a sorted listing table via insert into is not supported yet. \
-                    To write to this table in the meantime, register an equivalent table with \
-                    file_sort_order = vec![]".into())
-            );
-        }
-
         let table_path = &self.table_paths()[0];
         // Get the object store for the table path.
         let store = state.runtime_env().object_store(table_path)?;
 
         let file_list_stream = pruned_partition_list(
+            state,
             store.as_ref(),
             table_path,
             &[],
@@ -908,9 +913,38 @@ impl TableProvider for ListingTable {
             file_type_writer_options,
         };
 
+        let unsorted: Vec<Vec<Expr>> = vec![];
+        let order_requirements = if self.options().file_sort_order != unsorted {
+            if matches!(
+                self.options().insert_mode,
+                ListingTableInsertMode::AppendToFile
+            ) {
+                return Err(DataFusionError::Plan(
+                    "Cannot insert into a sorted ListingTable with mode append!".into(),
+                ));
+            }
+            // Multiple sort orders in outer vec are equivalent, so we pass only the first one
+            let ordering = self
+                .try_create_output_ordering()?
+                .get(0)
+                .ok_or(DataFusionError::Internal(
+                    "Expected ListingTable to have a sort order, but none found!".into(),
+                ))?
+                .clone();
+            // Converts Vec<Vec<SortExpr>> into type required by execution plan to specify its required input ordering
+            Some(
+                ordering
+                    .into_iter()
+                    .map(PhysicalSortRequirement::from)
+                    .collect::<Vec<_>>(),
+            )
+        } else {
+            None
+        };
+
         self.options()
             .format
-            .create_writer_physical_plan(input, state, config)
+            .create_writer_physical_plan(input, state, config, order_requirements)
             .await
     }
 }
@@ -933,6 +967,7 @@ impl ListingTable {
         // list files (with partitions)
         let file_list = future::try_join_all(self.table_paths.iter().map(|table_path| {
             pruned_partition_list(
+                ctx,
                 store.as_ref(),
                 table_path,
                 filters,

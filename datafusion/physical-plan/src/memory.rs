@@ -81,7 +81,7 @@ impl DisplayAs for MemoryExec {
                             output_ordering.iter().map(|e| e.to_string()).collect();
                         format!(", output_ordering={}", order_strings.join(","))
                     })
-                    .unwrap_or_else(|| "".to_string());
+                    .unwrap_or_default();
 
                 write!(
                     f,

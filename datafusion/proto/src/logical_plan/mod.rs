@@ -15,6 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::fmt::Debug;
+use std::str::FromStr;
+use std::sync::Arc;
+
 use crate::common::{byte_to_string, proto_error, str_to_byte};
 use crate::protobuf::logical_plan_node::LogicalPlanType::CustomScan;
 use crate::protobuf::{CustomTableScanNode, LogicalExprNodeCollection};
@@ -25,6 +29,7 @@ use crate::{
         logical_plan_node::LogicalPlanType, LogicalExtensionNode, LogicalPlanNode,
     },
 };
+
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion::{
     datasource::{
@@ -38,27 +43,22 @@ use datafusion::{
     datasource::{provider_as_source, source_as_provider},
     prelude::SessionContext,
 };
-use datafusion_common::not_impl_err;
 use datafusion_common::{
-    context, internal_err, parsers::CompressionTypeVariant, DataFusionError,
-    OwnedTableReference, Result,
+    context, internal_err, not_impl_err, parsers::CompressionTypeVariant,
+    DataFusionError, OwnedTableReference, Result,
 };
-use datafusion_expr::logical_plan::DdlStatement;
-use datafusion_expr::DropView;
 use datafusion_expr::{
     logical_plan::{
         builder::project, Aggregate, CreateCatalog, CreateCatalogSchema,
-        CreateExternalTable, CreateView, CrossJoin, Distinct, EmptyRelation, Extension,
-        Join, JoinConstraint, Limit, Prepare, Projection, Repartition, Sort,
-        SubqueryAlias, TableScan, Values, Window,
+        CreateExternalTable, CreateView, CrossJoin, DdlStatement, Distinct,
+        EmptyRelation, Extension, Join, JoinConstraint, Limit, Prepare, Projection,
+        Repartition, Sort, SubqueryAlias, TableScan, Values, Window,
     },
-    Expr, LogicalPlan, LogicalPlanBuilder,
+    DropView, Expr, LogicalPlan, LogicalPlanBuilder,
 };
+
 use prost::bytes::BufMut;
 use prost::Message;
-use std::fmt::Debug;
-use std::str::FromStr;
-use std::sync::Arc;
 
 pub mod from_proto;
 pub mod to_proto;
@@ -493,6 +493,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))
                 })?;
 
+                let constraints = (create_extern_table.constraints.clone()).ok_or_else(|| {
+                    DataFusionError::Internal(String::from(
+                        "Protobuf deserialization error, CreateExternalTableNode was missing required table constraints.",
+                    ))
+                })?;
                 let definition = if !create_extern_table.definition.is_empty() {
                     Some(create_extern_table.definition.clone())
                 } else {
@@ -532,6 +537,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     definition,
                     unbounded: create_extern_table.unbounded,
                     options: create_extern_table.options.clone(),
+                    constraints: constraints.into(),
                 })))
             }
             LogicalPlanType::CreateView(create_view) => {
@@ -1205,6 +1211,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     order_exprs,
                     unbounded,
                     options,
+                    constraints,
                 },
             )) => {
                 let mut converted_order_exprs: Vec<LogicalExprNodeCollection> = vec![];
@@ -1235,6 +1242,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             file_compression_type: file_compression_type.to_string(),
                             unbounded: *unbounded,
                             options: options.clone(),
+                            constraints: Some(constraints.clone().into()),
                         },
                     )),
                 })
