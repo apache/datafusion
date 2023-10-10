@@ -202,7 +202,7 @@ impl ExecutionPlan for FileSinkExec {
         // own input at execution time
         vec![false]
     }
-    
+
     fn required_input_distribution(&self) -> Vec<Distribution> {
         vec![Distribution::SinglePartition; self.children().len()]
     }

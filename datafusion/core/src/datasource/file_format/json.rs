@@ -25,9 +25,7 @@ use std::sync::Arc;
 
 use super::{FileFormat, FileScanConfig};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
-use crate::datasource::file_format::write::{
-    BatchSerializer, FileWriterMode,
-};
+use crate::datasource::file_format::write::{BatchSerializer, FileWriterMode};
 use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
 use crate::datasource::physical_plan::{FileGroupDisplay, FileSinkConfig, NdJsonExec};
 use crate::error::Result;
@@ -230,8 +228,7 @@ struct JsonSink {
 
 impl Debug for JsonSink {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("JsonSink")
-            .finish()
+        f.debug_struct("JsonSink").finish()
     }
 }
 
@@ -260,7 +257,7 @@ impl JsonSink {
         &self,
         data: SendableRecordBatchStream,
         context: &Arc<TaskContext>,
-    ) -> Result<u64>{
+    ) -> Result<u64> {
         let writer_options = self.config.file_type_writer_options.try_into_json()?;
         let compression = &writer_options.compression;
         let compression = FileCompressionType::from(*compression);
@@ -276,57 +273,34 @@ impl JsonSink {
         };
 
         stateless_append_all(
-            data, 
-            object_store, 
-            file_groups, 
-            self.config.unbounded_input, 
-            compression, 
+            data,
+            object_store,
+            file_groups,
+            self.config.unbounded_input,
+            compression,
             Box::new(get_serializer),
-        ).await
-
-        
-
+        )
+        .await
     }
 
     async fn multipartput_all(
         &self,
         data: SendableRecordBatchStream,
         context: &Arc<TaskContext>,
-    ) -> Result<u64>{
-        let writer_options = self.config.file_type_writer_options.try_into_json()?;
-        let compression = &writer_options.compression;
-        let compression = FileCompressionType::from(*compression);
-
-        let object_store = context
-            .runtime_env()
-            .object_store(&self.config.object_store_url)?;
-
+    ) -> Result<u64> {
         let get_serializer = move || {
             let serializer: Box<dyn BatchSerializer> = Box::new(JsonSerializer::new());
             serializer
         };
 
-        let exec_options = &context.session_config()
-            .options()
-            .execution;
-
-        let max_rows_per_file = exec_options.soft_max_rows_per_output_file;
-        let file_buffer_size = exec_options.max_parallel_ouput_files;
-        let rb_buffer_size = exec_options.max_buffered_batches_per_output_file;
-
         stateless_multipart_put(
-            data, 
-            object_store, 
-            (&self.config.table_paths[0]).clone(), 
-            self.config.unbounded_input, 
-            "json".into(), 
-            compression, 
+            data,
+            context,
+            "json".into(),
             Box::new(get_serializer),
-            self.config.single_file_output,
-            max_rows_per_file,
-            file_buffer_size,
-            rb_buffer_size,
-        ).await
+            &self.config,
+        )
+        .await
     }
 }
 
@@ -345,28 +319,20 @@ impl DataSink for JsonSink {
         data: SendableRecordBatchStream,
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
-
-        match self.config.writer_mode{
+        match self.config.writer_mode {
             FileWriterMode::Append => {
-                let total_count = self.append_all(
-                    data,
-                    context
-                ).await?;
+                let total_count = self.append_all(data, context).await?;
                 Ok(total_count)
-            },
+            }
             FileWriterMode::PutMultipart => {
-                let total_count = self.multipartput_all(
-                    data,
-                    context
-                ).await?;
+                let total_count = self.multipartput_all(data, context).await?;
                 Ok(total_count)
-            },
-            FileWriterMode::Put =>{
+            }
+            FileWriterMode::Put => {
                 return not_impl_err!("FileWriterMode::Put is not supported yet!")
-            },
+            }
         }
     }
-    
 }
 
 #[cfg(test)]

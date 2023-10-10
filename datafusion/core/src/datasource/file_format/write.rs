@@ -26,7 +26,7 @@ use std::task::{Context, Poll};
 
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::listing::{ListingTableUrl, PartitionedFile};
-use crate::datasource::physical_plan::FileMeta;
+use crate::datasource::physical_plan::{FileMeta, FileSinkConfig};
 use crate::error::Result;
 use crate::physical_plan::SendableRecordBatchStream;
 
@@ -35,6 +35,7 @@ use datafusion_common::{exec_err, DataFusionError};
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use datafusion_execution::TaskContext;
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use futures::{ready, StreamExt};
@@ -315,8 +316,7 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
     mut serializer: Box<dyn BatchSerializer>,
     mut writer: AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>,
     unbounded_input: bool,
-) -> std::result::Result<(WriterType, u64), (WriterType, DataFusionError)>
-{
+) -> std::result::Result<(WriterType, u64), (WriterType, DataFusionError)> {
     let (tx, mut rx) =
         mpsc::channel::<JoinHandle<Result<(usize, Bytes), DataFusionError>>>(100);
 
@@ -394,6 +394,9 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
     Ok((writer, row_count as u64))
 }
 
+type RecordBatchReceiver = Receiver<RecordBatch>;
+type DemuxedStreamReceiver = Receiver<(Path, RecordBatchReceiver)>;
+
 /// Splits a single [SendableRecordBatchStream] into a dynamically determined
 /// number of partitions at execution time. The partitions are determined by
 /// factors known only at execution time, such as total number of rows and
@@ -404,55 +407,71 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
 /// number of total output files. The caller is also responsible to monitor
 /// the demux task for errors and abort accordingly. The single_file_ouput parameter
 /// overrides all other settings to force only a single file to be written.
+/// partition_by parameter will additionally split the input based on the unique
+/// values of a specific column https://github.com/apache/arrow-datafusion/issues/7744
 pub(crate) fn start_demuxer_task(
     mut input: SendableRecordBatchStream,
-    max_rows_per_file: usize,
+    context: &Arc<TaskContext>,
     _partition_by: Option<&str>,
     base_output_path: ListingTableUrl,
     file_extension: String,
-    max_parallel_files: usize,
-    max_buffered_recordbatches: usize,
     single_file_output: bool,
-) -> (tokio::task::JoinHandle<Result<()>>,Receiver<(Path, Receiver<RecordBatch>)>){
-    let (tx, rx) = tokio::sync::mpsc::channel(max_parallel_files);
-    let task: JoinHandle<std::result::Result<(), DataFusionError>> = tokio::spawn(async move {
-        let mut total_rows_current_file = 0;
-        let mut part_idx = 0;
-        let write_id = rand::distributions::Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
-        let file_path = if !single_file_output{
-            base_output_path
-                .prefix()
-                .child(format!("{}_{}.{}", write_id, part_idx, file_extension))
-        } else {
-            base_output_path.prefix().to_owned()
-        };
-        
-        let (mut tx_file, mut rx_file) = tokio::sync::mpsc::channel(max_buffered_recordbatches);
-        tx.send((file_path, rx_file)).await
-            .map_err(|_| DataFusionError::Execution("Error sending new file stream!".into()))?;
-        part_idx += 1;
-        while let Some(rb) = input.next().await.transpose()?{
-            total_rows_current_file += rb.num_rows();
-            tx_file.send(rb).await
-                .map_err(|_| DataFusionError::Execution("Error sending RecordBatch to file stream!".into()))?;
-            
-            // Once we have sent enough data to previous file stream, spawn a new one
-            if total_rows_current_file >= max_rows_per_file &&
-            !single_file_output{
-                total_rows_current_file = 0;
-                
-                let file_path = base_output_path
-                    .prefix()
-                    .child(format!("{}_{}.{}", write_id, part_idx, file_extension));
-                (tx_file, rx_file) = tokio::sync::mpsc::channel(max_buffered_recordbatches);
-                tx.send((file_path, rx_file)).await
-                    .map_err(|_| DataFusionError::Execution("Error sending new file stream!".into()))?;
+) -> (JoinHandle<Result<()>>, DemuxedStreamReceiver) {
+    let exec_options = &context.session_config().options().execution;
 
-                part_idx += 1;
+    let max_rows_per_file = exec_options.soft_max_rows_per_output_file;
+    let max_parallel_files = exec_options.max_parallel_ouput_files;
+    let max_buffered_recordbatches = exec_options.max_buffered_batches_per_output_file;
+
+    let (tx, rx) = tokio::sync::mpsc::channel(max_parallel_files);
+    let task: JoinHandle<std::result::Result<(), DataFusionError>> =
+        tokio::spawn(async move {
+            let mut total_rows_current_file = 0;
+            let mut part_idx = 0;
+            let write_id = rand::distributions::Alphanumeric
+                .sample_string(&mut rand::thread_rng(), 16);
+            let file_path = if !single_file_output {
+                base_output_path
+                    .prefix()
+                    .child(format!("{}_{}.{}", write_id, part_idx, file_extension))
+            } else {
+                base_output_path.prefix().to_owned()
+            };
+
+            let (mut tx_file, mut rx_file) =
+                tokio::sync::mpsc::channel(max_buffered_recordbatches / 2);
+            tx.send((file_path, rx_file)).await.map_err(|_| {
+                DataFusionError::Execution("Error sending new file stream!".into())
+            })?;
+            part_idx += 1;
+            while let Some(rb) = input.next().await.transpose()? {
+                total_rows_current_file += rb.num_rows();
+                tx_file.send(rb).await.map_err(|_| {
+                    DataFusionError::Execution(
+                        "Error sending RecordBatch to file stream!".into(),
+                    )
+                })?;
+
+                // Once we have sent enough data to previous file stream, spawn a new one
+                if total_rows_current_file >= max_rows_per_file && !single_file_output {
+                    total_rows_current_file = 0;
+
+                    let file_path = base_output_path
+                        .prefix()
+                        .child(format!("{}_{}.{}", write_id, part_idx, file_extension));
+                    (tx_file, rx_file) =
+                        tokio::sync::mpsc::channel(max_buffered_recordbatches);
+                    tx.send((file_path, rx_file)).await.map_err(|_| {
+                        DataFusionError::Execution(
+                            "Error sending new file stream!".into(),
+                        )
+                    })?;
+
+                    part_idx += 1;
+                }
             }
-        }
-        Ok(())
-    });
+            Ok(())
+        });
     (task, rx)
 }
 
@@ -467,7 +486,6 @@ pub(crate) async fn stateless_serialize_and_write_files(
     tx: Sender<u64>,
     unbounded_input: bool,
 ) -> Result<()> {
-
     let mut row_count = 0;
     // tracks if any writers encountered an error triggering the need to abort
     let mut any_errors = false;
@@ -477,8 +495,7 @@ pub(crate) async fn stateless_serialize_and_write_files(
     // if true, we may not have a guarentee that all written data was cleaned up.
     let mut any_abort_errors = false;
     let mut join_set = JoinSet::new();
-    while let Some((data_rx, serializer, writer)) = rx.recv().await
-    {
+    while let Some((data_rx, serializer, writer)) = rx.recv().await {
         join_set.spawn(async move {
             serialize_rb_stream_to_object_store(
                 data_rx,
@@ -543,8 +560,11 @@ pub(crate) async fn stateless_serialize_and_write_files(
         }
     }
 
-    tx.send(row_count).await
-        .map_err(|_| DataFusionError::Internal("Error encountered while sending row count back to file sink!".into()))?;
+    tx.send(row_count).await.map_err(|_| {
+        DataFusionError::Internal(
+            "Error encountered while sending row count back to file sink!".into(),
+        )
+    })?;
     Ok(())
 }
 
@@ -553,38 +573,45 @@ pub(crate) async fn stateless_serialize_and_write_files(
 /// can be serialized independently of all other [RecordBatch]s.
 pub(crate) async fn stateless_multipart_put(
     data: SendableRecordBatchStream,
-    object_store: Arc<dyn ObjectStore>,
-    base_output_path: ListingTableUrl,
-    unbounded_input: bool,
+    context: &Arc<TaskContext>,
     file_extension: String,
-    compression: FileCompressionType,
     get_serializer: Box<dyn Fn() -> Box<dyn BatchSerializer> + Send>,
-    single_file_output: bool,
-    max_rows_per_file: usize,
-    file_buffer_size: usize,
-    rb_buffer_size: usize,
-) -> Result<u64>{
+    config: &FileSinkConfig,
+) -> Result<u64> {
+    let writer_options = config.file_type_writer_options.try_into_csv()?;
+    let compression = &writer_options.compression;
+    let compression = FileCompressionType::from(*compression);
+
+    let object_store = context
+        .runtime_env()
+        .object_store(&config.object_store_url)?;
+
+    let single_file_output = config.single_file_output;
+    let base_output_path = &config.table_paths[0];
+    let unbounded_input = config.unbounded_input;
+
     let (demux_task, mut file_stream_rx) = start_demuxer_task(
-        data, 
-        max_rows_per_file, 
-        None, 
-        base_output_path,
+        data,
+        context,
+        None,
+        base_output_path.clone(),
         file_extension,
-        file_buffer_size,
-        rb_buffer_size/2,
-        single_file_output);
-    
-    // TODO: update buffer size
-    let (tx_file_bundle, rx_file_bundle) = tokio::sync::mpsc::channel(rb_buffer_size/2);
+        single_file_output,
+    );
+
+    let rb_buffer_size = &context
+        .session_config()
+        .options()
+        .execution
+        .max_buffered_batches_per_output_file;
+
+    let (tx_file_bundle, rx_file_bundle) = tokio::sync::mpsc::channel(rb_buffer_size / 2);
     let (tx_row_cnt, mut rx_row_cnt) = tokio::sync::mpsc::channel(1);
     let write_coordinater_task = tokio::spawn(async move {
-        stateless_serialize_and_write_files(
-            rx_file_bundle,
-            tx_row_cnt,
-            unbounded_input,
-        ).await
+        stateless_serialize_and_write_files(rx_file_bundle, tx_row_cnt, unbounded_input)
+            .await
     });
-    while let Some((output_location, rb_stream)) = file_stream_rx.recv().await{
+    while let Some((output_location, rb_stream)) = file_stream_rx.recv().await {
         let serializer = get_serializer();
         let object_meta = ObjectMeta {
             location: output_location,
@@ -600,28 +627,32 @@ pub(crate) async fn stateless_multipart_put(
         )
         .await?;
 
-        tx_file_bundle.send((
-            rb_stream,
-            serializer,
-            writer
-        )).await
-        .map_err(|_| DataFusionError::Internal("Writer receive file bundle channel closed unexpectedly!".into()))?;
+        tx_file_bundle
+            .send((rb_stream, serializer, writer))
+            .await
+            .map_err(|_| {
+                DataFusionError::Internal(
+                    "Writer receive file bundle channel closed unexpectedly!".into(),
+                )
+            })?;
     }
 
     // Signal to the write coordinater that no more files are coming
     drop(tx_file_bundle);
 
-    let total_count = if let Some(cnt) = rx_row_cnt.recv().await{
+    let total_count = if let Some(cnt) = rx_row_cnt.recv().await {
         cnt
     } else {
-        return Err(DataFusionError::Internal("Did not receive final row count from write cooridnator task!".into()))
+        return Err(DataFusionError::Internal(
+            "Did not receive final row count from write cooridnator task!".into(),
+        ));
     };
 
-    match try_join!(write_coordinater_task, demux_task){
+    match try_join!(write_coordinater_task, demux_task) {
         Ok((r1, r2)) => {
             r1?;
             r2?;
-        },
+        }
         Err(e) => {
             if e.is_panic() {
                 std::panic::resume_unwind(e.into_panic());
@@ -631,19 +662,19 @@ pub(crate) async fn stateless_multipart_put(
         }
     }
 
-    Ok(total_count) 
-}   
+    Ok(total_count)
+}
 
 /// Orchestrates append_all for any statelessly serialized file type. Appends to all files provided
-/// in a round robin fashion. 
+/// in a round robin fashion.
 pub(crate) async fn stateless_append_all(
     mut data: SendableRecordBatchStream,
     object_store: Arc<dyn ObjectStore>,
     file_groups: &Vec<PartitionedFile>,
     unbounded_input: bool,
     compression: FileCompressionType,
-    get_serializer: Box<dyn Fn() -> Box<dyn BatchSerializer> + Send>
-) -> Result<u64>{
+    get_serializer: Box<dyn Fn() -> Box<dyn BatchSerializer> + Send>,
+) -> Result<u64> {
     let (tx_file_bundle, rx_file_bundle) = tokio::sync::mpsc::channel(file_groups.len());
     let mut send_channels = vec![];
     for file_group in file_groups {
@@ -660,43 +691,47 @@ pub(crate) async fn stateless_append_all(
 
         let (tx, rx) = tokio::sync::mpsc::channel(9000);
         send_channels.push(tx);
-        tx_file_bundle.send((
-            rx,
-            serializer,
-            writer
-        )).await
-        .map_err(|_| DataFusionError::Internal("Writer receive file bundle channel closed unexpectedly!".into()))?;
+        tx_file_bundle
+            .send((rx, serializer, writer))
+            .await
+            .map_err(|_| {
+                DataFusionError::Internal(
+                    "Writer receive file bundle channel closed unexpectedly!".into(),
+                )
+            })?;
     }
 
     let (tx_row_cnt, mut rx_row_cnt) = tokio::sync::mpsc::channel(1);
     let write_coordinater_task = tokio::spawn(async move {
-        stateless_serialize_and_write_files(
-            rx_file_bundle,
-            tx_row_cnt,
-            unbounded_input,
-        ).await
+        stateless_serialize_and_write_files(rx_file_bundle, tx_row_cnt, unbounded_input)
+            .await
     });
 
-    // Append to file groups in round robin 
+    // Append to file groups in round robin
     let mut next_file_idx = 0;
-    while let Some(rb) = data.next().await.transpose()?{
-        send_channels[next_file_idx].send(rb).await
-        .map_err(|_| DataFusionError::Internal("Recordbatch file append stream closed unexpectedly!".into()))?;
+    while let Some(rb) = data.next().await.transpose()? {
+        send_channels[next_file_idx].send(rb).await.map_err(|_| {
+            DataFusionError::Internal(
+                "Recordbatch file append stream closed unexpectedly!".into(),
+            )
+        })?;
         next_file_idx = (next_file_idx + 1) % send_channels.len();
     }
     // Signal to the write coordinater that no more files are coming
     drop(tx_file_bundle);
 
-    let total_count = if let Some(cnt) = rx_row_cnt.recv().await{
+    let total_count = if let Some(cnt) = rx_row_cnt.recv().await {
         cnt
     } else {
-        return Err(DataFusionError::Internal("Did not receive final row count from write cooridnator task!".into()))
+        return Err(DataFusionError::Internal(
+            "Did not receive final row count from write cooridnator task!".into(),
+        ));
     };
 
-    match try_join!(write_coordinater_task){
+    match try_join!(write_coordinater_task) {
         Ok(r1) => {
             r1.0?;
-        },
+        }
         Err(e) => {
             if e.is_panic() {
                 std::panic::resume_unwind(e.into_panic());
@@ -706,5 +741,5 @@ pub(crate) async fn stateless_append_all(
         }
     }
 
-    Ok(total_count) 
+    Ok(total_count)
 }

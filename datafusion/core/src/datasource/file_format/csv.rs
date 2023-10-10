@@ -25,9 +25,7 @@ use std::sync::Arc;
 
 use super::{FileFormat, DEFAULT_SCHEMA_INFER_MAX_RECORD};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
-use crate::datasource::file_format::write::{
-    BatchSerializer, FileWriterMode,
-};
+use crate::datasource::file_format::write::{BatchSerializer, FileWriterMode};
 use crate::datasource::physical_plan::{
     CsvExec, FileGroupDisplay, FileScanConfig, FileSinkConfig,
 };
@@ -486,7 +484,7 @@ impl CsvSink {
         &self,
         data: SendableRecordBatchStream,
         context: &Arc<TaskContext>,
-    ) -> Result<u64>{
+    ) -> Result<u64> {
         let writer_options = self.config.file_type_writer_options.try_into_csv()?;
         let (builder, compression) =
             (&writer_options.writer_options, &writer_options.compression);
@@ -503,70 +501,53 @@ impl CsvSink {
             let inner_clone = builder_clone.clone();
             // In append mode, consider has_header flag only when file is empty (at the start).
             // For other modes, use has_header flag as is.
-            let serializer: Box<dyn BatchSerializer> = Box::new(CsvSerializer::new()
-                .with_builder(inner_clone)
-                .with_header(options_clone.has_header));
+            let serializer: Box<dyn BatchSerializer> = Box::new(
+                CsvSerializer::new()
+                    .with_builder(inner_clone)
+                    .with_header(options_clone.has_header),
+            );
             serializer
         };
 
         stateless_append_all(
-            data, 
-            object_store, 
-            file_groups, 
-            self.config.unbounded_input, 
-            compression, 
+            data,
+            object_store,
+            file_groups,
+            self.config.unbounded_input,
+            compression,
             Box::new(get_serializer),
-        ).await
-
-        
-
+        )
+        .await
     }
 
     async fn multipartput_all(
         &self,
         data: SendableRecordBatchStream,
         context: &Arc<TaskContext>,
-    ) -> Result<u64>{
+    ) -> Result<u64> {
         let writer_options = self.config.file_type_writer_options.try_into_csv()?;
-        let (builder, compression) =
-            (&writer_options.writer_options, &writer_options.compression);
-        let compression = FileCompressionType::from(*compression);
-
-        let object_store = context
-            .runtime_env()
-            .object_store(&self.config.object_store_url)?;
+        let builder = &writer_options.writer_options;
 
         let builder_clone = builder.clone();
         let options_clone = writer_options.clone();
         let get_serializer = move || {
             let inner_clone = builder_clone.clone();
-            let serializer: Box<dyn BatchSerializer> = Box::new(CsvSerializer::new()
-                .with_builder(inner_clone)
-                .with_header(options_clone.has_header));
+            let serializer: Box<dyn BatchSerializer> = Box::new(
+                CsvSerializer::new()
+                    .with_builder(inner_clone)
+                    .with_header(options_clone.has_header),
+            );
             serializer
         };
 
-        let exec_options = &context.session_config()
-            .options()
-            .execution;
-
-        let max_rows_per_file = exec_options.soft_max_rows_per_output_file;
-        let file_buffer_size = exec_options.max_parallel_ouput_files;
-        let rb_buffer_size = exec_options.max_buffered_batches_per_output_file;
-
         stateless_multipart_put(
-            data, 
-            object_store, 
-            (&self.config.table_paths[0]).clone(), 
-            self.config.unbounded_input, 
-            "csv".into(), 
-            compression, 
+            data,
+            context,
+            "csv".into(),
             Box::new(get_serializer),
-            self.config.single_file_output,
-            max_rows_per_file,
-            file_buffer_size,
-            rb_buffer_size,
-        ).await
+            &self.config,
+        )
+        .await
     }
 }
 
@@ -585,28 +566,20 @@ impl DataSink for CsvSink {
         data: SendableRecordBatchStream,
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
-
-        match self.config.writer_mode{
+        match self.config.writer_mode {
             FileWriterMode::Append => {
-                let total_count = self.append_all(
-                    data,
-                    context
-                ).await?;
+                let total_count = self.append_all(data, context).await?;
                 Ok(total_count)
-            },
+            }
             FileWriterMode::PutMultipart => {
-                let total_count = self.multipartput_all(
-                    data,
-                    context
-                ).await?;
+                let total_count = self.multipartput_all(data, context).await?;
                 Ok(total_count)
-            },
-            FileWriterMode::Put =>{
+            }
+            FileWriterMode::Put => {
                 return not_impl_err!("FileWriterMode::Put is not supported yet!")
-            },
+            }
         }
     }
-    
 }
 
 #[cfg(test)]
