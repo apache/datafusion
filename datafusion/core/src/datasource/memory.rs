@@ -17,6 +17,7 @@
 
 //! [`MemTable`] for querying `Vec<RecordBatch>` by DataFusion.
 
+use datafusion_physical_plan::metrics::MetricsSet;
 use futures::StreamExt;
 use log::debug;
 use std::any::Any;
@@ -54,7 +55,7 @@ pub type PartitionData = Arc<RwLock<Vec<RecordBatch>>>;
 pub struct MemTable {
     schema: SchemaRef,
     pub(crate) batches: Vec<PartitionData>,
-    constraints: Option<Constraints>,
+    constraints: Constraints,
 }
 
 impl MemTable {
@@ -77,15 +78,13 @@ impl MemTable {
                 .into_iter()
                 .map(|e| Arc::new(RwLock::new(e)))
                 .collect::<Vec<_>>(),
-            constraints: None,
+            constraints: Constraints::empty(),
         })
     }
 
     /// Assign constraints
     pub fn with_constraints(mut self, constraints: Constraints) -> Self {
-        if !constraints.is_empty() {
-            self.constraints = Some(constraints);
-        }
+        self.constraints = constraints;
         self
     }
 
@@ -164,7 +163,7 @@ impl TableProvider for MemTable {
     }
 
     fn constraints(&self) -> Option<&Constraints> {
-        self.constraints.as_ref()
+        Some(&self.constraints)
     }
 
     fn table_type(&self) -> TableType {
@@ -261,6 +260,14 @@ impl MemSink {
 
 #[async_trait]
 impl DataSink for MemSink {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        None
+    }
+
     async fn write_all(
         &self,
         mut data: Vec<SendableRecordBatchStream>,

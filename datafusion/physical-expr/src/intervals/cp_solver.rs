@@ -688,6 +688,7 @@ mod tests {
 
     use crate::expressions::{BinaryExpr, Column};
     use crate::intervals::test_utils::gen_conjunctive_numerical_expr;
+    use arrow::datatypes::TimeUnit;
     use datafusion_common::ScalarValue;
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};
@@ -1413,5 +1414,135 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_propagate_comparison() {
+        // In the examples below:
+        // `left` is unbounded: [?, ?],
+        // `right` is known to be [1000,1000]
+        // so `left` < `right` results in no new knowledge of `right` but knowing that `left` is now < 1000:` [?, 1000)
+        let left = Interval::new(
+            IntervalBound::make_unbounded(DataType::Int64).unwrap(),
+            IntervalBound::make_unbounded(DataType::Int64).unwrap(),
+        );
+        let right = Interval::new(
+            IntervalBound::new(ScalarValue::Int64(Some(1000)), false),
+            IntervalBound::new(ScalarValue::Int64(Some(1000)), false),
+        );
+        assert_eq!(
+            (
+                Some(Interval::new(
+                    IntervalBound::make_unbounded(DataType::Int64).unwrap(),
+                    IntervalBound::new(ScalarValue::Int64(Some(1000)), true)
+                )),
+                Some(Interval::new(
+                    IntervalBound::new(ScalarValue::Int64(Some(1000)), false),
+                    IntervalBound::new(ScalarValue::Int64(Some(1000)), false)
+                )),
+            ),
+            propagate_comparison(&Operator::Lt, &left, &right).unwrap()
+        );
+
+        let left = Interval::new(
+            IntervalBound::make_unbounded(DataType::Timestamp(
+                TimeUnit::Nanosecond,
+                None,
+            ))
+            .unwrap(),
+            IntervalBound::make_unbounded(DataType::Timestamp(
+                TimeUnit::Nanosecond,
+                None,
+            ))
+            .unwrap(),
+        );
+        let right = Interval::new(
+            IntervalBound::new(ScalarValue::TimestampNanosecond(Some(1000), None), false),
+            IntervalBound::new(ScalarValue::TimestampNanosecond(Some(1000), None), false),
+        );
+        assert_eq!(
+            (
+                Some(Interval::new(
+                    IntervalBound::make_unbounded(DataType::Timestamp(
+                        TimeUnit::Nanosecond,
+                        None
+                    ))
+                    .unwrap(),
+                    IntervalBound::new(
+                        ScalarValue::TimestampNanosecond(Some(1000), None),
+                        true
+                    )
+                )),
+                Some(Interval::new(
+                    IntervalBound::new(
+                        ScalarValue::TimestampNanosecond(Some(1000), None),
+                        false
+                    ),
+                    IntervalBound::new(
+                        ScalarValue::TimestampNanosecond(Some(1000), None),
+                        false
+                    )
+                )),
+            ),
+            propagate_comparison(&Operator::Lt, &left, &right).unwrap()
+        );
+
+        let left = Interval::new(
+            IntervalBound::make_unbounded(DataType::Timestamp(
+                TimeUnit::Nanosecond,
+                Some("+05:00".into()),
+            ))
+            .unwrap(),
+            IntervalBound::make_unbounded(DataType::Timestamp(
+                TimeUnit::Nanosecond,
+                Some("+05:00".into()),
+            ))
+            .unwrap(),
+        );
+        let right = Interval::new(
+            IntervalBound::new(
+                ScalarValue::TimestampNanosecond(Some(1000), Some("+05:00".into())),
+                false,
+            ),
+            IntervalBound::new(
+                ScalarValue::TimestampNanosecond(Some(1000), Some("+05:00".into())),
+                false,
+            ),
+        );
+        assert_eq!(
+            (
+                Some(Interval::new(
+                    IntervalBound::make_unbounded(DataType::Timestamp(
+                        TimeUnit::Nanosecond,
+                        Some("+05:00".into()),
+                    ))
+                    .unwrap(),
+                    IntervalBound::new(
+                        ScalarValue::TimestampNanosecond(
+                            Some(1000),
+                            Some("+05:00".into())
+                        ),
+                        true
+                    )
+                )),
+                Some(Interval::new(
+                    IntervalBound::new(
+                        ScalarValue::TimestampNanosecond(
+                            Some(1000),
+                            Some("+05:00".into())
+                        ),
+                        false
+                    ),
+                    IntervalBound::new(
+                        ScalarValue::TimestampNanosecond(
+                            Some(1000),
+                            Some("+05:00".into())
+                        ),
+                        false
+                    )
+                )),
+            ),
+            propagate_comparison(&Operator::Lt, &left, &right).unwrap()
+        );
     }
 }
