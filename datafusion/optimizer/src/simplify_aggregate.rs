@@ -86,7 +86,6 @@ fn try_optimize_internal(
     _config: &dyn OptimizerConfig,
     indices: Vec<usize>,
 ) -> Result<Option<LogicalPlan>> {
-    // println!("indices: {:?}", indices);
     match plan {
         LogicalPlan::Projection(proj) => {
             let exprs_used = get_at_indices(&proj.expr, indices);

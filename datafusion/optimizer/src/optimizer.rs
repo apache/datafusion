@@ -256,7 +256,6 @@ impl Optimizer {
             Arc::new(EliminateProjection::new()),
             // PushDownProjection can pushdown Projections through Limits, do PushDownLimit again.
             Arc::new(PushDownLimit::new()),
-            // Arc::new(SimplifyAggregate::new()),
         ];
 
         Self::with_rules(rules)

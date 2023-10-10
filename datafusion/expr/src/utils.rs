@@ -732,81 +732,6 @@ fn agg_cols(agg: &Aggregate) -> Vec<Column> {
         .collect()
 }
 
-// /// Update group by exprs, according to functional dependencies
-// /// The query below
-// ///
-// /// SELECT sn, amount
-// /// FROM sales_global
-// /// GROUP BY sn
-// ///
-// /// cannot be calculated, because it has a column(`amount`) which is not
-// /// part of group by expression.
-// /// However, if we know that, `sn` is determinant of `amount`. We can
-// /// safely, determine value of `amount` for each distinct `sn`. For these cases
-// /// we rewrite the query above as
-// ///
-// /// SELECT sn, amount
-// /// FROM sales_global
-// /// GROUP BY sn, amount
-// ///
-// /// Both queries, are functionally same. \[Because, (`sn`, `amount`) and (`sn`)
-// /// defines the identical groups. \]
-// /// This function updates group by expressions such that select expressions that are
-// /// not in group by expression, are added to the group by expressions if they are dependent
-// /// of the sub-set of group by expressions.
-// pub fn get_updated_group_by_exprs(
-//     group_by_exprs: &[Expr],
-//     select_exprs: &[Expr],
-//     schema: &DFSchemaRef,
-// ) -> Result<Vec<Expr>> {
-//     let mut new_group_by_exprs = group_by_exprs.to_vec();
-//     let fields = schema.fields();
-//     let group_by_expr_names = group_by_exprs
-//         .iter()
-//         .map(|group_by_expr| group_by_expr.display_name())
-//         .collect::<Result<Vec<_>>>()?;
-//     // Get targets that can be used in a select, even if they do not occur in aggregation:
-//     if let Some(target_indices) =
-//         get_target_functional_dependencies(schema, &group_by_expr_names)
-//     {
-//         // Calculate dependent fields names with determinant GROUP BY expression:
-//         let associated_field_names = target_indices
-//             .iter()
-//             .map(|idx| fields[*idx].qualified_name())
-//             .collect::<Vec<_>>();
-//         // Expand GROUP BY expressions with select expressions: If a GROUP
-//         // BY expression is a determinant key, we can use its dependent
-//         // columns in select statements also.
-//         for expr in select_exprs {
-//             let col_exprs = expr.to_columns()?;
-//             let any_missing = col_exprs.iter().any(|col_expr| {
-//                 !new_group_by_exprs.contains(&Expr::Column(col_expr.clone()))
-//             });
-//             let all_associated = col_exprs.iter().all(|col_expr| {
-//                 let col_expr_name = format!("{}", col_expr);
-//                 associated_field_names.contains(&col_expr_name)
-//             });
-//             if any_missing && all_associated {
-//                 for expr in col_exprs {
-//                     let col_expr = Expr::Column(expr.clone());
-//                     if !new_group_by_exprs.contains(&col_expr) {
-//                         new_group_by_exprs.push(col_expr);
-//                     }
-//                 }
-//             }
-//
-//             let expr_name = format!("{}", expr);
-//             if !new_group_by_exprs.contains(expr)
-//                 && associated_field_names.contains(&expr_name)
-//             {
-//                 new_group_by_exprs.push(expr.clone());
-//             }
-//         }
-//     }
-//
-//     Ok(new_group_by_exprs)
-// }
-
 fn exprlist_to_fields_aggregate(exprs: &[Expr], agg: &Aggregate) -> Result<Vec<DFField>> {
     let agg_cols = agg_cols(agg);
     let mut fields = vec![];
@@ -844,35 +769,6 @@ pub fn exprlist_to_fields<'a>(
         exprs.iter().map(|e| e.to_field(input_schema)).collect()
     }
 }
-
-// /// Rewrite the aggregate plan according to expression
-// /// If some of expressions are among functional dependencies and
-// /// they are not part of group by expressions. We can rewrite group by
-// /// section of the aggregate to support seemingly invalid query.
-// pub fn rewrite_plan<'a>(
-//     expr: impl IntoIterator<Item = &'a Expr>,
-//     plan: &Arc<LogicalPlan>,
-// ) -> Result<Arc<LogicalPlan>> {
-//     let exprs: Vec<Expr> = expr.into_iter().cloned().collect();
-//     // when dealing with aggregate plans we cannot simply look in the aggregate output schema
-//     // because it will contain columns representing complex expressions (such a column named
-//     // `GROUPING(person.state)` so in order to resolve `person.state` in this case we need to
-//     // look at the input to the aggregate instead.
-//     Ok(match plan.as_ref() {
-//         LogicalPlan::Aggregate(agg) => {
-//             // Get update group expr according to functional dependencies if available.
-//             let new_group_expr =
-//                 get_updated_group_by_exprs(&agg.group_expr, &exprs, agg.input.schema())?;
-//             // Update plan with updated aggregation
-//             Arc::new(LogicalPlan::Aggregate(Aggregate::try_new(
-//                 agg.input.clone(),
-//                 new_group_expr,
-//                 agg.aggr_expr.clone(),
-//             )?))
-//         }
-//         _ => plan.clone(),
-//     })
-// }
 
 /// Convert an expression into Column expression if it's already provided as input plan.
 ///
