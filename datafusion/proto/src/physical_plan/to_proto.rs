@@ -22,57 +22,34 @@ use std::{
     sync::Arc,
 };
 
-use datafusion::physical_plan::{
-    expressions::{
-        ApproxDistinct, ApproxMedian, ApproxPercentileCont,
-        ApproxPercentileContWithWeight, ArrayAgg, Correlation, Covariance, CovariancePop,
-        DistinctArrayAgg, DistinctBitXor, DistinctSum, FirstValue, Grouping, LastValue,
-        Median, OrderSensitiveArrayAgg, Regr, RegrType, Stddev, StddevPop, Variance,
-        VariancePop,
-    },
-    windows::BuiltInWindowExpr,
-    ColumnStatistics,
-};
-use datafusion::{
-    physical_expr::window::NthValueKind,
-    physical_plan::{
-        expressions::{
-            CaseExpr, CumeDist, InListExpr, IsNotNullExpr, IsNullExpr, NegativeExpr,
-            NotExpr, NthValue, Ntile, Rank, RankType, RowNumber, WindowShift,
-        },
-        Statistics,
-    },
-};
-use datafusion::{
-    physical_expr::window::SlidingAggregateWindowExpr,
-    physical_plan::{
-        expressions::{CastExpr, TryCastExpr},
-        windows::PlainAggregateWindowExpr,
-        WindowExpr,
-    },
-};
-
-use datafusion::datasource::listing::{FileRange, PartitionedFile};
-use datafusion::datasource::physical_plan::FileScanConfig;
-
-use datafusion::physical_plan::expressions::{Count, DistinctCount, Literal};
-
-use datafusion::physical_plan::expressions::{
-    Avg, BinaryExpr, BitAnd, BitOr, BitXor, BoolAnd, BoolOr, Column, LikeExpr, Max, Min,
-    Sum,
-};
-use datafusion::physical_plan::{AggregateExpr, PhysicalExpr};
-
 use crate::protobuf::{self, physical_window_expr_node, scalar_value::Value};
 use crate::protobuf::{
     physical_aggregate_expr_node, PhysicalSortExprNode, PhysicalSortExprNodeCollection,
     ScalarValue,
 };
+
+use datafusion::datasource::listing::{FileRange, PartitionedFile};
+use datafusion::datasource::physical_plan::FileScanConfig;
 use datafusion::logical_expr::BuiltinScalarFunction;
 use datafusion::physical_expr::expressions::{GetFieldAccessExpr, GetIndexedFieldExpr};
+use datafusion::physical_expr::window::{NthValueKind, SlidingAggregateWindowExpr};
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
+use datafusion::physical_plan::expressions::{
+    ApproxDistinct, ApproxMedian, ApproxPercentileCont, ApproxPercentileContWithWeight,
+    ArrayAgg, Avg, BinaryExpr, BitAnd, BitOr, BitXor, BoolAnd, BoolOr, CaseExpr,
+    CastExpr, Column, Correlation, Count, Covariance, CovariancePop, CumeDist,
+    DistinctArrayAgg, DistinctBitXor, DistinctCount, DistinctSum, FirstValue, Grouping,
+    InListExpr, IsNotNullExpr, IsNullExpr, LastValue, LikeExpr, Literal, Max, Median,
+    Min, NegativeExpr, NotExpr, NthValue, Ntile, OrderSensitiveArrayAgg, Rank, RankType,
+    Regr, RegrType, RowNumber, Stddev, StddevPop, Sum, TryCastExpr, Variance,
+    VariancePop, WindowShift,
+};
 use datafusion::physical_plan::joins::utils::JoinSide;
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
+use datafusion::physical_plan::windows::{BuiltInWindowExpr, PlainAggregateWindowExpr};
+use datafusion::physical_plan::{
+    AggregateExpr, ColumnStatistics, PhysicalExpr, Statistics, WindowExpr,
+};
 use datafusion_common::{
     internal_err, not_impl_err, stats::Sharpness, DataFusionError, Result,
 };

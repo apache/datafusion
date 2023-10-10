@@ -17,8 +17,14 @@
 
 //! Aggregates functionalities
 
+use std::any::Any;
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use super::DisplayAs;
 use crate::aggregates::{
     no_grouping::AggregateStream, row_hash::GroupedHashAggregateStream,
+    topk_stream::GroupedTopKAggregateStream,
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::{
@@ -34,19 +40,20 @@ use datafusion_common::utils::longest_consecutive_prefix;
 use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Accumulator;
+use datafusion_physical_expr::utils::{
+    convert_to_expr, get_finer_ordering, get_indices_of_matching_exprs,
+    ordering_satisfy_requirement_concrete,
+};
 use datafusion_physical_expr::{
+    aggregate::is_order_sensitive,
     equivalence::project_equivalence_properties,
-    expressions::Column,
+    expressions::{Column, Max, Min},
     normalize_out_expr_with_columns_map, physical_exprs_contains, reverse_order_bys,
-    utils::{convert_to_expr, get_indices_of_matching_exprs},
     AggregateExpr, LexOrdering, LexOrderingReq, OrderingEquivalenceProperties,
     PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
 };
 
 use itertools::Itertools;
-use std::any::Any;
-use std::collections::HashMap;
-use std::sync::Arc;
 
 mod group_values;
 mod no_grouping;
@@ -55,16 +62,8 @@ mod row_hash;
 mod topk;
 mod topk_stream;
 
-use crate::aggregates::topk_stream::GroupedTopKAggregateStream;
 pub use datafusion_expr::AggregateFunction;
-use datafusion_physical_expr::aggregate::is_order_sensitive;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
-use datafusion_physical_expr::expressions::{Max, Min};
-use datafusion_physical_expr::utils::{
-    get_finer_ordering, ordering_satisfy_requirement_concrete,
-};
-
-use super::DisplayAs;
 
 /// Hash aggregate modes
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]

@@ -25,28 +25,25 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::{any::Any, sync::Arc};
 
-use arrow::{
-    datatypes::{Field, Schema, SchemaRef},
-    record_batch::RecordBatch,
-};
-use datafusion_common::stats::Sharpness;
-use datafusion_common::{exec_err, internal_err, DFSchemaRef, DataFusionError};
-use futures::Stream;
-use itertools::Itertools;
-use log::{debug, trace, warn};
-
-use super::DisplayAs;
 use super::{
     expressions::PhysicalSortExpr,
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
-    ColumnStatistics, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
-    SendableRecordBatchStream, Statistics,
+    ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
+    RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 use crate::common::get_meet_of_orderings;
 use crate::metrics::BaselineMetrics;
 use crate::stream::ObservedStream;
-use datafusion_common::Result;
+
+use arrow::datatypes::{Field, Schema, SchemaRef};
+use arrow::record_batch::RecordBatch;
+use datafusion_common::stats::Sharpness;
+use datafusion_common::{exec_err, internal_err, DFSchemaRef, DataFusionError, Result};
 use datafusion_execution::TaskContext;
+
+use futures::Stream;
+use itertools::Itertools;
+use log::{debug, trace, warn};
 use tokio::macros::support::thread_rng_n;
 
 /// `UnionExec`: `UNION ALL` execution plan.
@@ -598,9 +595,9 @@ fn stats_union(mut left: Statistics, right: Statistics) -> Statistics {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::collect;
     use crate::test;
 
-    use crate::collect;
     use arrow::record_batch::RecordBatch;
     use datafusion_common::ScalarValue;
 

@@ -17,10 +17,12 @@
 
 //! Serde code to convert from protocol buffers to Rust data structures.
 
-use crate::protobuf;
+use std::convert::{TryFrom, TryInto};
+use std::ops::Deref;
+use std::sync::Arc;
+
+use arrow::compute::SortOptions;
 use arrow::datatypes::DataType;
-use chrono::TimeZone;
-use chrono::Utc;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::datasource::listing::{FileRange, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
@@ -29,33 +31,28 @@ use datafusion::execution::context::ExecutionProps;
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::window_function::WindowFunction;
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
-use datafusion::physical_plan::expressions::{in_list, LikeExpr};
-use datafusion::physical_plan::expressions::{GetFieldAccessExpr, GetIndexedFieldExpr};
-use datafusion::physical_plan::windows::create_window_expr;
-use datafusion::physical_plan::WindowExpr;
-use datafusion::physical_plan::{
-    expressions::{
-        BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, Literal,
-        NegativeExpr, NotExpr, TryCastExpr,
-    },
-    functions, Partitioning,
+use datafusion::physical_plan::expressions::{
+    in_list, BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr,
+    Literal, NegativeExpr, NotExpr, TryCastExpr,
 };
-use datafusion::physical_plan::{ColumnStatistics, PhysicalExpr, Statistics};
+use datafusion::physical_plan::expressions::{GetFieldAccessExpr, GetIndexedFieldExpr};
+use datafusion::physical_plan::joins::utils::JoinSide;
+use datafusion::physical_plan::windows::create_window_expr;
+use datafusion::physical_plan::{
+    functions, ColumnStatistics, Partitioning, PhysicalExpr, Statistics, WindowExpr,
+};
 use datafusion_common::stats::Sharpness;
-use datafusion_common::ScalarValue;
-use datafusion_common::{not_impl_err, DataFusionError, Result};
-use object_store::path::Path;
-use object_store::ObjectMeta;
-use std::convert::{TryFrom, TryInto};
-use std::ops::Deref;
-use std::sync::Arc;
+use datafusion_common::{not_impl_err, DataFusionError, Result, ScalarValue};
 
 use crate::common::proto_error;
 use crate::convert_required;
 use crate::logical_plan;
+use crate::protobuf;
 use crate::protobuf::physical_expr_node::ExprType;
-use datafusion::physical_plan::joins::utils::JoinSide;
-use datafusion::physical_plan::sorts::sort::SortOptions;
+
+use chrono::{TimeZone, Utc};
+use object_store::path::Path;
+use object_store::ObjectMeta;
 
 impl From<&protobuf::PhysicalColumn> for Column {
     fn from(c: &protobuf::PhysicalColumn) -> Column {
@@ -609,9 +606,7 @@ impl From<&protobuf::ColumnStats> for ColumnStatistics {
 
 impl From<protobuf::Sharpness> for Sharpness<usize> {
     fn from(s: protobuf::Sharpness) -> Self {
-        let sharpness_type = if let Ok(s_type) = s.sharpness_info.try_into() {
-            s_type
-        } else {
+        let Ok(sharpness_type) = s.sharpness_info.try_into() else {
             return Sharpness::Absent;
         };
         match sharpness_type {
@@ -648,9 +643,7 @@ impl From<protobuf::Sharpness> for Sharpness<usize> {
 
 impl From<protobuf::Sharpness> for Sharpness<ScalarValue> {
     fn from(s: protobuf::Sharpness) -> Self {
-        let sharpness_type = if let Ok(s_type) = s.sharpness_info.try_into() {
-            s_type
-        } else {
+        let Ok(sharpness_type) = s.sharpness_info.try_into() else {
             return Sharpness::Absent;
         };
         match sharpness_type {
@@ -695,8 +688,6 @@ impl TryFrom<&protobuf::Statistics> for Statistics {
 
     fn try_from(s: &protobuf::Statistics) -> Result<Self, Self::Error> {
         // Keep it sync with Statistics::to_proto
-        let column_statistics =
-            s.column_stats.iter().map(|s| s.into()).collect::<Vec<_>>();
         Ok(Statistics {
             num_rows: if let Some(nr) = &s.num_rows {
                 nr.clone().into()
@@ -709,7 +700,7 @@ impl TryFrom<&protobuf::Statistics> for Statistics {
                 Sharpness::Absent
             },
             // No column statistic (None) is encoded with empty array
-            column_statistics,
+            column_statistics: s.column_stats.iter().map(|s| s.into()).collect(),
         })
     }
 }

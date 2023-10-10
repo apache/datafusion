@@ -24,10 +24,11 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::usize;
 
+use crate::joins::hash_join_utils::{build_filter_input_order, SortedFilterExpr};
 use crate::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder};
-use crate::SchemaRef;
 use crate::{
-    ColumnStatistics, EquivalenceProperties, ExecutionPlan, Partitioning, Statistics,
+    ColumnStatistics, EquivalenceProperties, ExecutionPlan, Partitioning, SchemaRef,
+    Statistics,
 };
 
 use arrow::array::{
@@ -44,15 +45,14 @@ use datafusion_common::{
     exec_err, plan_err, DataFusionError, JoinType, Result, ScalarValue, SharedResult,
 };
 use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::intervals::ExprIntervalGraph;
+use datafusion_physical_expr::utils::merge_vectors;
 use datafusion_physical_expr::{
     add_offset_to_lex_ordering, EquivalentClass, LexOrdering, LexOrderingRef,
     OrderingEquivalenceProperties, OrderingEquivalentClass, PhysicalExpr,
     PhysicalSortExpr,
 };
 
-use crate::joins::hash_join_utils::{build_filter_input_order, SortedFilterExpr};
-use datafusion_physical_expr::intervals::ExprIntervalGraph;
-use datafusion_physical_expr::utils::merge_vectors;
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};
 use parking_lot::Mutex;
@@ -827,26 +827,30 @@ fn estimate_inner_join_cardinality(
         .iter()
         .zip(right_stats.column_statistics.iter())
     {
-        // If there is no overlap in any of the join columns, that means the join
+        // If there is no overlap in any of the join columns, this means the join
         // itself is disjoint and the cardinality is 0. Though we can only assume
         // this when the statistics are exact (since it is a very strong assumption).
         if left_stat.min_value.get_value()? > right_stat.max_value.get_value()? {
-            return match (
-                left_stat.min_value.is_exact().unwrap_or(false),
-                right_stat.max_value.is_exact().unwrap_or(false),
-            ) {
-                (true, true) => Some(Sharpness::Exact(0)),
-                _ => Some(Sharpness::Inexact(0)),
-            };
+            return Some(
+                if left_stat.min_value.is_exact().unwrap_or(false)
+                    && right_stat.max_value.is_exact().unwrap_or(false)
+                {
+                    Sharpness::Exact(0)
+                } else {
+                    Sharpness::Inexact(0)
+                },
+            );
         }
         if left_stat.max_value.get_value()? < right_stat.min_value.get_value()? {
-            return match (
-                left_stat.max_value.is_exact().unwrap_or(false),
-                right_stat.min_value.is_exact().unwrap_or(false),
-            ) {
-                (true, true) => Some(Sharpness::Exact(0)),
-                _ => Some(Sharpness::Inexact(0)),
-            };
+            return Some(
+                if left_stat.max_value.is_exact().unwrap_or(false)
+                    && right_stat.min_value.is_exact().unwrap_or(false)
+                {
+                    Sharpness::Exact(0)
+                } else {
+                    Sharpness::Inexact(0)
+                },
+            );
         }
 
         let left_max_distinct = max_distinct_count(&left_stats.num_rows, left_stat)?;
@@ -866,11 +870,11 @@ fn estimate_inner_join_cardinality(
     let left_num_rows = left_stats.num_rows.get_value()?;
     let right_num_rows = right_stats.num_rows.get_value()?;
     match join_selectivity {
-        Sharpness::Exact(val) if val > 0 => {
-            Some(Sharpness::Exact((left_num_rows * right_num_rows) / val))
+        Sharpness::Exact(value) if value > 0 => {
+            Some(Sharpness::Exact((left_num_rows * right_num_rows) / value))
         }
-        Sharpness::Inexact(val) if val > 0 => {
-            Some(Sharpness::Inexact((left_num_rows * right_num_rows) / val))
+        Sharpness::Inexact(value) if value > 0 => {
+            Some(Sharpness::Inexact((left_num_rows * right_num_rows) / value))
         }
         // Since we don't have any information about the selectivity (which is derived
         // from the number of distinct rows information) we can give up here for now.
@@ -1419,13 +1423,15 @@ pub fn prepare_sorted_exprs(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use arrow::datatypes::Fields;
-    use arrow::error::Result as ArrowResult;
-    use arrow::{datatypes::DataType, error::ArrowError};
-    use arrow_schema::SortOptions;
-    use datafusion_common::ScalarValue;
     use std::pin::Pin;
+
+    use super::*;
+
+    use arrow::datatypes::{DataType, Fields};
+    use arrow::error::{ArrowError, Result as ArrowResult};
+    use arrow_schema::SortOptions;
+
+    use datafusion_common::ScalarValue;
 
     fn check(left: &[Column], right: &[Column], on: &[(Column, Column)]) -> Result<()> {
         let left = left
@@ -1581,20 +1587,15 @@ mod tests {
         column_stats: Vec<ColumnStatistics>,
         is_exact: bool,
     ) -> Statistics {
-        if is_exact {
-            Statistics {
-                num_rows: num_rows.map(Sharpness::Exact).unwrap_or(Sharpness::Absent),
-                column_statistics: column_stats,
-                total_byte_size: Sharpness::Absent,
+        Statistics {
+            num_rows: if is_exact {
+                num_rows.map(Sharpness::Exact)
+            } else {
+                num_rows.map(Sharpness::Inexact)
             }
-        } else {
-            Statistics {
-                num_rows: num_rows
-                    .map(Sharpness::Inexact)
-                    .unwrap_or(Sharpness::Absent),
-                column_statistics: column_stats,
-                total_byte_size: Sharpness::Absent,
-            }
+            .unwrap_or(Sharpness::Absent),
+            column_statistics: column_stats,
+            total_byte_size: Sharpness::Absent,
         }
     }
 
@@ -1608,10 +1609,10 @@ mod tests {
                 .map(Sharpness::Inexact)
                 .unwrap_or(Sharpness::Absent),
             min_value: min
-                .map(|size| Sharpness::Inexact(ScalarValue::Int64(Some(size))))
+                .map(|size| Sharpness::Inexact(ScalarValue::from(size)))
                 .unwrap_or(Sharpness::Absent),
             max_value: max
-                .map(|size| Sharpness::Inexact(ScalarValue::Int64(Some(size))))
+                .map(|size| Sharpness::Inexact(ScalarValue::from(size)))
                 .unwrap_or(Sharpness::Absent),
             ..Default::default()
         }

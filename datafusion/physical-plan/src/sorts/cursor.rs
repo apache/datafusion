@@ -15,14 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::sorts::sort::SortOptions;
+use std::cmp::Ordering;
+
 use arrow::buffer::ScalarBuffer;
+use arrow::compute::SortOptions;
 use arrow::datatypes::ArrowNativeTypeOp;
 use arrow::row::{Row, Rows};
 use arrow_array::types::ByteArrayType;
 use arrow_array::{Array, ArrowPrimitiveType, GenericByteArray, PrimitiveArray};
 use datafusion_execution::memory_pool::MemoryReservation;
-use std::cmp::Ordering;
 
 /// A [`Cursor`] for [`Rows`]
 pub struct RowCursor {

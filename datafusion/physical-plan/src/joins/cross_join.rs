@@ -18,14 +18,12 @@
 //! Defines the cross join plan for loading the left side of the cross join
 //! and producing batches in parallel for the right partitions
 
-use datafusion_common::stats::Sharpness;
-use futures::{ready, StreamExt};
-use futures::{Stream, TryStreamExt};
 use std::{any::Any, sync::Arc, task::Poll};
 
-use arrow::datatypes::{Fields, Schema, SchemaRef};
-use arrow::record_batch::RecordBatch;
-
+use super::utils::{
+    adjust_right_output_partitioning, cross_join_equivalence_properties,
+    BuildProbeJoinMetrics, OnceAsync, OnceFut,
+};
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::DisplayAs;
 use crate::{
@@ -34,16 +32,17 @@ use crate::{
     ExecutionPlan, Partitioning, PhysicalSortExpr, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
-use async_trait::async_trait;
-use datafusion_common::{plan_err, DataFusionError};
-use datafusion_common::{Result, ScalarValue};
+
+use arrow::datatypes::{Fields, Schema, SchemaRef};
+use arrow::record_batch::RecordBatch;
+use datafusion_common::stats::Sharpness;
+use datafusion_common::{plan_err, DataFusionError, Result, ScalarValue};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 
-use super::utils::{
-    adjust_right_output_partitioning, cross_join_equivalence_properties,
-    BuildProbeJoinMetrics, OnceAsync, OnceFut,
-};
+use async_trait::async_trait;
+use futures::{ready, StreamExt};
+use futures::{Stream, TryStreamExt};
 
 /// Data of the left side
 type JoinLeftData = (RecordBatch, MemoryReservation);
@@ -438,6 +437,7 @@ mod tests {
     use super::*;
     use crate::common;
     use crate::test::build_table_scan_i32;
+
     use datafusion_common::{assert_batches_sorted_eq, assert_contains};
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 

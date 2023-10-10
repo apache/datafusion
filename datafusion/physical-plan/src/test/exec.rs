@@ -23,23 +23,21 @@ use std::{
     sync::{Arc, Weak},
     task::{Context, Poll},
 };
-use tokio::sync::Barrier;
 
-use arrow::{
-    datatypes::{DataType, Field, Schema, SchemaRef},
-    record_batch::RecordBatch,
-};
-use futures::Stream;
-
+use crate::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
 use crate::{
-    common, stream::RecordBatchReceiverStream, stream::RecordBatchStreamAdapter,
-    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
+    common, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
-use datafusion_physical_expr::PhysicalSortExpr;
 
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::record_batch::RecordBatch;
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::PhysicalSortExpr;
+
+use futures::Stream;
+use tokio::sync::Barrier;
 
 /// Index into the data that has been returned so far
 #[derive(Debug, Default, Clone)]

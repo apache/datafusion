@@ -513,12 +513,14 @@ impl Interval {
         upper: IntervalBound::new_closed(ScalarValue::Boolean(Some(true))),
     };
 
-    /// Returns the cardinality of this interval which is the number of all
-    /// distinct points inside it. Under these conditions the function return None:
-    /// - If any of the bounds is an infinite bound
-    /// - If the type is not implemented yet
-    /// - If there is an overflow during a computation
-    /// In case of a malformed interval, the function returns an error.
+    /// Returns the cardinality of this interval, which is the number of all
+    /// distinct points inside it. This function returns `None` if:
+    /// - The interval is unbounded from either side, or
+    /// - Cardinality calculations for the datatype in question is not
+    ///   implemented yet, or
+    /// - An overflow occurs during the calculation.
+    ///
+    /// This function returns an error if the given interval is malformed.
     pub fn cardinality(&self) -> Result<Option<u64>> {
         let data_type = self.get_datatype()?;
         if data_type.is_integer() {
@@ -542,47 +544,46 @@ impl Interval {
                 ) => {
                     // Negative numbers are sorted in the reverse order. To always have a positive difference after the subtraction,
                     // we perform following transformation:
-                    let transformed_lower = (lower.to_bits() as i32)
-                        ^ (((lower.to_bits() as i32) >> 31) & 0x7fffffff);
-                    let transformed_upper = (upper.to_bits() as i32)
-                        ^ (((upper.to_bits() as i32) >> 31) & 0x7fffffff);
-                    let diff = if let Ok(result) =
-                        transformed_upper.sub_checked(transformed_lower)
-                    {
-                        result
-                    } else {
+                    let lower_bits = lower.to_bits() as i32;
+                    let upper_bits = upper.to_bits() as i32;
+                    let transformed_lower =
+                        lower_bits ^ ((lower_bits >> 31) & 0x7fffffff);
+                    let transformed_upper =
+                        upper_bits ^ ((upper_bits >> 31) & 0x7fffffff);
+                    let Ok(count) = transformed_upper.sub_checked(transformed_lower)
+                    else {
                         return Ok(None);
                     };
                     Ok(Some(calculate_cardinality_based_on_bounds(
                         self.lower.open,
                         self.upper.open,
-                        diff as u64,
+                        count as u64,
                     )))
                 }
                 (
                     ScalarValue::Float64(Some(lower)),
                     ScalarValue::Float64(Some(upper)),
                 ) => {
-                    let transformed_lower = (lower.to_bits() as i64)
-                        ^ (((lower.to_bits() as i64) >> 63) & 0x7fffffffffffffff);
-                    let transformed_upper = (upper.to_bits() as i64)
-                        ^ (((upper.to_bits() as i64) >> 63) & 0x7fffffffffffffff);
-                    let diff = if let Ok(result) =
-                        transformed_upper.sub_checked(transformed_lower)
-                    {
-                        result
-                    } else {
+                    let lower_bits = lower.to_bits() as i64;
+                    let upper_bits = upper.to_bits() as i64;
+                    let transformed_lower =
+                        lower_bits ^ ((lower_bits >> 63) & 0x7fffffffffffffff);
+                    let transformed_upper =
+                        upper_bits ^ ((upper_bits >> 63) & 0x7fffffffffffffff);
+                    let Ok(count) = transformed_upper.sub_checked(transformed_lower)
+                    else {
                         return Ok(None);
                     };
                     Ok(Some(calculate_cardinality_based_on_bounds(
                         self.lower.open,
                         self.upper.open,
-                        diff as u64,
+                        count as u64,
                     )))
                 }
                 _ => Ok(None),
             }
         } else {
+            // Cardinality calculations are not implemented for this data type yet:
             Ok(None)
         }
     }

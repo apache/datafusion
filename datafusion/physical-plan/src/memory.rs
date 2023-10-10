@@ -17,23 +17,24 @@
 
 //! Execution plan for reading in-memory batches of data
 
+use std::any::Any;
+use std::fmt;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+
 use super::expressions::PhysicalSortExpr;
 use super::{
     common, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
+use crate::ordering_equivalence_properties_helper;
+
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use core::fmt;
-use datafusion_common::{internal_err, project_schema, Result};
-use std::any::Any;
-use std::sync::Arc;
-use std::task::{Context, Poll};
-
-use crate::ordering_equivalence_properties_helper;
-use datafusion_common::DataFusionError;
+use datafusion_common::{internal_err, project_schema, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{LexOrdering, OrderingEquivalenceProperties};
+
 use futures::Stream;
 
 /// Execution plan for reading in-memory batches of data
@@ -265,12 +266,14 @@ impl RecordBatchStream for MemoryStream {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use crate::memory::MemoryExec;
     use crate::ExecutionPlan;
+
     use arrow_schema::{DataType, Field, Schema, SortOptions};
     use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr::PhysicalSortExpr;
-    use std::sync::Arc;
 
     #[test]
     fn test_memory_order_eq() -> datafusion_common::Result<()> {

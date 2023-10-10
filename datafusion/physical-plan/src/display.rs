@@ -20,12 +20,11 @@
 
 use std::fmt;
 
-use arrow_schema::SchemaRef;
-use datafusion_common::display::StringifiedPlan;
-use datafusion_physical_expr::PhysicalSortExpr;
-
 use super::{accept, ExecutionPlan, ExecutionPlanVisitor};
-use datafusion_common::display::{GraphvizBuilder, PlanType};
+
+use arrow_schema::SchemaRef;
+use datafusion_common::display::{GraphvizBuilder, PlanType, StringifiedPlan};
+use datafusion_physical_expr::PhysicalSortExpr;
 
 /// Options for controlling how each [`ExecutionPlan`] should format itself
 #[derive(Debug, Clone, Copy)]

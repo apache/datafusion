@@ -17,9 +17,16 @@
 
 //! Defines common code used in execution plans
 
+use std::fs;
+use std::fs::{metadata, File};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::task::{Context, Poll};
+
 use super::SendableRecordBatchStream;
 use crate::stream::RecordBatchReceiverStream;
 use crate::{ColumnStatistics, ExecutionPlan, Statistics};
+
 use arrow::datatypes::Schema;
 use arrow::ipc::writer::{FileWriter, IpcWriteOptions};
 use arrow::record_batch::RecordBatch;
@@ -28,14 +35,10 @@ use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+
 use futures::{Future, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
 use pin_project_lite::pin_project;
-use std::fs;
-use std::fs::{metadata, File};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::task::{Context, Poll};
 use tokio::task::JoinHandle;
 
 /// [`MemoryReservation`] used across query execution streams
@@ -378,6 +381,7 @@ mod tests {
     use crate::memory::MemoryExec;
     use crate::sorts::sort::SortExec;
     use crate::union::UnionExec;
+
     use arrow::compute::SortOptions;
     use arrow::{
         array::{Float32Array, Float64Array},

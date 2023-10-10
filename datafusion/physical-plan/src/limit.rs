@@ -22,13 +22,12 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::{
-    DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan, Partitioning,
-};
-
 use super::expressions::PhysicalSortExpr;
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream, Statistics};
+use crate::{
+    DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan, Partitioning,
+};
 
 use arrow::array::ArrayRef;
 use arrow::datatypes::SchemaRef;
@@ -38,8 +37,7 @@ use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::OrderingEquivalenceProperties;
 
-use futures::stream::Stream;
-use futures::stream::StreamExt;
+use futures::stream::{Stream, StreamExt};
 use log::trace;
 
 /// Limit execution plan
@@ -558,14 +556,12 @@ impl RecordBatchStream for LimitStream {
 
 #[cfg(test)]
 mod tests {
-
-    use arrow_schema::Schema;
-    use common::collect;
-
     use super::*;
     use crate::coalesce_partitions::CoalescePartitionsExec;
-    use crate::common;
-    use crate::test;
+    use crate::common::collect;
+    use crate::{common, test};
+
+    use arrow_schema::Schema;
 
     #[tokio::test]
     async fn limit() -> Result<()> {

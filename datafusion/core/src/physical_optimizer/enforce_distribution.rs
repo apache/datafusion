@@ -40,7 +40,6 @@ use crate::physical_plan::joins::{
 };
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
-use crate::physical_plan::sorts::sort::SortOptions;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::physical_plan::union::{can_interleave, InterleaveExec, UnionExec};
 use crate::physical_plan::windows::WindowAggExec;
@@ -48,6 +47,7 @@ use crate::physical_plan::{
     with_new_children_if_necessary, Distribution, ExecutionPlan, Partitioning,
 };
 
+use arrow::compute::SortOptions;
 use datafusion_common::stats::Sharpness;
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_expr::logical_plan::JoinType;

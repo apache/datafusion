@@ -40,12 +40,12 @@ use datafusion_common::stats::Sharpness;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::expressions::{Literal, UnKnownColumn};
+use datafusion_physical_expr::utils::find_orderings_of_exprs;
 use datafusion_physical_expr::{
     normalize_out_expr_with_columns_map, project_equivalence_properties,
     project_ordering_equivalence_properties, OrderingEquivalenceProperties,
 };
 
-use datafusion_physical_expr::utils::find_orderings_of_exprs;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -393,54 +393,37 @@ fn get_field_metadata(
 }
 
 fn stats_projection(
-    stats: Statistics,
+    mut stats: Statistics,
     exprs: impl Iterator<Item = Arc<dyn PhysicalExpr>>,
     schema: SchemaRef,
 ) -> Statistics {
-    let inner_exprs = exprs.collect::<Vec<_>>();
-    let column_statistics = inner_exprs
-        .clone()
-        .into_iter()
-        .enumerate()
-        .map(|(_index, e)| {
-            if let Some(col) = e.as_any().downcast_ref::<Column>() {
-                stats.column_statistics[col.index()].clone()
-            } else {
-                // TODO stats: estimate more statistics from expressions
-                // (expressions should compute their statistics themselves)
-                ColumnStatistics::new_unknown()
-            }
-        })
-        .collect();
-
-    let primitive_row_size = inner_exprs
-        .into_iter()
-        .map(|e| match e.data_type(schema.as_ref()) {
-            Ok(data_type) => data_type.primitive_width(),
-            Err(_) => None,
-        })
-        .try_fold(0usize, |init, v| v.map(|value| init + value));
-
-    match (primitive_row_size, stats.num_rows.get_value()) {
-        (Some(row_size), Some(_)) => {
-            Statistics {
-                num_rows: stats.num_rows.clone(),
-                column_statistics,
-                // Use the row_size * row_count as the total byte size
-                total_byte_size: Sharpness::Exact(row_size).multiply(&stats.num_rows),
+    let mut primitive_row_size = 0;
+    let mut primitive_row_size_possible = true;
+    let mut column_statistics = vec![];
+    for expr in exprs {
+        let col_stats = if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+            stats.column_statistics[col.index()].clone()
+        } else {
+            // TODO stats: estimate more statistics from expressions
+            // (expressions should compute their statistics themselves)
+            ColumnStatistics::new_unknown()
+        };
+        column_statistics.push(col_stats);
+        if let Ok(data_type) = expr.data_type(&schema) {
+            if let Some(value) = data_type.primitive_width() {
+                primitive_row_size += value;
+                continue;
             }
         }
-        _ => {
-            Statistics {
-                num_rows: stats.num_rows,
-                column_statistics,
-                // TODO stats: knowing the type of the new columns we can guess the output size
-                // If we can't get the exact statistics for the project
-                // Before we get the exact result, we just use the child status
-                total_byte_size: stats.total_byte_size,
-            }
-        }
+        primitive_row_size_possible = false;
     }
+
+    if primitive_row_size_possible {
+        stats.total_byte_size =
+            Sharpness::Exact(primitive_row_size).multiply(&stats.num_rows);
+    }
+    stats.column_statistics = column_statistics;
+    stats
 }
 
 impl ProjectionStream {

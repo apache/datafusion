@@ -49,6 +49,7 @@ use datafusion_physical_expr::{
 
 use datafusion_physical_expr::intervals::utils::check_support;
 use datafusion_physical_expr::utils::collect_columns;
+
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -202,8 +203,9 @@ impl ExecutionPlan for FilterExec {
     fn statistics(&self) -> Result<Statistics> {
         let predicate = self.predicate();
 
-        if !check_support(predicate, self.schema()) {
-            return Ok(Statistics::new_unknown(&self.schema()));
+        let schema = self.schema();
+        if !check_support(predicate, &schema) {
+            return Ok(Statistics::new_unknown(&schema));
         }
         let input_stats = self.input.statistics()?;
 
@@ -392,18 +394,18 @@ pub type EqualAndNonEqual<'a> =
 
 #[cfg(test)]
 mod tests {
+    use std::iter::Iterator;
+    use std::sync::Arc;
 
     use super::*;
     use crate::expressions::*;
     use crate::test;
     use crate::test::exec::StatisticsExec;
     use crate::ExecutionPlan;
+
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::ColumnStatistics;
-    use datafusion_common::ScalarValue;
+    use datafusion_common::{ColumnStatistics, ScalarValue};
     use datafusion_expr::Operator;
-    use std::iter::Iterator;
-    use std::sync::Arc;
 
     #[tokio::test]
     async fn collect_columns_predicates() -> Result<()> {

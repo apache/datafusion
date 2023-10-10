@@ -15,8 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use async_recursion::async_recursion;
-use chrono::DateTime;
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use datafusion::arrow::datatypes::Schema;
 use datafusion::common::not_impl_err;
 use datafusion::datasource::listing::PartitionedFile;
@@ -25,9 +26,10 @@ use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::physical_plan::{ExecutionPlan, Statistics};
 use datafusion::prelude::SessionContext;
+
+use async_recursion::async_recursion;
+use chrono::DateTime;
 use object_store::ObjectMeta;
-use std::collections::HashMap;
-use std::sync::Arc;
 use substrait::proto::read_rel::local_files::file_or_files::PathType;
 use substrait::proto::{
     expression::MaskExpression, read_rel::ReadType, rel::RelType, Rel,

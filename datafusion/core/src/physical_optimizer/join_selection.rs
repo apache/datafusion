@@ -1224,33 +1224,33 @@ mod util_tests {
             Operator::Plus,
             Arc::new(Column::new("a", 0)),
         )) as Arc<dyn PhysicalExpr>;
-        assert!(check_support(&supported_expr, schema.clone()));
+        assert!(check_support(&supported_expr, &schema));
         let supported_expr_2 = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
-        assert!(check_support(&supported_expr_2, schema.clone()));
+        assert!(check_support(&supported_expr_2, &schema));
         let unsupported_expr = Arc::new(BinaryExpr::new(
             Arc::new(Column::new("a", 0)),
             Operator::Or,
             Arc::new(Column::new("a", 0)),
         )) as Arc<dyn PhysicalExpr>;
-        assert!(!check_support(&unsupported_expr, schema.clone()));
+        assert!(!check_support(&unsupported_expr, &schema));
         let unsupported_expr_2 = Arc::new(BinaryExpr::new(
             Arc::new(Column::new("a", 0)),
             Operator::Or,
             Arc::new(NegativeExpr::new(Arc::new(Column::new("a", 0)))),
         )) as Arc<dyn PhysicalExpr>;
-        assert!(!check_support(&unsupported_expr_2, schema.clone()));
+        assert!(!check_support(&unsupported_expr_2, &schema));
         let unsupported_expr_3 = Arc::new(BinaryExpr::new(
             Arc::new(Column::new("b", 1)),
             Operator::Eq,
             Arc::new(Literal::new(ScalarValue::Int16(Some(-1)))),
         )) as Arc<dyn PhysicalExpr>;
-        assert!(!check_support(&unsupported_expr_3, schema.clone()));
+        assert!(!check_support(&unsupported_expr_3, &schema));
         let unsupported_expr_4 = Arc::new(BinaryExpr::new(
             Arc::new(Column::new("c", 2)),
             Operator::Eq,
             Arc::new(Literal::new(ScalarValue::Int16(Some(-1)))),
         )) as Arc<dyn PhysicalExpr>;
-        assert!(!check_support(&unsupported_expr_4, schema.clone()));
+        assert!(!check_support(&unsupported_expr_4, &schema));
     }
 }
 

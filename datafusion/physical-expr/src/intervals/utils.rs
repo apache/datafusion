@@ -38,11 +38,11 @@ const DT_MS_MASK: i64 = 0xFFFF_FFFF;
 /// We do not support every type of [`Operator`]s either. Over time, this check
 /// will relax as more types of `PhysicalExpr`s and `Operator`s are supported.
 /// Currently, [`CastExpr`], [`NegativeExpr`], [`BinaryExpr`], [`Column`] and [`Literal`] are supported.
-pub fn check_support(expr: &Arc<dyn PhysicalExpr>, schema: SchemaRef) -> bool {
+pub fn check_support(expr: &Arc<dyn PhysicalExpr>, schema: &SchemaRef) -> bool {
     let expr_any = expr.as_any();
     if let Some(binary_expr) = expr_any.downcast_ref::<BinaryExpr>() {
         is_operator_supported(binary_expr.op())
-            && check_support(binary_expr.left(), schema.clone())
+            && check_support(binary_expr.left(), schema)
             && check_support(binary_expr.right(), schema)
     } else if let Some(column) = expr_any.downcast_ref::<Column>() {
         if let Ok(field) = schema.field_with_name(column.name()) {
@@ -51,7 +51,7 @@ pub fn check_support(expr: &Arc<dyn PhysicalExpr>, schema: SchemaRef) -> bool {
             return false;
         }
     } else if let Some(literal) = expr_any.downcast_ref::<Literal>() {
-        if let Ok(dt) = literal.data_type(&schema) {
+        if let Ok(dt) = literal.data_type(schema) {
             is_datatype_supported(&dt)
         } else {
             return false;
