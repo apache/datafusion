@@ -104,9 +104,7 @@ pub async fn from_substrait_rel(
                         object_store_url: ObjectStoreUrl::local_filesystem(),
                         file_schema: Arc::new(Schema::empty()),
                         file_groups,
-                        statistics: Statistics::new_with_unbounded_columns(
-                            &Schema::empty(),
-                        ),
+                        statistics: Statistics::new_unknown(&Schema::empty()),
                         projection: None,
                         limit: None,
                         table_partition_cols: vec![],

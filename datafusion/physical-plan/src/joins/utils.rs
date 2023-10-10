@@ -734,10 +734,7 @@ pub(crate) fn estimate_join_statistics(
     let join_stats = estimate_join_cardinality(join_type, left_stats, right_stats, &on);
     let (num_rows, column_statistics) = match join_stats {
         Some(stats) => (Sharpness::Inexact(stats.num_rows), stats.column_statistics),
-        None => (
-            Sharpness::Absent,
-            Statistics::unbounded_column_statistics(schema),
-        ),
+        None => (Sharpness::Absent, Statistics::unknown_column(schema)),
     };
     Ok(Statistics {
         num_rows,

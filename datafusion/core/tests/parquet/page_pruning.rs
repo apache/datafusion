@@ -17,6 +17,7 @@
 
 use crate::parquet::Unit::Page;
 use crate::parquet::{ContextWithParquet, Scenario};
+
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::PartitionedFile;
@@ -30,6 +31,7 @@ use datafusion_common::{ScalarValue, Statistics, ToDFSchema};
 use datafusion_expr::{col, lit, Expr};
 use datafusion_physical_expr::create_physical_expr;
 use datafusion_physical_expr::execution_props::ExecutionProps;
+
 use futures::StreamExt;
 use object_store::path::Path;
 use object_store::ObjectMeta;
@@ -72,7 +74,7 @@ async fn get_parquet_exec(state: &SessionState, filter: Expr) -> ParquetExec {
             object_store_url,
             file_groups: vec![vec![partitioned_file]],
             file_schema: schema.clone(),
-            statistics: Statistics::new_with_unbounded_columns(&schema),
+            statistics: Statistics::new_unknown(&schema),
             // file has 10 cols so index 12 should be month
             projection: None,
             limit: None,

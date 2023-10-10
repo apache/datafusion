@@ -42,7 +42,7 @@ async fn parquet_exec() -> Result<()> {
                 123,
             )],
         ],
-        statistics: Statistics::new_with_unbounded_columns(&Schema::empty()),
+        statistics: Statistics::new_unknown(&Schema::empty()),
         projection: None,
         limit: None,
         table_partition_cols: vec![],

@@ -15,12 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use crate::cache::CacheAccessor;
-use dashmap::DashMap;
+
 use datafusion_common::Statistics;
+
+use dashmap::DashMap;
 use object_store::path::Path;
 use object_store::ObjectMeta;
-use std::sync::Arc;
 
 /// Collected statistics for files
 /// Cache is invalided when file size or last modification has changed
@@ -179,7 +182,7 @@ mod tests {
 
         cache.put_with_extra(
             &meta.location,
-            Statistics::new_with_unbounded_columns(&Schema::new(vec![Field::new(
+            Statistics::new_unknown(&Schema::new(vec![Field::new(
                 "test_column",
                 DataType::Timestamp(TimeUnit::Second, None),
                 false,

@@ -16,21 +16,20 @@
 // under the License.
 
 //! Utilizing exact statistics from sources to avoid scanning data
-use datafusion_common::stats::Sharpness;
 use std::sync::Arc;
 
+use super::optimizer::PhysicalOptimizerRule;
 use crate::config::ConfigOptions;
-use datafusion_common::tree_node::TreeNode;
-use datafusion_expr::utils::COUNT_STAR_EXPANSION;
-
+use crate::error::Result;
 use crate::physical_plan::aggregates::AggregateExec;
 use crate::physical_plan::empty::EmptyExec;
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::{expressions, AggregateExpr, ExecutionPlan, Statistics};
 use crate::scalar::ScalarValue;
 
-use super::optimizer::PhysicalOptimizerRule;
-use crate::error::Result;
+use datafusion_common::stats::Sharpness;
+use datafusion_common::tree_node::TreeNode;
+use datafusion_expr::utils::COUNT_STAR_EXPANSION;
 
 /// Optimizer that uses available statistics for aggregate functions
 #[derive(Default)]
@@ -243,17 +242,9 @@ fn take_optimizable_max(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::Arc;
 
-    use arrow::array::Int32Array;
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::record_batch::RecordBatch;
-    use datafusion_common::cast::as_int64_array;
-    use datafusion_physical_expr::expressions::cast;
-    use datafusion_physical_expr::PhysicalExpr;
-    use datafusion_physical_plan::aggregates::AggregateMode;
-
+    use super::*;
     use crate::error::Result;
     use crate::logical_expr::Operator;
     use crate::physical_plan::aggregates::{AggregateExec, PhysicalGroupBy};
@@ -263,6 +254,14 @@ mod tests {
     use crate::physical_plan::filter::FilterExec;
     use crate::physical_plan::memory::MemoryExec;
     use crate::prelude::SessionContext;
+
+    use arrow::array::Int32Array;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
+    use datafusion_common::cast::as_int64_array;
+    use datafusion_physical_expr::expressions::cast;
+    use datafusion_physical_expr::PhysicalExpr;
+    use datafusion_physical_plan::aggregates::AggregateMode;
 
     /// Mock data using a MemoryExec which has an exact count statistic
     fn mock_data() -> Result<Arc<MemoryExec>> {

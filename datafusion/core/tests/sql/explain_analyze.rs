@@ -16,6 +16,7 @@
 // under the License.
 
 use super::*;
+
 use datafusion::config::ConfigOptions;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::metrics::Timestamp;

@@ -212,19 +212,18 @@ pub struct Statistics {
 }
 
 impl Statistics {
-    /// Returns a [`Statistics`] instance corresponding to the given schema by assigning infinite
-    /// bounds to each column in the schema. This is useful when the input statistics are not
-    /// known to give an opportunity to the current executor to shrink the bounds of some columns.
-    pub fn new_with_unbounded_columns(schema: &Schema) -> Self {
+    /// Returns a [`Statistics`] instance for the given schema by assigning
+    /// unknown statistics to each column in the schema.
+    pub fn new_unknown(schema: &Schema) -> Self {
         Self {
             num_rows: Sharpness::Absent,
             total_byte_size: Sharpness::Absent,
-            column_statistics: Statistics::unbounded_column_statistics(schema),
+            column_statistics: Statistics::unknown_column(schema),
         }
     }
 
-    /// Returns an unbounded ColumnStatistics for each field in the schema.
-    pub fn unbounded_column_statistics(schema: &Schema) -> Vec<ColumnStatistics> {
+    /// Returns an unbounded `ColumnStatistics` for each field in the schema.
+    pub fn unknown_column(schema: &Schema) -> Vec<ColumnStatistics> {
         schema
             .fields()
             .iter()

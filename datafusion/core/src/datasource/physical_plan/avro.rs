@@ -16,6 +16,11 @@
 // under the License.
 
 //! Execution plan for reading line-delimited Avro files
+
+use std::any::Any;
+use std::sync::Arc;
+
+use super::FileScanConfig;
 use crate::error::Result;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
@@ -23,17 +28,12 @@ use crate::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
     Statistics,
 };
-use datafusion_execution::TaskContext;
 
 use arrow::datatypes::SchemaRef;
+use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{
     ordering_equivalence_properties_helper, LexOrdering, OrderingEquivalenceProperties,
 };
-
-use std::any::Any;
-use std::sync::Arc;
-
-use super::FileScanConfig;
 
 /// Execution plan for scanning Avro data source
 #[derive(Debug, Clone)]
@@ -272,7 +272,7 @@ mod tests {
         let avro_exec = AvroExec::new(FileScanConfig {
             object_store_url: ObjectStoreUrl::local_filesystem(),
             file_groups: vec![vec![meta.into()]],
-            statistics: Statistics::new_with_unbounded_columns(&file_schema),
+            statistics: Statistics::new_unknown(&file_schema),
             file_schema,
             projection: Some(vec![0, 1, 2]),
             limit: None,
@@ -344,7 +344,7 @@ mod tests {
         let avro_exec = AvroExec::new(FileScanConfig {
             object_store_url,
             file_groups: vec![vec![meta.into()]],
-            statistics: Statistics::new_with_unbounded_columns(&file_schema),
+            statistics: Statistics::new_unknown(&file_schema),
             file_schema,
             projection,
             limit: None,
@@ -417,7 +417,7 @@ mod tests {
             projection: Some(vec![0, 1, file_schema.fields().len(), 2]),
             object_store_url,
             file_groups: vec![vec![partitioned_file]],
-            statistics: Statistics::new_with_unbounded_columns(&file_schema),
+            statistics: Statistics::new_unknown(&file_schema),
             file_schema,
             limit: None,
             table_partition_cols: vec![("date".to_owned(), DataType::Utf8)],

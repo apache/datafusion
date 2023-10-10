@@ -92,9 +92,7 @@ fn supports_collect_by_size(
 ) -> bool {
     // Currently we do not trust the 0 value from stats, due to stats collection might have bug
     // TODO check the logic in datasource::get_statistics_with_limit()
-    let stats = if let Ok(stats) = plan.statistics() {
-        stats
-    } else {
+    let Ok(stats) = plan.statistics() else {
         return false;
     };
     if let Some(size) = stats.total_byte_size.get_value() {
@@ -592,6 +590,8 @@ fn apply_subrules(
 
 #[cfg(test)]
 mod tests_statistical {
+    use std::sync::Arc;
+
     use super::*;
     use crate::{
         physical_plan::{
@@ -599,8 +599,6 @@ mod tests_statistical {
         },
         test::StatisticsExec,
     };
-
-    use std::sync::Arc;
 
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::{stats::Sharpness, JoinType, ScalarValue};
@@ -1204,6 +1202,8 @@ mod tests_statistical {
 
 #[cfg(test)]
 mod util_tests {
+    use std::sync::Arc;
+
     use arrow_schema::{DataType, Field, Schema};
     use datafusion_common::ScalarValue;
     use datafusion_expr::Operator;
@@ -1212,7 +1212,6 @@ mod util_tests {
     };
     use datafusion_physical_expr::intervals::utils::check_support;
     use datafusion_physical_expr::PhysicalExpr;
-    use std::sync::Arc;
 
     #[test]
     fn check_expr_supported() {

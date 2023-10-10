@@ -65,7 +65,7 @@ async fn main() -> Result<()> {
         object_store_url: ObjectStoreUrl::local_filesystem(),
         file_schema: schema.clone(),
         file_groups: vec![vec![PartitionedFile::new(path.to_string(), 10)]],
-        statistics: Statistics::new_with_unbounded_columns(&schema),
+        statistics: Statistics::new_unknown(&schema),
         projection: Some(vec![1, 0]),
         limit: Some(5),
         table_partition_cols: vec![],

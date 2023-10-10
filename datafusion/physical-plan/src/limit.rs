@@ -206,7 +206,7 @@ impl ExecutionPlan for GlobalLimitExec {
                 }
             })
             .unwrap_or(usize::MAX);
-        let col_stats = Statistics::unbounded_column_statistics(&self.schema());
+        let col_stats = Statistics::unknown_column(&self.schema());
 
         let fetched_row_number_stats = Statistics {
             num_rows: Sharpness::Exact(max_row_num),
@@ -372,7 +372,7 @@ impl ExecutionPlan for LocalLimitExec {
 
     fn statistics(&self) -> Result<Statistics> {
         let input_stats = self.input.statistics()?;
-        let col_stats = Statistics::unbounded_column_statistics(&self.schema());
+        let col_stats = Statistics::unknown_column(&self.schema());
         let stats = match input_stats {
             // if the input does not reach the limit globally, return input stats
             Statistics {

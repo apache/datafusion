@@ -77,7 +77,7 @@ impl FileFormat for AvroFormat {
         table_schema: SchemaRef,
         _object: &ObjectMeta,
     ) -> Result<Statistics> {
-        Ok(Statistics::new_with_unbounded_columns(&table_schema))
+        Ok(Statistics::new_unknown(&table_schema))
     }
 
     async fn create_physical_plan(

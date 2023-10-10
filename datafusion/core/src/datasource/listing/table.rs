@@ -962,10 +962,7 @@ impl ListingTable {
         let store = if let Some(url) = self.table_paths.get(0) {
             ctx.runtime_env().object_store(url)?
         } else {
-            return Ok((
-                vec![],
-                Statistics::new_with_unbounded_columns(&self.file_schema),
-            ));
+            return Ok((vec![], Statistics::new_unknown(&self.file_schema)));
         };
         // list files (with partitions)
         let file_list = future::try_join_all(self.table_paths.iter().map(|table_path| {
@@ -984,8 +981,7 @@ impl ListingTable {
         let files = file_list
             .map(|part_file| async {
                 let part_file = part_file?;
-                let mut statistics_result =
-                    Statistics::new_with_unbounded_columns(&self.file_schema);
+                let mut statistics_result = Statistics::new_unknown(&self.file_schema);
                 if self.options.collect_stat {
                     let statistics_cache = self.collected_statistics.clone();
                     match statistics_cache.get_with_extra(

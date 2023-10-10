@@ -17,6 +17,11 @@
 
 //! Execution plan for reading Parquet files
 
+use std::any::Any;
+use std::fmt::Debug;
+use std::ops::Range;
+use std::sync::Arc;
+
 use crate::datasource::physical_plan::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
@@ -36,27 +41,19 @@ use crate::{
         Statistics,
     },
 };
-use datafusion_physical_expr::{
-    ordering_equivalence_properties_helper, PhysicalSortExpr,
-};
-use fmt::Debug;
-use object_store::path::Path;
-use std::any::Any;
-use std::fmt;
-use std::ops::Range;
-use std::sync::Arc;
-use tokio::task::JoinSet;
 
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::error::ArrowError;
 use datafusion_physical_expr::{
-    LexOrdering, OrderingEquivalenceProperties, PhysicalExpr,
+    ordering_equivalence_properties_helper, LexOrdering, OrderingEquivalenceProperties,
+    PhysicalExpr, PhysicalSortExpr,
 };
 
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use futures::{StreamExt, TryStreamExt};
 use log::debug;
+use object_store::path::Path;
 use object_store::ObjectStore;
 use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::arrow::async_reader::{AsyncFileReader, ParquetObjectReader};
@@ -64,6 +61,7 @@ use parquet::arrow::{AsyncArrowWriter, ParquetRecordBatchStreamBuilder, Projecti
 use parquet::basic::{ConvertedType, LogicalType};
 use parquet::file::{metadata::ParquetMetaData, properties::WriterProperties};
 use parquet::schema::types::ColumnDescriptor;
+use tokio::task::JoinSet;
 
 mod metrics;
 pub mod page_filter;
@@ -860,7 +858,7 @@ mod tests {
                 FileScanConfig {
                     object_store_url: ObjectStoreUrl::local_filesystem(),
                     file_groups: vec![file_groups],
-                    statistics: Statistics::new_with_unbounded_columns(&file_schema),
+                    statistics: Statistics::new_unknown(&file_schema),
                     file_schema,
                     projection,
                     limit: None,
@@ -1517,7 +1515,7 @@ mod tests {
                 FileScanConfig {
                     object_store_url: ObjectStoreUrl::local_filesystem(),
                     file_groups,
-                    statistics: Statistics::new_with_unbounded_columns(&file_schema),
+                    statistics: Statistics::new_unknown(&file_schema),
                     file_schema,
                     projection: None,
                     limit: None,
@@ -1621,7 +1619,7 @@ mod tests {
                 object_store_url,
                 file_groups: vec![vec![partitioned_file]],
                 file_schema: schema.clone(),
-                statistics: Statistics::new_with_unbounded_columns(&schema),
+                statistics: Statistics::new_unknown(&schema),
                 // file has 10 cols so index 12 should be month and 13 should be day
                 projection: Some(vec![0, 1, 2, 12, 13]),
                 limit: None,
@@ -1695,7 +1693,7 @@ mod tests {
                 object_store_url: ObjectStoreUrl::local_filesystem(),
                 file_groups: vec![vec![partitioned_file]],
                 file_schema: Arc::new(Schema::empty()),
-                statistics: Statistics::new_with_unbounded_columns(&Schema::empty()),
+                statistics: Statistics::new_unknown(&Schema::empty()),
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],

@@ -23,20 +23,6 @@ use std::fmt;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use arrow::csv::WriterBuilder;
-use arrow::datatypes::{DataType, Field, Fields, Schema};
-use arrow::{self, datatypes::SchemaRef};
-use arrow_array::RecordBatch;
-use datafusion_common::{exec_err, not_impl_err, DataFusionError, FileType};
-use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
-
-use async_trait::async_trait;
-use bytes::{Buf, Bytes};
-use futures::stream::BoxStream;
-use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
-use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore};
-
 use super::{FileFormat, DEFAULT_SCHEMA_INFER_MAX_RECORD};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::write::{
@@ -50,6 +36,20 @@ use crate::execution::context::SessionState;
 use crate::physical_plan::insert::{DataSink, FileSinkExec};
 use crate::physical_plan::{DisplayAs, DisplayFormatType, Statistics};
 use crate::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
+
+use arrow::csv::WriterBuilder;
+use arrow::datatypes::{DataType, Field, Fields, Schema};
+use arrow::{self, datatypes::SchemaRef};
+use arrow_array::RecordBatch;
+use datafusion_common::{exec_err, not_impl_err, DataFusionError, FileType};
+use datafusion_execution::TaskContext;
+use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
+
+use async_trait::async_trait;
+use bytes::{Buf, Bytes};
+use futures::stream::BoxStream;
+use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
+use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore};
 use rand::distributions::{Alphanumeric, DistString};
 
 /// Character Separated Value `FileFormat` implementation.
@@ -238,7 +238,7 @@ impl FileFormat for CsvFormat {
         table_schema: SchemaRef,
         _object: &ObjectMeta,
     ) -> Result<Statistics> {
-        Ok(Statistics::new_with_unbounded_columns(&table_schema))
+        Ok(Statistics::new_unknown(&table_schema))
     }
 
     async fn create_physical_plan(

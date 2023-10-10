@@ -1010,7 +1010,7 @@ impl ExecutionPlan for AggregateExec {
         // - case where we group by on a column for which with have the `distinct` stat
         // TODO stats: aggr expression:
         // - aggregations somtimes also preserve invariants such as min, max...
-        let column_statistics = Statistics::unbounded_column_statistics(&self.schema());
+        let column_statistics = Statistics::unknown_column(&self.schema());
         match self.mode {
             AggregateMode::Final | AggregateMode::FinalPartitioned
                 if self.group_by.expr.is_empty() =>

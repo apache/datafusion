@@ -896,7 +896,7 @@ mod tests {
                     "file_path".to_string(),
                     100,
                 )]],
-                statistics: Statistics::new_with_unbounded_columns(schema),
+                statistics: Statistics::new_unknown(schema),
                 projection: Some(projection),
                 limit: None,
                 table_partition_cols: vec![],

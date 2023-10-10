@@ -18,6 +18,12 @@
 //! [`FileScanConfig`] to configure scanning of possibly partitioned
 //! file sources.
 
+use std::{
+    borrow::Cow, cmp::min, collections::HashMap, fmt::Debug, marker::PhantomData,
+    sync::Arc, vec,
+};
+
+use super::get_projected_output_ordering;
 use crate::datasource::{
     listing::{FileRange, PartitionedFile},
     object_store::ObjectStoreUrl,
@@ -32,18 +38,12 @@ use arrow::buffer::Buffer;
 use arrow::datatypes::{ArrowNativeType, UInt16Type};
 use arrow_array::{ArrayRef, DictionaryArray, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
-use datafusion_common::{exec_err, stats::Sharpness};
-use datafusion_common::{ColumnStatistics, Statistics};
+use datafusion_common::stats::Sharpness;
+use datafusion_common::{exec_err, ColumnStatistics, Statistics};
 use datafusion_physical_expr::LexOrdering;
 
 use itertools::Itertools;
 use log::warn;
-use std::{
-    borrow::Cow, cmp::min, collections::HashMap, fmt::Debug, marker::PhantomData,
-    sync::Arc, vec,
-};
-
-use super::get_projected_output_ordering;
 
 /// Convert type to a type suitable for use as a [`ListingTable`]
 /// partition column. Returns `Dictionary(UInt16, val_type)`, which is
@@ -135,8 +135,7 @@ impl FileScanConfig {
                 table_cols_stats.push(self.statistics.column_statistics[idx].clone())
             } else {
                 let partition_idx = idx - self.file_schema.fields().len();
-                let name = &self.table_partition_cols[partition_idx].0;
-                let dtype = &self.table_partition_cols[partition_idx].1;
+                let (name, dtype) = &self.table_partition_cols[partition_idx];
                 table_fields.push(Field::new(name, dtype.to_owned(), false));
                 // TODO provide accurate stat for partition column (#1186)
                 table_cols_stats.push(ColumnStatistics::new_unknown())
@@ -501,7 +500,7 @@ mod tests {
         let conf = config_for_projection(
             Arc::clone(&file_schema),
             None,
-            Statistics::new_with_unbounded_columns(&file_schema),
+            Statistics::new_unknown(&file_schema),
             vec![(
                 "date".to_owned(),
                 wrap_partition_type_in_dict(DataType::Utf8),
@@ -602,7 +601,7 @@ mod tests {
                 file_batch.schema().fields().len(),
                 file_batch.schema().fields().len() + 2,
             ]),
-            Statistics::new_with_unbounded_columns(&file_batch.schema()),
+            Statistics::new_unknown(&file_batch.schema()),
             partition_cols.clone(),
         );
         let (proj_schema, ..) = conf.project();

@@ -44,8 +44,9 @@ use crate::physical_plan::sorts::sort::SortOptions;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::physical_plan::union::{can_interleave, InterleaveExec, UnionExec};
 use crate::physical_plan::windows::WindowAggExec;
-use crate::physical_plan::Partitioning;
-use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
+use crate::physical_plan::{
+    with_new_children_if_necessary, Distribution, ExecutionPlan, Partitioning,
+};
 
 use datafusion_common::stats::Sharpness;
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
@@ -60,6 +61,7 @@ use datafusion_physical_expr::{
 };
 use datafusion_physical_plan::unbounded_output;
 use datafusion_physical_plan::windows::{get_best_fitting_window, BoundedWindowAggExec};
+
 use itertools::izip;
 
 /// The `EnforceDistribution` rule ensures that distribution requirements are
@@ -1237,8 +1239,8 @@ fn ensure_distribution(
     let stats = dist_context.plan.statistics()?;
     let mut repartition_beneficial_stat = true;
     if let Sharpness::Exact(num_rows) = stats.num_rows {
-        // when we are sure that number of rows is <=1
-        // repartitioning is not beneficial
+        // If the number of rows is surely less than one, then repartitioning
+        // is not beneficial.
         repartition_beneficial_stat = num_rows > 1;
     }
     // Remove unnecessary repartition from the physical plan if any
@@ -1823,7 +1825,7 @@ mod tests {
                 object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
                 file_schema: schema(),
                 file_groups: vec![vec![PartitionedFile::new("x".to_string(), 100)]],
-                statistics: Statistics::new_with_unbounded_columns(&schema()),
+                statistics: Statistics::new_unknown(&schema()),
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],
@@ -1851,7 +1853,7 @@ mod tests {
                     vec![PartitionedFile::new("x".to_string(), 100)],
                     vec![PartitionedFile::new("y".to_string(), 100)],
                 ],
-                statistics: Statistics::new_with_unbounded_columns(&schema()),
+                statistics: Statistics::new_unknown(&schema()),
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],
@@ -1873,7 +1875,7 @@ mod tests {
                 object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
                 file_schema: schema(),
                 file_groups: vec![vec![PartitionedFile::new("x".to_string(), 100)]],
-                statistics: Statistics::new_with_unbounded_columns(&schema()),
+                statistics: Statistics::new_unknown(&schema()),
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],
@@ -1904,7 +1906,7 @@ mod tests {
                     vec![PartitionedFile::new("x".to_string(), 100)],
                     vec![PartitionedFile::new("y".to_string(), 100)],
                 ],
-                statistics: Statistics::new_with_unbounded_columns(&schema()),
+                statistics: Statistics::new_unknown(&schema()),
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],
@@ -3941,7 +3943,7 @@ mod tests {
                             "x".to_string(),
                             100,
                         )]],
-                        statistics: Statistics::new_with_unbounded_columns(&schema()),
+                        statistics: Statistics::new_unknown(&schema()),
                         projection: None,
                         limit: None,
                         table_partition_cols: vec![],

@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::fs;
+use std::sync::Arc;
+
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
@@ -31,8 +34,7 @@ use datafusion_execution::cache::cache_unit::{
 };
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
-use std::fs;
-use std::sync::Arc;
+
 use tempfile::tempdir;
 
 #[tokio::test]

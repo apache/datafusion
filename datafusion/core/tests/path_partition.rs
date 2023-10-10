@@ -17,17 +17,13 @@
 
 //! Test queries on partitioned datasets
 
-use arrow::datatypes::DataType;
-use datafusion_common::stats::Sharpness;
 use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use bytes::Bytes;
-use chrono::{TimeZone, Utc};
+use arrow::datatypes::DataType;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::{
     assert_batches_sorted_eq,
@@ -40,7 +36,12 @@ use datafusion::{
     prelude::SessionContext,
     test_util::{self, arrow_test_data, parquet_test_data},
 };
+use datafusion_common::stats::Sharpness;
 use datafusion_common::ScalarValue;
+
+use async_trait::async_trait;
+use bytes::Bytes;
+use chrono::{TimeZone, Utc};
 use futures::stream;
 use futures::stream::BoxStream;
 use object_store::{

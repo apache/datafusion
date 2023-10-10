@@ -476,9 +476,9 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
         statistics: Statistics {
             num_rows: Sharpness::Inexact(100),
             total_byte_size: Sharpness::Inexact(1024),
-            column_statistics: Statistics::unbounded_column_statistics(&Arc::new(
-                Schema::new(vec![Field::new("col", DataType::Utf8, false)]),
-            )),
+            column_statistics: Statistics::unknown_column(&Arc::new(Schema::new(vec![
+                Field::new("col", DataType::Utf8, false),
+            ]))),
         },
         projection: None,
         limit: None,

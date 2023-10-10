@@ -15,10 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+
 use arrow::array::{Int32Array, Int64Array};
 use arrow::compute::kernels::aggregate;
 use arrow::datatypes::{DataType, Field, Int32Type, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use datafusion::datasource::{TableProvider, TableType};
+use datafusion::error::Result;
 use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
 use datafusion::logical_expr::{
     col, Expr, LogicalPlan, LogicalPlanBuilder, TableScan, UNNAMED_TABLE,
@@ -26,29 +33,19 @@ use datafusion::logical_expr::{
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::{
-    ColumnStatistics, DisplayAs, ExecutionPlan, Partitioning, RecordBatchStream,
-    SendableRecordBatchStream, Statistics,
+    collect, ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
+    RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 use datafusion::scalar::ScalarValue;
-use datafusion::{
-    datasource::{TableProvider, TableType},
-    physical_plan::collect,
-};
-use datafusion::{error::Result, physical_plan::DisplayFormatType};
-
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::project_schema;
 use datafusion_common::stats::Sharpness;
+
+use async_trait::async_trait;
 use futures::stream::Stream;
-use std::any::Any;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{Context, Poll};
 
 /// Also run all tests that are found in the `custom_sources_cases` directory
 mod custom_sources_cases;
-
-use async_trait::async_trait;
 
 //--- Custom source dataframe tests ---//
 

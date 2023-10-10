@@ -21,6 +21,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use arrow::datatypes::Schema;
+use arrow_schema::Field;
 
 use datafusion_common::stats::Sharpness;
 use datafusion_common::{ColumnStatistics, DataFusionError, Result, ScalarValue};
@@ -64,7 +65,7 @@ impl AnalysisContext {
     ) -> Self {
         let mut column_boundaries = vec![];
         for (idx, stats) in statistics.iter().enumerate() {
-            let field: &Arc<arrow_schema::Field> = &input_schema.fields()[idx];
+            let field: &Arc<Field> = &input_schema.fields()[idx];
             if let Ok(inf_field) = ScalarValue::try_from(field.data_type()) {
                 let interval = Interval::new(
                     IntervalBound::new_closed(
@@ -78,7 +79,7 @@ impl AnalysisContext {
                         stats.max_value.get_value().cloned().unwrap_or(inf_field),
                     ),
                 );
-                let column = Column::new(input_schema.fields()[idx].name(), idx);
+                let column = Column::new(field.name(), idx);
                 column_boundaries.push(ExprBoundaries {
                     column,
                     interval,
@@ -191,7 +192,7 @@ fn shrink_boundaries(
         }
     });
     let graph_nodes = graph.gather_node_indices(&[expr.clone()]);
-    // Since the propagation result is success, the graph has at least one element.
+    // Since propagation result was successful, the graph has at least one element.
     // An empty check is also done at the outer scope, do not repeat it here.
     let (_, root_index) = graph_nodes[0];
     let final_result = graph.get_interval(root_index);

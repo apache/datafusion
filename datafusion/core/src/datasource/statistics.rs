@@ -15,17 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use super::listing::PartitionedFile;
 use crate::arrow::datatypes::{Schema, SchemaRef};
 use crate::error::Result;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
 use crate::physical_plan::{Accumulator, ColumnStatistics, Statistics};
+
 use datafusion_common::stats::Sharpness;
 use datafusion_common::ScalarValue;
-use futures::Stream;
-use futures::StreamExt;
-use itertools::izip;
 
-use super::listing::PartitionedFile;
+use futures::{Stream, StreamExt};
+use itertools::izip;
 
 /// Get all files as well as the file level summary statistics (no statistic for partition columns).
 /// If the optional `limit` is provided, includes only sufficient files.
@@ -47,42 +47,45 @@ pub async fn get_statistics_with_limit(
     let mut num_rows: Option<Sharpness<usize>> = None;
     let mut total_byte_size: Option<Sharpness<usize>> = None;
 
-    // fusing the stream allows us to call next safely even once it is finished
+    // Fusing the stream allows us to call next safely even once it is finished.
     let mut all_files = Box::pin(all_files.fuse());
-    while let Some(res) = all_files.next().await {
-        let (file, file_stats) = res?;
+    while let Some(current) = all_files.next().await {
+        let (file, file_stats) = current?;
         result_files.push(file);
 
         // Number of rows, total byte size and null counts are added for each file.
         // In case of an absent information or inexact value coming from the file,
         // it changes the statistic sharpness to inexact.
-        num_rows = if let Some(some_num_rows) = num_rows {
-            Some(match (file_stats.num_rows, &some_num_rows) {
+        num_rows = Some(if let Some(some_num_rows) = num_rows {
+            match (file_stats.num_rows, &some_num_rows) {
                 (Sharpness::Absent, _) => some_num_rows.to_inexact(),
                 (lhs, Sharpness::Absent) => lhs.to_inexact(),
                 (lhs, rhs) => lhs.add(rhs),
-            })
+            }
         } else {
-            Some(file_stats.num_rows)
-        };
+            file_stats.num_rows
+        });
 
-        total_byte_size = if let Some(some_total_byte_size) = total_byte_size {
-            Some(match (file_stats.total_byte_size, &some_total_byte_size) {
+        total_byte_size = Some(if let Some(some_total_byte_size) = total_byte_size {
+            match (file_stats.total_byte_size, &some_total_byte_size) {
                 (Sharpness::Absent, _) => some_total_byte_size.to_inexact(),
                 (lhs, Sharpness::Absent) => lhs.to_inexact(),
                 (lhs, rhs) => lhs.add(rhs),
-            })
+            }
         } else {
-            Some(file_stats.total_byte_size)
-        };
+            file_stats.total_byte_size
+        });
 
         if let Some(some_null_counts) = &mut null_counts {
-            for (i, cs) in file_stats.column_statistics.iter().enumerate() {
-                some_null_counts[i] = if cs.null_count == Sharpness::Absent {
-                    // Downcast to inexact
-                    some_null_counts[i].clone().to_inexact()
+            for (target, cs) in some_null_counts
+                .iter_mut()
+                .zip(file_stats.column_statistics.iter())
+            {
+                *target = if cs.null_count == Sharpness::Absent {
+                    // Downcast to inexact:
+                    target.clone().to_inexact()
                 } else {
-                    some_null_counts[i].add(&cs.null_count)
+                    target.add(&cs.null_count)
                 };
             }
         } else {
@@ -92,8 +95,9 @@ pub async fn get_statistics_with_limit(
                 .iter()
                 .map(|cs| cs.null_count.clone())
                 .collect::<Vec<_>>();
-            // file schema may have additional fields other than each file (such as partition, guaranteed to be at the end)
-            // Hence, push rest of the fields with information Absent.
+            // File schema may have additional fields other than each file (such
+            // as partitions, guaranteed to be at the end). Hence, rest of the
+            // fields are initialized with `Absent`.
             for _ in 0..file_schema.fields().len() - file_stats.column_statistics.len() {
                 new_col_stats_nulls.push(Sharpness::Absent)
             }
@@ -153,24 +157,20 @@ pub async fn get_statistics_with_limit(
         }
     }
 
-    let null_counts =
-        null_counts.unwrap_or(vec![Sharpness::Absent; file_schema.fields().len()]);
-    let max_values =
-        max_values.unwrap_or(vec![Sharpness::Absent; file_schema.fields().len()]);
-    let min_values =
-        min_values.unwrap_or(vec![Sharpness::Absent; file_schema.fields().len()]);
-
-    let column_stats = get_col_stats_vec(null_counts, max_values, min_values);
+    let size = file_schema.fields().len();
+    let null_counts = null_counts.unwrap_or(vec![Sharpness::Absent; size]);
+    let max_values = max_values.unwrap_or(vec![Sharpness::Absent; size]);
+    let min_values = min_values.unwrap_or(vec![Sharpness::Absent; size]);
 
     let mut statistics = Statistics {
         num_rows: num_rows.unwrap_or(Sharpness::Absent),
         total_byte_size: total_byte_size.unwrap_or(Sharpness::Absent),
-        column_statistics: column_stats,
+        column_statistics: get_col_stats_vec(null_counts, max_values, min_values),
     };
     if all_files.next().await.is_some() {
-        // if we still have files in the stream, it means that the limit kicked
-        // in and the statistic could have been different if we have
-        // processed the files in a different order.
+        // If we still have files in the stream, it means that the limit kicked
+        // in, and the statistic could have been different had we processed the
+        // files in a different order.
         statistics = statistics.make_inexact()
     }
 
@@ -184,12 +184,12 @@ pub(crate) fn create_max_min_accs(
         .fields()
         .iter()
         .map(|field| MaxAccumulator::try_new(field.data_type()).ok())
-        .collect::<Vec<_>>();
+        .collect();
     let min_values: Vec<Option<MinAccumulator>> = schema
         .fields()
         .iter()
         .map(|field| MinAccumulator::try_new(field.data_type()).ok())
-        .collect::<Vec<_>>();
+        .collect();
     (max_values, min_values)
 }
 
@@ -234,8 +234,8 @@ pub(crate) fn get_col_stats(
         .collect()
 }
 
-/// If the given value is numerically greater than the original value,
-/// it set the new max value with the exactness information.
+/// If the given value is numerically greater than the original maximum value,
+/// set the new maximum value with appropriate exactness information.
 fn set_max_if_greater(
     max_values: &mut [Sharpness<ScalarValue>],
     max_nominee: Sharpness<ScalarValue>,
@@ -266,8 +266,8 @@ fn set_max_if_greater(
     }
 }
 
-/// If the given value is numerically lesser than the original value,
-/// it set the new min value with the exactness information.
+/// If the given value is numerically lesser than the original minimum value,
+/// set the new minimum value with appropriate exactness information.
 fn set_min_if_lesser(
     min_values: &mut [Sharpness<ScalarValue>],
     min_nominee: Sharpness<ScalarValue>,

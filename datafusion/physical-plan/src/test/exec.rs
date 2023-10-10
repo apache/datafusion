@@ -457,7 +457,7 @@ impl ExecutionPlan for ErrorExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        Ok(Statistics::new_with_unbounded_columns(&self.schema()))
+        Ok(Statistics::new_unknown(&self.schema()))
     }
 }
 

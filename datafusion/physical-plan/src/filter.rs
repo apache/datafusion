@@ -203,7 +203,7 @@ impl ExecutionPlan for FilterExec {
         let predicate = self.predicate();
 
         if !check_support(predicate, self.schema()) {
-            return Ok(Statistics::new_with_unbounded_columns(&self.schema()));
+            return Ok(Statistics::new_unknown(&self.schema()));
         }
         let input_stats = self.input.statistics()?;
 
@@ -618,7 +618,7 @@ mod tests {
         //      a: min=???, max=??? (missing)
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let input = Arc::new(StatisticsExec::new(
-            Statistics::new_with_unbounded_columns(&schema),
+            Statistics::new_unknown(&schema),
             schema.clone(),
         ));
 
@@ -938,7 +938,7 @@ mod tests {
     async fn test_empty_input_statistics() -> Result<()> {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let input = Arc::new(StatisticsExec::new(
-            Statistics::new_with_unbounded_columns(&schema),
+            Statistics::new_unknown(&schema),
             schema,
         ));
         // WHERE a <= 10 AND 0 <= a - 5

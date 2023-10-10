@@ -170,11 +170,12 @@ pub fn negative(
 mod tests {
     use super::*;
     use crate::expressions::{col, Column};
-    #[allow(unused_imports)]
+
     use arrow::array::*;
     use arrow::datatypes::*;
     use arrow_schema::DataType::{Float32, Float64, Int16, Int32, Int64, Int8};
     use datafusion_common::{cast::as_primitive_array, Result};
+
     use paste::paste;
 
     macro_rules! test_array_negative_op {

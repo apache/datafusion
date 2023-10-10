@@ -16,6 +16,13 @@
 // under the License.
 
 //! Execution plan for reading line-delimited JSON files
+
+use std::any::Any;
+use std::io::BufReader;
+use std::sync::Arc;
+use std::task::Poll;
+
+use super::FileScanConfig;
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::listing::ListingTableUrl;
 use crate::datasource::physical_plan::file_stream::{
@@ -29,10 +36,10 @@ use crate::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
     Statistics,
 };
-use datafusion_execution::TaskContext;
 
 use arrow::json::ReaderBuilder;
 use arrow::{datatypes::SchemaRef, json};
+use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{
     ordering_equivalence_properties_helper, LexOrdering, OrderingEquivalenceProperties,
 };
@@ -41,14 +48,8 @@ use bytes::{Buf, Bytes};
 use futures::{ready, stream, StreamExt, TryStreamExt};
 use object_store;
 use object_store::{GetResultPayload, ObjectStore};
-use std::any::Any;
-use std::io::BufReader;
-use std::sync::Arc;
-use std::task::Poll;
 use tokio::io::AsyncWriteExt;
 use tokio::task::JoinSet;
-
-use super::FileScanConfig;
 
 /// Execution plan for scanning NdJson data source
 #[derive(Debug, Clone)]
@@ -457,7 +458,7 @@ mod tests {
             FileScanConfig {
                 object_store_url,
                 file_groups,
-                statistics: Statistics::new_with_unbounded_columns(&file_schema),
+                statistics: Statistics::new_unknown(&file_schema),
                 file_schema,
                 projection: None,
                 limit: Some(3),
@@ -536,7 +537,7 @@ mod tests {
             FileScanConfig {
                 object_store_url,
                 file_groups,
-                statistics: Statistics::new_with_unbounded_columns(&file_schema),
+                statistics: Statistics::new_unknown(&file_schema),
                 file_schema,
                 projection: None,
                 limit: Some(3),
@@ -584,7 +585,7 @@ mod tests {
             FileScanConfig {
                 object_store_url,
                 file_groups,
-                statistics: Statistics::new_with_unbounded_columns(&file_schema),
+                statistics: Statistics::new_unknown(&file_schema),
                 file_schema,
                 projection: Some(vec![0, 2]),
                 limit: None,
@@ -637,7 +638,7 @@ mod tests {
             FileScanConfig {
                 object_store_url,
                 file_groups,
-                statistics: Statistics::new_with_unbounded_columns(&file_schema),
+                statistics: Statistics::new_unknown(&file_schema),
                 file_schema,
                 projection: Some(vec![3, 0, 2]),
                 limit: None,
