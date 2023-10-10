@@ -54,6 +54,7 @@ use std::any::Any;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
+use std::iter::zip;
 use std::sync::Arc;
 
 /// Default table name for unnamed table
@@ -1196,39 +1197,36 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
     }
 
     // create union schema
-    let union_schema = (0..left_col_num)
-        .map(|i| {
-            let left_field = left_plan.schema().field(i);
-            let right_field = right_plan.schema().field(i);
-            let nullable = left_field.is_nullable() || right_field.is_nullable();
-            let data_type =
-                comparison_coercion(left_field.data_type(), right_field.data_type())
-                    .ok_or_else(|| {
-                        DataFusionError::Plan(format!(
-                    "UNION Column {} (type: {}) is not compatible with column {} (type: {})",
-                    right_field.name(),
-                    right_field.data_type(),
-                    left_field.name(),
-                    left_field.data_type()
-                ))
-                    })?;
-
-            Ok(DFField::new(
-                left_field.qualifier().cloned(),
+    let union_schema = zip(
+        left_plan.schema().fields().iter(),
+        right_plan.schema().fields().iter(),
+    )
+    .map(|(left_field, right_field)| {
+        let nullable = left_field.is_nullable() || right_field.is_nullable();
+        let data_type =
+            comparison_coercion(left_field.data_type(), right_field.data_type())
+                .ok_or_else(|| {
+                    DataFusionError::Plan(format!(
+                "UNION Column {} (type: {}) is not compatible with column {} (type: {})",
+                right_field.name(),
+                right_field.data_type(),
                 left_field.name(),
-                data_type,
-                nullable,
+                left_field.data_type()
             ))
-        })
-        .collect::<Result<Vec<_>>>()?
-        .to_dfschema()?;
+                })?;
+
+        Ok(DFField::new(
+            left_field.qualifier().cloned(),
+            left_field.name(),
+            data_type,
+            nullable,
+        ))
+    })
+    .collect::<Result<Vec<_>>>()?
+    .to_dfschema()?;
 
     let inputs = vec![left_plan, right_plan]
         .into_iter()
-        .flat_map(|p| match p {
-            LogicalPlan::Union(Union { inputs, .. }) => inputs,
-            other_plan => vec![Arc::new(other_plan)],
-        })
         .map(|p| {
             let plan = coerce_plan_expr_for_schema(&p, &union_schema)?;
             match plan {
@@ -1596,7 +1594,7 @@ mod tests {
     }
 
     #[test]
-    fn plan_builder_union_combined_single_union() -> Result<()> {
+    fn plan_builder_union() -> Result<()> {
         let plan =
             table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?;
 
@@ -1607,11 +1605,12 @@ mod tests {
             .union(plan.build()?)?
             .build()?;
 
-        // output has only one union
         let expected = "Union\
-        \n  TableScan: employee_csv projection=[state, salary]\
-        \n  TableScan: employee_csv projection=[state, salary]\
-        \n  TableScan: employee_csv projection=[state, salary]\
+        \n  Union\
+        \n    Union\
+        \n      TableScan: employee_csv projection=[state, salary]\
+        \n      TableScan: employee_csv projection=[state, salary]\
+        \n    TableScan: employee_csv projection=[state, salary]\
         \n  TableScan: employee_csv projection=[state, salary]";
 
         assert_eq!(expected, format!("{plan:?}"));
@@ -1620,7 +1619,7 @@ mod tests {
     }
 
     #[test]
-    fn plan_builder_union_distinct_combined_single_union() -> Result<()> {
+    fn plan_builder_union_distinct() -> Result<()> {
         let plan =
             table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?;
 
