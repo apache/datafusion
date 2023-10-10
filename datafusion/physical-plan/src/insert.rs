@@ -40,7 +40,6 @@ use crate::stream::RecordBatchStreamAdapter;
 use datafusion_common::{exec_err, internal_err, DataFusionError};
 use datafusion_execution::TaskContext;
 
-
 /// `DataSink` implements writing streams of [`RecordBatch`]es to
 /// user defined destinations.
 ///
