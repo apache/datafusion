@@ -45,10 +45,10 @@ impl OptimizerRule for EliminateNestedUnion {
         match plan {
             LogicalPlan::Union(Union { inputs, schema }) => {
                 let inputs = inputs
-                    .into_iter()
+                    .iter()
                     .flat_map(|plan| match plan.as_ref() {
                         LogicalPlan::Union(Union { inputs, schema }) => inputs
-                            .into_iter()
+                            .iter()
                             .map(|plan| {
                                 Arc::new(
                                     coerce_plan_expr_for_schema(plan, schema).unwrap(),

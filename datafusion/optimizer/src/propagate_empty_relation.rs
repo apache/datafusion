@@ -211,7 +211,7 @@ mod tests {
                 Arc::new(EliminateNestedUnion::new()),
                 Arc::new(PropagateEmptyRelation::new()),
             ],
-            &plan,
+            plan,
             expected,
         )
     }
