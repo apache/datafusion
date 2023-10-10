@@ -87,6 +87,7 @@ pub mod limit;
 pub mod order;
 pub mod parquet;
 pub mod parquet_schema;
+pub mod parser;
 pub mod partitioned_csv;
 pub mod predicates;
 pub mod projection;
