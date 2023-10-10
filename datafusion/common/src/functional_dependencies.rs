@@ -448,14 +448,20 @@ pub fn aggregate_functional_dependencies(
         }
         // All of the composite indices occur in the GROUP BY expression:
         if new_source_indices.len() == source_indices.len() {
+            let mode = if new_source_indices.len() == group_by_expr_names.len() {
+                // If dependency covers all of the group by exprs, mode will be single
+                Dependency::Single
+            } else {
+                // Otherwise existing mode is preserved
+                *mode
+            };
             aggregate_func_dependencies.push(
                 FunctionalDependence::new(
                     new_source_indices.into_iter().collect(),
                     target_indices.clone(),
                     *nullable,
                 )
-                // input uniqueness stays the same when GROUP BY matches with input functional dependence determinants
-                .with_mode(*mode),
+                .with_mode(mode),
             );
         }
     }

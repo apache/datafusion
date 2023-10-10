@@ -2235,3 +2235,128 @@ mod tests {
         Ok(())
     }
 }
+
+// mod tmp_tests {
+//     use crate::assert_batches_eq;
+//     use crate::physical_plan::{collect, displayable, ExecutionPlan};
+//     use crate::prelude::SessionContext;
+//     use arrow::util::pretty::print_batches;
+//     use datafusion_common::Result;
+//     use datafusion_execution::config::SessionConfig;
+//     use std::sync::Arc;
+//
+//     fn print_plan(plan: &Arc<dyn ExecutionPlan>) -> Result<()> {
+//         let formatted = displayable(plan.as_ref()).indent(true).to_string();
+//         let actual: Vec<&str> = formatted.trim().lines().collect();
+//         println!("{:#?}", actual);
+//         Ok(())
+//     }
+//
+//     #[tokio::test]
+//     async fn test_first_value() -> Result<()> {
+//         let config = SessionConfig::new().with_target_partitions(1);
+//         let ctx = SessionContext::with_config(config);
+//         // ctx.sql(
+//         //     "CREATE EXTERNAL TABLE annotated_data_infinite (
+//         //       ts INTEGER,
+//         //       inc_col INTEGER,
+//         //       desc_col INTEGER,
+//         //     )
+//         //     STORED AS CSV
+//         //     WITH HEADER ROW
+//         //     WITH ORDER (ts ASC)
+//         //     LOCATION 'tests/data/window_1.csv'",
+//         // )
+//         //     .await?;
+//
+//         ctx.sql(
+//             "CREATE UNBOUNDED EXTERNAL TABLE annotated_data_infinite2 (
+//               a0 INTEGER,
+//               a INTEGER,
+//               b INTEGER,
+//               c INTEGER,
+//               d INTEGER
+//             )
+//             STORED AS CSV
+//             WITH HEADER ROW
+//             WITH ORDER (a ASC, b ASC, c ASC)
+//             LOCATION 'tests/data/window_2.csv'",
+//         )
+//         .await?;
+//
+//         //  let sql = "SELECT FIRST_VALUE(inc_col ORDER BY ts ASC) as first
+//         // FROM annotated_data_infinite";
+//         //  let sql = "SELECT LAST_VALUE(inc_col ORDER BY ts ASC) as last
+//         // FROM annotated_data_infinite";
+//
+//         //  let sql = "SELECT SUM(inc_col ORDER BY ts DESC) OVER() as last
+//         // FROM annotated_data_infinite";
+//
+//         let sql = "SELECT a, b, FIRST_VALUE(c ORDER BY a DESC) as first_c
+//           FROM annotated_data_infinite2
+//           GROUP BY a, b";
+//
+//         let msg = format!("Creating logical plan for '{sql}'");
+//         let dataframe = ctx.sql(sql).await.expect(&msg);
+//         let physical_plan = dataframe.create_physical_plan().await?;
+//         print_plan(&physical_plan)?;
+//         let actual = collect(physical_plan, ctx.task_ctx()).await?;
+//         print_batches(&actual)?;
+//         Ok(())
+//     }
+//
+//     #[tokio::test]
+//     async fn test_subquery() -> Result<()> {
+//         let config = SessionConfig::new().with_target_partitions(1);
+//         let ctx = SessionContext::new_with_config(config);
+//         ctx.sql(
+//             "CREATE TABLE sales_global_with_pk (zip_code INT,
+//           country VARCHAR(3),
+//           sn INT,
+//           ts TIMESTAMP,
+//           currency VARCHAR(3),
+//           amount FLOAT,
+//           primary key(sn)
+//         ) as VALUES
+//           (0, 'GRC', 0, '2022-01-01 06:00:00'::timestamp, 'EUR', 30.0),
+//           (1, 'FRA', 1, '2022-01-01 08:00:00'::timestamp, 'EUR', 50.0),
+//           (1, 'TUR', 2, '2022-01-01 11:30:00'::timestamp, 'TRY', 75.0),
+//           (1, 'FRA', 3, '2022-01-02 12:00:00'::timestamp, 'EUR', 200.0),
+//           (1, 'TUR', 4, '2022-01-03 10:00:00'::timestamp, 'TRY', 100.0)",
+//         )
+//         .await?;
+//
+//         // let sql = "SELECT l.sn, r.sn, SUM(l.amount), r.amount
+//         //   FROM sales_global_with_pk AS l
+//         //   JOIN sales_global_with_pk AS r
+//         //   ON l.sn >= r.sn
+//         //   GROUP BY l.sn
+//         //   ORDER BY l.sn";
+//
+//         let sql = "SELECT *
+//             FROM (
+//               SELECT *, ROW_NUMBER() OVER(ORDER BY l.sn) AS rn1
+//               FROM (
+//                 SELECT l.sn, SUM(l.amount)
+//                 FROM (
+//                   SELECT l.sn, l.amount, SUM(l.amount) as sum1
+//                   FROM
+//                     (SELECT *
+//                     FROM sales_global_with_pk AS l
+//                     JOIN sales_global_with_pk AS r ON l.sn >= r.sn)
+//                   GROUP BY l.sn)
+//                 GROUP BY l.sn)
+//               )
+//             GROUP BY l.sn
+//             ORDER BY l.sn";
+//
+//         let msg = format!("Creating logical plan for '{sql}'");
+//         let dataframe = ctx.sql(sql).await.expect(&msg);
+//         let physical_plan = dataframe.create_physical_plan().await?;
+//         print_plan(&physical_plan)?;
+//         let batches = collect(physical_plan, ctx.task_ctx()).await?;
+//         print_batches(&batches)?;
+//         // assert_eq!(0, 1);
+//         Ok(())
+//     }
+// }

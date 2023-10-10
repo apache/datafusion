@@ -779,6 +779,23 @@ pub fn get_updated_group_by_exprs(
         // BY expression is a determinant key, we can use its dependent
         // columns in select statements also.
         for expr in select_exprs {
+            let col_exprs = expr.to_columns()?;
+            let any_missing = col_exprs.iter().any(|col_expr| {
+                !new_group_by_exprs.contains(&Expr::Column(col_expr.clone()))
+            });
+            let all_associated = col_exprs.iter().all(|col_expr| {
+                let col_expr_name = format!("{}", col_expr);
+                associated_field_names.contains(&col_expr_name)
+            });
+            if any_missing && all_associated {
+                for expr in col_exprs {
+                    let col_expr = Expr::Column(expr.clone());
+                    if !new_group_by_exprs.contains(&col_expr) {
+                        new_group_by_exprs.push(col_expr);
+                    }
+                }
+            }
+
             let expr_name = format!("{}", expr);
             if !new_group_by_exprs.contains(expr)
                 && associated_field_names.contains(&expr_name)

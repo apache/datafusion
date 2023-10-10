@@ -514,8 +514,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         group_by_exprs: Vec<Expr>,
         aggr_exprs: Vec<Expr>,
     ) -> Result<(LogicalPlan, Vec<Expr>, Option<Expr>)> {
+        let select_wo_aggr = select_exprs
+            .iter()
+            .filter_map(|elem| {
+                if !aggr_exprs.contains(elem) {
+                    Some(elem.clone())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
         let group_by_exprs =
-            get_updated_group_by_exprs(&group_by_exprs, select_exprs, input.schema())?;
+            get_updated_group_by_exprs(&group_by_exprs, &select_wo_aggr, input.schema())?;
 
         // create the aggregate plan
         let plan = LogicalPlanBuilder::from(input.clone())

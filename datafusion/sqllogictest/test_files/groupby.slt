@@ -3212,6 +3212,21 @@ SELECT s.sn, s.amount, 2*s.sn
 3 200 6
 4 100 8
 
+# we should be able to re-write group by expression
+# using functional dependencies for complex expressions also.
+# In this case, we use 2*s.amount instead of s.amount.
+query IRI
+SELECT s.sn, 2*s.amount, 2*s.sn
+  FROM sales_global_with_pk AS s
+  GROUP BY sn
+  ORDER BY sn
+----
+0 60 0
+1 100 2
+2 150 4
+3 400 6
+4 200 8
+
 query IRI
 SELECT s.sn, s.amount, 2*s.sn
   FROM sales_global_with_pk_alternate AS s
