@@ -52,7 +52,7 @@ pub trait DataSink: DisplayAs + Debug + Send + Sync {
     fn as_any(&self) -> &dyn Any;
 
     /// Return a snapshot of the [`MetricsSet`] for this
-    /// [`ExecutionPlan`].
+    /// [`DataSink`].
     ///
     /// While the values of the metrics in the returned
     /// [`MetricsSet`] may change as execution progresses, the
