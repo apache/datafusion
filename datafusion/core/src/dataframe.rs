@@ -42,6 +42,7 @@ use datafusion_expr::{
     avg, count, is_null, max, median, min, stddev, utils::COUNT_STAR_EXPANSION,
     TableProviderFilterPushDown, UNNAMED_TABLE,
 };
+use datafusion_physical_plan::displayable;
 
 use crate::arrow::datatypes::Schema;
 use crate::arrow::datatypes::SchemaRef;
@@ -1248,6 +1249,12 @@ impl DataFrame {
     }
 }
 
+fn print_plan(plan: &Arc<dyn ExecutionPlan>) {
+    let formatted = displayable(plan.as_ref()).indent(true).to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    println!("{:#?}", actual);
+}
+
 struct DataFrameTableProvider {
     plan: LogicalPlan,
 }
@@ -1317,8 +1324,8 @@ mod tests {
     use datafusion_common::{Constraint, Constraints};
     use datafusion_expr::{
         avg, cast, count, count_distinct, create_udf, expr, lit, max, min, sum,
-        BuiltInWindowFunction, ScalarFunctionImplementation, Volatility, WindowFrame,
-        WindowFunction,
+        BinaryExpr, BuiltInWindowFunction, Operator, ScalarFunctionImplementation,
+        Volatility, WindowFrame, WindowFunction,
     };
     use datafusion_physical_expr::expressions::Column;
     use object_store::local::LocalFileSystem;
@@ -1494,7 +1501,119 @@ mod tests {
         let expr_list = vec![col_id, col_name];
         let df = df.select(expr_list)?;
         let physical_plan = df.clone().create_physical_plan().await?;
+        print_plan(&physical_plan);
+        // Since id and name are functionally dependant, we can use name among expression
+        // even if it is not part of the group by expression.
+        let df_results = collect(physical_plan, ctx.task_ctx()).await?;
 
+        #[rustfmt::skip]
+        assert_batches_sorted_eq!(
+            ["+----+------+",
+             "| id | name |",
+             "+----+------+",
+             "| 1  | a    |",
+             "+----+------+",],
+            &df_results
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_with_pk2() -> Result<()> {
+        // create the dataframe
+        let config = SessionConfig::new().with_target_partitions(1);
+        let ctx = SessionContext::new_with_config(config);
+
+        let table1 = table_with_constraints();
+        let df = ctx.read_table(table1)?;
+        let col_id = Expr::Column(datafusion_common::Column {
+            relation: None,
+            name: "id".to_string(),
+        });
+        let col_name = Expr::Column(datafusion_common::Column {
+            relation: None,
+            name: "name".to_string(),
+        });
+
+        // group by contains id column
+        let group_expr = vec![col_id.clone()];
+        let aggr_expr = vec![];
+        let df = df.aggregate(group_expr, aggr_expr)?;
+
+        let condition1 = Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(col_id.clone()),
+            Operator::Eq,
+            Box::new(Expr::Literal(ScalarValue::Int32(Some(1)))),
+        ));
+        let condition2 = Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(col_name),
+            Operator::Eq,
+            Box::new(Expr::Literal(ScalarValue::Utf8(Some("a".to_string())))),
+        ));
+        // Predicate refers to id, and name fields
+        let predicate = Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(condition1),
+            Operator::And,
+            Box::new(condition2),
+        ));
+        let df = df.filter(predicate)?;
+        let physical_plan = df.clone().create_physical_plan().await?;
+        print_plan(&physical_plan);
+        // Since id and name are functionally dependant, we can use name among expression
+        // even if it is not part of the group by expression.
+        let df_results = collect(physical_plan, ctx.task_ctx()).await?;
+
+        #[rustfmt::skip]
+        assert_batches_sorted_eq!(
+            ["+----+------+",
+             "| id | name |",
+             "+----+------+",
+             "| 1  | a    |",
+             "+----+------+",],
+            &df_results
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_with_pk3() -> Result<()> {
+        // create the dataframe
+        let config = SessionConfig::new().with_target_partitions(1);
+        let ctx = SessionContext::new_with_config(config);
+
+        let table1 = table_with_constraints();
+        let df = ctx.read_table(table1)?;
+        let col_id = Expr::Column(datafusion_common::Column {
+            relation: None,
+            name: "id".to_string(),
+        });
+        let col_name = Expr::Column(datafusion_common::Column {
+            relation: None,
+            name: "name".to_string(),
+        });
+
+        // group by contains id column
+        let group_expr = vec![col_id.clone()];
+        let aggr_expr = vec![];
+        // group by id,
+        let df = df.aggregate(group_expr, aggr_expr)?;
+
+        let condition1 = Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(col_id.clone()),
+            Operator::Eq,
+            Box::new(Expr::Literal(ScalarValue::Int32(Some(1)))),
+        ));
+        // Predicate refers to id field
+        let predicate = condition1;
+        // id=0
+        let df = df.filter(predicate)?;
+        // Select expression refers to id, and name columns.
+        // id, name 
+        let df = df.select(vec![col_id.clone(), col_name.clone()])?;
+        let physical_plan = df.clone().create_physical_plan().await?;
+        print_plan(&physical_plan);
         // Since id and name are functionally dependant, we can use name among expression
         // even if it is not part of the group by expression.
         let df_results = collect(physical_plan, ctx.task_ctx()).await?;

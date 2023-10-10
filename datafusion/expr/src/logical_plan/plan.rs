@@ -1816,6 +1816,7 @@ pub struct Filter {
 impl Filter {
     /// Create a new filter operator.
     pub fn try_new(predicate: Expr, input: Arc<LogicalPlan>) -> Result<Self> {
+        let input = rewrite_plan(&[predicate.clone()], &input)?;
         // Filter predicates must return a boolean value so we try and validate that here.
         // Note that it is not always possible to resolve the predicate expression during plan
         // construction (such as with correlated subqueries) so we make a best effort here and
