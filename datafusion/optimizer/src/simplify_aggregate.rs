@@ -94,8 +94,7 @@ fn try_optimize_internal(
             if let Some(new_input) =
                 try_optimize_internal(&proj.input, _config, new_indices)?
             {
-                let res = plan.with_new_inputs(&[new_input])?;
-                return Ok(Some(res));
+                return Ok(Some(plan.with_new_inputs(&[new_input])?));
             }
         }
         LogicalPlan::Aggregate(aggregate) => {
@@ -121,13 +120,11 @@ fn try_optimize_internal(
                 && used_target_indices.is_some()
             {
                 // TODO: Continue to recursion for double aggregates
-                let new_agg = Aggregate::try_new(
+                return Ok(Some(LogicalPlan::Aggregate(Aggregate::try_new(
                     aggregate.input.clone(),
                     group_bys_used,
                     aggregate.aggr_expr.clone(),
-                );
-                let new_agg = new_agg?;
-                return Ok(Some(LogicalPlan::Aggregate(new_agg)));
+                )?)));
             }
         }
         LogicalPlan::Sort(sort) => {

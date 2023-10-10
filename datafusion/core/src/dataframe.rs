@@ -1346,6 +1346,13 @@ mod tests {
         println!("{:#?}", actual);
     }
 
+    /// Utility function yielding a string representation of the given [`ExecutionPlan`].
+    fn get_plan_string(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
+        let formatted = displayable(plan.as_ref()).indent(true).to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        actual.iter().map(|elem| elem.to_string()).collect()
+    }
+
     pub fn table_with_constraints() -> Arc<dyn TableProvider> {
         let dual_schema = Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int32, false),
@@ -1503,6 +1510,16 @@ mod tests {
         let df = df.select(expr_list)?;
         let physical_plan = df.clone().create_physical_plan().await?;
         print_plan(&physical_plan);
+        let expected = vec![
+            "AggregateExec: mode=Single, gby=[id@0 as id, name@1 as name], aggr=[]",
+            "  MemoryExec: partitions=1, partition_sizes=[1]",
+        ];
+        // Get string representation of the plan
+        let actual = get_plan_string(&physical_plan);
+        assert_eq!(
+            expected, actual,
+            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
         // Since id and name are functionally dependant, we can use name among expression
         // even if it is not part of the group by expression.
         let df_results = collect(physical_plan, ctx.task_ctx()).await?;
@@ -1561,6 +1578,20 @@ mod tests {
         let df = df.filter(predicate)?;
         let physical_plan = df.clone().create_physical_plan().await?;
         print_plan(&physical_plan);
+
+        let expected = vec![
+            "CoalesceBatchesExec: target_batch_size=8192",
+            "  FilterExec: id@0 = 1 AND name@1 = a",
+            "    AggregateExec: mode=Single, gby=[id@0 as id, name@1 as name], aggr=[]",
+            "      MemoryExec: partitions=1, partition_sizes=[1]",
+        ];
+        // Get string representation of the plan
+        let actual = get_plan_string(&physical_plan);
+        assert_eq!(
+            expected, actual,
+            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
         // Since id and name are functionally dependant, we can use name among expression
         // even if it is not part of the group by expression.
         let df_results = collect(physical_plan, ctx.task_ctx()).await?;
@@ -1615,6 +1646,83 @@ mod tests {
         let df = df.select(vec![col_id.clone(), col_name.clone()])?;
         let physical_plan = df.clone().create_physical_plan().await?;
         print_plan(&physical_plan);
+
+        let expected = vec![
+            "CoalesceBatchesExec: target_batch_size=8192",
+            "  FilterExec: id@0 = 1",
+            "    AggregateExec: mode=Single, gby=[id@0 as id, name@1 as name], aggr=[]",
+            "      MemoryExec: partitions=1, partition_sizes=[1]",
+        ];
+        // Get string representation of the plan
+        let actual = get_plan_string(&physical_plan);
+        assert_eq!(
+            expected, actual,
+            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        // Since id and name are functionally dependant, we can use name among expression
+        // even if it is not part of the group by expression.
+        let df_results = collect(physical_plan, ctx.task_ctx()).await?;
+
+        #[rustfmt::skip]
+        assert_batches_sorted_eq!(
+            ["+----+------+",
+             "| id | name |",
+             "+----+------+",
+             "| 1  | a    |",
+             "+----+------+",],
+            &df_results
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_with_pk4() -> Result<()> {
+        // create the dataframe
+        let config = SessionConfig::new().with_target_partitions(1);
+        let ctx = SessionContext::new_with_config(config);
+
+        let table1 = table_with_constraints();
+        let df = ctx.read_table(table1)?;
+        let col_id = Expr::Column(datafusion_common::Column {
+            relation: None,
+            name: "id".to_string(),
+        });
+
+        // group by contains id column
+        let group_expr = vec![col_id.clone()];
+        let aggr_expr = vec![];
+        // group by id,
+        let df = df.aggregate(group_expr, aggr_expr)?;
+
+        let condition1 = Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(col_id.clone()),
+            Operator::Eq,
+            Box::new(Expr::Literal(ScalarValue::Int32(Some(1)))),
+        ));
+        // Predicate refers to id field
+        let predicate = condition1;
+        // id=1
+        let df = df.filter(predicate)?;
+        let physical_plan = df.clone().create_physical_plan().await?;
+        print_plan(&physical_plan);
+
+        // In this case aggregate shouldn't be expanded, since these
+        // columns are not used.
+        let expected = vec![
+            "CoalesceBatchesExec: target_batch_size=8192",
+            "  FilterExec: id@0 = 1",
+            "    AggregateExec: mode=Single, gby=[id@0 as id], aggr=[]",
+            "      MemoryExec: partitions=1, partition_sizes=[1]",
+        ];
+        // Get string representation of the plan
+        let actual = get_plan_string(&physical_plan);
+        assert_eq!(
+            expected, actual,
+            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
         // Since id and name are functionally dependant, we can use name among expression
         // even if it is not part of the group by expression.
         let df_results = collect(physical_plan, ctx.task_ctx()).await?;
