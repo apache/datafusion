@@ -2327,7 +2327,9 @@ mod tests {
                 dict_id: 0, \
                 dict_is_ordered: false, \
                 metadata: {} } }\
-        ], metadata: {}, functional_dependencies: FunctionalDependencies { deps: [] } }, \
+        ], fields_index: {\
+            FieldReference { name: \"a\", qualifier: None }: [0]\
+        }, metadata: {}, functional_dependencies: FunctionalDependencies { deps: [] } }, \
         ExecutionPlan schema: Schema { fields: [\
             Field { \
                 name: \"b\", \
