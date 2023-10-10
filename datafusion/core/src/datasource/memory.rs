@@ -17,6 +17,7 @@
 
 //! [`MemTable`] for querying `Vec<RecordBatch>` by DataFusion.
 
+use datafusion_physical_plan::metrics::MetricsSet;
 use futures::StreamExt;
 use log::debug;
 use std::any::Any;
@@ -259,6 +260,14 @@ impl MemSink {
 
 #[async_trait]
 impl DataSink for MemSink {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        None
+    }
+
     async fn write_all(
         &self,
         mut data: Vec<SendableRecordBatchStream>,
