@@ -19,7 +19,7 @@
 
 use crate::expr::{
     AggregateFunction, BinaryExpr, Cast, Exists, GroupingSet, InList, InSubquery,
-    ScalarFunction, TryCast,
+    Placeholder, ScalarFunction, TryCast,
 };
 use crate::function::PartitionEvaluatorFactory;
 use crate::WindowUDF;
@@ -78,6 +78,24 @@ pub fn out_ref_col(dt: DataType, ident: impl Into<Column>) -> Expr {
 /// ```
 pub fn ident(name: impl Into<String>) -> Expr {
     Expr::Column(Column::from_name(name))
+}
+
+/// Create placeholder value that will be filled in (such as `$1`)
+///
+/// Note the parameter type can be inferred using [`Expr::infer_placeholder_types`]
+///
+/// # Example
+///
+/// ```rust
+/// # use datafusion_expr::{placeholder};
+/// let p = placeholder("$0"); // $0, refers to parameter 1
+/// assert_eq!(p.to_string(), "$0")
+/// ```
+pub fn placeholder(id: impl Into<String>) -> Expr {
+    Expr::Placeholder(Placeholder {
+        id: id.into(),
+        data_type: None,
+    })
 }
 
 /// Return a new expression `left <op> right`

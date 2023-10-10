@@ -928,8 +928,40 @@ impl LogicalPlan {
             }
         }
     }
-    /// Convert a prepared [`LogicalPlan`] into its inner logical plan
-    /// with all params replaced with their corresponding values
+    /// Replaces placeholder param values (like `$1`, `$2`) in [`LogicalPlan`]
+    /// with the specified `param_values`.
+    ///
+    /// [`LogicalPlan::Prepare`] are
+    /// converted to their inner logical plan for execution.
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow::datatypes::{Field, Schema, DataType};
+    /// use datafusion_common::ScalarValue;
+    /// # use datafusion_expr::{lit, col, LogicalPlanBuilder, logical_plan::table_scan, placeholder};
+    /// # let schema = Schema::new(vec![
+    /// #     Field::new("id", DataType::Int32, false),
+    /// # ]);
+    /// // Build SELECT * FROM t1 WHRERE id = $1
+    /// let plan = table_scan(Some("t1"), &schema, None).unwrap()
+    ///     .filter(col("id").eq(placeholder("$1"))).unwrap()
+    ///     .build().unwrap();
+    ///
+    /// assert_eq!("Filter: t1.id = $1\
+    ///            \n  TableScan: t1",
+    ///             plan.display_indent().to_string()
+    /// );
+    ///
+    /// // Fill in the parameter $1 with a literal 3
+    /// let plan = plan.with_param_values(vec![
+    ///   ScalarValue::from(3i32) // value at index 0 --> $1
+    /// ]).unwrap();
+    ///
+    /// assert_eq!("Filter: t1.id = Int32(3)\
+    ///             \n  TableScan: t1",
+    ///             plan.display_indent().to_string()
+    ///  );
+    /// ```
     pub fn with_param_values(
         self,
         param_values: Vec<ScalarValue>,
@@ -961,7 +993,7 @@ impl LogicalPlan {
                 let input_plan = prepare_lp.input;
                 input_plan.replace_params_with_values(&param_values)
             }
-            _ => Ok(self),
+            _ => self.replace_params_with_values(&param_values),
         }
     }
 
@@ -1060,7 +1092,7 @@ impl LogicalPlan {
 }
 
 impl LogicalPlan {
-    /// applies collect to any subqueries in the plan
+    /// applies `op` to any subqueries in the plan
     pub(crate) fn apply_subqueries<F>(&self, op: &mut F) -> datafusion_common::Result<()>
     where
         F: FnMut(&Self) -> datafusion_common::Result<VisitRecursion>,
@@ -1112,9 +1144,11 @@ impl LogicalPlan {
         Ok(())
     }
 
-    /// Return a logical plan with all placeholders/params (e.g $1 $2,
-    /// ...) replaced with corresponding values provided in the
-    /// params_values
+    /// Return a `LogicalPlan` with all placeholders (e.g $1 $2,
+    /// ...) replaced with corresponding values provided in
+    /// `params_values`
+    ///
+    /// See [`Self::with_param_values`] for examples and usage
     pub fn replace_params_with_values(
         &self,
         param_values: &[ScalarValue],
@@ -1122,7 +1156,10 @@ impl LogicalPlan {
         let new_exprs = self
             .expressions()
             .into_iter()
-            .map(|e| Self::replace_placeholders_with_values(e, param_values))
+            .map(|e| {
+                let e = e.infer_placeholder_types(self.schema())?;
+                Self::replace_placeholders_with_values(e, param_values)
+            })
             .collect::<Result<Vec<_>>>()?;
 
         let new_inputs_with_values = self
@@ -1219,7 +1256,9 @@ impl LogicalPlan {
 // Various implementations for printing out LogicalPlans
 impl LogicalPlan {
     /// Return a `format`able structure that produces a single line
-    /// per node. For example:
+    /// per node.
+    ///
+    /// # Example
     ///
     /// ```text
     /// Projection: employee.id
@@ -2321,7 +2360,7 @@ pub struct Unnest {
 mod tests {
     use super::*;
     use crate::logical_plan::table_scan;
-    use crate::{col, exists, in_subquery, lit};
+    use crate::{col, exists, in_subquery, lit, placeholder};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::tree_node::TreeNodeVisitor;
     use datafusion_common::{not_impl_err, DFSchema, TableReference};
@@ -2767,10 +2806,7 @@ digraph {
 
         let plan = table_scan(TableReference::none(), &schema, None)
             .unwrap()
-            .filter(col("id").eq(Expr::Placeholder(Placeholder::new(
-                "".into(),
-                Some(DataType::Int32),
-            ))))
+            .filter(col("id").eq(placeholder("")))
             .unwrap()
             .build()
             .unwrap();
@@ -2783,10 +2819,7 @@ digraph {
 
         let plan = table_scan(TableReference::none(), &schema, None)
             .unwrap()
-            .filter(col("id").eq(Expr::Placeholder(Placeholder::new(
-                "$0".into(),
-                Some(DataType::Int32),
-            ))))
+            .filter(col("id").eq(placeholder("$0")))
             .unwrap()
             .build()
             .unwrap();
