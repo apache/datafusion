@@ -25,24 +25,26 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
+use crate::datasource::listing::{ListingTableUrl, PartitionedFile};
 use crate::datasource::physical_plan::FileMeta;
 use crate::error::Result;
 use crate::physical_plan::SendableRecordBatchStream;
 
 use arrow_array::RecordBatch;
-use datafusion_common::{exec_err, internal_err, DataFusionError};
+use datafusion_common::{exec_err, DataFusionError};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use datafusion_execution::RecordBatchStream;
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use futures::{ready, StreamExt};
 use object_store::path::Path;
 use object_store::{MultipartId, ObjectMeta, ObjectStore};
+use rand::distributions::DistString;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
-use tokio::sync::mpsc;
+use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::{JoinHandle, JoinSet};
+use tokio::try_join;
 
 /// `AsyncPutWriter` is an object that facilitates asynchronous writing to object stores.
 /// It is specifically designed for the `object_store` crate's `put` method and sends
@@ -308,22 +310,21 @@ type SerializerType = Box<dyn BatchSerializer>;
 /// concurrently. Data order is preserved. In the event of an error,
 /// the ObjectStore writer is returned to the caller in addition to an error,
 /// so that the caller may handle aborting failed writes.
-async fn serialize_rb_stream_to_object_store(
-    mut data_stream: Pin<Box<dyn RecordBatchStream + Send>>,
+pub(crate) async fn serialize_rb_stream_to_object_store(
+    mut data_rx: Receiver<RecordBatch>,
     mut serializer: Box<dyn BatchSerializer>,
     mut writer: AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>,
     unbounded_input: bool,
-) -> std::result::Result<(SerializerType, WriterType, u64), (WriterType, DataFusionError)>
+) -> std::result::Result<(WriterType, u64), (WriterType, DataFusionError)>
 {
     let (tx, mut rx) =
         mpsc::channel::<JoinHandle<Result<(usize, Bytes), DataFusionError>>>(100);
 
     let serialize_task = tokio::spawn(async move {
-        while let Some(maybe_batch) = data_stream.next().await {
+        while let Some(batch) = data_rx.recv().await {
             match serializer.duplicate() {
                 Ok(mut serializer_clone) => {
                     let handle = tokio::spawn(async move {
-                        let batch = maybe_batch?;
                         let num_rows = batch.num_rows();
                         let bytes = serializer_clone.serialize(batch).await?;
                         Ok((num_rows, bytes))
@@ -344,7 +345,7 @@ async fn serialize_rb_stream_to_object_store(
                 }
             }
         }
-        Ok(serializer)
+        Ok(())
     });
 
     let mut row_count = 0;
@@ -380,8 +381,8 @@ async fn serialize_rb_stream_to_object_store(
         }
     }
 
-    let serializer = match serialize_task.await {
-        Ok(Ok(serializer)) => serializer,
+    match serialize_task.await {
+        Ok(Ok(_)) => (),
         Ok(Err(e)) => return Err((writer, e)),
         Err(_) => {
             return Err((
@@ -390,29 +391,83 @@ async fn serialize_rb_stream_to_object_store(
             ))
         }
     };
-    Ok((serializer, writer, row_count as u64))
+    Ok((writer, row_count as u64))
 }
 
+/// Splits a single [SendableRecordBatchStream] into a dynamically determined
+/// number of partitions at execution time. The partitions are determined by
+/// factors known only at execution time, such as total number of rows and
+/// partition column values. The demuxer task communicates to the caller
+/// by sending channels over a channel. The inner channels send RecordBatches
+/// which should be contained within the same output file. The outer channel
+/// is used to send a dynamic number of inner channels, representing a dynamic
+/// number of total output files. The caller is also responsible to monitor
+/// the demux task for errors and abort accordingly. The single_file_ouput parameter
+/// overrides all other settings to force only a single file to be written.
+pub(crate) fn start_demuxer_task(
+    mut input: SendableRecordBatchStream,
+    max_rows_per_file: usize,
+    _partition_by: Option<&str>,
+    base_output_path: ListingTableUrl,
+    file_extension: String,
+    max_parallel_files: usize,
+    max_buffered_recordbatches: usize,
+    single_file_output: bool,
+) -> (tokio::task::JoinHandle<Result<()>>,Receiver<(Path, Receiver<RecordBatch>)>){
+    let (tx, rx) = tokio::sync::mpsc::channel(max_parallel_files);
+    let task: JoinHandle<std::result::Result<(), DataFusionError>> = tokio::spawn(async move {
+        let mut total_rows_current_file = 0;
+        let mut part_idx = 0;
+        let write_id = rand::distributions::Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+        let file_path = if !single_file_output{
+            base_output_path
+                .prefix()
+                .child(format!("{}_{}.{}", write_id, part_idx, file_extension))
+        } else {
+            base_output_path.prefix().to_owned()
+        };
+        
+        let (mut tx_file, mut rx_file) = tokio::sync::mpsc::channel(max_buffered_recordbatches);
+        tx.send((file_path, rx_file)).await
+            .map_err(|_| DataFusionError::Execution("Error sending new file stream!".into()))?;
+        part_idx += 1;
+        while let Some(rb) = input.next().await.transpose()?{
+            total_rows_current_file += rb.num_rows();
+            tx_file.send(rb).await
+                .map_err(|_| DataFusionError::Execution("Error sending RecordBatch to file stream!".into()))?;
+            
+            // Once we have sent enough data to previous file stream, spawn a new one
+            if total_rows_current_file >= max_rows_per_file &&
+            !single_file_output{
+                total_rows_current_file = 0;
+                
+                let file_path = base_output_path
+                    .prefix()
+                    .child(format!("{}_{}.{}", write_id, part_idx, file_extension));
+                (tx_file, rx_file) = tokio::sync::mpsc::channel(max_buffered_recordbatches);
+                tx.send((file_path, rx_file)).await
+                    .map_err(|_| DataFusionError::Execution("Error sending new file stream!".into()))?;
+
+                part_idx += 1;
+            }
+        }
+        Ok(())
+    });
+    (task, rx)
+}
+
+type FileWriteBundle = (Receiver<RecordBatch>, SerializerType, WriterType);
 /// Contains the common logic for serializing RecordBatches and
 /// writing the resulting bytes to an ObjectStore.
 /// Serialization is assumed to be stateless, i.e.
 /// each RecordBatch can be serialized without any
 /// dependency on the RecordBatches before or after.
 pub(crate) async fn stateless_serialize_and_write_files(
-    data: Vec<SendableRecordBatchStream>,
-    mut serializers: Vec<SerializerType>,
-    mut writers: Vec<WriterType>,
-    single_file_output: bool,
+    mut rx: Receiver<FileWriteBundle>,
+    tx: Sender<u64>,
     unbounded_input: bool,
-) -> Result<u64> {
-    if single_file_output && (serializers.len() != 1 || writers.len() != 1) {
-        return internal_err!("single_file_output is true, but got more than 1 writer!");
-    }
-    let num_partitions = data.len();
-    let num_writers = writers.len();
-    if !single_file_output && (num_partitions != num_writers) {
-        return internal_err!("single_file_ouput is false, but did not get 1 writer for each output partition!");
-    }
+) -> Result<()> {
+
     let mut row_count = 0;
     // tracks if any writers encountered an error triggering the need to abort
     let mut any_errors = false;
@@ -421,100 +476,59 @@ pub(crate) async fn stateless_serialize_and_write_files(
     // tracks if any errors were encountered in the process of aborting writers.
     // if true, we may not have a guarentee that all written data was cleaned up.
     let mut any_abort_errors = false;
-    match single_file_output {
-        false => {
-            let mut join_set = JoinSet::new();
-            for (data_stream, serializer, writer) in data
-                .into_iter()
-                .zip(serializers.into_iter())
-                .zip(writers.into_iter())
-                .map(|((a, b), c)| (a, b, c))
-            {
-                join_set.spawn(async move {
-                    serialize_rb_stream_to_object_store(
-                        data_stream,
-                        serializer,
-                        writer,
-                        unbounded_input,
-                    )
-                    .await
-                });
-            }
-            let mut finished_writers = Vec::with_capacity(num_writers);
-            while let Some(result) = join_set.join_next().await {
-                match result {
-                    Ok(res) => match res {
-                        Ok((_, writer, cnt)) => {
-                            finished_writers.push(writer);
-                            row_count += cnt;
-                        }
-                        Err((writer, e)) => {
-                            finished_writers.push(writer);
-                            any_errors = true;
-                            triggering_error = Some(e);
-                        }
-                    },
-                    Err(e) => {
-                        // Don't panic, instead try to clean up as many writers as possible.
-                        // If we hit this code, ownership of a writer was not joined back to
-                        // this thread, so we cannot clean it up (hence any_abort_errors is true)
-                        any_errors = true;
-                        any_abort_errors = true;
-                        triggering_error = Some(DataFusionError::Internal(format!(
-                            "Unexpected join error while serializing file {e}"
-                        )));
-                    }
+    let mut join_set = JoinSet::new();
+    while let Some((data_rx, serializer, writer)) = rx.recv().await
+    {
+        join_set.spawn(async move {
+            serialize_rb_stream_to_object_store(
+                data_rx,
+                serializer,
+                writer,
+                unbounded_input,
+            )
+            .await
+        });
+    }
+    let mut finished_writers = Vec::new();
+    while let Some(result) = join_set.join_next().await {
+        match result {
+            Ok(res) => match res {
+                Ok((writer, cnt)) => {
+                    finished_writers.push(writer);
+                    row_count += cnt;
                 }
-            }
-
-            // Finalize or abort writers as appropriate
-            for mut writer in finished_writers.into_iter() {
-                match any_errors {
-                    true => {
-                        let abort_result = writer.abort_writer();
-                        if abort_result.is_err() {
-                            any_abort_errors = true;
-                        }
-                    }
-                    false => {
-                        writer.shutdown()
-                            .await
-                            .map_err(|_| DataFusionError::Internal("Error encountered while finalizing writes! Partial results may have been written to ObjectStore!".into()))?;
-                    }
+                Err((writer, e)) => {
+                    finished_writers.push(writer);
+                    any_errors = true;
+                    triggering_error = Some(e);
                 }
+            },
+            Err(e) => {
+                // Don't panic, instead try to clean up as many writers as possible.
+                // If we hit this code, ownership of a writer was not joined back to
+                // this thread, so we cannot clean it up (hence any_abort_errors is true)
+                any_errors = true;
+                any_abort_errors = true;
+                triggering_error = Some(DataFusionError::Internal(format!(
+                    "Unexpected join error while serializing file {e}"
+                )));
             }
         }
-        true => {
-            let mut writer = writers.remove(0);
-            let mut serializer = serializers.remove(0);
-            let mut cnt;
-            for data_stream in data.into_iter() {
-                (serializer, writer, cnt) = match serialize_rb_stream_to_object_store(
-                    data_stream,
-                    serializer,
-                    writer,
-                    unbounded_input,
-                )
-                .await
-                {
-                    Ok((s, w, c)) => (s, w, c),
-                    Err((w, e)) => {
-                        any_errors = true;
-                        triggering_error = Some(e);
-                        writer = w;
-                        break;
-                    }
-                };
-                row_count += cnt;
-            }
-            match any_errors {
-                true => {
-                    let abort_result = writer.abort_writer();
-                    if abort_result.is_err() {
-                        any_abort_errors = true;
-                    }
+    }
+
+    // Finalize or abort writers as appropriate
+    for mut writer in finished_writers.into_iter() {
+        match any_errors {
+            true => {
+                let abort_result = writer.abort_writer();
+                if abort_result.is_err() {
+                    any_abort_errors = true;
                 }
-                false => writer.shutdown().await?,
+            }
+            false => {
+                writer.shutdown()
+                    .await
+                    .map_err(|_| DataFusionError::Internal("Error encountered while finalizing writes! Partial results may have been written to ObjectStore!".into()))?;
             }
         }
     }
@@ -529,5 +543,168 @@ pub(crate) async fn stateless_serialize_and_write_files(
         }
     }
 
-    Ok(row_count)
+    tx.send(row_count).await
+        .map_err(|_| DataFusionError::Internal("Error encountered while sending row count back to file sink!".into()))?;
+    Ok(())
+}
+
+/// Orchestrates multipart put of a dynamic number of output files from a single input stream
+/// for any statelessly serialized file type. That is, any file type for which each [RecordBatch]
+/// can be serialized independently of all other [RecordBatch]s.
+pub(crate) async fn stateless_multipart_put(
+    data: SendableRecordBatchStream,
+    object_store: Arc<dyn ObjectStore>,
+    base_output_path: ListingTableUrl,
+    unbounded_input: bool,
+    file_extension: String,
+    compression: FileCompressionType,
+    get_serializer: Box<dyn Fn() -> Box<dyn BatchSerializer> + Send>,
+    single_file_output: bool,
+    max_rows_per_file: usize,
+    file_buffer_size: usize,
+    rb_buffer_size: usize,
+) -> Result<u64>{
+    let (demux_task, mut file_stream_rx) = start_demuxer_task(
+        data, 
+        max_rows_per_file, 
+        None, 
+        base_output_path,
+        file_extension,
+        file_buffer_size,
+        rb_buffer_size/2,
+        single_file_output);
+    
+    // TODO: update buffer size
+    let (tx_file_bundle, rx_file_bundle) = tokio::sync::mpsc::channel(rb_buffer_size/2);
+    let (tx_row_cnt, mut rx_row_cnt) = tokio::sync::mpsc::channel(1);
+    let write_coordinater_task = tokio::spawn(async move {
+        stateless_serialize_and_write_files(
+            rx_file_bundle,
+            tx_row_cnt,
+            unbounded_input,
+        ).await
+    });
+    while let Some((output_location, rb_stream)) = file_stream_rx.recv().await{
+        let serializer = get_serializer();
+        let object_meta = ObjectMeta {
+            location: output_location,
+            last_modified: chrono::offset::Utc::now(),
+            size: 0,
+            e_tag: None,
+        };
+        let writer = create_writer(
+            FileWriterMode::PutMultipart,
+            compression,
+            object_meta.into(),
+            object_store.clone(),
+        )
+        .await?;
+
+        tx_file_bundle.send((
+            rb_stream,
+            serializer,
+            writer
+        )).await
+        .map_err(|_| DataFusionError::Internal("Writer receive file bundle channel closed unexpectedly!".into()))?;
+    }
+
+    // Signal to the write coordinater that no more files are coming
+    drop(tx_file_bundle);
+
+    let total_count = if let Some(cnt) = rx_row_cnt.recv().await{
+        cnt
+    } else {
+        return Err(DataFusionError::Internal("Did not receive final row count from write cooridnator task!".into()))
+    };
+
+    match try_join!(write_coordinater_task, demux_task){
+        Ok((r1, r2)) => {
+            r1?;
+            r2?;
+        },
+        Err(e) => {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            } else {
+                unreachable!();
+            }
+        }
+    }
+
+    Ok(total_count) 
+}   
+
+/// Orchestrates append_all for any statelessly serialized file type. Appends to all files provided
+/// in a round robin fashion. 
+pub(crate) async fn stateless_append_all(
+    mut data: SendableRecordBatchStream,
+    object_store: Arc<dyn ObjectStore>,
+    file_groups: &Vec<PartitionedFile>,
+    unbounded_input: bool,
+    compression: FileCompressionType,
+    get_serializer: Box<dyn Fn() -> Box<dyn BatchSerializer> + Send>
+) -> Result<u64>{
+    let (tx_file_bundle, rx_file_bundle) = tokio::sync::mpsc::channel(file_groups.len());
+    let mut send_channels = vec![];
+    for file_group in file_groups {
+        let serializer = get_serializer();
+
+        let file = file_group.clone();
+        let writer = create_writer(
+            FileWriterMode::PutMultipart,
+            compression,
+            file.object_meta.clone().into(),
+            object_store.clone(),
+        )
+        .await?;
+
+        let (tx, rx) = tokio::sync::mpsc::channel(9000);
+        send_channels.push(tx);
+        tx_file_bundle.send((
+            rx,
+            serializer,
+            writer
+        )).await
+        .map_err(|_| DataFusionError::Internal("Writer receive file bundle channel closed unexpectedly!".into()))?;
+    }
+
+    let (tx_row_cnt, mut rx_row_cnt) = tokio::sync::mpsc::channel(1);
+    let write_coordinater_task = tokio::spawn(async move {
+        stateless_serialize_and_write_files(
+            rx_file_bundle,
+            tx_row_cnt,
+            unbounded_input,
+        ).await
+    });
+
+    // Append to file groups in round robin 
+    let mut next_file_idx = 0;
+    while let Some(rb) = data.next().await.transpose()?{
+        send_channels[next_file_idx].send(rb).await
+        .map_err(|_| DataFusionError::Internal("Recordbatch file append stream closed unexpectedly!".into()))?;
+        next_file_idx = (next_file_idx + 1) % send_channels.len();
+    }
+    // Signal to the write coordinater that no more files are coming
+    drop(tx_file_bundle);
+
+    let total_count = if let Some(cnt) = rx_row_cnt.recv().await{
+        cnt
+    } else {
+        return Err(DataFusionError::Internal("Did not receive final row count from write cooridnator task!".into()))
+    };
+
+    match try_join!(write_coordinater_task){
+        Ok(r1) => {
+            r1.0?;
+        },
+        Err(e) => {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            } else {
+                unreachable!();
+            }
+        }
+    }
+
+    Ok(total_count) 
 }

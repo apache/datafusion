@@ -758,10 +758,9 @@ impl DataSink for ParquetSink {
 
     async fn write_all(
         &self,
-        mut data: Vec<SendableRecordBatchStream>,
+        data: SendableRecordBatchStream,
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
-        let num_partitions = data.len();
         let parquet_props = self
             .config
             .file_type_writer_options
@@ -772,63 +771,102 @@ impl DataSink for ParquetSink {
             .runtime_env()
             .object_store(&self.config.object_store_url)?;
 
-        let mut row_count = 0;
 
-        let allow_single_file_parallelism = context
-            .session_config()
+        let exec_options = &context.session_config()
             .options()
-            .execution
+            .execution;
+
+        let allow_single_file_parallelism = exec_options
             .parquet
             .allow_single_file_parallelism;
 
-        match self.config.single_file_output {
-            false => {
-                let writers = self
-                    .create_all_async_arrow_writers(
-                        num_partitions,
-                        parquet_props,
-                        object_store.clone(),
-                    )
-                    .await?;
-                // TODO parallelize individual parquet serialization when already outputting multiple parquet files
-                // e.g. if outputting 2 parquet files on a system with 32 threads, spawn 16 tasks for each individual
-                // file to be serialized.
-                row_count = output_multiple_parquet_files(writers, data).await?;
-            }
-            true => {
-                if !allow_single_file_parallelism || data.len() <= 1 {
-                    let mut writer = self
-                        .create_all_async_arrow_writers(
-                            num_partitions,
-                            parquet_props,
-                            object_store.clone(),
-                        )
-                        .await?
-                        .remove(0);
-                    for data_stream in data.iter_mut() {
-                        while let Some(batch) = data_stream.next().await.transpose()? {
-                            row_count += batch.num_rows();
-                            writer.write(&batch).await?;
-                        }
-                    }
+        // This is a temporary special case until https://github.com/apache/arrow-datafusion/pull/7655
+        // can be pulled in. 
+        if allow_single_file_parallelism && self.config.single_file_output{
+            let object_store_writer = self
+            .create_object_store_writers(1, object_store)
+            .await?
+            .remove(0);
 
+            let schema_clone = self.config.output_schema.clone();
+            return output_single_parquet_file_parallelized(
+                object_store_writer,
+                vec![data],
+                schema_clone,
+                &parquet_props,
+            )
+            .await
+            .map(|r| r as u64)
+        }
+        
+
+        let max_rows_per_file = exec_options.soft_max_rows_per_output_file;
+        let file_buffer_size = exec_options.max_parallel_ouput_files;
+        let rb_buffer_size = exec_options.max_buffered_batches_per_output_file;
+
+        let (demux_task, mut file_stream_rx) = start_demuxer_task(
+            data, 
+            max_rows_per_file, 
+            None, 
+            (&self.config.table_paths[0]).clone(),
+            "parquet".into(),
+            file_buffer_size,
+            rb_buffer_size/2,
+            self.config.single_file_output,
+        );
+
+        let mut file_write_tasks: JoinSet<std::result::Result<usize, DataFusionError>> = JoinSet::new();
+        while let Some((path, mut rx)) = file_stream_rx.recv().await{
+            let mut writer = self.create_async_arrow_writer(
+                ObjectMeta {
+                    location: path,
+                    last_modified: chrono::offset::Utc::now(),
+                    size: 0,
+                    e_tag: None,
+                }.into(), 
+                object_store.clone(), 
+                parquet_props.clone(),
+            ).await?;
+
+            file_write_tasks.spawn(
+                async move {
+                    let mut row_count = 0;
+                    while let Some(batch) = rx.recv().await {
+                        row_count += batch.num_rows();
+                        writer.write(&batch).await?;
+                    }
                     writer.close().await?;
-                } else {
-                    let object_store_writer = self
-                        .create_object_store_writers(1, object_store)
-                        .await?
-                        .remove(0);
-                    row_count = output_single_parquet_file_parallelized(
-                        object_store_writer,
-                        data,
-                        self.config.output_schema.clone(),
-                        parquet_props,
-                    )
-                    .await?;
+                    Ok(row_count)
+                }
+            );
+        }
+
+        let mut row_count = 0;
+        while let Some(result) = file_write_tasks.join_next().await{
+            match result{
+                Ok(r) => {
+                    row_count += r?;
+                }
+                Err(e) =>{
+                    if e.is_panic() {
+                        std::panic::resume_unwind(e.into_panic());
+                    } else {
+                        unreachable!();
+                    }
                 }
             }
         }
 
+        match demux_task.await{
+            Ok(r) => r?,
+            Err(e) =>{
+                if e.is_panic() {
+                    std::panic::resume_unwind(e.into_panic());
+                } else {
+                    unreachable!();
+                }
+            }
+        }
         Ok(row_count as u64)
     }
 }
@@ -974,7 +1012,6 @@ async fn output_single_parquet_file_parallelized(
     };
     object_store_writer.write_all(final_buff.as_slice()).await?;
     object_store_writer.shutdown().await?;
-    println!("done!");
 
     Ok(row_count)
 }

@@ -26,7 +26,7 @@ use std::sync::Arc;
 use super::{FileFormat, FileScanConfig};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::write::{
-    create_writer, stateless_serialize_and_write_files, BatchSerializer, FileWriterMode,
+    BatchSerializer, FileWriterMode,
 };
 use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
 use crate::datasource::physical_plan::{FileGroupDisplay, FileSinkConfig, NdJsonExec};
@@ -172,7 +172,7 @@ impl FileFormat for JsonFormat {
             return not_impl_err!("Inserting compressed JSON is not implemented yet.");
         }
         let sink_schema = conf.output_schema().clone();
-        let sink = Arc::new(JsonSink::new(conf, self.file_compression_type));
+        let sink = Arc::new(JsonSink::new(conf));
 
         Ok(Arc::new(FileSinkExec::new(
             input,
@@ -226,13 +226,11 @@ impl BatchSerializer for JsonSerializer {
 struct JsonSink {
     /// Config options for writing data
     config: FileSinkConfig,
-    file_compression_type: FileCompressionType,
 }
 
 impl Debug for JsonSink {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("JsonSink")
-            .field("file_compression_type", &self.file_compression_type)
             .finish()
     }
 }
@@ -254,11 +252,81 @@ impl DisplayAs for JsonSink {
 }
 
 impl JsonSink {
-    fn new(config: FileSinkConfig, file_compression_type: FileCompressionType) -> Self {
-        Self {
-            config,
-            file_compression_type,
-        }
+    fn new(config: FileSinkConfig) -> Self {
+        Self { config }
+    }
+
+    async fn append_all(
+        &self,
+        data: SendableRecordBatchStream,
+        context: &Arc<TaskContext>,
+    ) -> Result<u64>{
+        let writer_options = self.config.file_type_writer_options.try_into_json()?;
+        let compression = &writer_options.compression;
+        let compression = FileCompressionType::from(*compression);
+
+        let object_store = context
+            .runtime_env()
+            .object_store(&self.config.object_store_url)?;
+        let file_groups = &self.config.file_groups;
+
+        let get_serializer = move || {
+            let serializer: Box<dyn BatchSerializer> = Box::new(JsonSerializer::new());
+            serializer
+        };
+
+        stateless_append_all(
+            data, 
+            object_store, 
+            file_groups, 
+            self.config.unbounded_input, 
+            compression, 
+            Box::new(get_serializer),
+        ).await
+
+        
+
+    }
+
+    async fn multipartput_all(
+        &self,
+        data: SendableRecordBatchStream,
+        context: &Arc<TaskContext>,
+    ) -> Result<u64>{
+        let writer_options = self.config.file_type_writer_options.try_into_json()?;
+        let compression = &writer_options.compression;
+        let compression = FileCompressionType::from(*compression);
+
+        let object_store = context
+            .runtime_env()
+            .object_store(&self.config.object_store_url)?;
+
+        let get_serializer = move || {
+            let serializer: Box<dyn BatchSerializer> = Box::new(JsonSerializer::new());
+            serializer
+        };
+
+        let exec_options = &context.session_config()
+            .options()
+            .execution;
+
+        let max_rows_per_file = exec_options.soft_max_rows_per_output_file;
+        let file_buffer_size = exec_options.max_parallel_ouput_files;
+        let rb_buffer_size = exec_options.max_buffered_batches_per_output_file;
+
+        stateless_multipart_put(
+            data, 
+            object_store, 
+            (&self.config.table_paths[0]).clone(), 
+            self.config.unbounded_input, 
+            "json".into(), 
+            compression, 
+            Box::new(get_serializer),
+            self.config.single_file_output,
+            max_rows_per_file,
+            file_buffer_size,
+            rb_buffer_size,
+        ).await
     }
 }
 
@@ -274,107 +342,31 @@ impl DataSink for JsonSink {
 
     async fn write_all(
         &self,
-        data: Vec<SendableRecordBatchStream>,
+        data: SendableRecordBatchStream,
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
-        let num_partitions = data.len();
 
-        let object_store = context
-            .runtime_env()
-            .object_store(&self.config.object_store_url)?;
-
-        let writer_options = self.config.file_type_writer_options.try_into_json()?;
-
-        let compression = FileCompressionType::from(writer_options.compression);
-
-        // Construct serializer and writer for each file group
-        let mut serializers: Vec<Box<dyn BatchSerializer>> = vec![];
-        let mut writers = vec![];
-        match self.config.writer_mode {
+        match self.config.writer_mode{
             FileWriterMode::Append => {
-                if self.config.single_file_output {
-                    return Err(DataFusionError::NotImplemented("single_file_output=true is not implemented for JsonSink in Append mode".into()));
-                }
-                for file_group in &self.config.file_groups {
-                    let serializer = JsonSerializer::new();
-                    serializers.push(Box::new(serializer));
-
-                    let file = file_group.clone();
-                    let writer = create_writer(
-                        self.config.writer_mode,
-                        compression,
-                        file.object_meta.clone().into(),
-                        object_store.clone(),
-                    )
-                    .await?;
-                    writers.push(writer);
-                }
-            }
-            FileWriterMode::Put => {
-                return not_impl_err!("Put Mode is not implemented for Json Sink yet")
-            }
+                let total_count = self.append_all(
+                    data,
+                    context
+                ).await?;
+                Ok(total_count)
+            },
             FileWriterMode::PutMultipart => {
-                // Currently assuming only 1 partition path (i.e. not hive-style partitioning on a column)
-                let base_path = &self.config.table_paths[0];
-                match self.config.single_file_output {
-                    false => {
-                        // Uniquely identify this batch of files with a random string, to prevent collisions overwriting files
-                        let write_id =
-                            Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
-                        for part_idx in 0..num_partitions {
-                            let serializer = JsonSerializer::new();
-                            serializers.push(Box::new(serializer));
-                            let file_path = base_path
-                                .prefix()
-                                .child(format!("{}_{}.json", write_id, part_idx));
-                            let object_meta = ObjectMeta {
-                                location: file_path,
-                                last_modified: chrono::offset::Utc::now(),
-                                size: 0,
-                                e_tag: None,
-                            };
-                            let writer = create_writer(
-                                self.config.writer_mode,
-                                compression,
-                                object_meta.into(),
-                                object_store.clone(),
-                            )
-                            .await?;
-                            writers.push(writer);
-                        }
-                    }
-                    true => {
-                        let serializer = JsonSerializer::new();
-                        serializers.push(Box::new(serializer));
-                        let file_path = base_path.prefix();
-                        let object_meta = ObjectMeta {
-                            location: file_path.clone(),
-                            last_modified: chrono::offset::Utc::now(),
-                            size: 0,
-                            e_tag: None,
-                        };
-                        let writer = create_writer(
-                            self.config.writer_mode,
-                            compression,
-                            object_meta.into(),
-                            object_store.clone(),
-                        )
-                        .await?;
-                        writers.push(writer);
-                    }
-                }
-            }
+                let total_count = self.multipartput_all(
+                    data,
+                    context
+                ).await?;
+                Ok(total_count)
+            },
+            FileWriterMode::Put =>{
+                return not_impl_err!("FileWriterMode::Put is not supported yet!")
+            },
         }
-
-        stateless_serialize_and_write_files(
-            data,
-            serializers,
-            writers,
-            self.config.single_file_output,
-            self.config.unbounded_input,
-        )
-        .await
     }
+    
 }
 
 #[cfg(test)]
