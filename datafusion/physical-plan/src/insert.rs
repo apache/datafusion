@@ -40,6 +40,7 @@ use crate::stream::RecordBatchStreamAdapter;
 use datafusion_common::{exec_err, internal_err, DataFusionError};
 use datafusion_execution::TaskContext;
 
+
 /// `DataSink` implements writing streams of [`RecordBatch`]es to
 /// user defined destinations.
 ///
@@ -51,17 +52,10 @@ pub trait DataSink: DisplayAs + Debug + Send + Sync {
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
 
-    /// Return a snapshot of the [`MetricsSet`] for this
-    /// [`ExecutionPlan`].
+    /// Return a snapshot of the [MetricsSet] for this
+    /// [DataSink].
     ///
-    /// While the values of the metrics in the returned
-    /// [`MetricsSet`] may change as execution progresses, the
-    /// specific metrics will not.
-    ///
-    /// Once `self.execute()` has returned (technically the future is
-    /// resolved) for all available partitions, the set of metrics
-    /// should be complete. If this function is called prior to
-    /// `execute()` new metrics may appear in subsequent calls.
+    /// See [ExecutionPlan::metrics()] for more details
     fn metrics(&self) -> Option<MetricsSet>;
 
     // TODO add desired input ordering
