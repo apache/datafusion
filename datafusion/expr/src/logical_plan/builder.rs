@@ -43,13 +43,13 @@ use crate::{
     Expr, ExprSchemable, TableSource,
 };
 use arrow::datatypes::{DataType, Schema, SchemaRef};
-use datafusion_common::plan_err;
 use datafusion_common::UnnestOptions;
 use datafusion_common::{
     display::ToStringifiedPlan, Column, DFField, DFSchema, DFSchemaRef, DataFusionError,
     FileType, FunctionalDependencies, OwnedTableReference, Result, ScalarValue,
     TableReference, ToDFSchema,
 };
+use datafusion_common::{get_target_functional_dependencies, plan_err};
 use std::any::Any;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -867,8 +867,29 @@ impl LogicalPlanBuilder {
         group_expr: impl IntoIterator<Item = impl Into<Expr>>,
         aggr_expr: impl IntoIterator<Item = impl Into<Expr>>,
     ) -> Result<Self> {
-        let group_expr = normalize_cols(group_expr, &self.plan)?;
+        let mut group_expr = normalize_cols(group_expr, &self.plan)?;
         let aggr_expr = normalize_cols(aggr_expr, &self.plan)?;
+
+        // Rewrite groupby exprs according to functional dependencies
+        let group_by_expr_names = group_expr
+            .iter()
+            .map(|group_by_expr| group_by_expr.display_name())
+            .collect::<Result<Vec<_>>>()?;
+        let schema = self.plan.schema();
+        if let Some(target_indices) =
+            get_target_functional_dependencies(schema, &group_by_expr_names)
+        {
+            for idx in target_indices {
+                let field = schema.field(idx);
+                // let res = field.qualifier();
+                // let name = input_schema.field(idx).name();
+                let expr =
+                    Expr::Column(Column::new(field.qualifier().cloned(), field.name()));
+                if !group_expr.contains(&expr) {
+                    group_expr.push(expr);
+                }
+            }
+        }
         Ok(Self::from(LogicalPlan::Aggregate(Aggregate::try_new(
             Arc::new(self.plan),
             group_expr,

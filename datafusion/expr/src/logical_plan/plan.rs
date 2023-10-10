@@ -25,7 +25,7 @@ use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::{DmlStatement, Statement};
 use crate::utils::{
     enumerate_grouping_sets, exprlist_to_fields, find_out_reference_exprs,
-    grouping_set_expr_count, grouping_set_to_exprlist, inspect_expr_pre, rewrite_plan,
+    grouping_set_expr_count, grouping_set_to_exprlist, inspect_expr_pre,
 };
 use crate::{
     build_join_schema, Expr, ExprSchemable, TableProviderFilterPushDown, TableSource,
@@ -1713,7 +1713,7 @@ pub struct Projection {
 impl Projection {
     /// Create a new Projection
     pub fn try_new(expr: Vec<Expr>, input: Arc<LogicalPlan>) -> Result<Self> {
-        let input = rewrite_plan(&expr, &input)?;
+        // let input = rewrite_plan(&expr, &input)?;
         let schema = Arc::new(DFSchema::new_with_metadata(
             exprlist_to_fields(&expr, &input)?,
             input.schema().metadata().clone(),
@@ -1816,7 +1816,7 @@ pub struct Filter {
 impl Filter {
     /// Create a new filter operator.
     pub fn try_new(predicate: Expr, input: Arc<LogicalPlan>) -> Result<Self> {
-        let input = rewrite_plan(&[predicate.clone()], &input)?;
+        // let input = rewrite_plan(&[predicate.clone()], &input)?;
         // Filter predicates must return a boolean value so we try and validate that here.
         // Note that it is not always possible to resolve the predicate expression during plan
         // construction (such as with correlated subqueries) so we make a best effort here and
@@ -1856,7 +1856,7 @@ pub struct Window {
 impl Window {
     /// Create a new window operator.
     pub fn try_new(window_expr: Vec<Expr>, input: Arc<LogicalPlan>) -> Result<Self> {
-        let input = rewrite_plan(&window_expr, &input)?;
+        // let input = rewrite_plan(&window_expr, &input)?;
         let mut window_fields: Vec<DFField> = input.schema().fields().clone();
         window_fields.extend_from_slice(&exprlist_to_fields(window_expr.iter(), &input)?);
         let metadata = input.schema().metadata().clone();

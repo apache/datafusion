@@ -42,7 +42,6 @@ use datafusion_expr::{
     avg, count, is_null, max, median, min, stddev, utils::COUNT_STAR_EXPANSION,
     TableProviderFilterPushDown, UNNAMED_TABLE,
 };
-use datafusion_physical_plan::displayable;
 
 use crate::arrow::datatypes::Schema;
 use crate::arrow::datatypes::SchemaRef;
@@ -1249,12 +1248,6 @@ impl DataFrame {
     }
 }
 
-fn print_plan(plan: &Arc<dyn ExecutionPlan>) {
-    let formatted = displayable(plan.as_ref()).indent(true).to_string();
-    let actual: Vec<&str> = formatted.trim().lines().collect();
-    println!("{:#?}", actual);
-}
-
 struct DataFrameTableProvider {
     plan: LogicalPlan,
 }
@@ -1328,6 +1321,7 @@ mod tests {
         Volatility, WindowFrame, WindowFunction,
     };
     use datafusion_physical_expr::expressions::Column;
+    use datafusion_physical_plan::displayable;
     use object_store::local::LocalFileSystem;
     use parquet::basic::{BrotliLevel, GzipLevel, ZstdLevel};
     use parquet::file::reader::FileReader;
@@ -1344,6 +1338,13 @@ mod tests {
     use crate::{assert_batches_sorted_eq, execution::context::SessionContext};
 
     use super::*;
+
+    // TODO: Remove this helper
+    fn print_plan(plan: &Arc<dyn ExecutionPlan>) {
+        let formatted = displayable(plan.as_ref()).indent(true).to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        println!("{:#?}", actual);
+    }
 
     pub fn table_with_constraints() -> Arc<dyn TableProvider> {
         let dual_schema = Arc::new(Schema::new(vec![

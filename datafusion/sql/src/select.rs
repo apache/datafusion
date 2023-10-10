@@ -33,7 +33,7 @@ use datafusion_expr::expr_rewriter::{
 use datafusion_expr::logical_plan::builder::project;
 use datafusion_expr::utils::{
     expand_qualified_wildcard, expand_wildcard, expr_as_column_expr, expr_to_columns,
-    find_aggregate_exprs, find_window_exprs, get_updated_group_by_exprs,
+    find_aggregate_exprs, find_window_exprs,
 };
 use datafusion_expr::{
     Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning,
@@ -514,23 +514,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         group_by_exprs: Vec<Expr>,
         aggr_exprs: Vec<Expr>,
     ) -> Result<(LogicalPlan, Vec<Expr>, Option<Expr>)> {
-        let select_wo_aggr = select_exprs
-            .iter()
-            .filter_map(|elem| {
-                if !aggr_exprs.contains(elem) {
-                    Some(elem.clone())
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
-        let group_by_exprs =
-            get_updated_group_by_exprs(&group_by_exprs, &select_wo_aggr, input.schema())?;
-
         // create the aggregate plan
         let plan = LogicalPlanBuilder::from(input.clone())
             .aggregate(group_by_exprs.clone(), aggr_exprs.clone())?
             .build()?;
+        let group_by_exprs = if let LogicalPlan::Aggregate(agg) = &plan {
+            agg.group_expr.clone()
+        } else {
+            group_by_exprs
+        };
 
         // in this next section of code we are re-writing the projection to refer to columns
         // output by the aggregate plan. For example, if the projection contains the expression

@@ -434,27 +434,40 @@ pub fn aggregate_functional_dependencies(
     {
         // Keep source indices in a `HashSet` to prevent duplicate entries:
         let mut new_source_indices = HashSet::new();
+        let mut new_source_field_names = vec![];
         let source_field_names = source_indices
             .iter()
             .map(|&idx| aggr_input_fields[idx].qualified_name())
             .collect::<Vec<_>>();
+
         for (idx, group_by_expr_name) in group_by_expr_names.iter().enumerate() {
             // When one of the input determinant expressions matches with
             // the GROUP BY expression, add the index of the GROUP BY
             // expression as a new determinant key:
             if source_field_names.contains(group_by_expr_name) {
                 new_source_indices.insert(idx);
+                if !new_source_field_names.contains(group_by_expr_name) {
+                    new_source_field_names.push(group_by_expr_name.clone());
+                }
             }
         }
+        let existing_target_indices =
+            get_target_functional_dependencies(aggr_input_schema, group_by_expr_names);
+        let new_target_indices = get_target_functional_dependencies(
+            aggr_input_schema,
+            &new_source_field_names,
+        );
+        let mode = if existing_target_indices == new_target_indices
+            && new_target_indices.is_some()
+        {
+            // If dependency covers all of the group by exprs, mode will be single
+            Dependency::Single
+        } else {
+            // Otherwise existing mode is preserved
+            *mode
+        };
         // All of the composite indices occur in the GROUP BY expression:
         if new_source_indices.len() == source_indices.len() {
-            let mode = if new_source_indices.len() == group_by_expr_names.len() {
-                // If dependency covers all of the group by exprs, mode will be single
-                Dependency::Single
-            } else {
-                // Otherwise existing mode is preserved
-                *mode
-            };
             aggregate_func_dependencies.push(
                 FunctionalDependence::new(
                     new_source_indices.into_iter().collect(),
@@ -524,8 +537,11 @@ pub fn get_target_functional_dependencies(
             combined_target_indices.extend(target_indices.iter());
         }
     }
-    (!combined_target_indices.is_empty())
-        .then_some(combined_target_indices.iter().cloned().collect::<Vec<_>>())
+    (!combined_target_indices.is_empty()).then_some({
+        let mut res = combined_target_indices.iter().cloned().collect::<Vec<_>>();
+        res.sort();
+        res
+    })
 }
 
 /// Updates entries inside the `entries` vector with their corresponding

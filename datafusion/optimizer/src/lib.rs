@@ -37,6 +37,7 @@ pub mod push_down_projection;
 pub mod replace_distinct_aggregate;
 pub mod rewrite_disjunctive_predicate;
 pub mod scalar_subquery_to_join;
+pub mod simplify_aggregate;
 pub mod simplify_expressions;
 pub mod single_distinct_to_groupby;
 pub mod unwrap_cast_in_comparison;
