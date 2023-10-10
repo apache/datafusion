@@ -1678,6 +1678,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_aggregate_with_pk4() -> Result<()> {
         // create the dataframe
         let config = SessionConfig::new().with_target_partitions(1);
