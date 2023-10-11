@@ -17,14 +17,6 @@
 
 //! Implementation of `InList` expressions: [`InListExpr`]
 
-use datafusion_common::exec_err;
-use datafusion_common::hash_utils::HashValue;
-use datafusion_common::{
-    cast::{as_boolean_array, as_generic_binary_array, as_string_array},
-    internal_err, not_impl_err, DataFusionError, Result, ScalarValue,
-};
-use datafusion_expr::ColumnarValue;
-
 use std::any::Any;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
@@ -43,6 +35,14 @@ use arrow::datatypes::*;
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_iterator::BitIndexIterator;
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
+use datafusion_common::cast::{
+    as_boolean_array, as_generic_binary_array, as_string_array,
+};
+use datafusion_common::hash_utils::HashValue;
+use datafusion_common::{
+    exec_err, internal_err, not_impl_err, DataFusionError, Result, ScalarValue,
+};
+use datafusion_expr::ColumnarValue;
 
 use ahash::RandomState;
 use hashbrown::hash_map::RawEntryMut;
