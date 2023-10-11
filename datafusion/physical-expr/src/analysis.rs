@@ -23,8 +23,9 @@ use std::sync::Arc;
 use arrow::datatypes::Schema;
 use arrow_schema::Field;
 
-use datafusion_common::stats::Sharpness;
-use datafusion_common::{ColumnStatistics, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    ColumnStatistics, DataFusionError, Result, ScalarValue, Sharpness,
+};
 
 use crate::expressions::Column;
 use crate::intervals::cp_solver::PropagationResult;

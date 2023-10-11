@@ -42,10 +42,10 @@ use datafusion_common::cast::as_boolean_array;
 use datafusion_common::stats::Sharpness;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
-    exec_err, plan_err, DataFusionError, JoinType, Result, ScalarValue, SharedResult,
+    exec_err, plan_err, DataFusionError, JoinType, Result, SharedResult,
 };
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::intervals::ExprIntervalGraph;
+use datafusion_physical_expr::intervals::{ExprIntervalGraph, Interval, IntervalBound};
 use datafusion_physical_expr::utils::merge_vectors;
 use datafusion_physical_expr::{
     add_offset_to_lex_ordering, EquivalentClass, LexOrdering, LexOrderingRef,
@@ -906,7 +906,13 @@ fn max_distinct_count(
             // Note that float support is intentionally omitted here, since the computation
             // of a range between two float values is not trivial and the result would be
             // highly inaccurate.
-            let numeric_range = get_int_range(min, max)?;
+            let numeric_range = Interval::new(
+                IntervalBound::new(min.clone(), false),
+                IntervalBound::new(max.clone(), false),
+            )
+            .cardinality()
+            .ok()
+            .flatten()? as usize;
 
             // The number can never be greater than the number of rows we have (minus
             // the nulls, since they don't count as distinct values).
@@ -925,26 +931,6 @@ fn max_distinct_count(
         }
         _ => None,
     }
-}
-
-/// Return the numeric range between the given min and max values.
-fn get_int_range(min: &ScalarValue, max: &ScalarValue) -> Option<usize> {
-    let delta = &max.sub(min).ok()?;
-    match delta {
-        ScalarValue::Int8(Some(delta)) if *delta >= 0 => Some(*delta as usize),
-        ScalarValue::Int16(Some(delta)) if *delta >= 0 => Some(*delta as usize),
-        ScalarValue::Int32(Some(delta)) if *delta >= 0 => Some(*delta as usize),
-        ScalarValue::Int64(Some(delta)) if *delta >= 0 => Some(*delta as usize),
-        ScalarValue::UInt8(Some(delta)) => Some(*delta as usize),
-        ScalarValue::UInt16(Some(delta)) => Some(*delta as usize),
-        ScalarValue::UInt32(Some(delta)) => Some(*delta as usize),
-        ScalarValue::UInt64(Some(delta)) => Some(*delta as usize),
-        _ => None,
-    }
-    // The delta (directly) is not the real range, since it does not include the
-    // first term.
-    // E.g. (min=2, max=4) -> (4 - 2) -> 2, but the actual result should be 3 (1, 2, 3).
-    .map(|open_ended_range| open_ended_range + 1)
 }
 
 enum OnceFutState<T> {
