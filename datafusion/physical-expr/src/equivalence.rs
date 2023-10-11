@@ -750,17 +750,11 @@ impl SchemaProperties {
         &self,
         sort_reqs: &[PhysicalSortRequirement],
     ) -> Vec<PhysicalSortRequirement> {
-        let normalized_sort_reqs = self.eq_groups.normalize_sort_requirements(sort_reqs);
-        // Remove entries that are known to be constant from requirement expression.
-        let normalized_sort_reqs =
-            prune_sort_reqs_with_constants(&normalized_sort_reqs, &self.constants);
-        let mut normalized_sort_reqs = collapse_lex_req(normalized_sort_reqs);
+        let mut normalized_sort_reqs =
+            self.eq_groups.normalize_sort_requirements(sort_reqs);
 
         // Prune redundant sections in the requirement.
         normalized_sort_reqs = self.prune_lex_req(normalized_sort_reqs);
-
-        // Remove duplicates from expression.
-        let normalized_sort_reqs = collapse_lex_req(normalized_sort_reqs);
 
         let oeq_group = self.oeq_group();
         if normalized_sort_reqs.is_empty() && !oeq_group.is_empty() {
@@ -771,11 +765,44 @@ impl SchemaProperties {
         }
     }
 
+    fn satisfy_prefix(&self, sort_req: &[PhysicalSortRequirement]) -> usize {
+        let mut prefix_length = 0;
+        while prefix_length < sort_req.len() {
+            if self.ordering_satisfy_requirement_concrete(&sort_req[0..prefix_length + 1])
+            {
+                prefix_length += 1;
+            } else {
+                break;
+            }
+        }
+        prefix_length
+    }
+
     /// This function simplifies lexicographical ordering requirement
     /// inside `sort_req` by removing postfix lexicographical requirements
     /// that satisfy global ordering (occurs inside the ordering equivalent class)
     fn prune_lex_req(&self, sort_req: LexOrderingReq) -> LexOrderingReq {
-        let mut section = &sort_req[..];
+        // Remove entries that are known to be constant from requirement expression.
+        let sort_req = prune_sort_reqs_with_constants(&sort_req, &self.constants);
+        let sort_req = collapse_lex_req(sort_req);
+
+        // If empty immediately return
+        if sort_req.is_empty() {
+            return sort_req;
+        }
+        let mut new_sort_req = vec![sort_req[0].clone()];
+        let mut idx = 1;
+        while idx < sort_req.len() {
+            let n_remove = self.satisfy_prefix(&sort_req[idx..]);
+            if n_remove == 0 {
+                new_sort_req.push(sort_req[idx].clone());
+                idx += 1;
+            } else {
+                idx += n_remove;
+            }
+        }
+
+        let mut section = &new_sort_req[..];
         // Eat up from the end of the sort_req until no section can be removed
         // from the ending.
         loop {
@@ -786,7 +813,8 @@ impl SchemaProperties {
             }
             section = &section[0..section.len() - n_prune];
         }
-        section.to_vec()
+        // Remove duplicates from expression.
+        collapse_lex_req(section.to_vec())
     }
 
     /// Determines how many entries from the end can be deleted.
@@ -821,15 +849,19 @@ impl SchemaProperties {
         0
     }
 
-    /// Checks whether `leading_ordering` is contained in any of the ordering
+    /// Checks whether `leading_requirement` is contained in any of the ordering
     /// equivalence classes.
-    pub fn satisfies_leading_ordering(
+    pub fn satisfies_leading_requirement(
         &self,
-        leading_ordering: &PhysicalSortExpr,
+        leading_requirement: &PhysicalSortRequirement,
     ) -> bool {
-        self.oeq_group()
-            .iter()
-            .any(|ordering| ordering[0].eq(leading_ordering))
+        let leading_requirement = self
+            .eq_groups
+            .normalize_sort_requirement(leading_requirement.clone());
+        self.oeq_group().iter().any(|ordering| {
+            let ordering = self.eq_groups.normalize_sort_exprs(ordering);
+            ordering[0].satisfy_with_schema(&leading_requirement, &self.schema)
+        })
     }
 
     /// Projects `SchemaProperties` according to mapping given in `source_to_target_mapping`.
@@ -1658,7 +1690,10 @@ mod tests {
             descending: true,
             nulls_first: true,
         };
-        // The schema is ordered by a ASC NULLS LAST, b ASC NULLS LAST
+        // Schema satisfies following orderings:
+        // [a ASC], [d ASC, b ASC], [e DESC, f ASC, g ASC]
+        // and
+        // Column [a=c] (e.g they are aliases).
         let (_test_schema, schema_properties) = create_test_params()?;
         // First element in the tuple stores vector of requirement, second element is the expected return value for ordering_satisfy function
         let requirements = vec![
@@ -1735,6 +1770,19 @@ mod tests {
                 false,
             ),
             (vec![(col_d, option1), (col_e, option2)], true),
+            (
+                vec![(col_d, option1), (col_c, option1), (col_b, option1)],
+                true,
+            ),
+            (
+                vec![
+                    (col_d, option1),
+                    (col_e, option2),
+                    (col_f, option1),
+                    (col_b, option1),
+                ],
+                true,
+            ),
         ];
 
         for (cols, expected) in requirements {
