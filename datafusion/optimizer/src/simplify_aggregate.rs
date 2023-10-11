@@ -21,6 +21,7 @@
 use crate::optimizer::ApplyOrder;
 use datafusion_common::{get_target_functional_dependencies, Result};
 use datafusion_expr::{logical_plan::LogicalPlan, Aggregate, Expr};
+use itertools::izip;
 
 use crate::{OptimizerConfig, OptimizerRule};
 
@@ -81,21 +82,27 @@ fn get_at_indices(exprs: &[Expr], indices: Vec<usize>) -> Vec<Expr> {
         .collect::<Vec<_>>()
 }
 
+fn merge_vectors(lhs: &[usize], rhs: &[usize]) -> Vec<usize> {
+    let mut merged = lhs.to_vec();
+    merged.extend(rhs);
+    // Make sure to run sort before dedup.
+    // Dedup removes consecutive same entries
+    // If sort is run before it, all duplicates are removed.
+    merged.sort();
+    merged.dedup();
+    merged
+}
+
 fn try_optimize_internal(
     plan: &LogicalPlan,
     _config: &dyn OptimizerConfig,
     indices: Vec<usize>,
 ) -> Result<Option<LogicalPlan>> {
-    match plan {
+    let child_required_indices: Option<Vec<Vec<usize>>> = match plan {
         LogicalPlan::Projection(proj) => {
             let exprs_used = get_at_indices(&proj.expr, indices);
             let new_indices = get_required_indices(&proj.input, &exprs_used)?;
-
-            if let Some(new_input) =
-                try_optimize_internal(&proj.input, _config, new_indices)?
-            {
-                return Ok(Some(plan.with_new_inputs(&[new_input])?));
-            }
+            Some(vec![new_indices])
         }
         LogicalPlan::Aggregate(aggregate) => {
             let group_bys_used = get_at_indices(&aggregate.group_expr, indices);
@@ -126,33 +133,41 @@ fn try_optimize_internal(
                     aggregate.aggr_expr.clone(),
                 )?)));
             }
+            None
         }
         LogicalPlan::Sort(sort) => {
-            if let Some(new_input) = try_optimize_internal(&sort.input, _config, indices)?
-            {
-                let res = plan.with_new_inputs(&[new_input])?;
-                return Ok(Some(res));
-            }
+            let indices_referred_by_sort = get_required_indices(&sort.input, &sort.expr)?;
+            let required_indices = merge_vectors(&indices, &indices_referred_by_sort);
+            Some(vec![required_indices])
         }
         LogicalPlan::Filter(filter) => {
-            let indices_used_by_filter =
+            let indices_referred_by_filter =
                 get_required_indices(&filter.input, &[filter.predicate.clone()])?;
-            let mut required_indices = indices.clone();
-            required_indices.extend(indices_used_by_filter);
-            // Make sure required_indices doesn't contains duplicates and it is ordered.
-            // Sort before dedup, dedup removes consecutive same elements
-            required_indices.sort();
-            required_indices.dedup();
-            if let Some(new_input) =
-                try_optimize_internal(&filter.input, _config, required_indices)?
-            {
-                let res = plan.with_new_inputs(&[new_input])?;
-                return Ok(Some(res));
-            }
+            let required_indices = merge_vectors(&indices, &indices_referred_by_filter);
+            Some(vec![required_indices])
         }
-        _ => {}
+        _ => None,
+    };
+    if let Some(child_required_indices) = child_required_indices {
+        let new_inputs = izip!(child_required_indices, plan.inputs())
+            .map(|(required_indices, child)| {
+                Ok(
+                    if let Some(child) =
+                        try_optimize_internal(child, _config, required_indices)?
+                    {
+                        child
+                    } else {
+                        // If child is not changed use existing child
+                        child.clone()
+                    },
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let res = plan.with_new_inputs(&new_inputs)?;
+        Ok(Some(res))
+    } else {
+        Ok(None)
     }
-    Ok(Some(plan.clone()))
 }
 
 #[cfg(test)]
