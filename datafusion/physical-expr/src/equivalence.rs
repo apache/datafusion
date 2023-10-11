@@ -765,7 +765,8 @@ impl SchemaProperties {
         }
     }
 
-    fn satisfy_prefix(&self, sort_req: &[PhysicalSortRequirement]) -> usize {
+    // Find the prefix length that is satisfied in the sort requirement
+    fn prefix_len_satisfied(&self, sort_req: &[PhysicalSortRequirement]) -> usize {
         let mut prefix_length = 0;
         while prefix_length < sort_req.len() {
             if self.ordering_satisfy_requirement_concrete(&sort_req[0..prefix_length + 1])
@@ -793,7 +794,7 @@ impl SchemaProperties {
         let mut new_sort_req = vec![sort_req[0].clone()];
         let mut idx = 1;
         while idx < sort_req.len() {
-            let n_remove = self.satisfy_prefix(&sort_req[idx..]);
+            let n_remove = self.prefix_len_satisfied(&sort_req[idx..]);
             if n_remove == 0 {
                 new_sort_req.push(sort_req[idx].clone());
                 idx += 1;
@@ -1780,6 +1781,24 @@ mod tests {
                     (col_e, option2),
                     (col_f, option1),
                     (col_b, option1),
+                ],
+                true,
+            ),
+            (
+                vec![
+                    (col_d, option1),
+                    (col_e, option2),
+                    (col_c, option1),
+                    (col_b, option1),
+                ],
+                true,
+            ),
+            (
+                vec![
+                    (col_d, option1),
+                    (col_e, option2),
+                    (col_b, option1),
+                    (col_f, option1),
                 ],
                 true,
             ),
