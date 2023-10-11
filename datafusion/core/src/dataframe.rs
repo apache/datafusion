@@ -1890,7 +1890,7 @@ mod tests {
             &df_results
         );
 
-        let df_renamed = df.clone().with_column("new_column", lit(true))?;
+        let df_with_column = df.clone().with_column("new_column", lit(true))?;
 
         assert_eq!(
             "\
@@ -1900,7 +1900,7 @@ mod tests {
         \n      Inner Join: t1.c1 = t2.c1\
         \n        TableScan: t1\
         \n        TableScan: t2",
-            format!("{:?}", df_renamed.logical_plan())
+            format!("{:?}", df_with_column.logical_plan())
         );
 
         assert_eq!(
@@ -1913,10 +1913,10 @@ mod tests {
         \n          TableScan: aggregate_test_100 projection=[c1]\
         \n        SubqueryAlias: t2\
         \n          TableScan: aggregate_test_100 projection=[c1]",
-            format!("{:?}", df_renamed.clone().into_optimized_plan()?)
+            format!("{:?}", df_with_column.clone().into_optimized_plan()?)
         );
 
-        let df_results = df_renamed.collect().await?;
+        let df_results = df_with_column.collect().await?;
 
         assert_batches_sorted_eq!(
             [
