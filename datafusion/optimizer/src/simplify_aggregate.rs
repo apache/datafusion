@@ -134,6 +134,22 @@ fn try_optimize_internal(
                 return Ok(Some(res));
             }
         }
+        LogicalPlan::Filter(filter) => {
+            let indices_used_by_filter =
+                get_required_indices(&filter.input, &[filter.predicate.clone()])?;
+            let mut required_indices = indices.clone();
+            required_indices.extend(indices_used_by_filter);
+            // Make sure required_indices doesn't contains duplicates and it is ordered.
+            // Sort before dedup, dedup removes consecutive same elements
+            required_indices.sort();
+            required_indices.dedup();
+            if let Some(new_input) =
+                try_optimize_internal(&filter.input, _config, required_indices)?
+            {
+                let res = plan.with_new_inputs(&[new_input])?;
+                return Ok(Some(res));
+            }
+        }
         _ => {}
     }
     Ok(Some(plan.clone()))

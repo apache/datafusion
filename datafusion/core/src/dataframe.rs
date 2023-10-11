@@ -1678,7 +1678,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_aggregate_with_pk4() -> Result<()> {
         // create the dataframe
         let config = SessionConfig::new().with_target_partitions(1);
@@ -1706,6 +1705,9 @@ mod tests {
         let predicate = condition1;
         // id=1
         let df = df.filter(predicate)?;
+        // Select expression refers to id column.
+        // id
+        let df = df.select(vec![col_id.clone()])?;
         let physical_plan = df.clone().create_physical_plan().await?;
         print_plan(&physical_plan);
 
@@ -1730,11 +1732,11 @@ mod tests {
 
         #[rustfmt::skip]
         assert_batches_sorted_eq!(
-            ["+----+------+",
-             "| id | name |",
-             "+----+------+",
-             "| 1  | a    |",
-             "+----+------+",],
+            [    "+----+",
+                "| id |",
+                "+----+",
+                "| 1  |",
+                "+----+",],
             &df_results
         );
 
