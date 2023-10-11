@@ -182,12 +182,11 @@ fn empty_child(plan: &LogicalPlan) -> Result<Option<LogicalPlan>> {
 #[cfg(test)]
 mod tests {
     use crate::eliminate_filter::EliminateFilter;
-    use crate::optimizer::Optimizer;
+    use crate::eliminate_nested_union::EliminateNestedUnion;
     use crate::test::{
-        assert_optimized_plan_eq, test_table_scan, test_table_scan_fields,
-        test_table_scan_with_name,
+        assert_optimized_plan_eq, assert_optimized_plan_eq_with_rules, test_table_scan,
+        test_table_scan_fields, test_table_scan_with_name,
     };
-    use crate::OptimizerContext;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::{Column, DFField, DFSchema, ScalarValue};
     use datafusion_expr::logical_plan::table_scan;
@@ -206,21 +205,15 @@ mod tests {
         plan: &LogicalPlan,
         expected: &str,
     ) -> Result<()> {
-        fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
-        let optimizer = Optimizer::with_rules(vec![
-            Arc::new(EliminateFilter::new()),
-            Arc::new(PropagateEmptyRelation::new()),
-        ]);
-        let config = &mut OptimizerContext::new()
-            .with_max_passes(1)
-            .with_skip_failing_rules(false);
-        let optimized_plan = optimizer
-            .optimize(plan, config, observe)
-            .expect("failed to optimize plan");
-        let formatted_plan = format!("{optimized_plan:?}");
-        assert_eq!(formatted_plan, expected);
-        assert_eq!(plan.schema(), optimized_plan.schema());
-        Ok(())
+        assert_optimized_plan_eq_with_rules(
+            vec![
+                Arc::new(EliminateFilter::new()),
+                Arc::new(EliminateNestedUnion::new()),
+                Arc::new(PropagateEmptyRelation::new()),
+            ],
+            plan,
+            expected,
+        )
     }
 
     #[test]

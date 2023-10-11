@@ -44,6 +44,7 @@ use arrow_array::RecordBatch;
 use datafusion_common::{exec_err, not_impl_err, DataFusionError, FileType};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
+use datafusion_physical_plan::metrics::MetricsSet;
 
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
@@ -484,6 +485,14 @@ impl CsvSink {
 
 #[async_trait]
 impl DataSink for CsvSink {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        None
+    }
+
     async fn write_all(
         &self,
         data: Vec<SendableRecordBatchStream>,

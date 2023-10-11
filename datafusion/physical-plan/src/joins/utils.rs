@@ -903,9 +903,6 @@ fn max_distinct_count(
             Some(stats.distinct_count.clone())
         }
         (_, Some(max), Some(min)) => {
-            // Note that float support is intentionally omitted here, since the computation
-            // of a range between two float values is not trivial and the result would be
-            // highly inaccurate.
             let numeric_range = Interval::new(
                 IntervalBound::new(min.clone(), false),
                 IntervalBound::new(max.clone(), false),

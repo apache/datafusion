@@ -17,52 +17,22 @@
 
 //! Parquet format abstractions
 
-use datafusion_common::stats::Sharpness;
-use parquet::column::writer::ColumnCloseResult;
-use parquet::file::writer::SerializedFileWriter;
-use rand::distributions::DistString;
 use std::any::Any;
 use std::fmt;
 use std::fmt::Debug;
 use std::io::Write;
 use std::sync::Arc;
-use tokio::io::{AsyncWrite, AsyncWriteExt};
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tokio::task::{JoinHandle, JoinSet};
-
-use crate::datasource::file_format::file_compression_type::FileCompressionType;
-use crate::datasource::statistics::create_max_min_accs;
-use arrow::datatypes::SchemaRef;
-use arrow::datatypes::{Fields, Schema};
-use async_trait::async_trait;
-use bytes::{BufMut, BytesMut};
-use datafusion_common::{exec_err, not_impl_err, plan_err, DataFusionError, FileType};
-use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
-use futures::{StreamExt, TryStreamExt};
-use hashbrown::HashMap;
-use object_store::{ObjectMeta, ObjectStore};
-use parquet::arrow::{parquet_to_arrow_schema, AsyncArrowWriter};
-use parquet::file::footer::{decode_footer, decode_metadata};
-use parquet::file::metadata::ParquetMetaData;
-use parquet::file::properties::WriterProperties;
-use parquet::file::statistics::Statistics as ParquetStatistics;
-use rand::distributions::Alphanumeric;
 
 use super::write::{create_writer, AbortableWrite, FileWriterMode};
-use super::FileFormat;
-use super::FileScanConfig;
-use crate::arrow::array::{
-    BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array,
-};
-use crate::arrow::datatypes::DataType;
-use crate::config::ConfigOptions;
+use super::{FileFormat, FileScanConfig};
 
+use crate::config::ConfigOptions;
+use crate::datasource::file_format::file_compression_type::FileCompressionType;
+use crate::datasource::get_col_stats;
 use crate::datasource::physical_plan::{
     FileGroupDisplay, FileMeta, FileSinkConfig, ParquetExec, SchemaAdapter,
 };
-
-use crate::datasource::get_col_stats;
+use crate::datasource::statistics::create_max_min_accs;
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
@@ -71,6 +41,32 @@ use crate::physical_plan::{
     Accumulator, DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream,
     Statistics,
 };
+
+use arrow::array::{BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array};
+use arrow::datatypes::{DataType, Fields, Schema, SchemaRef};
+use datafusion_common::{
+    exec_err, not_impl_err, plan_err, DataFusionError, FileType, Sharpness,
+};
+use datafusion_execution::TaskContext;
+use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
+use datafusion_physical_plan::metrics::MetricsSet;
+
+use async_trait::async_trait;
+use bytes::{BufMut, BytesMut};
+use futures::{StreamExt, TryStreamExt};
+use hashbrown::HashMap;
+use object_store::{ObjectMeta, ObjectStore};
+use parquet::arrow::{parquet_to_arrow_schema, AsyncArrowWriter};
+use parquet::column::writer::ColumnCloseResult;
+use parquet::file::footer::{decode_footer, decode_metadata};
+use parquet::file::metadata::ParquetMetaData;
+use parquet::file::properties::WriterProperties;
+use parquet::file::statistics::Statistics as ParquetStatistics;
+use parquet::file::writer::SerializedFileWriter;
+use rand::distributions::{Alphanumeric, DistString};
+use tokio::io::{AsyncWrite, AsyncWriteExt};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::task::{JoinHandle, JoinSet};
 
 /// The Apache Parquet `FileFormat` implementation
 ///
@@ -753,6 +749,14 @@ impl ParquetSink {
 
 #[async_trait]
 impl DataSink for ParquetSink {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        None
+    }
+
     async fn write_all(
         &self,
         mut data: Vec<SendableRecordBatchStream>,

@@ -27,6 +27,7 @@ use super::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
     Statistics,
 };
+use crate::metrics::MetricsSet;
 use crate::stream::RecordBatchStreamAdapter;
 
 use arrow::datatypes::SchemaRef;
@@ -47,6 +48,16 @@ use futures::StreamExt;
 /// output.
 #[async_trait]
 pub trait DataSink: DisplayAs + Debug + Send + Sync {
+    /// Returns the data sink as [`Any`](std::any::Any) so that it can be
+    /// downcast to a specific implementation.
+    fn as_any(&self) -> &dyn Any;
+
+    /// Return a snapshot of the [MetricsSet] for this
+    /// [DataSink].
+    ///
+    /// See [ExecutionPlan::metrics()] for more details
+    fn metrics(&self) -> Option<MetricsSet>;
+
     // TODO add desired input ordering
     // How does this sink want its input ordered?
 
@@ -151,6 +162,16 @@ impl FileSinkExec {
             streams.push(self.execute_input_stream(part, context.clone())?);
         }
         Ok(streams)
+    }
+
+    /// Returns insert sink
+    pub fn sink(&self) -> &dyn DataSink {
+        self.sink.as_ref()
+    }
+
+    /// Returns the metrics of the underlying [DataSink]
+    pub fn metrics(&self) -> Option<MetricsSet> {
+        self.sink.metrics()
     }
 }
 
