@@ -253,11 +253,7 @@ impl Statistics {
 
 impl Display for Statistics {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Rows={}, Bytes={}, ColStats={:?}",
-            self.num_rows, self.total_byte_size, self.column_statistics
-        )?;
+        write!(f, "Rows={}, Bytes={}", self.num_rows, self.total_byte_size)?;
 
         Ok(())
     }

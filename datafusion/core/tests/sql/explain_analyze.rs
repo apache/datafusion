@@ -827,5 +827,5 @@ async fn csv_explain_analyze_with_statistics() {
         .to_string();
 
     // should contain scan statistics
-    assert_contains!(&formatted, ", statistics=[Rows=Absent, Bytes=Absent, ColStats=[ColumnStatistics { null_count: Absent, max_value: Absent, min_value: Absent, distinct_count: Absent }]]");
+    assert_contains!(&formatted, ", statistics=[Rows=Absent, Bytes=Absent]");
 }
