@@ -1904,8 +1904,8 @@ mod tests {
     #[test]
     fn test_ordering_satisfy_with_equivalence_random() -> Result<()> {
         // Number of random tests
-        let n_test = 1000usize;
-        let n_req_max = 3usize;
+        let n_test = 10000usize;
+        let n_req_max = 5usize;
         let option1 = SortOptions {
             descending: false,
             nulls_first: false,
@@ -1920,10 +1920,10 @@ mod tests {
 
         // use a random number for values
         let mut rng = StdRng::seed_from_u64(23);
-        let n_req = rng.gen_range(0..n_req_max);
         let schema = schema_properties.schema();
         let n_schema = schema.fields.len();
         for _test_id in 0..n_test {
+            let n_req = rng.gen_range(0..n_req_max);
             let requirement = (0..n_req)
                 .map(|_idx| {
                     let col_idx = rng.gen_range(0..n_schema);
