@@ -1144,10 +1144,7 @@ impl DataFrame {
                     col_exists = true;
                     new_column.clone()
                 } else {
-                    Expr::Column(Column {
-                        relation: None,
-                        name: f.name().into(),
-                    })
+                    col(f.qualified_column())
                 }
             })
             .collect();
@@ -1850,6 +1847,86 @@ mod tests {
                 "+----+----+-----+-----+"
             ],
             &df_results_overwrite_self
+        );
+
+        Ok(())
+    }
+
+    // Test issue: https://github.com/apache/arrow-datafusion/issues/7790
+    // The join operation outputs two identical column names, but they belong to different relations.
+    #[tokio::test]
+    async fn with_column_join_same_columns() -> Result<()> {
+        let df = test_table().await?.select_columns(&["c1"])?;
+        let ctx = SessionContext::new();
+
+        let table = df.into_view();
+        ctx.register_table("t1", table.clone())?;
+        ctx.register_table("t2", table)?;
+        let df = ctx
+            .table("t1")
+            .await?
+            .join(
+                ctx.table("t2").await?,
+                JoinType::Inner,
+                &["c1"],
+                &["c1"],
+                None,
+            )?
+            .sort(vec![
+                // make the test deterministic
+                col("t1.c1").sort(true, true),
+            ])?
+            .limit(0, Some(1))?;
+
+        let df_results = df.clone().collect().await?;
+        assert_batches_sorted_eq!(
+            [
+                "+----+----+",
+                "| c1 | c1 |",
+                "+----+----+",
+                "| a  | a  |",
+                "+----+----+",
+            ],
+            &df_results
+        );
+
+        let df_renamed = df.clone().with_column("new_column", lit(true))?;
+
+        assert_eq!(
+            "\
+        Projection: t1.c1, t2.c1, Boolean(true) AS new_column\
+        \n  Limit: skip=0, fetch=1\
+        \n    Sort: t1.c1 ASC NULLS FIRST\
+        \n      Inner Join: t1.c1 = t2.c1\
+        \n        TableScan: t1\
+        \n        TableScan: t2",
+            format!("{:?}", df_renamed.logical_plan())
+        );
+
+        assert_eq!(
+            "\
+        Projection: t1.c1, t2.c1, Boolean(true) AS new_column\
+        \n  Limit: skip=0, fetch=1\
+        \n    Sort: t1.c1 ASC NULLS FIRST, fetch=1\
+        \n      Inner Join: t1.c1 = t2.c1\
+        \n        SubqueryAlias: t1\
+        \n          TableScan: aggregate_test_100 projection=[c1]\
+        \n        SubqueryAlias: t2\
+        \n          TableScan: aggregate_test_100 projection=[c1]",
+            format!("{:?}", df_renamed.clone().into_optimized_plan()?)
+        );
+
+        let df_results = df_renamed.collect().await?;
+
+        assert_batches_sorted_eq!(
+            [
+                "+----+----+------------+",
+                "| c1 | c1 | new_column |",
+                "+----+----+------------+",
+                "| a  | a  | true       |",
+                "+----+----+------------+",
+            ],
+            &df_results
         );
 
         Ok(())
