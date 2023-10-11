@@ -785,12 +785,55 @@ impl SchemaProperties {
     fn prune_lex_req(&self, sort_req: LexOrderingReq) -> LexOrderingReq {
         // Remove entries that are known to be constant from requirement expression.
         let sort_req = prune_sort_reqs_with_constants(&sort_req, &self.constants);
-        let sort_req = collapse_lex_req(sort_req);
+        let mut sort_req = collapse_lex_req(sort_req);
 
         // If empty immediately return
         if sort_req.is_empty() {
             return sort_req;
         }
+        for ordering in self.oeq_group.iter() {
+            let normalized_ordering = self.eq_groups.normalize_sort_exprs(ordering);
+            let req = prune_sort_reqs_with_constants(
+                &PhysicalSortRequirement::from_sort_exprs(&normalized_ordering),
+                &self.constants,
+            );
+            let ordering = PhysicalSortRequirement::to_sort_exprs(req);
+            let match_indices = ordering
+                .iter()
+                .map(|elem| {
+                    sort_req.iter().position(|sort_req| {
+                        elem.satisfy_with_schema(sort_req, &self.schema)
+                    })
+                })
+                .collect::<Vec<_>>();
+            let mut match_prefix = vec![];
+            for elem in &match_indices{
+                if let Some(elem) = elem{
+                    if let Some(last) = match_prefix.last(){
+                        // Should increase
+                        if elem <= last{
+                            break;
+                        }
+                    }
+                    match_prefix.push(*elem)
+                } else {
+                    break;
+                }
+            }
+            println!("match_indices:{:?}, match_prefix:{:?}", match_indices, match_prefix);
+            // can remove entries at the match_prefix indices
+            for idx in match_prefix.iter().rev(){
+                sort_req.remove(*idx);
+            }
+
+        }
+        // If empty immediately return
+        if sort_req.is_empty() {
+            return sort_req;
+        }
+        // TODO: Do not delete from the start
+        // or use empty check
+
         let mut new_sort_req = vec![sort_req[0].clone()];
         let mut idx = 1;
         while idx < sort_req.len() {
@@ -1862,16 +1905,15 @@ mod tests {
                 ],
                 true,
             ),
-            // TODO: Resolve test below
-            // (
-            //     vec![
-            //         (col_d, option1),
-            //         (col_e, option2),
-            //         (col_b, option1),
-            //         (col_f, option1),
-            //     ],
-            //     true,
-            // ),
+            (
+                vec![
+                    (col_d, option1),
+                    (col_e, option2),
+                    (col_b, option1),
+                    (col_f, option1),
+                ],
+                true,
+            ),
         ];
 
         for (cols, expected) in requirements {
