@@ -336,8 +336,8 @@ pub fn longest_consecutive_prefix<T: Borrow<usize>>(
     count
 }
 
-/// Wrap an array into a ListArray
-/// e.g. arr: `PrimitiveArray<Int32Type>` -> `ListArray<PritimiveArray<Int32Type>>`
+/// Wrap an array into a single element `ListArray`.
+/// For example `[1, 2, 3]` would be converted into `[[1, 2, 3]]` 
 pub fn wrap_into_list_array(arr: ArrayRef) -> ListArray {
     let offsets = OffsetBuffer::from_lengths([arr.len()]);
     ListArray::new(

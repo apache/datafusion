@@ -576,7 +576,7 @@ impl TDigest {
             .map(|v| ScalarValue::Float64(Some(v)))
             .collect();
 
-        let arr = ScalarValue::scalars_to_list_array(&centroids, &DataType::Float64);
+        let arr = ScalarValue::new_list(&centroids, &DataType::Float64);
 
         vec![
             ScalarValue::UInt64(Some(self.max_size as u64)),

@@ -97,7 +97,7 @@ pub enum ScalarValue {
     LargeBinary(Option<Vec<u8>>),
     /// Fixed size list of nested ScalarValue
     Fixedsizelist(Option<Vec<ScalarValue>>, FieldRef, i32),
-    /// ListArray wrapper
+    /// Represents a single element of a [`ListArray`] as an [`ArrayRef`]
     List(ArrayRef),
     /// Date stored as a signed 32bit int days since UNIX epoch 1970-01-01
     Date32(Option<i32>),
@@ -1447,6 +1447,7 @@ impl ScalarValue {
             DataType::List(_) => {
                 // Fallback case handling homogeneous lists with any ScalarValue element type
                 let list_array = ScalarValue::iter_to_array_list(scalars)?;
+                println!("list_array: {:?}", list_array);
                 Arc::new(list_array)
             }
             DataType::Struct(fields) => {
@@ -1619,7 +1620,7 @@ impl ScalarValue {
         Ok(array)
     }
 
-    // This function does not contains nulls but empty array instead.
+    /// This function does not contains nulls but empty array instead.
     fn iter_to_array_list_without_nulls(
         values: &[ScalarValue],
         data_type: &DataType,
@@ -1654,7 +1655,7 @@ impl ScalarValue {
         Ok(list_array)
     }
 
-    // This function build with nulls with nulls buffer.
+    /// This function build with nulls with nulls buffer.
     fn iter_to_array_list(
         scalars: impl IntoIterator<Item = ScalarValue>,
     ) -> Result<GenericListArray<i32>> {
@@ -1766,7 +1767,7 @@ impl ScalarValue {
     ///
     /// assert_eq!(result, &expected);
     /// ```
-    pub fn scalars_to_list_array(
+    pub fn new_list(
         values: &[ScalarValue],
         data_type: &DataType,
     ) -> ArrayRef {
@@ -3178,7 +3179,7 @@ mod tests {
         ];
 
         let array =
-            ScalarValue::scalars_to_list_array(scalars.as_slice(), &DataType::Utf8);
+            ScalarValue::new_list(scalars.as_slice(), &DataType::Utf8);
 
         let expected = wrap_into_list_array(Arc::new(StringArray::from(vec![
             "rust",
@@ -3528,7 +3529,7 @@ mod tests {
 
     #[test]
     fn scalar_list_null_to_array() {
-        let list_array_ref = ScalarValue::scalars_to_list_array(&[], &DataType::UInt64);
+        let list_array_ref = ScalarValue::new_list(&[], &DataType::UInt64);
         let list_array = as_list_array(&list_array_ref);
 
         assert_eq!(list_array.len(), 1);
@@ -3543,7 +3544,7 @@ mod tests {
             ScalarValue::UInt64(Some(101)),
         ];
         let list_array_ref =
-            ScalarValue::scalars_to_list_array(&values, &DataType::UInt64);
+            ScalarValue::new_list(&values, &DataType::UInt64);
         let list_array = as_list_array(&list_array_ref);
         assert_eq!(list_array.len(), 1);
         assert_eq!(list_array.values().len(), 3);
@@ -5056,7 +5057,7 @@ mod tests {
     #[test]
     fn test_build_timestamp_millisecond_list() {
         let values = vec![ScalarValue::TimestampMillisecond(Some(1), None)];
-        let arr = ScalarValue::scalars_to_list_array(
+        let arr = ScalarValue::new_list(
             &values,
             &DataType::Timestamp(TimeUnit::Millisecond, None),
         );
