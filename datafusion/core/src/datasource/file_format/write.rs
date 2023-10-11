@@ -408,7 +408,7 @@ type DemuxedStreamReceiver = Receiver<(Path, RecordBatchReceiver)>;
 /// the demux task for errors and abort accordingly. The single_file_ouput parameter
 /// overrides all other settings to force only a single file to be written.
 /// partition_by parameter will additionally split the input based on the unique
-/// values of a specific column https://github.com/apache/arrow-datafusion/issues/7744
+/// values of a specific column `<https://github.com/apache/arrow-datafusion/issues/7744>``
 pub(crate) fn start_demuxer_task(
     mut input: SendableRecordBatchStream,
     context: &Arc<TaskContext>,
