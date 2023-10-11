@@ -337,7 +337,7 @@ pub fn longest_consecutive_prefix<T: Borrow<usize>>(
 }
 
 /// Wrap an array into a single element `ListArray`.
-/// For example `[1, 2, 3]` would be converted into `[[1, 2, 3]]` 
+/// For example `[1, 2, 3]` would be converted into `[[1, 2, 3]]`
 pub fn wrap_into_list_array(arr: ArrayRef) -> ListArray {
     let offsets = OffsetBuffer::from_lengths([arr.len()]);
     ListArray::new(
