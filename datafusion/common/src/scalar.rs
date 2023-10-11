@@ -1757,7 +1757,7 @@ impl ScalarValue {
     ///    ScalarValue::Int32(Some(2))
     /// ];
     ///
-    /// let array = ScalarValue::scalars_to_list_array(&scalars, &DataType::Int32);
+    /// let array = ScalarValue::new_list(&scalars, &DataType::Int32);
     /// let result = as_list_array(&array).unwrap();
     ///
     /// let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(

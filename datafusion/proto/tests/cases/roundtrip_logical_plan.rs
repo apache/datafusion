@@ -19,14 +19,12 @@ use std::collections::HashMap;
 use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
 
-use arrow::array::{new_null_array, ArrayRef, ListArray};
+use arrow::array::ArrayRef;
 use arrow::datatypes::{
-    DataType, Field, Fields, Float32Type, Int32Type, IntervalDayTimeType,
-    IntervalMonthDayNanoType, IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields,
-    UnionMode,
+    DataType, Field, Fields, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
+    Schema, SchemaRef, TimeUnit, UnionFields, UnionMode,
 };
 
-use datafusion_common::utils::wrap_into_list_array;
 use prost::Message;
 
 use datafusion::datasource::provider::TableProviderFactory;
@@ -549,6 +547,7 @@ fn round_trip_scalar_values() {
         ScalarValue::UInt64(None),
         ScalarValue::Utf8(None),
         ScalarValue::LargeUtf8(None),
+        ScalarValue::List(ScalarValue::new_list(&[], &DataType::Boolean)),
         ScalarValue::Date32(None),
         ScalarValue::Boolean(Some(true)),
         ScalarValue::Boolean(Some(false)),
@@ -639,6 +638,32 @@ fn round_trip_scalar_values() {
             i64::MAX,
         ))),
         ScalarValue::IntervalMonthDayNano(None),
+        ScalarValue::List(ScalarValue::new_list(
+            &[
+                ScalarValue::Float32(Some(-213.1)),
+                ScalarValue::Float32(None),
+                ScalarValue::Float32(Some(5.5)),
+                ScalarValue::Float32(Some(2.0)),
+                ScalarValue::Float32(Some(1.0)),
+            ],
+            &DataType::Float32,
+        )),
+        ScalarValue::List(ScalarValue::new_list(
+            &[
+                ScalarValue::List(ScalarValue::new_list(&[], &DataType::Float32)),
+                ScalarValue::List(ScalarValue::new_list(
+                    &[
+                        ScalarValue::Float32(Some(-213.1)),
+                        ScalarValue::Float32(None),
+                        ScalarValue::Float32(Some(5.5)),
+                        ScalarValue::Float32(Some(2.0)),
+                        ScalarValue::Float32(Some(1.0)),
+                    ],
+                    &DataType::Float32,
+                )),
+            ],
+            &DataType::List(new_arc_field("item", DataType::Float32, true)),
+        )),
         ScalarValue::Dictionary(
             Box::new(DataType::Int32),
             Box::new(ScalarValue::Utf8(Some("foo".into()))),
@@ -671,47 +696,6 @@ fn round_trip_scalar_values() {
         ScalarValue::FixedSizeBinary(b"bar".to_vec().len() as i32, Some(b"bar".to_vec())),
         ScalarValue::FixedSizeBinary(0, None),
         ScalarValue::FixedSizeBinary(5, None),
-    ];
-
-    for test_case in should_pass.into_iter() {
-        let proto: protobuf::ScalarValue = (&test_case)
-            .try_into()
-            .expect("failed conversion to protobuf");
-
-        let roundtrip: ScalarValue = (&proto)
-            .try_into()
-            .expect("failed conversion from protobuf");
-
-        assert_eq!(
-            test_case, roundtrip,
-            "ScalarValue was not the same after round trip!\n\n\
-                        Input: {test_case:?}\n\nRoundtrip: {roundtrip:?}"
-        );
-    }
-}
-
-#[test]
-fn round_trip_scalar_list() {
-    let i32arr = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
-        Some(vec![Some(1), Some(2), Some(4)]),
-    ]));
-    let f32arr = Arc::new(ListArray::from_iter_primitive::<Float32Type, _, _>(vec![
-        Some(vec![Some(-213.1), None, Some(5.5), Some(2.0)]),
-    ]));
-    let null_arr = Arc::new(wrap_into_list_array(new_null_array(&DataType::Int32, 0)));
-
-    let f32arr_with_null =
-        Arc::new(ListArray::from_iter_primitive::<Float32Type, _, _>(vec![
-            Some(vec![Some(-213.1), None, Some(5.5), Some(2.0)]),
-            None,
-            Some(vec![Some(-213.1), None, Some(5.5), Some(2.0)]),
-        ]));
-
-    let should_pass: Vec<ScalarValue> = vec![
-        ScalarValue::List(i32arr),
-        ScalarValue::List(f32arr),
-        ScalarValue::List(null_arr),
-        ScalarValue::List(f32arr_with_null),
     ];
 
     for test_case in should_pass.into_iter() {
