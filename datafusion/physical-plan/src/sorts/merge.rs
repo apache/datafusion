@@ -26,7 +26,7 @@ use crate::{PhysicalSortExpr, RecordBatchStream, SendableRecordBatchStream};
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_array::*;
-use datafusion_common::Result;
+use datafusion_common::{internal_err, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
 use futures::Stream;
 use std::pin::Pin;
@@ -63,6 +63,12 @@ pub fn streaming_merge(
     fetch: Option<usize>,
     reservation: MemoryReservation,
 ) -> Result<SendableRecordBatchStream> {
+    // If there are no sort expressions, preserving the order
+    // doesn't mean anything (and result in inifinite loops)
+    if expressions.is_empty() {
+        return internal_err!("Sort expressions cannot be empty for streaming merge");
+    }
+
     // Special case single column comparisons with optimized cursor implementations
     if expressions.len() == 1 {
         let sort = expressions[0].clone();
