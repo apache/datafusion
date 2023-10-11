@@ -26,7 +26,7 @@ use crate::{PhysicalSortExpr, RecordBatchStream, SendableRecordBatchStream};
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_array::*;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
 use futures::Stream;
 use std::pin::Pin;
