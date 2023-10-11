@@ -1839,6 +1839,64 @@ mod tests {
     }
 
     #[test]
+    fn test_ordering_satisfy_with_equivalence_random() -> Result<()> {
+        // Number of random tests
+        let n_test = 1000usize;
+        let n_req_max = 5usize;
+        let option1 = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        let option2 = SortOptions {
+            descending: true,
+            nulls_first: true,
+        };
+        // Schema satisfies following orderings:
+        // [a ASC], [d ASC, b ASC], [e DESC, f ASC, g ASC]
+        // and
+        // Column [a=c] (e.g they are aliases).
+        let (_test_schema, schema_properties) = create_test_params()?;
+        let table_data_with_properties =
+            generate_table_for_schema_properties(&schema_properties, 625, 5)?;
+
+        // use a random number for values
+        let mut rng = StdRng::seed_from_u64(23);
+        let n_req = rng.gen_range(0..n_req_max);
+        let schema = schema_properties.schema();
+        let n_schema = schema.fields.len();
+        for test_id in 0..n_test {
+            let requirement = (0..n_req)
+                .map(|idx| {
+                    let col_idx = rng.gen_range(0..n_schema);
+                    let col_expr = col(schema.fields[col_idx].name(), &schema)?;
+                    // Choose option1 or option2 with 50 % probability.
+                    let options = if rng.gen_range(0..1) == 0 {
+                        option1
+                    } else {
+                        option2
+                    };
+                    Ok(PhysicalSortExpr {
+                        expr: col_expr,
+                        options,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let err_msg = format!("Error in test case:{requirement:?}");
+            let expected = is_table_same_after_sort(
+                requirement.clone(),
+                table_data_with_properties.clone(),
+            )?;
+            assert_eq!(
+                schema_properties.ordering_satisfy_concrete(&requirement),
+                expected,
+                "{err_msg}"
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
     fn test_ordering_satisfy_different_lengths() -> Result<()> {
         let test_schema = create_test_schema()?;
         let col_a_expr = col("a", &test_schema)?;
