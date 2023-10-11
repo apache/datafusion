@@ -497,15 +497,19 @@ impl CsvSink {
 
         let builder_clone = builder.clone();
         let options_clone = writer_options.clone();
-        let get_serializer = move || {
+        let get_serializer = move |file_size| {
             let inner_clone = builder_clone.clone();
             // In append mode, consider has_header flag only when file is empty (at the start).
             // For other modes, use has_header flag as is.
-            let serializer: Box<dyn BatchSerializer> = Box::new(
+            let serializer: Box<dyn BatchSerializer> = Box::new(if file_size > 0 {
                 CsvSerializer::new()
                     .with_builder(inner_clone)
-                    .with_header(options_clone.has_header),
-            );
+                    .with_header(false)
+            } else {
+                CsvSerializer::new()
+                    .with_builder(inner_clone)
+                    .with_header(options_clone.has_header)
+            });
             serializer
         };
 
@@ -546,6 +550,7 @@ impl CsvSink {
             "csv".into(),
             Box::new(get_serializer),
             &self.config,
+            writer_options.compression.into(),
         )
         .await
     }

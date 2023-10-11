@@ -260,14 +260,13 @@ impl JsonSink {
     ) -> Result<u64> {
         let writer_options = self.config.file_type_writer_options.try_into_json()?;
         let compression = &writer_options.compression;
-        let compression = FileCompressionType::from(*compression);
 
         let object_store = context
             .runtime_env()
             .object_store(&self.config.object_store_url)?;
         let file_groups = &self.config.file_groups;
 
-        let get_serializer = move || {
+        let get_serializer = move |_| {
             let serializer: Box<dyn BatchSerializer> = Box::new(JsonSerializer::new());
             serializer
         };
@@ -277,7 +276,7 @@ impl JsonSink {
             object_store,
             file_groups,
             self.config.unbounded_input,
-            compression,
+            (*compression).into(),
             Box::new(get_serializer),
         )
         .await
@@ -288,6 +287,9 @@ impl JsonSink {
         data: SendableRecordBatchStream,
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
+        let writer_options = self.config.file_type_writer_options.try_into_json()?;
+        let compression = &writer_options.compression;
+
         let get_serializer = move || {
             let serializer: Box<dyn BatchSerializer> = Box::new(JsonSerializer::new());
             serializer
@@ -299,6 +301,7 @@ impl JsonSink {
             "json".into(),
             Box::new(get_serializer),
             &self.config,
+            (*compression).into(),
         )
         .await
     }

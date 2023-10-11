@@ -2090,7 +2090,6 @@ mod tests {
             }
             None => SessionContext::new(),
         };
-        let target_partition_number = session_ctx.state().config().target_partitions();
 
         // Create a new schema with one field called "a" of type Int32
         let schema = Arc::new(Schema::new(vec![Field::new(
@@ -2230,7 +2229,7 @@ mod tests {
 
         // Assert that `target_partition_number` many files were added to the table.
         let num_files = tmp_dir.path().read_dir()?.count();
-        assert_eq!(num_files, target_partition_number);
+        assert_eq!(num_files, 1);
 
         // Create a physical plan from the insert plan
         let plan = session_ctx
@@ -2273,7 +2272,7 @@ mod tests {
 
         // Assert that another `target_partition_number` many files were added to the table.
         let num_files = tmp_dir.path().read_dir()?.count();
-        assert_eq!(num_files, 2 * target_partition_number);
+        assert_eq!(num_files, 2);
 
         // Return Ok if the function
         Ok(())

@@ -577,11 +577,8 @@ pub(crate) async fn stateless_multipart_put(
     file_extension: String,
     get_serializer: Box<dyn Fn() -> Box<dyn BatchSerializer> + Send>,
     config: &FileSinkConfig,
+    compression: FileCompressionType,
 ) -> Result<u64> {
-    let writer_options = config.file_type_writer_options.try_into_csv()?;
-    let compression = &writer_options.compression;
-    let compression = FileCompressionType::from(*compression);
-
     let object_store = context
         .runtime_env()
         .object_store(&config.object_store_url)?;
@@ -673,16 +670,16 @@ pub(crate) async fn stateless_append_all(
     file_groups: &Vec<PartitionedFile>,
     unbounded_input: bool,
     compression: FileCompressionType,
-    get_serializer: Box<dyn Fn() -> Box<dyn BatchSerializer> + Send>,
+    get_serializer: Box<dyn Fn(usize) -> Box<dyn BatchSerializer> + Send>,
 ) -> Result<u64> {
     let (tx_file_bundle, rx_file_bundle) = tokio::sync::mpsc::channel(file_groups.len());
     let mut send_channels = vec![];
     for file_group in file_groups {
-        let serializer = get_serializer();
+        let serializer = get_serializer(file_group.object_meta.size);
 
         let file = file_group.clone();
         let writer = create_writer(
-            FileWriterMode::PutMultipart,
+            FileWriterMode::Append,
             compression,
             file.object_meta.clone().into(),
             object_store.clone(),
@@ -716,9 +713,13 @@ pub(crate) async fn stateless_append_all(
             )
         })?;
         next_file_idx = (next_file_idx + 1) % send_channels.len();
+        if unbounded_input {
+            tokio::task::yield_now().await;
+        }
     }
     // Signal to the write coordinater that no more files are coming
     drop(tx_file_bundle);
+    drop(send_channels);
 
     let total_count = if let Some(cnt) = rx_row_cnt.recv().await {
         cnt
