@@ -1462,7 +1462,11 @@ mod tests {
     use datafusion_common::Result;
 
     use crate::physical_expr::physical_exprs_equal;
+    use arrow::compute::{lexsort_to_indices, SortColumn};
+    use arrow_array::{ArrayRef, RecordBatch, UInt32Array, UInt64Array};
     use arrow_schema::{Fields, SortOptions};
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
     use std::sync::Arc;
 
     // Generate a schema which consists of 5 columns (a, b, c, d, e)
@@ -2061,5 +2065,176 @@ mod tests {
         assert_eq!(result, expected);
 
         Ok(())
+    }
+
+    #[test]
+    fn check_expected_ordering_with_data() -> Result<()> {
+        let input_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::UInt64, true),
+            Field::new("b", DataType::UInt64, true),
+            Field::new("c", DataType::UInt64, true),
+            Field::new("d", DataType::UInt64, true),
+            Field::new("e", DataType::UInt64, true),
+            Field::new("f", DataType::UInt64, true),
+        ]));
+        let col_a_expr = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+        let col_b_expr = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
+        let col_c_expr = Arc::new(Column::new("c", 2)) as Arc<dyn PhysicalExpr>;
+        let col_d_expr = Arc::new(Column::new("d", 3)) as Arc<dyn PhysicalExpr>;
+        let col_e_expr = Arc::new(Column::new("e", 4)) as Arc<dyn PhysicalExpr>;
+        let col_f_expr = Arc::new(Column::new("f", 5)) as Arc<dyn PhysicalExpr>;
+
+        let col_a_expr = &col_a_expr;
+        let col_b_expr = &col_b_expr;
+        let col_c_expr = &col_c_expr;
+        let col_d_expr = &col_d_expr;
+        let col_e_expr = &col_e_expr;
+        let col_f_expr = &col_f_expr;
+        let mut schema_properties = SchemaProperties::new(input_schema.clone());
+        schema_properties.add_new_orderings(&[
+            vec![
+                PhysicalSortExpr {
+                    expr: col_a_expr.clone(),
+                    options: Default::default(),
+                },
+                PhysicalSortExpr {
+                    expr: col_b_expr.clone(),
+                    options: Default::default(),
+                },
+            ],
+            vec![PhysicalSortExpr {
+                expr: col_c_expr.clone(),
+                options: Default::default(),
+            }],
+            vec![
+                PhysicalSortExpr {
+                    expr: col_d_expr.clone(),
+                    options: Default::default(),
+                },
+                PhysicalSortExpr {
+                    expr: col_e_expr.clone(),
+                    options: Default::default(),
+                },
+                PhysicalSortExpr {
+                    expr: col_f_expr.clone(),
+                    options: Default::default(),
+                },
+            ],
+        ]);
+        let record_batch =
+            generate_table_for_schema_properties(&schema_properties, 625, 5)?;
+
+        // true means table is same after sorting, (sort was unnecessary)
+        // false means table changes after sorting, (sort was necessary)
+        let test_cases = vec![
+            // a ASC
+            (vec![col_a_expr], true),
+            // a ASC, d ASC, b ASC, e ASC
+            (vec![col_a_expr, col_d_expr, col_b_expr, col_e_expr], true),
+            // a ASC, e ASC
+            (vec![col_a_expr, col_e_expr], false),
+        ];
+        for (required, expected) in test_cases {
+            let required_ordering = required
+                .into_iter()
+                .map(|expr| PhysicalSortExpr {
+                    expr: expr.clone(),
+                    options: Default::default(),
+                })
+                .collect();
+
+            assert_eq!(
+                is_table_same_after_sort(required_ordering, record_batch.clone())?,
+                expected
+            );
+        }
+
+        Ok(())
+    }
+
+    // Check whether table will stay the same after ordered according to requirement
+    // given. If so it means that required ordering is already satisfied (according to
+    // random data).
+    fn is_table_same_after_sort(
+        mut required_ordering: Vec<PhysicalSortExpr>,
+        batch: RecordBatch,
+    ) -> Result<bool> {
+        let schema = batch.schema();
+        let n_row = batch.num_rows() as u64;
+        let mut sort_columns = vec![];
+        let new_arr = Arc::new(UInt64Array::from_iter_values(0..n_row)) as ArrayRef;
+        let mut cols = batch.columns().to_vec();
+        cols.push(new_arr);
+        let mut fields = schema.fields.to_vec();
+        let new_col_expr =
+            Arc::new(Column::new("unique", fields.len())) as Arc<dyn PhysicalExpr>;
+        fields.push(Arc::new(Field::new("unique", DataType::UInt64, false)));
+        let schema = Arc::new(Schema::new(fields));
+        let batch = RecordBatch::try_new(schema.clone(), cols)?;
+
+        // Add a unique ordering to the requirement to make resulting indices deterministic
+        required_ordering.push(PhysicalSortExpr {
+            expr: new_col_expr,
+            options: Default::default(),
+        });
+
+        for elem in required_ordering.into_iter() {
+            let (idx, _field) = schema
+                .column_with_name(
+                    elem.expr.as_any().downcast_ref::<Column>().unwrap().name(),
+                )
+                .unwrap();
+            let arr = batch.column(idx);
+            sort_columns.push(SortColumn {
+                values: arr.clone(),
+                options: Some(elem.options),
+            })
+        }
+        let indices = lexsort_to_indices(&sort_columns, None)?;
+        let no_change = UInt32Array::from_iter_values(0..n_row as u32);
+        Ok(indices == no_change)
+    }
+
+    // Generate a table that satisfies schema properties, in terms of ordering equivalences.
+    fn generate_table_for_schema_properties(
+        schema_properties: &SchemaProperties,
+        n_elem: usize,
+        n_distinct: usize,
+    ) -> Result<RecordBatch> {
+        // use a random number for values
+        let mut rng = StdRng::seed_from_u64(23);
+
+        let schema = schema_properties.schema();
+
+        let mut schema_vec = vec![None; schema.fields.len()];
+        for ordering in schema_properties.oeq_group.iter() {
+            let mut sort_columns = vec![];
+            let mut indices = vec![];
+            for PhysicalSortExpr { expr, options } in ordering {
+                let col = expr.as_any().downcast_ref::<Column>().unwrap();
+                let (idx, _field) = schema.column_with_name(col.name()).unwrap();
+                let mut arr: Vec<u64> = vec![0; n_elem];
+                arr.iter_mut().for_each(|v| {
+                    *v = rng.gen_range(0..n_distinct) as u64;
+                });
+                let arr = Arc::new(UInt64Array::from_iter_values(arr)) as ArrayRef;
+                sort_columns.push(SortColumn {
+                    values: arr,
+                    options: Some(*options),
+                });
+                indices.push(idx);
+            }
+            let sort_arrs = arrow::compute::lexsort(&sort_columns, None)?;
+            for (idx, arr) in izip!(indices, sort_arrs) {
+                schema_vec[idx] = Some(arr);
+            }
+        }
+        let res = schema_vec
+            .into_iter()
+            .zip(schema.fields.iter())
+            .map(|(elem, field)| (field.name(), elem.unwrap()))
+            .collect::<Vec<_>>();
+        let res = RecordBatch::try_from_iter(res)?;
+        Ok(res)
     }
 }
