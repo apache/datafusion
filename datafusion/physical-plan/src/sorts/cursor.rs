@@ -501,4 +501,56 @@ mod tests {
         b.advance();
         assert_eq!(a.cmp(&b), Ordering::Less);
     }
+
+    #[test]
+    fn test_slice_primitive() {
+        let options = SortOptions {
+            descending: false,
+            nulls_first: true,
+        };
+
+        let buffer = ScalarBuffer::from(vec![0, 1, 2]);
+        let mut cursor = new_primitive(options, buffer, 0);
+
+        // from start
+        let sliced = cursor.slice(0, 1).expect("slice should be successful");
+        assert_eq!(sliced.num_rows(), 1);
+        let expected = new_primitive(options, ScalarBuffer::from(vec![0]), 0);
+        assert_eq!(
+            sliced.cmp(&expected),
+            Ordering::Equal,
+            "should slice from start"
+        );
+
+        // with offset
+        let sliced = cursor.slice(1, 2).expect("slice should be successful");
+        assert_eq!(sliced.num_rows(), 2);
+        let expected = new_primitive(options, ScalarBuffer::from(vec![1]), 0);
+        assert_eq!(
+            sliced.cmp(&expected),
+            Ordering::Equal,
+            "should slice with offset"
+        );
+
+        // cursor current position != start
+        cursor.advance();
+        let sliced = cursor.slice(0, 1).expect("slice should be successful");
+        assert_eq!(sliced.num_rows(), 1);
+        let expected = new_primitive(options, ScalarBuffer::from(vec![0]), 0);
+        assert_eq!(
+            sliced.cmp(&expected),
+            Ordering::Equal,
+            "should ignore current cursor position when sliced"
+        );
+
+        // out of bounds
+        assert!(
+            cursor.slice(0, 42).is_err(),
+            "should return err when slice is out of bounds"
+        );
+        assert!(
+            cursor.slice(42, 1).is_err(),
+            "should return err when slice is out of bounds"
+        );
+    }
 }
