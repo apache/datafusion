@@ -329,13 +329,12 @@ fn get_init_req(
 /// This function gets the finest ordering requirement among all the aggregation
 /// functions. If requirements are conflicting, (i.e. we can not compute the
 /// aggregations in a single [`AggregateExec`]), the function returns an error.
-fn get_finest_requirement<F2: Fn() -> SchemaProperties>(
+fn get_finest_requirement(
     aggr_expr: &mut [Arc<dyn AggregateExpr>],
     order_by_expr: &mut [Option<LexOrdering>],
-    schema_properties: F2,
+    schema_properties: &SchemaProperties,
 ) -> Result<Option<LexOrdering>> {
     let mut finest_req = get_init_req(aggr_expr, order_by_expr);
-    let properties = schema_properties();
     for (aggr_expr, fn_req) in aggr_expr.iter_mut().zip(order_by_expr.iter_mut()) {
         let fn_req = if let Some(fn_req) = fn_req {
             fn_req
@@ -344,7 +343,8 @@ fn get_finest_requirement<F2: Fn() -> SchemaProperties>(
         };
 
         if let Some(finest_req) = &mut finest_req {
-            if let Some(finer) = properties.get_finer_ordering(finest_req, fn_req) {
+            if let Some(finer) = schema_properties.get_finer_ordering(finest_req, fn_req)
+            {
                 *finest_req = finer.to_vec();
                 continue;
             }
@@ -353,7 +353,7 @@ fn get_finest_requirement<F2: Fn() -> SchemaProperties>(
             if let Some(reverse) = aggr_expr.reverse_expr() {
                 let fn_req_reverse = reverse_order_bys(fn_req);
                 if let Some(finer) =
-                    properties.get_finer_ordering(finest_req, &fn_req_reverse)
+                    schema_properties.get_finer_ordering(finest_req, &fn_req_reverse)
                 {
                     // We need to update `aggr_expr` with its reverse, since only its
                     // reverse requirement is compatible with existing requirements:
@@ -479,10 +479,11 @@ impl AggregateExec {
                 })
             })
             .collect::<Vec<_>>();
-        let requirement =
-            get_finest_requirement(&mut aggr_expr, &mut order_by_expr, || {
-                input.schema_properties()
-            })?;
+        let requirement = get_finest_requirement(
+            &mut aggr_expr,
+            &mut order_by_expr,
+            &input.schema_properties(),
+        )?;
         let mut ordering_req = requirement.unwrap_or(vec![]);
         let partition_search_mode = get_aggregate_search_mode(
             &group_by,
@@ -2040,9 +2041,11 @@ mod tests {
             vec![],
         )) as _;
         let mut aggr_exprs = vec![aggr_expr; order_by_exprs.len()];
-        let res = get_finest_requirement(&mut aggr_exprs, &mut order_by_exprs, || {
-            schema_properties.clone()
-        })?;
+        let res = get_finest_requirement(
+            &mut aggr_exprs,
+            &mut order_by_exprs,
+            &schema_properties,
+        )?;
         assert_eq!(res, order_by_exprs[2]);
         Ok(())
     }
