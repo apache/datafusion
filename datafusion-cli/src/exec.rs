@@ -32,6 +32,7 @@ use datafusion::{
     error::{DataFusionError, Result},
     logical_expr::{CreateExternalTable, DdlStatement},
 };
+use datafusion::common::plan_err_raw;
 use datafusion::{logical_expr::LogicalPlan, prelude::SessionContext};
 use object_store::ObjectStore;
 use rustyline::error::ReadlineError;
