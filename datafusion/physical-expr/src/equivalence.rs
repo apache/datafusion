@@ -26,7 +26,7 @@ use arrow::datatypes::SchemaRef;
 
 use crate::physical_expr::{deduplicate_physical_exprs, have_common_entries};
 use crate::sort_properties::{ExprOrdering, SortProperties};
-use arrow_schema::{Schema, SortOptions};
+use arrow_schema::SortOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::utils::longest_consecutive_prefix;
 use datafusion_common::{DataFusionError, JoinSide, JoinType, Result};
@@ -755,28 +755,7 @@ impl SchemaProperties {
 
         // Prune redundant sections in the requirement.
         normalized_sort_reqs = self.prune_lex_req(normalized_sort_reqs);
-
-        let oeq_group = self.oeq_group();
-        if normalized_sort_reqs.is_empty() && !oeq_group.is_empty() {
-            // By convention use first entry
-            PhysicalSortRequirement::from_sort_exprs(&oeq_group.inner[0])
-        } else {
-            normalized_sort_reqs
-        }
-    }
-
-    // Find the prefix length that is satisfied in the sort requirement
-    fn prefix_len_satisfied(&self, sort_req: &[PhysicalSortRequirement]) -> usize {
-        let mut prefix_length = 0;
-        while prefix_length < sort_req.len() {
-            if self.ordering_satisfy_requirement_concrete(&sort_req[0..prefix_length + 1])
-            {
-                prefix_length += 1;
-            } else {
-                break;
-            }
-        }
-        prefix_length
+        normalized_sort_reqs
     }
 
     /// This function simplifies lexicographical ordering requirement
@@ -820,79 +799,13 @@ impl SchemaProperties {
                     break;
                 }
             }
-            println!(
-                "match_indices:{:?}, match_prefix:{:?}",
-                match_indices, match_prefix
-            );
             // can remove entries at the match_prefix indices
             for idx in match_prefix.iter().rev() {
                 sort_req.remove(*idx);
             }
         }
-        // If empty immediately return
-        if sort_req.is_empty() {
-            return sort_req;
-        }
-        // TODO: Do not delete from the start
-        // or use empty check
-
-        let mut new_sort_req = vec![sort_req[0].clone()];
-        let mut idx = 1;
-        while idx < sort_req.len() {
-            let n_remove = self.prefix_len_satisfied(&sort_req[idx..]);
-            if n_remove == 0 {
-                new_sort_req.push(sort_req[idx].clone());
-                idx += 1;
-            } else {
-                idx += n_remove;
-            }
-        }
-
-        let mut section = &new_sort_req[..];
-        // Eat up from the end of the sort_req until no section can be removed
-        // from the ending.
-        loop {
-            let n_prune = self.prune_last_n_that_is_in_oeq(section);
-            // Cannot prune entries from the end of requirement
-            if n_prune == 0 {
-                break;
-            }
-            section = &section[0..section.len() - n_prune];
-        }
         // Remove duplicates from expression.
-        collapse_lex_req(section.to_vec())
-    }
-
-    /// Determines how many entries from the end can be deleted.
-    /// Last n entry satisfies global ordering, hence having them
-    /// as postfix in the lexicographical requirement is unnecessary.
-    /// Assume requirement is [a ASC, b ASC, c ASC], also assume that
-    /// existing ordering is [c ASC, d ASC]. In this case, since [c ASC]
-    /// is satisfied by the existing ordering (e.g corresponding section is global ordering),
-    /// [c ASC] can be pruned from the requirement: [a ASC, b ASC, c ASC]. In this case,
-    /// this function will return 1, to indicate last element can be removed from the requirement
-    fn prune_last_n_that_is_in_oeq(&self, sort_req: &[PhysicalSortRequirement]) -> usize {
-        let sort_req_len = sort_req.len();
-        let oeq_group = self.oeq_group();
-        let eq_groups = self.eq_groups();
-        for ordering in oeq_group.iter() {
-            let ordering = eq_groups.normalize_sort_exprs(ordering);
-            let req = prune_sort_reqs_with_constants(
-                &PhysicalSortRequirement::from_sort_exprs(&ordering),
-                &self.constants,
-            );
-            let ordering = PhysicalSortRequirement::to_sort_exprs(req);
-            let mut search_range = std::cmp::min(ordering.len(), sort_req_len);
-            while search_range > 0 {
-                let req_section = &sort_req[sort_req_len - search_range..];
-                if req_satisfied(&ordering, req_section, &self.schema) {
-                    return search_range;
-                } else {
-                    search_range -= 1;
-                }
-            }
-        }
-        0
+        collapse_lex_req(sort_req)
     }
 
     /// Checks whether `leading_requirement` is contained in any of the ordering
@@ -1174,15 +1087,8 @@ impl SchemaProperties {
         &self,
         required: &[PhysicalSortRequirement],
     ) -> bool {
-        let provided_normalized = self.oeq_group().output_ordering().unwrap_or_default();
         let required_normalized = self.normalize_sort_requirements(required);
-        if required_normalized.len() > provided_normalized.len() {
-            return false;
-        }
-        required_normalized
-            .into_iter()
-            .zip(provided_normalized)
-            .all(|(req, given)| given.satisfy_with_schema(&req, &self.schema))
+        required_normalized.is_empty()
     }
 
     /// Checks whether the given [`PhysicalSortRequirement`]s are equal or more
@@ -1208,8 +1114,16 @@ impl SchemaProperties {
         provided: &[PhysicalSortRequirement],
         required: &[PhysicalSortRequirement],
     ) -> bool {
-        let required_normalized = self.normalize_sort_requirements(required);
-        let provided_normalized = self.normalize_sort_requirements(provided);
+        let required_normalized = self.eq_groups.normalize_sort_requirements(required);
+        let required_normalized =
+            prune_sort_reqs_with_constants(&required_normalized, &self.constants);
+        let required_normalized = collapse_lex_req(required_normalized);
+
+        let provided_normalized = self.eq_groups.normalize_sort_requirements(provided);
+        let provided_normalized =
+            prune_sort_reqs_with_constants(&provided_normalized, &self.constants);
+        let provided_normalized = collapse_lex_req(provided_normalized);
+
         if required_normalized.len() > provided_normalized.len() {
             return false;
         }
@@ -1350,21 +1264,6 @@ pub fn collapse_lex_ordering(input: LexOrdering) -> LexOrdering {
         }
     }
     output
-}
-
-/// Checks whether given section satisfies req.
-fn req_satisfied(
-    given: LexOrderingRef,
-    req: &[PhysicalSortRequirement],
-    schema: &Arc<Schema>,
-) -> bool {
-    // Write below code as any/all
-    for (given, req) in izip!(given.iter(), req.iter()) {
-        if !given.satisfy_with_schema(req, schema) {
-            return false;
-        }
-    }
-    true
 }
 
 /// Remove ordering requirements that have constant value

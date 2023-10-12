@@ -374,6 +374,8 @@ pub fn get_best_fitting_window(
     // of the window_exprs are same.
     let partitionby_exprs = window_exprs[0].partition_by();
     let orderby_keys = window_exprs[0].order_by();
+    // println!("partitionby_exprs: {:?}, orderby_keys:{:?}", partitionby_exprs, orderby_keys);
+    // println!("input.schema_properties().oeq_group():{:?}", input.schema_properties().oeq_group());
     let (should_reverse, partition_search_mode) =
         if let Some((should_reverse, partition_search_mode)) =
             get_window_mode(partitionby_exprs, orderby_keys, input)?
@@ -382,6 +384,7 @@ pub fn get_best_fitting_window(
         } else {
             return Ok(None);
         };
+    // println!("should_reverse: {:?}, partition_search_mode:{:?}", should_reverse, partition_search_mode);
     let is_unbounded = unbounded_output(input);
     if !is_unbounded && partition_search_mode != PartitionSearchMode::Sorted {
         // Executor has bounded input and `partition_search_mode` is not `PartitionSearchMode::Sorted`
