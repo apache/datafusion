@@ -106,7 +106,7 @@ impl PhysicalExpr for NegativeExpr {
 
     /// Given the child interval of a NegativeExpr, it calculates the NegativeExpr's interval.
     /// It replaces the upper and lower bounds after multiplying them with -1.
-    /// Ex: (a, b] => [-b, a)
+    /// Ex: `(a, b] => [-b, -a)``
     fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
         Ok(Interval::new(
             children[0].upper.negate()?,
@@ -114,8 +114,8 @@ impl PhysicalExpr for NegativeExpr {
         ))
     }
 
-    /// Updates the child interval of a NegativeExpr by intersecting the original
-    /// interval of child with the possibly shrunk NegativeExpr interval.
+    /// Returns a new [`Interval`] of a NegativeExpr  that has the existing `interval` given that
+    /// given the input interval is known to be `children`.
     fn propagate_constraints(
         &self,
         interval: &Interval,

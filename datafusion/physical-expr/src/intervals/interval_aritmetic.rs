@@ -86,6 +86,8 @@ impl IntervalBound {
             .map(|value| IntervalBound::new(value, self.open))
     }
 
+    /// Returns a new bound with a negated value, if any, and the same open/closed.
+    /// For example negating `[5` would return `[-5`, or `-1)` would return `1)`
     pub fn negate(&self) -> Result<IntervalBound> {
         self.value.arithmetic_negate().map(|value| IntervalBound {
             value,
