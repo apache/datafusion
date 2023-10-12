@@ -1621,7 +1621,7 @@ fn flatten_internal(
     indexes: Option<OffsetBuffer<i32>>,
 ) -> Result<ListArray> {
     let list_arr = as_list_array(array)?;
-    let (field, offsets, values, nulls) = list_arr.clone().into_parts();
+    let (field, offsets, values, _) = list_arr.clone().into_parts();
     let data_type = field.data_type();
 
     match data_type {
@@ -1638,7 +1638,7 @@ fn flatten_internal(
         _ => {
             if let Some(indexes) = indexes {
                 let offsets = get_offsets_for_flatten(offsets, indexes);
-                let list_arr = ListArray::new(field, offsets, values, nulls);
+                let list_arr = ListArray::new(field, offsets, values, None);
                 Ok(list_arr)
             } else {
                 Ok(list_arr.clone())

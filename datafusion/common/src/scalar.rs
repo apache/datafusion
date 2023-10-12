@@ -1447,7 +1447,6 @@ impl ScalarValue {
             DataType::List(_) => {
                 // Fallback case handling homogeneous lists with any ScalarValue element type
                 let list_array = ScalarValue::iter_to_array_list(scalars)?;
-                println!("list_array: {:?}", list_array);
                 Arc::new(list_array)
             }
             DataType::Struct(fields) => {
