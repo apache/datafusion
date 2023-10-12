@@ -318,7 +318,34 @@ impl PartialOrd for ScalarValue {
                 }
             }
             (Fixedsizelist(_, _, _), _) => None,
-            (List(_), List(_)) => todo!("ArrayRef does not have PartialOrd yet"),
+            (List(arr1), List(arr2)) => {
+                if arr1.data_type() == arr2.data_type() {
+                    let list_arr1 = as_list_array(arr1);
+                    let list_arr2 = as_list_array(arr2);
+                    if list_arr1.len() != list_arr2.len() {
+                        return None;
+                    }
+                    for i in 0..list_arr1.len() {
+                        let arr1 = list_arr1.value(i);
+                        let arr2 = list_arr2.value(i);
+
+                        let lt_res = arrow::compute::kernels::cmp::lt(&arr1, &arr2).unwrap();
+                        let eq_res = arrow::compute::kernels::cmp::eq(&arr1, &arr2).unwrap();
+
+                        for j in 0..lt_res.len() {
+                            if lt_res.is_valid(j) && lt_res.value(j) {
+                                return Some(Ordering::Less);
+                            }
+                            if eq_res.is_valid(j) && !eq_res.value(j) {
+                                return Some(Ordering::Greater);
+                            }
+                        }
+                    }
+                    Some(Ordering::Equal)
+                } else {
+                    None
+                }
+            }
             (List(_), _) => None,
             (Date32(v1), Date32(v2)) => v1.partial_cmp(v2),
             (Date32(_), _) => None,
@@ -3525,6 +3552,85 @@ mod tests {
         );
 
         Ok(())
+    }
+    
+    #[test]
+    fn test_list_partial_cmp() {
+        let a = ScalarValue::List(Arc::new(
+            ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+                Some(1),
+                Some(2),
+                Some(3),
+            ])]),
+        ));
+        let b = ScalarValue::List(Arc::new(
+            ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+                Some(1),
+                Some(2),
+                Some(3),
+            ])]),
+        ));
+        assert_eq!(a.partial_cmp(&b), Some(Ordering::Equal));
+
+        let a = ScalarValue::List(Arc::new(
+            ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+                Some(10),
+                Some(2),
+                Some(3),
+            ])]),
+        ));
+        let b = ScalarValue::List(Arc::new(
+            ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+                Some(1),
+                Some(2),
+                Some(30),
+            ])]),
+        ));
+        assert_eq!(a.partial_cmp(&b), Some(Ordering::Greater));
+
+        let a = ScalarValue::List(Arc::new(
+            ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+                Some(10),
+                Some(2),
+                Some(3),
+            ])]),
+        ));
+        let b = ScalarValue::List(Arc::new(
+            ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+                Some(10),
+                Some(2),
+                Some(30),
+            ])]),
+        ));
+        assert_eq!(a.partial_cmp(&b), Some(Ordering::Less));
+
+        let a = ScalarValue::List(Arc::new(
+            ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+                Some(10),
+                Some(2),
+                Some(3),
+            ]),
+            None,
+            Some(vec![
+                Some(10),
+                Some(2),
+                Some(3),
+            ])]),
+        ));
+        let b = ScalarValue::List(Arc::new(
+            ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+                Some(10),
+                Some(2),
+                Some(3),
+            ]),
+            None,
+            Some(vec![
+                Some(10),
+                Some(2),
+                Some(3),
+            ])]),
+        ));
+        assert_eq!(a.partial_cmp(&b), Some(Ordering::Equal));
     }
 
     #[test]
