@@ -807,11 +807,11 @@ impl SchemaProperties {
                 })
                 .collect::<Vec<_>>();
             let mut match_prefix = vec![];
-            for elem in &match_indices{
-                if let Some(elem) = elem{
-                    if let Some(last) = match_prefix.last(){
+            for elem in &match_indices {
+                if let Some(elem) = elem {
+                    if let Some(last) = match_prefix.last() {
                         // Should increase
-                        if elem <= last{
+                        if elem <= last {
                             break;
                         }
                     }
@@ -820,12 +820,14 @@ impl SchemaProperties {
                     break;
                 }
             }
-            println!("match_indices:{:?}, match_prefix:{:?}", match_indices, match_prefix);
+            println!(
+                "match_indices:{:?}, match_prefix:{:?}",
+                match_indices, match_prefix
+            );
             // can remove entries at the match_prefix indices
-            for idx in match_prefix.iter().rev(){
+            for idx in match_prefix.iter().rev() {
                 sort_req.remove(*idx);
             }
-
         }
         // If empty immediately return
         if sort_req.is_empty() {
