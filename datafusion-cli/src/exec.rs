@@ -26,13 +26,13 @@ use crate::{
     },
     print_options::{MaxRows, PrintOptions},
 };
+use datafusion::common::plan_err_raw;
 use datafusion::sql::{parser::DFParser, sqlparser::dialect::dialect_from_str};
 use datafusion::{
     datasource::listing::ListingTableUrl,
     error::{DataFusionError, Result},
     logical_expr::{CreateExternalTable, DdlStatement},
 };
-use datafusion::common::plan_err_raw;
 use datafusion::{logical_expr::LogicalPlan, prelude::SessionContext};
 use object_store::ObjectStore;
 use rustyline::error::ReadlineError;
