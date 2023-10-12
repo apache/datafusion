@@ -21,7 +21,6 @@ use arrow::datatypes::ArrowNativeTypeOp;
 use arrow::row::{Row, Rows};
 use arrow_array::types::ByteArrayType;
 use arrow_array::{Array, ArrowPrimitiveType, GenericByteArray, PrimitiveArray};
-use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
 use std::{cmp::Ordering, sync::Arc};
 
@@ -105,8 +104,10 @@ pub trait Cursor: Ord {
 
     /// Slice the cursor at a given row index, returning a new cursor
     ///
-    /// Returns an error if the slice is out of bounds, or memory is insufficient
-    fn slice(&self, offset: usize, length: usize) -> Result<Self>
+    /// # Panics
+    ///
+    /// Panics if the slice is out of bounds, or memory is insufficient
+    fn slice(&self, offset: usize, length: usize) -> Self
     where
         Self: Sized;
 
@@ -128,14 +129,14 @@ impl Cursor for RowCursor {
     }
 
     #[inline]
-    fn slice(&self, offset: usize, length: usize) -> Result<Self> {
-        Ok(Self {
+    fn slice(&self, offset: usize, length: usize) -> Self {
+        Self {
             cur_row: self.row_offset + offset,
             row_offset: self.row_offset + offset,
             row_limit: self.row_offset + offset + length,
             rows: self.rows.clone(),
             reservation: self.reservation.new_empty(), // Arc cloning of Rows is cheap
-        })
+        }
     }
 
     #[inline]
@@ -161,7 +162,7 @@ pub trait FieldValues {
 
     fn value(&self, idx: usize) -> &Self::Value;
 
-    fn slice(&self, offset: usize, length: usize) -> Result<Self>
+    fn slice(&self, offset: usize, length: usize) -> Self
     where
         Self: Sized;
 }
@@ -195,11 +196,9 @@ impl<T: ArrowNativeTypeOp> FieldValues for PrimitiveValues<T> {
     }
 
     #[inline]
-    fn slice(&self, offset: usize, length: usize) -> Result<Self> {
-        if offset + length > self.len() {
-            return Err(DataFusionError::Internal("slice out of bounds".into()));
-        }
-        Ok(Self(self.0.slice(offset, length)))
+    fn slice(&self, offset: usize, length: usize) -> Self {
+        assert!(offset + length <= self.len(), "cursor slice out of bounds");
+        Self(self.0.slice(offset, length))
     }
 }
 
@@ -234,11 +233,12 @@ impl<T: ByteArrayType> FieldValues for GenericByteArray<T> {
     }
 
     #[inline]
-    fn slice(&self, offset: usize, length: usize) -> Result<Self> {
-        if offset + length > Array::len(self) {
-            return Err(DataFusionError::Internal("slice out of bounds".into()));
-        }
-        Ok(self.slice(offset, length))
+    fn slice(&self, offset: usize, length: usize) -> Self {
+        assert!(
+            offset + length <= Array::len(self),
+            "cursor slice out of bounds"
+        );
+        self.slice(offset, length)
     }
 }
 
@@ -325,7 +325,7 @@ impl<T: FieldValues> Cursor for FieldCursor<T> {
         t
     }
 
-    fn slice(&self, offset: usize, length: usize) -> Result<Self> {
+    fn slice(&self, offset: usize, length: usize) -> Self {
         let FieldCursor {
             values,
             offset: _,
@@ -333,12 +333,12 @@ impl<T: FieldValues> Cursor for FieldCursor<T> {
             options,
         } = self;
 
-        Ok(Self {
-            values: values.slice(offset, length)?,
+        Self {
+            values: values.slice(offset, length),
             offset: 0,
             null_threshold: *null_threshold,
             options: *options,
-        })
+        }
     }
 
     fn num_rows(&self) -> usize {
@@ -513,7 +513,7 @@ mod tests {
         let mut cursor = new_primitive(options, buffer, 0);
 
         // from start
-        let sliced = cursor.slice(0, 1).expect("slice should be successful");
+        let sliced = cursor.slice(0, 1);
         assert_eq!(sliced.num_rows(), 1);
         let expected = new_primitive(options, ScalarBuffer::from(vec![0]), 0);
         assert_eq!(
@@ -523,7 +523,7 @@ mod tests {
         );
 
         // with offset
-        let sliced = cursor.slice(1, 2).expect("slice should be successful");
+        let sliced = cursor.slice(1, 2);
         assert_eq!(sliced.num_rows(), 2);
         let expected = new_primitive(options, ScalarBuffer::from(vec![1]), 0);
         assert_eq!(
@@ -534,7 +534,7 @@ mod tests {
 
         // cursor current position != start
         cursor.advance();
-        let sliced = cursor.slice(0, 1).expect("slice should be successful");
+        let sliced = cursor.slice(0, 1);
         assert_eq!(sliced.num_rows(), 1);
         let expected = new_primitive(options, ScalarBuffer::from(vec![0]), 0);
         assert_eq!(
@@ -542,15 +542,19 @@ mod tests {
             Ordering::Equal,
             "should ignore current cursor position when sliced"
         );
+    }
 
-        // out of bounds
-        assert!(
-            cursor.slice(0, 42).is_err(),
-            "should return err when slice is out of bounds"
-        );
-        assert!(
-            cursor.slice(42, 1).is_err(),
-            "should return err when slice is out of bounds"
-        );
+    #[test]
+    #[should_panic(expected = "cursor slice out of bounds")]
+    fn test_slice_panic_can_panic() {
+        let options = SortOptions {
+            descending: false,
+            nulls_first: true,
+        };
+
+        let buffer = ScalarBuffer::from(vec![0, 1, 2]);
+        let cursor = new_primitive(options, buffer, 0);
+
+        cursor.slice(42, 1);
     }
 }
