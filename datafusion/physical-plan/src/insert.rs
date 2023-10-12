@@ -199,11 +199,13 @@ impl ExecutionPlan for FileSinkExec {
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         // DataSink is responsible for dynamically partitioning its
-        // own input at execution time
+        // own input at execution time.
         vec![false]
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
+        // DataSink is responsible for dynamically partitioning its
+        // own input at execution time, and so requires a single input partition.
         vec![Distribution::SinglePartition; self.children().len()]
     }
 

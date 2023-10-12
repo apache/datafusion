@@ -273,6 +273,7 @@ impl JsonSink {
 
         stateless_append_all(
             data,
+            context,
             object_store,
             file_groups,
             self.config.unbounded_input,

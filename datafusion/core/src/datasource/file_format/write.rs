@@ -421,7 +421,7 @@ type DemuxedStreamReceiver = Receiver<(Path, RecordBatchReceiver)>;
 ///                                                                     └──────▶ │  batch d  ├────▶...──────▶│   Batch n  │    │ Output FileN│
 ///                                                                              └───────────┘               └────────────┘    └─────────────┘
 pub(crate) fn start_demuxer_task(
-    mut input: SendableRecordBatchStream,
+    input: SendableRecordBatchStream,
     context: &Arc<TaskContext>,
     _partition_by: Option<&str>,
     base_output_path: ListingTableUrl,
@@ -432,58 +432,112 @@ pub(crate) fn start_demuxer_task(
 
     let max_rows_per_file = exec_options.soft_max_rows_per_output_file;
     let max_parallel_files = exec_options.max_parallel_ouput_files;
-    let max_buffered_recordbatches = exec_options.max_buffered_batches_per_output_file;
+    let max_buffered_batches = exec_options.max_buffered_batches_per_output_file;
 
-    let (tx, rx) = tokio::sync::mpsc::channel(max_parallel_files);
-    let task: JoinHandle<std::result::Result<(), DataFusionError>> =
-        tokio::spawn(async move {
-            let mut total_rows_current_file = 0;
-            let mut part_idx = 0;
-            let write_id = rand::distributions::Alphanumeric
-                .sample_string(&mut rand::thread_rng(), 16);
-            let file_path = if !single_file_output {
-                base_output_path
-                    .prefix()
-                    .child(format!("{}_{}.{}", write_id, part_idx, file_extension))
-            } else {
-                base_output_path.prefix().to_owned()
-            };
+    let (tx, rx) = mpsc::channel(max_parallel_files);
 
-            let (mut tx_file, mut rx_file) =
-                tokio::sync::mpsc::channel(max_buffered_recordbatches / 2);
-            tx.send((file_path, rx_file)).await.map_err(|_| {
-                DataFusionError::Execution("Error sending new file stream!".into())
-            })?;
-            part_idx += 1;
-            while let Some(rb) = input.next().await.transpose()? {
-                total_rows_current_file += rb.num_rows();
-                tx_file.send(rb).await.map_err(|_| {
-                    DataFusionError::Execution(
-                        "Error sending RecordBatch to file stream!".into(),
-                    )
-                })?;
-
-                // Once we have sent enough data to previous file stream, spawn a new one
-                if total_rows_current_file >= max_rows_per_file && !single_file_output {
-                    total_rows_current_file = 0;
-
-                    let file_path = base_output_path
-                        .prefix()
-                        .child(format!("{}_{}.{}", write_id, part_idx, file_extension));
-                    (tx_file, rx_file) =
-                        tokio::sync::mpsc::channel(max_buffered_recordbatches);
-                    tx.send((file_path, rx_file)).await.map_err(|_| {
-                        DataFusionError::Execution(
-                            "Error sending new file stream!".into(),
-                        )
-                    })?;
-
-                    part_idx += 1;
-                }
-            }
-            Ok(())
-        });
+    let task = tokio::spawn(async move {
+        row_count_demuxer(
+            input,
+            base_output_path,
+            file_extension,
+            single_file_output,
+            max_rows_per_file,
+            max_buffered_batches,
+            tx,
+        )
+        .await
+    });
     (task, rx)
+}
+
+fn generate_file_path(
+    base_output_path: &ListingTableUrl,
+    write_id: &str,
+    part_idx: usize,
+    file_extension: &str,
+    single_file_output: bool,
+) -> Path {
+    if !single_file_output {
+        base_output_path
+            .prefix()
+            .child(format!("{}_{}.{}", write_id, part_idx, file_extension))
+    } else {
+        base_output_path.prefix().to_owned()
+    }
+}
+
+async fn create_new_file_stream(
+    base_output_path: &ListingTableUrl,
+    write_id: &str,
+    part_idx: usize,
+    file_extension: &str,
+    single_file_output: bool,
+    max_buffered_batches: usize,
+    tx: &mut Sender<(Path, Receiver<RecordBatch>)>,
+) -> Result<Sender<RecordBatch>> {
+    let file_path = generate_file_path(
+        base_output_path,
+        write_id,
+        part_idx,
+        file_extension,
+        single_file_output,
+    );
+    let (tx_file, rx_file) = mpsc::channel(max_buffered_batches / 2);
+    tx.send((file_path, rx_file)).await.map_err(|_| {
+        DataFusionError::Execution("Error sending RecordBatch to file stream!".into())
+    })?;
+    Ok(tx_file)
+}
+
+async fn row_count_demuxer(
+    mut input: SendableRecordBatchStream,
+    base_output_path: ListingTableUrl,
+    file_extension: String,
+    single_file_output: bool,
+    max_rows_per_file: usize,
+    max_buffered_batches: usize,
+    mut tx: Sender<(Path, Receiver<RecordBatch>)>,
+) -> Result<()> {
+    let mut total_rows_current_file = 0;
+    let mut part_idx = 0;
+    let write_id =
+        rand::distributions::Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+
+    let mut tx_file = create_new_file_stream(
+        &base_output_path,
+        &write_id,
+        part_idx,
+        &file_extension,
+        single_file_output,
+        max_buffered_batches,
+        &mut tx,
+    )
+    .await?;
+    part_idx += 1;
+
+    while let Some(rb) = input.next().await.transpose()? {
+        total_rows_current_file += rb.num_rows();
+        tx_file.send(rb).await.map_err(|_| {
+            DataFusionError::Execution("Error sending RecordBatch to file stream!".into())
+        })?;
+
+        if total_rows_current_file >= max_rows_per_file && !single_file_output {
+            total_rows_current_file = 0;
+            tx_file = create_new_file_stream(
+                &base_output_path,
+                &write_id,
+                part_idx,
+                &file_extension,
+                single_file_output,
+                max_buffered_batches,
+                &mut tx,
+            )
+            .await?;
+            part_idx += 1;
+        }
+    }
+    Ok(())
 }
 
 type FileWriteBundle = (Receiver<RecordBatch>, SerializerType, WriterType);
@@ -494,7 +548,7 @@ type FileWriteBundle = (Receiver<RecordBatch>, SerializerType, WriterType);
 /// dependency on the RecordBatches before or after.
 pub(crate) async fn stateless_serialize_and_write_files(
     mut rx: Receiver<FileWriteBundle>,
-    tx: Sender<u64>,
+    tx: tokio::sync::oneshot::Sender<u64>,
     unbounded_input: bool,
 ) -> Result<()> {
     let mut row_count = 0;
@@ -571,7 +625,7 @@ pub(crate) async fn stateless_serialize_and_write_files(
         }
     }
 
-    tx.send(row_count).await.map_err(|_| {
+    tx.send(row_count).map_err(|_| {
         DataFusionError::Internal(
             "Error encountered while sending row count back to file sink!".into(),
         )
@@ -614,7 +668,7 @@ pub(crate) async fn stateless_multipart_put(
         .max_buffered_batches_per_output_file;
 
     let (tx_file_bundle, rx_file_bundle) = tokio::sync::mpsc::channel(rb_buffer_size / 2);
-    let (tx_row_cnt, mut rx_row_cnt) = tokio::sync::mpsc::channel(1);
+    let (tx_row_cnt, rx_row_cnt) = tokio::sync::oneshot::channel();
     let write_coordinater_task = tokio::spawn(async move {
         stateless_serialize_and_write_files(rx_file_bundle, tx_row_cnt, unbounded_input)
             .await
@@ -648,13 +702,11 @@ pub(crate) async fn stateless_multipart_put(
     // Signal to the write coordinater that no more files are coming
     drop(tx_file_bundle);
 
-    let total_count = if let Some(cnt) = rx_row_cnt.recv().await {
-        cnt
-    } else {
-        return Err(DataFusionError::Internal(
-            "Did not receive final row count from write cooridnator task!".into(),
-        ));
-    };
+    let total_count = rx_row_cnt.await.map_err(|_| {
+        DataFusionError::Internal(
+            "Did not receieve row count from write coordinater".into(),
+        )
+    })?;
 
     match try_join!(write_coordinater_task, demux_task) {
         Ok((r1, r2)) => {
@@ -677,12 +729,19 @@ pub(crate) async fn stateless_multipart_put(
 /// in a round robin fashion.
 pub(crate) async fn stateless_append_all(
     mut data: SendableRecordBatchStream,
+    context: &Arc<TaskContext>,
     object_store: Arc<dyn ObjectStore>,
     file_groups: &Vec<PartitionedFile>,
     unbounded_input: bool,
     compression: FileCompressionType,
     get_serializer: Box<dyn Fn(usize) -> Box<dyn BatchSerializer> + Send>,
 ) -> Result<u64> {
+    let rb_buffer_size = &context
+        .session_config()
+        .options()
+        .execution
+        .max_buffered_batches_per_output_file;
+
     let (tx_file_bundle, rx_file_bundle) = tokio::sync::mpsc::channel(file_groups.len());
     let mut send_channels = vec![];
     for file_group in file_groups {
@@ -697,7 +756,7 @@ pub(crate) async fn stateless_append_all(
         )
         .await?;
 
-        let (tx, rx) = tokio::sync::mpsc::channel(9000);
+        let (tx, rx) = tokio::sync::mpsc::channel(rb_buffer_size / 2);
         send_channels.push(tx);
         tx_file_bundle
             .send((rx, serializer, writer))
@@ -709,7 +768,7 @@ pub(crate) async fn stateless_append_all(
             })?;
     }
 
-    let (tx_row_cnt, mut rx_row_cnt) = tokio::sync::mpsc::channel(1);
+    let (tx_row_cnt, rx_row_cnt) = tokio::sync::oneshot::channel();
     let write_coordinater_task = tokio::spawn(async move {
         stateless_serialize_and_write_files(rx_file_bundle, tx_row_cnt, unbounded_input)
             .await
@@ -732,13 +791,11 @@ pub(crate) async fn stateless_append_all(
     drop(tx_file_bundle);
     drop(send_channels);
 
-    let total_count = if let Some(cnt) = rx_row_cnt.recv().await {
-        cnt
-    } else {
-        return Err(DataFusionError::Internal(
-            "Did not receive final row count from write cooridnator task!".into(),
-        ));
-    };
+    let total_count = rx_row_cnt.await.map_err(|_| {
+        DataFusionError::Internal(
+            "Did not receieve row count from write coordinater".into(),
+        )
+    })?;
 
     match try_join!(write_coordinater_task) {
         Ok(r1) => {
