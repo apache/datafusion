@@ -621,7 +621,6 @@ fn analyze_window_sort_removal(
             Arc::new(WindowAggExec::try_new(
                 window_expr.to_vec(),
                 window_child,
-                input_schema,
                 partitionby_exprs.to_vec(),
             )?) as _
         };

@@ -435,7 +435,6 @@ pub fn get_best_fitting_window(
         Ok(Some(Arc::new(WindowAggExec::try_new(
             window_expr,
             input.clone(),
-            input.schema(),
             physical_partition_keys.to_vec(),
         )?) as _))
     }

@@ -759,7 +759,6 @@ impl DefaultPhysicalPlanner {
                         Arc::new(WindowAggExec::try_new(
                             window_expr,
                             input_exec,
-                            physical_input_schema,
                             physical_partition_keys,
                         )?)
                     })
