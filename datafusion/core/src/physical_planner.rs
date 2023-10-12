@@ -1253,7 +1253,6 @@ impl DefaultPhysicalPlanner {
                 }
                 LogicalPlan::Dml(dml) => {
                     // DataFusion is a read-only query engine, but also a library, so consumers may implement this
-                    let op = dml.op;
                     not_impl_err!(
                         "Unsupported logical plan: Dml({0})", dml.op
                     )
