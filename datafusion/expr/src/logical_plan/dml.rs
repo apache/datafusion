@@ -105,7 +105,7 @@ impl DmlStatement {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub enum WriteOp {
     InsertOverwrite,
     InsertInto,
