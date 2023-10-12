@@ -22,35 +22,38 @@ use arrow::datatypes::DataType;
 
 use std::fmt::{self, Debug, Display};
 
-/// To deal with information without exactness guarantees, we wrap it inside a
-/// [`Sharpness`] object to express its reliability.
+/// Represents a value with a degree of certainty. `Precision` is used to
+/// propagate information the precision of statistical values.
 #[derive(Clone, PartialEq, Eq, Default)]
-pub enum Sharpness<T: Debug + Clone + PartialEq + Eq + PartialOrd> {
+pub enum Precision<T: Debug + Clone + PartialEq + Eq + PartialOrd> {
+    /// The exact value is known
     Exact(T),
+    /// The value is not known exactly, but is likely close to this value
     Inexact(T),
+    /// Nothing is known about the value
     #[default]
     Absent,
 }
 
-impl<T: Debug + Clone + PartialEq + Eq + PartialOrd> Sharpness<T> {
+impl<T: Debug + Clone + PartialEq + Eq + PartialOrd> Precision<T> {
     /// If we have some value (exact or inexact), it returns that value.
     /// Otherwise, it returns `None`.
     pub fn get_value(&self) -> Option<&T> {
         match self {
-            Sharpness::Exact(value) | Sharpness::Inexact(value) => Some(value),
-            Sharpness::Absent => None,
+            Precision::Exact(value) | Precision::Inexact(value) => Some(value),
+            Precision::Absent => None,
         }
     }
 
-    /// Transform the value in this [`Sharpness`] object, if one exists, using
+    /// Transform the value in this [`Precision`] object, if one exists, using
     /// the given function. Preserves the exactness state.
-    pub fn map<F>(self, f: F) -> Sharpness<T>
+    pub fn map<F>(self, f: F) -> Precision<T>
     where
         F: Fn(T) -> T,
     {
         match self {
-            Sharpness::Exact(val) => Sharpness::Exact(f(val)),
-            Sharpness::Inexact(val) => Sharpness::Inexact(f(val)),
+            Precision::Exact(val) => Precision::Exact(f(val)),
+            Precision::Inexact(val) => Precision::Inexact(f(val)),
             _ => self,
         }
     }
@@ -59,139 +62,139 @@ impl<T: Debug + Clone + PartialEq + Eq + PartialOrd> Sharpness<T> {
     /// have an inexact value, and `None` if there is no value.
     pub fn is_exact(&self) -> Option<bool> {
         match self {
-            Sharpness::Exact(_) => Some(true),
-            Sharpness::Inexact(_) => Some(false),
+            Precision::Exact(_) => Some(true),
+            Precision::Inexact(_) => Some(false),
             _ => None,
         }
     }
 
     /// Returns the maximum of two (possibly inexact) values, conservatively
     /// propagating exactness information. If one of the input values is
-    /// [`Sharpness::Absent`], the result is `Absent` too.
-    pub fn max(&self, other: &Sharpness<T>) -> Sharpness<T> {
+    /// [`Precision::Absent`], the result is `Absent` too.
+    pub fn max(&self, other: &Precision<T>) -> Precision<T> {
         match (self, other) {
-            (Sharpness::Exact(a), Sharpness::Exact(b)) => {
-                Sharpness::Exact(if a >= b { a.clone() } else { b.clone() })
+            (Precision::Exact(a), Precision::Exact(b)) => {
+                Precision::Exact(if a >= b { a.clone() } else { b.clone() })
             }
-            (Sharpness::Inexact(a), Sharpness::Exact(b))
-            | (Sharpness::Exact(a), Sharpness::Inexact(b))
-            | (Sharpness::Inexact(a), Sharpness::Inexact(b)) => {
-                Sharpness::Inexact(if a >= b { a.clone() } else { b.clone() })
+            (Precision::Inexact(a), Precision::Exact(b))
+            | (Precision::Exact(a), Precision::Inexact(b))
+            | (Precision::Inexact(a), Precision::Inexact(b)) => {
+                Precision::Inexact(if a >= b { a.clone() } else { b.clone() })
             }
-            (_, _) => Sharpness::Absent,
+            (_, _) => Precision::Absent,
         }
     }
 
     /// Returns the minimum of two (possibly inexact) values, conservatively
     /// propagating exactness information. If one of the input values is
-    /// [`Sharpness::Absent`], the result is `Absent` too.
-    pub fn min(&self, other: &Sharpness<T>) -> Sharpness<T> {
+    /// [`Precision::Absent`], the result is `Absent` too.
+    pub fn min(&self, other: &Precision<T>) -> Precision<T> {
         match (self, other) {
-            (Sharpness::Exact(a), Sharpness::Exact(b)) => {
-                Sharpness::Exact(if a >= b { b.clone() } else { a.clone() })
+            (Precision::Exact(a), Precision::Exact(b)) => {
+                Precision::Exact(if a >= b { b.clone() } else { a.clone() })
             }
-            (Sharpness::Inexact(a), Sharpness::Exact(b))
-            | (Sharpness::Exact(a), Sharpness::Inexact(b))
-            | (Sharpness::Inexact(a), Sharpness::Inexact(b)) => {
-                Sharpness::Inexact(if a >= b { b.clone() } else { a.clone() })
+            (Precision::Inexact(a), Precision::Exact(b))
+            | (Precision::Exact(a), Precision::Inexact(b))
+            | (Precision::Inexact(a), Precision::Inexact(b)) => {
+                Precision::Inexact(if a >= b { b.clone() } else { a.clone() })
             }
-            (_, _) => Sharpness::Absent,
+            (_, _) => Precision::Absent,
         }
     }
 
-    /// Demotes the sharpness state to inexact (if present).
+    /// Demotes the precision state from exact to inexact (if present).
     pub fn to_inexact(self) -> Self {
         match self {
-            Sharpness::Exact(value) => Sharpness::Inexact(value),
+            Precision::Exact(value) => Precision::Inexact(value),
             _ => self,
         }
     }
 }
 
-impl Sharpness<usize> {
+impl Precision<usize> {
     /// Calculates the sum of two (possibly inexact) [`usize`] values,
     /// conservatively propagating exactness information. If one of the input
-    /// values is [`Sharpness::Absent`], the result is `Absent` too.
-    pub fn add(&self, other: &Sharpness<usize>) -> Sharpness<usize> {
+    /// values is [`Precision::Absent`], the result is `Absent` too.
+    pub fn add(&self, other: &Precision<usize>) -> Precision<usize> {
         match (self, other) {
-            (Sharpness::Exact(a), Sharpness::Exact(b)) => Sharpness::Exact(a + b),
-            (Sharpness::Inexact(a), Sharpness::Exact(b))
-            | (Sharpness::Exact(a), Sharpness::Inexact(b))
-            | (Sharpness::Inexact(a), Sharpness::Inexact(b)) => Sharpness::Inexact(a + b),
-            (_, _) => Sharpness::Absent,
+            (Precision::Exact(a), Precision::Exact(b)) => Precision::Exact(a + b),
+            (Precision::Inexact(a), Precision::Exact(b))
+            | (Precision::Exact(a), Precision::Inexact(b))
+            | (Precision::Inexact(a), Precision::Inexact(b)) => Precision::Inexact(a + b),
+            (_, _) => Precision::Absent,
         }
     }
 
     /// Calculates the difference of two (possibly inexact) [`usize`] values,
     /// conservatively propagating exactness information. If one of the input
-    /// values is [`Sharpness::Absent`], the result is `Absent` too.
-    pub fn sub(&self, other: &Sharpness<usize>) -> Sharpness<usize> {
+    /// values is [`Precision::Absent`], the result is `Absent` too.
+    pub fn sub(&self, other: &Precision<usize>) -> Precision<usize> {
         match (self, other) {
-            (Sharpness::Exact(a), Sharpness::Exact(b)) => Sharpness::Exact(a - b),
-            (Sharpness::Inexact(a), Sharpness::Exact(b))
-            | (Sharpness::Exact(a), Sharpness::Inexact(b))
-            | (Sharpness::Inexact(a), Sharpness::Inexact(b)) => Sharpness::Inexact(a - b),
-            (_, _) => Sharpness::Absent,
+            (Precision::Exact(a), Precision::Exact(b)) => Precision::Exact(a - b),
+            (Precision::Inexact(a), Precision::Exact(b))
+            | (Precision::Exact(a), Precision::Inexact(b))
+            | (Precision::Inexact(a), Precision::Inexact(b)) => Precision::Inexact(a - b),
+            (_, _) => Precision::Absent,
         }
     }
 
     /// Calculates the multiplication of two (possibly inexact) [`usize`] values,
     /// conservatively propagating exactness information. If one of the input
-    /// values is [`Sharpness::Absent`], the result is `Absent` too.
-    pub fn multiply(&self, other: &Sharpness<usize>) -> Sharpness<usize> {
+    /// values is [`Precision::Absent`], the result is `Absent` too.
+    pub fn multiply(&self, other: &Precision<usize>) -> Precision<usize> {
         match (self, other) {
-            (Sharpness::Exact(a), Sharpness::Exact(b)) => Sharpness::Exact(a * b),
-            (Sharpness::Inexact(a), Sharpness::Exact(b))
-            | (Sharpness::Exact(a), Sharpness::Inexact(b))
-            | (Sharpness::Inexact(a), Sharpness::Inexact(b)) => Sharpness::Inexact(a * b),
-            (_, _) => Sharpness::Absent,
+            (Precision::Exact(a), Precision::Exact(b)) => Precision::Exact(a * b),
+            (Precision::Inexact(a), Precision::Exact(b))
+            | (Precision::Exact(a), Precision::Inexact(b))
+            | (Precision::Inexact(a), Precision::Inexact(b)) => Precision::Inexact(a * b),
+            (_, _) => Precision::Absent,
         }
     }
 }
 
-impl Sharpness<ScalarValue> {
+impl Precision<ScalarValue> {
     /// Calculates the sum of two (possibly inexact) [`ScalarValue`] values,
     /// conservatively propagating exactness information. If one of the input
-    /// values is [`Sharpness::Absent`], the result is `Absent` too.
-    pub fn add(&self, other: &Sharpness<ScalarValue>) -> Sharpness<ScalarValue> {
+    /// values is [`Precision::Absent`], the result is `Absent` too.
+    pub fn add(&self, other: &Precision<ScalarValue>) -> Precision<ScalarValue> {
         match (self, other) {
-            (Sharpness::Exact(a), Sharpness::Exact(b)) => {
+            (Precision::Exact(a), Precision::Exact(b)) => {
                 if let Ok(result) = a.add(b) {
-                    Sharpness::Exact(result)
+                    Precision::Exact(result)
                 } else {
-                    Sharpness::Absent
+                    Precision::Absent
                 }
             }
-            (Sharpness::Inexact(a), Sharpness::Exact(b))
-            | (Sharpness::Exact(a), Sharpness::Inexact(b))
-            | (Sharpness::Inexact(a), Sharpness::Inexact(b)) => {
+            (Precision::Inexact(a), Precision::Exact(b))
+            | (Precision::Exact(a), Precision::Inexact(b))
+            | (Precision::Inexact(a), Precision::Inexact(b)) => {
                 if let Ok(result) = a.add(b) {
-                    Sharpness::Inexact(result)
+                    Precision::Inexact(result)
                 } else {
-                    Sharpness::Absent
+                    Precision::Absent
                 }
             }
-            (_, _) => Sharpness::Absent,
+            (_, _) => Precision::Absent,
         }
     }
 }
 
-impl<T: fmt::Debug + Clone + PartialEq + Eq + PartialOrd> Debug for Sharpness<T> {
+impl<T: fmt::Debug + Clone + PartialEq + Eq + PartialOrd> Debug for Precision<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Sharpness::Exact(inner) => write!(f, "Exact({:?})", inner),
-            Sharpness::Inexact(inner) => write!(f, "Inexact({:?})", inner),
-            Sharpness::Absent => write!(f, "Absent"),
+            Precision::Exact(inner) => write!(f, "Exact({:?})", inner),
+            Precision::Inexact(inner) => write!(f, "Inexact({:?})", inner),
+            Precision::Absent => write!(f, "Absent"),
         }
     }
 }
 
-impl<T: fmt::Debug + Clone + PartialEq + Eq + PartialOrd> Display for Sharpness<T> {
+impl<T: fmt::Debug + Clone + PartialEq + Eq + PartialOrd> Display for Precision<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Sharpness::Exact(inner) => write!(f, "Exact({:?})", inner),
-            Sharpness::Inexact(inner) => write!(f, "Inexact({:?})", inner),
-            Sharpness::Absent => write!(f, "Absent"),
+            Precision::Exact(inner) => write!(f, "Exact({:?})", inner),
+            Precision::Inexact(inner) => write!(f, "Inexact({:?})", inner),
+            Precision::Absent => write!(f, "Absent"),
         }
     }
 }
@@ -274,111 +277,111 @@ mod tests {
 
     #[test]
     fn test_get_value() {
-        let exact_sharpness = Sharpness::Exact(42);
-        let inexact_sharpness = Sharpness::Inexact(23);
-        let absent_sharpness = Sharpness::<i32>::Absent;
+        let exact_precision = Precision::Exact(42);
+        let inexact_precision = Precision::Inexact(23);
+        let absent_precision = Precision::<i32>::Absent;
 
-        assert_eq!(*exact_sharpness.get_value().unwrap(), 42);
-        assert_eq!(*inexact_sharpness.get_value().unwrap(), 23);
-        assert_eq!(absent_sharpness.get_value(), None);
+        assert_eq!(*exact_precision.get_value().unwrap(), 42);
+        assert_eq!(*inexact_precision.get_value().unwrap(), 23);
+        assert_eq!(absent_precision.get_value(), None);
     }
 
     #[test]
     fn test_map() {
-        let exact_sharpness = Sharpness::Exact(42);
-        let inexact_sharpness = Sharpness::Inexact(23);
-        let absent_sharpness = Sharpness::Absent;
+        let exact_precision = Precision::Exact(42);
+        let inexact_precision = Precision::Inexact(23);
+        let absent_precision = Precision::Absent;
 
         let squared = |x| x * x;
 
-        assert_eq!(exact_sharpness.map(squared), Sharpness::Exact(1764));
-        assert_eq!(inexact_sharpness.map(squared), Sharpness::Inexact(529));
-        assert_eq!(absent_sharpness.map(squared), Sharpness::Absent);
+        assert_eq!(exact_precision.map(squared), Precision::Exact(1764));
+        assert_eq!(inexact_precision.map(squared), Precision::Inexact(529));
+        assert_eq!(absent_precision.map(squared), Precision::Absent);
     }
 
     #[test]
     fn test_is_exact() {
-        let exact_sharpness = Sharpness::Exact(42);
-        let inexact_sharpness = Sharpness::Inexact(23);
-        let absent_sharpness = Sharpness::<i32>::Absent;
+        let exact_precision = Precision::Exact(42);
+        let inexact_precision = Precision::Inexact(23);
+        let absent_precision = Precision::<i32>::Absent;
 
-        assert_eq!(exact_sharpness.is_exact(), Some(true));
-        assert_eq!(inexact_sharpness.is_exact(), Some(false));
-        assert_eq!(absent_sharpness.is_exact(), None);
+        assert_eq!(exact_precision.is_exact(), Some(true));
+        assert_eq!(inexact_precision.is_exact(), Some(false));
+        assert_eq!(absent_precision.is_exact(), None);
     }
 
     #[test]
     fn test_max() {
-        let sharpness1 = Sharpness::Exact(42);
-        let sharpness2 = Sharpness::Inexact(23);
-        let sharpness3 = Sharpness::Exact(30);
-        let absent_sharpness = Sharpness::Absent;
+        let precision1 = Precision::Exact(42);
+        let precision2 = Precision::Inexact(23);
+        let precision3 = Precision::Exact(30);
+        let absent_precision = Precision::Absent;
 
-        assert_eq!(sharpness1.max(&sharpness2), Sharpness::Inexact(42));
-        assert_eq!(sharpness1.max(&sharpness3), Sharpness::Exact(42));
-        assert_eq!(sharpness2.max(&sharpness3), Sharpness::Inexact(30));
-        assert_eq!(sharpness1.max(&absent_sharpness), Sharpness::Absent);
+        assert_eq!(precision1.max(&precision2), Precision::Inexact(42));
+        assert_eq!(precision1.max(&precision3), Precision::Exact(42));
+        assert_eq!(precision2.max(&precision3), Precision::Inexact(30));
+        assert_eq!(precision1.max(&absent_precision), Precision::Absent);
     }
 
     #[test]
     fn test_min() {
-        let sharpness1 = Sharpness::Exact(42);
-        let sharpness2 = Sharpness::Inexact(23);
-        let sharpness3 = Sharpness::Exact(30);
-        let absent_sharpness = Sharpness::Absent;
+        let precision1 = Precision::Exact(42);
+        let precision2 = Precision::Inexact(23);
+        let precision3 = Precision::Exact(30);
+        let absent_precision = Precision::Absent;
 
-        assert_eq!(sharpness1.min(&sharpness2), Sharpness::Inexact(23));
-        assert_eq!(sharpness1.min(&sharpness3), Sharpness::Exact(30));
-        assert_eq!(sharpness2.min(&sharpness3), Sharpness::Inexact(23));
-        assert_eq!(sharpness1.min(&absent_sharpness), Sharpness::Absent);
+        assert_eq!(precision1.min(&precision2), Precision::Inexact(23));
+        assert_eq!(precision1.min(&precision3), Precision::Exact(30));
+        assert_eq!(precision2.min(&precision3), Precision::Inexact(23));
+        assert_eq!(precision1.min(&absent_precision), Precision::Absent);
     }
 
     #[test]
     fn test_to_inexact() {
-        let exact_sharpness = Sharpness::Exact(42);
-        let inexact_sharpness = Sharpness::Inexact(42);
-        let absent_sharpness = Sharpness::<i32>::Absent;
+        let exact_precision = Precision::Exact(42);
+        let inexact_precision = Precision::Inexact(42);
+        let absent_precision = Precision::<i32>::Absent;
 
-        assert_eq!(exact_sharpness.clone().to_inexact(), inexact_sharpness);
-        assert_eq!(inexact_sharpness.clone().to_inexact(), inexact_sharpness);
-        assert_eq!(absent_sharpness.clone().to_inexact(), absent_sharpness);
+        assert_eq!(exact_precision.clone().to_inexact(), inexact_precision);
+        assert_eq!(inexact_precision.clone().to_inexact(), inexact_precision);
+        assert_eq!(absent_precision.clone().to_inexact(), absent_precision);
     }
 
     #[test]
     fn test_add() {
-        let sharpness1 = Sharpness::Exact(42);
-        let sharpness2 = Sharpness::Inexact(23);
-        let sharpness3 = Sharpness::Exact(30);
-        let absent_sharpness = Sharpness::Absent;
+        let precision1 = Precision::Exact(42);
+        let precision2 = Precision::Inexact(23);
+        let precision3 = Precision::Exact(30);
+        let absent_precision = Precision::Absent;
 
-        assert_eq!(sharpness1.add(&sharpness2), Sharpness::Inexact(65));
-        assert_eq!(sharpness1.add(&sharpness3), Sharpness::Exact(72));
-        assert_eq!(sharpness2.add(&sharpness3), Sharpness::Inexact(53));
-        assert_eq!(sharpness1.add(&absent_sharpness), Sharpness::Absent);
+        assert_eq!(precision1.add(&precision2), Precision::Inexact(65));
+        assert_eq!(precision1.add(&precision3), Precision::Exact(72));
+        assert_eq!(precision2.add(&precision3), Precision::Inexact(53));
+        assert_eq!(precision1.add(&absent_precision), Precision::Absent);
     }
 
     #[test]
     fn test_sub() {
-        let sharpness1 = Sharpness::Exact(42);
-        let sharpness2 = Sharpness::Inexact(23);
-        let sharpness3 = Sharpness::Exact(30);
-        let absent_sharpness = Sharpness::Absent;
+        let precision1 = Precision::Exact(42);
+        let precision2 = Precision::Inexact(23);
+        let precision3 = Precision::Exact(30);
+        let absent_precision = Precision::Absent;
 
-        assert_eq!(sharpness1.sub(&sharpness2), Sharpness::Inexact(19));
-        assert_eq!(sharpness1.sub(&sharpness3), Sharpness::Exact(12));
-        assert_eq!(sharpness1.sub(&absent_sharpness), Sharpness::Absent);
+        assert_eq!(precision1.sub(&precision2), Precision::Inexact(19));
+        assert_eq!(precision1.sub(&precision3), Precision::Exact(12));
+        assert_eq!(precision1.sub(&absent_precision), Precision::Absent);
     }
 
     #[test]
     fn test_multiply() {
-        let sharpness1 = Sharpness::Exact(6);
-        let sharpness2 = Sharpness::Inexact(3);
-        let sharpness3 = Sharpness::Exact(5);
-        let absent_sharpness = Sharpness::Absent;
+        let precision1 = Precision::Exact(6);
+        let precision2 = Precision::Inexact(3);
+        let precision3 = Precision::Exact(5);
+        let absent_precision = Precision::Absent;
 
-        assert_eq!(sharpness1.multiply(&sharpness2), Sharpness::Inexact(18));
-        assert_eq!(sharpness1.multiply(&sharpness3), Sharpness::Exact(30));
-        assert_eq!(sharpness2.multiply(&sharpness3), Sharpness::Inexact(15));
-        assert_eq!(sharpness1.multiply(&absent_sharpness), Sharpness::Absent);
+        assert_eq!(precision1.multiply(&precision2), Precision::Inexact(18));
+        assert_eq!(precision1.multiply(&precision3), Precision::Exact(30));
+        assert_eq!(precision2.multiply(&precision3), Precision::Inexact(15));
+        assert_eq!(precision1.multiply(&absent_precision), Precision::Absent);
     }
 }
