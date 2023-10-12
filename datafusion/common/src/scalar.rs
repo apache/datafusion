@@ -329,8 +329,10 @@ impl PartialOrd for ScalarValue {
                         let arr1 = list_arr1.value(i);
                         let arr2 = list_arr2.value(i);
 
-                        let lt_res = arrow::compute::kernels::cmp::lt(&arr1, &arr2).unwrap();
-                        let eq_res = arrow::compute::kernels::cmp::eq(&arr1, &arr2).unwrap();
+                        let lt_res =
+                            arrow::compute::kernels::cmp::lt(&arr1, &arr2).unwrap();
+                        let eq_res =
+                            arrow::compute::kernels::cmp::eq(&arr1, &arr2).unwrap();
 
                         for j in 0..lt_res.len() {
                             if lt_res.is_valid(j) && lt_res.value(j) {
@@ -3553,83 +3555,79 @@ mod tests {
 
         Ok(())
     }
-    
+
     #[test]
     fn test_list_partial_cmp() {
-        let a = ScalarValue::List(Arc::new(
-            ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
-                Some(1),
-                Some(2),
-                Some(3),
-            ])]),
-        ));
-        let b = ScalarValue::List(Arc::new(
-            ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
-                Some(1),
-                Some(2),
-                Some(3),
-            ])]),
-        ));
+        let a =
+            ScalarValue::List(Arc::new(
+                ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+                    Some(1),
+                    Some(2),
+                    Some(3),
+                ])]),
+            ));
+        let b =
+            ScalarValue::List(Arc::new(
+                ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+                    Some(1),
+                    Some(2),
+                    Some(3),
+                ])]),
+            ));
         assert_eq!(a.partial_cmp(&b), Some(Ordering::Equal));
 
-        let a = ScalarValue::List(Arc::new(
-            ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
-                Some(10),
-                Some(2),
-                Some(3),
-            ])]),
-        ));
-        let b = ScalarValue::List(Arc::new(
-            ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
-                Some(1),
-                Some(2),
-                Some(30),
-            ])]),
-        ));
+        let a =
+            ScalarValue::List(Arc::new(
+                ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+                    Some(10),
+                    Some(2),
+                    Some(3),
+                ])]),
+            ));
+        let b =
+            ScalarValue::List(Arc::new(
+                ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+                    Some(1),
+                    Some(2),
+                    Some(30),
+                ])]),
+            ));
         assert_eq!(a.partial_cmp(&b), Some(Ordering::Greater));
 
-        let a = ScalarValue::List(Arc::new(
-            ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
-                Some(10),
-                Some(2),
-                Some(3),
-            ])]),
-        ));
-        let b = ScalarValue::List(Arc::new(
-            ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
-                Some(10),
-                Some(2),
-                Some(30),
-            ])]),
-        ));
+        let a =
+            ScalarValue::List(Arc::new(
+                ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+                    Some(10),
+                    Some(2),
+                    Some(3),
+                ])]),
+            ));
+        let b =
+            ScalarValue::List(Arc::new(
+                ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+                    Some(10),
+                    Some(2),
+                    Some(30),
+                ])]),
+            ));
         assert_eq!(a.partial_cmp(&b), Some(Ordering::Less));
 
-        let a = ScalarValue::List(Arc::new(
-            ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
-                Some(10),
-                Some(2),
-                Some(3),
-            ]),
-            None,
-            Some(vec![
-                Some(10),
-                Some(2),
-                Some(3),
-            ])]),
-        ));
-        let b = ScalarValue::List(Arc::new(
-            ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
-                Some(10),
-                Some(2),
-                Some(3),
-            ]),
-            None,
-            Some(vec![
-                Some(10),
-                Some(2),
-                Some(3),
-            ])]),
-        ));
+        let a =
+            ScalarValue::List(Arc::new(
+                ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+                    Some(vec![Some(10), Some(2), Some(3)]),
+                    None,
+                    Some(vec![Some(10), Some(2), Some(3)]),
+                ]),
+            ));
+        let b =
+            ScalarValue::List(Arc::new(
+                ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+                    Some(vec![Some(10), Some(2), Some(3)]),
+                    None,
+                    Some(vec![Some(10), Some(2), Some(3)]),
+                ]),
+            ));
         assert_eq!(a.partial_cmp(&b), Some(Ordering::Equal));
     }
 
