@@ -21,6 +21,7 @@ use arrow::array::{AsArray, PrimitiveBuilder};
 use log::debug;
 
 use std::any::Any;
+use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::aggregate::groups_accumulator::accumulate::NullState;
@@ -33,6 +34,7 @@ use arrow::{
     array::{ArrayRef, UInt64Array},
     datatypes::Field,
 };
+use arrow_array::types::DecimalType;
 use arrow_array::{
     Array, ArrowNativeTypeOp, ArrowNumericType, ArrowPrimitiveType, PrimitiveArray,
 };
@@ -256,9 +258,8 @@ impl Accumulator for AvgAccumulator {
 }
 
 /// An accumulator to compute the average for decimals
-#[derive(Debug)]
-struct DecimalAvgAccumulator {
-    sum: Option<i128>,
+struct DecimalAvgAccumulator<T: DecimalType> {
+    sum: Option<T::Native>,
     count: u64,
     sum_scale: i8,
     sum_precision: u8,
@@ -266,7 +267,20 @@ struct DecimalAvgAccumulator {
     target_scale: i8,
 }
 
-impl Accumulator for DecimalAvgAccumulator {
+impl<T: DecimalType> Debug for DecimalAvgAccumulator<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DecimalAvgAccumulator")
+            .field("sum", &self.sum)
+            .field("count", &self.count)
+            .field("sum_scale", &self.sum_scale)
+            .field("sum_precision", &self.sum_precision)
+            .field("target_precision", &self.target_precision)
+            .field("target_scale", &self.target_scale)
+            .finish()
+    }
+}
+
+impl<T: DecimalType> Accumulator for DecimalAvgAccumulator<T> {
     fn state(&self) -> Result<Vec<ScalarValue>> {
         Ok(vec![
             ScalarValue::from(self.count),
@@ -275,7 +289,7 @@ impl Accumulator for DecimalAvgAccumulator {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let values = values[0].as_primitive::<Decimal128Type>();
+        let values = values[0].as_primitive::<T>();
 
         self.count += (values.len() - values.null_count()) as u64;
         if let Some(x) = sum(values) {

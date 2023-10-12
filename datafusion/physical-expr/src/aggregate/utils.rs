@@ -22,7 +22,7 @@ use arrow::array::ArrayRef;
 use arrow::datatypes::{MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PRECISION};
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    Decimal128Type, TimestampMicrosecondType, TimestampMillisecondType,
+    Decimal128Type, DecimalType, TimestampMicrosecondType, TimestampMillisecondType,
     TimestampNanosecondType, TimestampSecondType,
 };
 use arrow_schema::{DataType, Field};
@@ -50,18 +50,18 @@ pub fn get_accum_scalar_values_as_arrays(
 ///
 /// For example, the precision is 3, the max of value is `999` and the min
 /// value is `-999`
-pub(crate) struct Decimal128Averager {
+pub(crate) struct Decimal128Averager<T: DecimalType> {
     /// scale factor for sum values (10^sum_scale)
-    sum_mul: i128,
+    sum_mul: T::Native,
     /// scale factor for target (10^target_scale)
-    target_mul: i128,
+    target_mul: T::Native,
     /// The minimum output value possible to represent with the target precision
-    target_min: i128,
+    target_min: T::Native,
     /// The maximum output value possible to represent with the target precision
-    target_max: i128,
+    target_max: T::Native,
 }
 
-impl Decimal128Averager {
+impl<T: DecimalType> Decimal128Averager<T> {
     /// Create a new `Decimal128Averager`:
     ///
     /// * sum_scale: the scale of `sum` values passed to [`Self::avg`]
