@@ -663,12 +663,7 @@ impl DataFrame {
     ) -> Result<DataFrame> {
         let expr = on_exprs.into_iter().reduce(Expr::and);
         let plan = LogicalPlanBuilder::from(self.plan)
-            .join(
-                right.plan,
-                join_type,
-                (Vec::<Column>::new(), Vec::<Column>::new()),
-                expr,
-            )?
+            .join_on(right.plan, join_type, expr)?
             .build()?;
         Ok(DataFrame::new(self.session_state, plan))
     }
