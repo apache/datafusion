@@ -17,25 +17,24 @@
 
 //! Negation (-) expression
 
-use std::any::Any;
-use std::hash::{Hash, Hasher};
-use std::sync::Arc;
-
+use crate::intervals::Interval;
 use crate::physical_expr::down_cast_any_ref;
 use crate::sort_properties::SortProperties;
 use crate::PhysicalExpr;
-
 use arrow::{
     compute::kernels::numeric::neg_wrapping,
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_expr::{
     type_coercion::{is_interval, is_null, is_signed_numeric},
     ColumnarValue,
 };
+
+use std::any::Any;
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 /// Negative expression
 #[derive(Debug, Hash)]
@@ -105,6 +104,30 @@ impl PhysicalExpr for NegativeExpr {
         self.hash(&mut s);
     }
 
+    /// Given the child interval of a NegativeExpr, it calculates the NegativeExpr's interval.
+    /// It replaces the upper and lower bounds after multiplying them with -1.
+    /// Ex: `(a, b] => [-b, -a)``
+    fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
+        Ok(Interval::new(
+            children[0].upper.negate()?,
+            children[0].lower.negate()?,
+        ))
+    }
+
+    /// Returns a new [`Interval`] of a NegativeExpr  that has the existing `interval` given that
+    /// given the input interval is known to be `children`.
+    fn propagate_constraints(
+        &self,
+        interval: &Interval,
+        children: &[&Interval],
+    ) -> Result<Vec<Option<Interval>>> {
+        let child_interval = children[0];
+        let negated_interval =
+            Interval::new(interval.upper.negate()?, interval.lower.negate()?);
+
+        Ok(vec![child_interval.intersect(negated_interval)?])
+    }
+
     /// The ordering of a [`NegativeExpr`] is simply the reverse of its child.
     fn get_ordering(&self, children: &[SortProperties]) -> SortProperties {
         -children[0]
@@ -144,7 +167,10 @@ pub fn negative(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::col;
+    use crate::{
+        expressions::{col, Column},
+        intervals::Interval,
+    };
     #[allow(unused_imports)]
     use arrow::array::*;
     use arrow::datatypes::*;
@@ -185,6 +211,39 @@ mod tests {
         test_array_negative_op!(Int64, 23456i64, 12345i64);
         test_array_negative_op!(Float32, 2345.0f32, 1234.0f32);
         test_array_negative_op!(Float64, 23456.0f64, 12345.0f64);
+        Ok(())
+    }
+
+    #[test]
+    fn test_evaluate_bounds() -> Result<()> {
+        let negative_expr = NegativeExpr {
+            arg: Arc::new(Column::new("a", 0)),
+        };
+        let child_interval = Interval::make(Some(-2), Some(1), (true, false));
+        let negative_expr_interval = Interval::make(Some(-1), Some(2), (false, true));
+        assert_eq!(
+            negative_expr.evaluate_bounds(&[&child_interval])?,
+            negative_expr_interval
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_propagate_constraints() -> Result<()> {
+        let negative_expr = NegativeExpr {
+            arg: Arc::new(Column::new("a", 0)),
+        };
+        let original_child_interval = Interval::make(Some(-2), Some(3), (false, false));
+        let negative_expr_interval = Interval::make(Some(0), Some(4), (true, false));
+        let after_propagation =
+            vec![Some(Interval::make(Some(-2), Some(0), (false, true)))];
+        assert_eq!(
+            negative_expr.propagate_constraints(
+                &negative_expr_interval,
+                &[&original_child_interval]
+            )?,
+            after_propagation
+        );
         Ok(())
     }
 }
