@@ -75,15 +75,49 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>>;
 
-    /// Computes bounds for the expression using interval arithmetic.
+    /// Computes the output interval for the expression, given the input
+    /// intervals.
+    ///
+    /// # Arguments
+    ///
+    /// * `children` are the intervals for the children (inputs) of this
+    /// expression.
+    ///
+    /// # Example
+    ///
+    /// If the expression is `a + b`, and the input intervals are `a: [1, 2]`
+    /// and `b: [3, 4]`, then the output interval would be `[4, 6]`.
     fn evaluate_bounds(&self, _children: &[&Interval]) -> Result<Interval> {
         not_impl_err!("Not implemented for {self}")
     }
 
-    /// Updates/shrinks bounds for the expression using interval arithmetic.
+    /// Updates bounds for child expressions, given a known interval for this
+    /// expression.
+    ///
+    /// This is used to propagate constraints down through an
+    /// expression tree.
+    ///
+    /// # Arguments
+    ///
+    /// * `interval` is the currently known interval for this expression.
+    /// * `children` are the current intervals for the children of this expression
+    ///
+    /// # Returns
+    ///
+    /// A Vec of new intervals for the children, in order.
+    ///
     /// If constraint propagation reveals an infeasibility, returns [None] for
-    /// the child causing infeasibility. If none of the children intervals
-    /// change, may return an empty vector instead of cloning `children`.
+    /// the child causing infeasibility.
+    ///
+    /// If none of the child intervals change as a result of propagation, may
+    /// return an empty vector instead of cloning `children`.
+    ///
+    /// # Example
+    ///
+    /// If the expression is `a + b`, the current `interval` is `[4, 5] and the
+    /// inputs are given [`a: [0, 2], `b: [-∞, 4]]`, then propagation would
+    /// would return `[a: [0, 2], b: [2, 4]]` as `b` must be at least 2 to to
+    /// make the output at least `4`.
     fn propagate_constraints(
         &self,
         _interval: &Interval,
