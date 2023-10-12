@@ -334,6 +334,30 @@ fn get_finest_requirement(
     order_by_expr: &mut [Option<LexOrdering>],
     schema_properties: &SchemaProperties,
 ) -> Result<Option<LexOrdering>> {
+    // Check at the beginning if all the requirements are satisfied by existing ordering
+    // If so return None, to indicate all of the requirements are already satisfied.
+    let mut all_satisfied = true;
+    for (aggr_expr, fn_req) in aggr_expr.iter_mut().zip(order_by_expr.iter_mut()) {
+        if schema_properties.ordering_satisfy(fn_req.as_deref()) {
+            continue;
+        }
+        if let Some(reverse) = aggr_expr.reverse_expr() {
+            let reverse_req = fn_req.as_ref().map(|item| reverse_order_bys(item));
+            if schema_properties.ordering_satisfy(reverse_req.as_deref()) {
+                // We need to update `aggr_expr` with its reverse, since only its
+                // reverse requirement is compatible with existing requirements:
+                *aggr_expr = reverse;
+                *fn_req = reverse_req;
+                continue;
+            }
+        }
+        // requirement is not satisfied
+        all_satisfied = false;
+    }
+    if all_satisfied {
+        // All of the requirements are already satisfied.
+        return Ok(None);
+    }
     let mut finest_req = get_init_req(aggr_expr, order_by_expr);
     for (aggr_expr, fn_req) in aggr_expr.iter_mut().zip(order_by_expr.iter_mut()) {
         let fn_req = if let Some(fn_req) = fn_req {
