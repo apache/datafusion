@@ -663,13 +663,15 @@ impl LogicalPlanBuilder {
         self,
         right: LogicalPlan,
         join_type: JoinType,
-        on_exprs: Option<Expr>,
+        on_exprs: impl IntoIterator<Item = Expr>,
     ) -> Result<Self> {
+        let filter = on_exprs.into_iter().reduce(Expr::and);
+
         self.join_detailed(
             right,
             join_type,
             (Vec::<Column>::new(), Vec::<Column>::new()),
-            on_exprs,
+            filter,
             false,
         )
     }
