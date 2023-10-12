@@ -267,3 +267,118 @@ impl ColumnStatistics {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_value() {
+        let exact_sharpness = Sharpness::Exact(42);
+        let inexact_sharpness = Sharpness::Inexact(23);
+        let absent_sharpness = Sharpness::<i32>::Absent;
+
+        assert_eq!(*exact_sharpness.get_value().unwrap(), 42);
+        assert_eq!(*inexact_sharpness.get_value().unwrap(), 23);
+        assert_eq!(absent_sharpness.get_value(), None);
+    }
+
+    #[test]
+    fn test_map() {
+        let exact_sharpness = Sharpness::Exact(42);
+        let inexact_sharpness = Sharpness::Inexact(23);
+        let absent_sharpness = Sharpness::Absent;
+
+        let squared = |x| x * x;
+
+        assert_eq!(exact_sharpness.map(squared), Sharpness::Exact(1764));
+        assert_eq!(inexact_sharpness.map(squared), Sharpness::Inexact(529));
+        assert_eq!(absent_sharpness.map(squared), Sharpness::Absent);
+    }
+
+    #[test]
+    fn test_is_exact() {
+        let exact_sharpness = Sharpness::Exact(42);
+        let inexact_sharpness = Sharpness::Inexact(23);
+        let absent_sharpness = Sharpness::<i32>::Absent;
+
+        assert_eq!(exact_sharpness.is_exact(), Some(true));
+        assert_eq!(inexact_sharpness.is_exact(), Some(false));
+        assert_eq!(absent_sharpness.is_exact(), None);
+    }
+
+    #[test]
+    fn test_max() {
+        let sharpness1 = Sharpness::Exact(42);
+        let sharpness2 = Sharpness::Inexact(23);
+        let sharpness3 = Sharpness::Exact(30);
+        let absent_sharpness = Sharpness::Absent;
+
+        assert_eq!(sharpness1.max(&sharpness2), Sharpness::Inexact(42));
+        assert_eq!(sharpness1.max(&sharpness3), Sharpness::Exact(42));
+        assert_eq!(sharpness2.max(&sharpness3), Sharpness::Inexact(30));
+        assert_eq!(sharpness1.max(&absent_sharpness), Sharpness::Absent);
+    }
+
+    #[test]
+    fn test_min() {
+        let sharpness1 = Sharpness::Exact(42);
+        let sharpness2 = Sharpness::Inexact(23);
+        let sharpness3 = Sharpness::Exact(30);
+        let absent_sharpness = Sharpness::Absent;
+
+        assert_eq!(sharpness1.min(&sharpness2), Sharpness::Inexact(23));
+        assert_eq!(sharpness1.min(&sharpness3), Sharpness::Exact(30));
+        assert_eq!(sharpness2.min(&sharpness3), Sharpness::Inexact(23));
+        assert_eq!(sharpness1.min(&absent_sharpness), Sharpness::Absent);
+    }
+
+    #[test]
+    fn test_to_inexact() {
+        let exact_sharpness = Sharpness::Exact(42);
+        let inexact_sharpness = Sharpness::Inexact(23);
+        let absent_sharpness = Sharpness::<i32>::Absent;
+
+        assert_eq!(exact_sharpness.clone().to_inexact(), inexact_sharpness);
+        assert_eq!(inexact_sharpness.clone().to_inexact(), inexact_sharpness);
+        assert_eq!(absent_sharpness.clone().to_inexact(), absent_sharpness);
+    }
+
+    #[test]
+    fn test_add() {
+        let sharpness1 = Sharpness::Exact(42);
+        let sharpness2 = Sharpness::Inexact(23);
+        let sharpness3 = Sharpness::Exact(30);
+        let absent_sharpness = Sharpness::Absent;
+
+        assert_eq!(sharpness1.add(&sharpness2), Sharpness::Inexact(65));
+        assert_eq!(sharpness1.add(&sharpness3), Sharpness::Exact(72));
+        assert_eq!(sharpness2.add(&sharpness3), Sharpness::Inexact(53));
+        assert_eq!(sharpness1.add(&absent_sharpness), Sharpness::Absent);
+    }
+
+    #[test]
+    fn test_sub() {
+        let sharpness1 = Sharpness::Exact(42);
+        let sharpness2 = Sharpness::Inexact(23);
+        let sharpness3 = Sharpness::Exact(30);
+        let absent_sharpness = Sharpness::Absent;
+
+        assert_eq!(sharpness1.sub(&sharpness2), Sharpness::Inexact(19));
+        assert_eq!(sharpness1.sub(&sharpness3), Sharpness::Exact(12));
+        assert_eq!(sharpness1.sub(&absent_sharpness), Sharpness::Absent);
+    }
+
+    #[test]
+    fn test_multiply() {
+        let sharpness1 = Sharpness::Exact(6);
+        let sharpness2 = Sharpness::Inexact(3);
+        let sharpness3 = Sharpness::Exact(5);
+        let absent_sharpness = Sharpness::Absent;
+
+        assert_eq!(sharpness1.multiply(&sharpness2), Sharpness::Inexact(18));
+        assert_eq!(sharpness1.multiply(&sharpness3), Sharpness::Exact(30));
+        assert_eq!(sharpness2.multiply(&sharpness3), Sharpness::Inexact(15));
+        assert_eq!(sharpness1.multiply(&absent_sharpness), Sharpness::Absent);
+    }
+}
