@@ -17,7 +17,8 @@
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{
-    internal_err, Column, DFField, DFSchema, DataFusionError, Result, TableReference,
+    internal_err, plan_err_raw, Column, DFField, DFSchema, DataFusionError, Result,
+    TableReference,
 };
 use datafusion_expr::{Case, Expr};
 use sqlparser::ast::{Expr as SQLExpr, Ident};
@@ -36,9 +37,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .schema_provider
                 .get_variable_type(&var_names)
                 .ok_or_else(|| {
-                    DataFusionError::Plan(format!(
-                        "variable {var_names:?} has no type information"
-                    ))
+                    plan_err_raw!("variable {var_names:?} has no type information")
                 })?;
             Ok(Expr::ScalarVariable(ty, var_names))
         } else {

@@ -478,9 +478,16 @@ macro_rules! with_dollar_sign {
 ///     plan_err!("Error {val}")
 ///     plan_err!("Error {val:?}")
 macro_rules! make_error {
-    ($NAME:ident, $ERR:ident) => {
+    ($NAME:ident, $NAME_RAW: ident, $ERR:ident) => {
         with_dollar_sign! {
             ($d:tt) => {
+                #[macro_export]
+                macro_rules! $NAME_RAW {
+                    ($d($d args:expr),*) => {
+                        DataFusionError::$ERR(format!("{}{}", format!($d($d args),*), DataFusionError::get_back_trace()).into())
+                    }
+                }
+
                 #[macro_export]
                 macro_rules! $NAME {
                     ($d($d args:expr),*) => {
@@ -493,16 +500,16 @@ macro_rules! make_error {
 }
 
 // Exposes a macro to create `DataFusionError::Plan`
-make_error!(plan_err, Plan);
+make_error!(plan_err, plan_err_raw, Plan);
 
 // Exposes a macro to create `DataFusionError::Internal`
-make_error!(internal_err, Internal);
+make_error!(internal_err, internal_err_raw, Internal);
 
 // Exposes a macro to create `DataFusionError::NotImplemented`
-make_error!(not_impl_err, NotImplemented);
+make_error!(not_impl_err, not_impl_err_raw, NotImplemented);
 
 // Exposes a macro to create `DataFusionError::Execution`
-make_error!(exec_err, Execution);
+make_error!(exec_err, exec_err_raw, Execution);
 
 // Exposes a macro to create `DataFusionError::SQL`
 #[macro_export]
@@ -517,6 +524,7 @@ macro_rules! sql_err {
 pub use exec_err as _exec_err;
 pub use internal_err as _internal_err;
 pub use not_impl_err as _not_impl_err;
+pub use plan_err as _plan_err;
 
 #[cfg(test)]
 mod test {

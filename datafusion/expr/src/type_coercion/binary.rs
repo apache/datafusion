@@ -24,8 +24,8 @@ use arrow::datatypes::{
     DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
 };
 
-use datafusion_common::Result;
 use datafusion_common::{plan_err, DataFusionError};
+use datafusion_common::{plan_err_raw, Result};
 
 use crate::Operator;
 
@@ -71,9 +71,9 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
         Operator::IsDistinctFrom |
         Operator::IsNotDistinctFrom => {
             comparison_coercion(lhs, rhs).map(Signature::comparison).ok_or_else(|| {
-                DataFusionError::Plan(format!(
+                plan_err_raw!(
                     "Cannot infer common argument type for comparison operation {lhs} {op} {rhs}"
-                ))
+                )
             })
         }
         Operator::And | Operator::Or => match (lhs, rhs) {
@@ -91,9 +91,9 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
         Operator::RegexNotMatch |
         Operator::RegexNotIMatch => {
             regex_coercion(lhs, rhs).map(Signature::comparison).ok_or_else(|| {
-                DataFusionError::Plan(format!(
+                plan_err_raw!(
                     "Cannot infer common argument type for regex operation {lhs} {op} {rhs}"
-                ))
+                )
             })
         }
         Operator::BitwiseAnd
@@ -102,24 +102,24 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
         | Operator::BitwiseShiftRight
         | Operator::BitwiseShiftLeft => {
             bitwise_coercion(lhs, rhs).map(Signature::uniform).ok_or_else(|| {
-                DataFusionError::Plan(format!(
+                plan_err_raw!(
                     "Cannot infer common type for bitwise operation {lhs} {op} {rhs}"
-                ))
+                )
             })
         }
         Operator::StringConcat => {
             string_concat_coercion(lhs, rhs).map(Signature::uniform).ok_or_else(|| {
-                DataFusionError::Plan(format!(
+                plan_err_raw!(
                     "Cannot infer common string type for string concat operation {lhs} {op} {rhs}"
-                ))
+                )
             })
         }
         Operator::AtArrow
         | Operator::ArrowAt => {
             array_coercion(lhs, rhs).map(Signature::uniform).ok_or_else(|| {
-                DataFusionError::Plan(format!(
+                plan_err_raw!(
                     "Cannot infer common array type for arrow operation {lhs} {op} {rhs}"
-                ))
+                )
             })
         }
         Operator::Plus |
@@ -154,9 +154,9 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
                 // Temporal arithmetic by first coercing to a common time representation
                 // e.g. Date32 - Timestamp
                 let ret = get_result(&coerced, &coerced).map_err(|e| {
-                    DataFusionError::Plan(format!(
+                    plan_err_raw!(
                         "Cannot get result type for temporal operation {coerced} {op} {coerced}: {e}"
-                    ))
+                    )
                 })?;
                 Ok(Signature{
                     lhs: coerced.clone(),
@@ -166,9 +166,9 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
             } else if let Some((lhs, rhs)) = math_decimal_coercion(lhs, rhs) {
                 // Decimal arithmetic, e.g. Decimal(10, 2) + Decimal(10, 0)
                 let ret = get_result(&lhs, &rhs).map_err(|e| {
-                    DataFusionError::Plan(format!(
+                    plan_err_raw!(
                         "Cannot get result type for decimal operation {lhs} {op} {rhs}: {e}"
-                    ))
+                    )
                 })?;
                 Ok(Signature{
                     lhs,

@@ -30,7 +30,7 @@ use crate::{
 };
 use datafusion_common::{
     alias::AliasGenerator,
-    exec_err, not_impl_err, plan_err,
+    exec_err, not_impl_err, plan_err, plan_err_raw,
     tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion},
 };
 use datafusion_execution::registry::SerializerRegistry;
@@ -1577,17 +1577,11 @@ impl SessionState {
         self.catalog_list
             .catalog(&resolved_ref.catalog)
             .ok_or_else(|| {
-                DataFusionError::Plan(format!(
-                    "failed to resolve catalog: {}",
-                    resolved_ref.catalog
-                ))
+                plan_err_raw!("failed to resolve catalog: {}", resolved_ref.catalog)
             })?
             .schema(&resolved_ref.schema)
             .ok_or_else(|| {
-                DataFusionError::Plan(format!(
-                    "failed to resolve schema: {}",
-                    resolved_ref.schema
-                ))
+                plan_err_raw!("failed to resolve schema: {}", resolved_ref.schema)
             })
     }
 
@@ -1689,11 +1683,11 @@ impl SessionState {
         dialect: &str,
     ) -> Result<datafusion_sql::parser::Statement> {
         let dialect = dialect_from_str(dialect).ok_or_else(|| {
-            DataFusionError::Plan(format!(
+            plan_err_raw!(
                 "Unsupported SQL dialect: {dialect}. Available dialects: \
                      Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
                      MsSQL, ClickHouse, BigQuery, Ansi."
-            ))
+            )
         })?;
         let mut statements = DFParser::parse_sql_with_dialect(sql, dialect.as_ref())?;
         if statements.len() > 1 {
@@ -2022,7 +2016,7 @@ impl<'a> ContextProvider for SessionContextProvider<'a> {
         self.tables
             .get(&name)
             .cloned()
-            .ok_or_else(|| DataFusionError::Plan(format!("table '{name}' not found")))
+            .ok_or_else(|| plan_err_raw!("table '{name}' not found"))
     }
 
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>> {
@@ -2069,9 +2063,7 @@ impl FunctionRegistry for SessionState {
         let result = self.scalar_functions.get(name);
 
         result.cloned().ok_or_else(|| {
-            DataFusionError::Plan(format!(
-                "There is no UDF named \"{name}\" in the registry"
-            ))
+            plan_err_raw!("There is no UDF named \"{name}\" in the registry")
         })
     }
 
@@ -2079,9 +2071,7 @@ impl FunctionRegistry for SessionState {
         let result = self.aggregate_functions.get(name);
 
         result.cloned().ok_or_else(|| {
-            DataFusionError::Plan(format!(
-                "There is no UDAF named \"{name}\" in the registry"
-            ))
+            plan_err_raw!("There is no UDAF named \"{name}\" in the registry")
         })
     }
 
@@ -2089,9 +2079,7 @@ impl FunctionRegistry for SessionState {
         let result = self.window_functions.get(name);
 
         result.cloned().ok_or_else(|| {
-            DataFusionError::Plan(format!(
-                "There is no UDWF named \"{name}\" in the registry"
-            ))
+            plan_err_raw!("There is no UDWF named \"{name}\" in the registry")
         })
     }
 }

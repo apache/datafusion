@@ -25,7 +25,7 @@ use crate::type_coercion::functions::data_types;
 use crate::utils;
 use crate::{AggregateUDF, Signature, TypeSignature, Volatility, WindowUDF};
 use arrow::datatypes::DataType;
-use datafusion_common::{plan_err, DataFusionError, Result};
+use datafusion_common::{plan_err, plan_err_raw, DataFusionError, Result};
 use std::sync::Arc;
 use std::{fmt, str::FromStr};
 use strum_macros::EnumIter;
@@ -192,11 +192,14 @@ impl BuiltInWindowFunction {
             // original errors are all related to wrong function signature
             // aggregate them for better error message
             .map_err(|_| {
-                DataFusionError::Plan(utils::generate_signature_error_msg(
-                    &format!("{self}"),
-                    self.signature(),
-                    input_expr_types,
-                ))
+                plan_err_raw!(
+                    "{}",
+                    utils::generate_signature_error_msg(
+                        &format!("{self}"),
+                        self.signature(),
+                        input_expr_types,
+                    )
+                )
             })?;
 
         match self {

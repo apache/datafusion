@@ -27,8 +27,8 @@ use crate::{LogicalPlan, Projection, Subquery};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{
-    internal_err, plan_err, Column, DFField, DFSchema, DataFusionError, ExprSchema,
-    Result,
+    internal_err, plan_err, plan_err_raw, Column, DFField, DFSchema, DataFusionError,
+    ExprSchema, Result,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -139,13 +139,9 @@ impl ExprSchemable for Expr {
                 ref op,
             }) => get_result_type(&left.get_type(schema)?, op, &right.get_type(schema)?),
             Expr::Like { .. } | Expr::SimilarTo { .. } => Ok(DataType::Boolean),
-            Expr::Placeholder(Placeholder { data_type, .. }) => {
-                data_type.clone().ok_or_else(|| {
-                    DataFusionError::Plan(
-                        "Placeholder type could not be resolved".to_owned(),
-                    )
-                })
-            }
+            Expr::Placeholder(Placeholder { data_type, .. }) => data_type
+                .clone()
+                .ok_or_else(|| plan_err_raw!("Placeholder type could not be resolved")),
             Expr::Wildcard => {
                 // Wildcard do not really have a type and do not appear in projections
                 Ok(DataType::Null)

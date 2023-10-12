@@ -22,7 +22,7 @@ use std::{
 
 use datafusion_common::{
     config::{ConfigOptions, Extensions},
-    DataFusionError, Result,
+    plan_err_raw, DataFusionError, Result,
 };
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 
@@ -182,9 +182,7 @@ impl FunctionRegistry for TaskContext {
         let result = self.scalar_functions.get(name);
 
         result.cloned().ok_or_else(|| {
-            DataFusionError::Plan(format!(
-                "There is no UDF named \"{name}\" in the TaskContext"
-            ))
+            plan_err_raw!("There is no UDF named \"{name}\" in the TaskContext")
         })
     }
 
@@ -192,9 +190,7 @@ impl FunctionRegistry for TaskContext {
         let result = self.aggregate_functions.get(name);
 
         result.cloned().ok_or_else(|| {
-            DataFusionError::Plan(format!(
-                "There is no UDAF named \"{name}\" in the TaskContext"
-            ))
+            plan_err_raw!("There is no UDAF named \"{name}\" in the TaskContext")
         })
     }
 

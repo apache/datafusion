@@ -43,6 +43,7 @@ use datafusion::{
     datasource::{provider_as_source, source_as_provider},
     prelude::SessionContext,
 };
+use datafusion_common::plan_err_raw;
 use datafusion_common::{
     context, internal_err, not_impl_err, parsers::CompressionTypeVariant,
     DataFusionError, OwnedTableReference, Result,
@@ -65,13 +66,13 @@ pub mod to_proto;
 
 impl From<from_proto::Error> for DataFusionError {
     fn from(e: from_proto::Error) -> Self {
-        DataFusionError::Plan(e.to_string())
+        plan_err_raw!("{}", e)
     }
 }
 
 impl From<to_proto::Error> for DataFusionError {
     fn from(e: to_proto::Error) -> Self {
-        DataFusionError::Plan(e.to_string())
+        plan_err_raw!("{}", e)
     }
 }
 
