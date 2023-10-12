@@ -336,7 +336,7 @@ mod tests {
     #[test]
     fn test_to_inexact() {
         let exact_sharpness = Sharpness::Exact(42);
-        let inexact_sharpness = Sharpness::Inexact(23);
+        let inexact_sharpness = Sharpness::Inexact(42);
         let absent_sharpness = Sharpness::<i32>::Absent;
 
         assert_eq!(exact_sharpness.clone().to_inexact(), inexact_sharpness);
