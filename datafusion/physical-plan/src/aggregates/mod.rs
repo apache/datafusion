@@ -1113,7 +1113,7 @@ mod tests {
     };
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion_physical_expr::expressions::{
-        lit, ApproxDistinct, Column, Count, FirstValue, LastValue, Median,
+        lit, ApproxDistinct, Count, FirstValue, LastValue, Median,
     };
     use datafusion_physical_expr::{
         AggregateExpr, PhysicalExpr, PhysicalSortExpr, SchemaProperties,
@@ -1987,61 +1987,53 @@ mod tests {
             descending: true,
             nulls_first: true,
         };
-        let col_a = Column::new("a", 0);
-        let col_b = Column::new("b", 1);
-        let col_c = Column::new("c", 2);
-        let col_d = Column::new("d", 3);
-        let col_a_expr = Arc::new(col_a.clone()) as Arc<dyn PhysicalExpr>;
-        let col_b_expr = Arc::new(col_b.clone()) as Arc<dyn PhysicalExpr>;
+        let col_a = &col("a", &test_schema)?;
+        let col_b = &col("b", &test_schema)?;
+        let col_c = &col("c", &test_schema)?;
         let mut schema_properties = SchemaProperties::new(test_schema);
         // Columns a and b are equal.
-        schema_properties.add_equal_conditions((&col_a_expr, &col_b_expr));
-        // [a ASC], [c DESC] describes ordering of the schema.
-        schema_properties.add_new_orderings(&[
-            vec![PhysicalSortExpr {
-                expr: Arc::new(col_a.clone()) as _,
-                options: options1,
-            }],
-            vec![PhysicalSortExpr {
-                expr: Arc::new(col_c.clone()) as _,
-                options: options2,
-            }],
-        ]);
+        schema_properties.add_equal_conditions((col_a, col_b));
         // Aggregate requirements are
-        // [None], [a ASC], [b ASC], [c DESC], [a ASC, d ASC] respectively
+        // [None], [a ASC], [a ASC, b ASC, c ASC], [a ASC, b ASC] respectively
         let mut order_by_exprs = vec![
             None,
             Some(vec![PhysicalSortExpr {
-                expr: Arc::new(col_a.clone()),
+                expr: col_a.clone(),
                 options: options1,
-            }]),
-            Some(vec![PhysicalSortExpr {
-                expr: Arc::new(col_b.clone()),
-                options: options1,
-            }]),
-            Some(vec![PhysicalSortExpr {
-                expr: Arc::new(col_c),
-                options: options2,
             }]),
             Some(vec![
                 PhysicalSortExpr {
-                    expr: Arc::new(col_a.clone()),
+                    expr: col_a.clone(),
                     options: options1,
                 },
                 PhysicalSortExpr {
-                    expr: Arc::new(col_d),
+                    expr: col_b.clone(),
+                    options: options1,
+                },
+                PhysicalSortExpr {
+                    expr: col_c.clone(),
+                    options: options1,
+                },
+            ]),
+            Some(vec![
+                PhysicalSortExpr {
+                    expr: col_a.clone(),
+                    options: options1,
+                },
+                PhysicalSortExpr {
+                    expr: col_b.clone(),
                     options: options1,
                 },
             ]),
             // Since aggregate expression is reversible (FirstValue), we should be able to resolve below
             // contradictory requirement by reversing it.
             Some(vec![PhysicalSortExpr {
-                expr: Arc::new(col_b.clone()),
+                expr: col_b.clone(),
                 options: options2,
             }]),
         ];
         let aggr_expr = Arc::new(FirstValue::new(
-            Arc::new(col_a.clone()),
+            col_a.clone(),
             "first1",
             DataType::Int32,
             vec![],
@@ -2051,7 +2043,7 @@ mod tests {
         let res = get_finest_requirement(&mut aggr_exprs, &mut order_by_exprs, || {
             schema_properties.clone()
         })?;
-        assert_eq!(res, order_by_exprs[4]);
+        assert_eq!(res, order_by_exprs[2]);
         Ok(())
     }
 }

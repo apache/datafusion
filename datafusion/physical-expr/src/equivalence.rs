@@ -750,33 +750,29 @@ impl SchemaProperties {
         &self,
         sort_reqs: &[PhysicalSortRequirement],
     ) -> Vec<PhysicalSortRequirement> {
-        let mut normalized_sort_reqs =
-            self.eq_groups.normalize_sort_requirements(sort_reqs);
-
+        let normalized_sort_reqs = self.eq_groups.normalize_sort_requirements(sort_reqs);
+        let normalized_sort_reqs =
+            prune_sort_reqs_with_constants(&normalized_sort_reqs, &self.constants);
         // Prune redundant sections in the requirement.
-        normalized_sort_reqs = self.prune_lex_req(normalized_sort_reqs);
-        normalized_sort_reqs
+        collapse_lex_req(normalized_sort_reqs)
     }
 
-    /// This function simplifies lexicographical ordering requirement
-    /// inside `sort_req` by removing postfix lexicographical requirements
-    /// that satisfy global ordering (occurs inside the ordering equivalent class)
-    fn prune_lex_req(&self, sort_req: LexOrderingReq) -> LexOrderingReq {
-        // Remove entries that are known to be constant from requirement expression.
-        let sort_req = prune_sort_reqs_with_constants(&sort_req, &self.constants);
-        let mut sort_req = collapse_lex_req(sort_req);
+    /// This function prunes lexicographical ordering requirement
+    /// by removing sections inside `sort_req` that satisfies any of the existing ordering.
+    /// By doing so, we reduce the requirement to its simplest form which is functionally
+    /// equivalent to the argument. Empty result means that requirement is already satisfied.
+    fn prune_lex_req(&self, sort_req: &[PhysicalSortRequirement]) -> LexOrderingReq {
+        // Make sure to use a standardized version of the requirement
+        let mut sort_req = self.normalize_sort_requirements(sort_req);
 
         // If empty immediately return
         if sort_req.is_empty() {
             return sort_req;
         }
+        let leading_requirement = sort_req[0].clone();
         for ordering in self.oeq_group.iter() {
-            let normalized_ordering = self.eq_groups.normalize_sort_exprs(ordering);
-            let req = prune_sort_reqs_with_constants(
-                &PhysicalSortRequirement::from_sort_exprs(&normalized_ordering),
-                &self.constants,
-            );
-            let ordering = PhysicalSortRequirement::to_sort_exprs(req);
+            // Normalize existing ordering
+            let ordering = self.normalize_sort_exprs(ordering);
             let match_indices = ordering
                 .iter()
                 .map(|elem| {
@@ -800,12 +796,18 @@ impl SchemaProperties {
                 }
             }
             // can remove entries at the match_prefix indices
+            // Remove with reverse iteration to not invalidate indices
             for idx in match_prefix.iter().rev() {
                 sort_req.remove(*idx);
             }
         }
-        // Remove duplicates from expression.
-        collapse_lex_req(sort_req)
+        if !sort_req.is_empty() {
+            // Do not invalidate requirement
+            sort_req.insert(0, leading_requirement);
+            sort_req
+        } else {
+            sort_req
+        }
     }
 
     /// Checks whether `leading_requirement` is contained in any of the ordering
@@ -977,17 +979,9 @@ impl SchemaProperties {
     /// Checks whether the required [`PhysicalSortExpr`]s are satisfied by the
     /// any of the existing orderings.
     pub fn ordering_satisfy_concrete(&self, required: &[PhysicalSortExpr]) -> bool {
-        let required_normalized = self.normalize_sort_exprs(required);
-        let provided_normalized = self.oeq_group().output_ordering().unwrap_or_default();
-
-        if required_normalized.len() > provided_normalized.len() {
-            return false;
-        }
-
-        required_normalized
-            .into_iter()
-            .zip(provided_normalized)
-            .all(|(req, given)| given == req)
+        // Convert `PhysicalSortExpr`s to `PhysicalSortRequirement`s
+        let sort_requirements = PhysicalSortRequirement::from_sort_exprs(required.iter());
+        self.ordering_satisfy_requirement_concrete(&sort_requirements)
     }
 
     /// Find the finer requirement among `req1` and `req2`
@@ -1087,8 +1081,7 @@ impl SchemaProperties {
         &self,
         required: &[PhysicalSortRequirement],
     ) -> bool {
-        let required_normalized = self.normalize_sort_requirements(required);
-        required_normalized.is_empty()
+        self.prune_lex_req(required).is_empty()
     }
 
     /// Checks whether the given [`PhysicalSortRequirement`]s are equal or more
@@ -1114,15 +1107,8 @@ impl SchemaProperties {
         provided: &[PhysicalSortRequirement],
         required: &[PhysicalSortRequirement],
     ) -> bool {
-        let required_normalized = self.eq_groups.normalize_sort_requirements(required);
-        let required_normalized =
-            prune_sort_reqs_with_constants(&required_normalized, &self.constants);
-        let required_normalized = collapse_lex_req(required_normalized);
-
-        let provided_normalized = self.eq_groups.normalize_sort_requirements(provided);
-        let provided_normalized =
-            prune_sort_reqs_with_constants(&provided_normalized, &self.constants);
-        let provided_normalized = collapse_lex_req(provided_normalized);
+        let provided_normalized = self.normalize_sort_requirements(provided);
+        let required_normalized = self.normalize_sort_requirements(required);
 
         if required_normalized.len() > provided_normalized.len() {
             return false;
@@ -1545,6 +1531,18 @@ mod tests {
             ],
         ]);
         Ok((test_schema, schema_properties))
+    }
+
+    // Convert each tuple to PhysicalSortRequirement
+    fn convert_to_requirement(
+        in_data: &[(&Arc<dyn PhysicalExpr>, Option<SortOptions>)],
+    ) -> Vec<PhysicalSortRequirement> {
+        in_data
+            .iter()
+            .map(|(expr, options)| {
+                PhysicalSortRequirement::new((*expr).clone(), *options)
+            })
+            .collect::<Vec<_>>()
     }
 
     #[test]
@@ -2250,5 +2248,171 @@ mod tests {
             .collect::<Vec<_>>();
         let res = RecordBatch::try_from_iter(res)?;
         Ok(res)
+    }
+
+    #[test]
+    fn test_schema_normalize_expr_with_equivalence() -> Result<()> {
+        let col_a = &Column::new("a", 0);
+        let col_b = &Column::new("b", 1);
+        let col_c = &Column::new("c", 2);
+        // Assume that column a and c are aliases.
+        let (_test_schema, schema_properties) = create_test_params()?;
+
+        let col_a_expr = Arc::new(col_a.clone()) as Arc<dyn PhysicalExpr>;
+        let col_b_expr = Arc::new(col_b.clone()) as Arc<dyn PhysicalExpr>;
+        let col_c_expr = Arc::new(col_c.clone()) as Arc<dyn PhysicalExpr>;
+        // Test cases for equivalence normalization,
+        // First entry in the tuple is argument, second entry is expected result after normalization.
+        let expressions = vec![
+            // Normalized version of the column a and c should go to a (since a is head)
+            (&col_a_expr, &col_a_expr),
+            (&col_c_expr, &col_a_expr),
+            // Cannot normalize column b
+            (&col_b_expr, &col_b_expr),
+        ];
+        let eq_groups = schema_properties.eq_groups();
+        for (expr, expected_eq) in expressions {
+            assert!(
+                expected_eq.eq(&eq_groups.normalize_expr(expr.clone())),
+                "error in test: expr: {expr:?}"
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_schema_normalize_sort_requirement_with_equivalence() -> Result<()> {
+        let option1 = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        // Assume that column a and c are aliases.
+        let (test_schema, schema_properties) = create_test_params()?;
+        let col_a_expr = &col("a", &test_schema)?;
+        let _col_b_expr = &col("b", &test_schema)?;
+        let col_c_expr = &col("c", &test_schema)?;
+        let col_d_expr = &col("d", &test_schema)?;
+        let _col_e_expr = &col("e", &test_schema)?;
+
+        // Test cases for equivalence normalization
+        // First entry in the tuple is PhysicalExpr, second entry is its ordering, third entry is result after normalization.
+        let expressions = vec![
+            (
+                vec![PhysicalSortRequirement {
+                    expr: col_a_expr.clone(),
+                    options: Some(option1),
+                }],
+                vec![PhysicalSortRequirement {
+                    expr: col_a_expr.clone(),
+                    options: Some(option1),
+                }],
+            ),
+            // In the normalized version column c should be replace with column a
+            (
+                vec![PhysicalSortRequirement {
+                    expr: col_c_expr.clone(),
+                    options: Some(option1),
+                }],
+                vec![PhysicalSortRequirement {
+                    expr: col_a_expr.clone(),
+                    options: Some(option1),
+                }],
+            ),
+            (
+                vec![PhysicalSortRequirement {
+                    expr: col_c_expr.clone(),
+                    options: None,
+                }],
+                vec![PhysicalSortRequirement {
+                    expr: col_a_expr.clone(),
+                    options: None,
+                }],
+            ),
+            (
+                vec![PhysicalSortRequirement {
+                    expr: col_d_expr.clone(),
+                    options: Some(option1),
+                }],
+                vec![PhysicalSortRequirement {
+                    expr: col_d_expr.clone(),
+                    options: Some(option1),
+                }],
+            ),
+        ];
+        for (arg, expected) in expressions.into_iter() {
+            let normalized = schema_properties.normalize_sort_requirements(&arg);
+            assert!(
+                expected.eq(&normalized),
+                "error in test: arg: {arg:?}, expected: {expected:?}, normalized: {normalized:?}"
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_normalize_sort_reqs() -> Result<()> {
+        // Schema satisfies following properties
+        // a=c
+        // and following orderings are valid
+        // [a ASC], [d ASC, b ASC], [e DESC, f ASC, g ASC]
+        let (test_schema, schema_properties) = create_test_params()?;
+        let col_a = &col("a", &test_schema)?;
+        let col_b = &col("b", &test_schema)?;
+        let col_c = &col("c", &test_schema)?;
+        let col_d = &col("d", &test_schema)?;
+        let col_e = &col("e", &test_schema)?;
+        let col_f = &col("f", &test_schema)?;
+        let option1 = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        let option2 = SortOptions {
+            descending: true,
+            nulls_first: true,
+        };
+        // First element in the tuple stores vector of requirement, second element is the expected return value for ordering_satisfy function
+        let requirements = vec![
+            (vec![(col_a, Some(option1))], vec![(col_a, Some(option1))]),
+            (vec![(col_a, Some(option2))], vec![(col_a, Some(option2))]),
+            (vec![(col_a, None)], vec![(col_a, None)]),
+            // Test whether equivalence works as expected
+            (vec![(col_c, Some(option1))], vec![(col_a, Some(option1))]),
+            (vec![(col_c, None)], vec![(col_a, None)]),
+            // Test whether ordering equivalence works as expected
+            (
+                vec![(col_d, Some(option1)), (col_b, Some(option1))],
+                vec![(col_d, Some(option1)), (col_b, Some(option1))],
+            ),
+            (
+                vec![(col_d, None), (col_b, None)],
+                vec![(col_d, None), (col_b, None)],
+            ),
+            (
+                vec![(col_e, Some(option2)), (col_f, Some(option1))],
+                vec![(col_e, Some(option2)), (col_f, Some(option1))],
+            ),
+            // We should be able to normalize in compatible requirements also (not exactly equal)
+            (
+                vec![(col_e, Some(option2)), (col_f, None)],
+                vec![(col_e, Some(option2)), (col_f, None)],
+            ),
+            (
+                vec![(col_e, None), (col_f, None)],
+                vec![(col_e, None), (col_f, None)],
+            ),
+        ];
+
+        for (reqs, expected_normalized) in requirements.into_iter() {
+            let req = convert_to_requirement(&reqs);
+            let expected_normalized = convert_to_requirement(&expected_normalized);
+
+            assert_eq!(
+                schema_properties.normalize_sort_requirements(&req),
+                expected_normalized
+            );
+        }
+        Ok(())
     }
 }
