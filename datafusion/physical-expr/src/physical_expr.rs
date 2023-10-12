@@ -116,7 +116,7 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
     ///
     /// If the expression is `a + b`, the current `interval` is `[4, 5] and the
     /// inputs are given [`a: [0, 2], `b: [-∞, 4]]`, then propagation would
-    /// would return `[a: [0, 2], b: [2, 4]]` as `b` must be at least 2 to to
+    /// would return `[a: [0, 2], b: [2, 4]]` as `b` must be at least 2 to
     /// make the output at least `4`.
     fn propagate_constraints(
         &self,
