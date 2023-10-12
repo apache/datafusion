@@ -409,6 +409,17 @@ type DemuxedStreamReceiver = Receiver<(Path, RecordBatchReceiver)>;
 /// overrides all other settings to force only a single file to be written.
 /// partition_by parameter will additionally split the input based on the unique
 /// values of a specific column `<https://github.com/apache/arrow-datafusion/issues/7744>``
+///                                                                              ┌───────────┐               ┌────────────┐    ┌─────────────┐
+///                                                                     ┌──────▶ │  batch 1  ├────▶...──────▶│   Batch a  │    │ Output File1│
+///                                                                     │        └───────────┘               └────────────┘    └─────────────┘
+///                                                                     │
+///                                                 ┌──────────┐        │        ┌───────────┐               ┌────────────┐    ┌─────────────┐
+/// ┌───────────┐               ┌────────────┐      │          │        ├──────▶ │  batch a+1├────▶...──────▶│   Batch b  │    │ Output File2│
+/// │  batch 1  ├────▶...──────▶│   Batch N  ├─────▶│  Demux   ├────────┤ ...    └───────────┘               └────────────┘    └─────────────┘
+/// └───────────┘               └────────────┘      │          │        │
+///                                                 └──────────┘        │        ┌───────────┐               ┌────────────┐    ┌─────────────┐
+///                                                                     └──────▶ │  batch d  ├────▶...──────▶│   Batch n  │    │ Output FileN│
+///                                                                              └───────────┘               └────────────┘    └─────────────┘
 pub(crate) fn start_demuxer_task(
     mut input: SendableRecordBatchStream,
     context: &Arc<TaskContext>,

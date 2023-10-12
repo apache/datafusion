@@ -270,7 +270,7 @@ config_namespace! {
         /// for each output file being worked. Higher values can potentially
         /// give faster write performance at the cost of higher peak
         /// memory consumption
-        pub max_buffered_batches_per_output_file: usize, default = 5000
+        pub max_buffered_batches_per_output_file: usize, default = 2
 
     }
 }
