@@ -990,10 +990,13 @@ mod test {
             None,
             None,
         ));
-        let err = Projection::try_new(vec![agg_expr], empty).err().unwrap();
+        let err = Projection::try_new(vec![agg_expr], empty)
+            .err()
+            .unwrap()
+            .strip_backtrace();
         assert_eq!(
-            "Plan(\"No function matches the given name and argument types 'AVG(Utf8)'. You might need to add explicit type casts.\\n\\tCandidate functions:\\n\\tAVG(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)\")",
-            &format!("{err:?}")
+            "Error during planning: No function matches the given name and argument types 'AVG(Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tAVG(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)",
+            err
         );
         Ok(())
     }
