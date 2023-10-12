@@ -112,9 +112,10 @@ impl DdlStatement {
                 match self.0 {
                     DdlStatement::CreateExternalTable(CreateExternalTable {
                         ref name,
+                        constraints,
                         ..
                     }) => {
-                        write!(f, "CreateExternalTable: {name:?}")
+                        write!(f, "CreateExternalTable: {name:?}{constraints}")
                     }
                     DdlStatement::CreateMemoryTable(CreateMemoryTable {
                         name,
@@ -191,6 +192,8 @@ pub struct CreateExternalTable {
     pub unbounded: bool,
     /// Table(provider) specific options
     pub options: HashMap<String, String>,
+    /// The list of constraints in the schema, such as primary key, unique, etc.
+    pub constraints: Constraints,
 }
 
 // Hashing refers to a subset of fields considered in PartialEq.

@@ -174,10 +174,28 @@ impl Display for IntervalBound {
 }
 
 /// This type represents an interval, which is used to calculate reliable
-/// bounds for expressions. Currently, we only support addition and
-/// subtraction, but more capabilities will be added in the future.
-/// Upper/lower bounds having NULL values indicate an unbounded side. For
-/// example; [10, 20], [10, ∞), (-∞, 100] and (-∞, ∞) are all valid intervals.
+/// bounds for expressions:
+///
+/// * An *open* interval does not include the endpoint and is written using a
+/// `(` or `)`.
+///
+/// * A *closed* interval does include the endpoint and is written using `[` or
+/// `]`.
+///
+/// * If the interval's `lower` and/or `upper` bounds are not known, they are
+/// called *unbounded* endpoint and represented using a `NULL` and written using
+/// `∞`.
+///
+/// # Examples
+///
+/// A `Int64` `Interval` of `[10, 20)` represents the values `10, 11, ... 18,
+/// 19` (includes 10, but does not include 20).
+///
+/// A `Int64` `Interval` of  `[10, ∞)` represents a value known to be either
+/// `10` or higher.
+///
+/// An `Interval` of `(-∞, ∞)` represents that the range is entirely unknown.
+///
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Interval {
     pub lower: IntervalBound,
@@ -208,14 +226,17 @@ impl Display for Interval {
 
 impl Interval {
     /// Creates a new interval object using the given bounds.
-    /// For boolean intervals, having an open false lower bound is equivalent
-    /// to having a true closed lower bound. Similarly, open true upper bound
-    /// is equivalent to having a false closed upper bound. Also for boolean
+    ///
+    /// # Boolean intervals need special handling
+    ///
+    /// For boolean intervals, having an open false lower bound is equivalent to
+    /// having a true closed lower bound. Similarly, open true upper bound is
+    /// equivalent to having a false closed upper bound. Also for boolean
     /// intervals, having an unbounded left endpoint is equivalent to having a
     /// false closed lower bound, while having an unbounded right endpoint is
     /// equivalent to having a true closed upper bound. Therefore; input
     /// parameters to construct an Interval can have different types, but they
-    /// all result in [false, false], [false, true] or [true, true].
+    /// all result in `[false, false]`, `[false, true]` or `[true, true]`.
     pub fn new(lower: IntervalBound, upper: IntervalBound) -> Interval {
         // Boolean intervals need a special handling.
         if let ScalarValue::Boolean(_) = lower.value {
