@@ -611,11 +611,19 @@ impl LogicalPlanBuilder {
         })))
     }
 
-    /// Apply a join with on constraint.
+    /// Apply a join to `right` using explicitly specified columns and an
+    /// optional filter expression.
     ///
-    /// Filter expression expected to contain non-equality predicates that can not be pushed
-    /// down to any of join inputs.
-    /// In case of outer join, filter applied to only matched rows.
+    /// See [`join_on`](Self::join_on) for a more concise way to specify the
+    /// join condition. Since DataFusion will automatically identify and
+    /// optimize equality predicates there is no performance difference between
+    /// this function and `join_on`
+    ///
+    /// `left_cols` and `right_cols` are used to form "equijoin" predicates (see
+    /// example below), which are then combined with the optional `filter`
+    /// expression.
+    ///
+    /// Note that in case of outer join, the `filter` is applied to only matched rows.
     pub fn join(
         self,
         right: LogicalPlan,
@@ -626,11 +634,12 @@ impl LogicalPlanBuilder {
         self.join_detailed(right, join_type, join_keys, filter, false)
     }
 
-    /// Apply a join with on constraint.
+    /// Apply a join with using the specified expressions.
     ///
-    /// The `ExtractEquijoinPredicate` optimizer pass has the ability to split join predicates into
-    /// equijoin predicates and (other) filter predicates. Therefore, if you prefer not to manually split the
-    /// join predicates, it is recommended to use the `join_on` method instead of the `join` method.
+    /// Note that DataFusion automatically optimizes joins, including
+    /// identifying and optimizing equality predicates.
+    ///
+    /// # Example
     ///
     /// ```
     /// # use datafusion_expr::{Expr, col, LogicalPlanBuilder,
@@ -650,9 +659,17 @@ impl LogicalPlanBuilder {
     ///
     /// let right_plan = LogicalPlanBuilder::scan("right", right_table, None)?.build()?;
     ///
-    /// let exprs = vec![col("left.a").eq(col("right.a")), col("left.b").not_eq(col("right.b"))]
+    /// // Form the expression `(left.a != right.a AND left.b != right.b)`
+    /// let exprs = vec![
+    ///     col("left.a").eq(col("right.a")),
+    ///     col("left.b").not_eq(col("right.b"))
+    ///  ]
     ///     .into_iter()
     ///     .reduce(Expr::and);
+    ///
+    /// // Perform the equivalent of `left INNER JOIN right ON (a != a2 AND b != b2)`
+    /// // finding all pairs of rows from `left` and `right` where
+    /// // where `a != a2` and `b != b2`.
     /// let plan = LogicalPlanBuilder::scan("left", left_table, None)?
     ///     .join_on(right_plan, JoinType::Inner, exprs)?
     ///     .build()?;
@@ -687,8 +704,14 @@ impl LogicalPlanBuilder {
         )
     }
 
-    /// Apply a join with on constraint and specified null equality
-    /// If null_equals_null is true then null == null, else null != null
+    /// Apply a join with on constraint and specified null equality.
+    ///
+    /// The behavior is the same as [`join`](Self::join) except that it allows
+    /// specifying the null equality behavior.
+    ///
+    /// If `null_equals_null=true`, rows where both join keys are `null` will be
+    /// emitted. Otherwise rows where either or both join keys are `null` will be
+    /// omitted.
     pub fn join_detailed(
         self,
         right: LogicalPlan,
