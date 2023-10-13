@@ -717,12 +717,6 @@ impl SchemaProperties {
     pub fn with_reorder(mut self, sort_expr: Vec<PhysicalSortExpr>) -> SchemaProperties {
         // TODO: In some cases, existing ordering equivalences may still be valid add this analysis.
 
-        // Normalize sort_expr according to equivalences
-        let sort_expr = self.eq_groups.normalize_sort_exprs(&sort_expr);
-
-        // Remove redundant entries from the lex ordering.
-        let sort_expr = collapse_lex_ordering(sort_expr);
-
         // Reset ordering equivalent group with the new ordering.
         // Constants, and equivalent groups are still valid after re-sort.
         // Hence only `oeq_group` is overwritten.
@@ -1223,23 +1217,6 @@ pub fn collapse_lex_req(input: LexOrderingReq) -> LexOrderingReq {
         if output
             .iter()
             .all(|elem: &PhysicalSortRequirement| !elem.expr.eq(&item.expr))
-        {
-            output.push(item);
-        }
-    }
-    output
-}
-
-/// This function constructs a duplicate-free `LexOrdering` by filtering out duplicate
-/// entries that have same physical expression inside the given vector `input`.
-/// `vec![a ASC, a DESC]` is collapsed to the `vec![a ASC]`. Since
-/// when same expression is already seen before, following expressions are redundant.
-fn collapse_lex_ordering(input: LexOrdering) -> LexOrdering {
-    let mut output = vec![];
-    for item in input {
-        if output
-            .iter()
-            .all(|elem: &PhysicalSortExpr| !elem.expr.eq(&item.expr))
         {
             output.push(item);
         }
