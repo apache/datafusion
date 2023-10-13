@@ -396,12 +396,7 @@ pub async fn from_substrait_rel(
                 }
                 None => match &join_filter {
                     Some(_) => left
-                        .join(
-                            right.build()?,
-                            join_type,
-                            (Vec::<Column>::new(), Vec::<Column>::new()),
-                            join_filter,
-                        )?
+                        .join_on(right.build()?, join_type, join_filter)?
                         .build(),
                     None => plan_err!("Join without join keys require a valid filter"),
                 },
