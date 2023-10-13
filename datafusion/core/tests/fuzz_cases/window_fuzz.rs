@@ -462,7 +462,6 @@ async fn run_window_test(
             )
             .unwrap()],
             exec1,
-            schema.clone(),
             vec![],
         )
         .unwrap(),
@@ -485,7 +484,6 @@ async fn run_window_test(
             )
             .unwrap()],
             exec2,
-            schema.clone(),
             vec![],
             search_mode,
         )

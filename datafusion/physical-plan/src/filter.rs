@@ -200,7 +200,7 @@ impl ExecutionPlan for FilterExec {
     fn statistics(&self) -> Statistics {
         let predicate = self.predicate();
 
-        if !check_support(predicate) {
+        if !check_support(predicate, &self.schema()) {
             return Statistics::default();
         }
 
