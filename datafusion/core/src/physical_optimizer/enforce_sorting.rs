@@ -2260,19 +2260,19 @@ mod tmp_tests {
         // config.options_mut().optimizer.max_passes = 1;
         let ctx = SessionContext::new_with_config(config);
         ctx.sql(
-            "CREATE TABLE sales_global_with_pk (zip_code INT,
-          country VARCHAR(3),
-          sn INT,
-          ts TIMESTAMP,
-          currency VARCHAR(3),
-          amount FLOAT,
-          primary key(sn)
-        ) as VALUES
-          (0, 'GRC', 0, '2022-01-01 06:00:00'::timestamp, 'EUR', 30.0),
-          (1, 'FRA', 1, '2022-01-01 08:00:00'::timestamp, 'EUR', 50.0),
-          (1, 'TUR', 2, '2022-01-01 11:30:00'::timestamp, 'TRY', 75.0),
-          (1, 'FRA', 3, '2022-01-02 12:00:00'::timestamp, 'EUR', 200.0),
-          (1, 'TUR', 4, '2022-01-03 10:00:00'::timestamp, 'TRY', 100.0)",
+            "CREATE EXTERNAL TABLE multiple_ordered_table_with_pk (
+              a0 INTEGER,
+              a INTEGER,
+              b INTEGER,
+              c INTEGER,
+              d INTEGER,
+              primary key(c)
+            )
+            STORED AS CSV
+            WITH HEADER ROW
+            WITH ORDER (a ASC, b ASC)
+            WITH ORDER (c ASC)
+            LOCATION '../core/tests/data/window_2.csv'",
         )
         .await?;
 
@@ -2289,10 +2289,10 @@ mod tmp_tests {
         print_plan(&physical_plan)?;
 
         let expected = vec![
-            "SortExec: expr=[sn@0 ASC NULLS LAST]",
-            "  ProjectionExec: expr=[sn@0 as sn, amount@1 as amount, 2 * CAST(sn@0 AS Int64) as Int64(2) * s.sn]",
-            "    AggregateExec: mode=Single, gby=[sn@0 as sn, amount@1 as amount], aggr=[]",
-            "      MemoryExec: partitions=1, partition_sizes=[1]",
+            "AggregateExec: mode=Single, gby=[c@0 as c, sum1@1 as sum1], aggr=[]",
+            "  ProjectionExec: expr=[c@0 as c, SUM(multiple_ordered_table_with_pk.d)@5 as sum1]",
+            "    AggregateExec: mode=Single, gby=[c@3 as c, a0@0 as a0, a@1 as a, b@2 as b, d@4 as d], aggr=[SUM(multiple_ordered_table_with_pk.d)], ordering_mode=PartiallyOrdered",
+            "      CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST], has_header=true",
         ];
         // Get string representation of the plan
         let actual = get_plan_string(&physical_plan);

@@ -18,6 +18,7 @@
 //! Optimizer rule to replace `where false` on a plan with an empty relation.
 //! This saves time in planning and executing the query.
 //! Note that this rule should be applied after simplify expressions optimizer rule.
+use std::sync::Arc;
 use crate::optimizer::ApplyOrder;
 use datafusion_common::{get_target_functional_dependencies, Result};
 use datafusion_expr::{logical_plan::LogicalPlan, Aggregate, Expr};
@@ -123,12 +124,19 @@ fn try_optimize_internal(
                 aggregate.input.schema(),
                 &group_by_expr_existing,
             );
+            // Can simplify aggregate group by
             if (used_target_indices == existing_target_indices)
                 && used_target_indices.is_some()
             {
+                let new_indices = (0..(group_by_expr_names_used.len()+aggregate.aggr_expr.len())).collect::<Vec<_>>();
+                let aggregate_input = if let Some(input ) = try_optimize_internal(&aggregate.input, _config, new_indices)?{
+                    Arc::new(input)
+                } else{
+                    aggregate.input.clone()
+                };
                 // TODO: Continue to recursion for double aggregates
                 return Ok(Some(LogicalPlan::Aggregate(Aggregate::try_new(
-                    aggregate.input.clone(),
+                    aggregate_input,
                     group_bys_used,
                     aggregate.aggr_expr.clone(),
                 )?)));
