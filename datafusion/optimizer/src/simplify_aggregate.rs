@@ -18,11 +18,11 @@
 //! Optimizer rule to replace `where false` on a plan with an empty relation.
 //! This saves time in planning and executing the query.
 //! Note that this rule should be applied after simplify expressions optimizer rule.
-use std::sync::Arc;
 use crate::optimizer::ApplyOrder;
 use datafusion_common::{get_target_functional_dependencies, Result};
 use datafusion_expr::{logical_plan::LogicalPlan, Aggregate, Expr};
 use itertools::izip;
+use std::sync::Arc;
 
 use crate::{OptimizerConfig, OptimizerRule};
 
@@ -60,6 +60,8 @@ fn get_required_indices(input: &LogicalPlan, exprs: &[Expr]) -> Result<Vec<usize
     let mut new_indices = vec![];
     for expr in exprs {
         let cols = expr.to_columns()?;
+        // println!("cols:{:?}", cols);
+        // println!("input.schema():{:?}", input.schema());
         for col in cols {
             let idx = input.schema().index_of_column(&col)?;
             if !new_indices.contains(&idx) {
@@ -70,10 +72,10 @@ fn get_required_indices(input: &LogicalPlan, exprs: &[Expr]) -> Result<Vec<usize
     Ok(new_indices)
 }
 
-fn get_at_indices(exprs: &[Expr], indices: Vec<usize>) -> Vec<Expr> {
+fn get_at_indices(exprs: &[Expr], indices: &[usize]) -> Vec<Expr> {
     indices
         .into_iter()
-        .filter_map(|idx| {
+        .filter_map(|&idx| {
             if idx < exprs.len() {
                 Some(exprs[idx].clone())
             } else {
@@ -94,6 +96,18 @@ fn merge_vectors(lhs: &[usize], rhs: &[usize]) -> Vec<usize> {
     merged
 }
 
+fn set_diff(lhs: &[usize], rhs: &[usize]) -> Vec<usize> {
+    lhs.iter()
+        .filter_map(|item| {
+            if !rhs.contains(item) {
+                Some(*item)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
 fn try_optimize_internal(
     plan: &LogicalPlan,
     _config: &dyn OptimizerConfig,
@@ -101,12 +115,18 @@ fn try_optimize_internal(
 ) -> Result<Option<LogicalPlan>> {
     let child_required_indices: Option<Vec<Vec<usize>>> = match plan {
         LogicalPlan::Projection(proj) => {
-            let exprs_used = get_at_indices(&proj.expr, indices);
+            // println!("proj.expr: {:?}", proj.expr);
+            let exprs_used = get_at_indices(&proj.expr, &indices);
+            // println!("exprs_used:{:?}", exprs_used);
             let new_indices = get_required_indices(&proj.input, &exprs_used)?;
+            // println!("projection  indices:{:?}, new_indices:{:?}", indices, new_indices);
             Some(vec![new_indices])
         }
         LogicalPlan::Aggregate(aggregate) => {
-            let group_bys_used = get_at_indices(&aggregate.group_expr, indices);
+            let group_bys_used = get_at_indices(&aggregate.group_expr, &indices);
+            // println!("aggregate, indices: {:?}", indices);
+            // println!("group_bys_used:{:?}", group_bys_used);
+            // println!("&aggregate.group_expr:{:?}", &aggregate.group_expr);
             let group_by_expr_names_used = group_bys_used
                 .iter()
                 .map(|group_by_expr| group_by_expr.display_name())
@@ -128,10 +148,28 @@ fn try_optimize_internal(
             if (used_target_indices == existing_target_indices)
                 && used_target_indices.is_some()
             {
-                let new_indices = (0..(group_by_expr_names_used.len()+aggregate.aggr_expr.len())).collect::<Vec<_>>();
-                let aggregate_input = if let Some(input ) = try_optimize_internal(&aggregate.input, _config, new_indices)?{
+                let unnecessary_group_by_exprs = aggregate
+                    .group_expr
+                    .iter()
+                    .filter_map(|group_by_expr| {
+                        if group_bys_used.iter().any(|item| item.eq(group_by_expr)) {
+                            None
+                        } else {
+                            Some(group_by_expr.clone())
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                // println!("unnecessary_group_by_exprs: {:?}", unnecessary_group_by_exprs);
+                let unnecessary_indices =
+                    get_required_indices(&aggregate.input, &unnecessary_group_by_exprs)?;
+                let input_indices =
+                    (0..aggregate.input.schema().fields().len()).collect::<Vec<_>>();
+                let required_indices = set_diff(&input_indices, &unnecessary_indices);
+                let aggregate_input = if let Some(input) =
+                    try_optimize_internal(&aggregate.input, _config, required_indices)?
+                {
                     Arc::new(input)
-                } else{
+                } else {
                     aggregate.input.clone()
                 };
                 // TODO: Continue to recursion for double aggregates

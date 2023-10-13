@@ -2253,10 +2253,9 @@ mod tmp_tests {
         Ok(())
     }
 
-
     #[tokio::test]
     async fn test_subquery() -> Result<()> {
-        let mut config = SessionConfig::new().with_target_partitions(1);
+        let config = SessionConfig::new().with_target_partitions(1);
         // config.options_mut().optimizer.max_passes = 1;
         let ctx = SessionContext::new_with_config(config);
         ctx.sql(
@@ -2289,10 +2288,10 @@ mod tmp_tests {
         print_plan(&physical_plan)?;
 
         let expected = vec![
-            "AggregateExec: mode=Single, gby=[c@0 as c, sum1@1 as sum1], aggr=[]",
-            "  ProjectionExec: expr=[c@0 as c, SUM(multiple_ordered_table_with_pk.d)@5 as sum1]",
-            "    AggregateExec: mode=Single, gby=[c@3 as c, a0@0 as a0, a@1 as a, b@2 as b, d@4 as d], aggr=[SUM(multiple_ordered_table_with_pk.d)], ordering_mode=PartiallyOrdered",
-            "      CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST], has_header=true",
+            "AggregateExec: mode=Single, gby=[c@0 as c, sum1@1 as sum1], aggr=[], ordering_mode=PartiallyOrdered",
+            "  ProjectionExec: expr=[c@0 as c, SUM(multiple_ordered_table_with_pk.d)@1 as sum1]",
+            "    AggregateExec: mode=Single, gby=[c@0 as c], aggr=[SUM(multiple_ordered_table_with_pk.d)], ordering_mode=FullyOrdered",
+            "      CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[c, d], output_ordering=[c@0 ASC NULLS LAST], has_header=true",
         ];
         // Get string representation of the plan
         let actual = get_plan_string(&physical_plan);
@@ -2307,5 +2306,4 @@ mod tmp_tests {
         // assert_eq!(0, 1);
         Ok(())
     }
-
 }
