@@ -1994,8 +1994,6 @@ pub struct WindowAggExecNode {
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
     #[prost(message, repeated, tag = "2")]
     pub window_expr: ::prost::alloc::vec::Vec<PhysicalWindowExprNode>,
-    #[prost(message, optional, tag = "4")]
-    pub input_schema: ::core::option::Option<Schema>,
     #[prost(message, repeated, tag = "5")]
     pub partition_keys: ::prost::alloc::vec::Vec<PhysicalExprNode>,
     /// Set optional to `None` for `BoundedWindowAggExec`.
