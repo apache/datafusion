@@ -38,44 +38,32 @@ use tokio::task::JoinSet;
 use super::metrics::BaselineMetrics;
 use super::{ExecutionPlan, RecordBatchStream, SendableRecordBatchStream};
 
-/// Builder for [`RecordBatchReceiverStream`] that propagates errors
-/// and panic's correctly.
-///
-/// [`RecordBatchReceiverStream`] is used to spawn one or more tasks
-/// that produce `RecordBatch`es and send them to a single
-/// `Receiver` which can improve parallelism.
-///
-/// This also handles propagating panic`s and canceling the tasks.
-pub struct RecordBatchReceiverStreamBuilder {
-    tx: Sender<Result<RecordBatch>>,
-    rx: Receiver<Result<RecordBatch>>,
-    schema: SchemaRef,
+/// Creates a stream from a collection of producing tasks, routing panics to the stream
+pub(crate) struct ReceiverStreamBuilder<O> {
+    tx: Sender<Result<O>>,
+    rx: Receiver<Result<O>>,
     join_set: JoinSet<Result<()>>,
 }
 
-impl RecordBatchReceiverStreamBuilder {
+impl<O: Send + 'static> ReceiverStreamBuilder<O> {
     /// create new channels with the specified buffer size
-    pub fn new(schema: SchemaRef, capacity: usize) -> Self {
+    pub fn new(capacity: usize) -> Self {
         let (tx, rx) = tokio::sync::mpsc::channel(capacity);
 
         Self {
             tx,
             rx,
-            schema,
             join_set: JoinSet::new(),
         }
     }
 
-    /// Get a handle for sending [`RecordBatch`]es to the output
-    pub fn tx(&self) -> Sender<Result<RecordBatch>> {
+    /// Get a handle for sending [`O`] to the output
+    pub fn tx(&self) -> Sender<Result<O>> {
         self.tx.clone()
     }
 
     /// Spawn task that will be aborted if this builder (or the stream
     /// built from it) are dropped
-    ///
-    /// this is often used to spawn tasks that write to the sender
-    /// retrieved from `Self::tx`
     pub fn spawn<F>(&mut self, task: F)
     where
         F: Future<Output = Result<()>>,
@@ -97,70 +85,11 @@ impl RecordBatchReceiverStreamBuilder {
         self.join_set.spawn_blocking(f);
     }
 
-    /// runs the input_partition of the `input` ExecutionPlan on the
-    /// tokio threadpool and writes its outputs to this stream
-    ///
-    /// If the input partition produces an error, the error will be
-    /// sent to the output stream and no further results are sent.
-    pub(crate) fn run_input(
-        &mut self,
-        input: Arc<dyn ExecutionPlan>,
-        partition: usize,
-        context: Arc<TaskContext>,
-    ) {
-        let output = self.tx();
-
-        self.spawn(async move {
-            let mut stream = match input.execute(partition, context) {
-                Err(e) => {
-                    // If send fails, the plan being torn down, there
-                    // is no place to send the error and no reason to continue.
-                    output.send(Err(e)).await.ok();
-                    debug!(
-                        "Stopping execution: error executing input: {}",
-                        displayable(input.as_ref()).one_line()
-                    );
-                    return Ok(());
-                }
-                Ok(stream) => stream,
-            };
-
-            // Transfer batches from inner stream to the output tx
-            // immediately.
-            while let Some(item) = stream.next().await {
-                let is_err = item.is_err();
-
-                // If send fails, plan being torn down, there is no
-                // place to send the error and no reason to continue.
-                if output.send(item).await.is_err() {
-                    debug!(
-                        "Stopping execution: output is gone, plan cancelling: {}",
-                        displayable(input.as_ref()).one_line()
-                    );
-                    return Ok(());
-                }
-
-                // stop after the first error is encontered (don't
-                // drive all streams to completion)
-                if is_err {
-                    debug!(
-                        "Stopping execution: plan returned error: {}",
-                        displayable(input.as_ref()).one_line()
-                    );
-                    return Ok(());
-                }
-            }
-
-            Ok(())
-        });
-    }
-
-    /// Create a stream of all `RecordBatch`es written to `tx`
-    pub fn build(self) -> SendableRecordBatchStream {
+    /// Create a stream of all [`O`] written to `tx`
+    pub fn build(self) -> BoxStream<'static, Result<O>> {
         let Self {
             tx,
             rx,
-            schema,
             mut join_set,
         } = self;
 
@@ -212,23 +141,129 @@ impl RecordBatchReceiverStreamBuilder {
 
         // Merge the streams together so whichever is ready first
         // produces the batch
-        let inner = futures::stream::select(rx_stream, check_stream).boxed();
-
-        Box::pin(RecordBatchReceiverStream { schema, inner })
+        futures::stream::select(rx_stream, check_stream).boxed()
     }
 }
 
-/// A [`SendableRecordBatchStream`] that combines [`RecordBatch`]es from multiple inputs,
-/// on new tokio Tasks,  increasing the potential parallelism.
+/// Builder for [`RecordBatchReceiverStream`] that propagates errors
+/// and panic's correctly.
 ///
-/// This structure also handles propagating panics and cancelling the
-/// underlying tasks correctly.
+/// [`RecordBatchReceiverStream`] is used to spawn one or more tasks
+/// that produce `RecordBatch`es and send them to a single
+/// `Receiver` which can improve parallelism.
 ///
-/// Use [`Self::builder`] to construct one.
-pub struct RecordBatchReceiverStream {
+/// This also handles propagating panic`s and canceling the tasks.
+pub struct RecordBatchReceiverStreamBuilder {
     schema: SchemaRef,
-    inner: BoxStream<'static, Result<RecordBatch>>,
+    inner: ReceiverStreamBuilder<RecordBatch>,
 }
+
+impl RecordBatchReceiverStreamBuilder {
+    /// create new channels with the specified buffer size
+    pub fn new(schema: SchemaRef, capacity: usize) -> Self {
+        Self {
+            schema,
+            inner: ReceiverStreamBuilder::new(capacity),
+        }
+    }
+
+    /// Get a handle for sending [`RecordBatch`] to the output
+    pub fn tx(&self) -> Sender<Result<RecordBatch>> {
+        self.inner.tx()
+    }
+
+    /// Spawn task that will be aborted if this builder (or the stream
+    /// built from it) are dropped
+    ///
+    /// this is often used to spawn tasks that write to the sender
+    /// retrieved from `Self::tx`
+    pub fn spawn<F>(&mut self, task: F)
+    where
+        F: Future<Output = Result<()>>,
+        F: Send + 'static,
+    {
+        self.inner.spawn(task)
+    }
+
+    /// Spawn a blocking task that will be aborted if this builder (or the stream
+    /// built from it) are dropped
+    ///
+    /// this is often used to spawn tasks that write to the sender
+    /// retrieved from `Self::tx`
+    pub fn spawn_blocking<F>(&mut self, f: F)
+    where
+        F: FnOnce() -> Result<()>,
+        F: Send + 'static,
+    {
+        self.inner.spawn_blocking(f)
+    }
+
+    /// runs the input_partition of the `input` ExecutionPlan on the
+    /// tokio threadpool and writes its outputs to this stream
+    ///
+    /// If the input partition produces an error, the error will be
+    /// sent to the output stream and no further results are sent.
+    pub(crate) fn run_input(
+        &mut self,
+        input: Arc<dyn ExecutionPlan>,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) {
+        let output = self.tx();
+
+        self.inner.spawn(async move {
+            let mut stream = match input.execute(partition, context) {
+                Err(e) => {
+                    // If send fails, the plan being torn down, there
+                    // is no place to send the error and no reason to continue.
+                    output.send(Err(e)).await.ok();
+                    debug!(
+                        "Stopping execution: error executing input: {}",
+                        displayable(input.as_ref()).one_line()
+                    );
+                    return Ok(());
+                }
+                Ok(stream) => stream,
+            };
+
+            // Transfer batches from inner stream to the output tx
+            // immediately.
+            while let Some(item) = stream.next().await {
+                let is_err = item.is_err();
+
+                // If send fails, plan being torn down, there is no
+                // place to send the error and no reason to continue.
+                if output.send(item).await.is_err() {
+                    debug!(
+                        "Stopping execution: output is gone, plan cancelling: {}",
+                        displayable(input.as_ref()).one_line()
+                    );
+                    return Ok(());
+                }
+
+                // stop after the first error is encontered (don't
+                // drive all streams to completion)
+                if is_err {
+                    debug!(
+                        "Stopping execution: plan returned error: {}",
+                        displayable(input.as_ref()).one_line()
+                    );
+                    return Ok(());
+                }
+            }
+
+            Ok(())
+        });
+    }
+
+    /// Create a stream of all [`RecordBatch`] written to `tx`
+    pub fn build(self) -> SendableRecordBatchStream {
+        Box::pin(RecordBatchStreamAdapter::new(self.schema, self.inner.build()))
+    }
+}
+
+#[doc(hidden)]
+pub struct RecordBatchReceiverStream {}
 
 impl RecordBatchReceiverStream {
     /// Create a builder with an internal buffer of capacity batches.
@@ -237,23 +272,6 @@ impl RecordBatchReceiverStream {
         capacity: usize,
     ) -> RecordBatchReceiverStreamBuilder {
         RecordBatchReceiverStreamBuilder::new(schema, capacity)
-    }
-}
-
-impl Stream for RecordBatchReceiverStream {
-    type Item = Result<RecordBatch>;
-
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        self.inner.poll_next_unpin(cx)
-    }
-}
-
-impl RecordBatchStream for RecordBatchReceiverStream {
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
     }
 }
 
