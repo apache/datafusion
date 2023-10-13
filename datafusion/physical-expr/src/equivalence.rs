@@ -943,43 +943,46 @@ impl SchemaProperties {
     /// This util shouldn't e used outside this context.
     fn prune_lex_req(&self, sort_req: &[PhysicalSortRequirement]) -> LexOrderingReq {
         // Make sure to use a standardized version of the requirement
-        let mut sort_req = self.normalize_sort_requirements(sort_req);
+        let mut normalized_sort_req = self.normalize_sort_requirements(sort_req);
 
         // If empty immediately return
-        if sort_req.is_empty() {
-            return sort_req;
+        if normalized_sort_req.is_empty() {
+            return normalized_sort_req;
         }
 
         for ordering in self.normalized_oeq_group().iter() {
             let match_indices = ordering
                 .iter()
                 .map(|elem| {
-                    sort_req.iter().position(|sort_req| {
+                    normalized_sort_req.iter().position(|sort_req| {
                         elem.satisfy_with_schema(sort_req, &self.schema)
                     })
                 })
                 .collect::<Vec<_>>();
-            let mut match_prefix = vec![];
-            for elem in &match_indices {
-                if let Some(elem) = elem {
-                    if let Some(last) = match_prefix.last() {
-                        // Should increase
-                        if elem <= last {
+
+            // Find the largest contiguous increasing sequence starting from the first index
+            let mut to_remove = Vec::new();
+            if let Some(&Some(first)) = match_indices.first() {
+                to_remove.push(first);
+                for window in match_indices.windows(2) {
+                    if let (Some(current), Some(next)) = (window[0], window[1]) {
+                        if next > current {
+                            to_remove.push(next);
+                        } else {
                             break;
                         }
+                    } else {
+                        break;
                     }
-                    match_prefix.push(*elem)
-                } else {
-                    break;
                 }
             }
             // can remove entries at the match_prefix indices
             // Remove with reverse iteration to not invalidate indices
-            for idx in match_prefix.iter().rev() {
-                sort_req.remove(*idx);
+            for idx in to_remove.iter().rev() {
+                normalized_sort_req.remove(*idx);
             }
         }
-        sort_req
+        normalized_sort_req
     }
 
     /// Checks whether `leading_requirement` is contained in any of the ordering
