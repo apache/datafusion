@@ -19,24 +19,30 @@ use arrow::{
     array::ArrayRef,
     datatypes::{DataType, Schema},
 };
-use datafusion_common::Column;
-use datafusion_common::ScalarValue;
-use log::debug;
-
-use parquet::file::{
-    metadata::RowGroupMetaData, statistics::Statistics as ParquetStatistics,
+use datafusion_common::{Column, DataFusionError, Result, ScalarValue};
+use parquet::{
+    arrow::{async_reader::AsyncFileReader, ParquetRecordBatchStreamBuilder},
+    bloom_filter::Sbbf,
+    file::{metadata::RowGroupMetaData, statistics::Statistics as ParquetStatistics},
+};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
 };
 
-use crate::datasource::physical_plan::parquet::{
-    from_bytes_to_i128, parquet_to_arrow_decimal_type,
+use crate::datasource::{
+    listing::FileRange,
+    physical_plan::parquet::{from_bytes_to_i128, parquet_to_arrow_decimal_type},
 };
-use crate::{
-    datasource::listing::FileRange,
-    physical_optimizer::pruning::{PruningPredicate, PruningStatistics},
-};
+use crate::logical_expr::Operator;
+use crate::physical_expr::expressions as phys_expr;
+use crate::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
+use crate::physical_plan::PhysicalExpr;
 
 use super::ParquetFileMetrics;
 
+/// Prune row groups based on statistics
+///
 /// Returns a vector of indexes into `groups` which should be scanned.
 ///
 /// If an index is NOT present in the returned Vec it means the
@@ -44,7 +50,7 @@ use super::ParquetFileMetrics;
 ///
 /// If an index IS present in the returned Vec it means the predicate
 /// did not filter out that row group.
-pub(crate) fn prune_row_groups(
+pub(crate) fn prune_row_groups_by_statistics(
     groups: &[RowGroupMetaData],
     range: Option<FileRange>,
     predicate: Option<&PruningPredicate>,
@@ -81,7 +87,7 @@ pub(crate) fn prune_row_groups(
                 // stats filter array could not be built
                 // return a closure which will not filter out any row groups
                 Err(e) => {
-                    debug!("Error evaluating row group predicate values {e}");
+                    log::debug!("Error evaluating row group predicate values {e}");
                     metrics.predicate_evaluation_errors.add(1);
                 }
             }
@@ -90,6 +96,242 @@ pub(crate) fn prune_row_groups(
         filtered.push(idx)
     }
     filtered
+}
+
+/// Prune row groups by bloom filters
+///
+/// Returns a vector of indexes into `groups` which should be scanned.
+///
+/// If an index is NOT present in the returned Vec it means the
+/// predicate filtered all the row group.
+///
+/// If an index IS present in the returned Vec it means the predicate
+/// did not filter out that row group.
+pub(crate) async fn prune_row_groups_by_bloom_filters<
+    T: AsyncFileReader + Send + 'static,
+>(
+    builder: &mut ParquetRecordBatchStreamBuilder<T>,
+    row_groups: &[usize],
+    groups: &[RowGroupMetaData],
+    predicate: &PruningPredicate,
+    metrics: &ParquetFileMetrics,
+) -> Vec<usize> {
+    let bf_predicates = match BloomFilterPruningPredicate::try_new(predicate.orig_expr())
+    {
+        Ok(predicates) => predicates,
+        Err(_) => {
+            return row_groups.to_vec();
+        }
+    };
+    let mut filtered = Vec::with_capacity(groups.len());
+    for idx in row_groups {
+        let rg_metadata = &groups[*idx];
+        // get all columns bloom filter
+        let mut column_sbbf =
+            HashMap::with_capacity(bf_predicates.required_columns.len());
+        for column_name in bf_predicates.required_columns.iter() {
+            let column_idx = match rg_metadata
+                .columns()
+                .iter()
+                .enumerate()
+                .find(|(_, column)| column.column_path().string().eq(column_name))
+            {
+                Some((column_idx, _)) => column_idx,
+                None => continue,
+            };
+            let bf = match builder
+                .get_row_group_column_bloom_filter(*idx, column_idx)
+                .await
+            {
+                Ok(bf) => match bf {
+                    Some(bf) => bf,
+                    None => {
+                        continue;
+                    }
+                },
+                Err(e) => {
+                    log::error!("Error evaluating row group predicate values when using BloomFilterPruningPredicate {e}");
+                    metrics.predicate_evaluation_errors.add(1);
+                    continue;
+                }
+            };
+            column_sbbf.insert(column_name.to_owned(), bf);
+        }
+        if bf_predicates.prune(&column_sbbf) {
+            metrics.row_groups_pruned.add(1);
+            continue;
+        }
+        filtered.push(*idx);
+    }
+    filtered
+}
+
+struct BloomFilterPruningPredicate {
+    /// Actual pruning predicate (rewritten in terms of column min/max statistics)
+    predicate_expr: Option<phys_expr::BinaryExpr>,
+    /// The statistics required to evaluate this predicate
+    required_columns: Vec<String>,
+}
+
+impl BloomFilterPruningPredicate {
+    fn try_new(expr: &Arc<dyn PhysicalExpr>) -> Result<Self> {
+        let expr = expr.as_any().downcast_ref::<phys_expr::BinaryExpr>();
+        match Self::get_predicate_columns(expr) {
+            Some(columns) => Ok(Self {
+                predicate_expr: expr.cloned(),
+                required_columns: columns.into_iter().collect(),
+            }),
+            None => Err(DataFusionError::Execution(
+                "BloomFilterPruningPredicate only support binary expr".to_string(),
+            )),
+        }
+    }
+
+    fn prune(&self, column_sbbf: &HashMap<String, Sbbf>) -> bool {
+        Self::prune_expr_with_bloom_filter(self.predicate_expr.as_ref(), column_sbbf)
+    }
+
+    /// filter the expr with bloom filter return true if the expr can be pruned
+    fn prune_expr_with_bloom_filter(
+        expr: Option<&phys_expr::BinaryExpr>,
+        column_sbbf: &HashMap<String, Sbbf>,
+    ) -> bool {
+        if expr.is_none() {
+            return false;
+        }
+        let expr = expr.unwrap();
+        match expr.op() {
+            Operator::And => {
+                let left = Self::prune_expr_with_bloom_filter(
+                    expr.left().as_any().downcast_ref::<phys_expr::BinaryExpr>(),
+                    column_sbbf,
+                );
+                let right = Self::prune_expr_with_bloom_filter(
+                    expr.right()
+                        .as_any()
+                        .downcast_ref::<phys_expr::BinaryExpr>(),
+                    column_sbbf,
+                );
+                left || right
+            }
+            Operator::Or => {
+                let left = Self::prune_expr_with_bloom_filter(
+                    expr.left().as_any().downcast_ref::<phys_expr::BinaryExpr>(),
+                    column_sbbf,
+                );
+                let right = Self::prune_expr_with_bloom_filter(
+                    expr.right()
+                        .as_any()
+                        .downcast_ref::<phys_expr::BinaryExpr>(),
+                    column_sbbf,
+                );
+                left && right
+            }
+            Operator::Eq => {
+                if let Some((col, val)) = Self::check_expr_is_col_equal_const(expr) {
+                    if let Some(sbbf) = column_sbbf.get(col.name()) {
+                        match val {
+                            ScalarValue::Utf8(Some(v)) => !sbbf.check(&v.as_str()),
+                            ScalarValue::Boolean(Some(v)) => !sbbf.check(&v),
+                            ScalarValue::Float64(Some(v)) => !sbbf.check(&v),
+                            ScalarValue::Float32(Some(v)) => !sbbf.check(&v),
+                            ScalarValue::Int64(Some(v)) => !sbbf.check(&v),
+                            ScalarValue::Int32(Some(v)) => !sbbf.check(&v),
+                            ScalarValue::Int16(Some(v)) => !sbbf.check(&v),
+                            ScalarValue::Int8(Some(v)) => !sbbf.check(&v),
+                            _ => false,
+                        }
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
+    }
+
+    fn get_predicate_columns(
+        expr: Option<&phys_expr::BinaryExpr>,
+    ) -> Option<HashSet<String>> {
+        match expr {
+            None => None,
+            Some(expr) => match expr.op() {
+                Operator::And => {
+                    let left = Self::get_predicate_columns(
+                        expr.left().as_any().downcast_ref::<phys_expr::BinaryExpr>(),
+                    );
+                    let right = Self::get_predicate_columns(
+                        expr.right()
+                            .as_any()
+                            .downcast_ref::<phys_expr::BinaryExpr>(),
+                    );
+                    match (left, right) {
+                        (Some(left), Some(right)) => {
+                            let mut columns = left;
+                            columns.extend(right);
+                            Some(columns)
+                        }
+                        (Some(left), None) => Some(left),
+                        (None, Some(right)) => Some(right),
+                        _ => None,
+                    }
+                }
+                Operator::Or => {
+                    let left = Self::get_predicate_columns(
+                        expr.left().as_any().downcast_ref::<phys_expr::BinaryExpr>(),
+                    );
+                    let right = Self::get_predicate_columns(
+                        expr.right()
+                            .as_any()
+                            .downcast_ref::<phys_expr::BinaryExpr>(),
+                    );
+                    match (left, right) {
+                        (Some(left), Some(right)) => {
+                            let mut columns = left;
+                            columns.extend(right);
+                            Some(columns)
+                        }
+                        _ => None,
+                    }
+                }
+                Operator::Eq => match Self::check_expr_is_col_equal_const(expr) {
+                    Some((column, _)) => {
+                        let mut columns = HashSet::new();
+                        columns.insert(column.name().to_string());
+                        Some(columns)
+                    }
+                    None => None,
+                },
+                _ => None,
+            },
+        }
+    }
+
+    fn check_expr_is_col_equal_const(
+        exr: &phys_expr::BinaryExpr,
+    ) -> Option<(phys_expr::Column, ScalarValue)> {
+        if Operator::Eq.ne(exr.op()) {
+            return None;
+        }
+
+        let left_any = exr.left().as_any();
+        let right_any = exr.right().as_any();
+        if let (Some(col), Some(liter)) = (
+            left_any.downcast_ref::<phys_expr::Column>(),
+            right_any.downcast_ref::<phys_expr::Literal>(),
+        ) {
+            return Some((col.clone(), liter.value().clone()));
+        }
+        if let (Some(liter), Some(col)) = (
+            left_any.downcast_ref::<phys_expr::Literal>(),
+            right_any.downcast_ref::<phys_expr::Column>(),
+        ) {
+            return Some((col.clone(), liter.value().clone()));
+        }
+        None
+    }
 }
 
 /// Wraps parquet statistics in a way
@@ -329,7 +571,12 @@ mod tests {
 
         let metrics = parquet_file_metrics();
         assert_eq!(
-            prune_row_groups(&[rgm1, rgm2], None, Some(&pruning_predicate), &metrics),
+            prune_row_groups_by_statistics(
+                &[rgm1, rgm2],
+                None,
+                Some(&pruning_predicate),
+                &metrics
+            ),
             vec![1]
         );
     }
@@ -358,7 +605,12 @@ mod tests {
         // missing statistics for first row group mean that the result from the predicate expression
         // is null / undefined so the first row group can't be filtered out
         assert_eq!(
-            prune_row_groups(&[rgm1, rgm2], None, Some(&pruning_predicate), &metrics),
+            prune_row_groups_by_statistics(
+                &[rgm1, rgm2],
+                None,
+                Some(&pruning_predicate),
+                &metrics
+            ),
             vec![0, 1]
         );
     }
@@ -400,7 +652,12 @@ mod tests {
         // the first row group is still filtered out because the predicate expression can be partially evaluated
         // when conditions are joined using AND
         assert_eq!(
-            prune_row_groups(groups, None, Some(&pruning_predicate), &metrics),
+            prune_row_groups_by_statistics(
+                groups,
+                None,
+                Some(&pruning_predicate),
+                &metrics
+            ),
             vec![1]
         );
 
@@ -413,7 +670,12 @@ mod tests {
         // if conditions in predicate are joined with OR and an unsupported expression is used
         // this bypasses the entire predicate expression and no row groups are filtered out
         assert_eq!(
-            prune_row_groups(groups, None, Some(&pruning_predicate), &metrics),
+            prune_row_groups_by_statistics(
+                groups,
+                None,
+                Some(&pruning_predicate),
+                &metrics
+            ),
             vec![0, 1]
         );
     }
@@ -456,7 +718,12 @@ mod tests {
         let metrics = parquet_file_metrics();
         // First row group was filtered out because it contains no null value on "c2".
         assert_eq!(
-            prune_row_groups(&groups, None, Some(&pruning_predicate), &metrics),
+            prune_row_groups_by_statistics(
+                &groups,
+                None,
+                Some(&pruning_predicate),
+                &metrics
+            ),
             vec![1]
         );
     }
@@ -482,7 +749,12 @@ mod tests {
         // bool = NULL always evaluates to NULL (and thus will not
         // pass predicates. Ideally these should both be false
         assert_eq!(
-            prune_row_groups(&groups, None, Some(&pruning_predicate), &metrics),
+            prune_row_groups_by_statistics(
+                &groups,
+                None,
+                Some(&pruning_predicate),
+                &metrics
+            ),
             vec![1]
         );
     }
@@ -535,7 +807,7 @@ mod tests {
         );
         let metrics = parquet_file_metrics();
         assert_eq!(
-            prune_row_groups(
+            prune_row_groups_by_statistics(
                 &[rgm1, rgm2, rgm3],
                 None,
                 Some(&pruning_predicate),
@@ -598,7 +870,7 @@ mod tests {
         );
         let metrics = parquet_file_metrics();
         assert_eq!(
-            prune_row_groups(
+            prune_row_groups_by_statistics(
                 &[rgm1, rgm2, rgm3, rgm4],
                 None,
                 Some(&pruning_predicate),
@@ -645,7 +917,7 @@ mod tests {
         );
         let metrics = parquet_file_metrics();
         assert_eq!(
-            prune_row_groups(
+            prune_row_groups_by_statistics(
                 &[rgm1, rgm2, rgm3],
                 None,
                 Some(&pruning_predicate),
@@ -715,7 +987,7 @@ mod tests {
         );
         let metrics = parquet_file_metrics();
         assert_eq!(
-            prune_row_groups(
+            prune_row_groups_by_statistics(
                 &[rgm1, rgm2, rgm3],
                 None,
                 Some(&pruning_predicate),
@@ -774,7 +1046,7 @@ mod tests {
         );
         let metrics = parquet_file_metrics();
         assert_eq!(
-            prune_row_groups(
+            prune_row_groups_by_statistics(
                 &[rgm1, rgm2, rgm3],
                 None,
                 Some(&pruning_predicate),
