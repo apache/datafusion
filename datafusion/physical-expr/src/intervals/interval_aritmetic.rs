@@ -17,18 +17,19 @@
 
 //! Interval arithmetic library
 
+use std::borrow::Borrow;
+use std::fmt::{self, Display, Formatter};
+use std::ops::{AddAssign, SubAssign};
+
 use crate::aggregate::min_max::{max, min};
 use crate::intervals::rounding::{alter_fp_rounding_mode, next_down, next_up};
+
 use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::DataType;
 use arrow_array::ArrowNativeTypeOp;
 use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::Operator;
-use std::borrow::Borrow;
-use std::fmt;
-use std::fmt::{Display, Formatter};
-use std::ops::{AddAssign, SubAssign};
 
 /// This type represents a single endpoint of an [`Interval`]. An
 /// endpoint can be open (does not include the endpoint) or closed

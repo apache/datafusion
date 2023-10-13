@@ -17,10 +17,11 @@
 
 //! This module provides data structures to represent statistics
 
-use crate::ScalarValue;
-use arrow_schema::Schema;
-
 use std::fmt::{self, Debug, Display};
+
+use crate::ScalarValue;
+
+use arrow_schema::Schema;
 
 /// Represents a value with a degree of certainty. `Precision` is used to
 /// propagate information the precision of statistical values.
