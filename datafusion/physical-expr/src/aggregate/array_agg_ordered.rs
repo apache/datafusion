@@ -200,9 +200,10 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         // First entry in the state is the aggregation result.
         let array_agg_values = &states[0];
         // 2nd entry stores values received for ordering requirement columns, for each aggregation value inside ARRAY_AGG list.
-        // For each `ScalarValue` inside ARRAY_AGG list, we will receive a `Vec<ScalarValue>` that stores
+        // For each `StructArray` inside ARRAY_AGG list, we will receive an `Array` that stores
         // values received from its ordering requirement expression. (This information is necessary for during merging).
         let agg_orderings = &states[1];
+
         if as_list_array(agg_orderings).is_ok() {
             // Stores ARRAY_AGG results coming from each partition
             let mut partition_values = vec![];
@@ -215,6 +216,7 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
 
             let array_agg_res =
                 ScalarValue::convert_array_to_scalar_vec(array_agg_values)?;
+
             for v in array_agg_res.into_iter() {
                 partition_values.push(v);
             }
@@ -281,6 +283,8 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
 }
 
 impl OrderSensitiveArrayAggAccumulator {
+    /// Inner Vec\<ScalarValue> in the ordering_values can be thought as ordering information for the each ScalarValue in the values array.
+    /// See [`merge_ordered_arrays`] for more information.
     fn convert_array_agg_to_orderings(
         &self,
         array_agg: Vec<Vec<ScalarValue>>,
