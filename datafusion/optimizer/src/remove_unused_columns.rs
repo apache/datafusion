@@ -28,16 +28,16 @@ use crate::{OptimizerConfig, OptimizerRule};
 
 /// Optimization rule that eliminate the scalar value (true/false) filter with an [LogicalPlan::EmptyRelation]
 #[derive(Default)]
-pub struct SimplifyAggregate {}
+pub struct RemoveUnusedColumns {}
 
-impl SimplifyAggregate {
+impl RemoveUnusedColumns {
     #[allow(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
 }
 
-impl OptimizerRule for SimplifyAggregate {
+impl OptimizerRule for RemoveUnusedColumns {
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
@@ -48,7 +48,7 @@ impl OptimizerRule for SimplifyAggregate {
     }
 
     fn name(&self) -> &str {
-        "SimplifyAggregate"
+        "RemoveUnusedColumns"
     }
 
     fn apply_order(&self) -> Option<ApplyOrder> {
@@ -56,25 +56,26 @@ impl OptimizerRule for SimplifyAggregate {
     }
 }
 
-fn get_required_indices(input: &LogicalPlan, exprs: &[Expr]) -> Result<Vec<usize>> {
+fn get_referred_indices(input: &LogicalPlan, exprs: &[Expr]) -> Result<Vec<usize>> {
     let mut new_indices = vec![];
     for expr in exprs {
         let cols = expr.to_columns()?;
-        // println!("cols:{:?}", cols);
-        // println!("input.schema():{:?}", input.schema());
         for col in cols {
-            let idx = input.schema().index_of_column(&col)?;
-            if !new_indices.contains(&idx) {
-                new_indices.push(idx);
+            if input.schema().has_column(&col) {
+                let idx = input.schema().index_of_column(&col)?;
+                if !new_indices.contains(&idx) {
+                    new_indices.push(idx);
+                }
             }
         }
     }
+    new_indices.sort();
     Ok(new_indices)
 }
 
 fn get_at_indices(exprs: &[Expr], indices: &[usize]) -> Vec<Expr> {
     indices
-        .into_iter()
+        .iter()
         .filter_map(|&idx| {
             if idx < exprs.len() {
                 Some(exprs[idx].clone())
@@ -96,16 +97,14 @@ fn merge_vectors(lhs: &[usize], rhs: &[usize]) -> Vec<usize> {
     merged
 }
 
-fn set_diff(lhs: &[usize], rhs: &[usize]) -> Vec<usize> {
-    lhs.iter()
-        .filter_map(|item| {
-            if !rhs.contains(item) {
-                Some(*item)
-            } else {
-                None
-            }
-        })
-        .collect()
+fn join_child_requirement(
+    child: &LogicalPlan,
+    on: &[Expr],
+    filter: &[Expr],
+) -> Result<Vec<usize>> {
+    let on_indices = get_referred_indices(child, on)?;
+    let filter_indices = get_referred_indices(child, filter)?;
+    Ok(merge_vectors(&on_indices, &filter_indices))
 }
 
 fn try_optimize_internal(
@@ -115,18 +114,12 @@ fn try_optimize_internal(
 ) -> Result<Option<LogicalPlan>> {
     let child_required_indices: Option<Vec<Vec<usize>>> = match plan {
         LogicalPlan::Projection(proj) => {
-            // println!("proj.expr: {:?}", proj.expr);
             let exprs_used = get_at_indices(&proj.expr, &indices);
-            // println!("exprs_used:{:?}", exprs_used);
-            let new_indices = get_required_indices(&proj.input, &exprs_used)?;
-            // println!("projection  indices:{:?}, new_indices:{:?}", indices, new_indices);
+            let new_indices = get_referred_indices(&proj.input, &exprs_used)?;
             Some(vec![new_indices])
         }
         LogicalPlan::Aggregate(aggregate) => {
             let group_bys_used = get_at_indices(&aggregate.group_expr, &indices);
-            // println!("aggregate, indices: {:?}", indices);
-            // println!("group_bys_used:{:?}", group_bys_used);
-            // println!("&aggregate.group_expr:{:?}", &aggregate.group_expr);
             let group_by_expr_names_used = group_bys_used
                 .iter()
                 .map(|group_by_expr| group_by_expr.display_name())
@@ -148,31 +141,18 @@ fn try_optimize_internal(
             if (used_target_indices == existing_target_indices)
                 && used_target_indices.is_some()
             {
-                let unnecessary_group_by_exprs = aggregate
-                    .group_expr
-                    .iter()
-                    .filter_map(|group_by_expr| {
-                        if group_bys_used.iter().any(|item| item.eq(group_by_expr)) {
-                            None
-                        } else {
-                            Some(group_by_expr.clone())
-                        }
-                    })
-                    .collect::<Vec<_>>();
-                // println!("unnecessary_group_by_exprs: {:?}", unnecessary_group_by_exprs);
-                let unnecessary_indices =
-                    get_required_indices(&aggregate.input, &unnecessary_group_by_exprs)?;
-                let input_indices =
-                    (0..aggregate.input.schema().fields().len()).collect::<Vec<_>>();
-                let required_indices = set_diff(&input_indices, &unnecessary_indices);
+                let mut all_exprs = group_bys_used.clone();
+                all_exprs.extend(aggregate.aggr_expr.clone());
+                let necessary_indices =
+                    get_referred_indices(&aggregate.input, &all_exprs)?;
+
                 let aggregate_input = if let Some(input) =
-                    try_optimize_internal(&aggregate.input, _config, required_indices)?
+                    try_optimize_internal(&aggregate.input, _config, necessary_indices)?
                 {
                     Arc::new(input)
                 } else {
                     aggregate.input.clone()
                 };
-                // TODO: Continue to recursion for double aggregates
                 return Ok(Some(LogicalPlan::Aggregate(Aggregate::try_new(
                     aggregate_input,
                     group_bys_used,
@@ -182,16 +162,56 @@ fn try_optimize_internal(
             None
         }
         LogicalPlan::Sort(sort) => {
-            let indices_referred_by_sort = get_required_indices(&sort.input, &sort.expr)?;
+            let indices_referred_by_sort = get_referred_indices(&sort.input, &sort.expr)?;
             let required_indices = merge_vectors(&indices, &indices_referred_by_sort);
             Some(vec![required_indices])
         }
         LogicalPlan::Filter(filter) => {
             let indices_referred_by_filter =
-                get_required_indices(&filter.input, &[filter.predicate.clone()])?;
+                get_referred_indices(&filter.input, &[filter.predicate.clone()])?;
             let required_indices = merge_vectors(&indices, &indices_referred_by_filter);
             Some(vec![required_indices])
         }
+        LogicalPlan::Window(window) => {
+            let indices_referred_by_window =
+                get_referred_indices(&window.input, &window.window_expr)?;
+            let required_indices = merge_vectors(&indices, &indices_referred_by_window);
+            Some(vec![required_indices])
+        }
+        LogicalPlan::Join(join) => {
+            let left_len = join.left.schema().fields().len();
+            let left_requirements_from_parent = indices
+                .iter()
+                .filter_map(|&idx| if idx < left_len { Some(idx) } else { None })
+                .collect::<Vec<_>>();
+            let right_requirements_from_parent = indices
+                .iter()
+                .filter_map(|&idx| {
+                    if idx >= left_len {
+                        Some(idx - left_len)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+            let (left_on, right_on): (Vec<_>, Vec<_>) = join.on.iter().cloned().unzip();
+            let join_filter = &join
+                .filter
+                .as_ref()
+                .map(|item| vec![item.clone()])
+                .unwrap_or_default();
+            let left_indices = join_child_requirement(&join.left, &left_on, join_filter)?;
+            let left_indices =
+                merge_vectors(&left_requirements_from_parent, &left_indices);
+
+            let right_indices =
+                join_child_requirement(&join.right, &right_on, join_filter)?;
+            let right_indices =
+                merge_vectors(&right_requirements_from_parent, &right_indices);
+            Some(vec![left_indices, right_indices])
+        }
+        // SubqueryAlias alias can route requirement for its parent to its child
+        LogicalPlan::SubqueryAlias(_) => Some(vec![indices]),
         _ => None,
     };
     if let Some(child_required_indices) = child_required_indices {
