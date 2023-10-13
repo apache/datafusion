@@ -238,7 +238,6 @@ pub fn bounded_window_exec(
             )
             .unwrap()],
             input.clone(),
-            input.schema(),
             vec![],
             crate::physical_plan::windows::PartitionSearchMode::Sorted,
         )

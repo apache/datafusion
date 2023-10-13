@@ -608,12 +608,10 @@ fn analyze_window_sort_removal(
         add_sort_above(&mut window_child, sort_expr, None)?;
 
         let uses_bounded_memory = window_expr.iter().all(|e| e.uses_bounded_memory());
-        let input_schema = window_child.schema();
         let new_window = if uses_bounded_memory {
             Arc::new(BoundedWindowAggExec::try_new(
                 window_expr.to_vec(),
                 window_child,
-                input_schema,
                 partitionby_exprs.to_vec(),
                 PartitionSearchMode::Sorted,
             )?) as _
@@ -621,7 +619,6 @@ fn analyze_window_sort_removal(
             Arc::new(WindowAggExec::try_new(
                 window_expr.to_vec(),
                 window_child,
-                input_schema,
                 partitionby_exprs.to_vec(),
             )?) as _
         };

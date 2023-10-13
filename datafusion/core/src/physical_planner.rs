@@ -751,7 +751,6 @@ impl DefaultPhysicalPlanner {
                         Arc::new(BoundedWindowAggExec::try_new(
                             window_expr,
                             input_exec,
-                            physical_input_schema,
                             physical_partition_keys,
                             PartitionSearchMode::Sorted,
                         )?)
@@ -759,7 +758,6 @@ impl DefaultPhysicalPlanner {
                         Arc::new(WindowAggExec::try_new(
                             window_expr,
                             input_exec,
-                            physical_input_schema,
                             physical_partition_keys,
                         )?)
                     })
