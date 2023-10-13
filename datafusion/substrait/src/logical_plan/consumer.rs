@@ -461,8 +461,8 @@ pub async fn from_substrait_rel(
             }
             _ => not_impl_err!("Only NamedTable reads are supported"),
         },
-        Some(RelType::Set(set)) => match set_rel::SetOp::from_i32(set.op) {
-            Some(set_op) => match set_op {
+        Some(RelType::Set(set)) => match set_rel::SetOp::try_from(set.op) {
+            Ok(set_op) => match set_op {
                 set_rel::SetOp::UnionAll => {
                     if !set.inputs.is_empty() {
                         let mut union_builder = Ok(LogicalPlanBuilder::from(
@@ -479,7 +479,7 @@ pub async fn from_substrait_rel(
                 }
                 _ => not_impl_err!("Unsupported set operator: {set_op:?}"),
             },
-            None => not_impl_err!("Invalid set operation type None"),
+            Err(e) => not_impl_err!("Invalid set operation type {}: {e}", set.op),
         },
         Some(RelType::ExtensionLeaf(extension)) => {
             let Some(ext_detail) = &extension.detail else {
@@ -535,7 +535,7 @@ pub async fn from_substrait_rel(
 }
 
 fn from_substrait_jointype(join_type: i32) -> Result<JoinType> {
-    if let Some(substrait_join_type) = join_rel::JoinType::from_i32(join_type) {
+    if let Ok(substrait_join_type) = join_rel::JoinType::try_from(join_type) {
         match substrait_join_type {
             join_rel::JoinType::Inner => Ok(JoinType::Inner),
             join_rel::JoinType::Left => Ok(JoinType::Left),
@@ -563,7 +563,7 @@ pub async fn from_substrait_sorts(
         let asc_nullfirst = match &s.sort_kind {
             Some(k) => match k {
                 Direction(d) => {
-                    let Some(direction) = SortDirection::from_i32(*d) else {
+                    let Ok(direction) = SortDirection::try_from(*d) else {
                         return not_impl_err!(
                             "Unsupported Substrait SortDirection value {d}"
                         );
