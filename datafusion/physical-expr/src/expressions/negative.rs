@@ -17,26 +17,26 @@
 
 //! Negation (-) expression
 
-use std::any::Any;
-use std::hash::{Hash, Hasher};
-use std::sync::Arc;
-
 use crate::intervals::Interval;
 use crate::physical_expr::down_cast_any_ref;
 use crate::sort_properties::SortProperties;
 use crate::PhysicalExpr;
-
 use arrow::{
     compute::kernels::numeric::neg_wrapping,
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_expr::{
     type_coercion::{is_interval, is_null, is_signed_numeric},
     ColumnarValue,
 };
+use std::any::Any;
+use std::any::Any;
+use std::hash::{Hash, Hasher};
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+use std::sync::Arc;
 
 /// Negative expression
 #[derive(Debug, Hash)]
@@ -108,7 +108,7 @@ impl PhysicalExpr for NegativeExpr {
 
     /// Given the child interval of a NegativeExpr, it calculates the NegativeExpr's interval.
     /// It replaces the upper and lower bounds after multiplying them with -1.
-    /// Ex: (a, b] => [-b, a)
+    /// Ex: `(a, b]` => `[-b, -a)`
     fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
         Ok(Interval::new(
             children[0].upper.negate()?,
@@ -116,8 +116,8 @@ impl PhysicalExpr for NegativeExpr {
         ))
     }
 
-    /// Updates the child interval of a NegativeExpr by intersecting the original
-    /// interval of child with the possibly shrunk NegativeExpr interval.
+    /// Returns a new [`Interval`] of a NegativeExpr  that has the existing `interval` given that
+    /// given the input interval is known to be `children`.
     fn propagate_constraints(
         &self,
         interval: &Interval,
@@ -169,13 +169,14 @@ pub fn negative(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::{col, Column};
-
+    use crate::{
+        expressions::{col, Column},
+        intervals::Interval,
+    };
     use arrow::array::*;
     use arrow::datatypes::*;
     use arrow_schema::DataType::{Float32, Float64, Int16, Int32, Int64, Int8};
     use datafusion_common::{cast::as_primitive_array, Result};
-
     use paste::paste;
 
     macro_rules! test_array_negative_op {

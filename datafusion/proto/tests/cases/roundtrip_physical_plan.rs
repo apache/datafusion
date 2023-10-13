@@ -276,7 +276,6 @@ fn roundtrip_window() -> Result<()> {
             sliding_aggr_window_expr,
         ],
         input,
-        schema.clone(),
         vec![col("b", &schema)?],
     )?))
 }

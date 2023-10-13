@@ -17,21 +17,18 @@
 
 //! Interval arithmetic library
 
+use crate::aggregate::min_max::{max, min};
+use crate::intervals::rounding::{alter_fp_rounding_mode, next_down, next_up};
+use arrow::compute::{cast_with_options, CastOptions};
+use arrow::datatypes::DataType;
+use arrow_array::ArrowNativeTypeOp;
+use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
+use datafusion_expr::type_coercion::binary::get_result_type;
+use datafusion_expr::Operator;
 use std::borrow::Borrow;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::ops::{AddAssign, SubAssign};
-
-use arrow::compute::{cast_with_options, CastOptions};
-use arrow::datatypes::DataType;
-use arrow_array::ArrowNativeTypeOp;
-
-use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
-use datafusion_expr::type_coercion::binary::get_result_type;
-use datafusion_expr::Operator;
-
-use crate::aggregate::min_max::{max, min};
-use crate::intervals::rounding::{alter_fp_rounding_mode, next_down, next_up};
 
 /// This type represents a single endpoint of an [`Interval`]. An
 /// endpoint can be open (does not include the endpoint) or closed
@@ -88,6 +85,8 @@ impl IntervalBound {
             .map(|value| IntervalBound::new(value, self.open))
     }
 
+    /// Returns a new bound with a negated value, if any, and the same open/closed.
+    /// For example negating `[5` would return `[-5`, or `-1)` would return `1)`.
     pub fn negate(&self) -> Result<IntervalBound> {
         self.value.arithmetic_negate().map(|value| IntervalBound {
             value,
