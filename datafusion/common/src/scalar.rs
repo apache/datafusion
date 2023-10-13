@@ -1004,7 +1004,8 @@ impl ScalarValue {
             | ScalarValue::Int16(None)
             | ScalarValue::Int32(None)
             | ScalarValue::Int64(None)
-            | ScalarValue::Float32(None) => Ok(self.clone()),
+            | ScalarValue::Float32(None)
+            | ScalarValue::Float64(None) => Ok(self.clone()),
             ScalarValue::Float64(Some(v)) => Ok(ScalarValue::Float64(Some(-v))),
             ScalarValue::Float32(Some(v)) => Ok(ScalarValue::Float32(Some(-v))),
             ScalarValue::Int8(Some(v)) => Ok(ScalarValue::Int8(Some(-v))),

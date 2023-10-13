@@ -163,7 +163,7 @@ pub fn check_finiteness_requirements(
 /// [`Operator`]: datafusion_expr::Operator
 fn is_prunable(join: &SymmetricHashJoinExec) -> bool {
     join.filter().map_or(false, |filter| {
-        check_support(filter.expression())
+        check_support(filter.expression(), &join.schema())
             && filter
                 .schema()
                 .fields()
