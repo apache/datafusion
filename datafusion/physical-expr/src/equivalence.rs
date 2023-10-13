@@ -1408,7 +1408,7 @@ mod tests {
         let col_f_expr = &col("f", &test_schema)?;
         let col_g_expr = &col("g", &test_schema)?;
         let mut schema_properties = SchemaProperties::new(test_schema.clone());
-        schema_properties.add_equal_conditions((&col_a_expr, &col_c_expr));
+        schema_properties.add_equal_conditions((col_a_expr, col_c_expr));
 
         let option1 = SortOptions {
             descending: false,
@@ -2176,7 +2176,7 @@ mod tests {
         let sorted_indices = lexsort_to_indices(&sort_columns, None)?;
         let original_indices = UInt32Array::from_iter_values(0..n_row as u32);
 
-        Ok(&sorted_indices == &original_indices)
+        Ok(sorted_indices == original_indices)
     }
 
     fn get_representative_arr(
