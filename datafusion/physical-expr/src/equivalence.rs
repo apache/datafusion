@@ -763,8 +763,9 @@ impl SchemaProperties {
         sort_reqs: &[PhysicalSortRequirement],
     ) -> Vec<PhysicalSortRequirement> {
         let normalized_sort_reqs = self.eq_groups.normalize_sort_requirements(sort_reqs);
+        let constants_normalized = self.eq_groups.normalize_exprs(&self.constants);
         let normalized_sort_reqs =
-            prune_sort_reqs_with_constants(&normalized_sort_reqs, &self.constants);
+            prune_sort_reqs_with_constants(&normalized_sort_reqs, &constants_normalized);
         // Prune redundant sections in the requirement.
         collapse_lex_req(normalized_sort_reqs)
     }
@@ -1036,7 +1037,7 @@ impl SchemaProperties {
         let mut best = vec![];
 
         for ordering in self.oeq_group.iter() {
-            let ordering = self.eq_groups.normalize_sort_exprs(ordering);
+            let ordering = self.normalize_sort_exprs(ordering);
             let ordering_exprs = ordering
                 .iter()
                 .map(|sort_expr| sort_expr.expr.clone())
