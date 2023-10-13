@@ -1390,7 +1390,9 @@ mod tests {
     use arrow::compute::{lexsort_to_indices, SortColumn};
     use arrow_array::{ArrayRef, RecordBatch, UInt32Array, UInt64Array};
     use arrow_schema::{Fields, SortOptions};
+    use itertools::Itertools;
     use rand::rngs::StdRng;
+    use rand::seq::SliceRandom;
     use rand::{Rng, SeedableRng};
     use std::sync::Arc;
 
@@ -1479,12 +1481,12 @@ mod tests {
         Ok(schema)
     }
 
-    /// Construct a schema with following properties
-    /// Schema satisfied following orderings:
-    /// [a ASC, b ASC], [c ASC, d ASC, e ASC]
-    /// and
+    /// Construct a schema with random ordering
+    /// among column a, b, c, d
+    /// where
     /// Column [a=f] (e.g they are aliases).
-    fn create_test_params_2() -> Result<(SchemaRef, SchemaProperties)> {
+    /// Column e is constant.
+    fn create_random_schema(seed: u64) -> Result<(SchemaRef, SchemaProperties)> {
         let test_schema = create_test_schema_2()?;
         let col_a_expr = &col("a", &test_schema)?;
         let col_b_expr = &col("b", &test_schema)?;
@@ -1493,38 +1495,34 @@ mod tests {
         let col_e_expr = &col("e", &test_schema)?;
         let col_f_expr = &col("f", &test_schema)?;
         let mut schema_properties = SchemaProperties::new(test_schema.clone());
+        // a=f
         schema_properties.add_equal_conditions((&col_a_expr, &col_f_expr));
+        // Column e is constant
+        schema_properties = schema_properties.with_constants(vec![col_e_expr.clone()]);
 
+        let mut rng = StdRng::seed_from_u64(seed);
+        let mut col_exprs = vec![col_a_expr, col_b_expr, col_c_expr, col_d_expr];
         let option1 = SortOptions {
             descending: false,
             nulls_first: false,
         };
-        schema_properties.add_new_orderings(&[
-            vec![
-                PhysicalSortExpr {
-                    expr: col_a_expr.clone(),
+        while !col_exprs.is_empty() {
+            let n_sort_expr = rng.gen_range(0..col_exprs.len() + 1);
+            let mut indices = (0..col_exprs.len()).collect::<Vec<_>>();
+            indices.shuffle(&mut rng);
+            let orderings = indices[0..n_sort_expr]
+                .iter()
+                .map(|idx| PhysicalSortExpr {
+                    expr: col_exprs[*idx].clone(),
                     options: option1,
-                },
-                PhysicalSortExpr {
-                    expr: col_b_expr.clone(),
-                    options: option1,
-                },
-            ],
-            vec![
-                PhysicalSortExpr {
-                    expr: col_c_expr.clone(),
-                    options: option1,
-                },
-                PhysicalSortExpr {
-                    expr: col_d_expr.clone(),
-                    options: option1,
-                },
-                PhysicalSortExpr {
-                    expr: col_e_expr.clone(),
-                    options: option1,
-                },
-            ],
-        ]);
+                })
+                .collect::<Vec<_>>();
+            schema_properties.add_new_orderings(&[orderings]);
+            col_exprs = indices[n_sort_expr..]
+                .iter()
+                .map(|idx| col_exprs[*idx])
+                .collect();
+        }
         Ok((test_schema, schema_properties))
     }
 
@@ -1839,47 +1837,45 @@ mod tests {
 
     #[test]
     fn test_ordering_satisfy_with_equivalence_random() -> Result<()> {
-        // Number of random tests
-        let n_test = 10000usize;
-        let n_req_max = 5usize;
+        let n_random_schema = 5;
         let option1 = SortOptions {
             descending: false,
             nulls_first: false,
         };
-        // Schema satisfies following orderings:
-        // [a ASC, b ASC], [c ASC, d ASC, e ASC]
-        // and
-        // Column [a=f] (e.g they are aliases).
-        let (_test_schema, schema_properties) = create_test_params_2()?;
-        let table_data_with_properties =
-            generate_table_for_schema_properties(&schema_properties, 625, 5)?;
+        for seed in 0..n_random_schema {
+            let (test_schema, schema_properties) = create_random_schema(seed)?;
+            let table_data_with_properties =
+                generate_table_for_schema_properties(&schema_properties, 125, 5)?;
+            let col_exprs = vec![
+                col("a", &test_schema)?,
+                col("b", &test_schema)?,
+                col("c", &test_schema)?,
+                col("d", &test_schema)?,
+                col("e", &test_schema)?,
+                col("f", &test_schema)?,
+            ];
 
-        // use a random number for values
-        let mut rng = StdRng::seed_from_u64(23);
-        let schema = schema_properties.schema();
-        let n_schema = schema.fields.len();
-        for _test_id in 0..n_test {
-            let n_req = rng.gen_range(0..n_req_max);
-            let requirement = (0..n_req)
-                .map(|_idx| {
-                    let col_idx = rng.gen_range(0..n_schema);
-                    let col_expr = col(schema.fields[col_idx].name(), &schema)?;
-                    Ok(PhysicalSortExpr {
-                        expr: col_expr,
-                        options: option1,
-                    })
-                })
-                .collect::<Result<Vec<_>>>()?;
-            let err_msg = format!("Error in test case:{requirement:?}");
-            let expected = is_table_same_after_sort(
-                requirement.clone(),
-                table_data_with_properties.clone(),
-            )?;
-            assert_eq!(
-                schema_properties.ordering_satisfy_concrete(&requirement),
-                expected,
-                "{err_msg}"
-            );
+            for n_req in 0..col_exprs.len() + 1 {
+                for exprs in col_exprs.iter().permutations(n_req) {
+                    let requirement = exprs
+                        .into_iter()
+                        .map(|expr| PhysicalSortExpr {
+                            expr: expr.clone(),
+                            options: option1,
+                        })
+                        .collect::<Vec<_>>();
+                    let expected = is_table_same_after_sort(
+                        requirement.clone(),
+                        table_data_with_properties.clone(),
+                    )?;
+                    let err_msg = format!("Error in test case requirement:{requirement:?}, expected: {expected:?}");
+                    assert_eq!(
+                        schema_properties.ordering_satisfy_concrete(&requirement),
+                        expected,
+                        "{err_msg}"
+                    );
+                }
+            }
         }
 
         Ok(())
@@ -2194,6 +2190,19 @@ mod tests {
         let schema = schema_properties.schema();
 
         let mut schema_vec = vec![None; schema.fields.len()];
+        // Fill constant columns
+        for constant in schema_properties.constants.iter() {
+            let col = constant.as_any().downcast_ref::<Column>().unwrap();
+            let (idx, _field) = schema.column_with_name(col.name()).unwrap();
+
+            // all of the values are set to 0.
+            let arr: Vec<u64> = vec![0; n_elem];
+            let arr = Arc::new(UInt64Array::from_iter_values(arr)) as ArrayRef;
+
+            schema_vec[idx] = Some(arr);
+        }
+
+        // Fill ordering expressions
         for ordering in schema_properties.oeq_group.iter() {
             let mut sort_columns = vec![];
             let mut indices = vec![];
@@ -2217,6 +2226,7 @@ mod tests {
             }
         }
 
+        // Fill equivalent expressions
         for eq_group in schema_properties.eq_groups.iter() {
             let arr = if let Some(arr) =
                 get_representative_arr(eq_group, &schema_vec, schema.clone())
