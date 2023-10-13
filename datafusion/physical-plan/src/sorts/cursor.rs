@@ -336,7 +336,7 @@ impl<T: FieldValues> Cursor for FieldCursor<T> {
         Self {
             values: values.slice(offset, length),
             offset: 0,
-            null_threshold: *null_threshold,
+            null_threshold: null_threshold.checked_sub(offset).unwrap_or(0),
             options: *options,
         }
     }
@@ -556,5 +556,64 @@ mod tests {
         let cursor = new_primitive(options, buffer, 0);
 
         cursor.slice(42, 1);
+    }
+
+    #[test]
+    fn test_slice_nulls_first() {
+        let options = SortOptions {
+            descending: false,
+            nulls_first: true,
+        };
+
+        let buffer = ScalarBuffer::from(vec![2, i32::MIN, 2]);
+        let mut a = new_primitive(options, buffer, 1);
+        let buffer = ScalarBuffer::from(vec![3, 2, i32::MIN, 2]);
+        let mut b = new_primitive(options, buffer, 1);
+
+        // NULL == NULL
+        assert_eq!(a, b);
+        assert_eq!(a.cmp(&b), Ordering::Equal);
+
+        // 2 > NULL
+        a = a.slice(1, 1);
+        assert_ne!(a, b);
+        assert_eq!(a.cmp(&b), Ordering::Greater);
+
+        // 2 < 3
+        b = b.slice(3, 1);
+        assert_ne!(a, b);
+        assert_eq!(a.cmp(&b), Ordering::Less);
+    }
+
+    #[test]
+    fn test_slice_no_nulls_first() {
+        let options = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+
+        let buffer = ScalarBuffer::from(vec![2, i32::MIN, 2]);
+        let mut a = new_primitive(options, buffer, 1);
+        let buffer = ScalarBuffer::from(vec![3, 2, i32::MIN, 2]);
+        let mut b = new_primitive(options, buffer, 1);
+
+        // 2 < 3
+        assert_ne!(a, b);
+        assert_eq!(a.cmp(&b), Ordering::Less);
+
+        // 2 == 2
+        b = b.slice(1, 3);
+        assert_eq!(a, b);
+        assert_eq!(a.cmp(&b), Ordering::Equal);
+
+        // NULL < 2
+        a = a.slice(1, 2);
+        assert_ne!(a, b);
+        assert_eq!(a.cmp(&b), Ordering::Less);
+
+        // NULL == NULL
+        b = b.slice(1, 2);
+        assert_eq!(a, b);
+        assert_eq!(a.cmp(&b), Ordering::Equal);
     }
 }
