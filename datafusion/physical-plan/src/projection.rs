@@ -36,7 +36,7 @@ use crate::{
 
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
-use datafusion_common::stats::Sharpness;
+use datafusion_common::stats::Precision;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::expressions::{Literal, UnKnownColumn};
@@ -420,7 +420,7 @@ fn stats_projection(
 
     if primitive_row_size_possible {
         stats.total_byte_size =
-            Sharpness::Exact(primitive_row_size).multiply(&stats.num_rows);
+            Precision::Exact(primitive_row_size).multiply(&stats.num_rows);
     }
     stats.column_statistics = column_statistics;
     stats
@@ -510,30 +510,30 @@ mod tests {
 
     fn get_stats() -> Statistics {
         Statistics {
-            num_rows: Sharpness::Exact(5),
-            total_byte_size: Sharpness::Exact(23),
+            num_rows: Precision::Exact(5),
+            total_byte_size: Precision::Exact(23),
             column_statistics: vec![
                 ColumnStatistics {
-                    distinct_count: Sharpness::Exact(5),
-                    max_value: Sharpness::Exact(ScalarValue::Int64(Some(21))),
-                    min_value: Sharpness::Exact(ScalarValue::Int64(Some(-4))),
-                    null_count: Sharpness::Exact(0),
+                    distinct_count: Precision::Exact(5),
+                    max_value: Precision::Exact(ScalarValue::Int64(Some(21))),
+                    min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
+                    null_count: Precision::Exact(0),
                 },
                 ColumnStatistics {
-                    distinct_count: Sharpness::Exact(1),
-                    max_value: Sharpness::Exact(ScalarValue::Utf8(Some(String::from(
+                    distinct_count: Precision::Exact(1),
+                    max_value: Precision::Exact(ScalarValue::Utf8(Some(String::from(
                         "x",
                     )))),
-                    min_value: Sharpness::Exact(ScalarValue::Utf8(Some(String::from(
+                    min_value: Precision::Exact(ScalarValue::Utf8(Some(String::from(
                         "a",
                     )))),
-                    null_count: Sharpness::Exact(3),
+                    null_count: Precision::Exact(3),
                 },
                 ColumnStatistics {
-                    distinct_count: Sharpness::Absent,
-                    max_value: Sharpness::Exact(ScalarValue::Float32(Some(1.1))),
-                    min_value: Sharpness::Exact(ScalarValue::Float32(Some(0.1))),
-                    null_count: Sharpness::Absent,
+                    distinct_count: Precision::Absent,
+                    max_value: Precision::Exact(ScalarValue::Float32(Some(1.1))),
+                    min_value: Precision::Exact(ScalarValue::Float32(Some(0.1))),
+                    null_count: Precision::Absent,
                 },
             ],
         }
@@ -558,24 +558,24 @@ mod tests {
         let result = stats_projection(source, exprs.into_iter(), Arc::new(schema));
 
         let expected = Statistics {
-            num_rows: Sharpness::Exact(5),
-            total_byte_size: Sharpness::Exact(23),
+            num_rows: Precision::Exact(5),
+            total_byte_size: Precision::Exact(23),
             column_statistics: vec![
                 ColumnStatistics {
-                    distinct_count: Sharpness::Exact(1),
-                    max_value: Sharpness::Exact(ScalarValue::Utf8(Some(String::from(
+                    distinct_count: Precision::Exact(1),
+                    max_value: Precision::Exact(ScalarValue::Utf8(Some(String::from(
                         "x",
                     )))),
-                    min_value: Sharpness::Exact(ScalarValue::Utf8(Some(String::from(
+                    min_value: Precision::Exact(ScalarValue::Utf8(Some(String::from(
                         "a",
                     )))),
-                    null_count: Sharpness::Exact(3),
+                    null_count: Precision::Exact(3),
                 },
                 ColumnStatistics {
-                    distinct_count: Sharpness::Exact(5),
-                    max_value: Sharpness::Exact(ScalarValue::Int64(Some(21))),
-                    min_value: Sharpness::Exact(ScalarValue::Int64(Some(-4))),
-                    null_count: Sharpness::Exact(0),
+                    distinct_count: Precision::Exact(5),
+                    max_value: Precision::Exact(ScalarValue::Int64(Some(21))),
+                    min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
+                    null_count: Precision::Exact(0),
                 },
             ],
         };
@@ -596,20 +596,20 @@ mod tests {
         let result = stats_projection(source, exprs.into_iter(), Arc::new(schema));
 
         let expected = Statistics {
-            num_rows: Sharpness::Exact(5),
-            total_byte_size: Sharpness::Exact(60),
+            num_rows: Precision::Exact(5),
+            total_byte_size: Precision::Exact(60),
             column_statistics: vec![
                 ColumnStatistics {
-                    distinct_count: Sharpness::Absent,
-                    max_value: Sharpness::Exact(ScalarValue::Float32(Some(1.1))),
-                    min_value: Sharpness::Exact(ScalarValue::Float32(Some(0.1))),
-                    null_count: Sharpness::Absent,
+                    distinct_count: Precision::Absent,
+                    max_value: Precision::Exact(ScalarValue::Float32(Some(1.1))),
+                    min_value: Precision::Exact(ScalarValue::Float32(Some(0.1))),
+                    null_count: Precision::Absent,
                 },
                 ColumnStatistics {
-                    distinct_count: Sharpness::Exact(5),
-                    max_value: Sharpness::Exact(ScalarValue::Int64(Some(21))),
-                    min_value: Sharpness::Exact(ScalarValue::Int64(Some(-4))),
-                    null_count: Sharpness::Exact(0),
+                    distinct_count: Precision::Exact(5),
+                    max_value: Precision::Exact(ScalarValue::Int64(Some(21))),
+                    min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
+                    null_count: Precision::Exact(0),
                 },
             ],
         };

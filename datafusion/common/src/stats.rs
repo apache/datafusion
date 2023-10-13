@@ -18,7 +18,7 @@
 //! This module provides data structures to represent statistics
 
 use crate::ScalarValue;
-use arrow::datatypes::DataType;
+use arrow_schema::Schema;
 
 use std::fmt::{self, Debug, Display};
 
@@ -199,182 +199,6 @@ impl<T: fmt::Debug + Clone + PartialEq + Eq + PartialOrd> Display for Precision<
     }
 }
 
-use arrow::datatypes::Schema;
-
-/// To deal with information without exactness guarantees, we wrap it inside a
-/// [`Sharpness`] object to express its reliability. See [`Statistics`] for a usage.
-#[derive(Clone, PartialEq, Eq, Default)]
-pub enum Sharpness<T: Debug + Clone + PartialEq + Eq + PartialOrd> {
-    Exact(T),
-    Inexact(T),
-    #[default]
-    Absent,
-}
-
-impl<T: Debug + Clone + PartialEq + Eq + PartialOrd> Sharpness<T> {
-    /// If we have some value (exact or inexact), it returns that value.
-    /// Otherwise, it returns `None`.
-    pub fn get_value(&self) -> Option<&T> {
-        match self {
-            Sharpness::Exact(value) | Sharpness::Inexact(value) => Some(value),
-            Sharpness::Absent => None,
-        }
-    }
-
-    /// Transform the value in this [`Sharpness`] object, if one exists, using
-    /// the given function. Preserves the exactness state.
-    pub fn map<F>(self, f: F) -> Sharpness<T>
-    where
-        F: Fn(T) -> T,
-    {
-        match self {
-            Sharpness::Exact(val) => Sharpness::Exact(f(val)),
-            Sharpness::Inexact(val) => Sharpness::Inexact(f(val)),
-            _ => self,
-        }
-    }
-
-    /// Returns `Some(true)` if we have an exact value, `Some(false)` if we
-    /// have an inexact value, and `None` if there is no value.
-    pub fn is_exact(&self) -> Option<bool> {
-        match self {
-            Sharpness::Exact(_) => Some(true),
-            Sharpness::Inexact(_) => Some(false),
-            _ => None,
-        }
-    }
-
-    /// Returns the maximum of two (possibly inexact) values, conservatively
-    /// propagating exactness information. If one of the input values is
-    /// [`Sharpness::Absent`], the result is `Absent` too.
-    pub fn max(&self, other: &Sharpness<T>) -> Sharpness<T> {
-        match (self, other) {
-            (Sharpness::Exact(a), Sharpness::Exact(b)) => {
-                Sharpness::Exact(if a >= b { a.clone() } else { b.clone() })
-            }
-            (Sharpness::Inexact(a), Sharpness::Exact(b))
-            | (Sharpness::Exact(a), Sharpness::Inexact(b))
-            | (Sharpness::Inexact(a), Sharpness::Inexact(b)) => {
-                Sharpness::Inexact(if a >= b { a.clone() } else { b.clone() })
-            }
-            (_, _) => Sharpness::Absent,
-        }
-    }
-
-    /// Returns the minimum of two (possibly inexact) values, conservatively
-    /// propagating exactness information. If one of the input values is
-    /// [`Sharpness::Absent`], the result is `Absent` too.
-    pub fn min(&self, other: &Sharpness<T>) -> Sharpness<T> {
-        match (self, other) {
-            (Sharpness::Exact(a), Sharpness::Exact(b)) => {
-                Sharpness::Exact(if a >= b { b.clone() } else { a.clone() })
-            }
-            (Sharpness::Inexact(a), Sharpness::Exact(b))
-            | (Sharpness::Exact(a), Sharpness::Inexact(b))
-            | (Sharpness::Inexact(a), Sharpness::Inexact(b)) => {
-                Sharpness::Inexact(if a >= b { b.clone() } else { a.clone() })
-            }
-            (_, _) => Sharpness::Absent,
-        }
-    }
-
-    /// Demotes the sharpness state to inexact (if present).
-    pub fn to_inexact(self) -> Self {
-        match self {
-            Sharpness::Exact(value) => Sharpness::Inexact(value),
-            _ => self,
-        }
-    }
-}
-
-impl Sharpness<usize> {
-    /// Calculates the sum of two (possibly inexact) [`usize`] values,
-    /// conservatively propagating exactness information. If one of the input
-    /// values is [`Sharpness::Absent`], the result is `Absent` too.
-    pub fn add(&self, other: &Sharpness<usize>) -> Sharpness<usize> {
-        match (self, other) {
-            (Sharpness::Exact(a), Sharpness::Exact(b)) => Sharpness::Exact(a + b),
-            (Sharpness::Inexact(a), Sharpness::Exact(b))
-            | (Sharpness::Exact(a), Sharpness::Inexact(b))
-            | (Sharpness::Inexact(a), Sharpness::Inexact(b)) => Sharpness::Inexact(a + b),
-            (_, _) => Sharpness::Absent,
-        }
-    }
-
-    /// Calculates the difference of two (possibly inexact) [`usize`] values,
-    /// conservatively propagating exactness information. If one of the input
-    /// values is [`Sharpness::Absent`], the result is `Absent` too.
-    pub fn sub(&self, other: &Sharpness<usize>) -> Sharpness<usize> {
-        match (self, other) {
-            (Sharpness::Exact(a), Sharpness::Exact(b)) => Sharpness::Exact(a - b),
-            (Sharpness::Inexact(a), Sharpness::Exact(b))
-            | (Sharpness::Exact(a), Sharpness::Inexact(b))
-            | (Sharpness::Inexact(a), Sharpness::Inexact(b)) => Sharpness::Inexact(a - b),
-            (_, _) => Sharpness::Absent,
-        }
-    }
-
-    /// Calculates the multiplication of two (possibly inexact) [`usize`] values,
-    /// conservatively propagating exactness information. If one of the input
-    /// values is [`Sharpness::Absent`], the result is `Absent` too.
-    pub fn multiply(&self, other: &Sharpness<usize>) -> Sharpness<usize> {
-        match (self, other) {
-            (Sharpness::Exact(a), Sharpness::Exact(b)) => Sharpness::Exact(a * b),
-            (Sharpness::Inexact(a), Sharpness::Exact(b))
-            | (Sharpness::Exact(a), Sharpness::Inexact(b))
-            | (Sharpness::Inexact(a), Sharpness::Inexact(b)) => Sharpness::Inexact(a * b),
-            (_, _) => Sharpness::Absent,
-        }
-    }
-}
-
-impl Sharpness<ScalarValue> {
-    /// Calculates the sum of two (possibly inexact) [`ScalarValue`] values,
-    /// conservatively propagating exactness information. If one of the input
-    /// values is [`Sharpness::Absent`], the result is `Absent` too.
-    pub fn add(&self, other: &Sharpness<ScalarValue>) -> Sharpness<ScalarValue> {
-        match (self, other) {
-            (Sharpness::Exact(a), Sharpness::Exact(b)) => {
-                if let Ok(result) = a.add(b) {
-                    Sharpness::Exact(result)
-                } else {
-                    Sharpness::Absent
-                }
-            }
-            (Sharpness::Inexact(a), Sharpness::Exact(b))
-            | (Sharpness::Exact(a), Sharpness::Inexact(b))
-            | (Sharpness::Inexact(a), Sharpness::Inexact(b)) => {
-                if let Ok(result) = a.add(b) {
-                    Sharpness::Inexact(result)
-                } else {
-                    Sharpness::Absent
-                }
-            }
-            (_, _) => Sharpness::Absent,
-        }
-    }
-}
-
-impl<T: fmt::Debug + Clone + PartialEq + Eq + PartialOrd> Debug for Sharpness<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Sharpness::Exact(inner) => write!(f, "Exact({:?})", inner),
-            Sharpness::Inexact(inner) => write!(f, "Inexact({:?})", inner),
-            Sharpness::Absent => write!(f, "Absent"),
-        }
-    }
-}
-
-impl<T: fmt::Debug + Clone + PartialEq + Eq + PartialOrd> Display for Sharpness<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Sharpness::Exact(inner) => write!(f, "Exact({:?})", inner),
-            Sharpness::Inexact(inner) => write!(f, "Inexact({:?})", inner),
-            Sharpness::Absent => write!(f, "Absent"),
-        }
-    }
-}
-
 /// Statistics for a relation
 /// Fields are optional and can be inexact because the sources
 /// sometimes provide approximate estimates for performance reasons
@@ -382,9 +206,9 @@ impl<T: fmt::Debug + Clone + PartialEq + Eq + PartialOrd> Display for Sharpness<
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Statistics {
     /// The number of table rows
-    pub num_rows: Sharpness<usize>,
+    pub num_rows: Precision<usize>,
     /// total bytes of the table rows
-    pub total_byte_size: Sharpness<usize>,
+    pub total_byte_size: Precision<usize>,
     /// Statistics on a column level
     pub column_statistics: Vec<ColumnStatistics>,
 }
@@ -394,8 +218,8 @@ impl Statistics {
     /// unknown statistics to each column in the schema.
     pub fn new_unknown(schema: &Schema) -> Self {
         Self {
-            num_rows: Sharpness::Absent,
-            total_byte_size: Sharpness::Absent,
+            num_rows: Precision::Absent,
+            total_byte_size: Precision::Absent,
             column_statistics: Statistics::unknown_column(schema),
         }
     }
@@ -410,7 +234,7 @@ impl Statistics {
     }
 
     /// If the exactness of a [`Statistics`] instance is lost, this function relaxes
-    /// the exactness of all information by converting them [`Sharpness::Inexact`].
+    /// the exactness of all information by converting them [`Precision::Inexact`].
     pub fn make_inexact(self) -> Self {
         Statistics {
             num_rows: self.num_rows.to_inexact(),
@@ -441,13 +265,13 @@ impl Display for Statistics {
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct ColumnStatistics {
     /// Number of null values on column
-    pub null_count: Sharpness<usize>,
+    pub null_count: Precision<usize>,
     /// Maximum value of column
-    pub max_value: Sharpness<ScalarValue>,
+    pub max_value: Precision<ScalarValue>,
     /// Minimum value of column
-    pub min_value: Sharpness<ScalarValue>,
+    pub min_value: Precision<ScalarValue>,
     /// Number of distinct values
-    pub distinct_count: Sharpness<usize>,
+    pub distinct_count: Precision<usize>,
 }
 
 impl ColumnStatistics {
@@ -460,13 +284,13 @@ impl ColumnStatistics {
         }
     }
 
-    /// Returns a [`ColumnStatistics`] instance having all [`Sharpness::Absent`] parameters.
+    /// Returns a [`ColumnStatistics`] instance having all [`Precision::Absent`] parameters.
     pub fn new_unknown() -> ColumnStatistics {
         ColumnStatistics {
-            null_count: Sharpness::Absent,
-            max_value: Sharpness::Absent,
-            min_value: Sharpness::Absent,
-            distinct_count: Sharpness::Absent,
+            null_count: Precision::Absent,
+            max_value: Precision::Absent,
+            min_value: Precision::Absent,
+            distinct_count: Precision::Absent,
         }
     }
 }

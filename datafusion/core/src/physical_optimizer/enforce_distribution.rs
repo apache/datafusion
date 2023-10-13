@@ -48,7 +48,7 @@ use crate::physical_plan::{
 };
 
 use arrow::compute::SortOptions;
-use datafusion_common::stats::Sharpness;
+use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_expr::logical_plan::JoinType;
 use datafusion_physical_expr::equivalence::EquivalenceProperties;
@@ -1238,7 +1238,7 @@ fn ensure_distribution(
     // Don't need to apply when the returned row count is not greater than 1:
     let stats = dist_context.plan.statistics()?;
     let mut repartition_beneficial_stat = true;
-    if let Sharpness::Exact(num_rows) = stats.num_rows {
+    if let Precision::Exact(num_rows) = stats.num_rows {
         // If the number of rows is surely less than one, then repartitioning
         // is not beneficial.
         repartition_beneficial_stat = num_rows > 1;

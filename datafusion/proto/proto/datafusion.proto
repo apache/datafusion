@@ -1545,28 +1545,28 @@ message PartitionStats {
   repeated ColumnStats column_stats = 4;
 }
 
-message Sharpness{
-  SharpnessInfo sharpness_info = 1;
+message Precision{
+  PrecisionInfo precision_info = 1;
   ScalarValue val = 2;
 }
 
-enum SharpnessInfo {
+enum PrecisionInfo {
   EXACT = 0;
   INEXACT = 1;
   ABSENT = 2;
 }
 
 message Statistics {
-  Sharpness num_rows = 1;
-  Sharpness total_byte_size = 2;
+  Precision num_rows = 1;
+  Precision total_byte_size = 2;
   repeated ColumnStats column_stats = 3;
 }
 
 message ColumnStats {
-  Sharpness min_value = 1;
-  Sharpness max_value = 2;
-  Sharpness null_count = 3;
-  Sharpness distinct_count = 4;
+  Precision min_value = 1;
+  Precision max_value = 2;
+  Precision null_count = 3;
+  Precision distinct_count = 4;
 }
 
 message NamedStructFieldExpr {

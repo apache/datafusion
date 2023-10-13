@@ -44,7 +44,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion_common::hash_utils::create_hashes;
-use datafusion_common::stats::Sharpness;
+use datafusion_common::stats::Precision;
 use datafusion_common::utils::{
     evaluate_partition_ranges, get_arrayref_at_indices, get_at_indices,
     get_record_batch_at_indices, get_row_at_idx,
@@ -334,7 +334,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
         Ok(Statistics {
             num_rows: input_stat.num_rows,
             column_statistics,
-            total_byte_size: Sharpness::Absent,
+            total_byte_size: Precision::Absent,
         })
     }
 }

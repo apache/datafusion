@@ -31,11 +31,9 @@ use datafusion_expr::{
     type_coercion::{is_interval, is_null, is_signed_numeric},
     ColumnarValue,
 };
-use std::any::Any;
+
 use std::any::Any;
 use std::hash::{Hash, Hasher};
-use std::hash::{Hash, Hasher};
-use std::sync::Arc;
 use std::sync::Arc;
 
 /// Negative expression

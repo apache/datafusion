@@ -2208,9 +2208,9 @@ pub struct PartitionStats {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Sharpness {
-    #[prost(enumeration = "SharpnessInfo", tag = "1")]
-    pub sharpness_info: i32,
+pub struct Precision {
+    #[prost(enumeration = "PrecisionInfo", tag = "1")]
+    pub precision_info: i32,
     #[prost(message, optional, tag = "2")]
     pub val: ::core::option::Option<ScalarValue>,
 }
@@ -2218,9 +2218,9 @@ pub struct Sharpness {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Statistics {
     #[prost(message, optional, tag = "1")]
-    pub num_rows: ::core::option::Option<Sharpness>,
+    pub num_rows: ::core::option::Option<Precision>,
     #[prost(message, optional, tag = "2")]
-    pub total_byte_size: ::core::option::Option<Sharpness>,
+    pub total_byte_size: ::core::option::Option<Precision>,
     #[prost(message, repeated, tag = "3")]
     pub column_stats: ::prost::alloc::vec::Vec<ColumnStats>,
 }
@@ -2228,13 +2228,13 @@ pub struct Statistics {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ColumnStats {
     #[prost(message, optional, tag = "1")]
-    pub min_value: ::core::option::Option<Sharpness>,
+    pub min_value: ::core::option::Option<Precision>,
     #[prost(message, optional, tag = "2")]
-    pub max_value: ::core::option::Option<Sharpness>,
+    pub max_value: ::core::option::Option<Precision>,
     #[prost(message, optional, tag = "3")]
-    pub null_count: ::core::option::Option<Sharpness>,
+    pub null_count: ::core::option::Option<Precision>,
     #[prost(message, optional, tag = "4")]
-    pub distinct_count: ::core::option::Option<Sharpness>,
+    pub distinct_count: ::core::option::Option<Precision>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -3168,21 +3168,21 @@ impl JoinSide {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
-pub enum SharpnessInfo {
+pub enum PrecisionInfo {
     Exact = 0,
     Inexact = 1,
     Absent = 2,
 }
-impl SharpnessInfo {
+impl PrecisionInfo {
     /// String value of the enum field names used in the ProtoBuf definition.
     ///
     /// The values are not transformed in any way and thus are considered stable
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            SharpnessInfo::Exact => "EXACT",
-            SharpnessInfo::Inexact => "INEXACT",
-            SharpnessInfo::Absent => "ABSENT",
+            PrecisionInfo::Exact => "EXACT",
+            PrecisionInfo::Inexact => "INEXACT",
+            PrecisionInfo::Absent => "ABSENT",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.

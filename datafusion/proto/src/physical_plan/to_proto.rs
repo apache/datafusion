@@ -51,7 +51,7 @@ use datafusion::physical_plan::{
     AggregateExpr, ColumnStatistics, PhysicalExpr, Statistics, WindowExpr,
 };
 use datafusion_common::{
-    internal_err, not_impl_err, stats::Sharpness, DataFusionError, Result,
+    internal_err, not_impl_err, stats::Precision, DataFusionError, Result,
 };
 
 impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
@@ -623,42 +623,42 @@ impl TryFrom<&[PartitionedFile]> for protobuf::FileGroup {
     }
 }
 
-impl From<&Sharpness<usize>> for protobuf::Sharpness {
-    fn from(s: &Sharpness<usize>) -> protobuf::Sharpness {
+impl From<&Precision<usize>> for protobuf::Precision {
+    fn from(s: &Precision<usize>) -> protobuf::Precision {
         match s {
-            Sharpness::Exact(val) => protobuf::Sharpness {
-                sharpness_info: protobuf::SharpnessInfo::Exact.into(),
+            Precision::Exact(val) => protobuf::Precision {
+                precision_info: protobuf::PrecisionInfo::Exact.into(),
                 val: Some(ScalarValue {
                     value: Some(Value::Uint64Value(*val as u64)),
                 }),
             },
-            Sharpness::Inexact(val) => protobuf::Sharpness {
-                sharpness_info: protobuf::SharpnessInfo::Inexact.into(),
+            Precision::Inexact(val) => protobuf::Precision {
+                precision_info: protobuf::PrecisionInfo::Inexact.into(),
                 val: Some(ScalarValue {
                     value: Some(Value::Uint64Value(*val as u64)),
                 }),
             },
-            Sharpness::Absent => protobuf::Sharpness {
-                sharpness_info: protobuf::SharpnessInfo::Absent.into(),
+            Precision::Absent => protobuf::Precision {
+                precision_info: protobuf::PrecisionInfo::Absent.into(),
                 val: Some(ScalarValue { value: None }),
             },
         }
     }
 }
 
-impl From<&Sharpness<datafusion_common::ScalarValue>> for protobuf::Sharpness {
-    fn from(s: &Sharpness<datafusion_common::ScalarValue>) -> protobuf::Sharpness {
+impl From<&Precision<datafusion_common::ScalarValue>> for protobuf::Precision {
+    fn from(s: &Precision<datafusion_common::ScalarValue>) -> protobuf::Precision {
         match s {
-            Sharpness::Exact(val) => protobuf::Sharpness {
-                sharpness_info: protobuf::SharpnessInfo::Exact.into(),
+            Precision::Exact(val) => protobuf::Precision {
+                precision_info: protobuf::PrecisionInfo::Exact.into(),
                 val: val.try_into().ok(),
             },
-            Sharpness::Inexact(val) => protobuf::Sharpness {
-                sharpness_info: protobuf::SharpnessInfo::Inexact.into(),
+            Precision::Inexact(val) => protobuf::Precision {
+                precision_info: protobuf::PrecisionInfo::Inexact.into(),
                 val: val.try_into().ok(),
             },
-            Sharpness::Absent => protobuf::Sharpness {
-                sharpness_info: protobuf::SharpnessInfo::Absent.into(),
+            Precision::Absent => protobuf::Precision {
+                precision_info: protobuf::PrecisionInfo::Absent.into(),
                 val: Some(ScalarValue { value: None }),
             },
         }
@@ -669,8 +669,8 @@ impl From<&Statistics> for protobuf::Statistics {
     fn from(s: &Statistics) -> protobuf::Statistics {
         let column_stats = s.column_statistics.iter().map(|s| s.into()).collect();
         protobuf::Statistics {
-            num_rows: Some(protobuf::Sharpness::from(&s.num_rows)),
-            total_byte_size: Some(protobuf::Sharpness::from(&s.total_byte_size)),
+            num_rows: Some(protobuf::Precision::from(&s.num_rows)),
+            total_byte_size: Some(protobuf::Precision::from(&s.total_byte_size)),
             column_stats,
         }
     }
@@ -679,10 +679,10 @@ impl From<&Statistics> for protobuf::Statistics {
 impl From<&ColumnStatistics> for protobuf::ColumnStats {
     fn from(s: &ColumnStatistics) -> protobuf::ColumnStats {
         protobuf::ColumnStats {
-            min_value: Some(protobuf::Sharpness::from(&s.min_value)),
-            max_value: Some(protobuf::Sharpness::from(&s.max_value)),
-            null_count: Some(protobuf::Sharpness::from(&s.null_count)),
-            distinct_count: Some(protobuf::Sharpness::from(&s.distinct_count)),
+            min_value: Some(protobuf::Precision::from(&s.min_value)),
+            max_value: Some(protobuf::Precision::from(&s.max_value)),
+            null_count: Some(protobuf::Precision::from(&s.null_count)),
+            distinct_count: Some(protobuf::Precision::from(&s.distinct_count)),
         }
     }
 }

@@ -18316,6 +18316,191 @@ impl<'de> serde::Deserialize<'de> for PlanType {
         deserializer.deserialize_struct("datafusion.PlanType", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for Precision {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.precision_info != 0 {
+            len += 1;
+        }
+        if self.val.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.Precision", len)?;
+        if self.precision_info != 0 {
+            let v = PrecisionInfo::try_from(self.precision_info)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.precision_info)))?;
+            struct_ser.serialize_field("precisionInfo", &v)?;
+        }
+        if let Some(v) = self.val.as_ref() {
+            struct_ser.serialize_field("val", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for Precision {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "precision_info",
+            "precisionInfo",
+            "val",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            PrecisionInfo,
+            Val,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "precisionInfo" | "precision_info" => Ok(GeneratedField::PrecisionInfo),
+                            "val" => Ok(GeneratedField::Val),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = Precision;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.Precision")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<Precision, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut precision_info__ = None;
+                let mut val__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::PrecisionInfo => {
+                            if precision_info__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("precisionInfo"));
+                            }
+                            precision_info__ = Some(map_.next_value::<PrecisionInfo>()? as i32);
+                        }
+                        GeneratedField::Val => {
+                            if val__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("val"));
+                            }
+                            val__ = map_.next_value()?;
+                        }
+                    }
+                }
+                Ok(Precision {
+                    precision_info: precision_info__.unwrap_or_default(),
+                    val: val__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.Precision", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for PrecisionInfo {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let variant = match self {
+            Self::Exact => "EXACT",
+            Self::Inexact => "INEXACT",
+            Self::Absent => "ABSENT",
+        };
+        serializer.serialize_str(variant)
+    }
+}
+impl<'de> serde::Deserialize<'de> for PrecisionInfo {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "EXACT",
+            "INEXACT",
+            "ABSENT",
+        ];
+
+        struct GeneratedVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = PrecisionInfo;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(formatter, "expected one of: {:?}", &FIELDS)
+            }
+
+            fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Signed(v), &self)
+                    })
+            }
+
+            fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Unsigned(v), &self)
+                    })
+            }
+
+            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                match value {
+                    "EXACT" => Ok(PrecisionInfo::Exact),
+                    "INEXACT" => Ok(PrecisionInfo::Inexact),
+                    "ABSENT" => Ok(PrecisionInfo::Absent),
+                    _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
+                }
+            }
+        }
+        deserializer.deserialize_any(GeneratedVisitor)
+    }
+}
 impl serde::Serialize for PrepareNode {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -21548,191 +21733,6 @@ impl<'de> serde::Deserialize<'de> for SelectionNode {
             }
         }
         deserializer.deserialize_struct("datafusion.SelectionNode", FIELDS, GeneratedVisitor)
-    }
-}
-impl serde::Serialize for Sharpness {
-    #[allow(deprecated)]
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeStruct;
-        let mut len = 0;
-        if self.sharpness_info != 0 {
-            len += 1;
-        }
-        if self.val.is_some() {
-            len += 1;
-        }
-        let mut struct_ser = serializer.serialize_struct("datafusion.Sharpness", len)?;
-        if self.sharpness_info != 0 {
-            let v = SharpnessInfo::try_from(self.sharpness_info)
-                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.sharpness_info)))?;
-            struct_ser.serialize_field("sharpnessInfo", &v)?;
-        }
-        if let Some(v) = self.val.as_ref() {
-            struct_ser.serialize_field("val", v)?;
-        }
-        struct_ser.end()
-    }
-}
-impl<'de> serde::Deserialize<'de> for Sharpness {
-    #[allow(deprecated)]
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        const FIELDS: &[&str] = &[
-            "sharpness_info",
-            "sharpnessInfo",
-            "val",
-        ];
-
-        #[allow(clippy::enum_variant_names)]
-        enum GeneratedField {
-            SharpnessInfo,
-            Val,
-        }
-        impl<'de> serde::Deserialize<'de> for GeneratedField {
-            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
-            where
-                D: serde::Deserializer<'de>,
-            {
-                struct GeneratedVisitor;
-
-                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-                    type Value = GeneratedField;
-
-                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                        write!(formatter, "expected one of: {:?}", &FIELDS)
-                    }
-
-                    #[allow(unused_variables)]
-                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
-                    where
-                        E: serde::de::Error,
-                    {
-                        match value {
-                            "sharpnessInfo" | "sharpness_info" => Ok(GeneratedField::SharpnessInfo),
-                            "val" => Ok(GeneratedField::Val),
-                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
-                        }
-                    }
-                }
-                deserializer.deserialize_identifier(GeneratedVisitor)
-            }
-        }
-        struct GeneratedVisitor;
-        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-            type Value = Sharpness;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("struct datafusion.Sharpness")
-            }
-
-            fn visit_map<V>(self, mut map_: V) -> std::result::Result<Sharpness, V::Error>
-                where
-                    V: serde::de::MapAccess<'de>,
-            {
-                let mut sharpness_info__ = None;
-                let mut val__ = None;
-                while let Some(k) = map_.next_key()? {
-                    match k {
-                        GeneratedField::SharpnessInfo => {
-                            if sharpness_info__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("sharpnessInfo"));
-                            }
-                            sharpness_info__ = Some(map_.next_value::<SharpnessInfo>()? as i32);
-                        }
-                        GeneratedField::Val => {
-                            if val__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("val"));
-                            }
-                            val__ = map_.next_value()?;
-                        }
-                    }
-                }
-                Ok(Sharpness {
-                    sharpness_info: sharpness_info__.unwrap_or_default(),
-                    val: val__,
-                })
-            }
-        }
-        deserializer.deserialize_struct("datafusion.Sharpness", FIELDS, GeneratedVisitor)
-    }
-}
-impl serde::Serialize for SharpnessInfo {
-    #[allow(deprecated)]
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let variant = match self {
-            Self::Exact => "EXACT",
-            Self::Inexact => "INEXACT",
-            Self::Absent => "ABSENT",
-        };
-        serializer.serialize_str(variant)
-    }
-}
-impl<'de> serde::Deserialize<'de> for SharpnessInfo {
-    #[allow(deprecated)]
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        const FIELDS: &[&str] = &[
-            "EXACT",
-            "INEXACT",
-            "ABSENT",
-        ];
-
-        struct GeneratedVisitor;
-
-        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-            type Value = SharpnessInfo;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                write!(formatter, "expected one of: {:?}", &FIELDS)
-            }
-
-            fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                i32::try_from(v)
-                    .ok()
-                    .and_then(|x| x.try_into().ok())
-                    .ok_or_else(|| {
-                        serde::de::Error::invalid_value(serde::de::Unexpected::Signed(v), &self)
-                    })
-            }
-
-            fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                i32::try_from(v)
-                    .ok()
-                    .and_then(|x| x.try_into().ok())
-                    .ok_or_else(|| {
-                        serde::de::Error::invalid_value(serde::de::Unexpected::Unsigned(v), &self)
-                    })
-            }
-
-            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                match value {
-                    "EXACT" => Ok(SharpnessInfo::Exact),
-                    "INEXACT" => Ok(SharpnessInfo::Inexact),
-                    "ABSENT" => Ok(SharpnessInfo::Absent),
-                    _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
-                }
-            }
-        }
-        deserializer.deserialize_any(GeneratedVisitor)
     }
 }
 impl serde::Serialize for SimilarToNode {

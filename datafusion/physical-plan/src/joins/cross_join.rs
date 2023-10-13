@@ -35,7 +35,7 @@ use crate::{
 
 use arrow::datatypes::{Fields, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::stats::Sharpness;
+use datafusion_common::stats::Precision;
 use datafusion_common::{plan_err, DataFusionError, Result, ScalarValue};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
@@ -279,7 +279,7 @@ fn stats_cartesian_product(
     let total_byte_size = left_stats
         .total_byte_size
         .multiply(&right_stats.total_byte_size)
-        .multiply(&Sharpness::Exact(2));
+        .multiply(&Precision::Exact(2));
 
     let left_col_stats = left_stats.column_statistics;
     let right_col_stats = right_stats.column_statistics;
@@ -463,66 +463,66 @@ mod tests {
         let right_bytes = 27;
 
         let left = Statistics {
-            num_rows: Sharpness::Exact(left_row_count),
-            total_byte_size: Sharpness::Exact(left_bytes),
+            num_rows: Precision::Exact(left_row_count),
+            total_byte_size: Precision::Exact(left_bytes),
             column_statistics: vec![
                 ColumnStatistics {
-                    distinct_count: Sharpness::Exact(5),
-                    max_value: Sharpness::Exact(ScalarValue::Int64(Some(21))),
-                    min_value: Sharpness::Exact(ScalarValue::Int64(Some(-4))),
-                    null_count: Sharpness::Exact(0),
+                    distinct_count: Precision::Exact(5),
+                    max_value: Precision::Exact(ScalarValue::Int64(Some(21))),
+                    min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
+                    null_count: Precision::Exact(0),
                 },
                 ColumnStatistics {
-                    distinct_count: Sharpness::Exact(1),
-                    max_value: Sharpness::Exact(ScalarValue::Utf8(Some(String::from(
+                    distinct_count: Precision::Exact(1),
+                    max_value: Precision::Exact(ScalarValue::Utf8(Some(String::from(
                         "x",
                     )))),
-                    min_value: Sharpness::Exact(ScalarValue::Utf8(Some(String::from(
+                    min_value: Precision::Exact(ScalarValue::Utf8(Some(String::from(
                         "a",
                     )))),
-                    null_count: Sharpness::Exact(3),
+                    null_count: Precision::Exact(3),
                 },
             ],
         };
 
         let right = Statistics {
-            num_rows: Sharpness::Exact(right_row_count),
-            total_byte_size: Sharpness::Exact(right_bytes),
+            num_rows: Precision::Exact(right_row_count),
+            total_byte_size: Precision::Exact(right_bytes),
             column_statistics: vec![ColumnStatistics {
-                distinct_count: Sharpness::Exact(3),
-                max_value: Sharpness::Exact(ScalarValue::Int64(Some(12))),
-                min_value: Sharpness::Exact(ScalarValue::Int64(Some(0))),
-                null_count: Sharpness::Exact(2),
+                distinct_count: Precision::Exact(3),
+                max_value: Precision::Exact(ScalarValue::Int64(Some(12))),
+                min_value: Precision::Exact(ScalarValue::Int64(Some(0))),
+                null_count: Precision::Exact(2),
             }],
         };
 
         let result = stats_cartesian_product(left, right);
 
         let expected = Statistics {
-            num_rows: Sharpness::Exact(left_row_count * right_row_count),
-            total_byte_size: Sharpness::Exact(2 * left_bytes * right_bytes),
+            num_rows: Precision::Exact(left_row_count * right_row_count),
+            total_byte_size: Precision::Exact(2 * left_bytes * right_bytes),
             column_statistics: vec![
                 ColumnStatistics {
-                    distinct_count: Sharpness::Exact(5),
-                    max_value: Sharpness::Exact(ScalarValue::Int64(Some(21))),
-                    min_value: Sharpness::Exact(ScalarValue::Int64(Some(-4))),
-                    null_count: Sharpness::Exact(0),
+                    distinct_count: Precision::Exact(5),
+                    max_value: Precision::Exact(ScalarValue::Int64(Some(21))),
+                    min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
+                    null_count: Precision::Exact(0),
                 },
                 ColumnStatistics {
-                    distinct_count: Sharpness::Exact(1),
-                    max_value: Sharpness::Exact(ScalarValue::Utf8(Some(String::from(
+                    distinct_count: Precision::Exact(1),
+                    max_value: Precision::Exact(ScalarValue::Utf8(Some(String::from(
                         "x",
                     )))),
-                    min_value: Sharpness::Exact(ScalarValue::Utf8(Some(String::from(
+                    min_value: Precision::Exact(ScalarValue::Utf8(Some(String::from(
                         "a",
                     )))),
-                    null_count: Sharpness::Exact(3 * right_row_count),
+                    null_count: Precision::Exact(3 * right_row_count),
                 },
                 ColumnStatistics {
-                    distinct_count: Sharpness::Exact(3),
-                    max_value: Sharpness::Exact(ScalarValue::Int64(Some(12))),
-                    min_value: Sharpness::Exact(ScalarValue::Int64(Some(0))),
-                    null_count: Sharpness::Exact(2 * left_row_count),
+                    distinct_count: Precision::Exact(3),
+                    max_value: Precision::Exact(ScalarValue::Int64(Some(12))),
+                    min_value: Precision::Exact(ScalarValue::Int64(Some(0))),
+                    null_count: Precision::Exact(2 * left_row_count),
                 },
             ],
         };
@@ -535,66 +535,66 @@ mod tests {
         let left_row_count = 11;
 
         let left = Statistics {
-            num_rows: Sharpness::Exact(left_row_count),
-            total_byte_size: Sharpness::Exact(23),
+            num_rows: Precision::Exact(left_row_count),
+            total_byte_size: Precision::Exact(23),
             column_statistics: vec![
                 ColumnStatistics {
-                    distinct_count: Sharpness::Exact(5),
-                    max_value: Sharpness::Exact(ScalarValue::Int64(Some(21))),
-                    min_value: Sharpness::Exact(ScalarValue::Int64(Some(-4))),
-                    null_count: Sharpness::Exact(0),
+                    distinct_count: Precision::Exact(5),
+                    max_value: Precision::Exact(ScalarValue::Int64(Some(21))),
+                    min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
+                    null_count: Precision::Exact(0),
                 },
                 ColumnStatistics {
-                    distinct_count: Sharpness::Exact(1),
-                    max_value: Sharpness::Exact(ScalarValue::Utf8(Some(String::from(
+                    distinct_count: Precision::Exact(1),
+                    max_value: Precision::Exact(ScalarValue::Utf8(Some(String::from(
                         "x",
                     )))),
-                    min_value: Sharpness::Exact(ScalarValue::Utf8(Some(String::from(
+                    min_value: Precision::Exact(ScalarValue::Utf8(Some(String::from(
                         "a",
                     )))),
-                    null_count: Sharpness::Exact(3),
+                    null_count: Precision::Exact(3),
                 },
             ],
         };
 
         let right = Statistics {
-            num_rows: Sharpness::Absent,
-            total_byte_size: Sharpness::Absent,
+            num_rows: Precision::Absent,
+            total_byte_size: Precision::Absent,
             column_statistics: vec![ColumnStatistics {
-                distinct_count: Sharpness::Exact(3),
-                max_value: Sharpness::Exact(ScalarValue::Int64(Some(12))),
-                min_value: Sharpness::Exact(ScalarValue::Int64(Some(0))),
-                null_count: Sharpness::Exact(2),
+                distinct_count: Precision::Exact(3),
+                max_value: Precision::Exact(ScalarValue::Int64(Some(12))),
+                min_value: Precision::Exact(ScalarValue::Int64(Some(0))),
+                null_count: Precision::Exact(2),
             }],
         };
 
         let result = stats_cartesian_product(left, right);
 
         let expected = Statistics {
-            num_rows: Sharpness::Absent,
-            total_byte_size: Sharpness::Absent,
+            num_rows: Precision::Absent,
+            total_byte_size: Precision::Absent,
             column_statistics: vec![
                 ColumnStatistics {
-                    distinct_count: Sharpness::Exact(5),
-                    max_value: Sharpness::Exact(ScalarValue::Int64(Some(21))),
-                    min_value: Sharpness::Exact(ScalarValue::Int64(Some(-4))),
-                    null_count: Sharpness::Absent, // we don't know the row count on the right
+                    distinct_count: Precision::Exact(5),
+                    max_value: Precision::Exact(ScalarValue::Int64(Some(21))),
+                    min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
+                    null_count: Precision::Absent, // we don't know the row count on the right
                 },
                 ColumnStatistics {
-                    distinct_count: Sharpness::Exact(1),
-                    max_value: Sharpness::Exact(ScalarValue::Utf8(Some(String::from(
+                    distinct_count: Precision::Exact(1),
+                    max_value: Precision::Exact(ScalarValue::Utf8(Some(String::from(
                         "x",
                     )))),
-                    min_value: Sharpness::Exact(ScalarValue::Utf8(Some(String::from(
+                    min_value: Precision::Exact(ScalarValue::Utf8(Some(String::from(
                         "a",
                     )))),
-                    null_count: Sharpness::Absent, // we don't know the row count on the right
+                    null_count: Precision::Absent, // we don't know the row count on the right
                 },
                 ColumnStatistics {
-                    distinct_count: Sharpness::Exact(3),
-                    max_value: Sharpness::Exact(ScalarValue::Int64(Some(12))),
-                    min_value: Sharpness::Exact(ScalarValue::Int64(Some(0))),
-                    null_count: Sharpness::Exact(2 * left_row_count),
+                    distinct_count: Precision::Exact(3),
+                    max_value: Precision::Exact(ScalarValue::Int64(Some(12))),
+                    min_value: Precision::Exact(ScalarValue::Int64(Some(0))),
+                    null_count: Precision::Exact(2 * left_row_count),
                 },
             ],
         };

@@ -30,7 +30,7 @@ use crate::{ColumnStatistics, ExecutionPlan, Statistics};
 use arrow::datatypes::Schema;
 use arrow::ipc::writer::{FileWriter, IpcWriteOptions};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::stats::Sharpness;
+use datafusion_common::stats::Precision;
 use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column};
@@ -156,14 +156,14 @@ pub fn compute_record_batch_statistics(
         for batch in partition {
             for (stat_index, col_index) in projection.iter().enumerate() {
                 column_statistics[stat_index].null_count =
-                    Sharpness::Exact(batch.column(*col_index).null_count());
+                    Precision::Exact(batch.column(*col_index).null_count());
             }
         }
     }
 
     Statistics {
-        num_rows: Sharpness::Exact(nb_rows),
-        total_byte_size: Sharpness::Exact(total_byte_size),
+        num_rows: Precision::Exact(nb_rows),
+        total_byte_size: Precision::Exact(total_byte_size),
         column_statistics,
     }
 }
@@ -675,8 +675,8 @@ mod tests {
         ]));
         let stats = compute_record_batch_statistics(&[], &schema, Some(vec![0, 1]));
 
-        assert_eq!(stats.num_rows, Sharpness::Exact(0));
-        assert_eq!(stats.total_byte_size, Sharpness::Exact(0));
+        assert_eq!(stats.num_rows, Precision::Exact(0));
+        assert_eq!(stats.total_byte_size, Precision::Exact(0));
         Ok(())
     }
 
@@ -697,20 +697,20 @@ mod tests {
             compute_record_batch_statistics(&[vec![batch]], &schema, Some(vec![0, 1]));
 
         let mut expected = Statistics {
-            num_rows: Sharpness::Exact(3),
-            total_byte_size: Sharpness::Exact(464), // this might change a bit if the way we compute the size changes
+            num_rows: Precision::Exact(3),
+            total_byte_size: Precision::Exact(464), // this might change a bit if the way we compute the size changes
             column_statistics: vec![
                 ColumnStatistics {
-                    distinct_count: Sharpness::Absent,
-                    max_value: Sharpness::Absent,
-                    min_value: Sharpness::Absent,
-                    null_count: Sharpness::Exact(0),
+                    distinct_count: Precision::Absent,
+                    max_value: Precision::Absent,
+                    min_value: Precision::Absent,
+                    null_count: Precision::Exact(0),
                 },
                 ColumnStatistics {
-                    distinct_count: Sharpness::Absent,
-                    max_value: Sharpness::Absent,
-                    min_value: Sharpness::Absent,
-                    null_count: Sharpness::Exact(0),
+                    distinct_count: Precision::Absent,
+                    max_value: Precision::Absent,
+                    min_value: Precision::Absent,
+                    null_count: Precision::Exact(0),
                 },
             ],
         };

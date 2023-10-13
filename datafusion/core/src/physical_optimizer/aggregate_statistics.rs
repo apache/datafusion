@@ -27,7 +27,7 @@ use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::{expressions, AggregateExpr, ExecutionPlan, Statistics};
 use crate::scalar::ScalarValue;
 
-use datafusion_common::stats::Sharpness;
+use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::TreeNode;
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
 
@@ -141,7 +141,7 @@ fn take_optimizable_table_count(
     agg_expr: &dyn AggregateExpr,
     stats: &Statistics,
 ) -> Option<(ScalarValue, &'static str)> {
-    if let (&Sharpness::Exact(num_rows), Some(casted_expr)) = (
+    if let (&Precision::Exact(num_rows), Some(casted_expr)) = (
         &stats.num_rows,
         agg_expr.as_any().downcast_ref::<expressions::Count>(),
     ) {
@@ -169,7 +169,7 @@ fn take_optimizable_column_count(
     stats: &Statistics,
 ) -> Option<(ScalarValue, String)> {
     let col_stats = &stats.column_statistics;
-    if let (&Sharpness::Exact(num_rows), Some(casted_expr)) = (
+    if let (&Precision::Exact(num_rows), Some(casted_expr)) = (
         &stats.num_rows,
         agg_expr.as_any().downcast_ref::<expressions::Count>(),
     ) {
@@ -180,7 +180,7 @@ fn take_optimizable_column_count(
                 .downcast_ref::<expressions::Column>()
             {
                 let current_val = &col_stats[col_expr.index()].null_count;
-                if let &Sharpness::Exact(val) = current_val {
+                if let &Precision::Exact(val) = current_val {
                     return Some((
                         ScalarValue::Int64(Some((num_rows - val) as i64)),
                         casted_expr.name().to_string(),
@@ -205,7 +205,7 @@ fn take_optimizable_min(
                 .as_any()
                 .downcast_ref::<expressions::Column>()
             {
-                if let Sharpness::Exact(val) = &col_stats[col_expr.index()].min_value {
+                if let Precision::Exact(val) = &col_stats[col_expr.index()].min_value {
                     if !val.is_null() {
                         return Some((val.clone(), casted_expr.name().to_string()));
                     }
@@ -229,7 +229,7 @@ fn take_optimizable_max(
                 .as_any()
                 .downcast_ref::<expressions::Column>()
             {
-                if let Sharpness::Exact(val) = &col_stats[col_expr.index()].max_value {
+                if let Precision::Exact(val) = &col_stats[col_expr.index()].max_value {
                     if !val.is_null() {
                         return Some((val.clone(), casted_expr.name().to_string()));
                     }

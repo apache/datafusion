@@ -601,15 +601,15 @@ mod tests_statistical {
     };
 
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::{stats::Sharpness, JoinType, ScalarValue};
+    use datafusion_common::{stats::Precision, JoinType, ScalarValue};
     use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_expr::PhysicalExpr;
 
     fn create_big_and_small() -> (Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>) {
         let big = Arc::new(StatisticsExec::new(
             Statistics {
-                num_rows: Sharpness::Inexact(10),
-                total_byte_size: Sharpness::Inexact(100000),
+                num_rows: Precision::Inexact(10),
+                total_byte_size: Precision::Inexact(100000),
                 column_statistics: vec![ColumnStatistics::new_unknown()],
             },
             Schema::new(vec![Field::new("big_col", DataType::Int32, false)]),
@@ -617,8 +617,8 @@ mod tests_statistical {
 
         let small = Arc::new(StatisticsExec::new(
             Statistics {
-                num_rows: Sharpness::Inexact(100000),
-                total_byte_size: Sharpness::Inexact(10),
+                num_rows: Precision::Inexact(100000),
+                total_byte_size: Precision::Inexact(10),
                 column_statistics: vec![ColumnStatistics::new_unknown()],
             },
             Schema::new(vec![Field::new("small_col", DataType::Int32, false)]),
@@ -638,14 +638,14 @@ mod tests_statistical {
     ) -> Vec<ColumnStatistics> {
         vec![ColumnStatistics {
             distinct_count: distinct_count
-                .map(Sharpness::Inexact)
-                .unwrap_or(Sharpness::Absent),
+                .map(Precision::Inexact)
+                .unwrap_or(Precision::Absent),
             min_value: min
-                .map(|size| Sharpness::Inexact(ScalarValue::UInt64(Some(size))))
-                .unwrap_or(Sharpness::Absent),
+                .map(|size| Precision::Inexact(ScalarValue::UInt64(Some(size))))
+                .unwrap_or(Precision::Absent),
             max_value: max
-                .map(|size| Sharpness::Inexact(ScalarValue::UInt64(Some(size))))
-                .unwrap_or(Sharpness::Absent),
+                .map(|size| Precision::Inexact(ScalarValue::UInt64(Some(size))))
+                .unwrap_or(Precision::Absent),
             ..Default::default()
         }]
     }
@@ -661,39 +661,39 @@ mod tests_statistical {
     ) {
         let big = Arc::new(StatisticsExec::new(
             Statistics {
-                num_rows: Sharpness::Inexact(100_000),
+                num_rows: Precision::Inexact(100_000),
                 column_statistics: create_column_stats(
                     Some(0),
                     Some(50_000),
                     Some(50_000),
                 ),
-                total_byte_size: Sharpness::Absent,
+                total_byte_size: Precision::Absent,
             },
             Schema::new(vec![Field::new("big_col", DataType::Int32, false)]),
         ));
 
         let medium = Arc::new(StatisticsExec::new(
             Statistics {
-                num_rows: Sharpness::Inexact(10_000),
+                num_rows: Precision::Inexact(10_000),
                 column_statistics: create_column_stats(
                     Some(1000),
                     Some(5000),
                     Some(1000),
                 ),
-                total_byte_size: Sharpness::Absent,
+                total_byte_size: Precision::Absent,
             },
             Schema::new(vec![Field::new("medium_col", DataType::Int32, false)]),
         ));
 
         let small = Arc::new(StatisticsExec::new(
             Statistics {
-                num_rows: Sharpness::Inexact(1000),
+                num_rows: Precision::Inexact(1000),
                 column_statistics: create_column_stats(
                     Some(0),
                     Some(100_000),
                     Some(1000),
                 ),
-                total_byte_size: Sharpness::Absent,
+                total_byte_size: Precision::Absent,
             },
             Schema::new(vec![Field::new("small_col", DataType::Int32, false)]),
         ));
@@ -744,11 +744,11 @@ mod tests_statistical {
 
         assert_eq!(
             swapped_join.left().statistics().unwrap().total_byte_size,
-            Sharpness::Inexact(10)
+            Precision::Inexact(10)
         );
         assert_eq!(
             swapped_join.right().statistics().unwrap().total_byte_size,
-            Sharpness::Inexact(100000)
+            Precision::Inexact(100000)
         );
     }
 
@@ -795,11 +795,11 @@ mod tests_statistical {
 
         assert_eq!(
             swapped_join.left().statistics().unwrap().total_byte_size,
-            Sharpness::Inexact(100000)
+            Precision::Inexact(100000)
         );
         assert_eq!(
             swapped_join.right().statistics().unwrap().total_byte_size,
-            Sharpness::Inexact(10)
+            Precision::Inexact(10)
         );
     }
 
@@ -840,11 +840,11 @@ mod tests_statistical {
 
             assert_eq!(
                 swapped_join.left().statistics().unwrap().total_byte_size,
-                Sharpness::Inexact(10)
+                Precision::Inexact(10)
             );
             assert_eq!(
                 swapped_join.right().statistics().unwrap().total_byte_size,
-                Sharpness::Inexact(100000)
+                Precision::Inexact(100000)
             );
 
             assert_eq!(original_schema, swapped_join.schema());
@@ -955,11 +955,11 @@ mod tests_statistical {
 
         assert_eq!(
             swapped_join.left().statistics().unwrap().total_byte_size,
-            Sharpness::Inexact(10)
+            Precision::Inexact(10)
         );
         assert_eq!(
             swapped_join.right().statistics().unwrap().total_byte_size,
-            Sharpness::Inexact(100000)
+            Precision::Inexact(100000)
         );
     }
 
@@ -1002,8 +1002,8 @@ mod tests_statistical {
     async fn test_join_selection_collect_left() {
         let big = Arc::new(StatisticsExec::new(
             Statistics {
-                num_rows: Sharpness::Inexact(10000000),
-                total_byte_size: Sharpness::Inexact(10000000),
+                num_rows: Precision::Inexact(10000000),
+                total_byte_size: Precision::Inexact(10000000),
                 column_statistics: vec![ColumnStatistics::new_unknown()],
             },
             Schema::new(vec![Field::new("big_col", DataType::Int32, false)]),
@@ -1011,8 +1011,8 @@ mod tests_statistical {
 
         let small = Arc::new(StatisticsExec::new(
             Statistics {
-                num_rows: Sharpness::Inexact(10),
-                total_byte_size: Sharpness::Inexact(10),
+                num_rows: Precision::Inexact(10),
+                total_byte_size: Precision::Inexact(10),
                 column_statistics: vec![ColumnStatistics::new_unknown()],
             },
             Schema::new(vec![Field::new("small_col", DataType::Int32, false)]),
@@ -1020,8 +1020,8 @@ mod tests_statistical {
 
         let empty = Arc::new(StatisticsExec::new(
             Statistics {
-                num_rows: Sharpness::Absent,
-                total_byte_size: Sharpness::Absent,
+                num_rows: Precision::Absent,
+                total_byte_size: Precision::Absent,
                 column_statistics: vec![ColumnStatistics::new_unknown()],
             },
             Schema::new(vec![Field::new("empty_col", DataType::Int32, false)]),
@@ -1080,8 +1080,8 @@ mod tests_statistical {
     async fn test_join_selection_partitioned() {
         let big1 = Arc::new(StatisticsExec::new(
             Statistics {
-                num_rows: Sharpness::Inexact(10000000),
-                total_byte_size: Sharpness::Inexact(10000000),
+                num_rows: Precision::Inexact(10000000),
+                total_byte_size: Precision::Inexact(10000000),
                 column_statistics: vec![ColumnStatistics::new_unknown()],
             },
             Schema::new(vec![Field::new("big_col1", DataType::Int32, false)]),
@@ -1089,8 +1089,8 @@ mod tests_statistical {
 
         let big2 = Arc::new(StatisticsExec::new(
             Statistics {
-                num_rows: Sharpness::Inexact(20000000),
-                total_byte_size: Sharpness::Inexact(20000000),
+                num_rows: Precision::Inexact(20000000),
+                total_byte_size: Precision::Inexact(20000000),
                 column_statistics: vec![ColumnStatistics::new_unknown()],
             },
             Schema::new(vec![Field::new("big_col2", DataType::Int32, false)]),
@@ -1098,8 +1098,8 @@ mod tests_statistical {
 
         let empty = Arc::new(StatisticsExec::new(
             Statistics {
-                num_rows: Sharpness::Absent,
-                total_byte_size: Sharpness::Absent,
+                num_rows: Precision::Absent,
+                total_byte_size: Precision::Absent,
                 column_statistics: vec![ColumnStatistics::new_unknown()],
             },
             Schema::new(vec![Field::new("empty_col", DataType::Int32, false)]),
@@ -1205,11 +1205,8 @@ mod util_tests {
     use std::sync::Arc;
 
     use arrow_schema::{DataType, Field, Schema};
-    use datafusion_common::ScalarValue;
     use datafusion_expr::Operator;
-    use datafusion_physical_expr::expressions::{
-        BinaryExpr, Column, Literal, NegativeExpr,
-    };
+    use datafusion_physical_expr::expressions::{BinaryExpr, Column, NegativeExpr};
     use datafusion_physical_expr::intervals::utils::check_support;
     use datafusion_physical_expr::PhysicalExpr;
 

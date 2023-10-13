@@ -39,7 +39,7 @@ use datafusion::physical_plan::{
 use datafusion::scalar::ScalarValue;
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::project_schema;
-use datafusion_common::stats::Sharpness;
+use datafusion_common::stats::Precision;
 
 use async_trait::async_trait;
 use futures::stream::Stream;
@@ -154,19 +154,19 @@ impl ExecutionPlan for CustomExecutionPlan {
     fn statistics(&self) -> Result<Statistics> {
         let batch = TEST_CUSTOM_RECORD_BATCH!().unwrap();
         Ok(Statistics {
-            num_rows: Sharpness::Exact(batch.num_rows()),
-            total_byte_size: Sharpness::Absent,
+            num_rows: Precision::Exact(batch.num_rows()),
+            total_byte_size: Precision::Absent,
             column_statistics: self
                 .projection
                 .clone()
                 .unwrap_or_else(|| (0..batch.columns().len()).collect())
                 .iter()
                 .map(|i| ColumnStatistics {
-                    null_count: Sharpness::Exact(batch.column(*i).null_count()),
-                    min_value: Sharpness::Exact(ScalarValue::Int32(aggregate::min(
+                    null_count: Precision::Exact(batch.column(*i).null_count()),
+                    min_value: Precision::Exact(ScalarValue::Int32(aggregate::min(
                         as_primitive_array::<Int32Type>(batch.column(*i)).unwrap(),
                     ))),
-                    max_value: Sharpness::Exact(ScalarValue::Int32(aggregate::max(
+                    max_value: Precision::Exact(ScalarValue::Int32(aggregate::max(
                         as_primitive_array::<Int32Type>(batch.column(*i)).unwrap(),
                     ))),
                     ..Default::default()

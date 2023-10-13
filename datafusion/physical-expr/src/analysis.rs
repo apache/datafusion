@@ -23,9 +23,8 @@ use std::sync::Arc;
 use arrow::datatypes::Schema;
 use arrow_schema::Field;
 
-use datafusion_common::{
-    ColumnStatistics, DataFusionError, Result, ScalarValue, Sharpness,
-};
+use datafusion_common::stats::Precision;
+use datafusion_common::{ColumnStatistics, DataFusionError, Result, ScalarValue};
 
 use crate::expressions::Column;
 use crate::intervals::cp_solver::PropagationResult;
@@ -105,7 +104,7 @@ pub struct ExprBoundaries {
     /// Minimum and maximum values this expression can have.
     pub interval: Interval,
     /// Maximum number of distinct values this expression can produce, if known.
-    pub distinct_count: Sharpness<usize>,
+    pub distinct_count: Precision<usize>,
 }
 
 /// Attempts to refine column boundaries and compute a selectivity value.

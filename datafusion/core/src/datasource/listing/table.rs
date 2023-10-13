@@ -1049,7 +1049,7 @@ mod tests {
 
     use arrow::datatypes::{DataType, Schema};
     use arrow::record_batch::RecordBatch;
-    use datafusion_common::stats::Sharpness;
+    use datafusion_common::stats::Precision;
     use datafusion_common::{assert_contains, GetExt, ScalarValue};
     use datafusion_expr::{BinaryExpr, LogicalPlanBuilder, Operator};
     use rstest::*;
@@ -1098,8 +1098,8 @@ mod tests {
         assert_eq!(exec.output_partitioning().partition_count(), 1);
 
         // test metadata
-        assert_eq!(exec.statistics()?.num_rows, Sharpness::Exact(8));
-        assert_eq!(exec.statistics()?.total_byte_size, Sharpness::Exact(671));
+        assert_eq!(exec.statistics()?.num_rows, Precision::Exact(8));
+        assert_eq!(exec.statistics()?.total_byte_size, Precision::Exact(671));
 
         Ok(())
     }
@@ -1121,8 +1121,8 @@ mod tests {
         let table = ListingTable::try_new(config)?;
 
         let exec = table.scan(&state, None, &[], None).await?;
-        assert_eq!(exec.statistics()?.num_rows, Sharpness::Exact(8));
-        assert_eq!(exec.statistics()?.total_byte_size, Sharpness::Exact(671));
+        assert_eq!(exec.statistics()?.num_rows, Precision::Exact(8));
+        assert_eq!(exec.statistics()?.total_byte_size, Precision::Exact(671));
 
         Ok(())
     }
@@ -1145,8 +1145,8 @@ mod tests {
         let table = ListingTable::try_new(config)?;
 
         let exec = table.scan(&state, None, &[], None).await?;
-        assert_eq!(exec.statistics()?.num_rows, Sharpness::Absent);
-        assert_eq!(exec.statistics()?.total_byte_size, Sharpness::Absent);
+        assert_eq!(exec.statistics()?.num_rows, Precision::Absent);
+        assert_eq!(exec.statistics()?.total_byte_size, Precision::Absent);
 
         Ok(())
     }

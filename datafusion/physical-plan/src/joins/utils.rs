@@ -39,7 +39,7 @@ use arrow::compute;
 use arrow::datatypes::{Field, Schema, SchemaBuilder};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::stats::Sharpness;
+use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
     exec_err, plan_err, DataFusionError, JoinType, Result, SharedResult,
@@ -733,12 +733,12 @@ pub(crate) fn estimate_join_statistics(
 
     let join_stats = estimate_join_cardinality(join_type, left_stats, right_stats, &on);
     let (num_rows, column_statistics) = match join_stats {
-        Some(stats) => (Sharpness::Inexact(stats.num_rows), stats.column_statistics),
-        None => (Sharpness::Absent, Statistics::unknown_column(schema)),
+        Some(stats) => (Precision::Inexact(stats.num_rows), stats.column_statistics),
+        None => (Precision::Absent, Statistics::unknown_column(schema)),
     };
     Ok(Statistics {
         num_rows,
-        total_byte_size: Sharpness::Absent,
+        total_byte_size: Precision::Absent,
         column_statistics,
     })
 }
@@ -765,12 +765,12 @@ fn estimate_join_cardinality(
             let ij_cardinality = estimate_inner_join_cardinality(
                 Statistics {
                     num_rows: left_stats.num_rows.clone(),
-                    total_byte_size: Sharpness::Absent,
+                    total_byte_size: Precision::Absent,
                     column_statistics: left_col_stats,
                 },
                 Statistics {
                     num_rows: right_stats.num_rows.clone(),
-                    total_byte_size: Sharpness::Absent,
+                    total_byte_size: Precision::Absent,
                     column_statistics: right_col_stats,
                 },
             )?;
@@ -818,10 +818,10 @@ fn estimate_join_cardinality(
 fn estimate_inner_join_cardinality(
     left_stats: Statistics,
     right_stats: Statistics,
-) -> Option<Sharpness<usize>> {
+) -> Option<Precision<usize>> {
     // The algorithm here is partly based on the non-histogram selectivity estimation
     // from Spark's Catalyst optimizer.
-    let mut join_selectivity = Sharpness::Absent;
+    let mut join_selectivity = Precision::Absent;
     for (left_stat, right_stat) in left_stats
         .column_statistics
         .iter()
@@ -835,9 +835,9 @@ fn estimate_inner_join_cardinality(
                 if left_stat.min_value.is_exact().unwrap_or(false)
                     && right_stat.max_value.is_exact().unwrap_or(false)
                 {
-                    Sharpness::Exact(0)
+                    Precision::Exact(0)
                 } else {
-                    Sharpness::Inexact(0)
+                    Precision::Inexact(0)
                 },
             );
         }
@@ -846,9 +846,9 @@ fn estimate_inner_join_cardinality(
                 if left_stat.max_value.is_exact().unwrap_or(false)
                     && right_stat.min_value.is_exact().unwrap_or(false)
                 {
-                    Sharpness::Exact(0)
+                    Precision::Exact(0)
                 } else {
-                    Sharpness::Inexact(0)
+                    Precision::Inexact(0)
                 },
             );
         }
@@ -870,11 +870,11 @@ fn estimate_inner_join_cardinality(
     let left_num_rows = left_stats.num_rows.get_value()?;
     let right_num_rows = right_stats.num_rows.get_value()?;
     match join_selectivity {
-        Sharpness::Exact(value) if value > 0 => {
-            Some(Sharpness::Exact((left_num_rows * right_num_rows) / value))
+        Precision::Exact(value) if value > 0 => {
+            Some(Precision::Exact((left_num_rows * right_num_rows) / value))
         }
-        Sharpness::Inexact(value) if value > 0 => {
-            Some(Sharpness::Inexact((left_num_rows * right_num_rows) / value))
+        Precision::Inexact(value) if value > 0 => {
+            Some(Precision::Inexact((left_num_rows * right_num_rows) / value))
         }
         // Since we don't have any information about the selectivity (which is derived
         // from the number of distinct rows information) we can give up here for now.
@@ -891,15 +891,15 @@ fn estimate_inner_join_cardinality(
 /// has min/max values, then they might be used as a fallback option. Otherwise,
 /// returns None.
 fn max_distinct_count(
-    num_rows: &Sharpness<usize>,
+    num_rows: &Precision<usize>,
     stats: &ColumnStatistics,
-) -> Option<Sharpness<usize>> {
+) -> Option<Precision<usize>> {
     match (
         &stats.distinct_count,
         stats.max_value.get_value(),
         stats.min_value.get_value(),
     ) {
-        (Sharpness::Exact(_), _, _) | (Sharpness::Inexact(_), _, _) => {
+        (Precision::Exact(_), _, _) | (Precision::Inexact(_), _, _) => {
             Some(stats.distinct_count.clone())
         }
         (_, Some(max), Some(min)) => {
@@ -920,9 +920,9 @@ fn max_distinct_count(
                     && stats.max_value.is_exact().unwrap_or(false)
                     && stats.min_value.is_exact().unwrap_or(false)
                 {
-                    Sharpness::Exact(numeric_range.min(ceiling))
+                    Precision::Exact(numeric_range.min(ceiling))
                 } else {
-                    Sharpness::Inexact(numeric_range.min(ceiling))
+                    Precision::Inexact(numeric_range.min(ceiling))
                 },
             )
         }
@@ -1572,13 +1572,13 @@ mod tests {
     ) -> Statistics {
         Statistics {
             num_rows: if is_exact {
-                num_rows.map(Sharpness::Exact)
+                num_rows.map(Precision::Exact)
             } else {
-                num_rows.map(Sharpness::Inexact)
+                num_rows.map(Precision::Inexact)
             }
-            .unwrap_or(Sharpness::Absent),
+            .unwrap_or(Precision::Absent),
             column_statistics: column_stats,
-            total_byte_size: Sharpness::Absent,
+            total_byte_size: Precision::Absent,
         }
     }
 
@@ -1589,14 +1589,14 @@ mod tests {
     ) -> ColumnStatistics {
         ColumnStatistics {
             distinct_count: distinct_count
-                .map(Sharpness::Inexact)
-                .unwrap_or(Sharpness::Absent),
+                .map(Precision::Inexact)
+                .unwrap_or(Precision::Absent),
             min_value: min
-                .map(|size| Sharpness::Inexact(ScalarValue::from(size)))
-                .unwrap_or(Sharpness::Absent),
+                .map(|size| Precision::Inexact(ScalarValue::from(size)))
+                .unwrap_or(Precision::Absent),
             max_value: max
-                .map(|size| Sharpness::Inexact(ScalarValue::from(size)))
-                .unwrap_or(Sharpness::Absent),
+                .map(|size| Precision::Inexact(ScalarValue::from(size)))
+                .unwrap_or(Precision::Absent),
             ..Default::default()
         }
     }
@@ -1608,7 +1608,7 @@ mod tests {
     // over the expected output (since it depends on join type to join type).
     #[test]
     fn test_inner_join_cardinality_single_column() -> Result<()> {
-        let cases: Vec<(PartialStats, PartialStats, Option<Sharpness<usize>>)> = vec![
+        let cases: Vec<(PartialStats, PartialStats, Option<Precision<usize>>)> = vec![
             // -----------------------------------------------------------------------------
             // | left(rows, min, max, distinct), right(rows, min, max, distinct), expected |
             // -----------------------------------------------------------------------------
@@ -1620,55 +1620,55 @@ mod tests {
             (
                 (10, Some(1), Some(10), None),
                 (10, Some(1), Some(10), None),
-                Some(Sharpness::Inexact(10)),
+                Some(Precision::Inexact(10)),
             ),
             // range(left) > range(right)
             (
                 (10, Some(6), Some(10), None),
                 (10, Some(8), Some(10), None),
-                Some(Sharpness::Inexact(20)),
+                Some(Precision::Inexact(20)),
             ),
             // range(right) > range(left)
             (
                 (10, Some(8), Some(10), None),
                 (10, Some(6), Some(10), None),
-                Some(Sharpness::Inexact(20)),
+                Some(Precision::Inexact(20)),
             ),
             // range(left) > len(left), range(right) > len(right)
             (
                 (10, Some(1), Some(15), None),
                 (20, Some(1), Some(40), None),
-                Some(Sharpness::Inexact(10)),
+                Some(Precision::Inexact(10)),
             ),
             // When we have distinct count.
             (
                 (10, Some(1), Some(10), Some(10)),
                 (10, Some(1), Some(10), Some(10)),
-                Some(Sharpness::Inexact(10)),
+                Some(Precision::Inexact(10)),
             ),
             // distinct(left) > distinct(right)
             (
                 (10, Some(1), Some(10), Some(5)),
                 (10, Some(1), Some(10), Some(2)),
-                Some(Sharpness::Inexact(20)),
+                Some(Precision::Inexact(20)),
             ),
             // distinct(right) > distinct(left)
             (
                 (10, Some(1), Some(10), Some(2)),
                 (10, Some(1), Some(10), Some(5)),
-                Some(Sharpness::Inexact(20)),
+                Some(Precision::Inexact(20)),
             ),
             // min(left) < 0 (range(left) > range(right))
             (
                 (10, Some(-5), Some(5), None),
                 (10, Some(1), Some(5), None),
-                Some(Sharpness::Inexact(10)),
+                Some(Precision::Inexact(10)),
             ),
             // min(right) < 0, max(right) < 0 (range(right) > range(left))
             (
                 (10, Some(-25), Some(-20), None),
                 (10, Some(-25), Some(-15), None),
-                Some(Sharpness::Inexact(10)),
+                Some(Precision::Inexact(10)),
             ),
             // range(left) < 0, range(right) >= 0
             // (there isn't a case where both left and right ranges are negative
@@ -1677,13 +1677,13 @@ mod tests {
             (
                 (10, Some(-10), Some(0), None),
                 (10, Some(0), Some(10), Some(5)),
-                Some(Sharpness::Inexact(10)),
+                Some(Precision::Inexact(10)),
             ),
             // range(left) = 1, range(right) = 1
             (
                 (10, Some(1), Some(1), None),
                 (10, Some(1), Some(1), None),
-                Some(Sharpness::Inexact(100)),
+                Some(Precision::Inexact(100)),
             ),
             //
             // Edge cases
@@ -1708,12 +1708,12 @@ mod tests {
             (
                 (10, Some(0), Some(10), None),
                 (10, Some(11), Some(20), None),
-                Some(Sharpness::Inexact(0)),
+                Some(Precision::Inexact(0)),
             ),
             (
                 (10, Some(11), Some(20), None),
                 (10, Some(0), Some(10), None),
-                Some(Sharpness::Inexact(0)),
+                Some(Precision::Inexact(0)),
             ),
             // distinct(left) = 0, distinct(right) = 0
             (
@@ -1738,13 +1738,13 @@ mod tests {
             assert_eq!(
                 estimate_inner_join_cardinality(
                     Statistics {
-                        num_rows: Sharpness::Inexact(left_num_rows),
-                        total_byte_size: Sharpness::Absent,
+                        num_rows: Precision::Inexact(left_num_rows),
+                        total_byte_size: Precision::Absent,
                         column_statistics: left_col_stats.clone(),
                     },
                     Statistics {
-                        num_rows: Sharpness::Inexact(right_num_rows),
-                        total_byte_size: Sharpness::Absent,
+                        num_rows: Precision::Inexact(right_num_rows),
+                        total_byte_size: Precision::Absent,
                         column_statistics: right_col_stats.clone(),
                     },
                 ),
@@ -1764,7 +1764,7 @@ mod tests {
             assert_eq!(
                 partial_join_stats
                     .clone()
-                    .map(|s| Sharpness::Inexact(s.num_rows)),
+                    .map(|s| Precision::Inexact(s.num_rows)),
                 expected_cardinality.clone()
             );
             assert_eq!(
@@ -1794,17 +1794,17 @@ mod tests {
         assert_eq!(
             estimate_inner_join_cardinality(
                 Statistics {
-                    num_rows: Sharpness::Inexact(400),
-                    total_byte_size: Sharpness::Absent,
+                    num_rows: Precision::Inexact(400),
+                    total_byte_size: Precision::Absent,
                     column_statistics: left_col_stats,
                 },
                 Statistics {
-                    num_rows: Sharpness::Inexact(400),
-                    total_byte_size: Sharpness::Absent,
+                    num_rows: Precision::Inexact(400),
+                    total_byte_size: Precision::Absent,
                     column_statistics: right_col_stats,
                 },
             ),
-            Some(Sharpness::Inexact((400 * 400) / 200))
+            Some(Precision::Inexact((400 * 400) / 200))
         );
         Ok(())
     }
@@ -1812,29 +1812,29 @@ mod tests {
     #[test]
     fn test_inner_join_cardinality_decimal_range() -> Result<()> {
         let left_col_stats = vec![ColumnStatistics {
-            distinct_count: Sharpness::Absent,
-            min_value: Sharpness::Inexact(ScalarValue::Decimal128(Some(32500), 14, 4)),
-            max_value: Sharpness::Inexact(ScalarValue::Decimal128(Some(35000), 14, 4)),
+            distinct_count: Precision::Absent,
+            min_value: Precision::Inexact(ScalarValue::Decimal128(Some(32500), 14, 4)),
+            max_value: Precision::Inexact(ScalarValue::Decimal128(Some(35000), 14, 4)),
             ..Default::default()
         }];
 
         let right_col_stats = vec![ColumnStatistics {
-            distinct_count: Sharpness::Absent,
-            min_value: Sharpness::Inexact(ScalarValue::Decimal128(Some(33500), 14, 4)),
-            max_value: Sharpness::Inexact(ScalarValue::Decimal128(Some(34000), 14, 4)),
+            distinct_count: Precision::Absent,
+            min_value: Precision::Inexact(ScalarValue::Decimal128(Some(33500), 14, 4)),
+            max_value: Precision::Inexact(ScalarValue::Decimal128(Some(34000), 14, 4)),
             ..Default::default()
         }];
 
         assert_eq!(
             estimate_inner_join_cardinality(
                 Statistics {
-                    num_rows: Sharpness::Inexact(100),
-                    total_byte_size: Sharpness::Absent,
+                    num_rows: Precision::Inexact(100),
+                    total_byte_size: Precision::Absent,
                     column_statistics: left_col_stats,
                 },
                 Statistics {
-                    num_rows: Sharpness::Inexact(100),
-                    total_byte_size: Sharpness::Absent,
+                    num_rows: Precision::Inexact(100),
+                    total_byte_size: Precision::Absent,
                     column_statistics: right_col_stats,
                 },
             ),

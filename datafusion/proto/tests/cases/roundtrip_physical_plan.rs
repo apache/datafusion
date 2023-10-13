@@ -53,7 +53,7 @@ use datafusion::physical_plan::{
 };
 use datafusion::prelude::SessionContext;
 use datafusion::scalar::ScalarValue;
-use datafusion_common::stats::Sharpness;
+use datafusion_common::stats::Precision;
 use datafusion_common::Result;
 use datafusion_expr::{
     Accumulator, AccumulatorFactoryFunction, AggregateUDF, ReturnTypeFunction, Signature,
@@ -473,8 +473,8 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
             1024,
         )]],
         statistics: Statistics {
-            num_rows: Sharpness::Inexact(100),
-            total_byte_size: Sharpness::Inexact(1024),
+            num_rows: Precision::Inexact(100),
+            total_byte_size: Precision::Inexact(1024),
             column_statistics: Statistics::unknown_column(&Arc::new(Schema::new(vec![
                 Field::new("col", DataType::Utf8, false),
             ]))),
