@@ -18,6 +18,7 @@
 use async_recursion::async_recursion;
 use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
 use datafusion::common::{not_impl_err, DFField, DFSchema, DFSchemaRef};
+
 use datafusion::logical_expr::{
     aggregate_function, window_function::find_df_window_func, BinaryExpr,
     BuiltinScalarFunction, Case, Expr, LogicalPlan, Operator,
@@ -127,6 +128,51 @@ fn scalar_function_type_from_str(name: &str) -> Result<ScalarFunctionType> {
         "ilike" => Ok(ScalarFunctionType::ILike),
         others => not_impl_err!("Unsupported function name: {others:?}"),
     }
+}
+
+fn split_eq_and_noneq_join_predicate_with_nulls_equality(
+    filter: &Expr,
+) -> (Vec<(Column, Column)>, bool, Option<Expr>) {
+    let exprs = split_conjunction(filter);
+
+    let mut accum_join_keys: Vec<(Column, Column)> = vec![];
+    let mut accum_filters: Vec<Expr> = vec![];
+    let mut nulls_equal_nulls = false;
+
+    for expr in exprs {
+        match expr {
+            Expr::BinaryExpr(binary_expr) => match binary_expr {
+                x @ (BinaryExpr {
+                    left,
+                    op: Operator::Eq,
+                    right,
+                }
+                | BinaryExpr {
+                    left,
+                    op: Operator::IsNotDistinctFrom,
+                    right,
+                }) => {
+                    nulls_equal_nulls = match x.op {
+                        Operator::Eq => false,
+                        Operator::IsNotDistinctFrom => true,
+                        _ => unreachable!(),
+                    };
+
+                    match (left.as_ref(), right.as_ref()) {
+                        (Expr::Column(l), Expr::Column(r)) => {
+                            accum_join_keys.push((l.clone(), r.clone()));
+                        }
+                        _ => accum_filters.push(expr.clone()),
+                    }
+                }
+                _ => accum_filters.push(expr.clone()),
+            },
+            _ => accum_filters.push(expr.clone()),
+        }
+    }
+
+    let join_filter = accum_filters.into_iter().reduce(Expr::and);
+    (accum_join_keys, nulls_equal_nulls, join_filter)
 }
 
 /// Convert Substrait Plan to DataFusion DataFrame
@@ -336,7 +382,13 @@ pub async fn from_substrait_rel(
             }
         }
         Some(RelType::Join(join)) => {
-            let left = LogicalPlanBuilder::from(
+            if join.post_join_filter.is_some() {
+                return not_impl_err!(
+                    "JoinRel with post_join_filter is not yet supported"
+                );
+            }
+
+            let left: LogicalPlanBuilder = LogicalPlanBuilder::from(
                 from_substrait_rel(ctx, join.left.as_ref().unwrap(), extensions).await?,
             );
             let right = LogicalPlanBuilder::from(
@@ -346,60 +398,32 @@ pub async fn from_substrait_rel(
             // The join condition expression needs full input schema and not the output schema from join since we lose columns from
             // certain join types such as semi and anti joins
             let in_join_schema = left.schema().join(right.schema())?;
-            // Parse post join filter if exists
-            let join_filter = match &join.post_join_filter {
-                Some(filter) => {
-                    let parsed_filter =
-                        from_substrait_rex(filter, &in_join_schema, extensions).await?;
-                    Some(parsed_filter.as_ref().clone())
-                }
-                None => None,
-            };
+
             // If join expression exists, parse the `on` condition expression, build join and return
-            // Otherwise, build join with koin filter, without join keys
+            // Otherwise, build join with only the filter, without join keys
             match &join.expression.as_ref() {
                 Some(expr) => {
                     let on =
                         from_substrait_rex(expr, &in_join_schema, extensions).await?;
-                    let predicates = split_conjunction(&on);
-                    // TODO: collect only one null_eq_null
-                    let join_exprs: Vec<(Column, Column, bool)> = predicates
-                        .iter()
-                        .map(|p| match p {
-                            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                                match (left.as_ref(), right.as_ref()) {
-                                    (Expr::Column(l), Expr::Column(r)) => match op {
-                                        Operator::Eq => Ok((l.clone(), r.clone(), false)),
-                                        Operator::IsNotDistinctFrom => {
-                                            Ok((l.clone(), r.clone(), true))
-                                        }
-                                        _ => plan_err!("invalid join condition op"),
-                                    },
-                                    _ => plan_err!("invalid join condition expression"),
-                                }
-                            }
-                            _ => plan_err!(
-                                "Non-binary expression is not supported in join condition"
-                            ),
-                        })
-                        .collect::<Result<Vec<_>>>()?;
-                    let (left_cols, right_cols, null_eq_nulls): (Vec<_>, Vec<_>, Vec<_>) =
-                        itertools::multiunzip(join_exprs);
+                    // The join expression can contain both equal and non-equal ops.
+                    // As of datafusion 31.0.0, the equal and non equal join conditions are in separate fields.
+                    // So we extract each part as follows:
+                    // - If an Eq or IsNotDistinctFrom op is encountered, add the left column, right column and is_null_equal_nulls to `join_ons` vector
+                    // - Otherwise we add the expression to join_filter (use conjunction if filter already exists)
+                    let (join_ons, nulls_equal_nulls, join_filter) =
+                        split_eq_and_noneq_join_predicate_with_nulls_equality(&on);
+                    let (left_cols, right_cols): (Vec<_>, Vec<_>) =
+                        itertools::multiunzip(join_ons);
                     left.join_detailed(
                         right.build()?,
                         join_type,
                         (left_cols, right_cols),
                         join_filter,
-                        null_eq_nulls[0],
+                        nulls_equal_nulls,
                     )?
                     .build()
                 }
-                None => match &join_filter {
-                    Some(_) => left
-                        .join_on(right.build()?, join_type, join_filter)?
-                        .build(),
-                    None => plan_err!("Join without join keys require a valid filter"),
-                },
+                None => plan_err!("JoinRel without join condition is not allowed"),
             }
         }
         Some(RelType::Read(read)) => match &read.as_ref().read_type {

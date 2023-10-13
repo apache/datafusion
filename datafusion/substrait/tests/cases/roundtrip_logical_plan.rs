@@ -23,15 +23,18 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
-use datafusion::common::{DFSchema, DFSchemaRef};
-use datafusion::error::Result;
+use datafusion::common::{not_impl_err, plan_err, DFSchema, DFSchemaRef};
+use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::SessionState;
 use datafusion::execution::registry::SerializerRegistry;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_expr::{Extension, LogicalPlan, UserDefinedLogicalNode};
 use datafusion::optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST;
 use datafusion::prelude::*;
+
 use substrait::proto::extensions::simple_extension_declaration::MappingType;
+use substrait::proto::rel::RelType;
+use substrait::proto::{plan_rel, Plan, Rel};
 
 struct MockSerializerRegistry;
 
@@ -383,12 +386,15 @@ async fn roundtrip_inner_join() -> Result<()> {
 
 #[tokio::test]
 async fn roundtrip_non_equi_inner_join() -> Result<()> {
-    roundtrip("SELECT data.a FROM data JOIN data2 ON data.a <> data2.a").await
+    roundtrip_verify_post_join_filter(
+        "SELECT data.a FROM data JOIN data2 ON data.a <> data2.a",
+    )
+    .await
 }
 
 #[tokio::test]
 async fn roundtrip_non_equi_join() -> Result<()> {
-    roundtrip(
+    roundtrip_verify_post_join_filter(
         "SELECT data.a FROM data, data2 WHERE data.a = data2.a AND data.e > data2.a",
     )
     .await
@@ -620,6 +626,91 @@ async fn extension_logical_plan() -> Result<()> {
     Ok(())
 }
 
+fn check_post_join_filters(rel: &Rel) -> Result<()> {
+    // search for target_rel and field value in proto
+    match &rel.rel_type {
+        Some(RelType::Join(join)) => {
+            // check if join filter is None
+            if join.post_join_filter.is_some() {
+                plan_err!(
+                    "DataFusion generated Susbtrait plan cannot have post_join_filter in JoinRel"
+                )
+            } else {
+                // recursively check JoinRels
+                match check_post_join_filters(join.left.as_ref().unwrap().as_ref()) {
+                    Err(e) => Err(e),
+                    Ok(_) => {
+                        check_post_join_filters(join.right.as_ref().unwrap().as_ref())
+                    }
+                }
+            }
+        }
+        Some(RelType::Project(p)) => {
+            check_post_join_filters(p.input.as_ref().unwrap().as_ref())
+        }
+        Some(RelType::Filter(filter)) => {
+            check_post_join_filters(filter.input.as_ref().unwrap().as_ref())
+        }
+        Some(RelType::Fetch(fetch)) => {
+            check_post_join_filters(fetch.input.as_ref().unwrap().as_ref())
+        }
+        Some(RelType::Sort(sort)) => {
+            check_post_join_filters(sort.input.as_ref().unwrap().as_ref())
+        }
+        Some(RelType::Aggregate(agg)) => {
+            check_post_join_filters(agg.input.as_ref().unwrap().as_ref())
+        }
+        Some(RelType::Set(set)) => {
+            for input in &set.inputs {
+                match check_post_join_filters(input) {
+                    Err(e) => return Err(e),
+                    Ok(_) => continue,
+                }
+            }
+            Ok(())
+        }
+        Some(RelType::ExtensionSingle(ext)) => {
+            check_post_join_filters(ext.input.as_ref().unwrap().as_ref())
+        }
+        Some(RelType::ExtensionMulti(ext)) => {
+            for input in &ext.inputs {
+                match check_post_join_filters(input) {
+                    Err(e) => return Err(e),
+                    Ok(_) => continue,
+                }
+            }
+            Ok(())
+        }
+        Some(RelType::ExtensionLeaf(_)) | Some(RelType::Read(_)) => Ok(()),
+        _ => not_impl_err!(
+            "Unsupported RelType: {:?} in post join filter check",
+            rel.rel_type
+        ),
+    }
+}
+
+async fn verify_post_join_filter_value(proto: Box<Plan>) -> Result<()> {
+    for relation in &proto.relations {
+        match relation.rel_type.as_ref() {
+            Some(rt) => match rt {
+                plan_rel::RelType::Rel(rel) => match check_post_join_filters(rel) {
+                    Err(e) => return Err(e),
+                    Ok(_) => continue,
+                },
+                plan_rel::RelType::Root(root) => {
+                    match check_post_join_filters(root.input.as_ref().unwrap()) {
+                        Err(e) => return Err(e),
+                        Ok(_) => continue,
+                    }
+                }
+            },
+            None => return plan_err!("Cannot parse plan relation: None"),
+        }
+    }
+
+    Ok(())
+}
+
 async fn assert_expected_plan(sql: &str, expected_plan_str: &str) -> Result<()> {
     let mut ctx = create_context().await?;
     let df = ctx.sql(sql).await?;
@@ -686,6 +777,25 @@ async fn roundtrip(sql: &str) -> Result<()> {
     let plan2str = format!("{plan2:?}");
     assert_eq!(plan1str, plan2str);
     Ok(())
+}
+
+async fn roundtrip_verify_post_join_filter(sql: &str) -> Result<()> {
+    let mut ctx = create_context().await?;
+    let df = ctx.sql(sql).await?;
+    let plan = df.into_optimized_plan()?;
+    let proto = to_substrait_plan(&plan, &ctx)?;
+    let plan2 = from_substrait_plan(&mut ctx, &proto).await?;
+    let plan2 = ctx.state().optimize(&plan2)?;
+
+    println!("{plan:#?}");
+    println!("{plan2:#?}");
+
+    let plan1str = format!("{plan:?}");
+    let plan2str = format!("{plan2:?}");
+    assert_eq!(plan1str, plan2str);
+
+    // verify that the join filters are None
+    verify_post_join_filter_value(proto).await
 }
 
 async fn roundtrip_all_types(sql: &str) -> Result<()> {
