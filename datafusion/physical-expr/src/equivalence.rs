@@ -659,6 +659,20 @@ impl SchemaProperties {
         &self.eq_groups
     }
 
+    /// Return the normalized version of the ordering equivalent group
+    /// Where constants, duplicates are removed and expressions are normalized
+    /// according to equivalent groups.
+    pub fn normalized_oeq_group(&self) -> OrderingEquivalentGroup {
+        // Construct a new ordering group that is normalized
+        // With equivalences, and constants are removed
+        let normalized_orderings = self
+            .oeq_group
+            .iter()
+            .map(|ordering| self.normalize_sort_exprs(ordering))
+            .collect::<Vec<_>>();
+        OrderingEquivalentGroup::new(normalized_orderings)
+    }
+
     /// Add SchemaProperties of the other to the state.
     pub fn extend(mut self, other: SchemaProperties) -> Self {
         self.eq_groups.extend(other.eq_groups);
@@ -936,9 +950,7 @@ impl SchemaProperties {
             return sort_req;
         }
 
-        for ordering in self.oeq_group.iter() {
-            // Normalize existing ordering
-            let ordering = self.normalize_sort_exprs(ordering);
+        for ordering in self.normalized_oeq_group().iter() {
             let match_indices = ordering
                 .iter()
                 .map(|elem| {
@@ -976,13 +988,7 @@ impl SchemaProperties {
         &self,
         leading_requirement: &PhysicalSortRequirement,
     ) -> bool {
-        let leading_requirement = self
-            .eq_groups
-            .normalize_sort_requirement(leading_requirement.clone());
-        self.oeq_group().iter().any(|ordering| {
-            let ordering = self.eq_groups.normalize_sort_exprs(ordering);
-            ordering[0].satisfy_with_schema(&leading_requirement, &self.schema)
-        })
+        self.ordering_satisfy_requirement_concrete(&[leading_requirement.clone()])
     }
 
     /// Projects `SchemaProperties` according to mapping given in `source_to_target_mapping`.
@@ -1036,8 +1042,7 @@ impl SchemaProperties {
         let exprs_normalized = self.eq_groups.normalize_exprs(exprs);
         let mut best = vec![];
 
-        for ordering in self.oeq_group.iter() {
-            let ordering = self.normalize_sort_exprs(ordering);
+        for ordering in self.normalized_oeq_group().iter() {
             let ordering_exprs = ordering
                 .iter()
                 .map(|sort_expr| sort_expr.expr.clone())
@@ -1092,7 +1097,7 @@ impl SchemaProperties {
         exprs: &[Arc<dyn PhysicalExpr>],
     ) -> Option<Vec<SortOptions>> {
         let normalized_exprs = self.eq_groups.normalize_exprs(exprs);
-        for ordering in self.oeq_group.iter() {
+        for ordering in self.normalized_oeq_group().iter() {
             if normalized_exprs.len() <= ordering.len() {
                 let mut ordering_options = vec![];
                 for (expr, sort_expr) in izip!(normalized_exprs.iter(), ordering.iter()) {
