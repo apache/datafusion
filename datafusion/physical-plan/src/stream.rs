@@ -110,7 +110,49 @@ impl<O: Send + Sync + 'static> ReceiverStreamBuilder<O> {
     ) {
         let output = self.tx();
 
-        self.spawn(async move { input.call(output, partition, context).await });
+        self.spawn(async move {
+            let mut stream = match input.execute(partition, context) {
+                Err(e) => {
+                    // If send fails, the plan being torn down, there
+                    // is no place to send the error and no reason to continue.
+                    output.send(Err(e)).await.ok();
+                    debug!(
+                        "Stopping execution: error executing input: {}",
+                        input.execute_display()
+                    );
+                    return Ok(());
+                }
+                Ok(stream) => stream,
+            };
+
+            // Transfer batches from inner stream to the output tx
+            // immediately.
+            while let Some(item) = stream.next().await {
+                let is_err = item.is_err();
+
+                // If send fails, plan being torn down, there is no
+                // place to send the error and no reason to continue.
+                if output.send(item).await.is_err() {
+                    debug!(
+                        "Stopping execution: output is gone, plan cancelling: {}",
+                        input.execute_display()
+                    );
+                    return Ok(());
+                }
+
+                // stop after the first error is encontered (don't
+                // drive all streams to completion)
+                if is_err {
+                    debug!(
+                        "Stopping execution: plan returned error: {}",
+                        input.execute_display()
+                    );
+                    return Ok(());
+                }
+            }
+
+            Ok(())
+        });
     }
 
     /// Create a stream of all `O`es written to `tx`
@@ -225,12 +267,13 @@ impl RecordBatchStream for ReceiverStream<RecordBatch> {
 pub(crate) trait StreamAdaptor: Send + Sync {
     type Item: Send + Sync;
 
-    async fn call(
+    fn execute(
         &self,
-        output: Sender<Self::Item>,
         partition: usize,
         context: Arc<TaskContext>,
-    ) -> Result<()>;
+    ) -> Result<BoxStream<'static, Self::Item>>;
+
+    fn execute_display(&self) -> String;
 }
 
 pub(crate) struct RecordBatchReceiverStreamAdaptor {
@@ -247,53 +290,16 @@ impl RecordBatchReceiverStreamAdaptor {
 impl StreamAdaptor for RecordBatchReceiverStreamAdaptor {
     type Item = Result<RecordBatch>;
 
-    async fn call(
+    fn execute(
         &self,
-        output: Sender<Self::Item>,
         partition: usize,
         context: Arc<TaskContext>,
-    ) -> Result<()> {
-        let mut stream = match self.input.execute(partition, context) {
-            Err(e) => {
-                // If send fails, the plan being torn down, there
-                // is no place to send the error and no reason to continue.
-                output.send(Err(e)).await.ok();
-                debug!(
-                    "Stopping execution: error executing input: {}",
-                    displayable(self.input.as_ref()).one_line()
-                );
-                return Ok(());
-            }
-            Ok(stream) => stream,
-        };
+    ) -> Result<BoxStream<'static, Self::Item>> {
+        Ok(self.input.execute(partition, context)?.boxed())
+    }
 
-        // Transfer batches from inner stream to the output tx
-        // immediately.
-        while let Some(item) = stream.next().await {
-            let is_err = item.is_err();
-
-            // If send fails, plan being torn down, there is no
-            // place to send the error and no reason to continue.
-            if output.send(item).await.is_err() {
-                debug!(
-                    "Stopping execution: output is gone, plan cancelling: {}",
-                    displayable(self.input.as_ref()).one_line()
-                );
-                return Ok(());
-            }
-
-            // stop after the first error is encontered (don't
-            // drive all streams to completion)
-            if is_err {
-                debug!(
-                    "Stopping execution: plan returned error: {}",
-                    displayable(self.input.as_ref()).one_line()
-                );
-                return Ok(());
-            }
-        }
-
-        Ok(())
+    fn execute_display(&self) -> String {
+        format!("{}", displayable(self.input.as_ref()).one_line())
     }
 }
 
