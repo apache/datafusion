@@ -738,7 +738,7 @@ impl SchemaProperties {
     /// This function converts `sort_exprs` `vec![b ASC, c ASC]` to first `vec![a ASC, c ASC]` after considering `eq_groups`
     /// Then converts `vec![a ASC, c ASC]` to `vec![d ASC]` after considering `oeq_group`.
     /// Standardized version `vec![d ASC]` is used in subsequent operations.
-    pub fn normalize_sort_exprs(
+    fn normalize_sort_exprs(
         &self,
         sort_exprs: &[PhysicalSortExpr],
     ) -> Vec<PhysicalSortExpr> {
@@ -764,7 +764,7 @@ impl SchemaProperties {
     /// This function converts `sort_exprs` `vec![b Some(ASC), c None]` to first `vec![a Some(ASC), c None]` after considering `eq_groups`
     /// Then converts `vec![a Some(ASC), c None]` to `vec![d Some(ASC)]` after considering `oeq_group`.
     /// Standardized version `vec![d Some(ASC)]` is used in subsequent operations.
-    pub fn normalize_sort_requirements(
+    fn normalize_sort_requirements(
         &self,
         sort_reqs: &[PhysicalSortRequirement],
     ) -> Vec<PhysicalSortRequirement> {
@@ -1234,7 +1234,7 @@ pub fn collapse_lex_req(input: LexOrderingReq) -> LexOrderingReq {
 /// entries that have same physical expression inside the given vector `input`.
 /// `vec![a ASC, a DESC]` is collapsed to the `vec![a ASC]`. Since
 /// when same expression is already seen before, following expressions are redundant.
-pub fn collapse_lex_ordering(input: LexOrdering) -> LexOrdering {
+fn collapse_lex_ordering(input: LexOrdering) -> LexOrdering {
     let mut output = vec![];
     for item in input {
         if output
@@ -1261,7 +1261,7 @@ fn prune_sort_reqs_with_constants(
 
 /// Adds the `offset` value to `Column` indices inside `expr`. This function is
 /// generally used during the update of the right table schema in join operations.
-pub(crate) fn add_offset_to_exprs(
+fn add_offset_to_exprs(
     exprs: Vec<Arc<dyn PhysicalExpr>>,
     offset: usize,
 ) -> Result<Vec<Arc<dyn PhysicalExpr>>> {
@@ -1273,7 +1273,7 @@ pub(crate) fn add_offset_to_exprs(
 
 /// Adds the `offset` value to `Column` indices inside `expr`. This function is
 /// generally used during the update of the right table schema in join operations.
-pub(crate) fn add_offset_to_expr(
+fn add_offset_to_expr(
     expr: Arc<dyn PhysicalExpr>,
     offset: usize,
 ) -> Result<Arc<dyn PhysicalExpr>> {
@@ -1287,7 +1287,7 @@ pub(crate) fn add_offset_to_expr(
 }
 
 /// Adds the `offset` value to `Column` indices inside `sort_expr.expr`.
-pub(crate) fn add_offset_to_sort_expr(
+fn add_offset_to_sort_expr(
     sort_expr: &PhysicalSortExpr,
     offset: usize,
 ) -> Result<PhysicalSortExpr> {
@@ -1322,7 +1322,7 @@ pub fn add_offset_to_lex_ordering(
 /// the intermediate node can be directly matched with the sort expression. If there
 /// is a match, the sort expression emerges at that node immediately, discarding
 /// the order coming from the children.
-pub fn update_ordering(
+fn update_ordering(
     mut node: ExprOrdering,
     ordering_equal_properties: &SchemaProperties,
 ) -> Result<Transformed<ExprOrdering>> {
