@@ -57,7 +57,7 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
         }
     }
 
-    /// Get a handle for sending [`O`] to the output
+    /// Get a handle for sending data to the output
     pub fn tx(&self) -> Sender<Result<O>> {
         self.tx.clone()
     }
@@ -85,7 +85,7 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
         self.join_set.spawn_blocking(f);
     }
 
-    /// Create a stream of all [`O`] written to `tx`
+    /// Create a stream of all data written to `tx`
     pub fn build(self) -> BoxStream<'static, Result<O>> {
         let Self {
             tx,
@@ -258,7 +258,10 @@ impl RecordBatchReceiverStreamBuilder {
 
     /// Create a stream of all [`RecordBatch`] written to `tx`
     pub fn build(self) -> SendableRecordBatchStream {
-        Box::pin(RecordBatchStreamAdapter::new(self.schema, self.inner.build()))
+        Box::pin(RecordBatchStreamAdapter::new(
+            self.schema,
+            self.inner.build(),
+        ))
     }
 }
 
