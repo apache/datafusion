@@ -3010,15 +3010,12 @@ impl fmt::Display for ScalarValue {
                 )?,
                 None => write!(f, "NULL")?,
             },
-            ScalarValue::List(arr) => {
-                write!(
-                    f,
-                    "{}",
-                    arrow::util::pretty::pretty_format_columns("col", &[arr.to_owned()])
-                        .unwrap()
-                )?;
-                // write!(f, "{:?}", arr)?;
-            }
+            ScalarValue::List(arr) => write!(
+                f,
+                "{}",
+                arrow::util::pretty::pretty_format_columns("col", &[arr.to_owned()])
+                    .unwrap()
+            )?,
             ScalarValue::Date32(e) => format_option!(f, e)?,
             ScalarValue::Date64(e) => format_option!(f, e)?,
             ScalarValue::Time32Second(e) => format_option!(f, e)?,
@@ -3218,20 +3215,6 @@ mod tests {
         ]);
 
         assert_eq!(&arr, actual_list_arr);
-    }
-
-    #[test]
-    fn test_display() {
-        let arr = Int32Array::from(vec![Some(1), None, Some(2)]);
-        let arr = Arc::new(arr) as ArrayRef;
-        println!("arr: {}", pretty_format_columns("col", &[arr]).unwrap());
-        let arr = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
-            Some(vec![Some(1), None, Some(2)]),
-            Some(vec![Some(1), None, Some(2)]),
-        ]);
-
-        let arr = Arc::new(arr) as ArrayRef;
-        println!("arr: {}", pretty_format_columns("col", &[arr]).unwrap());
     }
 
     #[test]
