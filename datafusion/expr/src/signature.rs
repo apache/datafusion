@@ -18,6 +18,7 @@
 //! Signature module contains foundational types that are used to represent signatures, types,
 //! and return types of functions in DataFusion.
 
+use crate::BuiltinScalarFunction;
 use arrow::datatypes::DataType;
 
 /// Constant that is used as a placeholder for any valid timezone.
@@ -224,5 +225,54 @@ impl Signature {
             type_signature: TypeSignature::OneOf(type_signatures),
             volatility,
         }
+    }
+}
+
+/// Monotonicity of the `ScalarFunctionExpr` with respect to its arguments.
+/// Each element of this vector corresponds to an argument and indicates whether
+/// the function's behavior is monotonic, or non-monotonic/unknown for that argument, namely:
+/// - `None` signifies unknown monotonicity or non-monotonicity.
+/// - `Some(true)` indicates that the function is monotonically increasing w.r.t. the argument in question.
+/// - Some(false) indicates that the function is monotonically decreasing w.r.t. the argument in question.
+pub type FuncMonotonicity = Vec<Option<bool>>;
+
+/// This function specifies monotonicity behaviors for built-in scalar functions.
+/// The list can be extended, only mathematical and datetime functions are
+/// considered for the initial implementation of this feature.
+pub fn get_func_monotonicity(fun: &BuiltinScalarFunction) -> Option<FuncMonotonicity> {
+    if matches!(
+        fun,
+        BuiltinScalarFunction::Atan
+            | BuiltinScalarFunction::Acosh
+            | BuiltinScalarFunction::Asinh
+            | BuiltinScalarFunction::Atanh
+            | BuiltinScalarFunction::Ceil
+            | BuiltinScalarFunction::Degrees
+            | BuiltinScalarFunction::Exp
+            | BuiltinScalarFunction::Factorial
+            | BuiltinScalarFunction::Floor
+            | BuiltinScalarFunction::Ln
+            | BuiltinScalarFunction::Log10
+            | BuiltinScalarFunction::Log2
+            | BuiltinScalarFunction::Radians
+            | BuiltinScalarFunction::Round
+            | BuiltinScalarFunction::Signum
+            | BuiltinScalarFunction::Sinh
+            | BuiltinScalarFunction::Sqrt
+            | BuiltinScalarFunction::Cbrt
+            | BuiltinScalarFunction::Tanh
+            | BuiltinScalarFunction::Trunc
+            | BuiltinScalarFunction::Pi
+    ) {
+        Some(vec![Some(true)])
+    } else if matches!(
+        fun,
+        BuiltinScalarFunction::DateTrunc | BuiltinScalarFunction::DateBin
+    ) {
+        Some(vec![None, Some(true)])
+    } else if *fun == BuiltinScalarFunction::Log {
+        Some(vec![Some(true), Some(false)])
+    } else {
+        None
     }
 }
