@@ -16,22 +16,25 @@
 // under the License.
 
 use crate::aggregates::group_values::GroupValues;
-use crate::row_converter::CardinalityAwareRowConverter;
 use ahash::RandomState;
+use arrow::compute::cast;
 use arrow::record_batch::RecordBatch;
-use arrow::row::{Rows, SortField};
-use arrow_array::ArrayRef;
-use arrow_schema::SchemaRef;
-use datafusion_common::Result;
+use arrow::row::{RowConverter, Rows, SortField};
+use arrow_array::{Array, ArrayRef};
+use arrow_schema::{DataType, SchemaRef};
+use datafusion_common::hash_utils::create_hashes;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
-use datafusion_physical_expr::hash_utils::create_hashes;
 use datafusion_physical_expr::EmitTo;
 use hashbrown::raw::RawTable;
 
 /// A [`GroupValues`] making use of [`Rows`]
 pub struct GroupValuesRows {
+    /// The output schema
+    schema: SchemaRef,
+
     /// Converter for the group values
-    row_converter: CardinalityAwareRowConverter,
+    row_converter: RowConverter,
 
     /// Logically maps group values to a group_index in
     /// [`Self::group_values`] and in each accumulator
@@ -65,7 +68,7 @@ pub struct GroupValuesRows {
 
 impl GroupValuesRows {
     pub fn try_new(schema: SchemaRef) -> Result<Self> {
-        let row_converter = CardinalityAwareRowConverter::new(
+        let row_converter = RowConverter::new(
             schema
                 .fields()
                 .iter()
@@ -76,6 +79,7 @@ impl GroupValuesRows {
         let map = RawTable::with_capacity(0);
 
         Ok(Self {
+            schema,
             row_converter,
             map,
             map_size: 0,
@@ -95,7 +99,7 @@ impl GroupValues for GroupValuesRows {
 
         let mut group_values = match self.group_values.take() {
             Some(group_values) => group_values,
-            None => self.row_converter.empty_rows(0, 0)?,
+            None => self.row_converter.empty_rows(0, 0),
         };
 
         // tracks to which group each of the input rows belongs
@@ -166,7 +170,7 @@ impl GroupValues for GroupValuesRows {
             .take()
             .expect("Can not emit from empty rows");
 
-        let output = match emit_to {
+        let mut output = match emit_to {
             EmitTo::All => {
                 let output = self.row_converter.convert_rows(&group_values)?;
                 group_values.clear();
@@ -177,7 +181,7 @@ impl GroupValues for GroupValuesRows {
                 let output = self.row_converter.convert_rows(groups_rows)?;
                 // Clear out first n group keys by copying them to a new Rows.
                 // TODO file some ticket in arrow-rs to make this more efficent?
-                let mut new_group_values = self.row_converter.empty_rows(0, 0)?;
+                let mut new_group_values = self.row_converter.empty_rows(0, 0);
                 for row in group_values.iter().skip(n) {
                     new_group_values.push(row);
                 }
@@ -198,6 +202,20 @@ impl GroupValues for GroupValuesRows {
                 output
             }
         };
+
+        // TODO: Materialize dictionaries in group keys (#7647)
+        for (field, array) in self.schema.fields.iter().zip(&mut output) {
+            let expected = field.data_type();
+            if let DataType::Dictionary(_, v) = expected {
+                let actual = array.data_type();
+                if v.as_ref() != actual {
+                    return Err(DataFusionError::Internal(format!(
+                        "Converted group rows expected dictionary of {v} got {actual}"
+                    )));
+                }
+                *array = cast(array.as_ref(), expected)?;
+            }
+        }
 
         self.group_values = Some(group_values);
         Ok(output)

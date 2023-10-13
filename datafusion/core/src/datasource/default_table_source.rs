@@ -43,7 +43,7 @@ impl DefaultTableSource {
 }
 
 impl TableSource for DefaultTableSource {
-    /// Returns the table source as [`Any`](std::any::Any) so that it can be
+    /// Returns the table source as [`Any`] so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any {
         self

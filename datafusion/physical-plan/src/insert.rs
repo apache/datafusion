@@ -35,6 +35,7 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use crate::metrics::MetricsSet;
 use crate::stream::RecordBatchStreamAdapter;
 use datafusion_common::{exec_err, internal_err, DataFusionError};
 use datafusion_execution::TaskContext;
@@ -46,6 +47,16 @@ use datafusion_execution::TaskContext;
 /// output.
 #[async_trait]
 pub trait DataSink: DisplayAs + Debug + Send + Sync {
+    /// Returns the data sink as [`Any`](std::any::Any) so that it can be
+    /// downcast to a specific implementation.
+    fn as_any(&self) -> &dyn Any;
+
+    /// Return a snapshot of the [MetricsSet] for this
+    /// [DataSink].
+    ///
+    /// See [ExecutionPlan::metrics()] for more details
+    fn metrics(&self) -> Option<MetricsSet>;
+
     // TODO add desired input ordering
     // How does this sink want its input ordered?
 
@@ -73,6 +84,8 @@ pub struct FileSinkExec {
     sink_schema: SchemaRef,
     /// Schema describing the structure of the output data.
     count_schema: SchemaRef,
+    /// Optional required sort order for output data.
+    sort_order: Option<Vec<PhysicalSortRequirement>>,
 }
 
 impl fmt::Debug for FileSinkExec {
@@ -87,12 +100,14 @@ impl FileSinkExec {
         input: Arc<dyn ExecutionPlan>,
         sink: Arc<dyn DataSink>,
         sink_schema: SchemaRef,
+        sort_order: Option<Vec<PhysicalSortRequirement>>,
     ) -> Self {
         Self {
             input,
             sink,
             sink_schema,
             count_schema: make_count_schema(),
+            sort_order,
         }
     }
 
@@ -147,6 +162,16 @@ impl FileSinkExec {
         }
         Ok(streams)
     }
+
+    /// Returns insert sink
+    pub fn sink(&self) -> &dyn DataSink {
+        self.sink.as_ref()
+    }
+
+    /// Returns the metrics of the underlying [DataSink]
+    pub fn metrics(&self) -> Option<MetricsSet> {
+        self.sink.metrics()
+    }
 }
 
 impl DisplayAs for FileSinkExec {
@@ -192,16 +217,20 @@ impl ExecutionPlan for FileSinkExec {
     }
 
     fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
-        // Require that the InsertExec gets the data in the order the
+        // The input order is either exlicitly set (such as by a ListingTable),
+        // or require that the [FileSinkExec] gets the data in the order the
         // input produced it (otherwise the optimizer may chose to reorder
         // the input which could result in unintended / poor UX)
         //
         // More rationale:
         // https://github.com/apache/arrow-datafusion/pull/6354#discussion_r1195284178
-        vec![self
-            .input
-            .output_ordering()
-            .map(PhysicalSortRequirement::from_sort_exprs)]
+        match &self.sort_order {
+            Some(requirements) => vec![Some(requirements.clone())],
+            None => vec![self
+                .input
+                .output_ordering()
+                .map(PhysicalSortRequirement::from_sort_exprs)],
+        }
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
@@ -221,7 +250,12 @@ impl ExecutionPlan for FileSinkExec {
             sink: self.sink.clone(),
             sink_schema: self.sink_schema.clone(),
             count_schema: self.count_schema.clone(),
+            sort_order: self.sort_order.clone(),
         }))
+    }
+
+    fn unbounded_output(&self, _children: &[bool]) -> Result<bool> {
+        Ok(_children[0])
     }
 
     /// Execute the plan and return a stream of `RecordBatch`es for

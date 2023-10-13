@@ -58,7 +58,7 @@ use datafusion_proto::bytes::{logical_plan_from_bytes, logical_plan_to_bytes};
 #[tokio::main]
 async fn main() -> Result<()> {
     let ctx = SessionContext::new();
-    ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
+    ctx.register_csv("t1", "tests/testdata/test.csv", CsvReadOptions::default())
         .await
         ?;
     let plan = ctx.table("t1").await?.into_optimized_plan()?;
@@ -81,7 +81,7 @@ use datafusion_proto::bytes::{physical_plan_from_bytes,physical_plan_to_bytes};
 #[tokio::main]
 async fn main() -> Result<()> {
     let ctx = SessionContext::new();
-    ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
+    ctx.register_csv("t1", "tests/testdata/test.csv", CsvReadOptions::default())
         .await
         ?;
     let logical_plan = ctx.table("t1").await?.into_optimized_plan()?;

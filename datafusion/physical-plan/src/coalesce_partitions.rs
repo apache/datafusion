@@ -104,6 +104,10 @@ impl ExecutionPlan for CoalescePartitionsExec {
         self.input.equivalence_properties()
     }
 
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![false]
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,

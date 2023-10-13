@@ -147,17 +147,19 @@ impl PagePruningPredicate {
 
         let file_offset_indexes = file_metadata.offset_index();
         let file_page_indexes = file_metadata.column_index();
-        let (file_offset_indexes, file_page_indexes) =
-            match (file_offset_indexes, file_page_indexes) {
-                (Some(o), Some(i)) => (o, i),
-                _ => {
-                    trace!(
-                    "skip page pruning due to lack of indexes. Have offset: {} file: {}",
+        let (file_offset_indexes, file_page_indexes) = match (
+            file_offset_indexes,
+            file_page_indexes,
+        ) {
+            (Some(o), Some(i)) => (o, i),
+            _ => {
+                trace!(
+                    "skip page pruning due to lack of indexes. Have offset: {}, column index: {}",
                     file_offset_indexes.is_some(), file_page_indexes.is_some()
                 );
-                    return Ok(None);
-                }
-            };
+                return Ok(None);
+            }
+        };
 
         let mut row_selections = Vec::with_capacity(page_index_predicates.len());
         for predicate in page_index_predicates {

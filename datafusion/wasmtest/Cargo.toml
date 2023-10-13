@@ -1,0 +1,50 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+[package]
+name = "datafusion-wasmtest"
+description = "Test library to compile datafusion crates to wasm"
+version = { workspace = true }
+edition = { workspace = true }
+readme = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
+rust-version = "1.70"
+
+[lib]
+crate-type = ["cdylib", "rlib",]
+
+[dependencies]
+
+# The `console_error_panic_hook` crate provides better debugging of panics by
+# logging them with `console.error`. This is great for development, but requires
+# all the `std::fmt` and `std::panicking` infrastructure, so isn't great for
+# code size when deploying.
+console_error_panic_hook = { version = "0.1.1", optional = true }
+
+datafusion-common = { path = "../common", version = "32.0.0", default-features = false }
+datafusion-expr = { path = "../expr" }
+datafusion-optimizer = { path = "../optimizer" }
+datafusion-physical-expr = { path = "../physical-expr" }
+datafusion-sql = { path = "../sql" }
+
+# getrandom must be compiled with js feature
+getrandom = { version = "0.2.8", features = ["js"] }
+parquet = { version = "47.0.0", default-features = false }
+wasm-bindgen = "0.2.87"

@@ -150,7 +150,7 @@ impl RunOpt {
             for i in 0..self.common.iterations {
                 let config =
                     SessionConfig::new().with_target_partitions(self.common.partitions);
-                let ctx = SessionContext::with_config(config);
+                let ctx = SessionContext::new_with_config(config);
                 let (rows, elapsed) =
                     exec_sort(&ctx, &expr, &test_file, self.common.debug).await?;
                 let ms = elapsed.as_secs_f64() * 1000.0;

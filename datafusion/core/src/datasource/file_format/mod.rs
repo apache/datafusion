@@ -24,6 +24,7 @@ pub const DEFAULT_SCHEMA_INFER_MAX_RECORD: usize = 1000;
 pub mod arrow;
 pub mod avro;
 pub mod csv;
+pub mod file_compression_type;
 pub mod json;
 pub mod options;
 pub mod parquet;
@@ -40,7 +41,7 @@ use crate::execution::context::SessionState;
 use crate::physical_plan::{ExecutionPlan, Statistics};
 
 use datafusion_common::{not_impl_err, DataFusionError, FileType};
-use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
 
 use async_trait::async_trait;
 use object_store::{ObjectMeta, ObjectStore};
@@ -98,6 +99,7 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
         _input: Arc<dyn ExecutionPlan>,
         _state: &SessionState,
         _conf: FileSinkConfig,
+        _order_requirements: Option<Vec<PhysicalSortRequirement>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         not_impl_err!("Writer not implemented for this format")
     }

@@ -35,10 +35,9 @@ use std::{any::Any, usize};
 use crate::common::SharedMemoryReservation;
 use crate::joins::hash_join::{build_equal_condition_join_indices, update_hash};
 use crate::joins::hash_join_utils::{
-    build_filter_expression_graph, calculate_filter_expr_intervals, combine_two_batches,
+    calculate_filter_expr_intervals, combine_two_batches,
     convert_sort_expr_with_filter_schema, get_pruning_anti_indices,
-    get_pruning_semi_indices, record_visited_indices, IntervalCalculatorInnerState,
-    PruningJoinHashMap,
+    get_pruning_semi_indices, record_visited_indices, PruningJoinHashMap,
 };
 use crate::joins::StreamJoinPartitionMode;
 use crate::DisplayAs;
@@ -69,6 +68,7 @@ use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::intervals::ExprIntervalGraph;
 
+use crate::joins::utils::prepare_sorted_exprs;
 use ahash::RandomState;
 use futures::stream::{select, BoxStream};
 use futures::{Stream, StreamExt};
@@ -174,8 +174,6 @@ pub struct SymmetricHashJoinExec {
     pub(crate) filter: Option<JoinFilter>,
     /// How the join is performed
     pub(crate) join_type: JoinType,
-    /// Expression graph and `SortedFilterExpr`s for interval calculations
-    filter_state: Option<Arc<Mutex<IntervalCalculatorInnerState>>>,
     /// The schema once the join is applied
     schema: SchemaRef,
     /// Shares the `RandomState` for the hashing algorithm
@@ -285,20 +283,12 @@ impl SymmetricHashJoinExec {
         // Initialize the random state for the join operation:
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
 
-        let filter_state = if filter.is_some() {
-            let inner_state = IntervalCalculatorInnerState::default();
-            Some(Arc::new(Mutex::new(inner_state)))
-        } else {
-            None
-        };
-
         Ok(SymmetricHashJoinExec {
             left,
             right,
             on,
             filter,
             join_type: *join_type,
-            filter_state,
             schema: Arc::new(schema),
             random_state,
             metrics: ExecutionPlanMetricsSet::new(),
@@ -496,21 +486,27 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             );
         }
         // If `filter_state` and `filter` are both present, then calculate sorted filter expressions
-        // for both sides, and build an expression graph if one is not already built.
-        let (left_sorted_filter_expr, right_sorted_filter_expr, graph) =
-            match (&self.filter_state, &self.filter) {
-                (Some(interval_state), Some(filter)) => build_filter_expression_graph(
-                    interval_state,
+        // for both sides, and build an expression graph.
+        let (left_sorted_filter_expr, right_sorted_filter_expr, graph) = match (
+            self.left.output_ordering(),
+            self.right.output_ordering(),
+            &self.filter,
+        ) {
+            (Some(left_sort_exprs), Some(right_sort_exprs), Some(filter)) => {
+                let (left, right, graph) = prepare_sorted_exprs(
+                    filter,
                     &self.left,
                     &self.right,
-                    filter,
-                )?,
-                // If `filter_state` or `filter` is not present, then return None for all three values:
-                (_, _) => (None, None, None),
-            };
+                    left_sort_exprs,
+                    right_sort_exprs,
+                )?;
+                (Some(left), Some(right), Some(graph))
+            }
+            // If `filter_state` or `filter` is not present, then return None for all three values:
+            _ => (None, None, None),
+        };
 
-        let on_left = self.on.iter().map(|on| on.0.clone()).collect::<Vec<_>>();
-        let on_right = self.on.iter().map(|on| on.1.clone()).collect::<Vec<_>>();
+        let (on_left, on_right) = self.on.iter().cloned().unzip();
 
         let left_side_joiner =
             OneSideHashJoiner::new(JoinSide::Left, on_left, self.left.schema());

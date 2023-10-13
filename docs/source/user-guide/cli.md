@@ -75,17 +75,42 @@ USAGE:
     datafusion-cli [OPTIONS]
 
 OPTIONS:
-    -c, --batch-size <BATCH_SIZE>           The batch size of each query, or use DataFusion default
-    -f, --file <FILE>...                    Execute commands from file(s), then exit
-        --format <FORMAT>                   [default: table] [possible values: csv, tsv, table, json,
-                                            nd-json]
-    -h, --help                              Print help information
-    -m, --memory-limit <MEMORY_LIMIT>       The memory pool limitation (e.g. '10g'), default to None (no limit)
-        --mem-pool-type <MEM_POOL_TYPE>     Specify the memory pool type 'greedy' or 'fair', default to 'greedy'
-    -p, --data-path <DATA_PATH>             Path to your data, default to current directory
-    -q, --quiet                             Reduce printing other than the results and work quietly
-    -r, --rc <RC>...                        Run the provided files on startup instead of ~/.datafusionrc
-    -V, --version                           Print version information
+    -b, --batch-size <BATCH_SIZE>
+            The batch size of each query, or use DataFusion default
+
+    -c, --command <COMMAND>...
+            Execute the given command string(s), then exit
+
+    -f, --file <FILE>...
+            Execute commands from file(s), then exit
+
+        --format <FORMAT>
+            [default: table] [possible values: csv, tsv, table, json, nd-json]
+
+    -h, --help
+            Print help information
+
+    -m, --memory-limit <MEMORY_LIMIT>
+            The memory pool limitation (e.g. '10g'), default to None (no limit)
+
+        --maxrows <MAXROWS>
+            The max number of rows to display for 'Table' format
+            [default: 40] [possible values: numbers(0/10/...), inf(no limit)]
+
+        --mem-pool-type <MEM_POOL_TYPE>
+            Specify the memory pool type 'greedy' or 'fair', default to 'greedy'
+
+    -p, --data-path <DATA_PATH>
+            Path to your data, default to current directory
+
+    -q, --quiet
+            Reduce printing other than the results and work quietly
+
+    -r, --rc <RC>...
+            Run the provided files on startup instead of ~/.datafusionrc
+
+    -V, --version
+            Print version information
 ```
 
 ## Querying data from the files directly
@@ -372,11 +397,13 @@ Available commands inside DataFusion CLI are:
 
 - Show configuration options
 
+`SHOW ALL [VERBOSE]`
+
 ```SQL
 > show all;
 
 +-------------------------------------------------+---------+
-| name                                            | setting |
+| name                                            | value   |
 +-------------------------------------------------+---------+
 | datafusion.execution.batch_size                 | 8192    |
 | datafusion.execution.coalesce_batches           | true    |
@@ -385,6 +412,21 @@ Available commands inside DataFusion CLI are:
 | datafusion.explain.physical_plan_only           | false   |
 | datafusion.optimizer.filter_null_join_keys      | false   |
 | datafusion.optimizer.skip_failed_rules          | true    |
++-------------------------------------------------+---------+
+
+```
+
+- Show specific configuration option
+
+`SHOW xyz.abc.qwe [VERBOSE]`
+
+```SQL
+> show datafusion.execution.batch_size;
+
++-------------------------------------------------+---------+
+| name                                            | value   |
++-------------------------------------------------+---------+
+| datafusion.execution.batch_size                 | 8192    |
 +-------------------------------------------------+---------+
 
 ```
@@ -407,12 +449,12 @@ For example, to set `datafusion.execution.batch_size` to `1024` you
 would set the `DATAFUSION_EXECUTION_BATCH_SIZE` environment variable
 appropriately:
 
-```shell
+```SQL
 $ DATAFUSION_EXECUTION_BATCH_SIZE=1024 datafusion-cli
 DataFusion CLI v12.0.0
 ❯ show all;
 +-------------------------------------------------+---------+
-| name                                            | setting |
+| name                                            | value   |
 +-------------------------------------------------+---------+
 | datafusion.execution.batch_size                 | 1024    |
 | datafusion.execution.coalesce_batches           | true    |
@@ -427,13 +469,13 @@ DataFusion CLI v12.0.0
 
 You can change the configuration options using `SET` statement as well
 
-```shell
+```SQL
 $ datafusion-cli
 DataFusion CLI v13.0.0
 
 ❯ show datafusion.execution.batch_size;
 +---------------------------------+---------+
-| name                            | setting |
+| name                            | value   |
 +---------------------------------+---------+
 | datafusion.execution.batch_size | 8192    |
 +---------------------------------+---------+
@@ -444,7 +486,7 @@ DataFusion CLI v13.0.0
 
 ❯ show datafusion.execution.batch_size;
 +---------------------------------+---------+
-| name                            | setting |
+| name                            | value   |
 +---------------------------------+---------+
 | datafusion.execution.batch_size | 1024    |
 +---------------------------------+---------+

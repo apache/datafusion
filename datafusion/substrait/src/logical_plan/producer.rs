@@ -193,7 +193,8 @@ pub fn to_substrait_rel(
         }
         LogicalPlan::Limit(limit) => {
             let input = to_substrait_rel(limit.input.as_ref(), ctx, extension_info)?;
-            let limit_fetch = limit.fetch.unwrap_or(0);
+            // Since protobuf can't directly distinguish `None` vs `0` encode `None` as `MAX`
+            let limit_fetch = limit.fetch.unwrap_or(usize::MAX);
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Fetch(Box::new(FetchRel {
                     common: None,

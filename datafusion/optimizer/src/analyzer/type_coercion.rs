@@ -41,7 +41,7 @@ use datafusion_expr::type_coercion::functions::data_types;
 use datafusion_expr::type_coercion::other::{
     get_coerce_type_for_case_expression, get_coerce_type_for_list,
 };
-use datafusion_expr::type_coercion::{is_datetime, is_numeric, is_utf8_or_large_utf8};
+use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_large_utf8};
 use datafusion_expr::{
     is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown,
     type_coercion, window_function, AggregateFunction, BuiltinScalarFunction, Expr,
@@ -496,7 +496,7 @@ fn coerce_window_frame(
     let target_type = match window_frame.units {
         WindowFrameUnits::Range => {
             if let Some(col_type) = current_types.first() {
-                if is_numeric(col_type) || is_utf8_or_large_utf8(col_type) {
+                if col_type.is_numeric() || is_utf8_or_large_utf8(col_type) {
                     col_type
                 } else if is_datetime(col_type) {
                     &DataType::Interval(IntervalUnit::MonthDayNano)
@@ -881,6 +881,7 @@ mod test {
 
     #[test]
     fn scalar_function() -> Result<()> {
+        // test that automatic argument type coercion for scalar functions work
         let empty = empty();
         let lit_expr = lit(10i64);
         let fun: BuiltinScalarFunction = BuiltinScalarFunction::Acos;

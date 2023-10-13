@@ -24,6 +24,8 @@ use crate::eliminate_duplicated_expr::EliminateDuplicatedExpr;
 use crate::eliminate_filter::EliminateFilter;
 use crate::eliminate_join::EliminateJoin;
 use crate::eliminate_limit::EliminateLimit;
+use crate::eliminate_nested_union::EliminateNestedUnion;
+use crate::eliminate_one_union::EliminateOneUnion;
 use crate::eliminate_outer_join::EliminateOuterJoin;
 use crate::eliminate_project::EliminateProjection;
 use crate::extract_equijoin_predicate::ExtractEquijoinPredicate;
@@ -220,6 +222,7 @@ impl Optimizer {
     /// Create a new optimizer using the recommended list of rules
     pub fn new() -> Self {
         let rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
+            Arc::new(EliminateNestedUnion::new()),
             Arc::new(SimplifyExpressions::new()),
             Arc::new(UnwrapCastInComparison::new()),
             Arc::new(ReplaceDistinctWithAggregate::new()),
@@ -239,6 +242,8 @@ impl Optimizer {
             Arc::new(CommonSubexprEliminate::new()),
             Arc::new(EliminateLimit::new()),
             Arc::new(PropagateEmptyRelation::new()),
+            // Must be after PropagateEmptyRelation
+            Arc::new(EliminateOneUnion::new()),
             Arc::new(FilterNullJoinKeys::default()),
             Arc::new(EliminateOuterJoin::new()),
             // Filters can't be pushed down past Limits, we should do PushDownFilter after PushDownLimit

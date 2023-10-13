@@ -28,6 +28,7 @@ pub mod enforce_distribution;
 pub mod enforce_sorting;
 pub mod join_selection;
 pub mod optimizer;
+pub mod output_requirements;
 pub mod pipeline_checker;
 pub mod pruning;
 pub mod replace_with_order_preserving_variants;

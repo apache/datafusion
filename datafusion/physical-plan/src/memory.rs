@@ -81,7 +81,7 @@ impl DisplayAs for MemoryExec {
                             output_ordering.iter().map(|e| e.to_string()).collect();
                         format!(", output_ordering={}", order_strings.join(","))
                     })
-                    .unwrap_or_else(|| "".to_string());
+                    .unwrap_or_default();
 
                 write!(
                     f,
@@ -126,9 +126,14 @@ impl ExecutionPlan for MemoryExec {
 
     fn with_new_children(
         self: Arc<Self>,
-        _: Vec<Arc<dyn ExecutionPlan>>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        internal_err!("Children cannot be replaced in {self:?}")
+        // MemoryExec has no children
+        if children.is_empty() {
+            Ok(self)
+        } else {
+            internal_err!("Children cannot be replaced in {self:?}")
+        }
     }
 
     fn execute(

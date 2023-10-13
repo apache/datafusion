@@ -258,7 +258,7 @@ impl Default for SessionContext {
 impl SessionContext {
     /// Creates a new `SessionContext` using the default [`SessionConfig`].
     pub fn new() -> Self {
-        Self::with_config(SessionConfig::new())
+        Self::new_with_config(SessionConfig::new())
     }
 
     /// Finds any [`ListingSchemaProvider`]s and instructs them to reload tables from "disk"
@@ -284,11 +284,18 @@ impl SessionContext {
     /// Creates a new `SessionContext` using the provided
     /// [`SessionConfig`] and a new [`RuntimeEnv`].
     ///
-    /// See [`Self::with_config_rt`] for more details on resource
+    /// See [`Self::new_with_config_rt`] for more details on resource
     /// limits.
-    pub fn with_config(config: SessionConfig) -> Self {
+    pub fn new_with_config(config: SessionConfig) -> Self {
         let runtime = Arc::new(RuntimeEnv::default());
-        Self::with_config_rt(config, runtime)
+        Self::new_with_config_rt(config, runtime)
+    }
+
+    /// Creates a new `SessionContext` using the provided
+    /// [`SessionConfig`] and a new [`RuntimeEnv`].
+    #[deprecated(since = "32.0.0", note = "Use SessionContext::new_with_config")]
+    pub fn with_config(config: SessionConfig) -> Self {
+        Self::new_with_config(config)
     }
 
     /// Creates a new `SessionContext` using the provided
@@ -304,13 +311,20 @@ impl SessionContext {
     /// memory used) across all DataFusion queries in a process,
     /// all `SessionContext`'s should be configured with the
     /// same `RuntimeEnv`.
+    pub fn new_with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
+        let state = SessionState::new_with_config_rt(config, runtime);
+        Self::new_with_state(state)
+    }
+
+    /// Creates a new `SessionContext` using the provided
+    /// [`SessionConfig`] and a [`RuntimeEnv`].
+    #[deprecated(since = "32.0.0", note = "Use SessionState::new_with_config_rt")]
     pub fn with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
-        let state = SessionState::with_config_rt(config, runtime);
-        Self::with_state(state)
+        Self::new_with_config_rt(config, runtime)
     }
 
     /// Creates a new `SessionContext` using the provided [`SessionState`]
-    pub fn with_state(state: SessionState) -> Self {
+    pub fn new_with_state(state: SessionState) -> Self {
         Self {
             session_id: state.session_id.clone(),
             session_start_time: Utc::now(),
@@ -318,6 +332,11 @@ impl SessionContext {
         }
     }
 
+    /// Creates a new `SessionContext` using the provided [`SessionState`]
+    #[deprecated(since = "32.0.0", note = "Use SessionState::new_with_state")]
+    pub fn with_state(state: SessionState) -> Self {
+        Self::new_with_state(state)
+    }
     /// Returns the time this `SessionContext` was created
     pub fn session_start_time(&self) -> DateTime<Utc> {
         self.session_start_time
@@ -1348,7 +1367,12 @@ impl QueryPlanner for DefaultQueryPlanner {
     }
 }
 
-/// Execution context for registering data sources and executing queries
+/// Execution context for registering data sources and executing queries.
+/// See [`SessionContext`] for a higher level API.
+///
+/// Note that there is no `Default` or `new()` for SessionState,
+/// to avoid accidentally running queries or other operations without passing through
+/// the [`SessionConfig`] or [`RuntimeEnv`]. See [`SessionContext`].
 #[derive(Clone)]
 pub struct SessionState {
     /// A unique UUID that identifies the session
@@ -1396,25 +1420,24 @@ impl Debug for SessionState {
     }
 }
 
-/// Default session builder using the provided configuration
-#[deprecated(
-    since = "23.0.0",
-    note = "See SessionContext::with_config() or SessionState::with_config_rt"
-)]
-pub fn default_session_builder(config: SessionConfig) -> SessionState {
-    SessionState::with_config_rt(config, Arc::new(RuntimeEnv::default()))
-}
-
 impl SessionState {
     /// Returns new [`SessionState`] using the provided
     /// [`SessionConfig`] and [`RuntimeEnv`].
-    pub fn with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
+    pub fn new_with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
         let catalog_list = Arc::new(MemoryCatalogList::new()) as Arc<dyn CatalogList>;
-        Self::with_config_rt_and_catalog_list(config, runtime, catalog_list)
+        Self::new_with_config_rt_and_catalog_list(config, runtime, catalog_list)
     }
 
-    /// Returns new SessionState using the provided configuration, runtime and catalog list.
-    pub fn with_config_rt_and_catalog_list(
+    /// Returns new [`SessionState`] using the provided
+    /// [`SessionConfig`] and [`RuntimeEnv`].
+    #[deprecated(since = "32.0.0", note = "Use SessionState::new_with_config_rt")]
+    pub fn with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
+        Self::new_with_config_rt(config, runtime)
+    }
+
+    /// Returns new [`SessionState`] using the provided
+    /// [`SessionConfig`],  [`RuntimeEnv`], and [`CatalogList`]
+    pub fn new_with_config_rt_and_catalog_list(
         config: SessionConfig,
         runtime: Arc<RuntimeEnv>,
         catalog_list: Arc<dyn CatalogList>,
@@ -1471,7 +1494,19 @@ impl SessionState {
             table_factories,
         }
     }
-
+    /// Returns new [`SessionState`] using the provided
+    /// [`SessionConfig`] and [`RuntimeEnv`].
+    #[deprecated(
+        since = "32.0.0",
+        note = "Use SessionState::new_with_config_rt_and_catalog_list"
+    )]
+    pub fn with_config_rt_and_catalog_list(
+        config: SessionConfig,
+        runtime: Arc<RuntimeEnv>,
+        catalog_list: Arc<dyn CatalogList>,
+    ) -> Self {
+        Self::new_with_config_rt_and_catalog_list(config, runtime, catalog_list)
+    }
     fn register_default_schema(
         config: &SessionConfig,
         table_factories: &HashMap<String, Arc<dyn TableProviderFactory>>,
@@ -2217,16 +2252,13 @@ mod tests {
     use crate::execution::context::QueryPlanner;
     use crate::execution::memory_pool::MemoryConsumer;
     use crate::execution::runtime_env::RuntimeConfig;
-    use crate::physical_plan::expressions::AvgAccumulator;
     use crate::test;
     use crate::test_util::parquet_test_data;
     use crate::variable::VarType;
-    use arrow::array::ArrayRef;
     use arrow::record_batch::RecordBatch;
     use arrow_schema::{Field, Schema};
     use async_trait::async_trait;
-    use datafusion_expr::{create_udaf, create_udf, Expr, Volatility};
-    use datafusion_physical_expr::functions::make_scalar_function;
+    use datafusion_expr::Expr;
     use std::fs::File;
     use std::path::PathBuf;
     use std::sync::Weak;
@@ -2248,7 +2280,7 @@ mod tests {
         let disk_manager = ctx1.runtime_env().disk_manager.clone();
 
         let ctx2 =
-            SessionContext::with_config_rt(SessionConfig::new(), ctx1.runtime_env());
+            SessionContext::new_with_config_rt(SessionConfig::new(), ctx1.runtime_env());
 
         assert_eq!(ctx1.runtime_env().memory_pool.reserved(), 100);
         assert_eq!(ctx2.runtime_env().memory_pool.reserved(), 100);
@@ -2326,87 +2358,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn case_sensitive_identifiers_user_defined_functions() -> Result<()> {
-        let ctx = SessionContext::new();
-        ctx.register_table("t", test::table_with_sequence(1, 1).unwrap())
-            .unwrap();
-
-        let myfunc = |args: &[ArrayRef]| Ok(Arc::clone(&args[0]));
-        let myfunc = make_scalar_function(myfunc);
-
-        ctx.register_udf(create_udf(
-            "MY_FUNC",
-            vec![DataType::Int32],
-            Arc::new(DataType::Int32),
-            Volatility::Immutable,
-            myfunc,
-        ));
-
-        // doesn't work as it was registered with non lowercase
-        let err = plan_and_collect(&ctx, "SELECT MY_FUNC(i) FROM t")
-            .await
-            .unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("Error during planning: Invalid function \'my_func\'"));
-
-        // Can call it if you put quotes
-        let result = plan_and_collect(&ctx, "SELECT \"MY_FUNC\"(i) FROM t").await?;
-
-        let expected = [
-            "+--------------+",
-            "| MY_FUNC(t.i) |",
-            "+--------------+",
-            "| 1            |",
-            "+--------------+",
-        ];
-        assert_batches_eq!(expected, &result);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn case_sensitive_identifiers_user_defined_aggregates() -> Result<()> {
-        let ctx = SessionContext::new();
-        ctx.register_table("t", test::table_with_sequence(1, 1).unwrap())
-            .unwrap();
-
-        // Note capitalization
-        let my_avg = create_udaf(
-            "MY_AVG",
-            vec![DataType::Float64],
-            Arc::new(DataType::Float64),
-            Volatility::Immutable,
-            Arc::new(|_| Ok(Box::<AvgAccumulator>::default())),
-            Arc::new(vec![DataType::UInt64, DataType::Float64]),
-        );
-
-        ctx.register_udaf(my_avg);
-
-        // doesn't work as it was registered as non lowercase
-        let err = plan_and_collect(&ctx, "SELECT MY_AVG(i) FROM t")
-            .await
-            .unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("Error during planning: Invalid function \'my_avg\'"));
-
-        // Can call it if you put quotes
-        let result = plan_and_collect(&ctx, "SELECT \"MY_AVG\"(i) FROM t").await?;
-
-        let expected = [
-            "+-------------+",
-            "| MY_AVG(t.i) |",
-            "+-------------+",
-            "| 1.0         |",
-            "+-------------+",
-        ];
-        assert_batches_eq!(expected, &result);
-
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn query_csv_with_custom_partition_extension() -> Result<()> {
         let tmp_dir = TempDir::new()?;
 
@@ -2476,8 +2427,8 @@ mod tests {
             .set_str("datafusion.catalog.location", url.as_str())
             .set_str("datafusion.catalog.format", "CSV")
             .set_str("datafusion.catalog.has_header", "true");
-        let session_state = SessionState::with_config_rt(cfg, runtime);
-        let ctx = SessionContext::with_state(session_state);
+        let session_state = SessionState::new_with_config_rt(cfg, runtime);
+        let ctx = SessionContext::new_with_state(session_state);
         ctx.refresh_catalogs().await?;
 
         let result =
@@ -2502,9 +2453,10 @@ mod tests {
     #[tokio::test]
     async fn custom_query_planner() -> Result<()> {
         let runtime = Arc::new(RuntimeEnv::default());
-        let session_state = SessionState::with_config_rt(SessionConfig::new(), runtime)
-            .with_query_planner(Arc::new(MyQueryPlanner {}));
-        let ctx = SessionContext::with_state(session_state);
+        let session_state =
+            SessionState::new_with_config_rt(SessionConfig::new(), runtime)
+                .with_query_planner(Arc::new(MyQueryPlanner {}));
+        let ctx = SessionContext::new_with_state(session_state);
 
         let df = ctx.sql("SELECT 1").await?;
         df.collect().await.expect_err("query not supported");
@@ -2513,7 +2465,7 @@ mod tests {
 
     #[tokio::test]
     async fn disabled_default_catalog_and_schema() -> Result<()> {
-        let ctx = SessionContext::with_config(
+        let ctx = SessionContext::new_with_config(
             SessionConfig::new().with_create_default_catalog_and_schema(false),
         );
 
@@ -2556,7 +2508,7 @@ mod tests {
     }
 
     async fn catalog_and_schema_test(config: SessionConfig) {
-        let ctx = SessionContext::with_config(config);
+        let ctx = SessionContext::new_with_config(config);
         let catalog = MemoryCatalogProvider::new();
         let schema = MemorySchemaProvider::new();
         schema
@@ -2633,7 +2585,7 @@ mod tests {
     #[tokio::test]
     async fn catalogs_not_leaked() {
         // the information schema used to introduce cyclic Arcs
-        let ctx = SessionContext::with_config(
+        let ctx = SessionContext::new_with_config(
             SessionConfig::new().with_information_schema(true),
         );
 
@@ -2656,7 +2608,7 @@ mod tests {
     #[tokio::test]
     async fn sql_create_schema() -> Result<()> {
         // the information schema used to introduce cyclic Arcs
-        let ctx = SessionContext::with_config(
+        let ctx = SessionContext::new_with_config(
             SessionConfig::new().with_information_schema(true),
         );
 
@@ -2679,7 +2631,7 @@ mod tests {
     #[tokio::test]
     async fn sql_create_catalog() -> Result<()> {
         // the information schema used to introduce cyclic Arcs
-        let ctx = SessionContext::with_config(
+        let ctx = SessionContext::new_with_config(
             SessionConfig::new().with_information_schema(true),
         );
 
@@ -2837,8 +2789,9 @@ mod tests {
         tmp_dir: &TempDir,
         partition_count: usize,
     ) -> Result<SessionContext> {
-        let ctx =
-            SessionContext::with_config(SessionConfig::new().with_target_partitions(8));
+        let ctx = SessionContext::new_with_config(
+            SessionConfig::new().with_target_partitions(8),
+        );
 
         let schema = populate_csv_partitions(tmp_dir, partition_count, ".csv")?;
 

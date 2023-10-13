@@ -291,6 +291,41 @@ pub struct EmptyRelationNode {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PrimaryKeyConstraint {
+    #[prost(uint64, repeated, tag = "1")]
+    pub indices: ::prost::alloc::vec::Vec<u64>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UniqueConstraint {
+    #[prost(uint64, repeated, tag = "1")]
+    pub indices: ::prost::alloc::vec::Vec<u64>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Constraint {
+    #[prost(oneof = "constraint::ConstraintMode", tags = "1, 2")]
+    pub constraint_mode: ::core::option::Option<constraint::ConstraintMode>,
+}
+/// Nested message and enum types in `Constraint`.
+pub mod constraint {
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum ConstraintMode {
+        #[prost(message, tag = "1")]
+        PrimaryKey(super::PrimaryKeyConstraint),
+        #[prost(message, tag = "2")]
+        Unique(super::UniqueConstraint),
+    }
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Constraints {
+    #[prost(message, repeated, tag = "1")]
+    pub constraints: ::prost::alloc::vec::Vec<Constraint>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateExternalTableNode {
     #[prost(message, optional, tag = "12")]
     pub name: ::core::option::Option<OwnedTableReference>,
@@ -321,6 +356,8 @@ pub struct CreateExternalTableNode {
         ::prost::alloc::string::String,
         ::prost::alloc::string::String,
     >,
+    #[prost(message, optional, tag = "15")]
+    pub constraints: ::core::option::Option<Constraints>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1566,7 +1603,7 @@ pub mod physical_expr_node {
         TryCast(::prost::alloc::boxed::Box<super::PhysicalTryCastNode>),
         /// window expressions
         #[prost(message, tag = "15")]
-        WindowExpr(::prost::alloc::boxed::Box<super::PhysicalWindowExprNode>),
+        WindowExpr(super::PhysicalWindowExprNode),
         #[prost(message, tag = "16")]
         ScalarUdf(super::PhysicalScalarUdfNode),
         #[prost(message, tag = "18")]
@@ -1615,8 +1652,16 @@ pub mod physical_aggregate_expr_node {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalWindowExprNode {
-    #[prost(message, optional, boxed, tag = "4")]
-    pub expr: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
+    #[prost(message, repeated, tag = "4")]
+    pub args: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    #[prost(message, repeated, tag = "5")]
+    pub partition_by: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    #[prost(message, repeated, tag = "6")]
+    pub order_by: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
+    #[prost(message, optional, tag = "7")]
+    pub window_frame: ::core::option::Option<WindowFrame>,
+    #[prost(string, tag = "8")]
+    pub name: ::prost::alloc::string::String,
     #[prost(oneof = "physical_window_expr_node::WindowFunction", tags = "1, 2")]
     pub window_function: ::core::option::Option<
         physical_window_expr_node::WindowFunction,
@@ -1938,15 +1983,38 @@ pub struct ProjectionExecNode {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PartiallySortedPartitionSearchMode {
+    #[prost(uint64, repeated, tag = "6")]
+    pub columns: ::prost::alloc::vec::Vec<u64>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct WindowAggExecNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
     #[prost(message, repeated, tag = "2")]
-    pub window_expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
-    #[prost(string, repeated, tag = "3")]
-    pub window_expr_name: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
-    #[prost(message, optional, tag = "4")]
-    pub input_schema: ::core::option::Option<Schema>,
+    pub window_expr: ::prost::alloc::vec::Vec<PhysicalWindowExprNode>,
+    #[prost(message, repeated, tag = "5")]
+    pub partition_keys: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    /// Set optional to `None` for `BoundedWindowAggExec`.
+    #[prost(oneof = "window_agg_exec_node::PartitionSearchMode", tags = "7, 8, 9")]
+    pub partition_search_mode: ::core::option::Option<
+        window_agg_exec_node::PartitionSearchMode,
+    >,
+}
+/// Nested message and enum types in `WindowAggExecNode`.
+pub mod window_agg_exec_node {
+    /// Set optional to `None` for `BoundedWindowAggExec`.
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum PartitionSearchMode {
+        #[prost(message, tag = "7")]
+        Linear(super::EmptyMessage),
+        #[prost(message, tag = "8")]
+        PartiallySorted(super::PartiallySortedPartitionSearchMode),
+        #[prost(message, tag = "9")]
+        Sorted(super::EmptyMessage),
+    }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]

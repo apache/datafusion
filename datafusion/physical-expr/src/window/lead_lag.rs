@@ -46,6 +46,11 @@ impl WindowShift {
     pub fn get_shift_offset(&self) -> i64 {
         self.shift_offset
     }
+
+    /// Get the default_value for window shift expression.
+    pub fn get_default_value(&self) -> Option<ScalarValue> {
+        self.default_value.clone()
+    }
 }
 
 /// lead() window function

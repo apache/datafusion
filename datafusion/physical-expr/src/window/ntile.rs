@@ -41,6 +41,10 @@ impl Ntile {
     pub fn new(name: String, n: u64) -> Self {
         Self { name, n }
     }
+
+    pub fn get_n(&self) -> u64 {
+        self.n
+    }
 }
 
 impl BuiltInWindowFunctionExpr for Ntile {

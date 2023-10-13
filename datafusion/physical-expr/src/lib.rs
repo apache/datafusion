@@ -28,7 +28,6 @@ pub mod equivalence;
 pub mod execution_props;
 pub mod expressions;
 pub mod functions;
-pub mod hash_utils;
 pub mod intervals;
 pub mod math_expressions;
 mod partitioning;
@@ -48,6 +47,9 @@ pub mod unicode_expressions;
 pub mod utils;
 pub mod var_provider;
 pub mod window;
+
+// For backwards compatibility
+pub use datafusion_common::hash_utils;
 
 pub use aggregate::groups_accumulator::{
     EmitTo, GroupsAccumulator, GroupsAccumulatorAdapter,

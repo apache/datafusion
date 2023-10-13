@@ -35,6 +35,78 @@ WITH HEADER ROW
 LOCATION '../../testing/data/avro/alltypes_plain.avro'
 
 statement ok
+CREATE EXTERNAL TABLE alltypes_plain_snappy (
+  id  INT NOT NULL,
+  bool_col BOOLEAN NOT NULL,
+  tinyint_col TINYINT NOT NULL,
+  smallint_col SMALLINT NOT NULL,
+  int_col INT NOT NULL,
+  bigint_col BIGINT NOT NULL,
+  float_col FLOAT NOT NULL,
+  double_col DOUBLE NOT NULL,
+  date_string_col BYTEA NOT NULL,
+  string_col VARCHAR NOT NULL,
+  timestamp_col TIMESTAMP NOT NULL,
+)
+STORED AS AVRO
+WITH HEADER ROW
+LOCATION '../../testing/data/avro/alltypes_plain.snappy.avro'
+
+statement ok
+CREATE EXTERNAL TABLE alltypes_plain_bzip2 (
+  id  INT NOT NULL,
+  bool_col BOOLEAN NOT NULL,
+  tinyint_col TINYINT NOT NULL,
+  smallint_col SMALLINT NOT NULL,
+  int_col INT NOT NULL,
+  bigint_col BIGINT NOT NULL,
+  float_col FLOAT NOT NULL,
+  double_col DOUBLE NOT NULL,
+  date_string_col BYTEA NOT NULL,
+  string_col VARCHAR NOT NULL,
+  timestamp_col TIMESTAMP NOT NULL,
+)
+STORED AS AVRO
+WITH HEADER ROW
+LOCATION '../../testing/data/avro/alltypes_plain.bzip2.avro'
+
+statement ok
+CREATE EXTERNAL TABLE alltypes_plain_xz (
+  id  INT NOT NULL,
+  bool_col BOOLEAN NOT NULL,
+  tinyint_col TINYINT NOT NULL,
+  smallint_col SMALLINT NOT NULL,
+  int_col INT NOT NULL,
+  bigint_col BIGINT NOT NULL,
+  float_col FLOAT NOT NULL,
+  double_col DOUBLE NOT NULL,
+  date_string_col BYTEA NOT NULL,
+  string_col VARCHAR NOT NULL,
+  timestamp_col TIMESTAMP NOT NULL,
+)
+STORED AS AVRO
+WITH HEADER ROW
+LOCATION '../../testing/data/avro/alltypes_plain.xz.avro'
+
+statement ok
+CREATE EXTERNAL TABLE alltypes_plain_zstandard (
+  id  INT NOT NULL,
+  bool_col BOOLEAN NOT NULL,
+  tinyint_col TINYINT NOT NULL,
+  smallint_col SMALLINT NOT NULL,
+  int_col INT NOT NULL,
+  bigint_col BIGINT NOT NULL,
+  float_col FLOAT NOT NULL,
+  double_col DOUBLE NOT NULL,
+  date_string_col BYTEA NOT NULL,
+  string_col VARCHAR NOT NULL,
+  timestamp_col TIMESTAMP NOT NULL,
+)
+STORED AS AVRO
+WITH HEADER ROW
+LOCATION '../../testing/data/avro/alltypes_plain.zstandard.avro'
+
+statement ok
 CREATE EXTERNAL TABLE single_nan (
   mycol FLOAT
 )
@@ -48,9 +120,73 @@ STORED AS AVRO
 WITH HEADER ROW
 LOCATION '../../testing/data/avro/nested_records.avro'
 
+statement ok
+CREATE EXTERNAL TABLE simple_enum
+STORED AS AVRO
+WITH HEADER ROW
+LOCATION '../../testing/data/avro/simple_enum.avro'
+
+statement ok
+CREATE EXTERNAL TABLE simple_fixed
+STORED AS AVRO
+WITH HEADER ROW
+LOCATION '../../testing/data/avro/simple_fixed.avro'
+
 # test avro query
 query IT
 SELECT id, CAST(string_col AS varchar) FROM alltypes_plain
+----
+4 0
+5 1
+6 0
+7 1
+2 0
+3 1
+0 0
+1 1
+
+# test avro query with snappy
+query IT
+SELECT id, CAST(string_col AS varchar) FROM alltypes_plain_snappy
+----
+4 0
+5 1
+6 0
+7 1
+2 0
+3 1
+0 0
+1 1
+
+# test avro query with bzip2
+query IT
+SELECT id, CAST(string_col AS varchar) FROM alltypes_plain_bzip2
+----
+4 0
+5 1
+6 0
+7 1
+2 0
+3 1
+0 0
+1 1
+
+# test avro query with xz
+query IT
+SELECT id, CAST(string_col AS varchar) FROM alltypes_plain_xz
+----
+4 0
+5 1
+6 0
+7 1
+2 0
+3 1
+0 0
+1 1
+
+# test avro query with zstandard
+query IT
+SELECT id, CAST(string_col AS varchar) FROM alltypes_plain_zstandard
 ----
 4 0
 5 1
@@ -89,11 +225,27 @@ SELECT id, CAST(string_col AS varchar) FROM alltypes_plain_multi_files
 1  1
 
 # test avro nested records
-query ??
-SELECT f1, f2 FROM nested_records
+query ????
+SELECT f1, f2, f3, f4 FROM nested_records
 ----
-{ns2.record2.f1_1: aaa, ns2.record2.f1_2: 10, ns2.record2.f1_3: {ns3.record3.f1_3_1: 3.14}} [{ns4.record4.f2_1: true, ns4.record4.f2_2: 1.2}, {ns4.record4.f2_1: true, ns4.record4.f2_2: 2.2}]
-{ns2.record2.f1_1: bbb, ns2.record2.f1_2: 20, ns2.record2.f1_3: {ns3.record3.f1_3_1: 3.14}} [{ns4.record4.f2_1: false, ns4.record4.f2_2: 10.2}]
+{f1_1: aaa, f1_2: 10, f1_3: {f1_3_1: 3.14}} [{f2_1: true, f2_2: 1.2}, {f2_1: true, f2_2: 2.2}] {f3_1: xyz} [{f4_1: 200}, ]
+{f1_1: bbb, f1_2: 20, f1_3: {f1_3_1: 3.14}} [{f2_1: false, f2_2: 10.2}] NULL [, {f4_1: 300}]
+
+# test avro enum
+query TTT
+SELECT f1, f2, f3 FROM simple_enum
+----
+a g j
+b h k
+c e NULL
+d f i
+
+# test avro fixed
+query ???
+SELECT f1, f2, f3 FROM simple_fixed
+----
+6162636465 666768696a6b6c6d6e6f 414243444546
+3132333435 31323334353637383930 NULL
 
 # test avro explain
 query TT

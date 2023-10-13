@@ -20,7 +20,7 @@ use arrow::record_batch::RecordBatch;
 use arrow_flight::encode::FlightDataEncoderBuilder;
 use arrow_flight::flight_descriptor::DescriptorType;
 use arrow_flight::flight_service_server::{FlightService, FlightServiceServer};
-use arrow_flight::sql::server::FlightSqlService;
+use arrow_flight::sql::server::{FlightSqlService, PeekableFlightDataStream};
 use arrow_flight::sql::{
     ActionBeginSavepointRequest, ActionBeginSavepointResult,
     ActionBeginTransactionRequest, ActionBeginTransactionResult,
@@ -36,7 +36,7 @@ use arrow_flight::sql::{
     TicketStatementQuery,
 };
 use arrow_flight::{
-    Action, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest,
+    Action, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest,
     HandshakeResponse, IpcMessage, SchemaAsIpc, Ticket,
 };
 use arrow_schema::Schema;
@@ -105,7 +105,7 @@ impl FlightSqlServiceImpl {
         let session_config = SessionConfig::from_env()
             .map_err(|e| Status::internal(format!("Error building plan: {e}")))?
             .with_information_schema(true);
-        let ctx = Arc::new(SessionContext::with_config(session_config));
+        let ctx = Arc::new(SessionContext::new_with_config(session_config));
 
         let testdata = datafusion::test_util::parquet_test_data();
 
@@ -547,7 +547,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
     async fn do_put_statement_update(
         &self,
         _ticket: CommandStatementUpdate,
-        _request: Request<Streaming<FlightData>>,
+        _request: Request<PeekableFlightDataStream>,
     ) -> Result<i64, Status> {
         info!("do_put_statement_update");
         Err(Status::unimplemented("Implement do_put_statement_update"))
@@ -556,7 +556,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
     async fn do_put_prepared_statement_query(
         &self,
         _query: CommandPreparedStatementQuery,
-        _request: Request<Streaming<FlightData>>,
+        _request: Request<PeekableFlightDataStream>,
     ) -> Result<Response<<Self as FlightService>::DoPutStream>, Status> {
         info!("do_put_prepared_statement_query");
         Err(Status::unimplemented(
@@ -567,7 +567,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
     async fn do_put_prepared_statement_update(
         &self,
         _handle: CommandPreparedStatementUpdate,
-        _request: Request<Streaming<FlightData>>,
+        _request: Request<PeekableFlightDataStream>,
     ) -> Result<i64, Status> {
         info!("do_put_prepared_statement_update");
         // statements like "CREATE TABLE.." or "SET datafusion.nnn.." call this function
@@ -578,7 +578,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
     async fn do_put_substrait_plan(
         &self,
         _query: CommandStatementSubstraitPlan,
-        _request: Request<Streaming<FlightData>>,
+        _request: Request<PeekableFlightDataStream>,
     ) -> Result<i64, Status> {
         info!("do_put_prepared_statement_update");
         Err(Status::unimplemented(

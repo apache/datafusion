@@ -40,10 +40,10 @@ arrow-buffer = { workspace = true }
 arrow-schema = { workspace = true }
 async-trait = "0.1.41"
 chrono = { version = "0.4.23", default-features = false }
-datafusion-common = { path = "../common", version = "31.0.0" }
-datafusion-execution = { path = "../execution", version = "31.0.0" }
-datafusion-expr = { path = "../expr", version = "31.0.0" }
-datafusion-physical-expr = { path = "../physical-expr", version = "31.0.0" }
+datafusion-common = { path = "../common", version = "32.0.0", default-features = false }
+datafusion-execution = { path = "../execution", version = "32.0.0" }
+datafusion-expr = { path = "../expr", version = "32.0.0" }
+datafusion-physical-expr = { path = "../physical-expr", version = "32.0.0" }
 futures = "0.3"
 half = { version = "2.1", default-features = false }
 hashbrown = { version = "0.14", features = ["raw"] }

@@ -23,11 +23,11 @@ User Defined Functions (UDFs) are functions that can be used in the context of D
 
 This page covers how to add UDFs to DataFusion. In particular, it covers how to add Scalar, Window, and Aggregate UDFs.
 
-| UDF Type  | Description                                                                                                | Example                                                                |
-| --------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| Scalar    | A function that takes a row of data and returns a single value.                                            | [simple_udf.rs](../../../datafusion-examples/examples/simple_udf.rs)   |
-| Window    | A function that takes a row of data and returns a single value, but also has access to the rows around it. | [simple_udwf.rs](../../../datafusion-examples/examples/simple_udwf.rs) |
-| Aggregate | A function that takes a group of rows and returns a single value.                                          | [simple_udaf.rs](../../../datafusion-examples/examples/simple_udaf.rs) |
+| UDF Type  | Description                                                                                                | Example                                                                                                            |
+| --------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Scalar    | A function that takes a row of data and returns a single value.                                            | [simple_udf.rs](https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/simple_udf.rs)   |
+| Window    | A function that takes a row of data and returns a single value, but also has access to the rows around it. | [simple_udwf.rs](https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/simple_udwf.rs) |
+| Aggregate | A function that takes a group of rows and returns a single value.                                          | [simple_udaf.rs](https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/simple_udaf.rs) |
 
 First we'll talk about adding an Scalar UDF end-to-end, then we'll talk about the differences between the different types of UDFs.
 

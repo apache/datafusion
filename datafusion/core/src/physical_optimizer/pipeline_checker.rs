@@ -108,7 +108,7 @@ impl TreeNode for PipelineStatePropagator {
         if !children.is_empty() {
             let new_children = children
                 .into_iter()
-                .map(|child| PipelineStatePropagator::new(child))
+                .map(PipelineStatePropagator::new)
                 .map(transform)
                 .collect::<Result<Vec<_>>>()?;
             let children_unbounded = new_children
@@ -163,7 +163,7 @@ pub fn check_finiteness_requirements(
 /// [`Operator`]: datafusion_expr::Operator
 fn is_prunable(join: &SymmetricHashJoinExec) -> bool {
     join.filter().map_or(false, |filter| {
-        check_support(filter.expression())
+        check_support(filter.expression(), &join.schema())
             && filter
                 .schema()
                 .fields()

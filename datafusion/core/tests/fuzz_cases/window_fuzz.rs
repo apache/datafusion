@@ -396,7 +396,7 @@ async fn run_window_test(
     let mut rng = StdRng::seed_from_u64(random_seed);
     let schema = input1[0].schema();
     let session_config = SessionConfig::new().with_batch_size(50);
-    let ctx = SessionContext::with_config(session_config);
+    let ctx = SessionContext::new_with_config(session_config);
     let (window_fn, args, fn_name) = get_random_function(&schema, &mut rng, is_linear);
 
     let window_frame = get_random_window_frame(&mut rng, is_linear);
@@ -461,7 +461,6 @@ async fn run_window_test(
             )
             .unwrap()],
             exec1,
-            schema.clone(),
             vec![],
         )
         .unwrap(),
@@ -484,7 +483,6 @@ async fn run_window_test(
             )
             .unwrap()],
             exec2,
-            schema.clone(),
             vec![],
             search_mode,
         )

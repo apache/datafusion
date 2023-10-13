@@ -273,8 +273,13 @@ pub async fn from_substrait_rel(
                     from_substrait_rel(ctx, input, extensions).await?,
                 );
                 let offset = fetch.offset as usize;
-                let count = fetch.count as usize;
-                input.limit(offset, Some(count))?.build()
+                // Since protobuf can't directly distinguish `None` vs `0` `None` is encoded as `MAX`
+                let count = if fetch.count as usize == usize::MAX {
+                    None
+                } else {
+                    Some(fetch.count as usize)
+                };
+                input.limit(offset, count)?.build()
             } else {
                 not_impl_err!("Fetch without an input is not valid")
             }

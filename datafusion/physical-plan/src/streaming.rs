@@ -163,9 +163,13 @@ impl ExecutionPlan for StreamingTableExec {
 
     fn with_new_children(
         self: Arc<Self>,
-        _children: Vec<Arc<dyn ExecutionPlan>>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        internal_err!("Children cannot be replaced in {self:?}")
+        if children.is_empty() {
+            Ok(self)
+        } else {
+            internal_err!("Children cannot be replaced in {self:?}")
+        }
     }
 
     fn execute(

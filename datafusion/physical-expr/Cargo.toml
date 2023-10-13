@@ -35,9 +35,6 @@ path = "src/lib.rs"
 [features]
 crypto_expressions = ["md-5", "sha2", "blake2", "blake3"]
 default = ["crypto_expressions", "regex_expressions", "unicode_expressions", "encoding_expressions"]
-# Enables support for non-scalar, binary operations on dictionaries
-# Note: this results in significant additional codegen
-dictionary_expressions = ["arrow/dyn_cmp_dict"]
 encoding_expressions = ["base64", "hex"]
 regex_expressions = ["regex"]
 unicode_expressions = ["unicode-segmentation"]
@@ -52,8 +49,8 @@ base64 = { version = "0.21", optional = true }
 blake2 = { version = "^0.10.2", optional = true }
 blake3 = { version = "1.0", optional = true }
 chrono = { workspace = true }
-datafusion-common = { path = "../common", version = "31.0.0" }
-datafusion-expr = { path = "../expr", version = "31.0.0" }
+datafusion-common = { path = "../common", version = "32.0.0", default-features = false }
+datafusion-expr = { path = "../expr", version = "32.0.0" }
 half = { version = "2.1", default-features = false }
 hashbrown = { version = "0.14", features = ["raw"] }
 hex = { version = "0.4", optional = true }

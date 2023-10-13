@@ -31,5 +31,5 @@ publish = false
 
 [dependencies]
 # Pin these dependencies so that the generated output is deterministic
-pbjson-build = { version = "=0.5.1" }
-prost-build = { version = "=0.11.9" }
+pbjson-build = "=0.6.2"
+prost-build = "=0.12.1"

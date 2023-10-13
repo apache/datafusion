@@ -35,7 +35,6 @@ path = "src/lib.rs"
 [features]
 crypto_expressions = ["datafusion-physical-expr/crypto_expressions"]
 default = ["unicode_expressions", "crypto_expressions", "regex_expressions"]
-dictionary_expressions = ["datafusion-physical-expr/dictionary_expressions"]
 regex_expressions = ["datafusion-physical-expr/regex_expressions"]
 unicode_expressions = ["datafusion-physical-expr/unicode_expressions"]
 
@@ -43,15 +42,15 @@ unicode_expressions = ["datafusion-physical-expr/unicode_expressions"]
 arrow = { workspace = true }
 async-trait = "0.1.41"
 chrono = { workspace = true }
-datafusion-common = { path = "../common", version = "31.0.0" }
-datafusion-expr = { path = "../expr", version = "31.0.0" }
-datafusion-physical-expr = { path = "../physical-expr", version = "31.0.0", default-features = false }
+datafusion-common = { path = "../common", version = "32.0.0", default-features = false }
+datafusion-expr = { path = "../expr", version = "32.0.0" }
+datafusion-physical-expr = { path = "../physical-expr", version = "32.0.0", default-features = false }
 hashbrown = { version = "0.14", features = ["raw"] }
 itertools = "0.11"
 log = "^0.4"
-regex-syntax = "0.7.1"
+regex-syntax = "0.8.0"
 
 [dev-dependencies]
 ctor = "0.2.0"
-datafusion-sql = { path = "../sql", version = "31.0.0" }
+datafusion-sql = { path = "../sql", version = "32.0.0" }
 env_logger = "0.10.0"

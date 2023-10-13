@@ -28,6 +28,7 @@ use datafusion_execution::config::SessionConfig;
 use datafusion_execution::TaskContext;
 use rand_distr::Distribution;
 use rand_distr::{Normal, Pareto};
+use std::fmt::Write;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
@@ -45,7 +46,7 @@ async fn create_context(
     let mut cfg = SessionConfig::new();
     let opts = cfg.options_mut();
     opts.optimizer.enable_topk_aggregation = use_topk;
-    let ctx = SessionContext::with_config(cfg);
+    let ctx = SessionContext::new_with_config(cfg);
     let _ = ctx.register_table("traces", mem_table)?;
     let sql = format!("select trace_id, max(timestamp_ms) from traces group by trace_id order by max(timestamp_ms) desc limit {limit};");
     let df = ctx.sql(sql.as_str()).await?;
@@ -130,8 +131,10 @@ fn make_data(
         let gen_id = |rng: &mut rand::rngs::SmallRng| {
             rng.gen::<[u8; 16]>()
                 .iter()
-                .map(|b| format!("{:02x}", b))
-                .collect::<String>()
+                .fold(String::new(), |mut output, b| {
+                    let _ = write!(output, "{b:02X}");
+                    output
+                })
         };
         let gen_sample_cnt =
             |mut rng: &mut rand::rngs::SmallRng| pareto.sample(&mut rng).ceil() as u32;

@@ -21,27 +21,26 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, SchemaRef};
-use async_trait::async_trait;
-use datafusion_common::file_options::{FileTypeWriterOptions, StatementOptions};
-use datafusion_common::DataFusionError;
-use datafusion_expr::CreateExternalTable;
+use super::listing::ListingTableInsertMode;
 
-use crate::datasource::file_format::arrow::ArrowFormat;
-use crate::datasource::file_format::avro::AvroFormat;
-use crate::datasource::file_format::csv::CsvFormat;
-use crate::datasource::file_format::json::JsonFormat;
-use crate::datasource::file_format::parquet::ParquetFormat;
-use crate::datasource::file_format::FileFormat;
+use crate::datasource::file_format::{
+    arrow::ArrowFormat, avro::AvroFormat, csv::CsvFormat,
+    file_compression_type::FileCompressionType, json::JsonFormat, parquet::ParquetFormat,
+    FileFormat,
+};
 use crate::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
 use crate::datasource::provider::TableProviderFactory;
 use crate::datasource::TableProvider;
 use crate::execution::context::SessionState;
-use datafusion_common::{FileCompressionType, FileType};
 
-use super::listing::ListingTableInsertMode;
+use arrow::datatypes::{DataType, SchemaRef};
+use datafusion_common::file_options::{FileTypeWriterOptions, StatementOptions};
+use datafusion_common::{DataFusionError, FileType};
+use datafusion_expr::CreateExternalTable;
+
+use async_trait::async_trait;
 
 /// A `TableProviderFactory` capable of creating new `ListingTable`s
 pub struct ListingTableFactory {}
@@ -231,7 +230,9 @@ impl TableProviderFactory for ListingTableFactory {
             .with_schema(resolved_schema);
         let provider = ListingTable::try_new(config)?
             .with_cache(state.runtime_env().cache_manager.get_file_statistic_cache());
-        let table = provider.with_definition(cmd.definition.clone());
+        let table = provider
+            .with_definition(cmd.definition.clone())
+            .with_constraints(cmd.constraints.clone());
         Ok(Arc::new(table))
     }
 }
@@ -247,13 +248,13 @@ fn get_extension(path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use std::collections::HashMap;
 
+    use super::*;
     use crate::execution::context::SessionContext;
+
     use datafusion_common::parsers::CompressionTypeVariant;
-    use datafusion_common::{DFSchema, OwnedTableReference};
+    use datafusion_common::{Constraints, DFSchema, OwnedTableReference};
 
     #[tokio::test]
     async fn test_create_using_non_std_file_ext() {
@@ -281,6 +282,7 @@ mod tests {
             order_exprs: vec![],
             unbounded: false,
             options: HashMap::new(),
+            constraints: Constraints::empty(),
         };
         let table_provider = factory.create(&state, &cmd).await.unwrap();
         let listing_table = table_provider

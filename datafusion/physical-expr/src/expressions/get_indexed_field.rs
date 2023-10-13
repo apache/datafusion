@@ -61,9 +61,28 @@ impl std::fmt::Display for GetFieldAccessExpr {
 
 impl PartialEq<dyn Any> for GetFieldAccessExpr {
     fn eq(&self, other: &dyn Any) -> bool {
+        use GetFieldAccessExpr::{ListIndex, ListRange, NamedStructField};
         down_cast_any_ref(other)
             .downcast_ref::<Self>()
-            .map(|x| self.eq(x))
+            .map(|x| match (self, x) {
+                (NamedStructField { name: lhs }, NamedStructField { name: rhs }) => {
+                    lhs.eq(rhs)
+                }
+                (ListIndex { key: lhs }, ListIndex { key: rhs }) => lhs.eq(rhs),
+                (
+                    ListRange {
+                        start: start_lhs,
+                        stop: stop_lhs,
+                    },
+                    ListRange {
+                        start: start_rhs,
+                        stop: stop_rhs,
+                    },
+                ) => start_lhs.eq(start_rhs) && stop_lhs.eq(stop_rhs),
+                (NamedStructField { .. }, ListIndex { .. } | ListRange { .. }) => false,
+                (ListIndex { .. }, NamedStructField { .. } | ListRange { .. }) => false,
+                (ListRange { .. }, NamedStructField { .. } | ListIndex { .. }) => false,
+            })
             .unwrap_or(false)
     }
 }
@@ -433,6 +452,21 @@ mod tests {
         let expr = Arc::new(GetIndexedFieldExpr::new_index(expr, key));
         let result = expr.evaluate(&batch)?.into_array(1);
         assert!(result.is_null(0));
+        Ok(())
+    }
+
+    #[test]
+    fn get_indexed_field_eq() -> Result<()> {
+        let schema = list_schema(&["list", "error"]);
+        let expr = col("list", &schema).unwrap();
+        let key = col("error", &schema).unwrap();
+        let indexed_field =
+            Arc::new(GetIndexedFieldExpr::new_index(expr.clone(), key.clone()))
+                as Arc<dyn PhysicalExpr>;
+        let indexed_field_other =
+            Arc::new(GetIndexedFieldExpr::new_index(key, expr)) as Arc<dyn PhysicalExpr>;
+        assert!(indexed_field.eq(&indexed_field));
+        assert!(!indexed_field.eq(&indexed_field_other));
         Ok(())
     }
 }

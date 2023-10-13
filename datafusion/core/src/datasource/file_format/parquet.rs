@@ -17,6 +17,7 @@
 
 //! Parquet format abstractions
 
+use datafusion_physical_plan::metrics::MetricsSet;
 use parquet::column::writer::ColumnCloseResult;
 use parquet::file::writer::SerializedFileWriter;
 use rand::distributions::DistString;
@@ -29,15 +30,14 @@ use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::task::{JoinHandle, JoinSet};
 
+use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use arrow::datatypes::SchemaRef;
 use arrow::datatypes::{Fields, Schema};
 use async_trait::async_trait;
 use bytes::{BufMut, BytesMut};
-use datafusion_common::{
-    exec_err, not_impl_err, plan_err, DataFusionError, FileCompressionType, FileType,
-};
+use datafusion_common::{exec_err, not_impl_err, plan_err, DataFusionError, FileType};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
 use futures::{StreamExt, TryStreamExt};
 use hashbrown::HashMap;
 use object_store::{ObjectMeta, ObjectStore};
@@ -70,9 +70,6 @@ use crate::physical_plan::{
     Accumulator, DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream,
     Statistics,
 };
-
-/// The number of files to read in parallel when inferring schema
-const SCHEMA_INFERENCE_CONCURRENCY: usize = 32;
 
 /// The Apache Parquet `FileFormat` implementation
 ///
@@ -177,7 +174,7 @@ impl FileFormat for ParquetFormat {
         let schemas: Vec<_> = futures::stream::iter(objects)
             .map(|object| fetch_schema(store.as_ref(), object, self.metadata_size_hint))
             .boxed() // Workaround https://github.com/rust-lang/rust/issues/64552
-            .buffered(SCHEMA_INFERENCE_CONCURRENCY)
+            .buffered(state.config_options().execution.meta_fetch_concurrency)
             .try_collect()
             .await?;
 
@@ -233,6 +230,7 @@ impl FileFormat for ParquetFormat {
         input: Arc<dyn ExecutionPlan>,
         _state: &SessionState,
         conf: FileSinkConfig,
+        order_requirements: Option<Vec<PhysicalSortRequirement>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if conf.overwrite {
             return not_impl_err!("Overwrites are not implemented yet for Parquet");
@@ -241,7 +239,12 @@ impl FileFormat for ParquetFormat {
         let sink_schema = conf.output_schema().clone();
         let sink = Arc::new(ParquetSink::new(conf));
 
-        Ok(Arc::new(FileSinkExec::new(input, sink, sink_schema)) as _)
+        Ok(Arc::new(FileSinkExec::new(
+            input,
+            sink,
+            sink_schema,
+            order_requirements,
+        )) as _)
     }
 
     fn file_type(&self) -> FileType {
@@ -755,6 +758,14 @@ impl ParquetSink {
 
 #[async_trait]
 impl DataSink for ParquetSink {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        None
+    }
+
     async fn write_all(
         &self,
         mut data: Vec<SendableRecordBatchStream>,
@@ -848,6 +859,8 @@ async fn output_single_parquet_file_parallelized(
     parquet_props: &WriterProperties,
 ) -> Result<usize> {
     let mut row_count = 0;
+    // TODO decrease parallelism / buffering:
+    // https://github.com/apache/arrow-datafusion/issues/7591
     let parallelism = data.len();
     let mut join_handles: Vec<JoinHandle<ParquetFileSerializedResult>> =
         Vec::with_capacity(parallelism);
@@ -881,6 +894,8 @@ async fn output_single_parquet_file_parallelized(
         >,
     > = tokio::task::spawn(async move {
         while let Some(data) = rx.recv().await {
+            // TODO write incrementally
+            // https://github.com/apache/arrow-datafusion/issues/7591
             object_store_writer.write_all(data.as_slice()).await?;
         }
         Ok(object_store_writer)
@@ -917,6 +932,8 @@ async fn output_single_parquet_file_parallelized(
                                     bytes_written: column.compressed_size() as _,
                                     rows_written: rg.num_rows() as _,
                                     metadata: column.clone(),
+                                    // TODO need to populate the indexes when writing final file
+                                    // see https://github.com/apache/arrow-datafusion/issues/7589
                                     bloom_filter: None,
                                     column_index: None,
                                     offset_index: None,
@@ -1099,7 +1116,7 @@ pub(crate) mod test_util {
         Ok((meta, files))
     }
 
-    //// write batches chunk_size rows at a time
+    /// write batches chunk_size rows at a time
     fn write_in_chunks<W: std::io::Write + Send>(
         writer: &mut ArrowWriter<W>,
         batch: &RecordBatch,
@@ -1376,7 +1393,7 @@ mod tests {
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {
         let config = SessionConfig::new().with_batch_size(2);
-        let session_ctx = SessionContext::with_config(config);
+        let session_ctx = SessionContext::new_with_config(config);
         let state = session_ctx.state();
         let task_ctx = state.task_ctx();
         let projection = None;
@@ -1404,7 +1421,7 @@ mod tests {
     #[tokio::test]
     async fn capture_bytes_scanned_metric() -> Result<()> {
         let config = SessionConfig::new().with_batch_size(2);
-        let session = SessionContext::with_config(config);
+        let session = SessionContext::new_with_config(config);
         let ctx = session.state();
 
         // Read the full file

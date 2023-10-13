@@ -20,35 +20,82 @@
 
 use arrow::datatypes::DataType;
 
+/// Constant that is used as a placeholder for any valid timezone.
+/// This is used where a function can accept a timestamp type with any
+/// valid timezone, it exists to avoid the need to enumerate all possible
+/// timezones. See [`TypeSignature`] for more details.
+///
+/// Type coercion always ensures that functions will be executed using
+/// timestamp arrays that have a valid time zone. Functions must never
+/// return results with this timezone.
+pub const TIMEZONE_WILDCARD: &str = "+TZ";
+
 ///A function's volatility, which defines the functions eligibility for certain optimizations
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
 pub enum Volatility {
-    /// Immutable - An immutable function will always return the same output when given the same
-    /// input. An example of this is [super::BuiltinScalarFunction::Cos].
+    /// An immutable function will always return the same output when given the same
+    /// input. An example of this is [super::BuiltinScalarFunction::Cos]. DataFusion
+    /// will attempt to inline immutable functions during planning.
     Immutable,
-    /// Stable - A stable function may return different values given the same input across different
+    /// A stable function may return different values given the same input across different
     /// queries but must return the same value for a given input within a query. An example of
-    /// this is [super::BuiltinScalarFunction::Now].
+    /// this is [super::BuiltinScalarFunction::Now]. DataFusion
+    /// will attempt to inline `Stable` functions during planning, when possible.
+    /// For query `select col1, now() from t1`, it might take a while to execute but
+    /// `now()` column will be the same for each output row, which is evaluated
+    /// during planning.
     Stable,
-    /// Volatile - A volatile function may change the return value from evaluation to evaluation.
+    /// A volatile function may change the return value from evaluation to evaluation.
     /// Multiple invocations of a volatile function may return different results when used in the
-    /// same query. An example of this is [super::BuiltinScalarFunction::Random].
+    /// same query. An example of this is [super::BuiltinScalarFunction::Random]. DataFusion
+    /// can not evaluate such functions during planning.
+    /// In the query `select col1, random() from t1`, `random()` function will be evaluated
+    /// for each output row, resulting in a unique random value for each row.
     Volatile,
 }
 
-/// A function's type signature, which defines the function's supported argument types.
+/// A function's type signature defines the types of arguments the function supports.
+///
+/// Functions typically support only a few different types of arguments compared to the
+/// different datatypes in Arrow. To make functions easy to use, when possible DataFusion
+/// automatically coerces (add casts to) function arguments so they match the type signature.
+///
+/// For example, a function like `cos` may only be implemented for `Float64` arguments. To support a query
+/// that calles `cos` with a different argument type, such as `cos(int_column)`, type coercion automatically
+/// adds a cast such as `cos(CAST int_column AS DOUBLE)` during planning.
+///
+/// # Data Types
+/// Types to match are represented using Arrow's [`DataType`].  [`DataType::Timestamp`] has an optional variable
+/// timezone specification. To specify a function can handle a timestamp with *ANY* timezone, use
+/// the [`TIMEZONE_WILDCARD`]. For example:
+///
+/// ```
+/// # use arrow::datatypes::{DataType, TimeUnit};
+/// # use datafusion_expr::{TIMEZONE_WILDCARD, TypeSignature};
+/// let type_signature = TypeSignature::Exact(vec![
+///   // A nanosecond precision timestamp with ANY timezone
+///   // matches  Timestamp(Nanosecond, Some("+0:00"))
+///   // matches  Timestamp(Nanosecond, Some("+5:00"))
+///   // does not match  Timestamp(Nanosecond, None)
+///   DataType::Timestamp(TimeUnit::Nanosecond, Some(TIMEZONE_WILDCARD.into())),
+/// ]);
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeSignature {
-    /// arbitrary number of arguments of an common type out of a list of valid types
-    // A function such as `concat` is `Variadic(vec![DataType::Utf8, DataType::LargeUtf8])`
+    /// arbitrary number of arguments of an common type out of a list of valid types.
+    ///
+    /// # Examples
+    /// A function such as `concat` is `Variadic(vec![DataType::Utf8, DataType::LargeUtf8])`
     Variadic(Vec<DataType>),
-    /// arbitrary number of arguments of an arbitrary but equal type
-    // A function such as `array` is `VariadicEqual`
-    // The first argument decides the type used for coercion
+    /// arbitrary number of arguments of an arbitrary but equal type.
+    /// DataFusion attempts to coerce all argument types to match the first argument's type
+    ///
+    /// # Examples
+    /// A function such as `array` is `VariadicEqual`
     VariadicEqual,
     /// arbitrary number of arguments with arbitrary types
     VariadicAny,
-    /// fixed number of arguments of an arbitrary but equal type out of a list of valid types
+    /// fixed number of arguments of an arbitrary but equal type out of a list of valid types.
     ///
     /// # Examples
     /// 1. A function of one argument of f64 is `Uniform(1, vec![DataType::Float64])`
@@ -58,7 +105,8 @@ pub enum TypeSignature {
     Exact(Vec<DataType>),
     /// fixed number of arguments of arbitrary types
     Any(usize),
-    /// One of a list of signatures
+    /// Matches exactly one of a list of [`TypeSignature`]s. Coercion is attempted to match
+    /// the signatures in order, and stops after the first success, if any.
     OneOf(Vec<TypeSignature>),
 }
 
@@ -104,46 +152,48 @@ impl TypeSignature {
     }
 }
 
-/// The signature of a function defines the supported argument types
-/// and its volatility.
+/// Defines the supported argument types ([`TypeSignature`]) and [`Volatility`] for a function.
+///
+/// DataFusion will automatically coerce (cast) argument types to one of the supported
+/// function signatures, if possible.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Signature {
-    /// type_signature - The types that the function accepts. See [TypeSignature] for more information.
+    /// The data types that the function accepts. See [TypeSignature] for more information.
     pub type_signature: TypeSignature,
-    /// volatility - The volatility of the function. See [Volatility] for more information.
+    /// The volatility of the function. See [Volatility] for more information.
     pub volatility: Volatility,
 }
 
 impl Signature {
-    /// new - Creates a new Signature from any type signature and the volatility.
+    /// Creates a new Signature from a given type signature and volatility.
     pub fn new(type_signature: TypeSignature, volatility: Volatility) -> Self {
         Signature {
             type_signature,
             volatility,
         }
     }
-    /// variadic - Creates a variadic signature that represents an arbitrary number of arguments all from a type in common_types.
+    /// An arbitrary number of arguments with the same type, from those listed in `common_types`.
     pub fn variadic(common_types: Vec<DataType>, volatility: Volatility) -> Self {
         Self {
             type_signature: TypeSignature::Variadic(common_types),
             volatility,
         }
     }
-    /// variadic_equal - Creates a variadic signature that represents an arbitrary number of arguments of the same type.
+    /// An arbitrary number of arguments of the same type.
     pub fn variadic_equal(volatility: Volatility) -> Self {
         Self {
             type_signature: TypeSignature::VariadicEqual,
             volatility,
         }
     }
-    /// variadic_any - Creates a variadic signature that represents an arbitrary number of arguments of any type.
+    /// An arbitrary number of arguments of any type.
     pub fn variadic_any(volatility: Volatility) -> Self {
         Self {
             type_signature: TypeSignature::VariadicAny,
             volatility,
         }
     }
-    /// uniform - Creates a function with a fixed number of arguments of the same type, which must be from valid_types.
+    /// A fixed number of arguments of the same type, from those listed in `valid_types`.
     pub fn uniform(
         arg_count: usize,
         valid_types: Vec<DataType>,
@@ -154,21 +204,21 @@ impl Signature {
             volatility,
         }
     }
-    /// exact - Creates a signature which must match the types in exact_types in order.
+    /// Exactly matches the types in `exact_types`, in order.
     pub fn exact(exact_types: Vec<DataType>, volatility: Volatility) -> Self {
         Signature {
             type_signature: TypeSignature::Exact(exact_types),
             volatility,
         }
     }
-    /// any - Creates a signature which can a be made of any type but of a specified number
+    /// A specified number of arguments of any type
     pub fn any(arg_count: usize, volatility: Volatility) -> Self {
         Signature {
             type_signature: TypeSignature::Any(arg_count),
             volatility,
         }
     }
-    /// one_of Creates a signature which can match any of the [TypeSignature]s which are passed in.
+    /// Any one of a list of [TypeSignature]s.
     pub fn one_of(type_signatures: Vec<TypeSignature>, volatility: Volatility) -> Self {
         Signature {
             type_signature: TypeSignature::OneOf(type_signatures),

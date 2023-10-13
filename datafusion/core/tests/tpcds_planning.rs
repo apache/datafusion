@@ -1045,7 +1045,7 @@ async fn regression_test(query_no: u8, create_physical: bool) -> Result<()> {
     let sql = fs::read_to_string(filename).expect("Could not read query");
 
     let config = SessionConfig::default();
-    let ctx = SessionContext::with_config(config);
+    let ctx = SessionContext::new_with_config(config);
     let tables = get_table_definitions();
     for table in &tables {
         ctx.register_table(

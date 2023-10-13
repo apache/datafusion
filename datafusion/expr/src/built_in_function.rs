@@ -18,6 +18,7 @@
 //! Built-in functions module contains all the built-in functions definitions.
 
 use crate::nullif::SUPPORTED_NULLIF_TYPES;
+use crate::signature::TIMEZONE_WILDCARD;
 use crate::type_coercion::functions::data_types;
 use crate::{
     conditional_expressions, struct_expressions, utils, Signature, TypeSignature,
@@ -618,13 +619,20 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ConcatWithSeparator => Ok(Utf8),
             BuiltinScalarFunction::DatePart => Ok(Float64),
             BuiltinScalarFunction::DateBin | BuiltinScalarFunction::DateTrunc => {
-                match input_expr_types[1] {
-                    Timestamp(Nanosecond, _) | Utf8 | Null => {
+                match &input_expr_types[1] {
+                    Timestamp(Nanosecond, None) | Utf8 | Null => {
                         Ok(Timestamp(Nanosecond, None))
                     }
-                    Timestamp(Microsecond, _) => Ok(Timestamp(Microsecond, None)),
-                    Timestamp(Millisecond, _) => Ok(Timestamp(Millisecond, None)),
-                    Timestamp(Second, _) => Ok(Timestamp(Second, None)),
+                    Timestamp(Nanosecond, tz_opt) => {
+                        Ok(Timestamp(Nanosecond, tz_opt.clone()))
+                    }
+                    Timestamp(Microsecond, tz_opt) => {
+                        Ok(Timestamp(Microsecond, tz_opt.clone()))
+                    }
+                    Timestamp(Millisecond, tz_opt) => {
+                        Ok(Timestamp(Millisecond, tz_opt.clone()))
+                    }
+                    Timestamp(Second, tz_opt) => Ok(Timestamp(Second, tz_opt.clone())),
                     _ => plan_err!(
                     "The {self} function can only accept timestamp as the second arg."
                 ),
@@ -1020,9 +1028,25 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::DateTrunc => Signature::one_of(
                 vec![
                     Exact(vec![Utf8, Timestamp(Nanosecond, None)]),
+                    Exact(vec![
+                        Utf8,
+                        Timestamp(Nanosecond, Some(TIMEZONE_WILDCARD.into())),
+                    ]),
                     Exact(vec![Utf8, Timestamp(Microsecond, None)]),
+                    Exact(vec![
+                        Utf8,
+                        Timestamp(Microsecond, Some(TIMEZONE_WILDCARD.into())),
+                    ]),
                     Exact(vec![Utf8, Timestamp(Millisecond, None)]),
+                    Exact(vec![
+                        Utf8,
+                        Timestamp(Millisecond, Some(TIMEZONE_WILDCARD.into())),
+                    ]),
                     Exact(vec![Utf8, Timestamp(Second, None)]),
+                    Exact(vec![
+                        Utf8,
+                        Timestamp(Second, Some(TIMEZONE_WILDCARD.into())),
+                    ]),
                 ],
                 self.volatility(),
             ),
@@ -1035,15 +1059,36 @@ impl BuiltinScalarFunction {
                             Timestamp(Nanosecond, None),
                         ]),
                         Exact(vec![
+                            Interval(MonthDayNano),
+                            Timestamp(array_type.clone(), Some(TIMEZONE_WILDCARD.into())),
+                            Timestamp(Nanosecond, Some(TIMEZONE_WILDCARD.into())),
+                        ]),
+                        Exact(vec![
                             Interval(DayTime),
                             Timestamp(array_type.clone(), None),
                             Timestamp(Nanosecond, None),
                         ]),
                         Exact(vec![
+                            Interval(DayTime),
+                            Timestamp(array_type.clone(), Some(TIMEZONE_WILDCARD.into())),
+                            Timestamp(Nanosecond, Some(TIMEZONE_WILDCARD.into())),
+                        ]),
+                        Exact(vec![
                             Interval(MonthDayNano),
                             Timestamp(array_type.clone(), None),
                         ]),
-                        Exact(vec![Interval(DayTime), Timestamp(array_type, None)]),
+                        Exact(vec![
+                            Interval(MonthDayNano),
+                            Timestamp(array_type.clone(), Some(TIMEZONE_WILDCARD.into())),
+                        ]),
+                        Exact(vec![
+                            Interval(DayTime),
+                            Timestamp(array_type.clone(), None),
+                        ]),
+                        Exact(vec![
+                            Interval(DayTime),
+                            Timestamp(array_type, Some(TIMEZONE_WILDCARD.into())),
+                        ]),
                     ]
                 };
 
@@ -1060,10 +1105,25 @@ impl BuiltinScalarFunction {
                     Exact(vec![Utf8, Date32]),
                     Exact(vec![Utf8, Date64]),
                     Exact(vec![Utf8, Timestamp(Second, None)]),
+                    Exact(vec![
+                        Utf8,
+                        Timestamp(Second, Some(TIMEZONE_WILDCARD.into())),
+                    ]),
                     Exact(vec![Utf8, Timestamp(Microsecond, None)]),
+                    Exact(vec![
+                        Utf8,
+                        Timestamp(Microsecond, Some(TIMEZONE_WILDCARD.into())),
+                    ]),
                     Exact(vec![Utf8, Timestamp(Millisecond, None)]),
+                    Exact(vec![
+                        Utf8,
+                        Timestamp(Millisecond, Some(TIMEZONE_WILDCARD.into())),
+                    ]),
                     Exact(vec![Utf8, Timestamp(Nanosecond, None)]),
-                    Exact(vec![Utf8, Timestamp(Nanosecond, Some("+00:00".into()))]),
+                    Exact(vec![
+                        Utf8,
+                        Timestamp(Nanosecond, Some(TIMEZONE_WILDCARD.into())),
+                    ]),
                 ],
                 self.volatility(),
             ),

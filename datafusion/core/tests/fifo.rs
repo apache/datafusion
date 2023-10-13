@@ -99,7 +99,7 @@ mod unix_test {
             .with_batch_size(TEST_BATCH_SIZE)
             .with_collect_statistics(false)
             .with_target_partitions(1);
-        let ctx = SessionContext::with_config(config);
+        let ctx = SessionContext::new_with_config(config);
         // To make unbounded deterministic
         let waiting = Arc::new(AtomicBool::new(unbounded_file));
         // Create a new temporary FIFO file
@@ -211,7 +211,7 @@ mod unix_test {
             .with_batch_size(TEST_BATCH_SIZE)
             .set_bool("datafusion.execution.coalesce_batches", false)
             .with_target_partitions(1);
-        let ctx = SessionContext::with_config(config);
+        let ctx = SessionContext::new_with_config(config);
         // Tasks
         let mut tasks: Vec<JoinHandle<()>> = vec![];
 
@@ -342,7 +342,7 @@ mod unix_test {
         let waiting_thread = waiting.clone();
         // create local execution context
         let config = SessionConfig::new().with_batch_size(TEST_BATCH_SIZE);
-        let ctx = SessionContext::with_config(config);
+        let ctx = SessionContext::new_with_config(config);
         // Create a new temporary FIFO file
         let tmp_dir = TempDir::new()?;
         let source_fifo_path = create_fifo_file(&tmp_dir, "source.csv")?;

@@ -23,7 +23,10 @@ use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::prelude::SessionContext;
 use datafusion_cli::catalog::DynamicFileCatalog;
 use datafusion_cli::{
-    exec, print_format::PrintFormat, print_options::PrintOptions, DATAFUSION_CLI_VERSION,
+    exec,
+    print_format::PrintFormat,
+    print_options::{MaxRows, PrintOptions},
+    DATAFUSION_CLI_VERSION,
 };
 use mimalloc::MiMalloc;
 use std::collections::HashMap;
@@ -122,6 +125,13 @@ struct Args {
         help = "Specify the memory pool type 'greedy' or 'fair', default to 'greedy'"
     )]
     mem_pool_type: Option<PoolType>,
+
+    #[clap(
+        long,
+        help = "The max number of rows to display for 'Table' format\n[default: 40] [possible values: numbers(0/10/...), inf(no limit)]",
+        default_value = "40"
+    )]
+    maxrows: MaxRows,
 }
 
 #[tokio::main]
@@ -168,7 +178,7 @@ pub async fn main() -> Result<()> {
     let runtime_env = create_runtime_env(rn_config.clone())?;
 
     let mut ctx =
-        SessionContext::with_config_rt(session_config.clone(), Arc::new(runtime_env));
+        SessionContext::new_with_config_rt(session_config.clone(), Arc::new(runtime_env));
     ctx.refresh_catalogs().await?;
     // install dynamic catalog provider that knows how to open files
     ctx.register_catalog_list(Arc::new(DynamicFileCatalog::new(
@@ -179,6 +189,7 @@ pub async fn main() -> Result<()> {
     let mut print_options = PrintOptions {
         format: args.format,
         quiet: args.quiet,
+        maxrows: args.maxrows,
     };
 
     let commands = args.command;

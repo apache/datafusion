@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! PyArrow
+//! Conversions between PyArrow and DataFusion types
 
 use arrow::array::ArrayData;
 use arrow::pyarrow::{FromPyArrow, ToPyArrow};

@@ -149,7 +149,7 @@ async fn create_groupby_context(tmp_dir: &TempDir) -> Result<SessionContext> {
     }
 
     let cfg = SessionConfig::new().with_target_partitions(1);
-    let ctx = SessionContext::with_config(cfg);
+    let ctx = SessionContext::new_with_config(cfg);
     ctx.register_csv(
         "traces",
         tmp_dir.path().to_str().unwrap(),

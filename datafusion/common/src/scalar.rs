@@ -833,15 +833,15 @@ impl ScalarValue {
             DataType::Interval(IntervalUnit::MonthDayNano) => {
                 ScalarValue::IntervalMonthDayNano(Some(0))
             }
-            DataType::Duration(TimeUnit::Second) => ScalarValue::DurationSecond(None),
+            DataType::Duration(TimeUnit::Second) => ScalarValue::DurationSecond(Some(0)),
             DataType::Duration(TimeUnit::Millisecond) => {
-                ScalarValue::DurationMillisecond(None)
+                ScalarValue::DurationMillisecond(Some(0))
             }
             DataType::Duration(TimeUnit::Microsecond) => {
-                ScalarValue::DurationMicrosecond(None)
+                ScalarValue::DurationMicrosecond(Some(0))
             }
             DataType::Duration(TimeUnit::Nanosecond) => {
-                ScalarValue::DurationNanosecond(None)
+                ScalarValue::DurationNanosecond(Some(0))
             }
             _ => {
                 return _not_impl_err!(
@@ -1004,7 +1004,8 @@ impl ScalarValue {
             | ScalarValue::Int16(None)
             | ScalarValue::Int32(None)
             | ScalarValue::Int64(None)
-            | ScalarValue::Float32(None) => Ok(self.clone()),
+            | ScalarValue::Float32(None)
+            | ScalarValue::Float64(None) => Ok(self.clone()),
             ScalarValue::Float64(Some(v)) => Ok(ScalarValue::Float64(Some(-v))),
             ScalarValue::Float32(Some(v)) => Ok(ScalarValue::Float32(Some(-v))),
             ScalarValue::Int8(Some(v)) => Ok(ScalarValue::Int8(Some(-v))),

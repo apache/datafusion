@@ -801,7 +801,7 @@ async fn aggregate_with_alias() -> Result<()> {
 #[tokio::test]
 async fn test_accumulator_row_accumulator() -> Result<()> {
     let config = SessionConfig::new();
-    let ctx = SessionContext::with_config(config);
+    let ctx = SessionContext::new_with_config(config);
     register_aggregate_csv(&ctx).await?;
 
     let sql = "SELECT c1, c2, MIN(c13) as min1, MIN(c9) as min2, MAX(c13) as max1, MAX(c9) as max2, AVG(c9) as avg1, MIN(c13) as min3, COUNT(C9) as cnt1, 0.5*SUM(c9-c8) as sum1

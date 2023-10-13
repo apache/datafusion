@@ -24,8 +24,9 @@ use crate::expressions::PhysicalSortExpr;
 use crate::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
 };
-use crate::sorts::merge::streaming_merge;
+use crate::sorts::streaming_merge::streaming_merge;
 use crate::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
+use crate::topk::TopK;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionPlan,
     Partitioning, SendableRecordBatchStream, Statistics,
@@ -765,7 +766,12 @@ impl DisplayAs for SortExec {
                 let expr: Vec<String> = self.expr.iter().map(|e| e.to_string()).collect();
                 match self.fetch {
                     Some(fetch) => {
-                        write!(f, "SortExec: fetch={fetch}, expr=[{}]", expr.join(","))
+                        write!(
+                            f,
+                            // TODO should this say topk?
+                            "SortExec: fetch={fetch}, expr=[{}]",
+                            expr.join(",")
+                        )
                     }
                     None => write!(f, "SortExec: expr=[{}]", expr.join(",")),
                 }
@@ -853,29 +859,54 @@ impl ExecutionPlan for SortExec {
 
         trace!("End SortExec's input.execute for partition: {}", partition);
 
-        let mut sorter = ExternalSorter::new(
-            partition,
-            input.schema(),
-            self.expr.clone(),
-            context.session_config().batch_size(),
-            self.fetch,
-            execution_options.sort_spill_reservation_bytes,
-            execution_options.sort_in_place_threshold_bytes,
-            &self.metrics_set,
-            context.runtime_env(),
-        );
+        if let Some(fetch) = self.fetch.as_ref() {
+            let mut topk = TopK::try_new(
+                partition,
+                input.schema(),
+                self.expr.clone(),
+                *fetch,
+                context.session_config().batch_size(),
+                context.runtime_env(),
+                &self.metrics_set,
+                partition,
+            )?;
 
-        Ok(Box::pin(RecordBatchStreamAdapter::new(
-            self.schema(),
-            futures::stream::once(async move {
-                while let Some(batch) = input.next().await {
-                    let batch = batch?;
-                    sorter.insert_batch(batch).await?;
-                }
-                sorter.sort()
-            })
-            .try_flatten(),
-        )))
+            Ok(Box::pin(RecordBatchStreamAdapter::new(
+                self.schema(),
+                futures::stream::once(async move {
+                    while let Some(batch) = input.next().await {
+                        let batch = batch?;
+                        topk.insert_batch(batch)?;
+                    }
+                    topk.emit()
+                })
+                .try_flatten(),
+            )))
+        } else {
+            let mut sorter = ExternalSorter::new(
+                partition,
+                input.schema(),
+                self.expr.clone(),
+                context.session_config().batch_size(),
+                self.fetch,
+                execution_options.sort_spill_reservation_bytes,
+                execution_options.sort_in_place_threshold_bytes,
+                &self.metrics_set,
+                context.runtime_env(),
+            );
+
+            Ok(Box::pin(RecordBatchStreamAdapter::new(
+                self.schema(),
+                futures::stream::once(async move {
+                    while let Some(batch) = input.next().await {
+                        let batch = batch?;
+                        sorter.insert_batch(batch).await?;
+                    }
+                    sorter.sort()
+                })
+                .try_flatten(),
+            )))
+        }
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -1043,7 +1074,7 @@ mod tests {
             assert_eq!(result.len(), 1);
 
             let metrics = sort_exec.metrics().unwrap();
-            let did_it_spill = metrics.spill_count().unwrap() > 0;
+            let did_it_spill = metrics.spill_count().unwrap_or(0) > 0;
             assert_eq!(did_it_spill, expect_spillage, "with fetch: {fetch:?}");
         }
         Ok(())

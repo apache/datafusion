@@ -145,10 +145,12 @@ impl SessionConfig {
         self.options.optimizer.repartition_sorts
     }
 
-    /// Remove sorts by replacing with order-preserving variants of operators,
-    /// even when query is bounded?
-    pub fn bounded_order_preserving_variants(&self) -> bool {
-        self.options.optimizer.bounded_order_preserving_variants
+    /// Prefer existing sort (true) or maximize parallelism (false). See
+    /// [prefer_existing_sort] for more details
+    ///
+    /// [prefer_existing_sort]: datafusion_common::config::OptimizerOptions::prefer_existing_sort
+    pub fn prefer_existing_sort(&self) -> bool {
+        self.options.optimizer.prefer_existing_sort
     }
 
     /// Are statistics collected during execution?
@@ -221,10 +223,12 @@ impl SessionConfig {
         self
     }
 
-    /// Enables or disables the use of order-preserving variants of `CoalescePartitions`
-    /// and `RepartitionExec` operators, even when the query is bounded
-    pub fn with_bounded_order_preserving_variants(mut self, enabled: bool) -> Self {
-        self.options.optimizer.bounded_order_preserving_variants = enabled;
+    /// Prefer existing sort (true) or maximize parallelism (false). See
+    /// [prefer_existing_sort] for more details
+    ///
+    /// [prefer_existing_sort]: datafusion_common::config::OptimizerOptions::prefer_existing_sort
+    pub fn with_prefer_existing_sort(mut self, enabled: bool) -> Self {
+        self.options.optimizer.prefer_existing_sort = enabled;
         self
     }
 

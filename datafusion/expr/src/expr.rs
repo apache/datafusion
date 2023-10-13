@@ -39,7 +39,7 @@ use std::sync::Arc;
 /// represent logical expressions such as `A + 1`, or `CAST(c1 AS
 /// int)`.
 ///
-/// An `Expr` can compute its [DataType](arrow::datatypes::DataType)
+/// An `Expr` can compute its [DataType]
 /// and nullability, and has functions for building up complex
 /// expressions.
 ///

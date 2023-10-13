@@ -39,11 +39,8 @@ avro = ["apache-avro", "num-traits", "datafusion-common/avro"]
 backtrace = ["datafusion-common/backtrace"]
 compression = ["xz2", "bzip2", "flate2", "zstd", "async-compression"]
 crypto_expressions = ["datafusion-physical-expr/crypto_expressions", "datafusion-optimizer/crypto_expressions"]
-default = ["crypto_expressions", "encoding__expressions", "regex_expressions", "unicode_expressions", "compression"]
-# Enables support for non-scalar, binary operations on dictionaries
-# Note: this results in significant additional codegen
-dictionary_expressions = ["datafusion-physical-expr/dictionary_expressions", "datafusion-optimizer/dictionary_expressions"]
-encoding__expressions = ["datafusion-physical-expr/encoding_expressions"]
+default = ["crypto_expressions", "encoding_expressions", "regex_expressions", "unicode_expressions", "compression"]
+encoding_expressions = ["datafusion-physical-expr/encoding_expressions"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
 force_hash_collisions = []
 pyarrow = ["datafusion-common/pyarrow"]
@@ -53,7 +50,7 @@ unicode_expressions = ["datafusion-physical-expr/unicode_expressions", "datafusi
 
 [dependencies]
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
-apache-avro = { version = "0.15", optional = true }
+apache-avro = { version = "0.16", optional = true }
 arrow = { workspace = true }
 arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
@@ -63,13 +60,13 @@ bytes = "1.4"
 bzip2 = { version = "0.4.3", optional = true }
 chrono = { workspace = true }
 dashmap = "5.4.0"
-datafusion-common = { path = "../common", version = "31.0.0", features = ["parquet", "object_store"] }
-datafusion-execution = { path = "../execution", version = "31.0.0" }
-datafusion-expr = { path = "../expr", version = "31.0.0" }
-datafusion-optimizer = { path = "../optimizer", version = "31.0.0", default-features = false }
-datafusion-physical-expr = { path = "../physical-expr", version = "31.0.0", default-features = false }
-datafusion-physical-plan = { path = "../physical-plan", version = "31.0.0", default-features = false }
-datafusion-sql = { path = "../sql", version = "31.0.0" }
+datafusion-common = { path = "../common", version = "32.0.0", features = ["parquet", "object_store"] }
+datafusion-execution = { path = "../execution", version = "32.0.0" }
+datafusion-expr = { path = "../expr", version = "32.0.0" }
+datafusion-optimizer = { path = "../optimizer", version = "32.0.0", default-features = false }
+datafusion-physical-expr = { path = "../physical-expr", version = "32.0.0", default-features = false }
+datafusion-physical-plan = { path = "../physical-plan", version = "32.0.0", default-features = false }
+datafusion-sql = { path = "../sql", version = "32.0.0" }
 flate2 = { version = "1.0.24", optional = true }
 futures = "0.3"
 glob = "0.3.0"
@@ -93,7 +90,7 @@ tokio-util = { version = "0.7.4", features = ["io"] }
 url = "2.2"
 uuid = { version = "1.0", features = ["v4"] }
 xz2 = { version = "0.1", optional = true }
-zstd = { version = "0.12", optional = true, default-features = false }
+zstd = { version = "0.13", optional = true, default-features = false }
 
 
 [dev-dependencies]
@@ -112,11 +109,12 @@ rand_distr = "0.4.3"
 regex = "1.5.4"
 rstest = "0.18.0"
 rust_decimal = { version = "1.27.0", features = ["tokio-pg"] }
+serde_json = "1"
 test-utils = { path = "../../test-utils" }
 thiserror = "1.0.37"
 tokio-postgres = "0.7.7"
 [target.'cfg(not(target_os = "windows"))'.dev-dependencies]
-nix = "0.26.1"
+nix = { version = "0.27.1", features = ["fs"] }
 
 [[bench]]
 harness = false

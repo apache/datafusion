@@ -19,13 +19,12 @@
 //! related functionality, used both in join calculations and optimization rules.
 
 use std::collections::{HashMap, VecDeque};
-use std::fmt::{Debug, Formatter};
+use std::fmt::Debug;
 use std::ops::IndexMut;
 use std::sync::Arc;
 use std::{fmt, usize};
 
 use crate::joins::utils::{JoinFilter, JoinSide};
-use crate::ExecutionPlan;
 
 use arrow::compute::concat_batches;
 use arrow::datatypes::{ArrowNativeType, SchemaRef};
@@ -34,13 +33,12 @@ use arrow_array::{ArrowPrimitiveType, NativeAdapter, PrimitiveArray, RecordBatch
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::intervals::{ExprIntervalGraph, Interval, IntervalBound};
+use datafusion_physical_expr::intervals::{Interval, IntervalBound};
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 
 use hashbrown::raw::RawTable;
 use hashbrown::HashSet;
-use parking_lot::Mutex;
 
 // Maps a `u64` hash value based on the build side ["on" values] to a list of indices with this key's value.
 // By allocating a `HashMap` with capacity for *at least* the number of rows for entries at the build side,
@@ -444,105 +442,6 @@ fn convert_filter_columns(
         // If the downcast fails, return the input expression as is.
         None
     })
-}
-
-#[derive(Default)]
-pub struct IntervalCalculatorInnerState {
-    /// Expression graph for interval calculations
-    graph: Option<ExprIntervalGraph>,
-    sorted_exprs: Vec<Option<SortedFilterExpr>>,
-    calculated: bool,
-}
-
-impl Debug for IntervalCalculatorInnerState {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "Exprs({:?})", self.sorted_exprs)
-    }
-}
-
-pub fn build_filter_expression_graph(
-    interval_state: &Arc<Mutex<IntervalCalculatorInnerState>>,
-    left: &Arc<dyn ExecutionPlan>,
-    right: &Arc<dyn ExecutionPlan>,
-    filter: &JoinFilter,
-) -> Result<(
-    Option<SortedFilterExpr>,
-    Option<SortedFilterExpr>,
-    Option<ExprIntervalGraph>,
-)> {
-    // Lock the mutex of the interval state:
-    let mut filter_state = interval_state.lock();
-    // If this is the first partition to be invoked, then we need to initialize our state
-    // (the expression graph for pruning, sorted filter expressions etc.)
-    if !filter_state.calculated {
-        // Interval calculations require each column to exhibit monotonicity
-        // independently. However, a `PhysicalSortExpr` object defines a
-        // lexicographical ordering, so we can only use their first elements.
-        // when deducing column monotonicities.
-        // TODO: Extend the `PhysicalSortExpr` mechanism to express independent
-        //       (i.e. simultaneous) ordering properties of columns.
-
-        // Build sorted filter expressions for the left and right join side:
-        let join_sides = [JoinSide::Left, JoinSide::Right];
-        let children = [left, right];
-        for (join_side, child) in join_sides.iter().zip(children.iter()) {
-            let sorted_expr = child
-                .output_ordering()
-                .and_then(|orders| {
-                    build_filter_input_order(
-                        *join_side,
-                        filter,
-                        &child.schema(),
-                        &orders[0],
-                    )
-                    .transpose()
-                })
-                .transpose()?;
-
-            filter_state.sorted_exprs.push(sorted_expr);
-        }
-
-        // Collect available sorted filter expressions:
-        let sorted_exprs_size = filter_state.sorted_exprs.len();
-        let mut sorted_exprs = filter_state
-            .sorted_exprs
-            .iter_mut()
-            .flatten()
-            .collect::<Vec<_>>();
-
-        // Create the expression graph if we can create sorted filter expressions for both children:
-        filter_state.graph = if sorted_exprs.len() == sorted_exprs_size {
-            let mut graph = ExprIntervalGraph::try_new(filter.expression().clone())?;
-
-            // Gather filter expressions:
-            let filter_exprs = sorted_exprs
-                .iter()
-                .map(|sorted_expr| sorted_expr.filter_expr().clone())
-                .collect::<Vec<_>>();
-
-            // Gather node indices of converted filter expressions in `SortedFilterExpr`s
-            // using the filter columns vector:
-            let child_node_indices = graph.gather_node_indices(&filter_exprs);
-
-            // Update SortedFilterExpr instances with the corresponding node indices:
-            for (sorted_expr, (_, index)) in
-                sorted_exprs.iter_mut().zip(child_node_indices.iter())
-            {
-                sorted_expr.set_node_index(*index);
-            }
-
-            Some(graph)
-        } else {
-            None
-        };
-        filter_state.calculated = true;
-    }
-    // Return the sorted filter expressions for both sides along with the expression graph:
-    Ok((
-        filter_state.sorted_exprs[0].clone(),
-        filter_state.sorted_exprs[1].clone(),
-        filter_state.graph.as_ref().cloned(),
-    ))
 }
 
 /// The [SortedFilterExpr] object represents a sorted filter expression. It

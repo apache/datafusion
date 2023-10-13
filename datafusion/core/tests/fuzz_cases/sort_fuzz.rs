@@ -174,9 +174,9 @@ impl SortTest {
             let runtime_config = RuntimeConfig::new()
                 .with_memory_pool(Arc::new(GreedyMemoryPool::new(pool_size)));
             let runtime = Arc::new(RuntimeEnv::new(runtime_config).unwrap());
-            SessionContext::with_config_rt(session_config, runtime)
+            SessionContext::new_with_config_rt(session_config, runtime)
         } else {
-            SessionContext::with_config(session_config)
+            SessionContext::new_with_config(session_config)
         };
 
         let task_ctx = session_ctx.task_ctx();

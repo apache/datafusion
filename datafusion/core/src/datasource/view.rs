@@ -108,12 +108,20 @@ impl TableProvider for ViewTable {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let plan = if let Some(projection) = projection {
+        let filter = filters.iter().cloned().reduce(|acc, new| acc.and(new));
+        let plan = self.logical_plan().clone();
+        let mut plan = LogicalPlanBuilder::from(plan);
+
+        if let Some(filter) = filter {
+            plan = plan.filter(filter)?;
+        }
+
+        let mut plan = if let Some(projection) = projection {
             // avoiding adding a redundant projection (e.g. SELECT * FROM view)
             let current_projection =
-                (0..self.logical_plan.schema().fields().len()).collect::<Vec<usize>>();
+                (0..plan.schema().fields().len()).collect::<Vec<usize>>();
             if projection == &current_projection {
-                self.logical_plan().clone()
+                plan
             } else {
                 let fields: Vec<Expr> = projection
                     .iter()
@@ -123,19 +131,11 @@ impl TableProvider for ViewTable {
                         )
                     })
                     .collect();
-                LogicalPlanBuilder::from(self.logical_plan.clone())
-                    .project(fields)?
-                    .build()?
+                plan.project(fields)?
             }
         } else {
-            self.logical_plan().clone()
+            plan
         };
-        let mut plan = LogicalPlanBuilder::from(plan);
-        let filter = filters.iter().cloned().reduce(|acc, new| acc.and(new));
-
-        if let Some(filter) = filter {
-            plan = plan.filter(filter)?;
-        }
 
         if let Some(limit) = limit {
             plan = plan.limit(0, Some(limit))?;
@@ -159,7 +159,7 @@ mod tests {
     #[tokio::test]
     async fn issue_3242() -> Result<()> {
         // regression test for https://github.com/apache/arrow-datafusion/pull/3242
-        let session_ctx = SessionContext::with_config(
+        let session_ctx = SessionContext::new_with_config(
             SessionConfig::new().with_information_schema(true),
         );
 
@@ -199,7 +199,7 @@ mod tests {
 
     #[tokio::test]
     async fn query_view() -> Result<()> {
-        let session_ctx = SessionContext::with_config(
+        let session_ctx = SessionContext::new_with_config(
             SessionConfig::new().with_information_schema(true),
         );
 
@@ -237,7 +237,7 @@ mod tests {
 
     #[tokio::test]
     async fn query_view_with_alias() -> Result<()> {
-        let session_ctx = SessionContext::with_config(SessionConfig::new());
+        let session_ctx = SessionContext::new_with_config(SessionConfig::new());
 
         session_ctx
             .sql("CREATE TABLE abc AS VALUES (1,2,3), (4,5,6)")
@@ -270,7 +270,7 @@ mod tests {
 
     #[tokio::test]
     async fn query_view_with_inline_alias() -> Result<()> {
-        let session_ctx = SessionContext::with_config(SessionConfig::new());
+        let session_ctx = SessionContext::new_with_config(SessionConfig::new());
 
         session_ctx
             .sql("CREATE TABLE abc AS VALUES (1,2,3), (4,5,6)")
@@ -303,7 +303,7 @@ mod tests {
 
     #[tokio::test]
     async fn query_view_with_projection() -> Result<()> {
-        let session_ctx = SessionContext::with_config(
+        let session_ctx = SessionContext::new_with_config(
             SessionConfig::new().with_information_schema(true),
         );
 
@@ -341,7 +341,7 @@ mod tests {
 
     #[tokio::test]
     async fn query_view_with_filter() -> Result<()> {
-        let session_ctx = SessionContext::with_config(
+        let session_ctx = SessionContext::new_with_config(
             SessionConfig::new().with_information_schema(true),
         );
 
@@ -378,7 +378,7 @@ mod tests {
 
     #[tokio::test]
     async fn query_join_views() -> Result<()> {
-        let session_ctx = SessionContext::with_config(
+        let session_ctx = SessionContext::new_with_config(
             SessionConfig::new().with_information_schema(true),
         );
 
@@ -439,6 +439,7 @@ mod tests {
             .select_columns(&["bool_col", "int_col"])?;
 
         let plan = df.explain(false, false)?.collect().await?;
+
         // Filters all the way to Parquet
         let formatted = arrow::util::pretty::pretty_format_batches(&plan)
             .unwrap()
@@ -480,7 +481,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_view_plan() -> Result<()> {
-        let session_ctx = SessionContext::with_config(
+        let session_ctx = SessionContext::new_with_config(
             SessionConfig::new().with_information_schema(true),
         );
 
@@ -533,7 +534,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_or_replace_view() -> Result<()> {
-        let session_ctx = SessionContext::with_config(
+        let session_ctx = SessionContext::new_with_config(
             SessionConfig::new().with_information_schema(true),
         );
 

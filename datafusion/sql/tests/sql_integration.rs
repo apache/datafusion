@@ -54,7 +54,7 @@ fn parse_decimals() {
         ("18446744073709551615", "UInt64(18446744073709551615)"),
         (
             "18446744073709551616",
-            "Decimal128(Some(18446744073709551616),38,0)",
+            "Decimal128(Some(18446744073709551616),20,0)",
         ),
     ];
     for (a, b) in test_data {
@@ -1807,6 +1807,14 @@ fn create_external_table_csv() {
 }
 
 #[test]
+fn create_external_table_with_pk() {
+    let sql = "CREATE EXTERNAL TABLE t(c1 int, primary key(c1)) STORED AS CSV LOCATION 'foo.csv'";
+    let expected =
+        "CreateExternalTable: Bare { table: \"t\" } constraints=[PrimaryKey([0])]";
+    quick_test(sql, expected);
+}
+
+#[test]
 fn create_schema_with_quoted_name() {
     let sql = "CREATE SCHEMA \"quoted_schema_name\"";
     let expected = "CreateCatalogSchema: \"quoted_schema_name\"";
@@ -2046,24 +2054,6 @@ fn union() {
 fn union_all() {
     let sql = "SELECT order_id from orders UNION ALL SELECT order_id FROM orders";
     let expected = "Union\
-            \n  Projection: orders.order_id\
-            \n    TableScan: orders\
-            \n  Projection: orders.order_id\
-            \n    TableScan: orders";
-    quick_test(sql, expected);
-}
-
-#[test]
-fn union_4_combined_in_one() {
-    let sql = "SELECT order_id from orders
-                    UNION ALL SELECT order_id FROM orders
-                    UNION ALL SELECT order_id FROM orders
-                    UNION ALL SELECT order_id FROM orders";
-    let expected = "Union\
-            \n  Projection: orders.order_id\
-            \n    TableScan: orders\
-            \n  Projection: orders.order_id\
-            \n    TableScan: orders\
             \n  Projection: orders.order_id\
             \n    TableScan: orders\
             \n  Projection: orders.order_id\
@@ -3886,6 +3876,40 @@ Projection: person.id, person.age
     let expected_plan = r#"
 Projection: person.id, person.age
   Filter: person.age = Int32(10)
+    TableScan: person
+        "#
+    .trim();
+    let plan = plan.replace_params_with_values(&param_values).unwrap();
+
+    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+}
+
+#[test]
+fn test_prepare_statement_infer_types_from_between_predicate() {
+    let sql = "SELECT id, age FROM person WHERE age BETWEEN $1 AND $2";
+
+    let expected_plan = r#"
+Projection: person.id, person.age
+  Filter: person.age BETWEEN $1 AND $2
+    TableScan: person
+        "#
+    .trim();
+
+    let expected_dt = "[Int32]";
+    let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+
+    let actual_types = plan.get_parameter_types().unwrap();
+    let expected_types = HashMap::from([
+        ("$1".to_string(), Some(DataType::Int32)),
+        ("$2".to_string(), Some(DataType::Int32)),
+    ]);
+    assert_eq!(actual_types, expected_types);
+
+    // replace params with values
+    let param_values = vec![ScalarValue::Int32(Some(10)), ScalarValue::Int32(Some(30))];
+    let expected_plan = r#"
+Projection: person.id, person.age
+  Filter: person.age BETWEEN Int32(10) AND Int32(30)
     TableScan: person
         "#
     .trim();

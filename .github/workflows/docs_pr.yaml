@@ -47,7 +47,6 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      # Note: this does not include dictionary_expressions to reduce codegen
       - name: Run doctests
         run: cargo test --doc --features avro,json
       - name: Verify Working Directory Clean

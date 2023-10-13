@@ -719,7 +719,7 @@ fn rewrite_placeholder(expr: &mut Expr, other: &Expr, schema: &DFSchema) -> Resu
             let other_dt = other.get_type(schema);
             match other_dt {
                 Err(e) => {
-                    return Err(e.context(format!(
+                    Err(e.context(format!(
                         "Can not find type of {other} needed to infer type of {expr}"
                     )))?;
                 }
@@ -741,6 +741,16 @@ fn infer_placeholder_types(expr: Expr, schema: &DFSchema) -> Result<Expr> {
             rewrite_placeholder(left.as_mut(), right.as_ref(), schema)?;
             rewrite_placeholder(right.as_mut(), left.as_ref(), schema)?;
         };
+        if let Expr::Between(Between {
+            expr,
+            negated: _,
+            low,
+            high,
+        }) = &mut expr
+        {
+            rewrite_placeholder(low.as_mut(), expr.as_ref(), schema)?;
+            rewrite_placeholder(high.as_mut(), expr.as_ref(), schema)?;
+        }
         Ok(Transformed::Yes(expr))
     })
 }

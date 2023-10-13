@@ -33,7 +33,7 @@ use std::sync::Arc;
 #[tokio::test]
 async fn unbounded_repartition() -> Result<()> {
     let config = SessionConfig::new();
-    let ctx = SessionContext::with_config(config);
+    let ctx = SessionContext::new_with_config(config);
     let task = ctx.task_ctx();
     let schema = Arc::new(Schema::new(vec![Field::new("a2", DataType::UInt32, false)]));
     let batch = RecordBatch::try_new(

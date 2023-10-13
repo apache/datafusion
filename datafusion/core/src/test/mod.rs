@@ -17,6 +17,9 @@
 
 //! Common unit test utility methods
 
+use crate::datasource::file_format::file_compression_type::{
+    FileCompressionType, FileTypeExt,
+};
 use crate::datasource::listing::PartitionedFile;
 use crate::datasource::object_store::ObjectStoreUrl;
 use crate::datasource::physical_plan::{CsvExec, FileScanConfig};
@@ -34,8 +37,8 @@ use arrow::record_batch::RecordBatch;
 use bzip2::write::BzEncoder;
 #[cfg(feature = "compression")]
 use bzip2::Compression as BzCompression;
+use datafusion_common::FileType;
 use datafusion_common::{DataFusionError, Statistics};
-use datafusion_common::{FileCompressionType, FileType};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{Partitioning, PhysicalSortExpr};
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType};

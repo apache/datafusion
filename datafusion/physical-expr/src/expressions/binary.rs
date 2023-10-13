@@ -38,12 +38,12 @@ use arrow::compute::kernels::comparison::regexp_is_match_utf8_scalar;
 use arrow::compute::kernels::concat_elements::concat_elements_utf8;
 use arrow::datatypes::*;
 use arrow::record_batch::RecordBatch;
-use arrow_array::Datum;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::{ColumnarValue, Operator};
 
+use crate::expressions::datum::{apply, apply_cmp};
 use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
     bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,
@@ -129,32 +129,6 @@ macro_rules! compute_utf8_op {
             .downcast_ref::<$DT>()
             .expect("compute_op failed to downcast right side array");
         Ok(Arc::new(paste::expr! {[<$OP _utf8>]}(&ll, &rr)?))
-    }};
-}
-
-/// Invoke a compute kernel on a data array and a scalar value
-macro_rules! compute_utf8_op_scalar {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident, $OP_TYPE:expr) => {{
-        let ll = $LEFT
-            .as_any()
-            .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast left side array");
-        if let ScalarValue::Utf8(Some(string_value))
-        | ScalarValue::LargeUtf8(Some(string_value)) = $RIGHT
-        {
-            Ok(Arc::new(paste::expr! {[<$OP _utf8_scalar>]}(
-                &ll,
-                &string_value,
-            )?))
-        } else if $RIGHT.is_null() {
-            Ok(Arc::new(new_null_array($OP_TYPE, $LEFT.len())))
-        } else {
-            internal_err!(
-                "compute_utf8_op_scalar for '{}' failed to cast literal value {}",
-                stringify!($OP),
-                $RIGHT
-            )
-        }
     }};
 }
 
@@ -284,35 +258,37 @@ impl PhysicalExpr for BinaryExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let left_value = self.left.evaluate(batch)?;
-        let right_value = self.right.evaluate(batch)?;
-        let left_data_type = left_value.data_type();
-        let right_data_type = right_value.data_type();
+        use arrow::compute::kernels::numeric::*;
+
+        let lhs = self.left.evaluate(batch)?;
+        let rhs = self.right.evaluate(batch)?;
+        let left_data_type = lhs.data_type();
+        let right_data_type = rhs.data_type();
 
         let schema = batch.schema();
         let input_schema = schema.as_ref();
 
-        if self.is_datum_operator() {
-            return match (&left_value, &right_value) {
-                (ColumnarValue::Array(left), ColumnarValue::Array(right)) => {
-                    self.evaluate_datum(&left.as_ref(), &right.as_ref())
-                }
-                (ColumnarValue::Scalar(left), ColumnarValue::Array(right)) => {
-                    self.evaluate_datum(&left.to_scalar(), &right.as_ref())
-                }
-                (ColumnarValue::Array(left), ColumnarValue::Scalar(right)) => {
-                    self.evaluate_datum(&left.as_ref(), &right.to_scalar())
-                }
-                (ColumnarValue::Scalar(left), ColumnarValue::Scalar(right)) => {
-                    self.evaluate_datum(&left.to_scalar(), &right.to_scalar())
-                }
-            };
+        match self.op {
+            Operator::Plus => return apply(&lhs, &rhs, add_wrapping),
+            Operator::Minus => return apply(&lhs, &rhs, sub_wrapping),
+            Operator::Multiply => return apply(&lhs, &rhs, mul_wrapping),
+            Operator::Divide => return apply(&lhs, &rhs, div),
+            Operator::Modulo => return apply(&lhs, &rhs, rem),
+            Operator::Eq => return apply_cmp(&lhs, &rhs, eq),
+            Operator::NotEq => return apply_cmp(&lhs, &rhs, neq),
+            Operator::Lt => return apply_cmp(&lhs, &rhs, lt),
+            Operator::Gt => return apply_cmp(&lhs, &rhs, gt),
+            Operator::LtEq => return apply_cmp(&lhs, &rhs, lt_eq),
+            Operator::GtEq => return apply_cmp(&lhs, &rhs, gt_eq),
+            Operator::IsDistinctFrom => return apply_cmp(&lhs, &rhs, distinct),
+            Operator::IsNotDistinctFrom => return apply_cmp(&lhs, &rhs, not_distinct),
+            _ => {}
         }
 
         let result_type = self.data_type(input_schema)?;
 
         // Attempt to use special kernels if one input is scalar and the other is an array
-        let scalar_result = match (&left_value, &right_value) {
+        let scalar_result = match (&lhs, &rhs) {
             (ColumnarValue::Array(array), ColumnarValue::Scalar(scalar)) => {
                 // if left is array and right is literal - use scalar operations
                 self.evaluate_array_scalar(array, scalar.clone())?.map(|r| {
@@ -323,16 +299,16 @@ impl PhysicalExpr for BinaryExpr {
         };
 
         if let Some(result) = scalar_result {
-            return result.map(|a| ColumnarValue::Array(a));
+            return result.map(ColumnarValue::Array);
         }
 
         // if both arrays or both literals - extract arrays and continue execution
         let (left, right) = (
-            left_value.into_array(batch.num_rows()),
-            right_value.into_array(batch.num_rows()),
+            lhs.into_array(batch.num_rows()),
+            rhs.into_array(batch.num_rows()),
         );
         self.evaluate_with_resolved_args(left, &left_data_type, right, &right_data_type)
-            .map(|a| ColumnarValue::Array(a))
+            .map(ColumnarValue::Array)
     }
 
     fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
@@ -450,46 +426,6 @@ fn to_result_type_array(
 }
 
 impl BinaryExpr {
-    fn is_datum_operator(&self) -> bool {
-        use Operator::*;
-        self.op.is_numerical_operators()
-            || matches!(
-                self.op,
-                Lt | LtEq | Gt | GtEq | Eq | NotEq | IsDistinctFrom | IsNotDistinctFrom
-            )
-    }
-
-    /// Evaluate the expression using [`Datum`]
-    fn evaluate_datum(
-        &self,
-        left: &dyn Datum,
-        right: &dyn Datum,
-    ) -> Result<ColumnarValue> {
-        use arrow::compute::kernels::numeric::*;
-        let array = match self.op {
-            Operator::Plus => add_wrapping(left, right)?,
-            Operator::Minus => sub_wrapping(left, right)?,
-            Operator::Multiply => mul_wrapping(left, right)?,
-            Operator::Divide => div(left, right)?,
-            Operator::Modulo => rem(left, right)?,
-            Operator::Eq => Arc::new(eq(left, right)?),
-            Operator::NotEq => Arc::new(neq(left, right)?),
-            Operator::Lt => Arc::new(lt(left, right)?),
-            Operator::Gt => Arc::new(gt(left, right)?),
-            Operator::LtEq => Arc::new(lt_eq(left, right)?),
-            Operator::GtEq => Arc::new(gt_eq(left, right)?),
-            Operator::IsDistinctFrom => Arc::new(distinct(left, right)?),
-            Operator::IsNotDistinctFrom => Arc::new(not_distinct(left, right)?),
-            _ => unreachable!(),
-        };
-
-        if left.get().1 && right.get().1 {
-            let scalar = ScalarValue::try_from_array(array.as_ref(), 0)?;
-            return Ok(ColumnarValue::Scalar(scalar));
-        }
-        Ok(ColumnarValue::Array(array))
-    }
-
     /// Evaluate the expression of the left input is an array and
     /// right is literal - use scalar operations
     fn evaluate_array_scalar(

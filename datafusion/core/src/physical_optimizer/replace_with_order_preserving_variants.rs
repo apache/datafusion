@@ -19,10 +19,10 @@
 //! order-preserving variants when it is helpful; either in terms of
 //! performance or to accommodate unbounded streams by fixing the pipeline.
 
+use std::sync::Arc;
+
 use crate::error::Result;
-use crate::physical_optimizer::utils::{
-    is_coalesce_partitions, is_sort, unbounded_output, ExecTree,
-};
+use crate::physical_optimizer::utils::{is_coalesce_partitions, is_sort, ExecTree};
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
@@ -32,8 +32,7 @@ use super::utils::is_repartition;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_physical_expr::utils::ordering_satisfy;
-
-use std::sync::Arc;
+use datafusion_physical_plan::unbounded_output;
 
 /// For a given `plan`, this object carries the information one needs from its
 /// descendants to decide whether it is beneficial to replace order-losing (but
@@ -113,7 +112,7 @@ impl OrderPreservationContext {
         self.plan
             .children()
             .into_iter()
-            .map(|child| OrderPreservationContext::new(child))
+            .map(OrderPreservationContext::new)
             .collect()
     }
 }
@@ -252,7 +251,7 @@ pub(crate) fn replace_with_order_preserving_variants(
         // any case, as doing so helps fix the pipeline.
         // Also do the replacement if opted-in via config options.
         let use_order_preserving_variant =
-            config.optimizer.bounded_order_preserving_variants || unbounded_output(plan);
+            config.optimizer.prefer_existing_sort || unbounded_output(plan);
         let updated_sort_input = get_updated_plan(
             exec_tree,
             is_spr_better || use_order_preserving_variant,
@@ -281,11 +280,11 @@ mod tests {
 
     use crate::prelude::SessionConfig;
 
+    use crate::datasource::file_format::file_compression_type::FileCompressionType;
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::physical_plan::{CsvExec, FileScanConfig};
     use crate::physical_plan::coalesce_batches::CoalesceBatchesExec;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-    use datafusion_common::FileCompressionType;
 
     use crate::physical_plan::filter::FilterExec;
     use crate::physical_plan::joins::{HashJoinExec, PartitionMode};
@@ -337,7 +336,7 @@ mod tests {
 
             // Run the rule top-down
             // let optimized_physical_plan = physical_plan.transform_down(&replace_repartition_execs)?;
-            let config = SessionConfig::new().with_bounded_order_preserving_variants($ALLOW_BOUNDED);
+            let config = SessionConfig::new().with_prefer_existing_sort($ALLOW_BOUNDED);
             let plan_with_pipeline_fixer = OrderPreservationContext::new(physical_plan);
             let parallel = plan_with_pipeline_fixer.transform_up(&|plan_with_pipeline_fixer| replace_with_order_preserving_variants(plan_with_pipeline_fixer, false, false, config.options()))?;
             let optimized_physical_plan = parallel.plan;

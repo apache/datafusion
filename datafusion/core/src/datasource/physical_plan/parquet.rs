@@ -1928,8 +1928,9 @@ mod tests {
         // create partitioned input file and context
         let tmp_dir = TempDir::new()?;
         // let mut ctx = create_ctx(&tmp_dir, 4).await?;
-        let ctx =
-            SessionContext::with_config(SessionConfig::new().with_target_partitions(8));
+        let ctx = SessionContext::new_with_config(
+            SessionConfig::new().with_target_partitions(8),
+        );
         let schema = populate_csv_partitions(&tmp_dir, 4, ".csv")?;
         // register csv file with the execution context
         ctx.register_csv(

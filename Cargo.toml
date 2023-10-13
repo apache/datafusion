@@ -17,7 +17,23 @@
 
 [workspace]
 exclude = ["datafusion-cli"]
-members = ["datafusion/common", "datafusion/core", "datafusion/expr", "datafusion/execution", "datafusion/optimizer", "datafusion/physical-expr", "datafusion/physical-plan", "datafusion/proto", "datafusion/proto/gen", "datafusion/sql", "datafusion/sqllogictest", "datafusion/substrait", "datafusion-examples", "test-utils", "benchmarks",
+members = [
+    "datafusion/common",
+    "datafusion/core",
+    "datafusion/expr",
+    "datafusion/execution",
+    "datafusion/optimizer",
+    "datafusion/physical-expr",
+    "datafusion/physical-plan",
+    "datafusion/proto",
+    "datafusion/proto/gen",
+    "datafusion/sql",
+    "datafusion/sqllogictest",
+    "datafusion/substrait",
+    "datafusion/wasmtest",
+    "datafusion-examples",
+    "test-utils",
+    "benchmarks",
 ]
 resolver = "2"
 
@@ -29,18 +45,17 @@ license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/apache/arrow-datafusion"
 rust-version = "1.70"
-version = "31.0.0"
+version = "32.0.0"
 
 [workspace.dependencies]
-arrow = { version = "46.0.0", features = ["prettyprint", "dyn_cmp_dict"] }
-arrow-array = { version = "46.0.0", default-features = false, features = ["chrono-tz"] }
-arrow-buffer = { version = "46.0.0", default-features = false }
-arrow-flight = { version = "46.0.0", features = ["flight-sql-experimental"] }
-arrow-schema = { version = "46.0.0", default-features = false }
-parquet = { version = "46.0.0", features = ["arrow", "async", "object_store"] }
-sqlparser = { version = "0.37.0", features = ["visitor"] }
+arrow = { version = "47.0.0", features = ["prettyprint"] }
+arrow-array = { version = "47.0.0", default-features = false, features = ["chrono-tz"] }
+arrow-buffer = { version = "47.0.0", default-features = false }
+arrow-flight = { version = "47.0.0", features = ["flight-sql-experimental"] }
+arrow-schema = { version = "47.0.0", default-features = false }
+parquet = { version = "47.0.0", features = ["arrow", "async", "object_store"] }
+sqlparser = { version = "0.38.0", features = ["visitor"] }
 chrono = { version = "0.4.31", default-features = false }
-
 
 [profile.release]
 codegen-units = 1

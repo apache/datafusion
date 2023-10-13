@@ -20,6 +20,13 @@
 //! the input data seen so far), which makes it appropriate when processing
 //! infinite inputs.
 
+use std::any::Any;
+use std::cmp::{min, Ordering};
+use std::collections::{HashMap, VecDeque};
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+
 use crate::expressions::PhysicalSortExpr;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::windows::{
@@ -29,37 +36,23 @@ use crate::{
     ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
     Partitioning, RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
 };
-use datafusion_common::{exec_err, plan_err, Result};
-use datafusion_execution::TaskContext;
 
-use ahash::RandomState;
 use arrow::{
     array::{Array, ArrayRef, UInt32Builder},
     compute::{concat, concat_batches, sort_to_indices},
     datatypes::{Schema, SchemaBuilder, SchemaRef},
     record_batch::RecordBatch,
 };
-use datafusion_expr::window_state::{PartitionBatchState, WindowAggState};
-use futures::stream::Stream;
-use futures::{ready, StreamExt};
-use hashbrown::raw::RawTable;
-use indexmap::IndexMap;
-use log::debug;
 
-use std::any::Any;
-use std::cmp::{min, Ordering};
-use std::collections::{HashMap, VecDeque};
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{Context, Poll};
-
+use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::{
     evaluate_partition_ranges, get_arrayref_at_indices, get_at_indices,
     get_record_batch_at_indices, get_row_at_idx,
 };
-use datafusion_common::DataFusionError;
+use datafusion_common::{exec_err, plan_err, DataFusionError, Result};
+use datafusion_execution::TaskContext;
+use datafusion_expr::window_state::{PartitionBatchState, WindowAggState};
 use datafusion_expr::ColumnarValue;
-use datafusion_physical_expr::hash_utils::create_hashes;
 use datafusion_physical_expr::window::{
     PartitionBatches, PartitionKey, PartitionWindowAggStates, WindowState,
 };
@@ -67,6 +60,13 @@ use datafusion_physical_expr::{
     EquivalenceProperties, OrderingEquivalenceProperties, PhysicalExpr,
     PhysicalSortRequirement,
 };
+
+use ahash::RandomState;
+use futures::stream::Stream;
+use futures::{ready, StreamExt};
+use hashbrown::raw::RawTable;
+use indexmap::IndexMap;
+use log::debug;
 
 #[derive(Debug, Clone, PartialEq)]
 /// Specifies partition column properties in terms of input ordering
@@ -88,8 +88,6 @@ pub struct BoundedWindowAggExec {
     window_expr: Vec<Arc<dyn WindowExpr>>,
     /// Schema after the window is run
     schema: SchemaRef,
-    /// Schema before the window
-    input_schema: SchemaRef,
     /// Partition Keys
     pub partition_keys: Vec<Arc<dyn PhysicalExpr>>,
     /// Execution metrics
@@ -110,11 +108,10 @@ impl BoundedWindowAggExec {
     pub fn try_new(
         window_expr: Vec<Arc<dyn WindowExpr>>,
         input: Arc<dyn ExecutionPlan>,
-        input_schema: SchemaRef,
         partition_keys: Vec<Arc<dyn PhysicalExpr>>,
         partition_search_mode: PartitionSearchMode,
     ) -> Result<Self> {
-        let schema = create_schema(&input_schema, &window_expr)?;
+        let schema = create_schema(&input.schema(), &window_expr)?;
         let schema = Arc::new(schema);
         let partition_by_exprs = window_expr[0].partition_by();
         let ordered_partition_by_indices = match &partition_search_mode {
@@ -140,7 +137,6 @@ impl BoundedWindowAggExec {
             input,
             window_expr,
             schema,
-            input_schema,
             partition_keys,
             metrics: ExecutionPlanMetricsSet::new(),
             partition_search_mode,
@@ -156,11 +152,6 @@ impl BoundedWindowAggExec {
     /// Input plan
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
-    }
-
-    /// Get the input schema before any window functions are applied
-    pub fn input_schema(&self) -> SchemaRef {
-        self.input_schema.clone()
     }
 
     /// Return the output sort order of partition keys: For example
@@ -303,7 +294,6 @@ impl ExecutionPlan for BoundedWindowAggExec {
         Ok(Arc::new(BoundedWindowAggExec::try_new(
             self.window_expr.clone(),
             children[0].clone(),
-            self.input_schema.clone(),
             self.partition_keys.clone(),
             self.partition_search_mode.clone(),
         )?))
@@ -333,7 +323,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
     fn statistics(&self) -> Statistics {
         let input_stat = self.input.statistics();
         let win_cols = self.window_expr.len();
-        let input_cols = self.input_schema.fields().len();
+        let input_cols = self.input.schema().fields().len();
         // TODO stats: some windowing function will maintain invariants such as min, max...
         let mut column_statistics = Vec::with_capacity(win_cols + input_cols);
         if let Some(input_col_stats) = input_stat.column_statistics {

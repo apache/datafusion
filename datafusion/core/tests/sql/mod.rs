@@ -26,6 +26,7 @@ use chrono::prelude::*;
 use chrono::Duration;
 
 use datafusion::datasource::TableProvider;
+use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::{Aggregate, LogicalPlan, TableScan};
 use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::ExecutionPlan;
@@ -34,15 +35,9 @@ use datafusion::prelude::*;
 use datafusion::test_util;
 use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
 use datafusion::{datasource::MemTable, physical_plan::collect};
-use datafusion::{
-    error::{DataFusionError, Result},
-    physical_plan::ColumnarValue,
-};
 use datafusion::{execution::context::SessionContext, physical_plan::displayable};
-use datafusion_common::cast::as_float64_array;
 use datafusion_common::plan_err;
 use datafusion_common::{assert_contains, assert_not_contains};
-use datafusion_expr::Volatility;
 use object_store::path::Path;
 use std::fs::File;
 use std::io::Write;
@@ -79,7 +74,6 @@ macro_rules! test_expression {
 
 pub mod aggregates;
 pub mod arrow_files;
-#[cfg(feature = "avro")]
 pub mod create_drop;
 pub mod csv_files;
 pub mod describe;
@@ -101,61 +95,13 @@ pub mod select;
 mod sql_api;
 pub mod subqueries;
 pub mod timestamp;
-pub mod udf;
-
-fn assert_float_eq<T>(expected: &[Vec<T>], received: &[Vec<String>])
-where
-    T: AsRef<str>,
-{
-    expected
-        .iter()
-        .flatten()
-        .zip(received.iter().flatten())
-        .for_each(|(l, r)| {
-            let (l, r) = (
-                l.as_ref().parse::<f64>().unwrap(),
-                r.as_str().parse::<f64>().unwrap(),
-            );
-            if l.is_nan() || r.is_nan() {
-                assert!(l.is_nan() && r.is_nan());
-            } else if (l - r).abs() > 2.0 * f64::EPSILON {
-                panic!("{l} != {r}")
-            }
-        });
-}
-
-fn create_ctx() -> SessionContext {
-    let ctx = SessionContext::new();
-
-    // register a custom UDF
-    ctx.register_udf(create_udf(
-        "custom_sqrt",
-        vec![DataType::Float64],
-        Arc::new(DataType::Float64),
-        Volatility::Immutable,
-        Arc::new(custom_sqrt),
-    ));
-
-    ctx
-}
-
-fn custom_sqrt(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    let arg = &args[0];
-    if let ColumnarValue::Array(v) = arg {
-        let input = as_float64_array(v).expect("cast failed");
-        let array: Float64Array = input.iter().map(|v| v.map(|x| x.sqrt())).collect();
-        Ok(ColumnarValue::Array(Arc::new(array)))
-    } else {
-        unimplemented!()
-    }
-}
 
 fn create_join_context(
     column_left: &str,
     column_right: &str,
     repartition_joins: bool,
 ) -> Result<SessionContext> {
-    let ctx = SessionContext::with_config(
+    let ctx = SessionContext::new_with_config(
         SessionConfig::new()
             .with_repartition_joins(repartition_joins)
             .with_target_partitions(2)
@@ -210,7 +156,7 @@ fn create_left_semi_anti_join_context_with_null_ids(
     column_right: &str,
     repartition_joins: bool,
 ) -> Result<SessionContext> {
-    let ctx = SessionContext::with_config(
+    let ctx = SessionContext::new_with_config(
         SessionConfig::new()
             .with_repartition_joins(repartition_joins)
             .with_target_partitions(2)
@@ -577,7 +523,8 @@ async fn create_ctx_with_partition(
     tmp_dir: &TempDir,
     partition_count: usize,
 ) -> Result<SessionContext> {
-    let ctx = SessionContext::with_config(SessionConfig::new().with_target_partitions(8));
+    let ctx =
+        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(8));
 
     let schema = populate_csv_partitions(tmp_dir, partition_count, ".csv")?;
 
@@ -635,6 +582,9 @@ pub fn make_partition(sz: i32) -> RecordBatch {
 
 /// Specialised String representation
 fn col_str(column: &ArrayRef, row_index: usize) -> String {
+    // NullArray::is_null() does not work on NullArray.
+    // can remove check for DataType::Null when
+    // https://github.com/apache/arrow-rs/issues/4835 is fixed
     if column.data_type() == &DataType::Null || column.is_null(row_index) {
         return "NULL".to_string();
     }
