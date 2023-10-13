@@ -712,6 +712,24 @@ impl SchemaProperties {
         self
     }
 
+    /// Re-creates `SchemaProperties` given that
+    /// schema is re-ordered by `sort_expr` in the argument.
+    pub fn with_reorder(mut self, sort_expr: Vec<PhysicalSortExpr>) -> SchemaProperties {
+        // TODO: In some cases, existing ordering equivalences may still be valid add this analysis.
+
+        // Normalize sort_expr according to equivalences
+        let sort_expr = self.eq_groups.normalize_sort_exprs(&sort_expr);
+
+        // Remove redundant entries from the lex ordering.
+        let sort_expr = collapse_lex_ordering(sort_expr);
+
+        // Reset ordering equivalent group with the new ordering.
+        // Constants, and equivalent groups are still valid after re-sort.
+        // Hence only `oeq_group` is overwritten.
+        self.oeq_group = OrderingEquivalentGroup::new(vec![sort_expr]);
+        self
+    }
+
     /// Transform `sort_exprs` vector, to standardized version using `eq_groups` and `oeq_group`
     /// Assume `eq_groups` states that `Column a` and `Column b` are aliases.
     /// Also assume `oeq_group` states that ordering `vec![d ASC]` and `vec![a ASC, c ASC]` are
@@ -757,217 +775,6 @@ impl SchemaProperties {
         collapse_lex_req(normalized_sort_reqs)
     }
 
-    /// This function prunes lexicographical ordering requirement
-    /// by removing sections inside `sort_req` that satisfies any of the existing ordering.
-    /// By doing so, we reduce the requirement to its simplest form which is functionally
-    /// equivalent to the argument. Empty result means that requirement is already satisfied.
-    fn prune_lex_req(&self, sort_req: &[PhysicalSortRequirement]) -> LexOrderingReq {
-        // Make sure to use a standardized version of the requirement
-        let mut sort_req = self.normalize_sort_requirements(sort_req);
-
-        // If empty immediately return
-        if sort_req.is_empty() {
-            return sort_req;
-        }
-        let leading_requirement = sort_req[0].clone();
-        for ordering in self.oeq_group.iter() {
-            // Normalize existing ordering
-            let ordering = self.normalize_sort_exprs(ordering);
-            let match_indices = ordering
-                .iter()
-                .map(|elem| {
-                    sort_req.iter().position(|sort_req| {
-                        elem.satisfy_with_schema(sort_req, &self.schema)
-                    })
-                })
-                .collect::<Vec<_>>();
-            let mut match_prefix = vec![];
-            for elem in &match_indices {
-                if let Some(elem) = elem {
-                    if let Some(last) = match_prefix.last() {
-                        // Should increase
-                        if elem <= last {
-                            break;
-                        }
-                    }
-                    match_prefix.push(*elem)
-                } else {
-                    break;
-                }
-            }
-            // can remove entries at the match_prefix indices
-            // Remove with reverse iteration to not invalidate indices
-            for idx in match_prefix.iter().rev() {
-                sort_req.remove(*idx);
-            }
-        }
-        if !sort_req.is_empty() {
-            // Do not invalidate requirement
-            sort_req.insert(0, leading_requirement);
-            sort_req
-        } else {
-            sort_req
-        }
-    }
-
-    /// Checks whether `leading_requirement` is contained in any of the ordering
-    /// equivalence classes.
-    pub fn satisfies_leading_requirement(
-        &self,
-        leading_requirement: &PhysicalSortRequirement,
-    ) -> bool {
-        let leading_requirement = self
-            .eq_groups
-            .normalize_sort_requirement(leading_requirement.clone());
-        self.oeq_group().iter().any(|ordering| {
-            let ordering = self.eq_groups.normalize_sort_exprs(ordering);
-            ordering[0].satisfy_with_schema(&leading_requirement, &self.schema)
-        })
-    }
-
-    /// Projects `SchemaProperties` according to mapping given in `source_to_target_mapping`.
-    pub fn project(
-        &self,
-        source_to_target_mapping: &ProjectionMapping,
-        output_schema: SchemaRef,
-    ) -> SchemaProperties {
-        let mut projected_properties = SchemaProperties::new(output_schema);
-
-        let projected_eq_groups = self.eq_groups.project(source_to_target_mapping);
-        projected_properties.eq_groups = projected_eq_groups;
-
-        let projected_orderings = self
-            .oeq_group
-            .iter()
-            .filter_map(|order| {
-                self.eq_groups
-                    .project_ordering(source_to_target_mapping, order)
-            })
-            .collect::<Vec<_>>();
-
-        // if empty, no need to track projected_orderings.
-        if !projected_orderings.is_empty() {
-            projected_properties.oeq_group =
-                OrderingEquivalentGroup::new(projected_orderings);
-        }
-
-        for (source, target) in source_to_target_mapping {
-            let initial_expr = ExprOrdering::new(source.clone());
-            let transformed = initial_expr
-                .transform_up(&|expr| update_ordering(expr, self))
-                .unwrap();
-            if let Some(SortProperties::Ordered(sort_options)) = transformed.state {
-                let sort_expr = PhysicalSortExpr {
-                    expr: target.clone(),
-                    options: sort_options,
-                };
-                // Push new ordering to the state.
-                projected_properties.oeq_group.push(vec![sort_expr]);
-            }
-        }
-        // Remove redundant entries from ordering group if any.
-        // projected_properties.oeq_group.remove_redundant_entries();
-        projected_properties
-    }
-
-    /// Re-creates `SchemaProperties` given that
-    /// schema is re-ordered by `sort_expr` in the argument.
-    pub fn with_reorder(mut self, sort_expr: Vec<PhysicalSortExpr>) -> SchemaProperties {
-        // TODO: In some cases, existing ordering equivalences may still be valid add this analysis.
-
-        // Normalize sort_expr according to equivalences
-        let sort_expr = self.eq_groups.normalize_sort_exprs(&sort_expr);
-
-        // Remove redundant entries from the lex ordering.
-        let sort_expr = collapse_lex_ordering(sort_expr);
-
-        // Reset ordering equivalent group with the new ordering.
-        // Constants, and equivalent groups are still valid after re-sort.
-        // Hence only `oeq_group` is overwritten.
-        self.oeq_group = OrderingEquivalentGroup::new(vec![sort_expr]);
-        self
-    }
-
-    /// Check whether any permutation of the argument has a prefix with existing ordering.
-    /// Return indices that describes ordering and their ordering information.
-    pub fn set_satisfy(&self, exprs: &[Arc<dyn PhysicalExpr>]) -> Option<Vec<usize>> {
-        let exprs_normalized = self.eq_groups.normalize_exprs(exprs);
-        let mut best = vec![];
-
-        for ordering in self.oeq_group.iter() {
-            let ordering = self.eq_groups.normalize_sort_exprs(ordering);
-            let ordering_exprs = ordering
-                .iter()
-                .map(|sort_expr| sort_expr.expr.clone())
-                .collect::<Vec<_>>();
-            let mut ordered_indices =
-                get_indices_of_exprs_strict(&exprs_normalized, &ordering_exprs);
-            ordered_indices.sort();
-            // Find out how many expressions of the existing ordering define ordering
-            // for expressions in the GROUP BY clause. For example, if the input is
-            // ordered by a, b, c, d and we group by b, a, d; the result below would be.
-            // 2, meaning 2 elements (a, b) among the GROUP BY columns define ordering.
-            let first_n = longest_consecutive_prefix(ordered_indices);
-            if first_n > best.len() {
-                let ordered_exprs = ordering_exprs[0..first_n].to_vec();
-                // Find indices for the GROUP BY expressions such that when we iterate with
-                // these indices, we would match existing ordering. For the example above,
-                // this would produce 1, 0; meaning 1st and 0th entries (a, b) among the
-                // GROUP BY expressions b, a, d match input ordering.
-                best = get_indices_of_exprs_strict(&ordered_exprs, &exprs_normalized);
-            }
-        }
-
-        if best.is_empty() {
-            None
-        } else {
-            Some(best)
-        }
-    }
-
-    /// Check whether one of the permutation of the exprs satisfies existing ordering.
-    /// If so, return indices and their orderings.
-    /// None, indicates that there is no permutation that satisfies ordering.
-    pub fn set_exactly_satisfy(
-        &self,
-        exprs: &[Arc<dyn PhysicalExpr>],
-    ) -> Option<Vec<usize>> {
-        if let Some(indices) = self.set_satisfy(exprs) {
-            // A permutation of the exprs satisfies one of the existing orderings.
-            if indices.len() == exprs.len() {
-                return Some(indices);
-            }
-        }
-        None
-    }
-
-    /// Get ordering of the expressions in the argument
-    /// Assumes arguments define lexicographical ordering.
-    /// None, represents none of the existing ordering satisfy
-    /// lexicographical ordering of the exprs.
-    pub fn get_lex_ordering(
-        &self,
-        exprs: &[Arc<dyn PhysicalExpr>],
-    ) -> Option<Vec<SortOptions>> {
-        let normalized_exprs = self.eq_groups.normalize_exprs(exprs);
-        for ordering in self.oeq_group.iter() {
-            if normalized_exprs.len() <= ordering.len() {
-                let mut ordering_options = vec![];
-                for (expr, sort_expr) in izip!(normalized_exprs.iter(), ordering.iter()) {
-                    if sort_expr.expr.eq(expr) {
-                        ordering_options.push(sort_expr.options);
-                    } else {
-                        break;
-                    }
-                    if ordering_options.len() == normalized_exprs.len() {
-                        return Some(ordering_options);
-                    }
-                }
-            }
-        }
-        None
-    }
-
     /// Checks whether given ordering requirements are satisfied by provided [PhysicalSortExpr]s.
     pub fn ordering_satisfy(&self, required: Option<&[PhysicalSortExpr]>) -> bool {
         match required {
@@ -982,6 +789,62 @@ impl SchemaProperties {
         // Convert `PhysicalSortExpr`s to `PhysicalSortRequirement`s
         let sort_requirements = PhysicalSortRequirement::from_sort_exprs(required.iter());
         self.ordering_satisfy_requirement_concrete(&sort_requirements)
+    }
+
+    /// Checks whether the given [`PhysicalSortRequirement`]s are satisfied by the
+    /// provided [`PhysicalSortExpr`]s.
+    pub fn ordering_satisfy_requirement(
+        &self,
+        required: Option<&[PhysicalSortRequirement]>,
+    ) -> bool {
+        match required {
+            None => true,
+            Some(required) => self.ordering_satisfy_requirement_concrete(required),
+        }
+    }
+
+    /// Checks whether the given [`PhysicalSortRequirement`]s are satisfied by the
+    /// provided [`PhysicalSortExpr`]s.
+    pub fn ordering_satisfy_requirement_concrete(
+        &self,
+        required: &[PhysicalSortRequirement],
+    ) -> bool {
+        self.prune_lex_req(required).is_empty()
+    }
+
+    /// Checks whether the given [`PhysicalSortRequirement`]s are equal or more
+    /// specific than the provided [`PhysicalSortRequirement`]s.
+    pub fn requirements_compatible(
+        &self,
+        provided: Option<&[PhysicalSortRequirement]>,
+        required: Option<&[PhysicalSortRequirement]>,
+    ) -> bool {
+        match (provided, required) {
+            (_, None) => true,
+            (None, Some(_)) => false,
+            (Some(provided), Some(required)) => {
+                self.requirements_compatible_concrete(provided, required)
+            }
+        }
+    }
+
+    /// Checks whether the given [`PhysicalSortRequirement`]s are equal or more
+    /// specific than the provided [`PhysicalSortRequirement`]s.
+    fn requirements_compatible_concrete(
+        &self,
+        provided: &[PhysicalSortRequirement],
+        required: &[PhysicalSortRequirement],
+    ) -> bool {
+        let provided_normalized = self.normalize_sort_requirements(provided);
+        let required_normalized = self.normalize_sort_requirements(required);
+
+        if required_normalized.len() > provided_normalized.len() {
+            return false;
+        }
+        required_normalized
+            .into_iter()
+            .zip(provided_normalized)
+            .all(|(req, given)| given.compatible(&req))
     }
 
     /// Find the finer requirement among `req1` and `req2`
@@ -1063,142 +926,274 @@ impl SchemaProperties {
         None
     }
 
-    /// Checks whether the given [`PhysicalSortRequirement`]s are satisfied by the
-    /// provided [`PhysicalSortExpr`]s.
-    pub fn ordering_satisfy_requirement(
-        &self,
-        required: Option<&[PhysicalSortRequirement]>,
-    ) -> bool {
-        match required {
-            None => true,
-            Some(required) => self.ordering_satisfy_requirement_concrete(required),
+    /// This function prunes lexicographical ordering requirement
+    /// by removing sections inside `sort_req` that satisfies any of the existing ordering.
+    /// Please note that pruned version may not functionally equivalent to the argument.
+    /// Empty result means that requirement is already satisfied.
+    /// Non-empty result means that requirement is not satisfied.
+    /// This util shouldn't e used outside this context.
+    fn prune_lex_req(&self, sort_req: &[PhysicalSortRequirement]) -> LexOrderingReq {
+        // Make sure to use a standardized version of the requirement
+        let mut sort_req = self.normalize_sort_requirements(sort_req);
+
+        // If empty immediately return
+        if sort_req.is_empty() {
+            return sort_req;
         }
-    }
 
-    /// Checks whether the given [`PhysicalSortRequirement`]s are satisfied by the
-    /// provided [`PhysicalSortExpr`]s.
-    pub fn ordering_satisfy_requirement_concrete(
-        &self,
-        required: &[PhysicalSortRequirement],
-    ) -> bool {
-        self.prune_lex_req(required).is_empty()
-    }
-
-    /// Checks whether the given [`PhysicalSortRequirement`]s are equal or more
-    /// specific than the provided [`PhysicalSortRequirement`]s.
-    pub fn requirements_compatible(
-        &self,
-        provided: Option<&[PhysicalSortRequirement]>,
-        required: Option<&[PhysicalSortRequirement]>,
-    ) -> bool {
-        match (provided, required) {
-            (_, None) => true,
-            (None, Some(_)) => false,
-            (Some(provided), Some(required)) => {
-                self.requirements_compatible_concrete(provided, required)
-            }
-        }
-    }
-
-    /// Checks whether the given [`PhysicalSortRequirement`]s are equal or more
-    /// specific than the provided [`PhysicalSortRequirement`]s.
-    fn requirements_compatible_concrete(
-        &self,
-        provided: &[PhysicalSortRequirement],
-        required: &[PhysicalSortRequirement],
-    ) -> bool {
-        let provided_normalized = self.normalize_sort_requirements(provided);
-        let required_normalized = self.normalize_sort_requirements(required);
-
-        if required_normalized.len() > provided_normalized.len() {
-            return false;
-        }
-        required_normalized
-            .into_iter()
-            .zip(provided_normalized)
-            .all(|(req, given)| given.compatible(&req))
-    }
-
-    /// Calculate ordering equivalence properties for the given join operation.
-    pub fn join(
-        &self,
-        join_type: &JoinType,
-        right: &SchemaProperties,
-        join_schema: SchemaRef,
-        maintains_input_order: &[bool],
-        probe_side: Option<JoinSide>,
-        on: &[(Column, Column)],
-    ) -> Result<SchemaProperties> {
-        let left_columns_len = self.schema.fields.len();
-        let mut new_properties = SchemaProperties::new(join_schema);
-
-        let join_eq_groups =
-            self.eq_groups()
-                .join(join_type, right.eq_groups(), left_columns_len, on)?;
-        new_properties.add_equivalent_groups(join_eq_groups);
-
-        // All joins have 2 children
-        assert_eq!(maintains_input_order.len(), 2);
-        let left_maintains = maintains_input_order[0];
-        let right_maintains = maintains_input_order[1];
-        let left_oeq_class = self.oeq_group();
-        let right_oeq_class = right.oeq_group();
-        match (left_maintains, right_maintains) {
-            (true, true) => {
-                return Err(DataFusionError::Plan(
-                    "Cannot maintain ordering of both sides".to_string(),
-                ))
-            }
-            (true, false) => {
-                // In this special case, right side ordering can be prefixed with left side ordering.
-                if let (Some(JoinSide::Left), JoinType::Inner) = (probe_side, join_type) {
-                    let updated_right_oeq = get_updated_right_ordering_equivalent_group(
-                        join_type,
-                        right_oeq_class,
-                        left_columns_len,
-                    )?;
-
-                    // Right side ordering equivalence properties should be prepended with
-                    // those of the left side while constructing output ordering equivalence
-                    // properties since stream side is the left side.
-                    //
-                    // If the right table ordering equivalences contain `b ASC`, and the output
-                    // ordering of the left table is `a ASC`, then the ordering equivalence `b ASC`
-                    // for the right table should be converted to `a ASC, b ASC` before it is added
-                    // to the ordering equivalences of the join.
-                    let out_oeq_class = left_oeq_class.join_postfix(&updated_right_oeq);
-                    new_properties.add_ordering_equivalent_group(out_oeq_class);
+        for ordering in self.oeq_group.iter() {
+            // Normalize existing ordering
+            let ordering = self.normalize_sort_exprs(ordering);
+            let match_indices = ordering
+                .iter()
+                .map(|elem| {
+                    sort_req.iter().position(|sort_req| {
+                        elem.satisfy_with_schema(sort_req, &self.schema)
+                    })
+                })
+                .collect::<Vec<_>>();
+            let mut match_prefix = vec![];
+            for elem in &match_indices {
+                if let Some(elem) = elem {
+                    if let Some(last) = match_prefix.last() {
+                        // Should increase
+                        if elem <= last {
+                            break;
+                        }
+                    }
+                    match_prefix.push(*elem)
                 } else {
-                    new_properties.add_ordering_equivalent_group(left_oeq_class.clone());
+                    break;
                 }
             }
-            (false, true) => {
+            // can remove entries at the match_prefix indices
+            // Remove with reverse iteration to not invalidate indices
+            for idx in match_prefix.iter().rev() {
+                sort_req.remove(*idx);
+            }
+        }
+        sort_req
+    }
+
+    /// Checks whether `leading_requirement` is contained in any of the ordering
+    /// equivalence classes.
+    pub fn satisfies_leading_requirement(
+        &self,
+        leading_requirement: &PhysicalSortRequirement,
+    ) -> bool {
+        let leading_requirement = self
+            .eq_groups
+            .normalize_sort_requirement(leading_requirement.clone());
+        self.oeq_group().iter().any(|ordering| {
+            let ordering = self.eq_groups.normalize_sort_exprs(ordering);
+            ordering[0].satisfy_with_schema(&leading_requirement, &self.schema)
+        })
+    }
+
+    /// Projects `SchemaProperties` according to mapping given in `source_to_target_mapping`.
+    pub fn project(
+        &self,
+        source_to_target_mapping: &ProjectionMapping,
+        output_schema: SchemaRef,
+    ) -> SchemaProperties {
+        let mut projected_properties = SchemaProperties::new(output_schema);
+
+        let projected_eq_groups = self.eq_groups.project(source_to_target_mapping);
+        projected_properties.eq_groups = projected_eq_groups;
+
+        let projected_orderings = self
+            .oeq_group
+            .iter()
+            .filter_map(|order| {
+                self.eq_groups
+                    .project_ordering(source_to_target_mapping, order)
+            })
+            .collect::<Vec<_>>();
+
+        // if empty, no need to track projected_orderings.
+        if !projected_orderings.is_empty() {
+            projected_properties.oeq_group =
+                OrderingEquivalentGroup::new(projected_orderings);
+        }
+
+        for (source, target) in source_to_target_mapping {
+            let initial_expr = ExprOrdering::new(source.clone());
+            let transformed = initial_expr
+                .transform_up(&|expr| update_ordering(expr, self))
+                .unwrap();
+            if let Some(SortProperties::Ordered(sort_options)) = transformed.state {
+                let sort_expr = PhysicalSortExpr {
+                    expr: target.clone(),
+                    options: sort_options,
+                };
+                // Push new ordering to the state.
+                projected_properties.oeq_group.push(vec![sort_expr]);
+            }
+        }
+        // Remove redundant entries from ordering group if any.
+        // projected_properties.oeq_group.remove_redundant_entries();
+        projected_properties
+    }
+
+    /// Check whether any permutation of the argument has a prefix with existing ordering.
+    /// Return indices that describes ordering and their ordering information.
+    pub fn set_satisfy(&self, exprs: &[Arc<dyn PhysicalExpr>]) -> Option<Vec<usize>> {
+        let exprs_normalized = self.eq_groups.normalize_exprs(exprs);
+        let mut best = vec![];
+
+        for ordering in self.oeq_group.iter() {
+            let ordering = self.eq_groups.normalize_sort_exprs(ordering);
+            let ordering_exprs = ordering
+                .iter()
+                .map(|sort_expr| sort_expr.expr.clone())
+                .collect::<Vec<_>>();
+            let mut ordered_indices =
+                get_indices_of_exprs_strict(&exprs_normalized, &ordering_exprs);
+            ordered_indices.sort();
+            // Find out how many expressions of the existing ordering define ordering
+            // for expressions in the GROUP BY clause. For example, if the input is
+            // ordered by a, b, c, d and we group by b, a, d; the result below would be.
+            // 2, meaning 2 elements (a, b) among the GROUP BY columns define ordering.
+            let first_n = longest_consecutive_prefix(ordered_indices);
+            if first_n > best.len() {
+                let ordered_exprs = ordering_exprs[0..first_n].to_vec();
+                // Find indices for the GROUP BY expressions such that when we iterate with
+                // these indices, we would match existing ordering. For the example above,
+                // this would produce 1, 0; meaning 1st and 0th entries (a, b) among the
+                // GROUP BY expressions b, a, d match input ordering.
+                best = get_indices_of_exprs_strict(&ordered_exprs, &exprs_normalized);
+            }
+        }
+
+        if best.is_empty() {
+            None
+        } else {
+            Some(best)
+        }
+    }
+
+    /// Check whether one of the permutation of the exprs satisfies existing ordering.
+    /// If so, return indices and their orderings.
+    /// None, indicates that there is no permutation that satisfies ordering.
+    pub fn set_exactly_satisfy(
+        &self,
+        exprs: &[Arc<dyn PhysicalExpr>],
+    ) -> Option<Vec<usize>> {
+        if let Some(indices) = self.set_satisfy(exprs) {
+            // A permutation of the exprs satisfies one of the existing orderings.
+            if indices.len() == exprs.len() {
+                return Some(indices);
+            }
+        }
+        None
+    }
+
+    /// Get ordering of the expressions in the argument
+    /// Assumes arguments define lexicographical ordering.
+    /// None, represents none of the existing ordering satisfy
+    /// lexicographical ordering of the exprs.
+    pub fn get_lex_ordering(
+        &self,
+        exprs: &[Arc<dyn PhysicalExpr>],
+    ) -> Option<Vec<SortOptions>> {
+        let normalized_exprs = self.eq_groups.normalize_exprs(exprs);
+        for ordering in self.oeq_group.iter() {
+            if normalized_exprs.len() <= ordering.len() {
+                let mut ordering_options = vec![];
+                for (expr, sort_expr) in izip!(normalized_exprs.iter(), ordering.iter()) {
+                    if sort_expr.expr.eq(expr) {
+                        ordering_options.push(sort_expr.options);
+                    } else {
+                        break;
+                    }
+                    if ordering_options.len() == normalized_exprs.len() {
+                        return Some(ordering_options);
+                    }
+                }
+            }
+        }
+        None
+    }
+}
+
+/// Calculate ordering equivalence properties for the given join operation.
+pub fn join_schema_properties(
+    left: &SchemaProperties,
+    right: &SchemaProperties,
+    join_type: &JoinType,
+    join_schema: SchemaRef,
+    maintains_input_order: &[bool],
+    probe_side: Option<JoinSide>,
+    on: &[(Column, Column)],
+) -> Result<SchemaProperties> {
+    let left_columns_len = left.schema.fields.len();
+    let mut new_properties = SchemaProperties::new(join_schema);
+
+    let join_eq_groups =
+        left.eq_groups()
+            .join(join_type, right.eq_groups(), left_columns_len, on)?;
+    new_properties.add_equivalent_groups(join_eq_groups);
+
+    // All joins have 2 children
+    assert_eq!(maintains_input_order.len(), 2);
+    let left_maintains = maintains_input_order[0];
+    let right_maintains = maintains_input_order[1];
+    let left_oeq_class = left.oeq_group();
+    let right_oeq_class = right.oeq_group();
+    match (left_maintains, right_maintains) {
+        (true, true) => {
+            return Err(DataFusionError::Plan(
+                "Cannot maintain ordering of both sides".to_string(),
+            ))
+        }
+        (true, false) => {
+            // In this special case, right side ordering can be prefixed with left side ordering.
+            if let (Some(JoinSide::Left), JoinType::Inner) = (probe_side, join_type) {
                 let updated_right_oeq = get_updated_right_ordering_equivalent_group(
                     join_type,
-                    right.oeq_group(),
+                    right_oeq_class,
                     left_columns_len,
                 )?;
-                // In this special case, left side ordering can be prefixed with right side ordering.
-                if let (Some(JoinSide::Right), JoinType::Inner) = (probe_side, join_type)
-                {
-                    // Left side ordering equivalence properties should be prepended with
-                    // those of the right side while constructing output ordering equivalence
-                    // properties since stream side is the right side.
-                    //
-                    // If the right table ordering equivalences contain `b ASC`, and the output
-                    // ordering of the left table is `a ASC`, then the ordering equivalence `b ASC`
-                    // for the right table should be converted to `a ASC, b ASC` before it is added
-                    // to the ordering equivalences of the join.
-                    let out_oeq_class = updated_right_oeq.join_postfix(left_oeq_class);
-                    new_properties.add_ordering_equivalent_group(out_oeq_class);
-                } else {
-                    new_properties.add_ordering_equivalent_group(updated_right_oeq);
-                }
+
+                // Right side ordering equivalence properties should be prepended with
+                // those of the left side while constructing output ordering equivalence
+                // properties since stream side is the left side.
+                //
+                // If the right table ordering equivalences contain `b ASC`, and the output
+                // ordering of the left table is `a ASC`, then the ordering equivalence `b ASC`
+                // for the right table should be converted to `a ASC, b ASC` before it is added
+                // to the ordering equivalences of the join.
+                let out_oeq_class = left_oeq_class.join_postfix(&updated_right_oeq);
+                new_properties.add_ordering_equivalent_group(out_oeq_class);
+            } else {
+                new_properties.add_ordering_equivalent_group(left_oeq_class.clone());
             }
-            (false, false) => {}
         }
-        Ok(new_properties)
+        (false, true) => {
+            let updated_right_oeq = get_updated_right_ordering_equivalent_group(
+                join_type,
+                right.oeq_group(),
+                left_columns_len,
+            )?;
+            // In this special case, left side ordering can be prefixed with right side ordering.
+            if let (Some(JoinSide::Right), JoinType::Inner) = (probe_side, join_type) {
+                // Left side ordering equivalence properties should be prepended with
+                // those of the right side while constructing output ordering equivalence
+                // properties since stream side is the right side.
+                //
+                // If the right table ordering equivalences contain `b ASC`, and the output
+                // ordering of the left table is `a ASC`, then the ordering equivalence `b ASC`
+                // for the right table should be converted to `a ASC, b ASC` before it is added
+                // to the ordering equivalences of the join.
+                let out_oeq_class = updated_right_oeq.join_postfix(left_oeq_class);
+                new_properties.add_ordering_equivalent_group(out_oeq_class);
+            } else {
+                new_properties.add_ordering_equivalent_group(updated_right_oeq);
+            }
+        }
+        (false, false) => {}
     }
+    Ok(new_properties)
 }
 
 /// Constructs a `SchemaProperties` struct from the given `orderings`.

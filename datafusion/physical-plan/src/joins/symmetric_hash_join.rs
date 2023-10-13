@@ -69,6 +69,7 @@ use datafusion_physical_expr::intervals::ExprIntervalGraph;
 
 use crate::joins::utils::prepare_sorted_exprs;
 use ahash::RandomState;
+use datafusion_physical_expr::equivalence::join_schema_properties;
 use datafusion_physical_expr::SchemaProperties;
 use futures::stream::{select, BoxStream};
 use futures::{Stream, StreamExt};
@@ -435,9 +436,10 @@ impl ExecutionPlan for SymmetricHashJoinExec {
     fn schema_properties(&self) -> SchemaProperties {
         let left = self.left.schema_properties();
         let right = self.right.schema_properties();
-        left.join(
-            &self.join_type,
+        join_schema_properties(
+            &left,
             &right,
+            &self.join_type,
             self.schema(),
             &self.maintains_input_order(),
             // Has alternating probe side

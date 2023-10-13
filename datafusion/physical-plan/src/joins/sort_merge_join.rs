@@ -54,6 +54,7 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{PhysicalSortRequirement, SchemaProperties};
 
+use datafusion_physical_expr::equivalence::join_schema_properties;
 use futures::{Stream, StreamExt};
 
 /// join execution plan executes partitions in parallel and combines them into a set of
@@ -284,9 +285,10 @@ impl ExecutionPlan for SortMergeJoinExec {
     fn schema_properties(&self) -> SchemaProperties {
         let left = self.left.schema_properties();
         let right = self.right.schema_properties();
-        left.join(
-            &self.join_type,
+        join_schema_properties(
+            &left,
             &right,
+            &self.join_type,
             self.schema(),
             &self.maintains_input_order(),
             Some(Self::probe_side(&self.join_type)),
