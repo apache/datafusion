@@ -650,9 +650,8 @@ impl LogicalPlanBuilder {
     ///
     /// let right_plan = LogicalPlanBuilder::scan("right", right_table, None)?.build()?;
     ///
-    /// let exprs = vec![col("left.a").eq(col("right.a")), col("left.b").not_eq(col("right.b"))]
-    ///     .into_iter()
-    ///     .reduce(Expr::and);
+    /// let exprs = vec![col("left.a").eq(col("right.a")), col("left.b").not_eq(col("right.b"))];
+    ///
     /// let plan = LogicalPlanBuilder::scan("left", left_table, None)?
     ///     .join_on(right_plan, JoinType::Inner, exprs)?
     ///     .build()?;
@@ -663,13 +662,15 @@ impl LogicalPlanBuilder {
         self,
         right: LogicalPlan,
         join_type: JoinType,
-        on_exprs: Option<Expr>,
+        on_exprs: impl IntoIterator<Item = Expr>,
     ) -> Result<Self> {
+        let filter = on_exprs.into_iter().reduce(Expr::and);
+
         self.join_detailed(
             right,
             join_type,
             (Vec::<Column>::new(), Vec::<Column>::new()),
-            on_exprs,
+            filter,
             false,
         )
     }
