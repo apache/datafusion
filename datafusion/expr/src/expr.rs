@@ -165,9 +165,15 @@ pub enum Expr {
     InSubquery(InSubquery),
     /// Scalar subquery
     ScalarSubquery(Subquery),
-    /// Represents a reference to all fields in a schema.
+    /// Represents a reference to all available fields.
+    ///
+    /// This expr has to be resolved to a list of columns before translating logical
+    /// plan into physical plan.
     Wildcard,
-    /// Represents a reference to all fields in a specific schema.
+    /// Represents a reference to all available fields in a specific schema.
+    ///    
+    /// This expr has to be resolved to a list of columns before translating logical
+    /// plan into physical plan.
     QualifiedWildcard { qualifier: String },
     /// List of grouping set expressions. Only valid in the context of an aggregate
     /// GROUP BY expression list
