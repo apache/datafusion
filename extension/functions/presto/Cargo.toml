@@ -1,0 +1,21 @@
+[package]
+name = "datafusion-extension-test-scalar-func"
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+datafusion = { path = "../../../datafusion/core" }
+datafusion-common = { path = "../../../datafusion/common" }
+datafusion-expr = { path = "../../../datafusion/expr" }
+arrow = { workspace = true }
+#arrow-flight = { workspace = true }
+#arrow-schema = { workspace = true }
+tokio = "1.33.0"
