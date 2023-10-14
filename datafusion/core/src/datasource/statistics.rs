@@ -171,7 +171,7 @@ pub async fn get_statistics_with_limit(
         // If we still have files in the stream, it means that the limit kicked
         // in, and the statistic could have been different had we processed the
         // files in a different order.
-        statistics = statistics.make_inexact()
+        statistics = statistics.into_inexact()
     }
 
     Ok((result_files, statistics))

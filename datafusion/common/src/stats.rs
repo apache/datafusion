@@ -206,11 +206,12 @@ impl<T: fmt::Debug + Clone + PartialEq + Eq + PartialOrd> Display for Precision<
 /// and the transformations output are not always predictable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Statistics {
-    /// The number of table rows
+    /// The number of table rows.
     pub num_rows: Precision<usize>,
-    /// total bytes of the table rows
+    /// Total bytes of the table rows.
     pub total_byte_size: Precision<usize>,
-    /// Statistics on a column level
+    /// Statistics on a column level. It contains a [`ColumnStatistics`] for
+    /// each field in the schema of the the table to which the [`Statistics`] refer.
     pub column_statistics: Vec<ColumnStatistics>,
 }
 
@@ -236,7 +237,7 @@ impl Statistics {
 
     /// If the exactness of a [`Statistics`] instance is lost, this function relaxes
     /// the exactness of all information by converting them [`Precision::Inexact`].
-    pub fn make_inexact(self) -> Self {
+    pub fn into_inexact(self) -> Self {
         Statistics {
             num_rows: self.num_rows.to_inexact(),
             total_byte_size: self.total_byte_size.to_inexact(),

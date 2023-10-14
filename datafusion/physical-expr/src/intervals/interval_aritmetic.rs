@@ -1760,9 +1760,11 @@ mod tests {
             assert_eq!(interval.cardinality()?.unwrap(), distinct_f32);
         }
 
-        // If the floating numbers has showned a homogeneous distribution pattern, the result would to be
-        // (distinct_f64 * 2_048 = 9223372036854775808); however, due to subnormal numbers around 0,
-        // the result will be a specific value, close to the expected one.
+        // The regular logarithmic distribution of floating-point numbers are only applicable
+        // outside of the `(-phi, phi)` interval, where `phi` denotes the largest positive
+        // subnormal floating-point number. Since the following intervals include these subnormal
+        // points, we cannot use the constant number that remains the same in powers of 2. Therefore,
+        // we manually supply the actual expected cardinality.
         let interval = Interval::new(
             IntervalBound::new(ScalarValue::from(-0.0625), false),
             IntervalBound::new(ScalarValue::from(0.0625), true),

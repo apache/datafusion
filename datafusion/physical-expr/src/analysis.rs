@@ -21,7 +21,6 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use arrow::datatypes::Schema;
-use arrow_schema::Field;
 
 use datafusion_common::stats::Precision;
 use datafusion_common::{ColumnStatistics, DataFusionError, Result, ScalarValue};
@@ -63,35 +62,12 @@ impl AnalysisContext {
         input_schema: &Schema,
         statistics: &[ColumnStatistics],
     ) -> Self {
-        let mut column_boundaries = vec![];
-        for (idx, stats) in statistics.iter().enumerate() {
-            let field: &Arc<Field> = &input_schema.fields()[idx];
-            if let Ok(inf_field) = ScalarValue::try_from(field.data_type()) {
-                let interval = Interval::new(
-                    IntervalBound::new_closed(
-                        stats
-                            .min_value
-                            .get_value()
-                            .cloned()
-                            .unwrap_or(inf_field.clone()),
-                    ),
-                    IntervalBound::new_closed(
-                        stats.max_value.get_value().cloned().unwrap_or(inf_field),
-                    ),
-                );
-                let column = Column::new(field.name(), idx);
-                column_boundaries.push(ExprBoundaries {
-                    column,
-                    interval,
-                    distinct_count: stats.distinct_count.clone(),
-                });
-            } else {
-                return AnalysisContext {
-                    boundaries: None,
-                    selectivity: None,
-                };
-            }
-        }
+        let column_boundaries = statistics
+            .iter()
+            .enumerate()
+            .map(|(idx, stats)| ExprBoundaries::from_column(input_schema, stats, idx))
+            .collect::<Vec<_>>();
+
         Self::new(column_boundaries)
     }
 }
@@ -105,6 +81,45 @@ pub struct ExprBoundaries {
     pub interval: Interval,
     /// Maximum number of distinct values this expression can produce, if known.
     pub distinct_count: Precision<usize>,
+}
+
+impl ExprBoundaries {
+    /// Create a new `ExprBoundaries` object from column level statistics.
+    pub fn from_column(
+        schema: &Schema,
+        col_stats: &ColumnStatistics,
+        col_index: usize,
+    ) -> Self {
+        let field = &schema.fields()[col_index];
+        let inf_field = ScalarValue::try_from(field.data_type()).unwrap_or_else(|_| {
+            panic!(
+                "There is no equivalent for the DataType {} among ScalarValues.",
+                field.data_type()
+            );
+        });
+        let interval = Interval::new(
+            IntervalBound::new_closed(
+                col_stats
+                    .min_value
+                    .get_value()
+                    .cloned()
+                    .unwrap_or(inf_field.clone()),
+            ),
+            IntervalBound::new_closed(
+                col_stats
+                    .max_value
+                    .get_value()
+                    .cloned()
+                    .unwrap_or(inf_field),
+            ),
+        );
+        let column = Column::new(field.name(), col_index);
+        ExprBoundaries {
+            column,
+            interval,
+            distinct_count: col_stats.distinct_count.clone(),
+        }
+    }
 }
 
 /// Attempts to refine column boundaries and compute a selectivity value.
@@ -192,10 +207,13 @@ fn shrink_boundaries(
         }
     });
     let graph_nodes = graph.gather_node_indices(&[expr.clone()]);
-    // Since propagation result was successful, the graph has at least one element.
-    // An empty check is also done at the outer scope, do not repeat it here.
-    let (_, root_index) = graph_nodes[0];
-    let final_result = graph.get_interval(root_index);
+    let Some((_, root_index)) = graph_nodes.get(0) else {
+        return Err(DataFusionError::Internal(
+            "The ExprIntervalGraph under investigation does not have any nodes."
+                .to_owned(),
+        ));
+    };
+    let final_result = graph.get_interval(*root_index);
 
     let selectivity = calculate_selectivity(
         &final_result.lower.value,
