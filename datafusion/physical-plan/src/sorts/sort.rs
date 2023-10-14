@@ -24,7 +24,7 @@ use crate::expressions::PhysicalSortExpr;
 use crate::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
 };
-use crate::sorts::merge::streaming_merge;
+use crate::sorts::streaming_merge::streaming_merge;
 use crate::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
 use crate::topk::TopK;
 use crate::{
@@ -763,17 +763,16 @@ impl DisplayAs for SortExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                let expr: Vec<String> = self.expr.iter().map(|e| e.to_string()).collect();
+                let expr = PhysicalSortExpr::format_list(&self.expr);
                 match self.fetch {
                     Some(fetch) => {
                         write!(
                             f,
                             // TODO should this say topk?
-                            "SortExec: fetch={fetch}, expr=[{}]",
-                            expr.join(",")
+                            "SortExec: fetch={fetch}, expr=[{expr}]",
                         )
                     }
-                    None => write!(f, "SortExec: expr=[{}]", expr.join(",")),
+                    None => write!(f, "SortExec: expr=[{expr}]"),
                 }
             }
         }

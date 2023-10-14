@@ -1738,8 +1738,11 @@ mod tests {
             _t: DisplayFormatType,
             f: &mut std::fmt::Formatter,
         ) -> std::fmt::Result {
-            let expr: Vec<String> = self.expr.iter().map(|e| e.to_string()).collect();
-            write!(f, "SortRequiredExec: [{}]", expr.join(","))
+            write!(
+                f,
+                "SortRequiredExec: [{}]",
+                PhysicalSortExpr::format_list(&self.expr)
+            )
         }
     }
 
@@ -3056,16 +3059,16 @@ mod tests {
                     vec![
                         top_join_plan.as_str(),
                         join_plan.as_str(),
-                        "SortPreservingRepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
+                        "SortPreservingRepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10, sort_exprs=a@0 ASC",
                         "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                         "SortExec: expr=[a@0 ASC]",
                         "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                        "SortPreservingRepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10",
+                        "SortPreservingRepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10, sort_exprs=b1@1 ASC",
                         "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                         "SortExec: expr=[b1@1 ASC]",
                         "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
                         "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                        "SortPreservingRepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
+                        "SortPreservingRepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10, sort_exprs=c@2 ASC",
                         "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                         "SortExec: expr=[c@2 ASC]",
                         "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
@@ -3082,21 +3085,21 @@ mod tests {
                 _ => vec![
                     top_join_plan.as_str(),
                     // Below 4 operators are differences introduced, when join mode is changed
-                    "SortPreservingRepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
+                    "SortPreservingRepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10, sort_exprs=a@0 ASC",
                     "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                     "SortExec: expr=[a@0 ASC]",
                     "CoalescePartitionsExec",
                     join_plan.as_str(),
-                    "SortPreservingRepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
+                    "SortPreservingRepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10, sort_exprs=a@0 ASC",
                     "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                     "SortExec: expr=[a@0 ASC]",
                     "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                    "SortPreservingRepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10",
+                    "SortPreservingRepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10, sort_exprs=b1@1 ASC",
                     "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                     "SortExec: expr=[b1@1 ASC]",
                     "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
                     "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                    "SortPreservingRepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
+                    "SortPreservingRepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10, sort_exprs=c@2 ASC",
                     "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                     "SortExec: expr=[c@2 ASC]",
                     "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
@@ -3170,16 +3173,16 @@ mod tests {
                         JoinType::Inner | JoinType::Right => vec![
                             top_join_plan.as_str(),
                             join_plan.as_str(),
-                            "SortPreservingRepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
+                            "SortPreservingRepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10, sort_exprs=a@0 ASC",
                             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                             "SortExec: expr=[a@0 ASC]",
                             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                            "SortPreservingRepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10",
+                            "SortPreservingRepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10, sort_exprs=b1@1 ASC",
                             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                             "SortExec: expr=[b1@1 ASC]",
                             "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
                             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                            "SortPreservingRepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
+                            "SortPreservingRepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10, sort_exprs=c@2 ASC",
                             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                             "SortExec: expr=[c@2 ASC]",
                             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
@@ -3187,21 +3190,21 @@ mod tests {
                         // Should include 8 RepartitionExecs (4 of them preserves order) and 4 SortExecs
                         JoinType::Left | JoinType::Full => vec![
                             top_join_plan.as_str(),
-                            "SortPreservingRepartitionExec: partitioning=Hash([b1@6], 10), input_partitions=10",
+                            "SortPreservingRepartitionExec: partitioning=Hash([b1@6], 10), input_partitions=10, sort_exprs=b1@6 ASC",
                             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                             "SortExec: expr=[b1@6 ASC]",
                             "CoalescePartitionsExec",
                             join_plan.as_str(),
-                            "SortPreservingRepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
+                            "SortPreservingRepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10, sort_exprs=a@0 ASC",
                             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                             "SortExec: expr=[a@0 ASC]",
                             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                            "SortPreservingRepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10",
+                            "SortPreservingRepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10, sort_exprs=b1@1 ASC",
                             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                             "SortExec: expr=[b1@1 ASC]",
                             "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
                             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                            "SortPreservingRepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
+                            "SortPreservingRepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10, sort_exprs=c@2 ASC",
                             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                             "SortExec: expr=[c@2 ASC]",
                             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
@@ -3292,7 +3295,7 @@ mod tests {
 
         let expected_first_sort_enforcement = &[
             "SortMergeJoin: join_type=Inner, on=[(b3@1, b2@1), (a3@0, a2@0)]",
-            "SortPreservingRepartitionExec: partitioning=Hash([b3@1, a3@0], 10), input_partitions=10",
+            "SortPreservingRepartitionExec: partitioning=Hash([b3@1, a3@0], 10), input_partitions=10, sort_exprs=b3@1 ASC,a3@0 ASC",
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "SortExec: expr=[b3@1 ASC,a3@0 ASC]",
             "CoalescePartitionsExec",
@@ -3303,7 +3306,7 @@ mod tests {
             "AggregateExec: mode=Partial, gby=[b@1 as b1, a@0 as a1], aggr=[]",
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-            "SortPreservingRepartitionExec: partitioning=Hash([b2@1, a2@0], 10), input_partitions=10",
+            "SortPreservingRepartitionExec: partitioning=Hash([b2@1, a2@0], 10), input_partitions=10, sort_exprs=b2@1 ASC,a2@0 ASC",
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "SortExec: expr=[b2@1 ASC,a2@0 ASC]",
             "CoalescePartitionsExec",
@@ -4382,7 +4385,7 @@ mod tests {
         let expected = &[
             "SortPreservingMergeExec: [c@2 ASC]",
             "FilterExec: c@2 = 0",
-            "SortPreservingRepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
+            "SortPreservingRepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2, sort_exprs=c@2 ASC",
             "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
         ];
 
