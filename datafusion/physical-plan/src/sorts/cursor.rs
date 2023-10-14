@@ -333,10 +333,18 @@ impl<T: FieldValues> Cursor for FieldCursor<T> {
             options,
         } = self;
 
+        let null_threshold = match self.options.nulls_first {
+            true => null_threshold.saturating_sub(offset),
+            false => {
+                let shorter_len = self.values.len().saturating_sub(offset + length + 1);
+                null_threshold.saturating_sub(offset.saturating_sub(shorter_len))
+            }
+        };
+
         Self {
             values: values.slice(offset, length),
             offset: 0,
-            null_threshold: null_threshold.checked_sub(offset).unwrap_or(0),
+            null_threshold,
             options: *options,
         }
     }
@@ -366,6 +374,25 @@ mod tests {
             null_threshold,
             options,
         }
+    }
+
+    #[test]
+    fn test_primitive_null_mask() {
+        let options = SortOptions {
+            descending: false,
+            nulls_first: true,
+        };
+
+        let is_min = new_primitive(options, ScalarBuffer::from(vec![i32::MIN]), 0);
+        assert_eq!(is_min.num_rows(), 1);
+        let is_null = new_primitive(options, ScalarBuffer::from(vec![i32::MIN]), 1);
+        assert_eq!(is_null.num_rows(), 1);
+
+        // i32::MIN != NULL
+        assert_ne!(is_min.cmp(&is_null), Ordering::Equal); // is null mask
+
+        assert!(is_null.is_null());
+        assert!(!is_min.is_null());
     }
 
     #[test]
@@ -414,6 +441,11 @@ mod tests {
         a.advance();
         assert_eq!(a.cmp(&b), Ordering::Less);
 
+        // finished
+        assert!(!b.is_finished());
+        b.advance();
+        assert!(b.is_finished());
+
         let options = SortOptions {
             descending: false,
             nulls_first: false,
@@ -439,6 +471,12 @@ mod tests {
         a.advance();
         assert_eq!(a.cmp(&b), Ordering::Equal);
         assert_eq!(a, b);
+
+        // finished
+        assert!(!a.is_finished());
+        a.advance();
+        a.advance();
+        assert!(a.is_finished());
 
         let options = SortOptions {
             descending: true,
@@ -565,55 +603,68 @@ mod tests {
             nulls_first: true,
         };
 
-        let buffer = ScalarBuffer::from(vec![2, i32::MIN, 2]);
-        let mut a = new_primitive(options, buffer, 1);
-        let buffer = ScalarBuffer::from(vec![3, 2, i32::MIN, 2]);
-        let mut b = new_primitive(options, buffer, 1);
+        let is_min = new_primitive(options, ScalarBuffer::from(vec![i32::MIN]), 0);
+
+        let buffer = ScalarBuffer::from(vec![i32::MIN, 79, 2, i32::MIN]);
+        let mut a = new_primitive(options, buffer, 2);
+        assert_eq!(a.num_rows(), 4);
+        let buffer = ScalarBuffer::from(vec![i32::MIN, -284, 3, i32::MIN, 2]);
+        let mut b = new_primitive(options, buffer, 2);
+        assert_eq!(b.num_rows(), 5);
 
         // NULL == NULL
-        assert_eq!(a, b);
+        assert!(a.is_null());
         assert_eq!(a.cmp(&b), Ordering::Equal);
 
-        // 2 > NULL
-        a = a.slice(1, 1);
-        assert_ne!(a, b);
+        // i32::MIN > NULL
+        a = a.slice(3, 1);
+        assert_eq!(a, is_min);
         assert_eq!(a.cmp(&b), Ordering::Greater);
 
-        // 2 < 3
-        b = b.slice(3, 1);
-        assert_ne!(a, b);
+        // i32::MIN == i32::MIN
+        b = b.slice(3, 2);
+        assert_eq!(b, is_min);
+        assert_eq!(a.cmp(&b), Ordering::Equal);
+
+        // i32::MIN < 2
+        b = b.slice(1, 1);
         assert_eq!(a.cmp(&b), Ordering::Less);
     }
 
     #[test]
-    fn test_slice_no_nulls_first() {
+    fn test_slice_nulls_last() {
         let options = SortOptions {
             descending: false,
             nulls_first: false,
         };
 
-        let buffer = ScalarBuffer::from(vec![2, i32::MIN, 2]);
-        let mut a = new_primitive(options, buffer, 1);
-        let buffer = ScalarBuffer::from(vec![3, 2, i32::MIN, 2]);
-        let mut b = new_primitive(options, buffer, 1);
+        let is_min = new_primitive(options, ScalarBuffer::from(vec![i32::MIN]), 0);
 
-        // 2 < 3
-        assert_ne!(a, b);
-        assert_eq!(a.cmp(&b), Ordering::Less);
+        let buffer = ScalarBuffer::from(vec![i32::MIN, 79, 2, i32::MIN]);
+        let mut a = new_primitive(options, buffer, 2);
+        assert_eq!(a.num_rows(), 4);
+        let buffer = ScalarBuffer::from(vec![i32::MIN, -284, 3, i32::MIN, 2]);
+        let mut b = new_primitive(options, buffer, 2);
+        assert_eq!(b.num_rows(), 5);
 
-        // 2 == 2
-        b = b.slice(1, 3);
-        assert_eq!(a, b);
+        // i32::MIN == i32::MIN
+        assert_eq!(a, is_min);
         assert_eq!(a.cmp(&b), Ordering::Equal);
 
-        // NULL < 2
-        a = a.slice(1, 2);
-        assert_ne!(a, b);
+        // i32::MIN < -284
+        b = b.slice(1, 3); // slice to full length
         assert_eq!(a.cmp(&b), Ordering::Less);
 
+        // 79 > -284
+        a = a.slice(1, 2); // slice to shorter than full length
+        assert!(!a.is_null());
+        assert_eq!(a.cmp(&b), Ordering::Greater);
+
         // NULL == NULL
-        b = b.slice(1, 2);
-        assert_eq!(a, b);
+        a = a.slice(1, 1);
+        b = b.slice(2, 1);
+        assert!(a.is_null());
+        assert!(b.is_null());
         assert_eq!(a.cmp(&b), Ordering::Equal);
     }
 }
