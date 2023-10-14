@@ -18,10 +18,29 @@
 //! Udf module contains foundational types that are used to represent UDFs in DataFusion.
 
 use crate::{Expr, ReturnTypeFunction, ScalarFunctionImplementation, Signature};
+use arrow::array::ArrayRef;
+use datafusion_common::Result;
 use std::fmt;
 use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::sync::Arc;
+
+pub trait ScalarFunctionDef: Sync + Send + std::fmt::Debug {
+    // TODO: support alias
+    fn name(&self) -> &str;
+
+    fn signature(&self) -> Signature;
+
+    // TODO: ReturnTypeFunction -> a ENUM
+    //     most function's return type is either the same as 1st arg or a fixed type
+    fn return_type(&self) -> ReturnTypeFunction;
+
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef>;
+}
+
+pub trait ScalarFunctionPackage {
+    fn functions(&self) -> Vec<Box<dyn ScalarFunctionDef>>;
+}
 
 /// Logical representation of a UDF.
 #[derive(Clone)]
