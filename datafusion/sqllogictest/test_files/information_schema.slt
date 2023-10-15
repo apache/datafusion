@@ -153,6 +153,7 @@ datafusion.execution.collect_statistics false
 datafusion.execution.max_buffered_batches_per_output_file 2
 datafusion.execution.max_parallel_ouput_files 8
 datafusion.execution.meta_fetch_concurrency 32
+datafusion.execution.minimum_parallel_output_files 4
 datafusion.execution.parquet.allow_single_file_parallelism false
 datafusion.execution.parquet.bloom_filter_enabled false
 datafusion.execution.parquet.bloom_filter_fpp NULL
@@ -223,6 +224,7 @@ datafusion.execution.collect_statistics false Should DataFusion collect statisti
 datafusion.execution.max_buffered_batches_per_output_file 2 This is the maximum number of RecordBatches buffered for each output file being worked. Higher values can potentially give faster write performance at the cost of higher peak memory consumption
 datafusion.execution.max_parallel_ouput_files 8 This is the maximum number of output files being written in parallel. Higher values can potentially give faster write performance at the cost of higher peak memory consumption.
 datafusion.execution.meta_fetch_concurrency 32 Number of files to read in parallel when inferring schema and statistics
+datafusion.execution.minimum_parallel_output_files 4 Guarentees a minimum level of output files running in parallel. RecordBatches will be distributed in round robin fashion to each parallel writer. Each writer is closed and a new file opened once soft_max_rows_per_output_file is reached.
 datafusion.execution.parquet.allow_single_file_parallelism false Controls whether DataFusion will attempt to speed up writing large parquet files by first writing multiple smaller files and then stitching them together into a single large file. This will result in faster write speeds, but higher memory usage. Also currently unsupported are bloom filters and column indexes when single_file_parallelism is enabled.
 datafusion.execution.parquet.bloom_filter_enabled false Sets if bloom filter is enabled for any column
 datafusion.execution.parquet.bloom_filter_fpp NULL Sets bloom filter false positive probability. If NULL, uses default parquet writer setting
