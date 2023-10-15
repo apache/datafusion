@@ -21,7 +21,7 @@ use crate::utils::{conjunction, replace_qualified_name, split_conjunction};
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::TreeNode;
-use datafusion_common::{plan_err, Column, DataFusionError, Result};
+use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_expr::expr::{Exists, InSubquery};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
@@ -282,12 +282,7 @@ fn build_join(
             false => JoinType::LeftSemi,
         };
         let new_plan = LogicalPlanBuilder::from(left.clone())
-            .join(
-                sub_query_alias,
-                join_type,
-                (Vec::<Column>::new(), Vec::<Column>::new()),
-                Some(join_filter),
-            )?
+            .join_on(sub_query_alias, join_type, Some(join_filter))?
             .build()?;
         debug!(
             "predicate subquery optimized:\n{}",

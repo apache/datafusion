@@ -315,24 +315,14 @@ fn build_join(
             _ => {
                 // if not correlated, group down to 1 row and left join on that (preserving row count)
                 LogicalPlanBuilder::from(filter_input.clone())
-                    .join(
-                        sub_query_alias,
-                        JoinType::Left,
-                        (Vec::<Column>::new(), Vec::<Column>::new()),
-                        None,
-                    )?
+                    .join_on(sub_query_alias, JoinType::Left, None)?
                     .build()?
             }
         }
     } else {
         // left join if correlated, grouping by the join keys so we don't change row count
         LogicalPlanBuilder::from(filter_input.clone())
-            .join(
-                sub_query_alias,
-                JoinType::Left,
-                (Vec::<Column>::new(), Vec::<Column>::new()),
-                join_filter_opt,
-            )?
+            .join_on(sub_query_alias, JoinType::Left, join_filter_opt)?
             .build()?
     };
     let mut computation_project_expr = HashMap::new();

@@ -626,6 +626,55 @@ impl LogicalPlanBuilder {
         self.join_detailed(right, join_type, join_keys, filter, false)
     }
 
+    /// Apply a join with on constraint.
+    ///
+    /// The `ExtractEquijoinPredicate` optimizer pass has the ability to split join predicates into
+    /// equijoin predicates and (other) filter predicates. Therefore, if you prefer not to manually split the
+    /// join predicates, it is recommended to use the `join_on` method instead of the `join` method.
+    ///
+    /// ```
+    /// # use datafusion_expr::{Expr, col, LogicalPlanBuilder,
+    /// #  logical_plan::builder::LogicalTableSource, logical_plan::JoinType,};
+    /// # use std::sync::Arc;
+    /// # use arrow::datatypes::{Schema, DataType, Field};
+    /// # use datafusion_common::Result;
+    /// # fn main() -> Result<()> {
+    /// let example_schema = Arc::new(Schema::new(vec![
+    ///     Field::new("a", DataType::Int32, false),
+    ///     Field::new("b", DataType::Int32, false),
+    ///     Field::new("c", DataType::Int32, false),
+    /// ]));
+    /// let table_source = Arc::new(LogicalTableSource::new(example_schema));
+    /// let left_table = table_source.clone();
+    /// let right_table = table_source.clone();
+    ///
+    /// let right_plan = LogicalPlanBuilder::scan("right", right_table, None)?.build()?;
+    ///
+    /// let exprs = vec![col("left.a").eq(col("right.a")), col("left.b").not_eq(col("right.b"))];
+    ///
+    /// let plan = LogicalPlanBuilder::scan("left", left_table, None)?
+    ///     .join_on(right_plan, JoinType::Inner, exprs)?
+    ///     .build()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn join_on(
+        self,
+        right: LogicalPlan,
+        join_type: JoinType,
+        on_exprs: impl IntoIterator<Item = Expr>,
+    ) -> Result<Self> {
+        let filter = on_exprs.into_iter().reduce(Expr::and);
+
+        self.join_detailed(
+            right,
+            join_type,
+            (Vec::<Column>::new(), Vec::<Column>::new()),
+            filter,
+            false,
+        )
+    }
+
     pub(crate) fn normalize(
         plan: &LogicalPlan,
         column: impl Into<Column> + Clone,
