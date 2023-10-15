@@ -45,9 +45,9 @@ use arrow::{
     datatypes::{DataType, Int32Type, Int64Type, Schema},
 };
 use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
+pub use datafusion_expr::FuncMonotonicity;
 use datafusion_expr::{
-    get_func_monotonicity, BuiltinScalarFunction, ColumnarValue, FuncMonotonicity,
-    ScalarFunctionImplementation,
+    BuiltinScalarFunction, ColumnarValue, ScalarFunctionImplementation,
 };
 use std::ops::Neg;
 use std::sync::Arc;
@@ -181,7 +181,7 @@ pub fn create_physical_expr(
         _ => create_physical_fun(fun, execution_props)?,
     };
 
-    let monotonicity = get_func_monotonicity(fun);
+    let monotonicity = fun.monotonicity();
 
     Ok(Arc::new(ScalarFunctionExpr::new(
         &format!("{fun}"),
@@ -902,6 +902,14 @@ pub fn create_physical_fun(
             );
         }
     })
+}
+
+#[deprecated(
+    since = "32.0.0",
+    note = "Moved to `expr` crate. Please use `BuiltinScalarFunction::monotonicity()` instead"
+)]
+pub fn get_func_monotonicity(fun: &BuiltinScalarFunction) -> Option<FuncMonotonicity> {
+    fun.monotonicity()
 }
 
 /// Determines a [`ScalarFunctionExpr`]'s monotonicity for the given arguments
