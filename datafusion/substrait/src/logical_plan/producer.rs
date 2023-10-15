@@ -278,14 +278,15 @@ pub fn to_substrait_rel(
             // parse filter if exists
             let in_join_schema = join.left.schema().join(join.right.schema())?;
             let join_filter = match &join.filter {
-                Some(filter) => Some(Box::new(to_substrait_rex(
+                Some(filter) => Some(to_substrait_rex(
                     filter,
                     &Arc::new(in_join_schema),
                     0,
                     extension_info,
-                )?)),
+                )?),
                 None => None,
             };
+
             // map the left and right columns to binary expressions in the form `l = r`
             // build a single expression for the ON condition, such as `l.a = r.a AND l.b = r.b`
             let eq_op = if join.null_equals_null {
@@ -293,15 +294,31 @@ pub fn to_substrait_rel(
             } else {
                 Operator::Eq
             };
-
-            let join_expr = to_substrait_join_expr(
+            let join_on = to_substrait_join_expr(
                 &join.on,
                 eq_op,
                 join.left.schema(),
                 join.right.schema(),
                 extension_info,
-            )?
-            .map(Box::new);
+            )?;
+
+            // create conjunction between `join_on` and `join_filter` to embed all join conditions,
+            // whether equal or non-equal in a single expression
+            let join_expr = match &join_on {
+                Some(on_expr) => match &join_filter {
+                    Some(filter) => Some(Box::new(make_binary_op_scalar_func(
+                        on_expr,
+                        filter,
+                        Operator::And,
+                        extension_info,
+                    ))),
+                    None => join_on.map(Box::new), // the join expression will only contain `join_on` if filter doesn't exist
+                },
+                None => match &join_filter {
+                    Some(_) => join_filter.map(Box::new), // the join expression will only contain `join_filter` if the `on` condition doesn't exist
+                    None => None,
+                },
+            };
 
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Join(Box::new(JoinRel {
@@ -309,8 +326,8 @@ pub fn to_substrait_rel(
                     left: Some(left),
                     right: Some(right),
                     r#type: join_type as i32,
-                    expression: join_expr,
-                    post_join_filter: join_filter,
+                    expression: join_expr.clone(),
+                    post_join_filter: None,
                     advanced_extension: None,
                 }))),
             }))

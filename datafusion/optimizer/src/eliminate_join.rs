@@ -77,7 +77,7 @@ impl OptimizerRule for EliminateJoin {
 mod tests {
     use crate::eliminate_join::EliminateJoin;
     use crate::test::*;
-    use datafusion_common::{Column, Result, ScalarValue};
+    use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::JoinType::Inner;
     use datafusion_expr::{logical_plan::builder::LogicalPlanBuilder, Expr, LogicalPlan};
     use std::sync::Arc;
@@ -89,10 +89,9 @@ mod tests {
     #[test]
     fn join_on_false() -> Result<()> {
         let plan = LogicalPlanBuilder::empty(false)
-            .join(
+            .join_on(
                 LogicalPlanBuilder::empty(false).build()?,
                 Inner,
-                (Vec::<Column>::new(), Vec::<Column>::new()),
                 Some(Expr::Literal(ScalarValue::Boolean(Some(false)))),
             )?
             .build()?;
@@ -104,10 +103,9 @@ mod tests {
     #[test]
     fn join_on_true() -> Result<()> {
         let plan = LogicalPlanBuilder::empty(false)
-            .join(
+            .join_on(
                 LogicalPlanBuilder::empty(false).build()?,
                 Inner,
-                (Vec::<Column>::new(), Vec::<Column>::new()),
                 Some(Expr::Literal(ScalarValue::Boolean(Some(true)))),
             )?
             .build()?;
