@@ -62,7 +62,7 @@ pub use stream::EmptyRecordBatchStream;
 /// return value from [`displayable`] in addition to the (normally
 /// quite verbose) `Debug` output.
 pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
-    /// Returns the execution plan as [`Any`](std::any::Any) so that it can be
+    /// Returns the execution plan as [`Any`] so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
 

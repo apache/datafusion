@@ -132,12 +132,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // parse ON expression
                 let expr = self.sql_to_expr(sql_expr, &join_schema, planner_context)?;
                 LogicalPlanBuilder::from(left)
-                    .join(
-                        right,
-                        join_type,
-                        (Vec::<Column>::new(), Vec::<Column>::new()),
-                        Some(expr),
-                    )?
+                    .join_on(right, join_type, Some(expr))?
                     .build()
             }
             JoinConstraint::Using(idents) => {

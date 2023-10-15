@@ -66,8 +66,16 @@ impl SimplifyExpressions {
         let schema = if !plan.inputs().is_empty() {
             DFSchemaRef::new(merge_schema(plan.inputs()))
         } else if let LogicalPlan::TableScan(scan) = plan {
-            // When predicates are pushed into a table scan, there needs to be
-            // a schema to resolve the fields against.
+            // When predicates are pushed into a table scan, there is no input
+            // schema to resolve predicates against, so it must be handled specially
+            //
+            // Note that this is not `plan.schema()` which is the *output*
+            // schema, and reflects any pushed down projection. The output schema
+            // will not contain columns that *only* appear in pushed down predicates
+            // (and no where else) in the plan.
+            //
+            // Thus, use the full schema of the inner provider without any
+            // projection applied for simplification
             Arc::new(DFSchema::try_from_qualified_schema(
                 &scan.table_name,
                 &scan.source.schema(),

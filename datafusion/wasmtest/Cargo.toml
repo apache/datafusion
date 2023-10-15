@@ -38,7 +38,7 @@ crate-type = ["cdylib", "rlib",]
 # code size when deploying.
 console_error_panic_hook = { version = "0.1.1", optional = true }
 
-datafusion-common = { path = "../common", version = "31.0.0", default-features = false }
+datafusion-common = { path = "../common", version = "32.0.0", default-features = false }
 datafusion-expr = { path = "../expr" }
 datafusion-optimizer = { path = "../optimizer" }
 datafusion-physical-expr = { path = "../physical-expr" }
