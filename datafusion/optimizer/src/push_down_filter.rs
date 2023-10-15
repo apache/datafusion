@@ -19,7 +19,7 @@ use crate::utils::{conjunction, split_conjunction};
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_common::{
-    internal_err, plan_err_raw, Column, DFSchema, DataFusionError, Result,
+    internal_err, plan_datafusion_err, Column, DFSchema, DataFusionError, Result,
 };
 use datafusion_expr::expr::Alias;
 use datafusion_expr::{
@@ -610,8 +610,9 @@ impl OptimizerRule for PushDownFilter {
                     )
                     .map(|e| (*e).clone())
                     .collect::<Vec<_>>();
-                let new_predicate = conjunction(new_predicates)
-                    .ok_or_else(|| plan_err_raw!("at least one expression exists"))?;
+                let new_predicate = conjunction(new_predicates).ok_or_else(|| {
+                    plan_datafusion_err!("at least one expression exists")
+                })?;
                 let new_filter = LogicalPlan::Filter(Filter::try_new(
                     new_predicate,
                     child_filter.input.clone(),

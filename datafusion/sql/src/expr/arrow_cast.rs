@@ -21,7 +21,9 @@
 use std::{fmt::Display, iter::Peekable, str::Chars, sync::Arc};
 
 use arrow_schema::{DataType, Field, IntervalUnit, TimeUnit};
-use datafusion_common::{plan_err_raw, DFSchema, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    plan_datafusion_err, DFSchema, DataFusionError, Result, ScalarValue,
+};
 
 use datafusion_common::plan_err;
 use datafusion_expr::{Expr, ExprSchemable};
@@ -98,7 +100,7 @@ pub fn parse_data_type(val: &str) -> Result<DataType> {
 }
 
 fn make_error(val: &str, msg: &str) -> DataFusionError {
-    plan_err_raw!("Unsupported type '{val}'. Must be a supported arrow type name such as 'Int32' or 'Timestamp(Nanosecond, None)'. Error {msg}" )
+    plan_datafusion_err!("Unsupported type '{val}'. Must be a supported arrow type name such as 'Int32' or 'Timestamp(Nanosecond, None)'. Error {msg}" )
 }
 
 fn make_error_expected(val: &str, expected: &Token, actual: &Token) -> DataFusionError {

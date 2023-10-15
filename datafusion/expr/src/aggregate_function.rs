@@ -20,7 +20,7 @@
 use crate::utils;
 use crate::{type_coercion::aggregates::*, Signature, TypeSignature, Volatility};
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::{plan_err, plan_err_raw, DataFusionError, Result};
+use datafusion_common::{plan_datafusion_err, plan_err, DataFusionError, Result};
 use std::sync::Arc;
 use std::{fmt, str::FromStr};
 use strum_macros::EnumIter;
@@ -232,7 +232,7 @@ impl AggregateFunction {
             // original errors are all related to wrong function signature
             // aggregate them for better error message
             .map_err(|_| {
-                plan_err_raw!(
+                plan_datafusion_err!(
                     "{}",
                     utils::generate_signature_error_msg(
                         &format!("{self}"),

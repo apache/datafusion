@@ -29,7 +29,7 @@ use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
-use datafusion_common::{plan_err, plan_err_raw, DataFusionError, Result};
+use datafusion_common::{plan_datafusion_err, plan_err, DataFusionError, Result};
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::{
@@ -127,7 +127,7 @@ pub(crate) fn pushdown_sorts(
     let plan = &requirements.plan;
     let parent_required = requirements.required_ordering.as_deref();
     const ERR_MSG: &str = "Expects parent requirement to contain something";
-    let err = || plan_err_raw!("{}", ERR_MSG);
+    let err = || plan_datafusion_err!("{}", ERR_MSG);
     if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
         let mut new_plan = plan.clone();
         if !ordering_satisfy_requirement(
@@ -199,7 +199,7 @@ fn pushdown_requirement_to_children(
     parent_required: Option<&[PhysicalSortRequirement]>,
 ) -> Result<Option<Vec<Option<Vec<PhysicalSortRequirement>>>>> {
     const ERR_MSG: &str = "Expects parent requirement to contain something";
-    let err = || plan_err_raw!("{}", ERR_MSG);
+    let err = || plan_datafusion_err!("{}", ERR_MSG);
     let maintains_input_order = plan.maintains_input_order();
     if is_window(plan) {
         let required_input_ordering = plan.required_input_ordering();

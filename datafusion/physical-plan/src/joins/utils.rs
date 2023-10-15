@@ -41,8 +41,8 @@ use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
-    exec_err, plan_err, plan_err_raw, DataFusionError, JoinType, Result, ScalarValue,
-    SharedResult,
+    exec_err, plan_datafusion_err, plan_err, DataFusionError, JoinType, Result,
+    ScalarValue, SharedResult,
 };
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{
@@ -1342,7 +1342,7 @@ pub fn prepare_sorted_exprs(
     right_sort_exprs: &[PhysicalSortExpr],
 ) -> Result<(SortedFilterExpr, SortedFilterExpr, ExprIntervalGraph)> {
     // Build the filter order for the left side
-    let err = || plan_err_raw!("Filter does not include the child order");
+    let err = || plan_datafusion_err!("Filter does not include the child order");
 
     let left_temp_sorted_filter_expr = build_filter_input_order(
         JoinSide::Left,

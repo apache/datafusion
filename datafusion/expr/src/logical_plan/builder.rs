@@ -49,7 +49,7 @@ use datafusion_common::{
     FileType, FunctionalDependencies, OwnedTableReference, Result, ScalarValue,
     TableReference, ToDFSchema,
 };
-use datafusion_common::{plan_err, plan_err_raw};
+use datafusion_common::{plan_datafusion_err, plan_err};
 use std::any::Any;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -1026,7 +1026,7 @@ impl LogicalPlanBuilder {
                         self.plan.schema().clone(),
                         right.schema().clone(),
                     )?.ok_or_else(||
-                        plan_err_raw!(
+                        plan_datafusion_err!(
                             "can't create join plan, join key should belong to one input, error key: ({normalized_left_key},{normalized_right_key})"
                         ))
             })
@@ -1206,7 +1206,7 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
         let data_type =
             comparison_coercion(left_field.data_type(), right_field.data_type())
                 .ok_or_else(|| {
-                    plan_err_raw!(
+                    plan_datafusion_err!(
                 "UNION Column {} (type: {}) is not compatible with column {} (type: {})",
                 right_field.name(),
                 right_field.data_type(),

@@ -25,7 +25,9 @@ use crate::{
     Volatility,
 };
 use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
-use datafusion_common::{internal_err, plan_err, plan_err_raw, DataFusionError, Result};
+use datafusion_common::{
+    internal_err, plan_datafusion_err, plan_err, DataFusionError, Result,
+};
 use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
@@ -501,7 +503,7 @@ impl BuiltinScalarFunction {
 
         // verify that this is a valid set of data types for this function
         data_types(input_expr_types, &self.signature()).map_err(|_| {
-            plan_err_raw!(
+            plan_datafusion_err!(
                 "{}",
                 utils::generate_signature_error_msg(
                     &format!("{self}"),

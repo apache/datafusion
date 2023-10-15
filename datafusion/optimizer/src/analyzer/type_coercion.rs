@@ -24,7 +24,7 @@ use arrow::datatypes::{DataType, IntervalUnit};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{RewriteRecursion, TreeNodeRewriter};
 use datafusion_common::{
-    exec_err, internal_err, plan_err, plan_err_raw, DFSchema, DFSchemaRef,
+    exec_err, internal_err, plan_datafusion_err, plan_err, DFSchema, DFSchemaRef,
     DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::expr::{
@@ -162,7 +162,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 let new_plan = analyze_internal(&self.schema, &subquery.subquery)?;
                 let expr_type = expr.get_type(&self.schema)?;
                 let subquery_type = new_plan.schema().field(0).data_type();
-                let common_type = comparison_coercion(&expr_type, subquery_type).ok_or(plan_err_raw!(
+                let common_type = comparison_coercion(&expr_type, subquery_type).ok_or(plan_datafusion_err!(
                         "expr type {expr_type:?} can't cast to {subquery_type:?} in InSubquery"
                     ),
                 )?;
@@ -217,7 +217,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     } else {
                         "LIKE"
                     };
-                    plan_err_raw!(
+                    plan_datafusion_err!(
                         "There isn't a common type to coerce {left_type} and {right_type} in {op_name} expression"
                     )
                 })?;
@@ -708,7 +708,7 @@ fn coerce_case_expression(case: Case, schema: &DFSchemaRef) -> Result<Case> {
             let coerced_type =
                 get_coerce_type_for_case_expression(&when_types, Some(case_type));
             coerced_type.ok_or_else(|| {
-                plan_err_raw!(
+                plan_datafusion_err!(
                     "Failed to coerce case ({case_type:?}) and when ({when_types:?}) \
                      to common types in CASE WHEN expression"
                 )
@@ -718,7 +718,7 @@ fn coerce_case_expression(case: Case, schema: &DFSchemaRef) -> Result<Case> {
     let then_else_coerce_type =
         get_coerce_type_for_case_expression(&then_types, else_type.as_ref()).ok_or_else(
             || {
-                plan_err_raw!(
+                plan_datafusion_err!(
                     "Failed to coerce then ({then_types:?}) and else ({else_type:?}) \
                      to common types in CASE WHEN expression"
                 )
