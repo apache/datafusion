@@ -766,11 +766,7 @@ impl DisplayAs for SortExec {
                 let expr = PhysicalSortExpr::format_list(&self.expr);
                 match self.fetch {
                     Some(fetch) => {
-                        write!(
-                            f,
-                            // TODO should this say topk?
-                            "SortExec: TopK(fetch={fetch}), expr=[{expr}]",
-                        )
+                        write!(f, "SortExec: TopK(fetch={fetch}), expr=[{expr}]",)
                     }
                     None => write!(f, "SortExec: expr=[{expr}]"),
                 }
