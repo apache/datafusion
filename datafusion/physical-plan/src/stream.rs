@@ -46,7 +46,7 @@ use super::{ExecutionPlan, RecordBatchStream, SendableRecordBatchStream};
 ///
 /// 2. Propagates panics, whereas the `tokio` version doesn't propagate panics to the receiver.
 ///
-/// 3. Automatically cancels any outstanding tasks when the receiver stream is dropped. 
+/// 3. Automatically cancels any outstanding tasks when the receiver stream is dropped.
 ///
 /// [`ReceiverStream` from tokio-stream]: https://docs.rs/tokio-stream/latest/tokio_stream/wrappers/struct.ReceiverStream.html
 
