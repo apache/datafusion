@@ -478,8 +478,8 @@ macro_rules! with_dollar_sign {
 ///     plan_err!("Error {val}")
 ///     plan_err!("Error {val:?}")
 ///
-/// [`NAME_ERR`] -  macro name for wrapping Err(DataFusionError::*)
-/// [`NAME_DF_ERR`] -  macro name for wrapping DataFusionError::*. Needed to keep backtrace opportunity
+/// `NAME_ERR` -  macro name for wrapping Err(DataFusionError::*)
+/// `NAME_DF_ERR` -  macro name for wrapping DataFusionError::*. Needed to keep backtrace opportunity
 /// in construction where DataFusionError::* used directly, like `map_err`, `ok_or_else`, etc
 macro_rules! make_error {
     ($NAME_ERR:ident, $NAME_DF_ERR: ident, $ERR:ident) => {
