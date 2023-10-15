@@ -189,7 +189,7 @@ impl PhysicalExpr for GetIndexedFieldExpr {
                 (DataType::Map(_, _), ScalarValue::Utf8(Some(k))) => {
                     let map_array = as_map_array(array.as_ref())?;
                     let key_scalar = Scalar::new(StringArray::from(vec![k.clone()]));
-                    let keys = arrow_ord::cmp::eq(&key_scalar, map_array.keys())?;
+                    let keys = arrow::compute::kernels::cmp::eq(&key_scalar, map_array.keys())?;
                     let entries = arrow::compute::filter(map_array.entries(), &keys)?;
                     let entries_struct_array = as_struct_array(entries.as_ref())?;
                     Ok(ColumnarValue::Array(entries_struct_array.column(1).clone()))

@@ -1243,7 +1243,6 @@ dependencies = [
  "arrow",
  "arrow-array",
  "arrow-buffer",
- "arrow-ord",
  "arrow-schema",
  "base64",
  "blake2",

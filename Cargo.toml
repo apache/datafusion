@@ -53,7 +53,6 @@ arrow-array = { version = "47.0.0", default-features = false, features = ["chron
 arrow-buffer = { version = "47.0.0", default-features = false }
 arrow-flight = { version = "47.0.0", features = ["flight-sql-experimental"] }
 arrow-schema = { version = "47.0.0", default-features = false }
-arrow-ord = { version = "47.0.0", default-features = false }
 parquet = { version = "47.0.0", features = ["arrow", "async", "object_store"] }
 sqlparser = { version = "0.38.0", features = ["visitor"] }
 chrono = { version = "0.4.31", default-features = false }

@@ -44,7 +44,6 @@ ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] 
 arrow = { workspace = true }
 arrow-array = { workspace = true }
 arrow-buffer = { workspace = true }
-arrow-ord = { workspace = true }
 arrow-schema = { workspace = true }
 base64 = { version = "0.21", optional = true }
 blake2 = { version = "^0.10.2", optional = true }
