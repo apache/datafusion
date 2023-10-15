@@ -38,7 +38,18 @@ use tokio::task::JoinSet;
 use super::metrics::BaselineMetrics;
 use super::{ExecutionPlan, RecordBatchStream, SendableRecordBatchStream};
 
-/// Creates a stream from a collection of producing tasks, routing panics to the stream
+/// Creates a stream from a collection of producing tasks, routing panics to the stream.
+///
+/// Note that this is similar to  [`ReceiverStream` from tokio-stream], with the differences being:
+///
+/// 1. Methods to bound and "detach"  tasks (`spawn()` and `spawn_blocking()`).
+///
+/// 2. Propagates panics, whereas the `tokio` version doesn't propagate panics to the receiver.
+///
+/// 3. Automatically cancels any outstanding tasks when the receiver stream is dropped. 
+///
+/// [`ReceiverStream` from tokio-stream]: https://docs.rs/tokio-stream/latest/tokio_stream/wrappers/struct.ReceiverStream.html
+
 pub(crate) struct ReceiverStreamBuilder<O> {
     tx: Sender<Result<O>>,
     rx: Receiver<Result<O>>,
