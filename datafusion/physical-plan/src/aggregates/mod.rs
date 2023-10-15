@@ -140,6 +140,7 @@ pub enum GroupByOrderMode {
 /// into multiple groups, using null expressions to align each group.
 /// For example, with a group by clause `GROUP BY GROUPING SET ((a,b),(a),(b))` the planner should
 /// create a `PhysicalGroupBy` like
+/// ```text
 /// PhysicalGroupBy {
 ///     expr: [(col(a), a), (col(b), b)],
 ///     null_expr: [(NULL, a), (NULL, b)],
@@ -149,6 +150,7 @@ pub enum GroupByOrderMode {
 ///         [true, false]   // (b) <=> (NULL, b)
 ///     ]
 /// }
+/// ```
 #[derive(Clone, Debug, Default)]
 pub struct PhysicalGroupBy {
     /// Distinct (Physical Expr, Alias) in the grouping set
