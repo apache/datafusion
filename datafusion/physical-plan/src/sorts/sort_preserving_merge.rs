@@ -118,8 +118,11 @@ impl DisplayAs for SortPreservingMergeExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                let expr: Vec<String> = self.expr.iter().map(|e| e.to_string()).collect();
-                write!(f, "SortPreservingMergeExec: [{}]", expr.join(","))?;
+                write!(
+                    f,
+                    "SortPreservingMergeExec: [{}]",
+                    PhysicalSortExpr::format_list(&self.expr)
+                )?;
                 if let Some(fetch) = self.fetch {
                     write!(f, ", fetch={fetch}")?;
                 };

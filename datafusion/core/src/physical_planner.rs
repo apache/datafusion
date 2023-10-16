@@ -751,7 +751,6 @@ impl DefaultPhysicalPlanner {
                         Arc::new(BoundedWindowAggExec::try_new(
                             window_expr,
                             input_exec,
-                            physical_input_schema,
                             physical_partition_keys,
                             PartitionSearchMode::Sorted,
                         )?)
@@ -759,7 +758,6 @@ impl DefaultPhysicalPlanner {
                         Arc::new(WindowAggExec::try_new(
                             window_expr,
                             input_exec,
-                            physical_input_schema,
                             physical_partition_keys,
                         )?)
                     })
@@ -1251,10 +1249,10 @@ impl DefaultPhysicalPlanner {
                         "Unsupported logical plan: Prepare"
                     )
                 }
-                LogicalPlan::Dml(_) => {
+                LogicalPlan::Dml(dml) => {
                     // DataFusion is a read-only query engine, but also a library, so consumers may implement this
                     not_impl_err!(
-                        "Unsupported logical plan: Dml"
+                        "Unsupported logical plan: Dml({0})", dml.op
                     )
                 }
                 LogicalPlan::Statement(statement) => {

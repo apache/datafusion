@@ -17,17 +17,16 @@
 
 //! Utility functions for the interval arithmetic library
 
-use std::sync::Arc;
-
 use super::{Interval, IntervalBound};
 use crate::{
-    expressions::{BinaryExpr, CastExpr, Column, Literal},
+    expressions::{BinaryExpr, CastExpr, Column, Literal, NegativeExpr},
     PhysicalExpr,
 };
-
-use arrow_schema::DataType;
+use arrow_schema::{DataType, SchemaRef};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::Operator;
+
+use std::sync::Arc;
 
 const MDN_DAY_MASK: i128 = 0xFFFF_FFFF_0000_0000_0000_0000;
 const MDN_NS_MASK: i128 = 0xFFFF_FFFF_FFFF_FFFF;
@@ -37,16 +36,32 @@ const DT_MS_MASK: i64 = 0xFFFF_FFFF;
 /// Currently, we do not support all [`PhysicalExpr`]s for interval calculations.
 /// We do not support every type of [`Operator`]s either. Over time, this check
 /// will relax as more types of `PhysicalExpr`s and `Operator`s are supported.
-/// Currently, [`CastExpr`], [`BinaryExpr`], [`Column`] and [`Literal`] are supported.
-pub fn check_support(expr: &Arc<dyn PhysicalExpr>) -> bool {
+/// Currently, [`CastExpr`], [`NegativeExpr`], [`BinaryExpr`], [`Column`] and [`Literal`] are supported.
+pub fn check_support(expr: &Arc<dyn PhysicalExpr>, schema: &SchemaRef) -> bool {
     let expr_any = expr.as_any();
-    let expr_supported = if let Some(binary_expr) = expr_any.downcast_ref::<BinaryExpr>()
-    {
+    if let Some(binary_expr) = expr_any.downcast_ref::<BinaryExpr>() {
         is_operator_supported(binary_expr.op())
+            && check_support(binary_expr.left(), schema)
+            && check_support(binary_expr.right(), schema)
+    } else if let Some(column) = expr_any.downcast_ref::<Column>() {
+        if let Ok(field) = schema.field_with_name(column.name()) {
+            is_datatype_supported(field.data_type())
+        } else {
+            return false;
+        }
+    } else if let Some(literal) = expr_any.downcast_ref::<Literal>() {
+        if let Ok(dt) = literal.data_type(schema) {
+            is_datatype_supported(&dt)
+        } else {
+            return false;
+        }
+    } else if let Some(cast) = expr_any.downcast_ref::<CastExpr>() {
+        check_support(cast.expr(), schema)
+    } else if let Some(negative) = expr_any.downcast_ref::<NegativeExpr>() {
+        check_support(negative.arg(), schema)
     } else {
-        expr_any.is::<Column>() || expr_any.is::<Literal>() || expr_any.is::<CastExpr>()
-    };
-    expr_supported && expr.children().iter().all(check_support)
+        false
+    }
 }
 
 // This function returns the inverse operator of the given operator.

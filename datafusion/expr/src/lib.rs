@@ -74,7 +74,9 @@ pub use logical_plan::*;
 pub use nullif::SUPPORTED_NULLIF_TYPES;
 pub use operator::Operator;
 pub use partition_evaluator::PartitionEvaluator;
-pub use signature::{Signature, TypeSignature, Volatility, TIMEZONE_WILDCARD};
+pub use signature::{
+    FuncMonotonicity, Signature, TypeSignature, Volatility, TIMEZONE_WILDCARD,
+};
 pub use table_source::{TableProviderFilterPushDown, TableSource, TableType};
 pub use udaf::AggregateUDF;
 pub use udf::ScalarUDF;

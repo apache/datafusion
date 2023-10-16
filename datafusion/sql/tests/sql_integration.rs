@@ -2062,24 +2062,6 @@ fn union_all() {
 }
 
 #[test]
-fn union_4_combined_in_one() {
-    let sql = "SELECT order_id from orders
-                    UNION ALL SELECT order_id FROM orders
-                    UNION ALL SELECT order_id FROM orders
-                    UNION ALL SELECT order_id FROM orders";
-    let expected = "Union\
-            \n  Projection: orders.order_id\
-            \n    TableScan: orders\
-            \n  Projection: orders.order_id\
-            \n    TableScan: orders\
-            \n  Projection: orders.order_id\
-            \n    TableScan: orders\
-            \n  Projection: orders.order_id\
-            \n    TableScan: orders";
-    quick_test(sql, expected);
-}
-
-#[test]
 fn union_with_different_column_names() {
     let sql = "SELECT order_id from orders UNION ALL SELECT customer_id FROM orders";
     let expected = "Union\
