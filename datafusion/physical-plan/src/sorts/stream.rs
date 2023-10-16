@@ -48,6 +48,10 @@ pub trait PartitionedStream: std::fmt::Debug + Send {
     ) -> Poll<Option<Self::Output>>;
 }
 
+/// A fallible [`PartitionedStream`] of [`Cursor`](super::cursor::Cursor) and [`RecordBatch`]
+pub(crate) type CursorStream<C> =
+    Box<dyn PartitionedStream<Output = Result<(C, RecordBatch)>>>;
+
 /// A newtype wrapper around a set of fused [`SendableRecordBatchStream`]
 /// that implements debug, and skips over empty [`RecordBatch`]
 struct FusedStreams(Vec<Fuse<SendableRecordBatchStream>>);

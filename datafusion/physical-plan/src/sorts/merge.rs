@@ -21,7 +21,6 @@
 use crate::metrics::BaselineMetrics;
 use crate::sorts::builder::SortOrderBuilder;
 use crate::sorts::cursor::Cursor;
-use crate::sorts::stream::PartitionedStream;
 use crate::RecordBatchStream;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -31,8 +30,7 @@ use futures::Stream;
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 
-/// A fallible [`PartitionedStream`] of [`Cursor`] and [`RecordBatch`]
-type CursorStream<C> = Box<dyn PartitionedStream<Output = Result<(C, RecordBatch)>>>;
+use super::stream::CursorStream;
 
 #[derive(Debug)]
 pub(crate) struct SortPreservingMergeStream<C> {
@@ -110,7 +108,12 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
         let stream_count = streams.partitions();
 
         Self {
-            in_progress: SortOrderBuilder::new(schema, stream_count, batch_size, reservation),
+            in_progress: SortOrderBuilder::new(
+                schema,
+                stream_count,
+                batch_size,
+                reservation,
+            ),
             streams,
             metrics,
             aborted: false,

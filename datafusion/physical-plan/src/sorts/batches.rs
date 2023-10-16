@@ -15,18 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Sort functionalities
-
-mod batches;
-mod builder;
-mod cascade;
-mod cursor;
-mod index;
-mod merge;
-pub mod sort;
-pub mod sort_preserving_merge;
-mod stream;
-pub mod streaming_merge;
-
-pub use index::RowIndex;
-pub(crate) use streaming_merge::streaming_merge;
+#[derive(Debug, Copy, Clone, Default)]
+pub(crate) struct BatchCursor {
+    /// The index into SortOrderBuilder::batches
+    pub batch_idx: usize,
+    /// The row index within the given batch
+    pub row_idx: usize,
+}

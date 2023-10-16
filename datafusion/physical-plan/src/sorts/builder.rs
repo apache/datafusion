@@ -21,13 +21,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::MemoryReservation;
 
-#[derive(Debug, Copy, Clone, Default)]
-struct BatchCursor {
-    /// The index into SortOrderBuilder::batches
-    batch_idx: usize,
-    /// The row index within the given batch
-    row_idx: usize,
-}
+use super::batches::BatchCursor;
 
 /// Provides an API to incrementally build a [`RecordBatch`] from partitioned [`RecordBatch`]
 #[derive(Debug)]
