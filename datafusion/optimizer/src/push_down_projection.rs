@@ -428,7 +428,7 @@ pub fn collect_projection_expr(projection: &Projection) -> HashMap<String, Expr>
 
 /// Accumulate the memory size of a data type measured in bits.
 ///
-/// Nested types are traversed and increment [nesting] on every level.
+/// Nested types are traversed and increment `nesting` on every level.
 fn nested_size(data_type: &DataType, nesting: &mut usize) -> usize {
     use DataType::*;
     if data_type.is_primitive() {
