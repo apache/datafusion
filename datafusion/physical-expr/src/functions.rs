@@ -349,13 +349,7 @@ where
             .collect::<Vec<ArrayRef>>();
 
         let result = (inner)(&args);
-
-        // maybe back to scalar
-        if len.is_some() {
-            result.map(ColumnarValue::Array)
-        } else {
-            ScalarValue::try_from_array(&result?, 0).map(ColumnarValue::Scalar)
-        }
+        result.map(ColumnarValue::Array)
     })
 }
 
