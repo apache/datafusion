@@ -371,7 +371,7 @@ fn get_finest_requirement(
         if let Some(finest_req) = &mut finest_req {
             if let Some(finer) = schema_properties.get_finer_ordering(finest_req, fn_req)
             {
-                *finest_req = finer.to_vec();
+                *finest_req = finer;
                 continue;
             }
             // If an aggregate function is reversible, analyze whether its reverse
@@ -384,7 +384,7 @@ fn get_finest_requirement(
                     // We need to update `aggr_expr` with its reverse, since only its
                     // reverse requirement is compatible with existing requirements:
                     *aggr_expr = reverse;
-                    *finest_req = finer.to_vec();
+                    *finest_req = finer;
                     *fn_req = fn_req_reverse;
                     continue;
                 }
@@ -2059,6 +2059,16 @@ mod tests {
                 options: options2,
             }]),
         ];
+        let common_requirement = Some(vec![
+            PhysicalSortExpr {
+                expr: col_a.clone(),
+                options: options1,
+            },
+            PhysicalSortExpr {
+                expr: col_c.clone(),
+                options: options1,
+            },
+        ]);
         let aggr_expr = Arc::new(FirstValue::new(
             col_a.clone(),
             "first1",
@@ -2072,7 +2082,7 @@ mod tests {
             &mut order_by_exprs,
             &schema_properties,
         )?;
-        assert_eq!(res, order_by_exprs[2]);
+        assert_eq!(res, common_requirement);
         Ok(())
     }
 }

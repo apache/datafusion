@@ -238,7 +238,6 @@ impl ExecutionPlan for UnionExec {
             let mut meet = Some(elem.clone());
             child_oeqs.iter().for_each(|child_oeq| {
                 if let Some(meet_vec) = &meet {
-                    // let mut meet_found = false;
                     let res = child_oeq
                         .oeq_group()
                         .iter()

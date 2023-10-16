@@ -856,82 +856,81 @@ impl SchemaProperties {
             .all(|(req, given)| given.compatible(&req))
     }
 
-    /// Find the finer requirement among `req1` and `req2`
+    /// Find the finer ordering among `req1` and `req2`
+    /// Finer requirement is the ordering that satisfies both of the orderings in the arguments.
     /// If `None`, this means that `req1` and `req2` are not compatible
     /// e.g there is no requirement that satisfies both
-    pub fn get_finer_ordering<'a>(
+    /// As an example finer ordering of [a ASC] and [a ASC, b ASC] is [a ASC, b ASC]
+    pub fn get_finer_ordering(
         &self,
-        req1: &'a [PhysicalSortExpr],
-        req2: &'a [PhysicalSortExpr],
-    ) -> Option<&'a [PhysicalSortExpr]> {
-        let lhs = self.normalize_sort_exprs(req1);
-        let rhs = self.normalize_sort_exprs(req2);
-        if izip!(lhs.iter(), rhs.iter()).all(|(lhs, rhs)| lhs.eq(rhs)) {
-            if lhs.len() > rhs.len() {
-                return Some(req1);
-            } else {
-                return Some(req2);
-            }
-        }
-        // Neither `provided` nor `req` satisfies one another, they are incompatible.
-        None
-    }
-
-    /// Find the coarser requirement among `req1` and `req2`
-    /// If `None`, this means that `req1` and `req2` are not compatible
-    pub fn get_meet_ordering<'a>(
-        &self,
-        req1: &'a [PhysicalSortExpr],
-        req2: &'a [PhysicalSortExpr],
-    ) -> Option<&'a [PhysicalSortExpr]> {
-        let lhs = self.normalize_sort_exprs(req1);
-        let rhs = self.normalize_sort_exprs(req2);
-        if izip!(lhs.iter(), rhs.iter()).all(|(lhs, rhs)| lhs.eq(rhs)) {
-            if lhs.len() < rhs.len() {
-                return Some(req1);
-            } else {
-                return Some(req2);
-            }
-        }
-        // Neither `provided` nor `req` satisfies one another, they are incompatible.
-        None
+        req1: &[PhysicalSortExpr],
+        req2: &[PhysicalSortExpr],
+    ) -> Option<Vec<PhysicalSortExpr>> {
+        // Convert `PhysicalSortExpr` s to `PhysicalSortRequirement`s.
+        let req1 = PhysicalSortRequirement::from_sort_exprs(req1);
+        let req2 = PhysicalSortRequirement::from_sort_exprs(req2);
+        let finer = self.get_finer_requirement(&req1, &req2);
+        // Convert back `PhysicalSortRequirement`s to `PhysicalSortExpr`s.
+        finer.map(PhysicalSortRequirement::to_sort_exprs)
     }
 
     /// Find the finer requirement among `req1` and `req2`
     /// If `None`, this means that `req1` and `req2` are not compatible
     /// e.g there is no requirement that satisfies both
-    pub fn get_finer_requirement<'a>(
+    pub fn get_finer_requirement(
         &self,
-        req1: &'a [PhysicalSortRequirement],
-        req2: &'a [PhysicalSortRequirement],
-    ) -> Option<&'a [PhysicalSortRequirement]> {
-        let lhs = self.normalize_sort_requirements(req1);
-        let rhs = self.normalize_sort_requirements(req2);
-        let mut left_finer = false;
-        let mut right_finer = false;
-        if izip!(lhs.iter(), rhs.iter()).all(|(lhs, rhs)| {
+        req1: &[PhysicalSortRequirement],
+        req2: &[PhysicalSortRequirement],
+    ) -> Option<Vec<PhysicalSortRequirement>> {
+        let mut lhs = self.normalize_sort_requirements(req1);
+        let mut rhs = self.normalize_sort_requirements(req2);
+        if izip!(lhs.iter_mut(), rhs.iter_mut()).all(|(lhs, rhs)| {
             match (lhs.options, rhs.options) {
                 (Some(lhs_opt), Some(rhs_opt)) => {
                     lhs.expr.eq(&rhs.expr) && lhs_opt == rhs_opt
                 }
-                (Some(_), None) => {
-                    left_finer = true;
+                (Some(options), None) => {
+                    rhs.options = Some(options);
                     lhs.expr.eq(&rhs.expr)
                 }
-                (None, Some(_)) => {
-                    right_finer = true;
+                (None, Some(options)) => {
+                    lhs.options = Some(options);
                     lhs.expr.eq(&rhs.expr)
                 }
                 (None, None) => lhs.expr.eq(&rhs.expr),
             }
         }) {
-            if lhs.len() >= rhs.len() && !right_finer {
-                return Some(req1);
-            } else if rhs.len() >= lhs.len() && !left_finer {
-                return Some(req2);
+            if lhs.len() >= rhs.len() {
+                return Some(lhs);
+            } else if rhs.len() >= lhs.len() {
+                return Some(rhs);
             }
         }
-        // Neither `provided` nor `req` satisfies one another, they are incompatible.
+        // Neither `req1` nor `req2` satisfies one another, they are incompatible.
+        None
+    }
+
+    /// Calculates the "meet" of given orderings.
+    /// The meet is the finest ordering that satisfied by all the given
+    /// orderings, see <https://en.wikipedia.org/wiki/Join_and_meet>.
+    /// If `None`, this means that `req1` and `req2` are not compatible
+    /// e.g there is no ordering that is satisfied by both
+    /// As an example meet ordering of [a ASC] and [a ASC, b ASC] is [a ASC]
+    pub fn get_meet_ordering(
+        &self,
+        req1: &[PhysicalSortExpr],
+        req2: &[PhysicalSortExpr],
+    ) -> Option<Vec<PhysicalSortExpr>> {
+        let lhs = self.normalize_sort_exprs(req1);
+        let rhs = self.normalize_sort_exprs(req2);
+        if izip!(lhs.iter(), rhs.iter()).all(|(lhs, rhs)| lhs.eq(rhs)) {
+            if lhs.len() < rhs.len() {
+                return Some(lhs);
+            } else {
+                return Some(rhs);
+            }
+        }
+        // There is no meet
         None
     }
 
@@ -1517,13 +1516,26 @@ mod tests {
     }
 
     // Convert each tuple to PhysicalSortRequirement
-    fn convert_to_requirement(
+    fn convert_to_sort_reqs(
         in_data: &[(&Arc<dyn PhysicalExpr>, Option<SortOptions>)],
     ) -> Vec<PhysicalSortRequirement> {
         in_data
             .iter()
             .map(|(expr, options)| {
                 PhysicalSortRequirement::new((*expr).clone(), *options)
+            })
+            .collect::<Vec<_>>()
+    }
+
+    // Convert each tuple to PhysicalSortExpr
+    fn convert_to_sort_exprs(
+        in_data: &[(&Arc<dyn PhysicalExpr>, SortOptions)],
+    ) -> Vec<PhysicalSortExpr> {
+        in_data
+            .iter()
+            .map(|(expr, options)| PhysicalSortExpr {
+                expr: (*expr).clone(),
+                options: *options,
             })
             .collect::<Vec<_>>()
     }
@@ -2426,14 +2438,108 @@ mod tests {
         ];
 
         for (reqs, expected_normalized) in requirements.into_iter() {
-            let req = convert_to_requirement(&reqs);
-            let expected_normalized = convert_to_requirement(&expected_normalized);
+            let req = convert_to_sort_reqs(&reqs);
+            let expected_normalized = convert_to_sort_reqs(&expected_normalized);
 
             assert_eq!(
                 schema_properties.normalize_sort_requirements(&req),
                 expected_normalized
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_finer() -> Result<()> {
+        let schema = create_test_schema()?;
+        let col_a = &col("a", &schema)?;
+        let col_b = &col("b", &schema)?;
+        let col_c = &col("c", &schema)?;
+        let schema_properties = SchemaProperties::new(schema);
+        let option_asc = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        let option_desc = SortOptions {
+            descending: true,
+            nulls_first: true,
+        };
+        let tests_cases = vec![
+            // Get finer requirement between [a Some(ASC)] and [a None, b Some(ASC)]
+            // result should be [a Some(ASC), b Some(ASC)]
+            (
+                vec![(col_a, Some(option_asc))],
+                vec![(col_a, None), (col_b, Some(option_asc))],
+                Some(vec![(col_a, Some(option_asc)), (col_b, Some(option_asc))]),
+            ),
+            // Get finer requirement between [a Some(ASC), b Some(ASC), c Some(ASC)] and [a Some(ASC), b Some(ASC)]
+            // result should be [a Some(ASC), b Some(ASC), c Some(ASC)]
+            (
+                vec![
+                    (col_a, Some(option_asc)),
+                    (col_b, Some(option_asc)),
+                    (col_c, Some(option_asc)),
+                ],
+                vec![(col_a, Some(option_asc)), (col_b, Some(option_asc))],
+                Some(vec![
+                    (col_a, Some(option_asc)),
+                    (col_b, Some(option_asc)),
+                    (col_c, Some(option_asc)),
+                ]),
+            ),
+            // Get finer requirement between [a Some(ASC), b Some(ASC)] and [a Some(ASC), b Some(DESC)]
+            // result should be None
+            (
+                vec![(col_a, Some(option_asc)), (col_b, Some(option_asc))],
+                vec![(col_a, Some(option_asc)), (col_b, Some(option_desc))],
+                None,
+            ),
+        ];
+        for (lhs, rhs, expected) in tests_cases {
+            let lhs = convert_to_sort_reqs(&lhs);
+            let rhs = convert_to_sort_reqs(&rhs);
+            let expected = expected.map(|expected| convert_to_sort_reqs(&expected));
+            let finer = schema_properties.get_finer_requirement(&lhs, &rhs);
+            assert_eq!(finer, expected)
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_meet_ordering() -> Result<()> {
+        let schema = create_test_schema()?;
+        let col_a = &col("a", &schema)?;
+        let col_b = &col("b", &schema)?;
+        let schema_properties = SchemaProperties::new(schema);
+        let option_asc = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        let option_desc = SortOptions {
+            descending: true,
+            nulls_first: true,
+        };
+        let tests_cases = vec![
+            // Get meet ordering between [a ASC] and [a ASC, b ASC]
+            // result should be [a ASC]
+            (
+                vec![(col_a, option_asc)],
+                vec![(col_a, option_asc), (col_b, option_asc)],
+                Some(vec![(col_a, option_asc)]),
+            ),
+            // Get meet ordering between [a ASC] and [a DESC]
+            // result should be None.
+            (vec![(col_a, option_asc)], vec![(col_a, option_desc)], None),
+        ];
+        for (lhs, rhs, expected) in tests_cases {
+            let lhs = convert_to_sort_exprs(&lhs);
+            let rhs = convert_to_sort_exprs(&rhs);
+            let expected = expected.map(|expected| convert_to_sort_exprs(&expected));
+            let finer = schema_properties.get_meet_ordering(&lhs, &rhs);
+            assert_eq!(finer, expected)
+        }
+
         Ok(())
     }
 }
