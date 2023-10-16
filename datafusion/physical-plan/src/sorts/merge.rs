@@ -320,8 +320,7 @@ impl<C: Cursor + Unpin> Stream for SortPreservingMergeStream<C> {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        let poll = self.poll_next_inner(cx);
-        self.metrics.record_poll(poll)
+        self.poll_next_inner(cx)
     }
 }
 

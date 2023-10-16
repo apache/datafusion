@@ -34,6 +34,9 @@ pub(crate) struct SortPreservingCascadeStream {
     /// If the stream has encountered an error, or fetch is reached
     aborted: bool,
 
+    /// used to record execution metrics
+    metrics: BaselineMetrics,
+
     /// The sorted input streams to merge together
     streams: SendableRecordBatchStream,
 
@@ -52,6 +55,7 @@ impl SortPreservingCascadeStream {
     ) -> Self {
         Self {
             aborted: false,
+            metrics: metrics.clone(),
             schema: schema.clone(),
             streams: Box::pin(SortPreservingMergeStream::new(
                 streams,
@@ -90,7 +94,8 @@ impl Stream for SortPreservingCascadeStream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        self.poll_next_inner(cx)
+        let poll = self.poll_next_inner(cx);
+        self.metrics.record_poll(poll)
     }
 }
 
