@@ -3672,6 +3672,19 @@ fn test_prepare_statement_should_infer_types() {
 }
 
 #[test]
+fn test_non_prepare_statement_should_infer_types() {
+    // Non prepared statements (like SELECT) should also have their parameter types inferred
+    let sql = "SELECT 1 + $1";
+    let plan = logical_plan(sql).unwrap();
+    let actual_types = plan.get_parameter_types().unwrap();
+    let expected_types = HashMap::from([
+        // constant 1 is inferred to be int64
+        ("$1".to_string(), Some(DataType::Int64)),
+    ]);
+    assert_eq!(actual_types, expected_types);
+}
+
+#[test]
 #[should_panic(
     expected = "value: SQL(ParserError(\"Expected [NOT] NULL or TRUE|FALSE or [NOT] DISTINCT FROM after IS, found: $1\""
 )]
