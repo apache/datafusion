@@ -489,13 +489,13 @@ fn nested_size(data_type: &DataType, nesting: &mut usize) -> usize {
 
 /// Find a field with a presumable small memory footprint based on its data type's memory size
 /// and the level of nesting.
-fn find_small_field(fields: &Vec<DFField>) -> DFField {
+fn find_small_field(fields: &[DFField]) -> DFField {
     let mut indexed_fields = fields
         .iter()
         .map(|f| {
             let nesting = &mut 0;
             let size = nested_size(f.field().data_type(), nesting);
-            (nesting.clone(), size)
+            (*nesting, size)
         })
         .enumerate()
         .collect_vec();
@@ -1289,7 +1289,7 @@ mod tests {
         let time_s = DFField::from(Field::new("d", Time32(TimeUnit::Second), false));
 
         assert_eq!(
-            find_small_field(&vec![
+            find_small_field(&[
                 int32.clone(),
                 bin.clone(),
                 list_i64.clone(),
@@ -1298,15 +1298,15 @@ mod tests {
             int32.clone()
         );
         assert_eq!(
-            find_small_field(&vec![bin.clone(), list_i64.clone(), time_s.clone()]),
+            find_small_field(&[bin.clone(), list_i64.clone(), time_s.clone()]),
             time_s.clone()
         );
         assert_eq!(
-            find_small_field(&vec![time_s.clone(), int32.clone()]),
+            find_small_field(&[time_s.clone(), int32.clone()]),
             time_s.clone()
         );
         assert_eq!(
-            find_small_field(&vec![bin.clone(), list_i64.clone()]),
+            find_small_field(&[bin.clone(), list_i64.clone()]),
             bin.clone()
         );
     }
