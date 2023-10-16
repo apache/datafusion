@@ -1023,7 +1023,7 @@ impl ExecutionPlan for AggregateExec {
             }
             _ => {
                 let input_stats = self.input.statistics();
-                // Input stat is exact and number of rows is less than 1.
+                // Input statistics is exact and number of rows not greater than 1:
                 let is_exact = input_stats.is_exact
                     && (input_stats
                         .num_rows

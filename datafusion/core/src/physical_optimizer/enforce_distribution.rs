@@ -1021,7 +1021,7 @@ fn add_hash_on_top(
     // until Repartition(Hash).
     dist_onward: &mut Option<ExecTree>,
     input_idx: usize,
-    repartition_beneficial_stat: bool,
+    repartition_beneficial_stats: bool,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     if n_target == input.output_partitioning().partition_count() && n_target == 1 {
         // In this case adding a hash repartition is unnecessary as the hash
@@ -1045,12 +1045,13 @@ fn add_hash_on_top(
         // - Usage of order preserving variants is not desirable (per the flag
         //   `config.optimizer.bounded_order_preserving_variants`).
         let should_preserve_ordering = input.output_ordering().is_some();
-        let mut new_plan = input.clone();
-        if repartition_beneficial_stat {
+        let mut new_plan = if repartition_beneficial_stats {
             // Since hashing benefits from partitioning, add a round-robin repartition
             // before it:
-            new_plan = add_roundrobin_on_top(input, n_target, dist_onward, 0)?;
-        }
+            add_roundrobin_on_top(input, n_target, dist_onward, 0)?
+        } else {
+            input
+        };
         new_plan = Arc::new(
             RepartitionExec::try_new(new_plan, Partitioning::Hash(hash_exprs, n_target))?
                 .with_preserve_order(should_preserve_ordering),
@@ -1288,14 +1289,14 @@ fn ensure_distribution(
         )| {
             // Don't need to apply when the returned row count is not greater than 1:
             let stats = child.statistics();
-            let mut repartition_beneficial_stat = true;
-            if stats.is_exact {
-                repartition_beneficial_stat =
-                    stats.num_rows.map(|num_rows| num_rows > 1).unwrap_or(true);
-            }
+            let repartition_beneficial_stats = if stats.is_exact {
+                stats.num_rows.map(|num_rows| num_rows > 1).unwrap_or(true)
+            } else {
+                true
+            };
             if enable_round_robin
                 // Operator benefits from partitioning (e.g. filter):
-                && (would_benefit && repartition_beneficial_stat)
+                && (would_benefit && repartition_beneficial_stats)
                 // Unless partitioning doesn't increase the partition count, it is not beneficial:
                 && child.output_partitioning().partition_count() < target_partitions
             {
@@ -1344,7 +1345,7 @@ fn ensure_distribution(
                         target_partitions,
                         dist_onward,
                         child_idx,
-                        repartition_beneficial_stat,
+                        repartition_beneficial_stats,
                     )?;
                 }
                 Distribution::UnspecifiedDistribution => {}
