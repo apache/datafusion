@@ -29,7 +29,11 @@ use datafusion_common::{plan_err, DataFusionError};
 
 use crate::Operator;
 
-/// The type signature of an instantiation of binary expression
+/// The type signature of an instantiation of binary operator expression such as
+/// `lhs + rhs`
+///
+/// Note this is different than [`crate::signature::Signature`] which
+/// describes the type signature of a function.
 struct Signature {
     /// The type to coerce the left argument to
     lhs: DataType,
@@ -648,8 +652,9 @@ fn string_concat_internal_coercion(
     }
 }
 
-/// Coercion rules for Strings: the type that both lhs and rhs can be
-/// casted to for the purpose of a string computation
+/// Coercion rules for string types (Utf8/LargeUtf8): If at least on argument is
+/// a string type and both arguments can be coerced into a string type, coerce
+/// to string type.
 fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
@@ -665,8 +670,30 @@ fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>
     }
 }
 
-/// Coercion rules for Binaries: the type that both lhs and rhs can be
-/// casted to for the purpose of a computation
+/// Coercion rules for binary (Binary/LargeBinary) to string (Utf8/LargeUtf8):
+/// If one argument is binary and the other is a string then coerce to string
+/// (e.g. for `like`)
+fn binary_to_string_coercion(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+    match (lhs_type, rhs_type) {
+        (Binary, Utf8) => Some(Utf8),
+        (Binary, LargeUtf8) => Some(LargeUtf8),
+        (LargeBinary, Utf8) => Some(LargeUtf8),
+        (LargeBinary, LargeUtf8) => Some(LargeUtf8),
+        (Utf8, Binary) => Some(Utf8),
+        (Utf8, LargeBinary) => Some(LargeUtf8),
+        (LargeUtf8, Binary) => Some(LargeUtf8),
+        (LargeUtf8, LargeBinary) => Some(LargeUtf8),
+        _ => None,
+    }
+}
+
+/// Coercion rules for binary types (Binary/LargeBinary): If at least on argument is
+/// a binary type and both arguments can be coerced into a binary type, coerce
+/// to binary type.
 fn binary_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
@@ -681,6 +708,7 @@ fn binary_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>
 /// This is a union of string coercion rules and dictionary coercion rules
 pub fn like_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     string_coercion(lhs_type, rhs_type)
+        .or_else(|| binary_to_string_coercion(lhs_type, rhs_type))
         .or_else(|| dictionary_coercion(lhs_type, rhs_type, false))
         .or_else(|| null_coercion(lhs_type, rhs_type))
 }
@@ -763,7 +791,7 @@ fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
     }
 }
 
-/// coercion rules from NULL type. Since NULL can be casted to most of types in arrow,
+/// coercion rules from NULL type. Since NULL can be casted to any other type in arrow,
 /// either lhs or rhs is NULL, if NULL can be casted to type of the other side, the coercion is valid.
 fn null_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     match (lhs_type, rhs_type) {
@@ -917,11 +945,33 @@ mod tests {
         );
     }
 
+    /// Test coercion rules for binary operators
+    ///
+    /// Applies coercion rules for `$LHS_TYPE $OP $RHS_TYPE` and asserts that the
+    /// the result type is `$RESULT_TYPE`
     macro_rules! test_coercion_binary_rule {
-        ($A_TYPE:expr, $B_TYPE:expr, $OP:expr, $C_TYPE:expr) => {{
-            let (lhs, rhs) = get_input_types(&$A_TYPE, &$OP, &$B_TYPE)?;
-            assert_eq!(lhs, $C_TYPE);
-            assert_eq!(rhs, $C_TYPE);
+        ($LHS_TYPE:expr, $RHS_TYPE:expr, $OP:expr, $RESULT_TYPE:expr) => {{
+            let (lhs, rhs) = get_input_types(&$LHS_TYPE, &$OP, &$RHS_TYPE)?;
+            assert_eq!(lhs, $RESULT_TYPE);
+            assert_eq!(rhs, $RESULT_TYPE);
+        }};
+    }
+
+    /// Test coercion rules for like
+    ///
+    /// Applies coercion rules for both
+    /// * `$LHS_TYPE LIKE $RHS_TYPE`
+    /// * `$RHS_TYPE LIKE $LHS_TYPE`
+    ///
+    /// And asserts the result type is `$RESULT_TYPE`
+    macro_rules! test_like_rule {
+        ($LHS_TYPE:expr, $RHS_TYPE:expr, $RESULT_TYPE:expr) => {{
+            println!("Coercing {} LIKE {}", $LHS_TYPE, $RHS_TYPE);
+            let result = like_coercion(&$LHS_TYPE, &$RHS_TYPE);
+            assert_eq!(result, $RESULT_TYPE);
+            // reverse the order
+            let result = like_coercion(&$RHS_TYPE, &$LHS_TYPE);
+            assert_eq!(result, $RESULT_TYPE);
         }};
     }
 
@@ -948,11 +998,46 @@ mod tests {
     }
 
     #[test]
-    fn test_type_coercion() -> Result<()> {
-        // test like coercion rule
-        let result = like_coercion(&DataType::Utf8, &DataType::Utf8);
-        assert_eq!(result, Some(DataType::Utf8));
+    fn test_like_coercion() {
+        // string coerce to strings
+        test_like_rule!(DataType::Utf8, DataType::Utf8, Some(DataType::Utf8));
+        test_like_rule!(
+            DataType::LargeUtf8,
+            DataType::Utf8,
+            Some(DataType::LargeUtf8)
+        );
+        test_like_rule!(
+            DataType::Utf8,
+            DataType::LargeUtf8,
+            Some(DataType::LargeUtf8)
+        );
+        test_like_rule!(
+            DataType::LargeUtf8,
+            DataType::LargeUtf8,
+            Some(DataType::LargeUtf8)
+        );
 
+        // Also coerce binary to strings
+        test_like_rule!(DataType::Binary, DataType::Utf8, Some(DataType::Utf8));
+        test_like_rule!(
+            DataType::LargeBinary,
+            DataType::Utf8,
+            Some(DataType::LargeUtf8)
+        );
+        test_like_rule!(
+            DataType::Binary,
+            DataType::LargeUtf8,
+            Some(DataType::LargeUtf8)
+        );
+        test_like_rule!(
+            DataType::LargeBinary,
+            DataType::LargeUtf8,
+            Some(DataType::LargeUtf8)
+        );
+    }
+
+    #[test]
+    fn test_type_coercion() -> Result<()> {
         test_coercion_binary_rule!(
             DataType::Utf8,
             DataType::Date32,

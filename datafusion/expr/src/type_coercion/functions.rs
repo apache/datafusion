@@ -46,6 +46,8 @@ pub fn data_types(
         return Ok(current_types.to_vec());
     }
 
+    // Try and coerce the argument types to match the signature, returning the
+    // coerced types from the first matching signature.
     for valid_types in valid_types {
         if let Some(types) = maybe_data_types(&valid_types, current_types) {
             return Ok(types);
@@ -60,6 +62,7 @@ pub fn data_types(
     )
 }
 
+/// Returns a Vec of all possible valid argument types for the given signature.
 fn get_valid_types(
     signature: &TypeSignature,
     current_types: &[DataType],
@@ -104,7 +107,12 @@ fn get_valid_types(
     Ok(valid_types)
 }
 
-/// Try to coerce current_types into valid_types.
+/// Try to coerce the current argument types to match the given `valid_types`.
+///
+/// For example, if a function `func` accepts arguments of  `(int64, int64)`,
+/// but was called with `(int32, int64)`, this function could match the
+/// valid_types by by coercing the first argument to `int64`, and would return
+/// `Some([int64, int64])`.
 fn maybe_data_types(
     valid_types: &[DataType],
     current_types: &[DataType],
@@ -220,6 +228,7 @@ fn coerced_from<'a>(
             Some(type_into.clone())
         }
         Interval(_) if matches!(type_from, Utf8 | LargeUtf8) => Some(type_into.clone()),
+        // Any type can be coerced into strings
         Utf8 | LargeUtf8 => Some(type_into.clone()),
         Null if can_cast_types(type_from, type_into) => Some(type_into.clone()),
 
