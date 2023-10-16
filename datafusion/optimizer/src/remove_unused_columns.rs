@@ -228,6 +228,9 @@ fn try_optimize_internal(
                 split_join_requirement_indices_to_children(left_len, &indices);
             Some(vec![left_child_indices, right_child_indices])
         },
+        LogicalPlan::Repartition(repartition) => {
+            // repartition 
+        }
         // SubqueryAlias alias can route requirement for its parent to its child
         LogicalPlan::SubqueryAlias(_) => Some(vec![indices]),
         _ => None,
