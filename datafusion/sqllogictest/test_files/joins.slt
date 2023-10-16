@@ -3396,7 +3396,7 @@ SortPreservingMergeExec: [a@0 ASC]
 ----------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 ------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], output_ordering=[a@0 ASC, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true
 ------------------CoalesceBatchesExec: target_batch_size=4096
---------------------SortPreservingRepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2
+--------------------SortPreservingRepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2, sort_exprs=a@0 ASC,b@1 ASC NULLS LAST
 ----------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 ------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC, b@1 ASC NULLS LAST], has_header=true
 
