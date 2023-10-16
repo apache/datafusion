@@ -161,7 +161,7 @@ pub fn adjust_output_array(
 }
 
 /// Downcast a `Box<dyn AggregateExpr>` or `Arc<dyn AggregateExpr>`
-/// and return the inner trait object as [`Any`](std::any::Any) so
+/// and return the inner trait object as [`Any`] so
 /// that it can be downcast to a specific implementation.
 ///
 /// This method is used when implementing the `PartialEq<dyn Any>`

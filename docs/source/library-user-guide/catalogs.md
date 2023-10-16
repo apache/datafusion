@@ -19,7 +19,7 @@
 
 # Catalogs, Schemas, and Tables
 
-This section describes how to create and manage catalogs, schemas, and tables in DataFusion. For those wanting to dive into the code quickly please see the [example](../../../datafusion-examples/examples/catalog.rs).
+This section describes how to create and manage catalogs, schemas, and tables in DataFusion. For those wanting to dive into the code quickly please see the [example](https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/catalog.rs).
 
 ## General Concepts
 

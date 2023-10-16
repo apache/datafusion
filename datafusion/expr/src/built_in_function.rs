@@ -18,10 +18,11 @@
 //! Built-in functions module contains all the built-in functions definitions.
 
 use crate::nullif::SUPPORTED_NULLIF_TYPES;
-use crate::type_coercion::functions::{data_types, TIMEZONE_PLACEHOLDER};
+use crate::signature::TIMEZONE_WILDCARD;
+use crate::type_coercion::functions::data_types;
 use crate::{
-    conditional_expressions, struct_expressions, utils, Signature, TypeSignature,
-    Volatility,
+    conditional_expressions, struct_expressions, utils, FuncMonotonicity, Signature,
+    TypeSignature, Volatility,
 };
 use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
 use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
@@ -1029,22 +1030,22 @@ impl BuiltinScalarFunction {
                     Exact(vec![Utf8, Timestamp(Nanosecond, None)]),
                     Exact(vec![
                         Utf8,
-                        Timestamp(Nanosecond, Some(TIMEZONE_PLACEHOLDER.into())),
+                        Timestamp(Nanosecond, Some(TIMEZONE_WILDCARD.into())),
                     ]),
                     Exact(vec![Utf8, Timestamp(Microsecond, None)]),
                     Exact(vec![
                         Utf8,
-                        Timestamp(Microsecond, Some(TIMEZONE_PLACEHOLDER.into())),
+                        Timestamp(Microsecond, Some(TIMEZONE_WILDCARD.into())),
                     ]),
                     Exact(vec![Utf8, Timestamp(Millisecond, None)]),
                     Exact(vec![
                         Utf8,
-                        Timestamp(Millisecond, Some(TIMEZONE_PLACEHOLDER.into())),
+                        Timestamp(Millisecond, Some(TIMEZONE_WILDCARD.into())),
                     ]),
                     Exact(vec![Utf8, Timestamp(Second, None)]),
                     Exact(vec![
                         Utf8,
-                        Timestamp(Second, Some(TIMEZONE_PLACEHOLDER.into())),
+                        Timestamp(Second, Some(TIMEZONE_WILDCARD.into())),
                     ]),
                 ],
                 self.volatility(),
@@ -1059,11 +1060,8 @@ impl BuiltinScalarFunction {
                         ]),
                         Exact(vec![
                             Interval(MonthDayNano),
-                            Timestamp(
-                                array_type.clone(),
-                                Some(TIMEZONE_PLACEHOLDER.into()),
-                            ),
-                            Timestamp(Nanosecond, Some(TIMEZONE_PLACEHOLDER.into())),
+                            Timestamp(array_type.clone(), Some(TIMEZONE_WILDCARD.into())),
+                            Timestamp(Nanosecond, Some(TIMEZONE_WILDCARD.into())),
                         ]),
                         Exact(vec![
                             Interval(DayTime),
@@ -1072,11 +1070,8 @@ impl BuiltinScalarFunction {
                         ]),
                         Exact(vec![
                             Interval(DayTime),
-                            Timestamp(
-                                array_type.clone(),
-                                Some(TIMEZONE_PLACEHOLDER.into()),
-                            ),
-                            Timestamp(Nanosecond, Some(TIMEZONE_PLACEHOLDER.into())),
+                            Timestamp(array_type.clone(), Some(TIMEZONE_WILDCARD.into())),
+                            Timestamp(Nanosecond, Some(TIMEZONE_WILDCARD.into())),
                         ]),
                         Exact(vec![
                             Interval(MonthDayNano),
@@ -1084,10 +1079,7 @@ impl BuiltinScalarFunction {
                         ]),
                         Exact(vec![
                             Interval(MonthDayNano),
-                            Timestamp(
-                                array_type.clone(),
-                                Some(TIMEZONE_PLACEHOLDER.into()),
-                            ),
+                            Timestamp(array_type.clone(), Some(TIMEZONE_WILDCARD.into())),
                         ]),
                         Exact(vec![
                             Interval(DayTime),
@@ -1095,7 +1087,7 @@ impl BuiltinScalarFunction {
                         ]),
                         Exact(vec![
                             Interval(DayTime),
-                            Timestamp(array_type, Some(TIMEZONE_PLACEHOLDER.into())),
+                            Timestamp(array_type, Some(TIMEZONE_WILDCARD.into())),
                         ]),
                     ]
                 };
@@ -1115,22 +1107,22 @@ impl BuiltinScalarFunction {
                     Exact(vec![Utf8, Timestamp(Second, None)]),
                     Exact(vec![
                         Utf8,
-                        Timestamp(Second, Some(TIMEZONE_PLACEHOLDER.into())),
+                        Timestamp(Second, Some(TIMEZONE_WILDCARD.into())),
                     ]),
                     Exact(vec![Utf8, Timestamp(Microsecond, None)]),
                     Exact(vec![
                         Utf8,
-                        Timestamp(Microsecond, Some(TIMEZONE_PLACEHOLDER.into())),
+                        Timestamp(Microsecond, Some(TIMEZONE_WILDCARD.into())),
                     ]),
                     Exact(vec![Utf8, Timestamp(Millisecond, None)]),
                     Exact(vec![
                         Utf8,
-                        Timestamp(Millisecond, Some(TIMEZONE_PLACEHOLDER.into())),
+                        Timestamp(Millisecond, Some(TIMEZONE_WILDCARD.into())),
                     ]),
                     Exact(vec![Utf8, Timestamp(Nanosecond, None)]),
                     Exact(vec![
                         Utf8,
-                        Timestamp(Nanosecond, Some(TIMEZONE_PLACEHOLDER.into())),
+                        Timestamp(Nanosecond, Some(TIMEZONE_WILDCARD.into())),
                     ]),
                 ],
                 self.volatility(),
@@ -1289,6 +1281,47 @@ impl BuiltinScalarFunction {
                     self.volatility(),
                 )
             }
+        }
+    }
+
+    /// This function specifies monotonicity behaviors for built-in scalar functions.
+    /// The list can be extended, only mathematical and datetime functions are
+    /// considered for the initial implementation of this feature.
+    pub fn monotonicity(&self) -> Option<FuncMonotonicity> {
+        if matches!(
+            &self,
+            BuiltinScalarFunction::Atan
+                | BuiltinScalarFunction::Acosh
+                | BuiltinScalarFunction::Asinh
+                | BuiltinScalarFunction::Atanh
+                | BuiltinScalarFunction::Ceil
+                | BuiltinScalarFunction::Degrees
+                | BuiltinScalarFunction::Exp
+                | BuiltinScalarFunction::Factorial
+                | BuiltinScalarFunction::Floor
+                | BuiltinScalarFunction::Ln
+                | BuiltinScalarFunction::Log10
+                | BuiltinScalarFunction::Log2
+                | BuiltinScalarFunction::Radians
+                | BuiltinScalarFunction::Round
+                | BuiltinScalarFunction::Signum
+                | BuiltinScalarFunction::Sinh
+                | BuiltinScalarFunction::Sqrt
+                | BuiltinScalarFunction::Cbrt
+                | BuiltinScalarFunction::Tanh
+                | BuiltinScalarFunction::Trunc
+                | BuiltinScalarFunction::Pi
+        ) {
+            Some(vec![Some(true)])
+        } else if matches!(
+            &self,
+            BuiltinScalarFunction::DateTrunc | BuiltinScalarFunction::DateBin
+        ) {
+            Some(vec![None, Some(true)])
+        } else if *self == BuiltinScalarFunction::Log {
+            Some(vec![Some(true), Some(false)])
+        } else {
+            None
         }
     }
 }

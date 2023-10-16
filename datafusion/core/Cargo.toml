@@ -60,13 +60,13 @@ bytes = "1.4"
 bzip2 = { version = "0.4.3", optional = true }
 chrono = { workspace = true }
 dashmap = "5.4.0"
-datafusion-common = { path = "../common", version = "31.0.0", features = ["parquet", "object_store"] }
-datafusion-execution = { path = "../execution", version = "31.0.0" }
-datafusion-expr = { path = "../expr", version = "31.0.0" }
-datafusion-optimizer = { path = "../optimizer", version = "31.0.0", default-features = false }
-datafusion-physical-expr = { path = "../physical-expr", version = "31.0.0", default-features = false }
-datafusion-physical-plan = { path = "../physical-plan", version = "31.0.0", default-features = false }
-datafusion-sql = { path = "../sql", version = "31.0.0" }
+datafusion-common = { path = "../common", version = "32.0.0", features = ["parquet", "object_store"] }
+datafusion-execution = { path = "../execution", version = "32.0.0" }
+datafusion-expr = { path = "../expr", version = "32.0.0" }
+datafusion-optimizer = { path = "../optimizer", version = "32.0.0", default-features = false }
+datafusion-physical-expr = { path = "../physical-expr", version = "32.0.0", default-features = false }
+datafusion-physical-plan = { path = "../physical-plan", version = "32.0.0", default-features = false }
+datafusion-sql = { path = "../sql", version = "32.0.0" }
 flate2 = { version = "1.0.24", optional = true }
 futures = "0.3"
 glob = "0.3.0"
@@ -90,7 +90,7 @@ tokio-util = { version = "0.7.4", features = ["io"] }
 url = "2.2"
 uuid = { version = "1.0", features = ["v4"] }
 xz2 = { version = "0.1", optional = true }
-zstd = { version = "0.12", optional = true, default-features = false }
+zstd = { version = "0.13", optional = true, default-features = false }
 
 
 [dev-dependencies]

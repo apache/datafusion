@@ -46,9 +46,9 @@ pub use pool::*;
 ///
 /// The following memory pool implementations are available:
 ///
-/// * [`UnboundedMemoryPool`](pool::UnboundedMemoryPool)
-/// * [`GreedyMemoryPool`](pool::GreedyMemoryPool)
-/// * [`FairSpillPool`](pool::FairSpillPool)
+/// * [`UnboundedMemoryPool`]
+/// * [`GreedyMemoryPool`]
+/// * [`FairSpillPool`]
 pub trait MemoryPool: Send + Sync + std::fmt::Debug {
     /// Registers a new [`MemoryConsumer`]
     ///

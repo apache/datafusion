@@ -72,7 +72,7 @@ Limit: skip=0, fetch=10
 physical_plan
 GlobalLimitExec: skip=0, fetch=10
 --SortPreservingMergeExec: [revenue@2 DESC], fetch=10
-----SortExec: fetch=10, expr=[revenue@2 DESC]
+----SortExec: TopK(fetch=10), expr=[revenue@2 DESC]
 ------ProjectionExec: expr=[c_custkey@0 as c_custkey, c_name@1 as c_name, SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)@7 as revenue, c_acctbal@2 as c_acctbal, n_name@4 as n_name, c_address@5 as c_address, c_phone@3 as c_phone, c_comment@6 as c_comment]
 --------AggregateExec: mode=FinalPartitioned, gby=[c_custkey@0 as c_custkey, c_name@1 as c_name, c_acctbal@2 as c_acctbal, c_phone@3 as c_phone, n_name@4 as n_name, c_address@5 as c_address, c_comment@6 as c_comment], aggr=[SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)]
 ----------CoalesceBatchesExec: target_batch_size=8192

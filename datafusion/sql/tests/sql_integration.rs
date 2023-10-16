@@ -1807,6 +1807,14 @@ fn create_external_table_csv() {
 }
 
 #[test]
+fn create_external_table_with_pk() {
+    let sql = "CREATE EXTERNAL TABLE t(c1 int, primary key(c1)) STORED AS CSV LOCATION 'foo.csv'";
+    let expected =
+        "CreateExternalTable: Bare { table: \"t\" } constraints=[PrimaryKey([0])]";
+    quick_test(sql, expected);
+}
+
+#[test]
 fn create_schema_with_quoted_name() {
     let sql = "CREATE SCHEMA \"quoted_schema_name\"";
     let expected = "CreateCatalogSchema: \"quoted_schema_name\"";
@@ -2046,24 +2054,6 @@ fn union() {
 fn union_all() {
     let sql = "SELECT order_id from orders UNION ALL SELECT order_id FROM orders";
     let expected = "Union\
-            \n  Projection: orders.order_id\
-            \n    TableScan: orders\
-            \n  Projection: orders.order_id\
-            \n    TableScan: orders";
-    quick_test(sql, expected);
-}
-
-#[test]
-fn union_4_combined_in_one() {
-    let sql = "SELECT order_id from orders
-                    UNION ALL SELECT order_id FROM orders
-                    UNION ALL SELECT order_id FROM orders
-                    UNION ALL SELECT order_id FROM orders";
-    let expected = "Union\
-            \n  Projection: orders.order_id\
-            \n    TableScan: orders\
-            \n  Projection: orders.order_id\
-            \n    TableScan: orders\
             \n  Projection: orders.order_id\
             \n    TableScan: orders\
             \n  Projection: orders.order_id\

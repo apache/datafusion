@@ -282,16 +282,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     runtime,
                     extension_codec,
                 )?;
-                let input_schema = window_agg
-                    .input_schema
-                    .as_ref()
-                    .ok_or_else(|| {
-                        DataFusionError::Internal(
-                            "input_schema in WindowAggrNode is missing.".to_owned(),
-                        )
-                    })?
-                    .clone();
-                let input_schema: SchemaRef = SchemaRef::new((&input_schema).try_into()?);
+                let input_schema = input.schema();
 
                 let physical_window_expr: Vec<Arc<dyn WindowExpr>> = window_agg
                     .window_expr
@@ -333,7 +324,6 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     Ok(Arc::new(BoundedWindowAggExec::try_new(
                         physical_window_expr,
                         input,
-                        input_schema,
                         partition_keys,
                         partition_search_mode,
                     )?))
@@ -341,7 +331,6 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     Ok(Arc::new(WindowAggExec::try_new(
                         physical_window_expr,
                         input,
-                        input_schema,
                         partition_keys,
                     )?))
                 }
@@ -1315,8 +1304,6 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 extension_codec,
             )?;
 
-            let input_schema = protobuf::Schema::try_from(exec.input_schema().as_ref())?;
-
             let window_expr =
                 exec.window_expr()
                     .iter()
@@ -1334,7 +1321,6 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     protobuf::WindowAggExecNode {
                         input: Some(Box::new(input)),
                         window_expr,
-                        input_schema: Some(input_schema),
                         partition_keys,
                         partition_search_mode: None,
                     },
@@ -1345,8 +1331,6 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 exec.input().to_owned(),
                 extension_codec,
             )?;
-
-            let input_schema = protobuf::Schema::try_from(exec.input_schema().as_ref())?;
 
             let window_expr =
                 exec.window_expr()
@@ -1385,7 +1369,6 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     protobuf::WindowAggExecNode {
                         input: Some(Box::new(input)),
                         window_expr,
-                        input_schema: Some(input_schema),
                         partition_keys,
                         partition_search_mode: Some(partition_search_mode),
                     },

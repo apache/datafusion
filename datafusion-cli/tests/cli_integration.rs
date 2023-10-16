@@ -43,7 +43,7 @@ fn init() {
 )]
 #[case::set_batch_size(
     ["--command", "show datafusion.execution.batch_size", "--format", "json", "-q", "-b", "1"],
-    "[{\"name\":\"datafusion.execution.batch_size\",\"setting\":\"1\"}]\n"
+    "[{\"name\":\"datafusion.execution.batch_size\",\"value\":\"1\"}]\n"
 )]
 #[test]
 fn cli_quick_test<'a>(

@@ -16,46 +16,46 @@
 # under the License.
 
 [package]
-authors.workspace = true
-edition.workspace = true
-homepage.workspace = true
-license.workspace = true
+authors = { workspace = true }
+edition = { workspace = true }
+homepage = { workspace = true }
+license = { workspace = true }
 name = "datafusion-sqllogictest"
-readme.workspace = true
-repository.workspace = true
-rust-version.workspace = true
-version.workspace = true
+readme = { workspace = true }
+repository = { workspace = true }
+rust-version = { workspace = true }
+version = { workspace = true }
 
 [lib]
 name = "datafusion_sqllogictest"
 path = "src/lib.rs"
 
 [dependencies]
-arrow = {workspace = true}
+arrow = { workspace = true }
 async-trait = "0.1.41"
 bigdecimal = "0.4.1"
-datafusion = {path = "../core", version = "31.0.0"}
-datafusion-common = {path = "../common", version = "31.0.0", default-features = false}
+bytes = { version = "1.4.0", optional = true }
+chrono = { workspace = true, optional = true }
+datafusion = { path = "../core", version = "32.0.0" }
+datafusion-common = { path = "../common", version = "32.0.0", default-features = false }
+futures = { version = "0.3.28" }
 half = "2.2.1"
 itertools = "0.11"
-object_store = "0.7.0"
-rust_decimal = {version = "1.27.0"}
 log = "^0.4"
+object_store = "0.7.0"
+postgres-protocol = { version = "0.6.4", optional = true }
+postgres-types = { version = "0.2.4", optional = true }
+rust_decimal = { version = "1.27.0" }
 sqllogictest = "0.17.0"
-sqlparser.workspace = true
+sqlparser = { workspace = true }
 tempfile = "3"
 thiserror = "1.0.44"
-tokio = {version = "1.0"}
-bytes = {version = "1.4.0", optional = true}
-futures = {version = "0.3.28"}
-chrono = { workspace = true, optional = true }
-tokio-postgres = {version = "0.7.7", optional = true}
-postgres-types = {version = "0.2.4", optional = true}
-postgres-protocol = {version = "0.6.4", optional = true}
+tokio = { version = "1.0" }
+tokio-postgres = { version = "0.7.7", optional = true }
 
 [features]
-postgres = ["bytes", "chrono", "tokio-postgres", "postgres-types", "postgres-protocol"]
 avro = ["datafusion/avro"]
+postgres = ["bytes", "chrono", "tokio-postgres", "postgres-types", "postgres-protocol"]
 
 [dev-dependencies]
 env_logger = "0.10"
