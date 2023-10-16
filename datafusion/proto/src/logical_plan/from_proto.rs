@@ -26,7 +26,7 @@ use crate::protobuf::{
     OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
 };
 use arrow::{
-    buffer::{Buffer, MutableBuffer},
+    buffer::Buffer,
     datatypes::{
         i256, DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, TimeUnit,
         UnionFields, UnionMode,
@@ -645,6 +645,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
             Value::Float32Value(v) => Self::Float32(Some(*v)),
             Value::Float64Value(v) => Self::Float64(Some(*v)),
             Value::Date32Value(v) => Self::Date32(Some(*v)),
+            // ScalarValue::List is serialized using arrow IPC format
             Value::ListValue(scalar_list) => {
                 let protobuf::ScalarListValue {
                     ipc_message,
@@ -655,29 +656,36 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 let schema: Schema = if let Some(schema_ref) = schema {
                     schema_ref.try_into()?
                 } else {
-                    return Err(Error::General("Unexpected schema".to_string()));
+                    return Err(Error::General(
+                        "Invalid schema while deserializing ScalarValue::List"
+                            .to_string(),
+                    ));
                 };
 
-                let message = root_as_message(ipc_message.as_slice()).unwrap();
+                let message = root_as_message(ipc_message.as_slice()).map_err(|e| {
+                    Error::General(format!(
+                        "Error IPC message while deserializing ScalarValue::List: {e}"
+                    ))
+                })?;
+                let buffer = Buffer::from(arrow_data);
 
-                // TODO: Add comment to why adding 0 before arrow_data.
-                // This code is from https://github.com/apache/arrow-rs/blob/4320a753beaee0a1a6870c59ef46b59e88c9c323/arrow-ipc/src/reader.rs#L1670-L1674C45
-                // Construct an unaligned buffer
-                let mut buffer = MutableBuffer::with_capacity(arrow_data.len() + 1);
-                buffer.push(0_u8);
-                buffer.extend_from_slice(arrow_data.as_slice());
-                let b = Buffer::from(buffer).slice(1);
+                let ipc_batch = message.header_as_record_batch().ok_or_else(|| {
+                    Error::General(
+                        "Unexpected message type deserializing ScalarValue::List"
+                            .to_string(),
+                    )
+                })?;
 
-                let ipc_batch = message.header_as_record_batch().unwrap();
                 let record_batch = read_record_batch(
-                    &b,
+                    &buffer,
                     ipc_batch,
                     Arc::new(schema),
                     &Default::default(),
                     None,
                     &message.version(),
                 )
-                .unwrap();
+                .map_err(DataFusionError::ArrowError)
+                .map_err(|e| e.context("Decoding ScalarValue::List Value"))?;
                 let arr = record_batch.column(0);
                 Self::List(arr.to_owned())
             }
