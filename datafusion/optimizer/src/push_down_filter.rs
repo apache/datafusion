@@ -18,7 +18,9 @@ use crate::optimizer::ApplyOrder;
 use crate::utils::{conjunction, split_conjunction};
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
-use datafusion_common::{internal_err, Column, DFSchema, DataFusionError, Result};
+use datafusion_common::{
+    internal_err, plan_datafusion_err, Column, DFSchema, DataFusionError, Result,
+};
 use datafusion_expr::expr::Alias;
 use datafusion_expr::{
     and,
@@ -609,7 +611,7 @@ impl OptimizerRule for PushDownFilter {
                     .map(|e| (*e).clone())
                     .collect::<Vec<_>>();
                 let new_predicate = conjunction(new_predicates).ok_or_else(|| {
-                    DataFusionError::Plan("at least one expression exists".to_string())
+                    plan_datafusion_err!("at least one expression exists")
                 })?;
                 let new_filter = LogicalPlan::Filter(Filter::try_new(
                     new_predicate,

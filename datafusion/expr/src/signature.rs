@@ -226,3 +226,11 @@ impl Signature {
         }
     }
 }
+
+/// Monotonicity of the `ScalarFunctionExpr` with respect to its arguments.
+/// Each element of this vector corresponds to an argument and indicates whether
+/// the function's behavior is monotonic, or non-monotonic/unknown for that argument, namely:
+/// - `None` signifies unknown monotonicity or non-monotonicity.
+/// - `Some(true)` indicates that the function is monotonically increasing w.r.t. the argument in question.
+/// - Some(false) indicates that the function is monotonically decreasing w.r.t. the argument in question.
+pub type FuncMonotonicity = Vec<Option<bool>>;

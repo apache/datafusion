@@ -43,13 +43,13 @@ use crate::{
     Expr, ExprSchemable, TableSource,
 };
 use arrow::datatypes::{DataType, Schema, SchemaRef};
-use datafusion_common::plan_err;
 use datafusion_common::UnnestOptions;
 use datafusion_common::{
     display::ToStringifiedPlan, Column, DFField, DFSchema, DFSchemaRef, DataFusionError,
     FileType, FunctionalDependencies, OwnedTableReference, Result, ScalarValue,
     TableReference, ToDFSchema,
 };
+use datafusion_common::{plan_datafusion_err, plan_err};
 use std::any::Any;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -1075,9 +1075,9 @@ impl LogicalPlanBuilder {
                         self.plan.schema().clone(),
                         right.schema().clone(),
                     )?.ok_or_else(||
-                        DataFusionError::Plan(format!(
+                        plan_datafusion_err!(
                             "can't create join plan, join key should belong to one input, error key: ({normalized_left_key},{normalized_right_key})"
-                        )))
+                        ))
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -1255,13 +1255,13 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
         let data_type =
             comparison_coercion(left_field.data_type(), right_field.data_type())
                 .ok_or_else(|| {
-                    DataFusionError::Plan(format!(
+                    plan_datafusion_err!(
                 "UNION Column {} (type: {}) is not compatible with column {} (type: {})",
                 right_field.name(),
                 right_field.data_type(),
                 left_field.name(),
                 left_field.data_type()
-            ))
+            )
                 })?;
 
         Ok(DFField::new(

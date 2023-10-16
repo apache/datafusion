@@ -31,9 +31,9 @@ use arrow_schema::DataType;
 use datafusion_common::file_options::StatementOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    not_impl_err, plan_err, unqualified_field_not_found, Column, Constraints, DFField,
-    DFSchema, DFSchemaRef, DataFusionError, ExprSchema, OwnedTableReference, Result,
-    SchemaReference, TableReference, ToDFSchema,
+    not_impl_err, plan_datafusion_err, plan_err, unqualified_field_not_found, Column,
+    Constraints, DFField, DFSchema, DFSchemaRef, DataFusionError, ExprSchema,
+    OwnedTableReference, Result, SchemaReference, TableReference, ToDFSchema,
 };
 use datafusion_expr::dml::{CopyOptions, CopyTo};
 use datafusion_expr::expr::Placeholder;
@@ -980,9 +980,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let mut assign_map = assignments
             .iter()
             .map(|assign| {
-                let col_name: &Ident = assign.id.iter().last().ok_or_else(|| {
-                    DataFusionError::Plan("Empty column id".to_string())
-                })?;
+                let col_name: &Ident = assign
+                    .id
+                    .iter()
+                    .last()
+                    .ok_or_else(|| plan_datafusion_err!("Empty column id"))?;
                 // Validate that the assignment target column exists
                 table_schema.field_with_unqualified_name(&col_name.value)?;
                 Ok((col_name.value.clone(), assign.value.clone()))
@@ -1113,15 +1115,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     if let ast::Expr::Value(Value::Placeholder(name)) = val {
                         let name =
                             name.replace('$', "").parse::<usize>().map_err(|_| {
-                                DataFusionError::Plan(format!(
-                                    "Can't parse placeholder: {name}"
-                                ))
+                                plan_datafusion_err!("Can't parse placeholder: {name}")
                             })? - 1;
                         let field = fields.get(idx).ok_or_else(|| {
-                            DataFusionError::Plan(format!(
+                            plan_datafusion_err!(
                                 "Placeholder ${} refers to a non existent column",
                                 idx + 1
-                            ))
+                            )
                         })?;
                         let dt = field.field().data_type().clone();
                         let _ = prepare_param_data_types.insert(name, dt);

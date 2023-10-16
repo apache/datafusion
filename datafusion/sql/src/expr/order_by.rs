@@ -16,7 +16,9 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{DFSchema, DataFusionError, Result};
+use datafusion_common::{
+    plan_datafusion_err, plan_err, DFSchema, DataFusionError, Result,
+};
 use datafusion_expr::expr::Sort;
 use datafusion_expr::Expr;
 use sqlparser::ast::{Expr as SQLExpr, OrderByExpr, Value};
@@ -41,18 +43,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 SQLExpr::Value(Value::Number(v, _)) => {
                     let field_index = v
                         .parse::<usize>()
-                        .map_err(|err| DataFusionError::Plan(err.to_string()))?;
+                        .map_err(|err| plan_datafusion_err!("{}", err))?;
 
                     if field_index == 0 {
-                        return Err(DataFusionError::Plan(
-                            "Order by index starts at 1 for column indexes".to_string(),
-                        ));
+                        return plan_err!(
+                            "Order by index starts at 1 for column indexes"
+                        );
                     } else if schema.fields().len() < field_index {
-                        return Err(DataFusionError::Plan(format!(
+                        return plan_err!(
                             "Order by column out of bounds, specified: {}, max: {}",
                             field_index,
                             schema.fields().len()
-                        )));
+                        );
                     }
 
                     let field = schema.field(field_index - 1);
