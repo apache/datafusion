@@ -26,7 +26,8 @@ use crate::common::transpose;
 use crate::expressions::PhysicalSortExpr;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::windows::{
-    calc_requirements, get_ordered_partition_by_indices, window_ordering_equivalence,
+    calc_requirements, get_ordered_partition_by_indices, get_partition_by_sort_exprs,
+    window_ordering_equivalence,
 };
 use crate::{
     ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
@@ -42,7 +43,7 @@ use arrow::{
     datatypes::{Schema, SchemaRef},
     record_batch::RecordBatch,
 };
-use datafusion_common::utils::{evaluate_partition_ranges, get_at_indices};
+use datafusion_common::utils::evaluate_partition_ranges;
 use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{PhysicalSortRequirement, SchemaProperties};
@@ -106,9 +107,12 @@ impl WindowAggExec {
     // Hence returned `PhysicalSortExpr` corresponding to `PARTITION BY` columns can be used safely
     // to calculate partition separation points
     pub fn partition_by_sort_keys(&self) -> Result<Vec<PhysicalSortExpr>> {
-        // Partition by sort keys indices are stored in self.ordered_partition_by_indices.
-        let sort_keys = self.input.output_ordering().unwrap_or(&[]);
-        get_at_indices(sort_keys, &self.ordered_partition_by_indices)
+        let partition_by = self.window_expr()[0].partition_by();
+        get_partition_by_sort_exprs(
+            &self.input,
+            partition_by,
+            &self.ordered_partition_by_indices,
+        )
     }
 }
 

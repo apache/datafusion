@@ -40,7 +40,7 @@ use datafusion_expr::{
 use datafusion_physical_expr::{
     reverse_order_bys,
     window::{BuiltInWindowFunctionExpr, SlidingAggregateWindowExpr},
-    AggregateExpr, PhysicalSortRequirement, SchemaProperties,
+    AggregateExpr, LexOrdering, PhysicalSortRequirement, SchemaProperties,
 };
 
 mod bounded_window_agg_exec;
@@ -330,6 +330,28 @@ pub(crate) fn get_ordered_partition_by_indices(
     } else {
         vec![]
     }
+}
+
+pub(crate) fn get_partition_by_sort_exprs(
+    input: &Arc<dyn ExecutionPlan>,
+    partition_by_exprs: &[Arc<dyn PhysicalExpr>],
+    ordered_partition_by_indices: &[usize],
+) -> Result<LexOrdering> {
+    let ordered_partition_exprs = ordered_partition_by_indices
+        .iter()
+        .map(|idx| partition_by_exprs[*idx].clone())
+        .collect::<Vec<_>>();
+    // Make sure ordered section doesn't move over the partition by expression
+    assert!(ordered_partition_by_indices.len() <= partition_by_exprs.len());
+    let partition_by_sort_exprs = input
+        .schema_properties()
+        .get_lex_ordering(&ordered_partition_exprs)
+        .ok_or_else(|| {
+            DataFusionError::Execution(
+                "Expects partition by expression to be ordered".to_string(),
+            )
+        })?;
+    Ok(partition_by_sort_exprs)
 }
 
 pub(crate) fn window_ordering_equivalence(

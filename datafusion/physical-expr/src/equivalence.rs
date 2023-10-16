@@ -1097,24 +1097,36 @@ impl SchemaProperties {
     pub fn get_lex_ordering(
         &self,
         exprs: &[Arc<dyn PhysicalExpr>],
-    ) -> Option<Vec<SortOptions>> {
-        let normalized_exprs = self.eq_groups.normalize_exprs(exprs);
+    ) -> Option<Vec<PhysicalSortExpr>> {
+        let mut normalized_exprs = self.eq_groups.normalize_exprs(exprs);
+        let mut ordered_exprs: Vec<PhysicalSortExpr> = vec![];
         for ordering in self.normalized_oeq_group().iter() {
-            if normalized_exprs.len() <= ordering.len() {
-                let mut ordering_options = vec![];
-                for (expr, sort_expr) in izip!(normalized_exprs.iter(), ordering.iter()) {
-                    if sort_expr.expr.eq(expr) {
-                        ordering_options.push(sort_expr.options);
-                    } else {
-                        break;
-                    }
-                    if ordering_options.len() == normalized_exprs.len() {
-                        return Some(ordering_options);
-                    }
+            for sort_expr in ordering {
+                if let Some(idx) = normalized_exprs.iter().position(|normalized_expr| {
+                    sort_expr.satisfy_with_schema(
+                        &PhysicalSortRequirement {
+                            expr: normalized_expr.clone(),
+                            options: None,
+                        },
+                        &self.schema,
+                    )
+                }) {
+                    ordered_exprs.push(PhysicalSortExpr {
+                        expr: normalized_exprs[idx].clone(),
+                        options: sort_expr.options,
+                    });
+                    normalized_exprs.remove(idx);
+                } else {
+                    // Should find in consecutive chunks
+                    break;
                 }
             }
         }
-        None
+        if normalized_exprs.is_empty() {
+            Some(ordered_exprs)
+        } else {
+            None
+        }
     }
 }
 

@@ -36,7 +36,6 @@ use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::window_state::WindowAggState;
 use datafusion_expr::window_state::WindowFrameContext;
 use datafusion_expr::WindowFrame;
-use itertools::izip;
 
 /// A window expr that takes the form of a [`BuiltInWindowFunctionExpr`].
 #[derive(Debug)]
@@ -94,15 +93,9 @@ impl BuiltInWindowExpr {
                         .into_iter()
                         .map(|idx| self.partition_by[idx].clone())
                         .collect::<Vec<_>>();
-                    if let Some(ordering_options) =
+                    if let Some(mut ordering) =
                         schema_properties.get_lex_ordering(&lex_partition_by)
                     {
-                        let mut ordering = izip!(
-                            lex_partition_by.into_iter(),
-                            ordering_options.into_iter()
-                        )
-                        .map(|(expr, options)| PhysicalSortExpr { expr, options })
-                        .collect::<Vec<_>>();
                         ordering.push(fn_res_ordering);
                         schema_properties.add_new_orderings(&[ordering]);
                     }

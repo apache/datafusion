@@ -758,14 +758,13 @@ mod tests {
         let sort_options = SortOptions::default();
         let sort_options_not = SortOptions::default().not();
 
-        let required_columns = [
-            Arc::new(Column::new("b", 1)) as _,
-            Arc::new(Column::new("a", 0)) as _,
-        ];
         let schema = Schema::new(vec![
             Field::new("a", DataType::Int32, true),
             Field::new("b", DataType::Int32, true),
         ]);
+        let col_a = &col("a", &schema)?;
+        let col_b = &col("b", &schema)?;
+        let required_columns = [col_b.clone(), col_a.clone()];
         let mut ordering_equal_properties = SchemaProperties::new(Arc::new(schema));
         ordering_equal_properties.add_new_orderings(&[vec![
             PhysicalSortExpr {
@@ -784,18 +783,26 @@ mod tests {
 
         assert_eq!(
             ordering_equal_properties.get_lex_ordering(&required_columns),
-            Some(vec![sort_options_not, sort_options])
+            Some(vec![
+                PhysicalSortExpr {
+                    expr: col_b.clone(),
+                    options: sort_options_not
+                },
+                PhysicalSortExpr {
+                    expr: col_a.clone(),
+                    options: sort_options
+                }
+            ])
         );
 
-        let required_columns = [
-            Arc::new(Column::new("b", 1)) as _,
-            Arc::new(Column::new("a", 0)) as _,
-        ];
         let schema = Schema::new(vec![
             Field::new("a", DataType::Int32, true),
             Field::new("b", DataType::Int32, true),
             Field::new("c", DataType::Int32, true),
         ]);
+        let col_a = &col("a", &schema)?;
+        let col_b = &col("b", &schema)?;
+        let required_columns = [col_b.clone(), col_a.clone()];
         let mut ordering_equal_properties = SchemaProperties::new(Arc::new(schema));
         ordering_equal_properties.add_new_orderings(&[
             vec![PhysicalSortExpr {
@@ -820,7 +827,16 @@ mod tests {
 
         assert_eq!(
             ordering_equal_properties.get_lex_ordering(&required_columns),
-            Some(vec![sort_options_not, sort_options])
+            Some(vec![
+                PhysicalSortExpr {
+                    expr: col_b.clone(),
+                    options: sort_options_not
+                },
+                PhysicalSortExpr {
+                    expr: col_a.clone(),
+                    options: sort_options
+                }
+            ])
         );
 
         let required_columns = [
