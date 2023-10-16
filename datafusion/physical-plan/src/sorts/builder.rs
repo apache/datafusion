@@ -22,10 +22,11 @@ use datafusion_common::Result;
 use datafusion_execution::memory_pool::MemoryReservation;
 
 use super::batches::BatchCursor;
+use super::cursor::Cursor;
 
 /// Provides an API to incrementally build a [`RecordBatch`] from partitioned [`RecordBatch`]
 #[derive(Debug)]
-pub struct SortOrderBuilder {
+pub struct SortOrderBuilder<C> {
     /// The schema of the RecordBatches yielded by this stream
     schema: SchemaRef,
 
@@ -36,14 +37,14 @@ pub struct SortOrderBuilder {
     reservation: MemoryReservation,
 
     /// The current [`BatchCursor`] for each stream
-    cursors: Vec<BatchCursor>,
+    cursors: Vec<Option<BatchCursor<C>>>,
 
     /// The accumulated stream indexes from which to pull rows
     /// Consists of a tuple of `(batch_idx, row_idx)`
     indices: Vec<(usize, usize)>,
 }
 
-impl SortOrderBuilder {
+impl<C: Cursor> SortOrderBuilder<C> {
     /// Create a new [`SortOrderBuilder`] with the provided `stream_count` and `batch_size`
     pub fn new(
         schema: SchemaRef,
@@ -54,30 +55,84 @@ impl SortOrderBuilder {
         Self {
             schema,
             batches: Vec::with_capacity(stream_count * 2),
-            cursors: vec![BatchCursor::default(); stream_count],
+            cursors: (0..stream_count).map(|_| None).collect(),
             indices: Vec::with_capacity(batch_size),
             reservation,
         }
     }
 
     /// Append a new batch in `stream_idx`
-    pub fn push_batch(&mut self, stream_idx: usize, batch: RecordBatch) -> Result<()> {
+    pub fn push_batch(
+        &mut self,
+        stream_idx: usize,
+        cursor: C,
+        batch: RecordBatch,
+    ) -> Result<()> {
         self.reservation.try_grow(batch.get_array_memory_size())?;
         let batch_idx = self.batches.len();
         self.batches.push((stream_idx, batch));
-        self.cursors[stream_idx] = BatchCursor {
+        self.cursors[stream_idx] = Some(BatchCursor {
             batch_idx,
+            cursor,
             row_idx: 0,
-        };
+        });
         Ok(())
     }
 
     /// Append the next row from `stream_idx`
     pub fn push_row(&mut self, stream_idx: usize) {
-        let cursor = &mut self.cursors[stream_idx];
-        let row_idx = cursor.row_idx;
-        cursor.row_idx += 1;
-        self.indices.push((cursor.batch_idx, row_idx));
+        let BatchCursor {
+            cursor: _,
+            batch_idx,
+            row_idx,
+        } = self.cursors[stream_idx]
+            .as_mut()
+            .expect("row pushed for non-existant cursor");
+        self.indices.push((*batch_idx, *row_idx));
+        *row_idx += 1;
+    }
+
+    /// Returns true if there is an in-progress cursor for a given stream
+    pub fn cursor_in_progress(&mut self, stream_idx: usize) -> bool {
+        self.cursors[stream_idx]
+            .as_mut()
+            .map_or(false, |batch_cursor| !batch_cursor.cursor.is_finished())
+    }
+
+    /// Advance the cursor for `stream_idx`
+    /// Return true if cursor was advanced
+    pub fn advance_cursor(&mut self, stream_idx: usize) -> bool {
+        let slot = &mut self.cursors[stream_idx];
+        match slot.as_mut() {
+            Some(c) => {
+                if c.cursor.is_finished() {
+                    return false;
+                }
+                c.cursor.advance();
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Returns `true` if the cursor at index `a` is greater than at index `b`
+    #[inline]
+    pub fn is_gt(&mut self, stream_idx_a: usize, stream_idx_b: usize) -> bool {
+        match (
+            self.cursor_in_progress(stream_idx_a),
+            self.cursor_in_progress(stream_idx_b),
+        ) {
+            (false, _) => true,
+            (_, false) => false,
+            _ => match (&self.cursors[stream_idx_a], &self.cursors[stream_idx_b]) {
+                (Some(a), Some(b)) => a
+                    .cursor
+                    .cmp(&b.cursor)
+                    .then_with(|| stream_idx_a.cmp(&stream_idx_b))
+                    .is_gt(),
+                _ => unreachable!(),
+            },
+        }
     }
 
     /// Returns the number of in-progress rows in this [`SortOrderBuilder`]
@@ -126,12 +181,15 @@ impl SortOrderBuilder {
         let mut batch_idx = 0;
         let mut retained = 0;
         self.batches.retain(|(stream_idx, batch)| {
-            let stream_cursor = &mut self.cursors[*stream_idx];
-            let retain = stream_cursor.batch_idx == batch_idx;
+            let batch_cursor = self.cursors[*stream_idx]
+                .as_mut()
+                .expect("should have batch cursor");
+
+            let retain = batch_cursor.batch_idx == batch_idx;
             batch_idx += 1;
 
             if retain {
-                stream_cursor.batch_idx = retained;
+                batch_cursor.batch_idx = retained;
                 retained += 1;
             } else {
                 self.reservation.shrink(batch.get_array_memory_size());

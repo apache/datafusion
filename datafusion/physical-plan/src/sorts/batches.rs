@@ -16,9 +16,14 @@
 // under the License.
 
 #[derive(Debug, Copy, Clone, Default)]
-pub(crate) struct BatchCursor {
+pub(crate) struct BatchCursor<C> {
     /// The index into SortOrderBuilder::batches
+    /// TODO: this will become a BatchId, for record batch collected (and not passed across streams)
     pub batch_idx: usize,
+
     /// The row index within the given batch
     pub row_idx: usize,
+
+    /// The cursor for the given batch.
+    pub cursor: C,
 }
