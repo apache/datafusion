@@ -61,7 +61,7 @@ pub fn streaming_merge(
     reservation: MemoryReservation,
 ) -> Result<SendableRecordBatchStream> {
     // If there are no sort expressions, preserving the order
-    // doesn't mean anything (and result in inifinite loops)
+    // doesn't mean anything (and result in infinite loops)
     if expressions.is_empty() {
         return internal_err!("Sort expressions cannot be empty for streaming merge");
     }

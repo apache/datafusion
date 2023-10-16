@@ -48,9 +48,9 @@ impl std::fmt::Debug for RowCursor {
 
 impl RowCursor {
     /// Create a new SortKeyCursor from `rows` and a `reservation`
-    /// that tracks its memory. Thre must be at least one row
+    /// that tracks its memory. There must be at least one row
     ///
-    /// Panic's if the reservation is not for exactly `rows.size()`
+    /// Panics if the reservation is not for exactly `rows.size()`
     /// bytes or if `rows` is empty.
     pub fn new(rows: Rows, reservation: MemoryReservation) -> Self {
         assert_eq!(
@@ -216,7 +216,7 @@ impl<T: FieldValues> FieldCursor<T> {
     ///
     /// Panics if the array is empty
     pub fn new<A: FieldArray<Values = T>>(options: SortOptions, array: &A) -> Self {
-        assert!(array.len() > 0, "Empty array passed to FieldValues");
+        assert!(array.len() > 0, "Empty array passed to FieldCursor");
         let null_threshold = match options.nulls_first {
             true => array.null_count(),
             false => array.len() - array.null_count(),
