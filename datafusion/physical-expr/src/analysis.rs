@@ -38,7 +38,7 @@ use datafusion_common::{
 pub struct AnalysisContext {
     // A list of known column boundaries, ordered by the index
     // of the column in the current schema.
-    pub boundaries: Option<Vec<ExprBoundaries>>,
+    pub boundaries: Vec<ExprBoundaries>,
     /// The estimated percentage of rows that this expression would select, if
     /// it were to be used as a boolean predicate on a filter. The value will be
     /// between 0.0 (selects nothing) and 1.0 (selects everything).
@@ -48,7 +48,7 @@ pub struct AnalysisContext {
 impl AnalysisContext {
     pub fn new(boundaries: Vec<ExprBoundaries>) -> Self {
         Self {
-            boundaries: Some(boundaries),
+            boundaries,
             selectivity: None,
         }
     }
@@ -136,9 +136,7 @@ pub fn analyze(
     expr: &Arc<dyn PhysicalExpr>,
     context: AnalysisContext,
 ) -> Result<AnalysisContext> {
-    let target_boundaries = context.boundaries.ok_or_else(|| {
-        DataFusionError::Internal("No column exists at the input to filter".to_string())
-    })?;
+    let target_boundaries = context.boundaries;
 
     let mut graph = ExprIntervalGraph::try_new(expr.clone())?;
 

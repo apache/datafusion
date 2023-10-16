@@ -227,23 +227,15 @@ impl ExecutionPlan for FilterExec {
             None => Precision::Absent,
         };
 
-        if let Some(analysis_boundaries) = analysis_ctx.boundaries {
-            let column_statistics = collect_new_statistics(
-                &input_stats.column_statistics,
-                analysis_boundaries,
-            );
-            Ok(Statistics {
-                num_rows,
-                total_byte_size,
-                column_statistics,
-            })
-        } else {
-            Ok(Statistics {
-                num_rows,
-                total_byte_size,
-                column_statistics: input_stats.column_statistics,
-            })
-        }
+        let column_statistics = collect_new_statistics(
+            &input_stats.column_statistics,
+            analysis_ctx.boundaries,
+        );
+        Ok(Statistics {
+            num_rows,
+            total_byte_size,
+            column_statistics,
+        })
     }
 }
 

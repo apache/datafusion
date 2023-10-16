@@ -1022,12 +1022,33 @@ impl ExecutionPlan for AggregateExec {
                     total_byte_size: Precision::Absent,
                 })
             }
-            _ => Ok(Statistics {
-                // the output row count is surely not larger than its input row count
-                num_rows: self.input.statistics()?.num_rows,
-                column_statistics,
-                total_byte_size: Precision::Absent,
-            }),
+            _ => {
+                // When the input row count is 0 or 1, we can adopt that statistic keeping its reliability.
+                // When it is larger than 1, we degrade the precision since it may decrease after aggregation.
+                let num_rows = if let Some(value) =
+                    self.input().statistics()?.num_rows.get_value()
+                {
+                    if *value > 1 {
+                        self.input().statistics()?.num_rows.to_inexact()
+                    } else if *value == 0 {
+                        // Aggregation on an empty table creates a null row.
+                        self.input()
+                            .statistics()?
+                            .num_rows
+                            .add(&Precision::Exact(1))
+                    } else {
+                        // num_rows = 1 case
+                        self.input().statistics()?.num_rows
+                    }
+                } else {
+                    Precision::Absent
+                };
+                Ok(Statistics {
+                    num_rows,
+                    column_statistics,
+                    total_byte_size: Precision::Absent,
+                })
+            }
         }
     }
 }

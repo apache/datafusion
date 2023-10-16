@@ -36,135 +36,87 @@ pub async fn get_statistics_with_limit(
     limit: Option<usize>,
 ) -> Result<(Vec<PartitionedFile>, Statistics)> {
     let mut result_files = vec![];
-    let mut null_counts: Option<Vec<Precision<usize>>> = None;
-    let mut max_values: Option<Vec<Precision<ScalarValue>>> = None;
-    let mut min_values: Option<Vec<Precision<ScalarValue>>> = None;
-
-    // The number of rows and the total byte size can be calculated as long as
-    // at least one file has them. If none of the files provide them, then they
-    // will be omitted from the statistics. The missing values will be counted
-    // as zero.
-    let mut num_rows: Option<Precision<usize>> = None;
-    let mut total_byte_size: Option<Precision<usize>> = None;
+    // These statistics can be calculated as long as at least one file has them.
+    // If none of the files provide them, then they will become an absent precision.
+    // The missing values will be counted as
+    // - zero for summations,
+    // - neutral element for extreme points.
+    let mut null_counts: Vec<Precision<usize>> =
+        vec![Precision::Absent; file_schema.fields().len()];
+    let mut max_values: Vec<Precision<ScalarValue>> =
+        vec![Precision::Absent; file_schema.fields().len()];
+    let mut min_values: Vec<Precision<ScalarValue>> =
+        vec![Precision::Absent; file_schema.fields().len()];
+    let mut num_rows: Precision<usize> = Precision::Absent;
+    let mut total_byte_size: Precision<usize> = Precision::Absent;
 
     // Fusing the stream allows us to call next safely even once it is finished.
     let mut all_files = Box::pin(all_files.fuse());
-    while let Some(current) = all_files.next().await {
-        let (file, file_stats) = current?;
+
+    if let Some(first_file) = all_files.next().await {
+        let (file, file_stats) = first_file?;
         result_files.push(file);
 
-        // Number of rows, total byte size and null counts are added for each file.
-        // In case of an absent information or inexact value coming from the file,
-        // it changes the statistic precision to inexact.
-        num_rows = Some(if let Some(some_num_rows) = num_rows {
-            match (file_stats.num_rows, &some_num_rows) {
-                (Precision::Absent, _) => some_num_rows.to_inexact(),
-                (lhs, Precision::Absent) => lhs.to_inexact(),
-                (lhs, rhs) => lhs.add(rhs),
-            }
-        } else {
-            file_stats.num_rows
-        });
-
-        total_byte_size = Some(if let Some(some_total_byte_size) = total_byte_size {
-            match (file_stats.total_byte_size, &some_total_byte_size) {
-                (Precision::Absent, _) => some_total_byte_size.to_inexact(),
-                (lhs, Precision::Absent) => lhs.to_inexact(),
-                (lhs, rhs) => lhs.add(rhs),
-            }
-        } else {
-            file_stats.total_byte_size
-        });
-
-        if let Some(some_null_counts) = &mut null_counts {
-            for (target, cs) in some_null_counts
-                .iter_mut()
-                .zip(file_stats.column_statistics.iter())
-            {
-                *target = if cs.null_count == Precision::Absent {
-                    // Downcast to inexact:
-                    target.clone().to_inexact()
-                } else {
-                    target.add(&cs.null_count)
-                };
-            }
-        } else {
-            // If it is the first file, we set it directly from the file statistics.
-            let mut new_col_stats_nulls = file_stats
-                .column_statistics
-                .iter()
-                .map(|cs| cs.null_count.clone())
-                .collect::<Vec<_>>();
-            // File schema may have additional fields other than each file (such
-            // as partitions, guaranteed to be at the end). Hence, rest of the
-            // fields are initialized with `Absent`.
-            for _ in 0..file_schema.fields().len() - file_stats.column_statistics.len() {
-                new_col_stats_nulls.push(Precision::Absent)
-            }
-            null_counts = Some(new_col_stats_nulls);
-        };
-
-        if let Some(some_max_values) = &mut max_values {
-            for (i, cs) in file_stats.column_statistics.iter().enumerate() {
-                set_max_if_greater(some_max_values, cs.max_value.clone(), i);
-            }
-        } else {
-            // If it is the first file, we set it directly from the file statistics.
-            let mut new_col_stats_max = file_stats
-                .column_statistics
-                .iter()
-                .map(|cs| cs.max_value.clone())
-                .collect::<Vec<_>>();
-            // file schema may have additional fields other than each file (such as partition, guaranteed to be at the end)
-            // Hence, push rest of the fields with information Absent.
-            for _ in 0..file_schema.fields().len() - file_stats.column_statistics.len() {
-                new_col_stats_max.push(Precision::Absent)
-            }
-            max_values = Some(new_col_stats_max);
-        };
-
-        if let Some(some_min_values) = &mut min_values {
-            for (i, cs) in file_stats.column_statistics.iter().enumerate() {
-                set_min_if_lesser(some_min_values, cs.min_value.clone(), i);
-            }
-        } else {
-            // If it is the first file, we set it directly from the file statistics.
-            let mut new_col_stats_min = file_stats
-                .column_statistics
-                .iter()
-                .map(|cs| cs.min_value.clone())
-                .collect::<Vec<_>>();
-            // file schema may have additional fields other than each file (such as partition, guaranteed to be at the end)
-            // Hence, push rest of the fields with information Absent.
-            for _ in 0..file_schema.fields().len() - file_stats.column_statistics.len() {
-                new_col_stats_min.push(Precision::Absent)
-            }
-            min_values = Some(new_col_stats_min);
-        };
+        // First file, we set them directly from the file statistics.
+        set_from_file_statistics(
+            &mut num_rows,
+            &mut total_byte_size,
+            &mut null_counts,
+            &mut max_values,
+            &mut min_values,
+            file_stats,
+        );
 
         // If the number of rows exceeds the limit, we can stop processing
         // files. This only applies when we know the number of rows. It also
         // currently ignores tables that have no statistics regarding the
         // number of rows.
-        if num_rows
-            .as_ref()
-            .unwrap_or(&Precision::Absent)
-            .get_value()
-            .unwrap_or(&usize::MIN)
-            > &limit.unwrap_or(usize::MAX)
-        {
-            break;
-        }
-    }
+        if num_rows.get_value().unwrap_or(&usize::MIN) <= &limit.unwrap_or(usize::MAX) {
+            while let Some(current) = all_files.next().await {
+                let (file, file_stats) = current?;
+                result_files.push(file);
 
-    let size = file_schema.fields().len();
-    let null_counts = null_counts.unwrap_or(vec![Precision::Absent; size]);
-    let max_values = max_values.unwrap_or(vec![Precision::Absent; size]);
-    let min_values = min_values.unwrap_or(vec![Precision::Absent; size]);
+                // Number of rows, total byte size and null counts are added for each file.
+                // In case of an absent information or inexact value coming from the file,
+                // it changes the statistic precision to inexact.
+                num_rows = add_row_stats(file_stats.num_rows, num_rows);
+
+                total_byte_size =
+                    add_row_stats(file_stats.total_byte_size, total_byte_size);
+
+                for (cs, target) in file_stats
+                    .column_statistics
+                    .iter()
+                    .map(|cs| cs.null_count.clone())
+                    .zip(null_counts.iter_mut())
+                {
+                    *target = add_row_stats(cs, target.clone());
+                }
+
+                for (i, cs) in file_stats.column_statistics.iter().enumerate() {
+                    set_max_if_greater(&mut max_values, cs.max_value.clone(), i);
+                }
+
+                for (i, cs) in file_stats.column_statistics.iter().enumerate() {
+                    set_min_if_lesser(&mut min_values, cs.min_value.clone(), i);
+                }
+
+                // If the number of rows exceeds the limit, we can stop processing
+                // files. This only applies when we know the number of rows. It also
+                // currently ignores tables that have no statistics regarding the
+                // number of rows.
+                if num_rows.get_value().unwrap_or(&usize::MIN)
+                    > &limit.unwrap_or(usize::MAX)
+                {
+                    break;
+                }
+            }
+        }
+    };
 
     let mut statistics = Statistics {
-        num_rows: num_rows.unwrap_or(Precision::Absent),
-        total_byte_size: total_byte_size.unwrap_or(Precision::Absent),
+        num_rows,
+        total_byte_size,
         column_statistics: get_col_stats_vec(null_counts, max_values, min_values),
     };
     if all_files.next().await.is_some() {
@@ -191,6 +143,44 @@ pub(crate) fn create_max_min_accs(
         .map(|field| MinAccumulator::try_new(field.data_type()).ok())
         .collect();
     (max_values, min_values)
+}
+
+fn set_from_file_statistics(
+    num_rows: &mut Precision<usize>,
+    total_byte_size: &mut Precision<usize>,
+    null_counts: &mut Vec<Precision<usize>>,
+    max_values: &mut Vec<Precision<ScalarValue>>,
+    min_values: &mut Vec<Precision<ScalarValue>>,
+    file_stats: Statistics,
+) {
+    *num_rows = file_stats.num_rows;
+    *total_byte_size = file_stats.total_byte_size;
+    *null_counts = file_stats
+        .column_statistics
+        .iter()
+        .map(|cs| cs.null_count.clone())
+        .collect::<Vec<_>>();
+    *max_values = file_stats
+        .column_statistics
+        .iter()
+        .map(|cs| cs.max_value.clone())
+        .collect::<Vec<_>>();
+    *min_values = file_stats
+        .column_statistics
+        .iter()
+        .map(|cs| cs.min_value.clone())
+        .collect::<Vec<_>>();
+}
+
+fn add_row_stats(
+    file_num_rows: Precision<usize>,
+    num_rows: Precision<usize>,
+) -> Precision<usize> {
+    match (file_num_rows, &num_rows) {
+        (Precision::Absent, _) => num_rows.to_inexact(),
+        (lhs, Precision::Absent) => lhs.to_inexact(),
+        (lhs, rhs) => lhs.add(rhs),
+    }
 }
 
 pub(crate) fn get_col_stats_vec(
