@@ -18,7 +18,9 @@
 //! Utility functions for complex field access
 
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::{plan_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    plan_datafusion_err, plan_err, DataFusionError, Result, ScalarValue,
+};
 
 /// Types of the field access expression of a nested type, such as `Field` or `List`
 pub enum GetFieldAccessSchema {
@@ -52,7 +54,7 @@ impl GetFieldAccessSchema {
                             )
                         } else {
                             let field = fields.iter().find(|f| f.name() == s);
-                            field.ok_or(DataFusionError::Plan(format!("Field {s} not found in struct"))).map(|f| f.as_ref().clone())
+                            field.ok_or(plan_datafusion_err!("Field {s} not found in struct")).map(|f| f.as_ref().clone())
                         }
                     }
                     (DataType::Struct(_), _) => plan_err!(

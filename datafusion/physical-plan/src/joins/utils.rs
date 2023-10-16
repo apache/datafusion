@@ -42,7 +42,8 @@ use datafusion_common::cast::as_boolean_array;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
-    exec_err, plan_err, DataFusionError, JoinType, Result, SharedResult,
+    exec_err, plan_datafusion_err, plan_err, DataFusionError, JoinType, Result,
+    ScalarValue, SharedResult,
 };
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::intervals::{ExprIntervalGraph, Interval, IntervalBound};
@@ -363,11 +364,7 @@ pub fn combine_join_ordering_equivalence_properties(
     let left_maintains = maintains_input_order[0];
     let right_maintains = maintains_input_order[1];
     match (left_maintains, right_maintains) {
-        (true, true) => {
-            return Err(DataFusionError::Plan(
-                "Cannot maintain ordering of both sides".to_string(),
-            ))
-        }
+        (true, true) => return plan_err!("Cannot maintain ordering of both sides"),
         (true, false) => {
             new_properties.extend(left_oeq_properties.oeq_class().cloned());
             // In this special case, right side ordering can be prefixed with left side ordering.
@@ -1367,8 +1364,7 @@ pub fn prepare_sorted_exprs(
     right_sort_exprs: &[PhysicalSortExpr],
 ) -> Result<(SortedFilterExpr, SortedFilterExpr, ExprIntervalGraph)> {
     // Build the filter order for the left side
-    let err =
-        || DataFusionError::Plan("Filter does not include the child order".to_owned());
+    let err = || plan_datafusion_err!("Filter does not include the child order");
 
     let left_temp_sorted_filter_expr = build_filter_input_order(
         JoinSide::Left,

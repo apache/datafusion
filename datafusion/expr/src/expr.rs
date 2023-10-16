@@ -17,7 +17,6 @@
 
 //! Expr module contains core type definition for `Expr`.
 
-use crate::aggregate_function;
 use crate::built_in_function;
 use crate::expr_fn::binary_expr;
 use crate::logical_plan::Subquery;
@@ -26,8 +25,10 @@ use crate::utils::{expr_to_columns, find_out_reference_exprs};
 use crate::window_frame;
 use crate::window_function;
 use crate::Operator;
+use crate::{aggregate_function, ExprSchemable};
 use arrow::datatypes::DataType;
-use datafusion_common::internal_err;
+use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::{internal_err, DFSchema};
 use datafusion_common::{plan_err, Column, DataFusionError, Result, ScalarValue};
 use std::collections::HashSet;
 use std::fmt;
@@ -605,10 +606,13 @@ impl InSubquery {
     }
 }
 
-/// Placeholder
+/// Placeholder, representing bind parameter values such as `$1`.
+///
+/// The type of these parameters is inferred using [`Expr::infer_placeholder_types`]
+/// or can be specified directly using `PREPARE` statements.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Placeholder {
-    /// The identifier of the parameter (e.g, $1 or $foo)
+    /// The identifier of the parameter, including the leading `$` (e.g, `"$1"` or `"$foo"`)
     pub id: String,
     /// The type the parameter will be filled in with
     pub data_type: Option<DataType>,
@@ -1036,6 +1040,52 @@ impl Expr {
     pub fn contains_outer(&self) -> bool {
         !find_out_reference_exprs(self).is_empty()
     }
+
+    /// Recursively find all [`Expr::Placeholder`] expressions, and
+    /// to infer their [`DataType`] from the context of their use.
+    ///
+    /// For example, gicen an expression like `<int32> = $0` will infer `$0` to
+    /// have type `int32`.
+    pub fn infer_placeholder_types(self, schema: &DFSchema) -> Result<Expr> {
+        self.transform(&|mut expr| {
+            // Default to assuming the arguments are the same type
+            if let Expr::BinaryExpr(BinaryExpr { left, op: _, right }) = &mut expr {
+                rewrite_placeholder(left.as_mut(), right.as_ref(), schema)?;
+                rewrite_placeholder(right.as_mut(), left.as_ref(), schema)?;
+            };
+            if let Expr::Between(Between {
+                expr,
+                negated: _,
+                low,
+                high,
+            }) = &mut expr
+            {
+                rewrite_placeholder(low.as_mut(), expr.as_ref(), schema)?;
+                rewrite_placeholder(high.as_mut(), expr.as_ref(), schema)?;
+            }
+            Ok(Transformed::Yes(expr))
+        })
+    }
+}
+
+// modifies expr if it is a placeholder with datatype of right
+fn rewrite_placeholder(expr: &mut Expr, other: &Expr, schema: &DFSchema) -> Result<()> {
+    if let Expr::Placeholder(Placeholder { id: _, data_type }) = expr {
+        if data_type.is_none() {
+            let other_dt = other.get_type(schema);
+            match other_dt {
+                Err(e) => {
+                    Err(e.context(format!(
+                        "Can not find type of {other} needed to infer type of {expr}"
+                    )))?;
+                }
+                Ok(dt) => {
+                    *data_type = Some(dt);
+                }
+            }
+        };
+    }
+    Ok(())
 }
 
 #[macro_export]
