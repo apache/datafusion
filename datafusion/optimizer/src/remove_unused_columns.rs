@@ -107,6 +107,30 @@ fn join_child_requirement(
     Ok(merge_vectors(&on_indices, &filter_indices))
 }
 
+fn split_join_requirement_indices_to_children(
+    left_len: usize,
+    indices: &[usize],
+) -> (Vec<usize>, Vec<usize>) {
+    let left_requirements_from_parent = indices
+        .iter()
+        .filter_map(|&idx| if idx < left_len { Some(idx) } else { None })
+        .collect::<Vec<_>>();
+    let right_requirements_from_parent = indices
+        .iter()
+        .filter_map(|&idx| {
+            if idx >= left_len {
+                Some(idx - left_len)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    (
+        left_requirements_from_parent,
+        right_requirements_from_parent,
+    )
+}
+
 fn try_optimize_internal(
     plan: &LogicalPlan,
     _config: &dyn OptimizerConfig,
@@ -180,20 +204,8 @@ fn try_optimize_internal(
         }
         LogicalPlan::Join(join) => {
             let left_len = join.left.schema().fields().len();
-            let left_requirements_from_parent = indices
-                .iter()
-                .filter_map(|&idx| if idx < left_len { Some(idx) } else { None })
-                .collect::<Vec<_>>();
-            let right_requirements_from_parent = indices
-                .iter()
-                .filter_map(|&idx| {
-                    if idx >= left_len {
-                        Some(idx - left_len)
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<_>>();
+            let (left_requirements_from_parent, right_requirements_from_parent) =
+                split_join_requirement_indices_to_children(left_len, &indices);
             let (left_on, right_on): (Vec<_>, Vec<_>) = join.on.iter().cloned().unzip();
             let join_filter = &join
                 .filter
@@ -210,6 +222,12 @@ fn try_optimize_internal(
                 merge_vectors(&right_requirements_from_parent, &right_indices);
             Some(vec![left_indices, right_indices])
         }
+        LogicalPlan::CrossJoin(cross_join) => {
+            let left_len = cross_join.left.schema().fields().len();
+            let (left_child_indices, right_child_indices) =
+                split_join_requirement_indices_to_children(left_len, &indices);
+            Some(vec![left_child_indices, right_child_indices])
+        },
         // SubqueryAlias alias can route requirement for its parent to its child
         LogicalPlan::SubqueryAlias(_) => Some(vec![indices]),
         _ => None,
