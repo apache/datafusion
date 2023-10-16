@@ -43,7 +43,7 @@ use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
     exec_err, plan_datafusion_err, plan_err, DataFusionError, JoinType, Result,
-    ScalarValue, SharedResult,
+    SharedResult,
 };
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::intervals::{ExprIntervalGraph, Interval, IntervalBound};
