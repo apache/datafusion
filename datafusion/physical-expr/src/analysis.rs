@@ -20,16 +20,17 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use arrow::datatypes::Schema;
-
-use datafusion_common::stats::Precision;
-use datafusion_common::{ColumnStatistics, DataFusionError, Result, ScalarValue};
-
 use crate::expressions::Column;
 use crate::intervals::cp_solver::PropagationResult;
 use crate::intervals::{cardinality_ratio, ExprIntervalGraph, Interval, IntervalBound};
 use crate::utils::collect_columns;
 use crate::PhysicalExpr;
+
+use arrow::datatypes::Schema;
+use datafusion_common::stats::Precision;
+use datafusion_common::{
+    internal_err, ColumnStatistics, DataFusionError, Result, ScalarValue,
+};
 
 /// The shared context used during the analysis of an expression. Includes
 /// the boundaries for all known columns.
@@ -58,17 +59,16 @@ impl AnalysisContext {
     }
 
     /// Create a new analysis context from column statistics.
-    pub fn from_statistics(
+    pub fn try_from_statistics(
         input_schema: &Schema,
         statistics: &[ColumnStatistics],
-    ) -> Self {
-        let column_boundaries = statistics
+    ) -> Result<Self> {
+        statistics
             .iter()
             .enumerate()
-            .map(|(idx, stats)| ExprBoundaries::from_column(input_schema, stats, idx))
-            .collect::<Vec<_>>();
-
-        Self::new(column_boundaries)
+            .map(|(idx, stats)| ExprBoundaries::try_from_column(input_schema, stats, idx))
+            .collect::<Result<Vec<_>>>()
+            .map(Self::new)
     }
 }
 
@@ -85,40 +85,35 @@ pub struct ExprBoundaries {
 
 impl ExprBoundaries {
     /// Create a new `ExprBoundaries` object from column level statistics.
-    pub fn from_column(
+    pub fn try_from_column(
         schema: &Schema,
         col_stats: &ColumnStatistics,
         col_index: usize,
-    ) -> Self {
+    ) -> Result<Self> {
         let field = &schema.fields()[col_index];
-        let inf_field = ScalarValue::try_from(field.data_type()).unwrap_or_else(|_| {
-            panic!(
-                "There is no equivalent for the DataType {} among ScalarValues.",
-                field.data_type()
-            );
-        });
+        let empty_field = ScalarValue::try_from(field.data_type())?;
         let interval = Interval::new(
             IntervalBound::new_closed(
                 col_stats
                     .min_value
                     .get_value()
                     .cloned()
-                    .unwrap_or(inf_field.clone()),
+                    .unwrap_or(empty_field.clone()),
             ),
             IntervalBound::new_closed(
                 col_stats
                     .max_value
                     .get_value()
                     .cloned()
-                    .unwrap_or(inf_field),
+                    .unwrap_or(empty_field),
             ),
         );
         let column = Column::new(field.name(), col_index);
-        ExprBoundaries {
+        Ok(ExprBoundaries {
             column,
             interval,
             distinct_count: col_stats.distinct_count.clone(),
-        }
+        })
     }
 }
 
@@ -208,10 +203,9 @@ fn shrink_boundaries(
     });
     let graph_nodes = graph.gather_node_indices(&[expr.clone()]);
     let Some((_, root_index)) = graph_nodes.get(0) else {
-        return Err(DataFusionError::Internal(
+        return internal_err!(
             "The ExprIntervalGraph under investigation does not have any nodes."
-                .to_owned(),
-        ));
+        );
     };
     let final_result = graph.get_interval(*root_index);
 

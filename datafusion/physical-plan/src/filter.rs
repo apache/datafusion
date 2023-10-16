@@ -211,10 +211,10 @@ impl ExecutionPlan for FilterExec {
 
         let num_rows = input_stats.num_rows;
         let total_byte_size = input_stats.total_byte_size;
-        let input_analysis_ctx = AnalysisContext::from_statistics(
+        let input_analysis_ctx = AnalysisContext::try_from_statistics(
             &self.input.schema(),
             &input_stats.column_statistics,
-        );
+        )?;
         let analysis_ctx = analyze(predicate, input_analysis_ctx)?;
 
         let selectivity = analysis_ctx.selectivity.unwrap_or(1.0);

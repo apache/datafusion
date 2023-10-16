@@ -708,8 +708,10 @@ fn next_value<const INC: bool>(value: ScalarValue) -> ScalarValue {
     }
 }
 
-/// This function computes the selectivity by computing the cardinality ratio of the given intervals.
-/// If this can not be calculated for some reasons, returns `1.0` meaning full selective / no filtering.
+/// This function computes the selectivity of an operation by computing the
+/// cardinality ratio of the given input/output intervals. If this can not be
+/// calculated for some reason, it returns `1.0` meaning fullly selective (no
+/// filtering).
 pub fn cardinality_ratio(
     initial_interval: &Interval,
     final_interval: &Interval,
@@ -1760,10 +1762,11 @@ mod tests {
             assert_eq!(interval.cardinality()?.unwrap(), distinct_f32);
         }
 
-        // The regular logarithmic distribution of floating-point numbers are only applicable
-        // outside of the `(-phi, phi)` interval, where `phi` denotes the largest positive
-        // subnormal floating-point number. Since the following intervals include these subnormal
-        // points, we cannot use the constant number that remains the same in powers of 2. Therefore,
+        // The regular logarithmic distribution of floating-point numbers are
+        // only applicable outside of the `(-phi, phi)` interval where `phi`
+        // denotes the largest positive subnormal floating-point number. Since
+        // the following intervals include such subnormal points, we cannot use
+        // a simple powers-of-two type formula for our expectations. Therefore,
         // we manually supply the actual expected cardinality.
         let interval = Interval::new(
             IntervalBound::new(ScalarValue::from(-0.0625), false),
