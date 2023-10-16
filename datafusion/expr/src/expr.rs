@@ -606,7 +606,7 @@ impl InSubquery {
 /// or can be specified directly using `PREPARE` statements.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Placeholder {
-    /// The identifier of the parameter, including the leading `$` (e.g, `"$1"` or `"$foo'`)
+    /// The identifier of the parameter, including the leading `$` (e.g, `"$1"` or `"$foo"`)
     pub id: String,
     /// The type the parameter will be filled in with
     pub data_type: Option<DataType>,
