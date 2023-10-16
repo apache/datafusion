@@ -477,12 +477,25 @@ macro_rules! with_dollar_sign {
 ///     plan_err!("Error {:?}", val)
 ///     plan_err!("Error {val}")
 ///     plan_err!("Error {val:?}")
+///
+/// `NAME_ERR` -  macro name for wrapping Err(DataFusionError::*)
+/// `NAME_DF_ERR` -  macro name for wrapping DataFusionError::*. Needed to keep backtrace opportunity
+/// in construction where DataFusionError::* used directly, like `map_err`, `ok_or_else`, etc
 macro_rules! make_error {
-    ($NAME:ident, $ERR:ident) => {
+    ($NAME_ERR:ident, $NAME_DF_ERR: ident, $ERR:ident) => {
         with_dollar_sign! {
             ($d:tt) => {
+                /// Macro wraps `$ERR` to add backtrace feature
                 #[macro_export]
-                macro_rules! $NAME {
+                macro_rules! $NAME_DF_ERR {
+                    ($d($d args:expr),*) => {
+                        DataFusionError::$ERR(format!("{}{}", format!($d($d args),*), DataFusionError::get_back_trace()).into())
+                    }
+                }
+
+                /// Macro wraps Err(`$ERR`) to add backtrace feature
+                #[macro_export]
+                macro_rules! $NAME_ERR {
                     ($d($d args:expr),*) => {
                         Err(DataFusionError::$ERR(format!("{}{}", format!($d($d args),*), DataFusionError::get_back_trace()).into()))
                     }
@@ -493,16 +506,16 @@ macro_rules! make_error {
 }
 
 // Exposes a macro to create `DataFusionError::Plan`
-make_error!(plan_err, Plan);
+make_error!(plan_err, plan_datafusion_err, Plan);
 
 // Exposes a macro to create `DataFusionError::Internal`
-make_error!(internal_err, Internal);
+make_error!(internal_err, internal_datafusion_err, Internal);
 
 // Exposes a macro to create `DataFusionError::NotImplemented`
-make_error!(not_impl_err, NotImplemented);
+make_error!(not_impl_err, not_impl_datafusion_err, NotImplemented);
 
 // Exposes a macro to create `DataFusionError::Execution`
-make_error!(exec_err, Execution);
+make_error!(exec_err, exec_datafusion_err, Execution);
 
 // Exposes a macro to create `DataFusionError::SQL`
 #[macro_export]
@@ -517,6 +530,7 @@ macro_rules! sql_err {
 pub use exec_err as _exec_err;
 pub use internal_err as _internal_err;
 pub use not_impl_err as _not_impl_err;
+pub use plan_err as _plan_err;
 
 #[cfg(test)]
 mod test {
