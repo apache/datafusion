@@ -2151,15 +2151,19 @@ mod tests {
         let coalesce_partitions = coalesce_partitions_exec(repartition_hash);
         let physical_plan = sort_exec(vec![sort_expr("a", &schema)], coalesce_partitions);
 
-        let expected_input = ["SortExec: expr=[a@0 ASC]",
+        let expected_input = [
+            "SortExec: expr=[a@0 ASC]",
             "  CoalescePartitionsExec",
             "    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
             "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "        CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC], has_header=false"];
-        let expected_optimized = ["SortPreservingMergeExec: [a@0 ASC]",
-            "  SortPreservingRepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
+            "        CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC], has_header=false"
+        ];
+        let expected_optimized = [
+            "SortPreservingMergeExec: [a@0 ASC]",
+            "  SortPreservingRepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10, sort_exprs=a@0 ASC",
             "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "      CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC], has_header=false"];
+            "      CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC], has_header=false",
+        ];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
         Ok(())
     }
@@ -2181,11 +2185,14 @@ mod tests {
             "  CoalescePartitionsExec",
             "    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
             "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "        CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC], has_header=false"];
-        let expected_optimized = ["SortPreservingMergeExec: [a@0 ASC]",
-            "  SortPreservingRepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
+            "        CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC], has_header=false"
+        ];
+        let expected_optimized = [
+            "SortPreservingMergeExec: [a@0 ASC]",
+            "  SortPreservingRepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10, sort_exprs=a@0 ASC",
             "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "      CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC], has_header=false"];
+            "      CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC], has_header=false",
+        ];
         assert_optimized!(expected_input, expected_optimized, physical_plan, false);
         Ok(())
     }
@@ -2254,7 +2261,7 @@ mod tests {
         let expected_input = [
             "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }], mode=[Sorted]",
             "  SortPreservingMergeExec: [a@0 ASC,b@1 ASC]",
-            "    SortPreservingRepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=10",
+            "    SortPreservingRepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=10, sort_exprs=a@0 ASC,b@1 ASC",
             "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "        SortExec: expr=[a@0 ASC,b@1 ASC]",
             "          CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",

@@ -76,7 +76,7 @@ Limit: skip=0, fetch=10
 physical_plan
 GlobalLimitExec: skip=0, fetch=10
 --SortPreservingMergeExec: [value@1 DESC], fetch=10
-----SortExec: fetch=10, expr=[value@1 DESC]
+----SortExec: TopK(fetch=10), expr=[value@1 DESC]
 ------ProjectionExec: expr=[ps_partkey@0 as ps_partkey, SUM(partsupp.ps_supplycost * partsupp.ps_availqty)@1 as value]
 --------NestedLoopJoinExec: join_type=Inner, filter=CAST(SUM(partsupp.ps_supplycost * partsupp.ps_availqty)@0 AS Decimal128(38, 15)) > SUM(partsupp.ps_supplycost * partsupp.ps_availqty) * Float64(0.0001)@1
 ----------AggregateExec: mode=FinalPartitioned, gby=[ps_partkey@0 as ps_partkey], aggr=[SUM(partsupp.ps_supplycost * partsupp.ps_availqty)]

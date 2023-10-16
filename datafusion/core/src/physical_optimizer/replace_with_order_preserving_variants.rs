@@ -365,7 +365,7 @@ mod tests {
             "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "        CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST], has_header=true"];
         let expected_optimized = ["SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
-            "  SortPreservingRepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
+            "  SortPreservingRepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8, sort_exprs=a@0 ASC NULLS LAST",
             "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "      CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST], has_header=true"];
         assert_optimized!(expected_input, expected_optimized, physical_plan);
@@ -409,10 +409,10 @@ mod tests {
         let expected_optimized = [
             "SortPreservingMergeExec: [a@0 ASC]",
             "  FilterExec: c@2 > 3",
-            "    SortPreservingRepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
+            "    SortPreservingRepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8, sort_exprs=a@0 ASC",
             "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "        SortPreservingMergeExec: [a@0 ASC]",
-            "          SortPreservingRepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
+            "          SortPreservingRepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8, sort_exprs=a@0 ASC",
             "            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "              CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC], has_header=true",
         ];
@@ -439,11 +439,14 @@ mod tests {
             "      FilterExec: c@2 > 3",
             "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "          CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST], has_header=true"];
-        let expected_optimized = ["SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
-            "  SortPreservingRepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
+        let expected_optimized = [
+            "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
+            "  SortPreservingRepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8, sort_exprs=a@0 ASC NULLS LAST",
             "    FilterExec: c@2 > 3",
             "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "        CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST], has_header=true"];
+            "        CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+
+        ];
         assert_optimized!(expected_input, expected_optimized, physical_plan);
         Ok(())
     }
@@ -472,7 +475,7 @@ mod tests {
         let expected_optimized = ["SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
             "  CoalesceBatchesExec: target_batch_size=8192",
             "    FilterExec: c@2 > 3",
-            "      SortPreservingRepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
+            "      SortPreservingRepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8, sort_exprs=a@0 ASC NULLS LAST",
             "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "          CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST], has_header=true"];
         assert_optimized!(expected_input, expected_optimized, physical_plan);
@@ -506,7 +509,7 @@ mod tests {
         let expected_optimized = ["SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
             "  CoalesceBatchesExec: target_batch_size=8192",
             "    FilterExec: c@2 > 3",
-            "      SortPreservingRepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
+            "      SortPreservingRepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8, sort_exprs=a@0 ASC NULLS LAST",
             "        CoalesceBatchesExec: target_batch_size=8192",
             "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "            CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST], has_header=true"];
@@ -558,21 +561,25 @@ mod tests {
         let physical_plan =
             sort_preserving_merge_exec(vec![sort_expr("a", &schema)], sort);
 
-        let expected_input = ["SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
+        let expected_input = [
+            "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
             "  SortExec: expr=[a@0 ASC NULLS LAST]",
             "    RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
             "      CoalesceBatchesExec: target_batch_size=8192",
             "        FilterExec: c@2 > 3",
             "          RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
             "            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "              CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST], has_header=true"];
-        let expected_optimized = ["SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
-            "  SortPreservingRepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
+            "              CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST], has_header=true"
+        ];
+        let expected_optimized = [
+            "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
+            "  SortPreservingRepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8, sort_exprs=a@0 ASC NULLS LAST",
             "    CoalesceBatchesExec: target_batch_size=8192",
             "      FilterExec: c@2 > 3",
-            "        SortPreservingRepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
+            "        SortPreservingRepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8, sort_exprs=a@0 ASC NULLS LAST",
             "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "            CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST], has_header=true"];
+            "            CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+        ];
         assert_optimized!(expected_input, expected_optimized, physical_plan);
         Ok(())
     }
@@ -624,7 +631,7 @@ mod tests {
             "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "        CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST], has_header=true"];
         let expected_optimized = ["SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
-            "  SortPreservingRepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
+            "  SortPreservingRepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8, sort_exprs=a@0 ASC NULLS LAST",
             "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "      CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST], has_header=true"];
         assert_optimized!(expected_input, expected_optimized, physical_plan);
@@ -668,7 +675,7 @@ mod tests {
         let expected_optimized = [
             "SortPreservingMergeExec: [c@2 ASC]",
             "  FilterExec: c@2 > 3",
-            "    SortPreservingRepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
+            "    SortPreservingRepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8, sort_exprs=c@2 ASC",
             "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "        SortExec: expr=[c@2 ASC]",
             "          CoalescePartitionsExec",
@@ -753,7 +760,7 @@ mod tests {
             "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "        CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true"];
         let expected_optimized = ["SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
-            "  SortPreservingRepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
+            "  SortPreservingRepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8, sort_exprs=a@0 ASC NULLS LAST",
             "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "      CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true"];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);

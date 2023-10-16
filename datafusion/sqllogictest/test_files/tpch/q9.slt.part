@@ -78,7 +78,7 @@ Limit: skip=0, fetch=10
 physical_plan
 GlobalLimitExec: skip=0, fetch=10
 --SortPreservingMergeExec: [nation@0 ASC NULLS LAST,o_year@1 DESC], fetch=10
-----SortExec: fetch=10, expr=[nation@0 ASC NULLS LAST,o_year@1 DESC]
+----SortExec: TopK(fetch=10), expr=[nation@0 ASC NULLS LAST,o_year@1 DESC]
 ------ProjectionExec: expr=[nation@0 as nation, o_year@1 as o_year, SUM(profit.amount)@2 as sum_profit]
 --------AggregateExec: mode=FinalPartitioned, gby=[nation@0 as nation, o_year@1 as o_year], aggr=[SUM(profit.amount)]
 ----------CoalesceBatchesExec: target_batch_size=8192

@@ -763,17 +763,12 @@ impl DisplayAs for SortExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                let expr: Vec<String> = self.expr.iter().map(|e| e.to_string()).collect();
+                let expr = PhysicalSortExpr::format_list(&self.expr);
                 match self.fetch {
                     Some(fetch) => {
-                        write!(
-                            f,
-                            // TODO should this say topk?
-                            "SortExec: fetch={fetch}, expr=[{}]",
-                            expr.join(",")
-                        )
+                        write!(f, "SortExec: TopK(fetch={fetch}), expr=[{expr}]",)
                     }
-                    None => write!(f, "SortExec: expr=[{}]", expr.join(",")),
+                    None => write!(f, "SortExec: expr=[{expr}]"),
                 }
             }
         }
