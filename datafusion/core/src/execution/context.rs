@@ -2017,7 +2017,7 @@ struct SessionContextProvider<'a> {
 }
 
 impl<'a> ContextProvider for SessionContextProvider<'a> {
-    fn get_table_provider(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
+    fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
         let name = self.state.resolve_table_ref(name).to_string();
         self.tables
             .get(&name)

@@ -362,7 +362,7 @@ struct MySchemaProvider {
 }
 
 impl ContextProvider for MySchemaProvider {
-    fn get_table_provider(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
+    fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
         let table_name = name.table();
         if table_name.starts_with("test") {
             let schema = Schema::new_with_metadata(

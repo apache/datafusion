@@ -191,7 +191,7 @@ struct MyContextProvider {
 }
 
 impl ContextProvider for MyContextProvider {
-    fn get_table_provider(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
+    fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
         if name.table() == "person" {
             Ok(Arc::new(MyTableSource {
                 schema: Arc::new(Schema::new(vec![

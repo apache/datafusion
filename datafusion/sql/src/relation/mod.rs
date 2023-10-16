@@ -38,7 +38,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 (
                     match (
                         cte,
-                        self.schema_provider.get_table_provider(table_ref.clone()),
+                        self.context_provider.get_table_source(table_ref.clone()),
                     ) {
                         (Some(cte_plan), _) => Ok(cte_plan.clone()),
                         (_, Ok(provider)) => {

@@ -611,7 +611,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let DescribeTableStmt { table_name } = statement;
         let table_ref = self.object_name_to_table_reference(table_name)?;
 
-        let table_source = self.schema_provider.get_table_provider(table_ref)?;
+        let table_source = self.context_provider.get_table_source(table_ref)?;
 
         let schema = table_source.schema();
 
@@ -630,7 +630,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             CopyToSource::Relation(object_name) => {
                 let table_ref =
                     self.object_name_to_table_reference(object_name.clone())?;
-                let table_source = self.schema_provider.get_table_provider(table_ref)?;
+                let table_source = self.context_provider.get_table_source(table_ref)?;
                 LogicalPlanBuilder::scan(
                     object_name_to_string(&object_name),
                     table_source,
@@ -912,12 +912,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<LogicalPlan> {
         // Do a table lookup to verify the table exists
         let table_ref = self.object_name_to_table_reference(table_name.clone())?;
-        let provider = self.schema_provider.get_table_provider(table_ref.clone())?;
-        let schema = (*provider.schema()).clone();
+        let table_source = self.context_provider.get_table_source(table_ref.clone())?;
+        let schema = (*table_source.schema()).clone();
         let schema = DFSchema::try_from(schema)?;
-        let scan =
-            LogicalPlanBuilder::scan(object_name_to_string(&table_name), provider, None)?
-                .build()?;
+        let scan = LogicalPlanBuilder::scan(
+            object_name_to_string(&table_name),
+            table_source,
+            None,
+        )?
+        .build()?;
         let mut planner_context = PlannerContext::new();
 
         let source = match predicate_expr {
@@ -960,10 +963,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // Do a table lookup to verify the table exists
         let table_name = self.object_name_to_table_reference(table_name)?;
-        let provider = self
-            .schema_provider
-            .get_table_provider(table_name.clone())?;
-        let arrow_schema = (*provider.schema()).clone();
+        let table_source = self.context_provider.get_table_source(table_name.clone())?;
+        let arrow_schema = (*table_source.schema()).clone();
         let table_schema = Arc::new(DFSchema::try_from_qualified_schema(
             table_name.clone(),
             &arrow_schema,
@@ -1064,10 +1065,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<LogicalPlan> {
         // Do a table lookup to verify the table exists
         let table_name = self.object_name_to_table_reference(table_name)?;
-        let provider = self
-            .schema_provider
-            .get_table_provider(table_name.clone())?;
-        let arrow_schema = (*provider.schema()).clone();
+        let table_source = self.context_provider.get_table_source(table_name.clone())?;
+        let arrow_schema = (*table_source.schema()).clone();
         let table_schema = DFSchema::try_from(arrow_schema)?;
 
         // Get insert fields and index_mapping
@@ -1193,7 +1192,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // Do a table lookup to verify the table exists
         let table_ref = self.object_name_to_table_reference(sql_table_name)?;
-        let _ = self.schema_provider.get_table_provider(table_ref)?;
+        let _ = self.context_provider.get_table_source(table_ref)?;
 
         // treat both FULL and EXTENDED as the same
         let select_list = if full || extended {
@@ -1228,7 +1227,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // Do a table lookup to verify the table exists
         let table_ref = self.object_name_to_table_reference(sql_table_name)?;
-        let _ = self.schema_provider.get_table_provider(table_ref)?;
+        let _ = self.context_provider.get_table_source(table_ref)?;
 
         let query = format!(
             "SELECT table_catalog, table_schema, table_name, definition FROM information_schema.views WHERE {where_clause}"
@@ -1245,8 +1244,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             schema: schema.into(),
             table: table.into(),
         };
-        self.schema_provider
-            .get_table_provider(tables_reference)
+        self.context_provider
+            .get_table_source(tables_reference)
             .is_ok()
     }
 }

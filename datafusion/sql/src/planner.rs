@@ -46,7 +46,7 @@ use crate::utils::make_decimal_type;
 /// functions referenced in SQL statements
 pub trait ContextProvider {
     /// Getter for a datasource
-    fn get_table_provider(&self, name: TableReference) -> Result<Arc<dyn TableSource>>;
+    fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>>;
     /// Getter for a UDF description
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>>;
     /// Getter for a UDAF description
@@ -186,7 +186,7 @@ impl PlannerContext {
 
 /// SQL query planner
 pub struct SqlToRel<'a, S: ContextProvider> {
-    pub(crate) schema_provider: &'a S,
+    pub(crate) context_provider: &'a S,
     pub(crate) options: ParserOptions,
     pub(crate) normalizer: IdentNormalizer,
 }
@@ -201,7 +201,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub fn new_with_options(schema_provider: &'a S, options: ParserOptions) -> Self {
         let normalize = options.enable_ident_normalization;
         SqlToRel {
-            schema_provider,
+            context_provider: schema_provider,
             options,
             normalizer: IdentNormalizer::new(normalize),
         }
@@ -334,7 +334,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     // Timestamp With Time Zone
                     // INPUT : [SQLDataType]   TimestampTz + [RuntimeConfig] Time Zone
                     // OUTPUT: [ArrowDataType] Timestamp<TimeUnit, Some(Time Zone)>
-                    self.schema_provider.options().execution.time_zone.clone()
+                    self.context_provider.options().execution.time_zone.clone()
                 } else {
                     // Timestamp Without Time zone
                     None
