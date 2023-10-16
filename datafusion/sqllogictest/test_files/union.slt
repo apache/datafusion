@@ -531,10 +531,9 @@ UnionExec
 --ProjectionExec: expr=[Int64(1)@0 as a]
 ----AggregateExec: mode=FinalPartitioned, gby=[Int64(1)@0 as Int64(1)], aggr=[]
 ------CoalesceBatchesExec: target_batch_size=8192
---------RepartitionExec: partitioning=Hash([Int64(1)@0], 4), input_partitions=4
+--------RepartitionExec: partitioning=Hash([Int64(1)@0], 4), input_partitions=1
 ----------AggregateExec: mode=Partial, gby=[1 as Int64(1)], aggr=[]
-------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
---------------EmptyExec: produce_one_row=true
+------------EmptyExec: produce_one_row=true
 --ProjectionExec: expr=[2 as a]
 ----EmptyExec: produce_one_row=true
 --ProjectionExec: expr=[3 as a]
@@ -563,15 +562,11 @@ UnionExec
 --ProjectionExec: expr=[COUNT(*)@1 as count, n@0 as n]
 ----AggregateExec: mode=FinalPartitioned, gby=[n@0 as n], aggr=[COUNT(*)]
 ------CoalesceBatchesExec: target_batch_size=8192
---------RepartitionExec: partitioning=Hash([n@0], 4), input_partitions=4
+--------RepartitionExec: partitioning=Hash([n@0], 4), input_partitions=1
 ----------AggregateExec: mode=Partial, gby=[n@0 as n], aggr=[COUNT(*)]
-------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
---------------ProjectionExec: expr=[5 as n]
-----------------EmptyExec: produce_one_row=true
+------------ProjectionExec: expr=[5 as n]
+--------------EmptyExec: produce_one_row=true
 --ProjectionExec: expr=[x@0 as count, y@1 as n]
 ----ProjectionExec: expr=[1 as x, MAX(Int64(10))@0 as y]
-------AggregateExec: mode=Final, gby=[], aggr=[MAX(Int64(10))]
---------CoalescePartitionsExec
-----------AggregateExec: mode=Partial, gby=[], aggr=[MAX(Int64(10))]
-------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
---------------EmptyExec: produce_one_row=true
+------AggregateExec: mode=Single, gby=[], aggr=[MAX(Int64(10))]
+--------EmptyExec: produce_one_row=true

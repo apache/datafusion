@@ -1021,6 +1021,7 @@ fn add_hash_on_top(
     // until Repartition(Hash).
     dist_onward: &mut Option<ExecTree>,
     input_idx: usize,
+    repartition_beneficial_stat: bool,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     if n_target == input.output_partitioning().partition_count() && n_target == 1 {
         // In this case adding a hash repartition is unnecessary as the hash
@@ -1044,9 +1045,12 @@ fn add_hash_on_top(
         // - Usage of order preserving variants is not desirable (per the flag
         //   `config.optimizer.bounded_order_preserving_variants`).
         let should_preserve_ordering = input.output_ordering().is_some();
-        // Since hashing benefits from partitioning, add a round-robin repartition
-        // before it:
-        let mut new_plan = add_roundrobin_on_top(input, n_target, dist_onward, 0)?;
+        let mut new_plan = input.clone();
+        if repartition_beneficial_stat {
+            // Since hashing benefits from partitioning, add a round-robin repartition
+            // before it:
+            new_plan = add_roundrobin_on_top(input, n_target, dist_onward, 0)?;
+        }
         new_plan = Arc::new(
             RepartitionExec::try_new(new_plan, Partitioning::Hash(hash_exprs, n_target))?
                 .with_preserve_order(should_preserve_ordering),
@@ -1233,13 +1237,7 @@ fn ensure_distribution(
     if dist_context.plan.children().is_empty() {
         return Ok(Transformed::No(dist_context));
     }
-    // Don't need to apply when the returned row count is not greater than 1:
-    let stats = dist_context.plan.statistics();
-    let mut repartition_beneficial_stat = true;
-    if stats.is_exact {
-        repartition_beneficial_stat =
-            stats.num_rows.map(|num_rows| num_rows > 1).unwrap_or(true);
-    }
+
     // Remove unnecessary repartition from the physical plan if any
     let DistributionContext {
         mut plan,
@@ -1263,7 +1261,6 @@ fn ensure_distribution(
             plan = updated_window;
         }
     };
-
     let n_children = plan.children().len();
     // This loop iterates over all the children to:
     // - Increase parallelism for every child if it is beneficial.
@@ -1289,6 +1286,13 @@ fn ensure_distribution(
             maintains,
             child_idx,
         )| {
+            // Don't need to apply when the returned row count is not greater than 1:
+            let stats = child.statistics();
+            let mut repartition_beneficial_stat = true;
+            if stats.is_exact {
+                repartition_beneficial_stat =
+                    stats.num_rows.map(|num_rows| num_rows > 1).unwrap_or(true);
+            }
             if enable_round_robin
                 // Operator benefits from partitioning (e.g. filter):
                 && (would_benefit && repartition_beneficial_stat)
@@ -1340,6 +1344,7 @@ fn ensure_distribution(
                         target_partitions,
                         dist_onward,
                         child_idx,
+                        repartition_beneficial_stat,
                     )?;
                 }
                 Distribution::UnspecifiedDistribution => {}
