@@ -30,10 +30,11 @@ use crate::{AggregateExpr, LexOrdering, PhysicalExpr, PhysicalSortExpr};
 
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field};
-use arrow_array::{Array, ListArray};
+use arrow_array::Array;
 use arrow_schema::{Fields, SortOptions};
+use datafusion_common::cast::as_list_array;
 use datafusion_common::utils::{compare_rows, get_row_at_idx};
-use datafusion_common::{exec_err, internal_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
 use itertools::izip;
@@ -181,12 +182,14 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         if values.is_empty() {
             return Ok(());
         }
+
         let n_row = values[0].len();
         for index in 0..n_row {
             let row = get_row_at_idx(values, index)?;
             self.values.push(row[0].clone());
             self.ordering_values.push(row[1..].to_vec());
         }
+
         Ok(())
     }
 
@@ -197,10 +200,11 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         // First entry in the state is the aggregation result.
         let array_agg_values = &states[0];
         // 2nd entry stores values received for ordering requirement columns, for each aggregation value inside ARRAY_AGG list.
-        // For each `ScalarValue` inside ARRAY_AGG list, we will receive a `Vec<ScalarValue>` that stores
+        // For each `StructArray` inside ARRAY_AGG list, we will receive an `Array` that stores
         // values received from its ordering requirement expression. (This information is necessary for during merging).
         let agg_orderings = &states[1];
-        if agg_orderings.as_any().is::<ListArray>() {
+
+        if as_list_array(agg_orderings).is_ok() {
             // Stores ARRAY_AGG results coming from each partition
             let mut partition_values = vec![];
             // Stores ordering requirement expression results coming from each partition
@@ -209,20 +213,21 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
             // Existing values should be merged also.
             partition_values.push(self.values.clone());
             partition_ordering_values.push(self.ordering_values.clone());
-            for index in 0..agg_orderings.len() {
-                let ordering = ScalarValue::try_from_array(agg_orderings, index)?;
-                // Ordering requirement expression values for each entry in the ARRAY_AGG list
-                let other_ordering_values =
-                    self.convert_array_agg_to_orderings(ordering)?;
-                // ARRAY_AGG result. (It is a `ScalarValue::List` under the hood, it stores `Vec<ScalarValue>`)
-                let array_agg_res = ScalarValue::try_from_array(array_agg_values, index)?;
-                if let ScalarValue::List(Some(other_values), _) = array_agg_res {
-                    partition_values.push(other_values);
-                    partition_ordering_values.push(other_ordering_values);
-                } else {
-                    return internal_err!("ARRAY_AGG state must be list!");
-                }
+
+            let array_agg_res =
+                ScalarValue::convert_array_to_scalar_vec(array_agg_values)?;
+
+            for v in array_agg_res.into_iter() {
+                partition_values.push(v);
             }
+
+            let orderings = ScalarValue::convert_array_to_scalar_vec(agg_orderings)?;
+            // Ordering requirement expression values for each entry in the ARRAY_AGG list
+            let other_ordering_values = self.convert_array_agg_to_orderings(orderings)?;
+            for v in other_ordering_values.into_iter() {
+                partition_ordering_values.push(v);
+            }
+
             let sort_options = self
                 .ordering_req
                 .iter()
@@ -248,10 +253,8 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
-        Ok(ScalarValue::new_list(
-            Some(self.values.clone()),
-            self.datatypes[0].clone(),
-        ))
+        let arr = ScalarValue::new_list(&self.values, &self.datatypes[0]);
+        Ok(ScalarValue::List(arr))
     }
 
     fn size(&self) -> usize {
@@ -280,33 +283,34 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
 }
 
 impl OrderSensitiveArrayAggAccumulator {
+    /// Inner Vec\<ScalarValue> in the ordering_values can be thought as ordering information for the each ScalarValue in the values array.
+    /// See [`merge_ordered_arrays`] for more information.
     fn convert_array_agg_to_orderings(
         &self,
-        in_data: ScalarValue,
-    ) -> Result<Vec<Vec<ScalarValue>>> {
-        if let ScalarValue::List(Some(list_vals), _field_ref) = in_data {
-            list_vals.into_iter().map(|struct_vals| {
-                if let ScalarValue::Struct(Some(orderings), _fields) = struct_vals {
-                    Ok(orderings)
-                } else {
-                    exec_err!(
-                        "Expects to receive ScalarValue::Struct(Some(..), _) but got:{:?}",
-                        struct_vals.data_type()
-                    )
-                }
-            }).collect::<Result<Vec<_>>>()
-        } else {
-            exec_err!(
-                "Expects to receive ScalarValue::List(Some(..), _) but got:{:?}",
-                in_data.data_type()
-            )
+        array_agg: Vec<Vec<ScalarValue>>,
+    ) -> Result<Vec<Vec<Vec<ScalarValue>>>> {
+        let mut orderings = vec![];
+        // in_data is Vec<ScalarValue> where ScalarValue does not include ScalarValue::List
+        for in_data in array_agg.into_iter() {
+            let ordering = in_data.into_iter().map(|struct_vals| {
+                    if let ScalarValue::Struct(Some(orderings), _) = struct_vals {
+                        Ok(orderings)
+                    } else {
+                        exec_err!(
+                            "Expects to receive ScalarValue::Struct(Some(..), _) but got:{:?}",
+                            struct_vals.data_type()
+                        )
+                    }
+                }).collect::<Result<Vec<_>>>()?;
+            orderings.push(ordering);
         }
+        Ok(orderings)
     }
 
     fn evaluate_orderings(&self) -> Result<ScalarValue> {
         let fields = ordering_fields(&self.ordering_req, &self.datatypes[1..]);
         let struct_field = Fields::from(fields.clone());
-        let orderings = self
+        let orderings: Vec<ScalarValue> = self
             .ordering_values
             .iter()
             .map(|ordering| {
@@ -314,7 +318,9 @@ impl OrderSensitiveArrayAggAccumulator {
             })
             .collect();
         let struct_type = DataType::Struct(Fields::from(fields));
-        Ok(ScalarValue::new_list(Some(orderings), struct_type))
+
+        let arr = ScalarValue::new_list(&orderings, &struct_type);
+        Ok(ScalarValue::List(arr))
     }
 }
 

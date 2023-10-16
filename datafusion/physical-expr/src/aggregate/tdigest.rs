@@ -28,6 +28,9 @@
 //! [Facebook's Folly TDigest]: https://github.com/facebook/folly/blob/main/folly/stats/TDigest.h
 
 use arrow::datatypes::DataType;
+use arrow_array::cast::as_list_array;
+use arrow_array::types::Float64Type;
+use datafusion_common::cast::as_primitive_array;
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use std::cmp::Ordering;
@@ -566,12 +569,14 @@ impl TDigest {
     /// [`TDigest`].
     pub(crate) fn to_scalar_state(&self) -> Vec<ScalarValue> {
         // Gather up all the centroids
-        let centroids: Vec<_> = self
+        let centroids: Vec<ScalarValue> = self
             .centroids
             .iter()
             .flat_map(|c| [c.mean(), c.weight()])
             .map(|v| ScalarValue::Float64(Some(v)))
             .collect();
+
+        let arr = ScalarValue::new_list(&centroids, &DataType::Float64);
 
         vec![
             ScalarValue::UInt64(Some(self.max_size as u64)),
@@ -579,7 +584,7 @@ impl TDigest {
             ScalarValue::Float64(Some(self.count)),
             ScalarValue::Float64(Some(self.max)),
             ScalarValue::Float64(Some(self.min)),
-            ScalarValue::new_list(Some(centroids), DataType::Float64),
+            ScalarValue::List(arr),
         ]
     }
 
@@ -600,10 +605,18 @@ impl TDigest {
         };
 
         let centroids: Vec<_> = match &state[5] {
-            ScalarValue::List(Some(c), f) if *f.data_type() == DataType::Float64 => c
-                .chunks(2)
-                .map(|v| Centroid::new(cast_scalar_f64!(v[0]), cast_scalar_f64!(v[1])))
-                .collect(),
+            ScalarValue::List(arr) => {
+                let list_array = as_list_array(arr);
+                let arr = list_array.values();
+
+                let f64arr =
+                    as_primitive_array::<Float64Type>(arr).expect("expected f64 array");
+                f64arr
+                    .values()
+                    .chunks(2)
+                    .map(|v| Centroid::new(v[0], v[1]))
+                    .collect()
+            }
             v => panic!("invalid centroids type {v:?}"),
         };
 
