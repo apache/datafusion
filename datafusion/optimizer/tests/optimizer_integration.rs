@@ -339,8 +339,8 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
     let statement = &ast[0];
 
     // create a logical query plan
-    let schema_provider = MySchemaProvider::default();
-    let sql_to_rel = SqlToRel::new(&schema_provider);
+    let context_provider = MyContextProvider::default();
+    let sql_to_rel = SqlToRel::new(&context_provider);
     let plan = sql_to_rel.sql_statement_to_plan(statement.clone()).unwrap();
 
     // hard code the return value of now()
@@ -357,11 +357,11 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
 }
 
 #[derive(Default)]
-struct MySchemaProvider {
+struct MyContextProvider {
     options: ConfigOptions,
 }
 
-impl ContextProvider for MySchemaProvider {
+impl ContextProvider for MyContextProvider {
     fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
         let table_name = name.table();
         if table_name.starts_with("test") {

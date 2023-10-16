@@ -197,15 +197,15 @@ pub struct SqlToRel<'a, S: ContextProvider> {
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// Create a new query planner
-    pub fn new(schema_provider: &'a S) -> Self {
-        Self::new_with_options(schema_provider, ParserOptions::default())
+    pub fn new(context_provider: &'a S) -> Self {
+        Self::new_with_options(context_provider, ParserOptions::default())
     }
 
     /// Create a new query planner
-    pub fn new_with_options(schema_provider: &'a S, options: ParserOptions) -> Self {
+    pub fn new_with_options(context_provider: &'a S, options: ParserOptions) -> Self {
         let normalize = options.enable_ident_normalization;
         SqlToRel {
-            context_provider: schema_provider,
+            context_provider,
             options,
             normalizer: IdentNormalizer::new(normalize),
         }
