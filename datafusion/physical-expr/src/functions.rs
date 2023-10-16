@@ -45,6 +45,7 @@ use arrow::{
     datatypes::{DataType, Int32Type, Int64Type, Schema},
 };
 use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
+pub use datafusion_expr::FuncMonotonicity;
 use datafusion_expr::{
     BuiltinScalarFunction, ColumnarValue, ScalarFunctionImplementation,
 };
@@ -180,7 +181,7 @@ pub fn create_physical_expr(
         _ => create_physical_fun(fun, execution_props)?,
     };
 
-    let monotonicity = get_func_monotonicity(fun);
+    let monotonicity = fun.monotonicity();
 
     Ok(Arc::new(ScalarFunctionExpr::new(
         &format!("{fun}"),
@@ -897,13 +898,13 @@ pub fn create_physical_fun(
     })
 }
 
-/// Monotonicity of the `ScalarFunctionExpr` with respect to its arguments.
-/// Each element of this vector corresponds to an argument and indicates whether
-/// the function's behavior is monotonic, or non-monotonic/unknown for that argument, namely:
-/// - `None` signifies unknown monotonicity or non-monotonicity.
-/// - `Some(true)` indicates that the function is monotonically increasing w.r.t. the argument in question.
-/// - Some(false) indicates that the function is monotonically decreasing w.r.t. the argument in question.
-pub type FuncMonotonicity = Vec<Option<bool>>;
+#[deprecated(
+    since = "32.0.0",
+    note = "Moved to `expr` crate. Please use `BuiltinScalarFunction::monotonicity()` instead"
+)]
+pub fn get_func_monotonicity(fun: &BuiltinScalarFunction) -> Option<FuncMonotonicity> {
+    fun.monotonicity()
+}
 
 /// Determines a [`ScalarFunctionExpr`]'s monotonicity for the given arguments
 /// and the function's behavior depending on its arguments.
@@ -955,47 +956,6 @@ fn func_order_in_one_dimension(
                 }
             }
         }
-    }
-}
-
-/// This function specifies monotonicity behaviors for built-in scalar functions.
-/// The list can be extended, only mathematical and datetime functions are
-/// considered for the initial implementation of this feature.
-pub fn get_func_monotonicity(fun: &BuiltinScalarFunction) -> Option<FuncMonotonicity> {
-    if matches!(
-        fun,
-        BuiltinScalarFunction::Atan
-            | BuiltinScalarFunction::Acosh
-            | BuiltinScalarFunction::Asinh
-            | BuiltinScalarFunction::Atanh
-            | BuiltinScalarFunction::Ceil
-            | BuiltinScalarFunction::Degrees
-            | BuiltinScalarFunction::Exp
-            | BuiltinScalarFunction::Factorial
-            | BuiltinScalarFunction::Floor
-            | BuiltinScalarFunction::Ln
-            | BuiltinScalarFunction::Log10
-            | BuiltinScalarFunction::Log2
-            | BuiltinScalarFunction::Radians
-            | BuiltinScalarFunction::Round
-            | BuiltinScalarFunction::Signum
-            | BuiltinScalarFunction::Sinh
-            | BuiltinScalarFunction::Sqrt
-            | BuiltinScalarFunction::Cbrt
-            | BuiltinScalarFunction::Tanh
-            | BuiltinScalarFunction::Trunc
-            | BuiltinScalarFunction::Pi
-    ) {
-        Some(vec![Some(true)])
-    } else if matches!(
-        fun,
-        BuiltinScalarFunction::DateTrunc | BuiltinScalarFunction::DateBin
-    ) {
-        Some(vec![None, Some(true)])
-    } else if *fun == BuiltinScalarFunction::Log {
-        Some(vec![Some(true), Some(false)])
-    } else {
-        None
     }
 }
 

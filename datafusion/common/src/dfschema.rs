@@ -24,7 +24,9 @@ use std::fmt::{Display, Formatter};
 use std::hash::Hash;
 use std::sync::Arc;
 
-use crate::error::{unqualified_field_not_found, DataFusionError, Result, SchemaError};
+use crate::error::{
+    unqualified_field_not_found, DataFusionError, Result, SchemaError, _plan_err,
+};
 use crate::{
     field_not_found, Column, FunctionalDependencies, OwnedTableReference, TableReference,
 };
@@ -187,10 +189,10 @@ impl DFSchema {
                 match &self.fields[i].qualifier {
                     Some(qualifier) => {
                         if (qualifier.to_string() + "." + self.fields[i].name()) == name {
-                            return Err(DataFusionError::Plan(format!(
+                            return _plan_err!(
                                 "Fully qualified field name '{name}' was supplied to `index_of` \
                                 which is deprecated. Please use `index_of_column_by_name` instead"
-                            )));
+                            );
                         }
                     }
                     None => (),
@@ -378,12 +380,11 @@ impl DFSchema {
             .zip(arrow_schema.fields().iter())
             .try_for_each(|(l_field, r_field)| {
                 if !can_cast_types(r_field.data_type(), l_field.data_type()) {
-                    Err(DataFusionError::Plan(
-                        format!("Column {} (type: {}) is not compatible with column {} (type: {})",
+                    _plan_err!("Column {} (type: {}) is not compatible with column {} (type: {})",
                                 r_field.name(),
                                 r_field.data_type(),
                                 l_field.name(),
-                                l_field.data_type())))
+                                l_field.data_type())
                 } else {
                     Ok(())
                 }

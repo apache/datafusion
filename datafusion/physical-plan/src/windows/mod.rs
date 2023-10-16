@@ -421,7 +421,6 @@ pub fn get_best_fitting_window(
         Ok(Some(Arc::new(BoundedWindowAggExec::try_new(
             window_expr,
             input.clone(),
-            input.schema(),
             physical_partition_keys.to_vec(),
             partition_search_mode,
         )?) as _))
@@ -435,7 +434,6 @@ pub fn get_best_fitting_window(
         Ok(Some(Arc::new(WindowAggExec::try_new(
             window_expr,
             input.clone(),
-            input.schema(),
             physical_partition_keys.to_vec(),
         )?) as _))
     }
@@ -759,7 +757,6 @@ mod tests {
                 schema.as_ref(),
             )?],
             blocking_exec,
-            schema,
             vec![],
         )?);
 

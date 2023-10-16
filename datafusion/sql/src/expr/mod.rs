@@ -29,13 +29,12 @@ mod value;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow_schema::DataType;
-use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
     internal_err, not_impl_err, plan_err, Column, DFSchema, DataFusionError, Result,
     ScalarValue,
 };
+use datafusion_expr::expr::InList;
 use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::expr::{InList, Placeholder};
 use datafusion_expr::{
     col, expr, lit, AggregateFunction, Between, BinaryExpr, BuiltinScalarFunction, Cast,
     Expr, ExprSchemable, GetFieldAccess, GetIndexedField, Like, Operator, TryCast,
@@ -122,7 +121,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let mut expr = self.sql_expr_to_logical_expr(sql, schema, planner_context)?;
         expr = self.rewrite_partial_qualifier(expr, schema);
         self.validate_schema_satisfies_exprs(schema, &[expr.clone()])?;
-        let expr = infer_placeholder_types(expr, schema)?;
+        let expr = expr.infer_placeholder_types(schema)?;
         Ok(expr)
     }
 
@@ -710,49 +709,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             self.plan_indices(indices, schema, planner_context)?,
         )))
     }
-}
-
-// modifies expr if it is a placeholder with datatype of right
-fn rewrite_placeholder(expr: &mut Expr, other: &Expr, schema: &DFSchema) -> Result<()> {
-    if let Expr::Placeholder(Placeholder { id: _, data_type }) = expr {
-        if data_type.is_none() {
-            let other_dt = other.get_type(schema);
-            match other_dt {
-                Err(e) => {
-                    Err(e.context(format!(
-                        "Can not find type of {other} needed to infer type of {expr}"
-                    )))?;
-                }
-                Ok(dt) => {
-                    *data_type = Some(dt);
-                }
-            }
-        };
-    }
-    Ok(())
-}
-
-/// Find all [`Expr::Placeholder`] tokens in a logical plan, and try
-/// to infer their [`DataType`] from the context of their use.
-fn infer_placeholder_types(expr: Expr, schema: &DFSchema) -> Result<Expr> {
-    expr.transform(&|mut expr| {
-        // Default to assuming the arguments are the same type
-        if let Expr::BinaryExpr(BinaryExpr { left, op: _, right }) = &mut expr {
-            rewrite_placeholder(left.as_mut(), right.as_ref(), schema)?;
-            rewrite_placeholder(right.as_mut(), left.as_ref(), schema)?;
-        };
-        if let Expr::Between(Between {
-            expr,
-            negated: _,
-            low,
-            high,
-        }) = &mut expr
-        {
-            rewrite_placeholder(low.as_mut(), expr.as_ref(), schema)?;
-            rewrite_placeholder(high.as_mut(), expr.as_ref(), schema)?;
-        }
-        Ok(Transformed::Yes(expr))
-    })
 }
 
 #[cfg(test)]

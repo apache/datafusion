@@ -43,13 +43,13 @@ use crate::{
     Expr, ExprSchemable, TableSource,
 };
 use arrow::datatypes::{DataType, Schema, SchemaRef};
-use datafusion_common::plan_err;
 use datafusion_common::UnnestOptions;
 use datafusion_common::{
     display::ToStringifiedPlan, Column, DFField, DFSchema, DFSchemaRef, DataFusionError,
     FileType, FunctionalDependencies, OwnedTableReference, Result, ScalarValue,
     TableReference, ToDFSchema,
 };
+use datafusion_common::{plan_datafusion_err, plan_err};
 use std::any::Any;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -626,6 +626,55 @@ impl LogicalPlanBuilder {
         self.join_detailed(right, join_type, join_keys, filter, false)
     }
 
+    /// Apply a join with on constraint.
+    ///
+    /// The `ExtractEquijoinPredicate` optimizer pass has the ability to split join predicates into
+    /// equijoin predicates and (other) filter predicates. Therefore, if you prefer not to manually split the
+    /// join predicates, it is recommended to use the `join_on` method instead of the `join` method.
+    ///
+    /// ```
+    /// # use datafusion_expr::{Expr, col, LogicalPlanBuilder,
+    /// #  logical_plan::builder::LogicalTableSource, logical_plan::JoinType,};
+    /// # use std::sync::Arc;
+    /// # use arrow::datatypes::{Schema, DataType, Field};
+    /// # use datafusion_common::Result;
+    /// # fn main() -> Result<()> {
+    /// let example_schema = Arc::new(Schema::new(vec![
+    ///     Field::new("a", DataType::Int32, false),
+    ///     Field::new("b", DataType::Int32, false),
+    ///     Field::new("c", DataType::Int32, false),
+    /// ]));
+    /// let table_source = Arc::new(LogicalTableSource::new(example_schema));
+    /// let left_table = table_source.clone();
+    /// let right_table = table_source.clone();
+    ///
+    /// let right_plan = LogicalPlanBuilder::scan("right", right_table, None)?.build()?;
+    ///
+    /// let exprs = vec![col("left.a").eq(col("right.a")), col("left.b").not_eq(col("right.b"))];
+    ///
+    /// let plan = LogicalPlanBuilder::scan("left", left_table, None)?
+    ///     .join_on(right_plan, JoinType::Inner, exprs)?
+    ///     .build()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn join_on(
+        self,
+        right: LogicalPlan,
+        join_type: JoinType,
+        on_exprs: impl IntoIterator<Item = Expr>,
+    ) -> Result<Self> {
+        let filter = on_exprs.into_iter().reduce(Expr::and);
+
+        self.join_detailed(
+            right,
+            join_type,
+            (Vec::<Column>::new(), Vec::<Column>::new()),
+            filter,
+            false,
+        )
+    }
+
     pub(crate) fn normalize(
         plan: &LogicalPlan,
         column: impl Into<Column> + Clone,
@@ -1026,9 +1075,9 @@ impl LogicalPlanBuilder {
                         self.plan.schema().clone(),
                         right.schema().clone(),
                     )?.ok_or_else(||
-                        DataFusionError::Plan(format!(
+                        plan_datafusion_err!(
                             "can't create join plan, join key should belong to one input, error key: ({normalized_left_key},{normalized_right_key})"
-                        )))
+                        ))
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -1206,13 +1255,13 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
         let data_type =
             comparison_coercion(left_field.data_type(), right_field.data_type())
                 .ok_or_else(|| {
-                    DataFusionError::Plan(format!(
+                    plan_datafusion_err!(
                 "UNION Column {} (type: {}) is not compatible with column {} (type: {})",
                 right_field.name(),
                 right_field.data_type(),
                 left_field.name(),
                 left_field.data_type()
-            ))
+            )
                 })?;
 
         Ok(DFField::new(

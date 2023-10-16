@@ -35,8 +35,8 @@ use arrow::{
 };
 use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{
-    internal_err, Column, Constraint, Constraints, DFField, DFSchema, DFSchemaRef,
-    DataFusionError, OwnedTableReference, Result, ScalarValue,
+    internal_err, plan_datafusion_err, Column, Constraint, Constraints, DFField,
+    DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result, ScalarValue,
 };
 use datafusion_expr::{
     abs, acos, acosh, array, array_append, array_concat, array_dims, array_element,
@@ -1744,9 +1744,7 @@ fn parse_vec_expr(
 ) -> Result<Option<Vec<Expr>>, Error> {
     let res = p
         .iter()
-        .map(|elem| {
-            parse_expr(elem, registry).map_err(|e| DataFusionError::Plan(e.to_string()))
-        })
+        .map(|elem| parse_expr(elem, registry).map_err(|e| plan_datafusion_err!("{}", e)))
         .collect::<Result<Vec<_>>>()?;
     // Convert empty vector to None.
     Ok((!res.is_empty()).then_some(res))

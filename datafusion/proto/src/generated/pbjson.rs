@@ -23976,9 +23976,6 @@ impl serde::Serialize for WindowAggExecNode {
         if !self.window_expr.is_empty() {
             len += 1;
         }
-        if self.input_schema.is_some() {
-            len += 1;
-        }
         if !self.partition_keys.is_empty() {
             len += 1;
         }
@@ -23991,9 +23988,6 @@ impl serde::Serialize for WindowAggExecNode {
         }
         if !self.window_expr.is_empty() {
             struct_ser.serialize_field("windowExpr", &self.window_expr)?;
-        }
-        if let Some(v) = self.input_schema.as_ref() {
-            struct_ser.serialize_field("inputSchema", v)?;
         }
         if !self.partition_keys.is_empty() {
             struct_ser.serialize_field("partitionKeys", &self.partition_keys)?;
@@ -24024,8 +24018,6 @@ impl<'de> serde::Deserialize<'de> for WindowAggExecNode {
             "input",
             "window_expr",
             "windowExpr",
-            "input_schema",
-            "inputSchema",
             "partition_keys",
             "partitionKeys",
             "linear",
@@ -24038,7 +24030,6 @@ impl<'de> serde::Deserialize<'de> for WindowAggExecNode {
         enum GeneratedField {
             Input,
             WindowExpr,
-            InputSchema,
             PartitionKeys,
             Linear,
             PartiallySorted,
@@ -24066,7 +24057,6 @@ impl<'de> serde::Deserialize<'de> for WindowAggExecNode {
                         match value {
                             "input" => Ok(GeneratedField::Input),
                             "windowExpr" | "window_expr" => Ok(GeneratedField::WindowExpr),
-                            "inputSchema" | "input_schema" => Ok(GeneratedField::InputSchema),
                             "partitionKeys" | "partition_keys" => Ok(GeneratedField::PartitionKeys),
                             "linear" => Ok(GeneratedField::Linear),
                             "partiallySorted" | "partially_sorted" => Ok(GeneratedField::PartiallySorted),
@@ -24092,7 +24082,6 @@ impl<'de> serde::Deserialize<'de> for WindowAggExecNode {
             {
                 let mut input__ = None;
                 let mut window_expr__ = None;
-                let mut input_schema__ = None;
                 let mut partition_keys__ = None;
                 let mut partition_search_mode__ = None;
                 while let Some(k) = map_.next_key()? {
@@ -24108,12 +24097,6 @@ impl<'de> serde::Deserialize<'de> for WindowAggExecNode {
                                 return Err(serde::de::Error::duplicate_field("windowExpr"));
                             }
                             window_expr__ = Some(map_.next_value()?);
-                        }
-                        GeneratedField::InputSchema => {
-                            if input_schema__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("inputSchema"));
-                            }
-                            input_schema__ = map_.next_value()?;
                         }
                         GeneratedField::PartitionKeys => {
                             if partition_keys__.is_some() {
@@ -24147,7 +24130,6 @@ impl<'de> serde::Deserialize<'de> for WindowAggExecNode {
                 Ok(WindowAggExecNode {
                     input: input__,
                     window_expr: window_expr__.unwrap_or_default(),
-                    input_schema: input_schema__,
                     partition_keys: partition_keys__.unwrap_or_default(),
                     partition_search_mode: partition_search_mode__,
                 })

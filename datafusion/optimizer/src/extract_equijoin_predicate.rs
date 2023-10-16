@@ -161,7 +161,6 @@ mod tests {
     use super::*;
     use crate::test::*;
     use arrow::datatypes::DataType;
-    use datafusion_common::Column;
     use datafusion_expr::{
         col, lit, logical_plan::builder::LogicalPlanBuilder, JoinType,
     };
@@ -182,12 +181,7 @@ mod tests {
         let t2 = test_table_scan_with_name("t2")?;
 
         let plan = LogicalPlanBuilder::from(t1)
-            .join(
-                t2,
-                JoinType::Left,
-                (Vec::<Column>::new(), Vec::<Column>::new()),
-                Some(col("t1.a").eq(col("t2.a"))),
-            )?
+            .join_on(t2, JoinType::Left, Some(col("t1.a").eq(col("t2.a"))))?
             .build()?;
         let expected = "Left Join: t1.a = t2.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N]\
             \n  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]\
@@ -202,10 +196,9 @@ mod tests {
         let t2 = test_table_scan_with_name("t2")?;
 
         let plan = LogicalPlanBuilder::from(t1)
-            .join(
+            .join_on(
                 t2,
                 JoinType::Left,
-                (Vec::<Column>::new(), Vec::<Column>::new()),
                 Some((col("t1.a") + lit(10i64)).eq(col("t2.a") * lit(2u32))),
             )?
             .build()?;
@@ -222,10 +215,9 @@ mod tests {
         let t2 = test_table_scan_with_name("t2")?;
 
         let plan = LogicalPlanBuilder::from(t1)
-            .join(
+            .join_on(
                 t2,
                 JoinType::Left,
-                (Vec::<Column>::new(), Vec::<Column>::new()),
                 Some(
                     (col("t1.a") + lit(10i64))
                         .gt_eq(col("t2.a") * lit(2u32))
@@ -273,10 +265,9 @@ mod tests {
         let t2 = test_table_scan_with_name("t2")?;
 
         let plan = LogicalPlanBuilder::from(t1)
-            .join(
+            .join_on(
                 t2,
                 JoinType::Left,
-                (Vec::<Column>::new(), Vec::<Column>::new()),
                 Some(
                     col("t1.c")
                         .eq(col("t2.c"))
@@ -301,10 +292,9 @@ mod tests {
         let t3 = test_table_scan_with_name("t3")?;
 
         let input = LogicalPlanBuilder::from(t2)
-            .join(
+            .join_on(
                 t3,
                 JoinType::Left,
-                (Vec::<Column>::new(), Vec::<Column>::new()),
                 Some(
                     col("t2.a")
                         .eq(col("t3.a"))
@@ -313,10 +303,9 @@ mod tests {
             )?
             .build()?;
         let plan = LogicalPlanBuilder::from(t1)
-            .join(
+            .join_on(
                 input,
                 JoinType::Left,
-                (Vec::<Column>::new(), Vec::<Column>::new()),
                 Some(
                     col("t1.a")
                         .eq(col("t2.a"))
@@ -340,10 +329,9 @@ mod tests {
         let t3 = test_table_scan_with_name("t3")?;
 
         let input = LogicalPlanBuilder::from(t2)
-            .join(
+            .join_on(
                 t3,
                 JoinType::Left,
-                (Vec::<Column>::new(), Vec::<Column>::new()),
                 Some(
                     col("t2.a")
                         .eq(col("t3.a"))
@@ -352,10 +340,9 @@ mod tests {
             )?
             .build()?;
         let plan = LogicalPlanBuilder::from(t1)
-            .join(
+            .join_on(
                 input,
                 JoinType::Left,
-                (Vec::<Column>::new(), Vec::<Column>::new()),
                 Some(col("t1.a").eq(col("t2.a")).and(col("t2.c").eq(col("t3.c")))),
             )?
             .build()?;
@@ -383,12 +370,7 @@ mod tests {
         )
         .alias("t1.a + 1 = t2.a + 2");
         let plan = LogicalPlanBuilder::from(t1)
-            .join(
-                t2,
-                JoinType::Left,
-                (Vec::<Column>::new(), Vec::<Column>::new()),
-                Some(filter),
-            )?
+            .join_on(t2, JoinType::Left, Some(filter))?
             .build()?;
         let expected = "Left Join: t1.a + CAST(Int64(1) AS UInt32) = t2.a + CAST(Int32(2) AS UInt32) [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N]\
         \n  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]\

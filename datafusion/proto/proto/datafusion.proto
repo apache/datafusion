@@ -1416,7 +1416,6 @@ message PartiallySortedPartitionSearchMode {
 message WindowAggExecNode {
   PhysicalPlanNode input = 1;
   repeated PhysicalWindowExprNode window_expr = 2;
-  Schema input_schema = 4;
   repeated PhysicalExprNode partition_keys = 5;
   // Set optional to `None` for `BoundedWindowAggExec`.
   oneof partition_search_mode {

@@ -663,12 +663,7 @@ impl DataFrame {
     ) -> Result<DataFrame> {
         let expr = on_exprs.into_iter().reduce(Expr::and);
         let plan = LogicalPlanBuilder::from(self.plan)
-            .join(
-                right.plan,
-                join_type,
-                (Vec::<Column>::new(), Vec::<Column>::new()),
-                expr,
-            )?
+            .join_on(right.plan, join_type, expr)?
             .build()?;
         Ok(DataFrame::new(self.session_state, plan))
     }
@@ -1144,10 +1139,7 @@ impl DataFrame {
                     col_exists = true;
                     new_column.clone()
                 } else {
-                    Expr::Column(Column {
-                        relation: None,
-                        name: f.name().into(),
-                    })
+                    col(f.qualified_column())
                 }
             })
             .collect();
@@ -1218,7 +1210,42 @@ impl DataFrame {
         Ok(DataFrame::new(self.session_state, project_plan))
     }
 
-    /// Convert a prepare logical plan into its inner logical plan with all params replaced with their corresponding values
+    /// Replace all parameters in logical plan with the specified
+    /// values, in preparation for execution.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use datafusion::prelude::*;
+    /// # use datafusion::{error::Result, assert_batches_eq};
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// # use datafusion_common::ScalarValue;
+    /// let mut ctx = SessionContext::new();
+    /// # ctx.register_csv("example", "tests/data/example.csv", CsvReadOptions::new()).await?;
+    /// let results = ctx
+    ///   .sql("SELECT a FROM example WHERE b = $1")
+    ///   .await?
+    ///    // replace $1 with value 2
+    ///   .with_param_values(vec![
+    ///      // value at index 0 --> $1
+    ///      ScalarValue::from(2i64)
+    ///    ])?
+    ///   .collect()
+    ///   .await?;
+    /// assert_batches_eq!(
+    ///  &[
+    ///    "+---+",
+    ///    "| a |",
+    ///    "+---+",
+    ///    "| 1 |",
+    ///    "+---+",
+    ///  ],
+    ///  &results
+    /// );
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn with_param_values(self, param_values: Vec<ScalarValue>) -> Result<Self> {
         let plan = self.plan.with_param_values(param_values)?;
         Ok(Self::new(self.session_state, plan))
@@ -1851,6 +1878,131 @@ mod tests {
             ],
             &df_results_overwrite_self
         );
+
+        Ok(())
+    }
+
+    // Test issue: https://github.com/apache/arrow-datafusion/issues/7790
+    // The join operation outputs two identical column names, but they belong to different relations.
+    #[tokio::test]
+    async fn with_column_join_same_columns() -> Result<()> {
+        let df = test_table().await?.select_columns(&["c1"])?;
+        let ctx = SessionContext::new();
+
+        let table = df.into_view();
+        ctx.register_table("t1", table.clone())?;
+        ctx.register_table("t2", table)?;
+        let df = ctx
+            .table("t1")
+            .await?
+            .join(
+                ctx.table("t2").await?,
+                JoinType::Inner,
+                &["c1"],
+                &["c1"],
+                None,
+            )?
+            .sort(vec![
+                // make the test deterministic
+                col("t1.c1").sort(true, true),
+            ])?
+            .limit(0, Some(1))?;
+
+        let df_results = df.clone().collect().await?;
+        assert_batches_sorted_eq!(
+            [
+                "+----+----+",
+                "| c1 | c1 |",
+                "+----+----+",
+                "| a  | a  |",
+                "+----+----+",
+            ],
+            &df_results
+        );
+
+        let df_with_column = df.clone().with_column("new_column", lit(true))?;
+
+        assert_eq!(
+            "\
+        Projection: t1.c1, t2.c1, Boolean(true) AS new_column\
+        \n  Limit: skip=0, fetch=1\
+        \n    Sort: t1.c1 ASC NULLS FIRST\
+        \n      Inner Join: t1.c1 = t2.c1\
+        \n        TableScan: t1\
+        \n        TableScan: t2",
+            format!("{:?}", df_with_column.logical_plan())
+        );
+
+        assert_eq!(
+            "\
+        Projection: t1.c1, t2.c1, Boolean(true) AS new_column\
+        \n  Limit: skip=0, fetch=1\
+        \n    Sort: t1.c1 ASC NULLS FIRST, fetch=1\
+        \n      Inner Join: t1.c1 = t2.c1\
+        \n        SubqueryAlias: t1\
+        \n          TableScan: aggregate_test_100 projection=[c1]\
+        \n        SubqueryAlias: t2\
+        \n          TableScan: aggregate_test_100 projection=[c1]",
+            format!("{:?}", df_with_column.clone().into_optimized_plan()?)
+        );
+
+        let df_results = df_with_column.collect().await?;
+
+        assert_batches_sorted_eq!(
+            [
+                "+----+----+------------+",
+                "| c1 | c1 | new_column |",
+                "+----+----+------------+",
+                "| a  | a  | true       |",
+                "+----+----+------------+",
+            ],
+            &df_results
+        );
+        Ok(())
+    }
+
+    // Table 't1' self join
+    // Supplementary test of issue: https://github.com/apache/arrow-datafusion/issues/7790
+    #[tokio::test]
+    async fn with_column_self_join() -> Result<()> {
+        let df = test_table().await?.select_columns(&["c1"])?;
+        let ctx = SessionContext::new();
+
+        ctx.register_table("t1", df.into_view())?;
+
+        let df = ctx
+            .table("t1")
+            .await?
+            .join(
+                ctx.table("t1").await?,
+                JoinType::Inner,
+                &["c1"],
+                &["c1"],
+                None,
+            )?
+            .sort(vec![
+                // make the test deterministic
+                col("t1.c1").sort(true, true),
+            ])?
+            .limit(0, Some(1))?;
+
+        let df_results = df.clone().collect().await?;
+        assert_batches_sorted_eq!(
+            [
+                "+----+----+",
+                "| c1 | c1 |",
+                "+----+----+",
+                "| a  | a  |",
+                "+----+----+",
+            ],
+            &df_results
+        );
+
+        let actual_err = df.clone().with_column("new_column", lit(true)).unwrap_err();
+        let expected_err = "Error during planning: Projections require unique expression names \
+            but the expression \"t1.c1\" at position 0 and \"t1.c1\" at position 1 have the same name. \
+            Consider aliasing (\"AS\") one of them.";
+        assert_eq!(actual_err.strip_backtrace(), expected_err);
 
         Ok(())
     }
