@@ -23,7 +23,7 @@ use datafusion_execution::memory_pool::MemoryReservation;
 
 #[derive(Debug, Copy, Clone, Default)]
 struct BatchCursor {
-    /// The index into BatchBuilder::batches
+    /// The index into SortOrderBuilder::batches
     batch_idx: usize,
     /// The row index within the given batch
     row_idx: usize,
@@ -31,7 +31,7 @@ struct BatchCursor {
 
 /// Provides an API to incrementally build a [`RecordBatch`] from partitioned [`RecordBatch`]
 #[derive(Debug)]
-pub struct BatchBuilder {
+pub struct SortOrderBuilder {
     /// The schema of the RecordBatches yielded by this stream
     schema: SchemaRef,
 
@@ -49,8 +49,8 @@ pub struct BatchBuilder {
     indices: Vec<(usize, usize)>,
 }
 
-impl BatchBuilder {
-    /// Create a new [`BatchBuilder`] with the provided `stream_count` and `batch_size`
+impl SortOrderBuilder {
+    /// Create a new [`SortOrderBuilder`] with the provided `stream_count` and `batch_size`
     pub fn new(
         schema: SchemaRef,
         stream_count: usize,
@@ -86,17 +86,17 @@ impl BatchBuilder {
         self.indices.push((cursor.batch_idx, row_idx));
     }
 
-    /// Returns the number of in-progress rows in this [`BatchBuilder`]
+    /// Returns the number of in-progress rows in this [`SortOrderBuilder`]
     pub fn len(&self) -> usize {
         self.indices.len()
     }
 
-    /// Returns `true` if this [`BatchBuilder`] contains no in-progress rows
+    /// Returns `true` if this [`SortOrderBuilder`] contains no in-progress rows
     pub fn is_empty(&self) -> bool {
         self.indices.is_empty()
     }
 
-    /// Returns the schema of this [`BatchBuilder`]
+    /// Returns the schema of this [`SortOrderBuilder`]
     pub fn schema(&self) -> &SchemaRef {
         &self.schema
     }

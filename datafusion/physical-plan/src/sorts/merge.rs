@@ -19,7 +19,7 @@
 //! This is an order-preserving merge.
 
 use crate::metrics::BaselineMetrics;
-use crate::sorts::builder::BatchBuilder;
+use crate::sorts::builder::SortOrderBuilder;
 use crate::sorts::cursor::Cursor;
 use crate::sorts::stream::PartitionedStream;
 use crate::RecordBatchStream;
@@ -36,7 +36,7 @@ type CursorStream<C> = Box<dyn PartitionedStream<Output = Result<(C, RecordBatch
 
 #[derive(Debug)]
 pub(crate) struct SortPreservingMergeStream<C> {
-    in_progress: BatchBuilder,
+    in_progress: SortOrderBuilder,
 
     /// The sorted input streams to merge together
     streams: CursorStream<C>,
@@ -110,7 +110,7 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
         let stream_count = streams.partitions();
 
         Self {
-            in_progress: BatchBuilder::new(schema, stream_count, batch_size, reservation),
+            in_progress: SortOrderBuilder::new(schema, stream_count, batch_size, reservation),
             streams,
             metrics,
             aborted: false,
