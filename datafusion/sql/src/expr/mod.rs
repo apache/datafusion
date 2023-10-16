@@ -772,12 +772,12 @@ mod tests {
 
     use crate::TableReference;
 
-    struct TestSchemaProvider {
+    struct TestContextProvider {
         options: ConfigOptions,
         tables: HashMap<String, Arc<dyn TableSource>>,
     }
 
-    impl TestSchemaProvider {
+    impl TestContextProvider {
         pub fn new() -> Self {
             let mut tables = HashMap::new();
             tables.insert(
@@ -796,7 +796,7 @@ mod tests {
         }
     }
 
-    impl ContextProvider for TestSchemaProvider {
+    impl ContextProvider for TestContextProvider {
         fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
             match self.tables.get(name.table()) {
                 Some(table) => Ok(table.clone()),
@@ -850,8 +850,8 @@ mod tests {
                         .unwrap();
                     let sql_expr = parser.parse_expr().unwrap();
 
-                    let schema_provider = TestSchemaProvider::new();
-                    let sql_to_rel = SqlToRel::new(&schema_provider);
+                    let context_provider = TestContextProvider::new();
+                    let sql_to_rel = SqlToRel::new(&context_provider);
 
                     // Should not stack overflow
                     sql_to_rel.sql_expr_to_logical_expr(
