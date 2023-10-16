@@ -146,11 +146,11 @@ impl<T: ArrowNumericType> std::fmt::Debug for MedianAccumulator<T> {
 
 impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
     fn state(&self) -> Result<Vec<ScalarValue>> {
-        let all_values: Vec<ScalarValue> = self
+        let all_values = self
             .all_values
             .iter()
             .map(|x| ScalarValue::new_primitive::<T>(Some(*x), &self.data_type))
-            .collect();
+            .collect::<Result<Vec<_>>>()?;
 
         let arr = ScalarValue::new_list(&all_values, &self.data_type);
         Ok(vec![ScalarValue::List(arr)])
@@ -188,7 +188,7 @@ impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
             let (_, median, _) = d.select_nth_unstable_by(len / 2, cmp);
             Some(*median)
         };
-        Ok(ScalarValue::new_primitive::<T>(median, &self.data_type))
+        ScalarValue::new_primitive::<T>(median, &self.data_type)
     }
 
     fn size(&self) -> usize {
