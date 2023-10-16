@@ -1228,6 +1228,7 @@ fn ensure_distribution(
     let enable_round_robin = config.optimizer.enable_round_robin_repartition;
     let repartition_file_scans = config.optimizer.repartition_file_scans;
     let repartition_file_min_size = config.optimizer.repartition_file_min_size;
+    let batch_size = config.execution.batch_size;
     let is_unbounded = unbounded_output(&dist_context.plan);
     // Use order preserving variants either of the conditions true
     // - it is desired according to config
@@ -1290,7 +1291,10 @@ fn ensure_distribution(
             // Don't need to apply when the returned row count is not greater than 1:
             let stats = child.statistics();
             let repartition_beneficial_stats = if stats.is_exact {
-                stats.num_rows.map(|num_rows| num_rows > 1).unwrap_or(true)
+                stats
+                    .num_rows
+                    .map(|num_rows| num_rows > batch_size)
+                    .unwrap_or(true)
             } else {
                 true
             };
