@@ -36,19 +36,18 @@ pub async fn get_statistics_with_limit(
     limit: Option<usize>,
 ) -> Result<(Vec<PartitionedFile>, Statistics)> {
     let mut result_files = vec![];
-    // These statistics can be calculated as long as at least one file has them.
-    // If none of the files provide them, then they will become an absent precision.
-    // The missing values will be counted as
-    // - zero for summations,
+    // These statistics can be calculated as long as at least one file provides
+    // useful information. If none of the files provides any information, then
+    // they will end up having `Precision::Absent` values. Throughout calculations,
+    // missing values will be imputed as:
+    // - zero for summations, and
     // - neutral element for extreme points.
-    let mut null_counts: Vec<Precision<usize>> =
-        vec![Precision::Absent; file_schema.fields().len()];
-    let mut max_values: Vec<Precision<ScalarValue>> =
-        vec![Precision::Absent; file_schema.fields().len()];
-    let mut min_values: Vec<Precision<ScalarValue>> =
-        vec![Precision::Absent; file_schema.fields().len()];
-    let mut num_rows: Precision<usize> = Precision::Absent;
-    let mut total_byte_size: Precision<usize> = Precision::Absent;
+    let size = file_schema.fields().len();
+    let mut null_counts: Vec<Precision<usize>> = vec![Precision::Absent; size];
+    let mut max_values: Vec<Precision<ScalarValue>> = vec![Precision::Absent; size];
+    let mut min_values: Vec<Precision<ScalarValue>> = vec![Precision::Absent; size];
+    let mut num_rows = Precision::<usize>::Absent;
+    let mut total_byte_size = Precision::<usize>::Absent;
 
     // Fusing the stream allows us to call next safely even once it is finished.
     let mut all_files = Box::pin(all_files.fuse());
@@ -76,9 +75,10 @@ pub async fn get_statistics_with_limit(
                 let (file, file_stats) = current?;
                 result_files.push(file);
 
-                // Number of rows, total byte size and null counts are added for each file.
-                // In case of an absent information or inexact value coming from the file,
-                // it changes the statistic precision to inexact.
+                // We accumulate the number of rows, total byte size and null
+                // counts across all the files in question. If any file does not
+                // provide any information or provides an inexact value, we demote
+                // the statistic precision to inexact.
                 num_rows = add_row_stats(file_stats.num_rows, num_rows);
 
                 total_byte_size =
@@ -94,11 +94,11 @@ pub async fn get_statistics_with_limit(
                 }
 
                 for (i, cs) in file_stats.column_statistics.iter().enumerate() {
-                    set_max_if_greater(&mut max_values, cs.max_value.clone(), i);
+                    set_max_if_greater(&mut max_values[i], cs.max_value.clone());
                 }
 
                 for (i, cs) in file_stats.column_statistics.iter().enumerate() {
-                    set_min_if_lesser(&mut min_values, cs.min_value.clone(), i);
+                    set_min_if_lesser(&mut min_values[i], cs.min_value.clone());
                 }
 
                 // If the number of rows exceeds the limit, we can stop processing
@@ -227,63 +227,61 @@ pub(crate) fn get_col_stats(
 /// If the given value is numerically greater than the original maximum value,
 /// set the new maximum value with appropriate exactness information.
 fn set_max_if_greater(
-    max_values: &mut [Precision<ScalarValue>],
+    max_values: &mut Precision<ScalarValue>,
     max_nominee: Precision<ScalarValue>,
-    index: usize,
 ) {
-    match (&max_values[index], &max_nominee) {
+    match (&max_values, &max_nominee) {
         (Precision::Exact(val1), Precision::Exact(val2)) => {
             if val1 < val2 {
-                max_values[index] = max_nominee;
+                *max_values = max_nominee;
             }
         }
         (Precision::Exact(val1), Precision::Inexact(val2))
         | (Precision::Inexact(val1), Precision::Inexact(val2))
         | (Precision::Inexact(val1), Precision::Exact(val2)) => {
             if val1 < val2 {
-                max_values[index] = max_nominee.to_inexact()
+                *max_values = max_nominee.to_inexact()
             }
         }
         (Precision::Inexact(_), Precision::Absent)
         | (Precision::Exact(_), Precision::Absent) => {
-            max_values[index] = max_values[index].clone().to_inexact()
+            *max_values = max_values.clone().to_inexact()
         }
         (Precision::Absent, Precision::Exact(_))
         | (Precision::Absent, Precision::Inexact(_)) => {
-            max_values[index] = max_nominee.to_inexact()
+            *max_values = max_nominee.to_inexact()
         }
-        (Precision::Absent, Precision::Absent) => max_values[index] = Precision::Absent,
+        (Precision::Absent, Precision::Absent) => *max_values = Precision::Absent,
     }
 }
 
 /// If the given value is numerically lesser than the original minimum value,
 /// set the new minimum value with appropriate exactness information.
 fn set_min_if_lesser(
-    min_values: &mut [Precision<ScalarValue>],
+    min_values: &mut Precision<ScalarValue>,
     min_nominee: Precision<ScalarValue>,
-    index: usize,
 ) {
-    match (&min_values[index], &min_nominee) {
+    match (&min_values, &min_nominee) {
         (Precision::Exact(val1), Precision::Exact(val2)) => {
             if val1 > val2 {
-                min_values[index] = min_nominee;
+                *min_values = min_nominee;
             }
         }
         (Precision::Exact(val1), Precision::Inexact(val2))
         | (Precision::Inexact(val1), Precision::Inexact(val2))
         | (Precision::Inexact(val1), Precision::Exact(val2)) => {
             if val1 > val2 {
-                min_values[index] = min_nominee.to_inexact()
+                *min_values = min_nominee.to_inexact()
             }
         }
         (Precision::Inexact(_), Precision::Absent)
         | (Precision::Exact(_), Precision::Absent) => {
-            min_values[index] = min_values[index].clone().to_inexact()
+            *min_values = min_values.clone().to_inexact()
         }
         (Precision::Absent, Precision::Exact(_))
         | (Precision::Absent, Precision::Inexact(_)) => {
-            min_values[index] = min_nominee.to_inexact()
+            *min_values = min_nominee.to_inexact()
         }
-        (Precision::Absent, Precision::Absent) => min_values[index] = Precision::Absent,
+        (Precision::Absent, Precision::Absent) => *min_values = Precision::Absent,
     }
 }

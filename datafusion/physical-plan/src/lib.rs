@@ -42,8 +42,6 @@ use datafusion_physical_expr::{
 use futures::stream::TryStreamExt;
 use tokio::task::JoinSet;
 
-// Interfaces:
-
 mod topk;
 mod visitor;
 
