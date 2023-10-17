@@ -1021,12 +1021,21 @@ impl ExecutionPlan for AggregateExec {
                     ..Default::default()
                 }
             }
-            _ => Statistics {
-                // the output row count is surely not larger than its input row count
-                num_rows: self.input.statistics().num_rows,
-                is_exact: false,
-                ..Default::default()
-            },
+            _ => {
+                let input_stats = self.input.statistics();
+                // Input statistics is exact and number of rows not greater than 1:
+                let is_exact = input_stats.is_exact
+                    && (input_stats
+                        .num_rows
+                        .map(|num_rows| num_rows == 1)
+                        .unwrap_or(false));
+                Statistics {
+                    // the output row count is surely not larger than its input row count
+                    num_rows: self.input.statistics().num_rows,
+                    is_exact,
+                    ..Default::default()
+                }
+            }
         }
     }
 }
