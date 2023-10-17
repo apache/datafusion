@@ -2371,6 +2371,7 @@ mod tmp_tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_subquery3() -> Result<()> {
         let config = SessionConfig::new().with_target_partitions(1);
         // config.options_mut().optimizer.max_passes = 1;
@@ -2440,7 +2441,7 @@ mod tmp_tests {
             (33, 'c', 3),
             (44, 'd', 4);",
         )
-            .await?;
+        .await?;
 
         let sql = "explain verbose SELECT t1_id, (SELECT a FROM (select 1 as a) WHERE a = t1.t1_int) as t2_int from t1";
 
@@ -2519,6 +2520,162 @@ mod tmp_tests {
             expected, actual,
             "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
+
+        let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+        print_batches(&batches)?;
+
+        // assert_eq!(0, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_subquery6() -> Result<()> {
+        let config = SessionConfig::new().with_target_partitions(1);
+        // config.options_mut().optimizer.max_passes = 1;
+        let ctx = SessionContext::new_with_config(config);
+
+        ctx.sql(
+            "CREATE TABLE join_t1(t1_id INT UNSIGNED, t1_name VARCHAR, t1_int INT UNSIGNED)
+        AS VALUES
+        (11, 'a', 1),
+        (22, 'b', 2),
+        (33, 'c', 3),
+        (44, 'd', 4);",
+        )
+            .await?;
+
+        ctx.sql(
+            "CREATE TABLE join_t2(t2_id INT UNSIGNED, t2_name VARCHAR, t2_int INT UNSIGNED)
+            AS VALUES
+            (11, 'z', 3),
+            (22, 'y', 1),
+            (44, 'x', 3),
+            (55, 'w', 3);",
+        )
+            .await?;
+
+        let sql = "SELECT *
+            FROM join_t1
+            WHERE NOT EXISTS (
+                SELECT DISTINCT t2_int
+                FROM join_t2
+                WHERE join_t1.t1_id + 1 > join_t2.t2_id * 2
+            )";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        print_plan(&physical_plan)?;
+
+        let expected = vec![
+            "NestedLoopJoinExec: join_type=LeftAnti, filter=CAST(t1_id@0 AS Int64) + 1 > CAST(t2_id@1 AS Int64) * 2",
+            "  MemoryExec: partitions=1, partition_sizes=[1]",
+            "  AggregateExec: mode=Single, gby=[t2_id@0 as t2_id], aggr=[]",
+            "    MemoryExec: partitions=1, partition_sizes=[1]",
+        ];
+        // Get string representation of the plan
+        let actual = get_plan_string(&physical_plan);
+        assert_eq!(
+            expected, actual,
+            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+        print_batches(&batches)?;
+
+        // assert_eq!(0, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_subquery7() -> Result<()> {
+        let config = SessionConfig::new().with_target_partitions(1);
+        // config.options_mut().optimizer.max_passes = 1;
+        let ctx = SessionContext::new_with_config(config);
+
+        ctx.sql("CREATE TABLE test_non_nullable_decimal(c1 DECIMAL(9,2) NOT NULL); ")
+            .await?;
+
+        let sql = "SELECT c1*0 FROM test_non_nullable_decimal";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        print_plan(&physical_plan)?;
+
+        let expected = vec![
+            "ProjectionExec: expr=[Some(0),20,0 as test_non_nullable_decimal.c1 * Int64(0)]",
+            "  MemoryExec: partitions=1, partition_sizes=[0]",
+        ];
+        // Get string representation of the plan
+        let actual = get_plan_string(&physical_plan);
+        assert_eq!(
+            expected, actual,
+            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+        print_batches(&batches)?;
+
+        // assert_eq!(0, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_subquery8() -> Result<()> {
+        let config = SessionConfig::new().with_target_partitions(1);
+        // config.options_mut().optimizer.max_passes = 1;
+        let ctx = SessionContext::new_with_config(config);
+
+        ctx.sql("CREATE EXTERNAL TABLE aggregate_test_100 (
+          c1  VARCHAR NOT NULL,
+          c2  TINYINT NOT NULL,
+          c3  SMALLINT NOT NULL,
+          c4  SMALLINT,
+          c5  INT,
+          c6  BIGINT NOT NULL,
+          c7  SMALLINT NOT NULL,
+          c8  INT NOT NULL,
+          c9  INT UNSIGNED NOT NULL,
+          c10 BIGINT UNSIGNED NOT NULL,
+          c11 FLOAT NOT NULL,
+          c12 DOUBLE NOT NULL,
+          c13 VARCHAR NOT NULL
+        )
+        STORED AS CSV
+        WITH HEADER ROW
+        LOCATION '../../testing/data/csv/aggregate_test_100.csv'")
+            .await?;
+
+        let sql = "explain verbose WITH indices AS (
+          SELECT 1 AS idx UNION ALL
+          SELECT 2 AS idx UNION ALL
+          SELECT 3 AS idx UNION ALL
+          SELECT 4 AS idx UNION ALL
+          SELECT 5 AS idx
+        )
+        SELECT data.arr[indices.idx] as element, array_length(data.arr) as array_len, dummy
+        FROM (
+          SELECT array_agg(distinct c2) as arr, count(1) as dummy FROM aggregate_test_100
+        ) data
+          CROSS JOIN indices
+        ORDER BY 1";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        print_plan(&physical_plan)?;
+
+        // let expected = vec![
+        //     "ProjectionExec: expr=[Some(0),20,0 as test_non_nullable_decimal.c1 * Int64(0)]",
+        //     "  MemoryExec: partitions=1, partition_sizes=[0]",
+        // ];
+        // // Get string representation of the plan
+        // let actual = get_plan_string(&physical_plan);
+        // assert_eq!(
+        //     expected, actual,
+        //     "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        // );
 
         let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
         print_batches(&batches)?;

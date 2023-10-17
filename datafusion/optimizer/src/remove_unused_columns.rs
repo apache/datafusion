@@ -20,9 +20,12 @@
 //! Note that this rule should be applied after simplify expressions optimizer rule.
 use crate::optimizer::ApplyOrder;
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{get_required_group_by_exprs_indices, DFField, DFSchemaRef, OwnedTableReference, Result, TableReference, ToDFSchema, JoinType};
+use datafusion_common::{
+    get_required_group_by_exprs_indices, DFField, DFSchemaRef, JoinType,
+    OwnedTableReference, Result, TableReference, ToDFSchema,
+};
 use datafusion_expr::{
-    logical_plan::LogicalPlan, Aggregate, Expr, Partitioning, TableScan,
+    logical_plan::LogicalPlan, Aggregate, Expr, Partitioning, Projection, TableScan,
 };
 use itertools::izip;
 use std::sync::Arc;
@@ -113,17 +116,13 @@ fn join_child_requirement(
 fn split_join_requirement_indices_to_children(
     left_len: usize,
     indices: &[usize],
-    join_type: &JoinType
+    join_type: &JoinType,
 ) -> (Vec<usize>, Vec<usize>) {
-     match join_type{
-         // In these cases split
-        JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {},
-        JoinType::LeftAnti | JoinType::LeftSemi => {
-            return (indices.to_vec(), vec![])
-        }
-        JoinType::RightSemi | JoinType::RightAnti => {
-            return (vec![], indices.to_vec())
-        }
+    match join_type {
+        // In these cases split
+        JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {}
+        JoinType::LeftAnti | JoinType::LeftSemi => return (indices.to_vec(), vec![]),
+        JoinType::RightSemi | JoinType::RightAnti => return (vec![], indices.to_vec()),
     }
     let left_requirements_from_parent = indices
         .iter()
@@ -167,8 +166,19 @@ fn try_optimize_internal(
     let child_required_indices: Option<Vec<Vec<usize>>> = match plan {
         LogicalPlan::Projection(proj) => {
             let exprs_used = get_at_indices(&proj.expr, &indices);
-            let new_indices = get_referred_indices(&proj.input, &exprs_used)?;
-            Some(vec![new_indices])
+            let required_indices = get_referred_indices(&proj.input, &exprs_used)?;
+            println!("indices: {:?}, required_indices:{:?}", indices, required_indices);
+            println!("proj.expr: {:?}", proj.expr);
+            println!("exprs_used: {:?}", exprs_used);
+            let projection_input = if let Some(input) =
+                try_optimize_internal(&proj.input, _config, required_indices)?
+            {
+                Arc::new(input)
+            } else {
+                proj.input.clone()
+            };
+            let new_proj = Projection::try_new(exprs_used, projection_input)?;
+            return Ok(Some(LogicalPlan::Projection(new_proj)));
         }
         LogicalPlan::Aggregate(aggregate) => {
             let group_by_expr_existing = aggregate
@@ -238,10 +248,14 @@ fn try_optimize_internal(
         LogicalPlan::Join(join) => {
             let left_len = join.left.schema().fields().len();
             let (left_requirements_from_parent, right_requirements_from_parent) =
-                split_join_requirement_indices_to_children(left_len, &indices, &join.join_type);
-            // println!("left_requirements_from_parent:{:?}", left_requirements_from_parent);
-            // println!("right_requirements_from_parent:{:?}", right_requirements_from_parent);
-            // println!("indices:{:?}", indices);
+                split_join_requirement_indices_to_children(
+                    left_len,
+                    &indices,
+                    &join.join_type,
+                );
+            println!("left_requirements_from_parent:{:?}", left_requirements_from_parent);
+            println!("right_requirements_from_parent:{:?}", right_requirements_from_parent);
+            println!("indices:{:?}", indices);
             let (left_on, right_on): (Vec<_>, Vec<_>) = join.on.iter().cloned().unzip();
             let join_filter = &join
                 .filter
@@ -267,7 +281,15 @@ fn try_optimize_internal(
         LogicalPlan::CrossJoin(cross_join) => {
             let left_len = cross_join.left.schema().fields().len();
             let (left_child_indices, right_child_indices) =
-                split_join_requirement_indices_to_children(left_len, &indices, &JoinType::Full);
+                split_join_requirement_indices_to_children(
+                    left_len,
+                    &indices,
+                    &JoinType::Inner,
+                );
+            // println!("left_len: {:?}", left_len);
+            // println!("left_child_indices:{:?}", left_child_indices);
+            // println!("right_child_indices:{:?}", right_child_indices);
+            // println!("indices:{:?}", indices);
             Some(vec![left_child_indices, right_child_indices])
         }
         LogicalPlan::Repartition(repartition) => {
@@ -298,9 +320,9 @@ fn try_optimize_internal(
             // println!("table_scan.source.schema().fields().len():{:?}", table_scan.source.schema().fields().len());
             let indices = if indices.is_empty() {
                 // Use at least 1 column if not empty
-                if table_scan.projected_schema.fields().is_empty(){
+                if table_scan.projected_schema.fields().is_empty() {
                     vec![]
-                } else{
+                } else {
                     vec![0]
                 }
             } else {
@@ -323,7 +345,8 @@ fn try_optimize_internal(
                 })
                 .collect::<Option<Vec<_>>>();
             // TODO: Remove this check.
-            if table_scan.projection.is_none(){
+            // println!("table_scan.projection: {:?}", table_scan.projection);
+            if table_scan.projection.is_none() {
                 projection = None;
             }
             // let projection = table_scan.projection.as_ref().map(|_proj_indices| indices);
@@ -352,19 +375,72 @@ fn try_optimize_internal(
             // println!("insub_query_aliasput: {:?}", plan);
             // println!("input: {:?}", sub_query_alias.input);
             Some(vec![indices])
-        },
+        }
         LogicalPlan::Subquery(sub_query) => {
-            let referred_indices = get_referred_indices(&sub_query.subquery, &sub_query.outer_ref_columns)?;
+            let referred_indices =
+                get_referred_indices(&sub_query.subquery, &sub_query.outer_ref_columns)?;
             let required_indices = merge_vectors(&indices, &referred_indices);
             Some(vec![required_indices])
-        },
+        }
         LogicalPlan::EmptyRelation(_empty_relation) => {
+            // Empty Relation has no children
+            None
+        }
+        LogicalPlan::Limit(_limit) => Some(vec![indices]),
+        LogicalPlan::Statement(_statement) => {
+            // TODO: Add support for statement.
+            None
+        }
+        LogicalPlan::Values(_values) => {
+            // Values has no children
+            None
+        }
+        LogicalPlan::Explain(_explain) => {
+            // Direct plan to its child.
             Some(vec![indices])
         }
-        LogicalPlan::Limit(_limit) => {
+        LogicalPlan::Analyze(_analyze) => {
+            // Direct plan to its child.
             Some(vec![indices])
         }
-        _ => None,
+        LogicalPlan::Distinct(_distinct) => {
+            // Direct plan to its child.
+            Some(vec![indices])
+        }
+        LogicalPlan::Prepare(_prepare) => {
+            // Direct plan to its child.
+            Some(vec![indices])
+        }
+        LogicalPlan::Extension(_extension) => {
+            // It is not known how to direct requirements to children.
+            // Safest behaviour is to stop propagation.
+            None
+        }
+        LogicalPlan::Dml(_dml_statement) => {
+            // Direct plan to its child.
+            Some(vec![indices])
+        }
+        LogicalPlan::Ddl(_ddl_statement) => {
+            // Ddl has no children
+            None
+        }
+        LogicalPlan::Copy(_copy_to) => {
+            // Direct plan to its child.
+            Some(vec![indices])
+        }
+        LogicalPlan::DescribeTable(_desc_table) => {
+            // Describe table has no children.
+            None
+        }
+        // TODO :Add an uneest test
+        LogicalPlan::Unnest(unnest) => {
+            let referred_indices = get_referred_indices(
+                &unnest.input,
+                &[Expr::Column(unnest.column.clone())],
+            )?;
+            let required_indices = merge_vectors(&indices, &referred_indices);
+            Some(vec![required_indices])
+        }
     };
     if let Some(child_required_indices) = child_required_indices {
         let new_inputs = izip!(child_required_indices, plan.inputs())

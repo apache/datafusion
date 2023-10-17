@@ -443,6 +443,14 @@ impl DFSchema {
                         .zip(iter2)
                         .all(|((t1, f1), (t2, f2))| t1 == t2 && Self::field_is_semantically_equal(f1, f2))
             }
+            (
+                DataType::Decimal128(_l_precision, _l_scale),
+                DataType::Decimal128(_r_precision, _r_scale),
+            ) => true,
+            (
+                DataType::Decimal256(_l_precision, _l_scale),
+                DataType::Decimal256(_r_precision, _r_scale),
+            ) => true,
             _ => dt1 == dt2,
         }
     }
