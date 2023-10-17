@@ -348,7 +348,7 @@ fn try_optimize_internal(
             })));
         }
         // SubqueryAlias alias can route requirement for its parent to its child
-        LogicalPlan::SubqueryAlias(sub_query_alias) => {
+        LogicalPlan::SubqueryAlias(_sub_query_alias) => {
             // println!("insub_query_aliasput: {:?}", plan);
             // println!("input: {:?}", sub_query_alias.input);
             Some(vec![indices])
@@ -358,6 +358,12 @@ fn try_optimize_internal(
             let required_indices = merge_vectors(&indices, &referred_indices);
             Some(vec![required_indices])
         },
+        LogicalPlan::EmptyRelation(_empty_relation) => {
+            Some(vec![indices])
+        }
+        LogicalPlan::Limit(_limit) => {
+            Some(vec![indices])
+        }
         _ => None,
     };
     if let Some(child_required_indices) = child_required_indices {
