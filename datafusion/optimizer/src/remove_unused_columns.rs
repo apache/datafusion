@@ -232,6 +232,10 @@ fn try_optimize_internal(
             let required_indices = merge_vectors(&indices, &referred_indices);
             Some(vec![required_indices])
         }
+        LogicalPlan::Union(union) => {
+            // Union directly re-routes requirements from its parents.
+            Some(vec![indices; union.inputs.len()])
+        }
         // SubqueryAlias alias can route requirement for its parent to its child
         LogicalPlan::SubqueryAlias(_) => Some(vec![indices]),
         _ => None,
