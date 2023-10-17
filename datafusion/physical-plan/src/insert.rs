@@ -36,7 +36,7 @@ use arrow_array::{ArrayRef, UInt64Array};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion_common::{exec_err, internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::PhysicalSortRequirement;
+use datafusion_physical_expr::{Distribution, PhysicalSortRequirement};
 
 use async_trait::async_trait;
 use futures::StreamExt;

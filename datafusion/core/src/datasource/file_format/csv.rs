@@ -23,6 +23,7 @@ use std::fmt;
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use super::write::{stateless_append_all, stateless_multipart_put};
 use super::{FileFormat, DEFAULT_SCHEMA_INFER_MAX_RECORD};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::write::{BatchSerializer, FileWriterMode};
@@ -49,7 +50,6 @@ use bytes::{Buf, Bytes};
 use futures::stream::BoxStream;
 use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
 use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore};
-use rand::distributions::{Alphanumeric, DistString};
 
 /// Character Separated Value `FileFormat` implementation.
 #[derive(Debug)]

@@ -23,6 +23,7 @@ use std::fmt::Debug;
 use std::io::BufReader;
 use std::sync::Arc;
 
+use super::write::{stateless_append_all, stateless_multipart_put};
 use super::{FileFormat, FileScanConfig};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::write::{BatchSerializer, FileWriterMode};
@@ -47,7 +48,6 @@ use datafusion_physical_plan::metrics::MetricsSet;
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
-use rand::distributions::{Alphanumeric, DistString};
 
 /// New line delimited JSON `FileFormat` implementation.
 #[derive(Debug)]

@@ -23,7 +23,7 @@ use std::fmt::Debug;
 use std::io::Write;
 use std::sync::Arc;
 
-use super::write::{create_writer, AbortableWrite, FileWriterMode};
+use super::write::{create_writer, start_demuxer_task, AbortableWrite, FileWriterMode};
 use super::{FileFormat, FileScanConfig};
 
 use crate::config::ConfigOptions;
@@ -62,7 +62,6 @@ use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::WriterProperties;
 use parquet::file::statistics::Statistics as ParquetStatistics;
 use parquet::file::writer::SerializedFileWriter;
-use rand::distributions::{Alphanumeric, DistString};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::task::{JoinHandle, JoinSet};
