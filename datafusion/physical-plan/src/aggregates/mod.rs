@@ -1027,7 +1027,7 @@ impl ExecutionPlan for AggregateExec {
                 let is_exact = input_stats.is_exact
                     && (input_stats
                         .num_rows
-                        .map(|num_rows| num_rows <= 1)
+                        .map(|num_rows| num_rows == 1)
                         .unwrap_or(false));
                 Statistics {
                     // the output row count is surely not larger than its input row count
