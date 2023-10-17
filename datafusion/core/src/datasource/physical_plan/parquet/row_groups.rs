@@ -488,6 +488,7 @@ impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::datasource::physical_plan::parquet::ParquetFileReader;
     use crate::physical_plan::metrics::ExecutionPlanMetricsSet;
     use arrow::datatypes::DataType::Decimal128;
     use arrow::datatypes::Schema;
@@ -496,6 +497,7 @@ mod tests {
     use datafusion_expr::{cast, col, lit, Expr};
     use datafusion_physical_expr::execution_props::ExecutionProps;
     use datafusion_physical_expr::{create_physical_expr, PhysicalExpr};
+    use parquet::arrow::async_reader::ParquetObjectReader;
     use parquet::basic::LogicalType;
     use parquet::data_type::{ByteArray, FixedLenByteArray};
     use parquet::{
@@ -1117,5 +1119,186 @@ mod tests {
         let df_schema = schema.clone().to_dfschema().unwrap();
         let execution_props = ExecutionProps::new();
         create_physical_expr(expr, &df_schema, schema, &execution_props).unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_row_group_bloom_filter_pruning_predicate_simple_expr() {
+        // load parquet file
+        let testdata = datafusion_common::test_util::parquet_test_data();
+        let file_name = "data_index_bloom_encoding_stats.parquet";
+        let path = format!("{testdata}/{file_name}");
+        let data = bytes::Bytes::from(std::fs::read(path).unwrap());
+
+        // generate pruning predicate
+        let schema = Schema::new(vec![Field::new("String", DataType::Utf8, false)]);
+        let expr = col(r#""String""#).eq(lit("Hello_Not_Exists"));
+        let expr = logical2physical(&expr, &schema);
+        let pruning_predicate =
+            PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
+
+        let row_groups = vec![0];
+        let pruned_row_groups = test_row_group_bloom_filter_pruning_predicate(
+            file_name,
+            data,
+            &pruning_predicate,
+            &row_groups,
+        )
+        .await
+        .unwrap();
+        assert!(pruned_row_groups.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_row_group_bloom_filter_pruning_predicate_partial_expr() {
+        // load parquet file
+        let testdata = datafusion_common::test_util::parquet_test_data();
+        let file_name = "data_index_bloom_encoding_stats.parquet";
+        let path = format!("{testdata}/{file_name}");
+        let data = bytes::Bytes::from(std::fs::read(path).unwrap());
+
+        // generate pruning predicate
+        let schema = Schema::new(vec![Field::new("String", DataType::Utf8, false)]);
+        let expr = col(r#""String""#)
+            .eq(lit("Hello_Not_Exists"))
+            .and(lit("1").eq(lit("1")));
+        let expr = logical2physical(&expr, &schema);
+        let pruning_predicate =
+            PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
+
+        let row_groups = vec![0];
+        let pruned_row_groups = test_row_group_bloom_filter_pruning_predicate(
+            file_name,
+            data,
+            &pruning_predicate,
+            &row_groups,
+        )
+        .await
+        .unwrap();
+        assert!(pruned_row_groups.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_row_group_bloom_filter_pruning_predicate_mutiple_expr() {
+        // load parquet file
+        let testdata = datafusion_common::test_util::parquet_test_data();
+        let file_name = "data_index_bloom_encoding_stats.parquet";
+        let path = format!("{testdata}/{file_name}");
+        let data = bytes::Bytes::from(std::fs::read(path).unwrap());
+
+        // generate pruning predicate
+        let schema = Schema::new(vec![Field::new("String", DataType::Utf8, false)]);
+        let expr = col(r#""String""#)
+            .eq(lit("Hello_Not_Exists"))
+            .or(col(r#""String""#).eq(lit("Hello_Not_Exists2")));
+        let expr = logical2physical(&expr, &schema);
+        let pruning_predicate =
+            PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
+
+        let row_groups = vec![0];
+        let pruned_row_groups = test_row_group_bloom_filter_pruning_predicate(
+            file_name,
+            data,
+            &pruning_predicate,
+            &row_groups,
+        )
+        .await
+        .unwrap();
+        assert!(pruned_row_groups.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_row_group_bloom_filter_pruning_predicate_with_exists_value() {
+        // load parquet file
+        let testdata = datafusion_common::test_util::parquet_test_data();
+        let file_name = "data_index_bloom_encoding_stats.parquet";
+        let path = format!("{testdata}/{file_name}");
+        let data = bytes::Bytes::from(std::fs::read(path).unwrap());
+
+        // generate pruning predicate
+        let schema = Schema::new(vec![Field::new("String", DataType::Utf8, false)]);
+        let expr = col(r#""String""#).eq(lit("Hello"));
+        let expr = logical2physical(&expr, &schema);
+        let pruning_predicate =
+            PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
+
+        let row_groups = vec![0];
+        let pruned_row_groups = test_row_group_bloom_filter_pruning_predicate(
+            file_name,
+            data,
+            &pruning_predicate,
+            &row_groups,
+        )
+        .await
+        .unwrap();
+        assert_eq!(pruned_row_groups, row_groups);
+    }
+
+    #[tokio::test]
+    async fn test_row_group_bloom_filter_pruning_predicate_without_bloom_filter() {
+        // load parquet file
+        let testdata = datafusion_common::test_util::parquet_test_data();
+        let file_name = "alltypes_plain.parquet";
+        let path = format!("{testdata}/{file_name}");
+        let data = bytes::Bytes::from(std::fs::read(path).unwrap());
+
+        // generate pruning predicate
+        let schema = Schema::new(vec![Field::new("string_col", DataType::Utf8, false)]);
+        let expr = col(r#""string_col""#).eq(lit("0"));
+        let expr = logical2physical(&expr, &schema);
+        let pruning_predicate =
+            PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
+
+        let row_groups = vec![0];
+        let pruned_row_groups = test_row_group_bloom_filter_pruning_predicate(
+            file_name,
+            data,
+            &pruning_predicate,
+            &row_groups,
+        )
+        .await
+        .unwrap();
+        assert_eq!(pruned_row_groups, row_groups);
+    }
+
+    async fn test_row_group_bloom_filter_pruning_predicate(
+        file_name: &str,
+        data: bytes::Bytes,
+        pruning_predicate: &PruningPredicate,
+        row_groups: &[usize],
+    ) -> Result<Vec<usize>> {
+        use object_store::{ObjectMeta, ObjectStore};
+
+        let object_meta = ObjectMeta {
+            location: object_store::path::Path::parse(file_name).expect("creating path"),
+            last_modified: chrono::DateTime::from(std::time::SystemTime::now()),
+            size: data.len(),
+            e_tag: None,
+        };
+        let in_memory = object_store::memory::InMemory::new();
+        in_memory
+            .put(&object_meta.location, data)
+            .await
+            .expect("put parquet file into in memory object store");
+
+        let metrics = ExecutionPlanMetricsSet::new();
+        let file_metrics =
+            ParquetFileMetrics::new(0, &object_meta.location.to_string(), &metrics);
+        let reader = ParquetFileReader {
+            inner: ParquetObjectReader::new(Arc::new(in_memory), object_meta),
+            file_metrics: file_metrics.clone(),
+        };
+        let mut builder = ParquetRecordBatchStreamBuilder::new(reader).await.unwrap();
+
+        let metadata = builder.metadata().clone();
+        let pruned_row_group = prune_row_groups_by_bloom_filters(
+            &mut builder,
+            row_groups,
+            &metadata.row_groups(),
+            pruning_predicate,
+            &file_metrics,
+        )
+        .await;
+
+        Ok(pruned_row_group)
     }
 }

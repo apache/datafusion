@@ -600,7 +600,7 @@ impl DefaultParquetFileReaderFactory {
 }
 
 /// Implements [`AsyncFileReader`] for a parquet file in object storage
-struct ParquetFileReader {
+pub(crate) struct ParquetFileReader {
     file_metrics: ParquetFileMetrics,
     inner: ParquetObjectReader,
 }
