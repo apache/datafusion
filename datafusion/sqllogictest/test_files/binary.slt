@@ -155,3 +155,92 @@ drop table t_source
 
 statement ok
 drop table t
+
+
+#############
+## Tests for binary that contains strings
+#############
+
+statement ok
+CREATE TABLE t_source
+AS VALUES
+  ('Foo'),
+  (NULL),
+  ('Bar'),
+  ('FooBar')
+;
+
+# Create a table with Binary, LargeBinary but really has strings
+statement ok
+CREATE TABLE t
+AS SELECT
+  arrow_cast(column1, 'Binary') as "binary",
+  arrow_cast(column1, 'LargeBinary') as "largebinary"
+FROM t_source;
+
+query ??TT
+SELECT binary, largebinary, cast(binary as varchar) as binary_str, cast(largebinary as varchar) as binary_largestr from t;
+----
+466f6f 466f6f Foo Foo
+NULL NULL NULL NULL
+426172 426172 Bar Bar
+466f6f426172 466f6f426172 FooBar FooBar
+
+# ensure coercion works for = and <>
+query ?T
+SELECT binary, cast(binary as varchar) as str FROM t WHERE binary = 'Foo';
+----
+466f6f Foo
+
+query ?T
+SELECT binary, cast(binary as varchar) as str FROM t WHERE binary <> 'Foo';
+----
+426172 Bar
+466f6f426172 FooBar
+
+# order by
+query ?
+SELECT binary FROM t ORDER BY binary;
+----
+426172
+466f6f
+466f6f426172
+NULL
+
+# order by
+query ?
+SELECT largebinary FROM t ORDER BY largebinary;
+----
+426172
+466f6f
+466f6f426172
+NULL
+
+# LIKE
+# https://github.com/apache/arrow-datafusion/issues/7342
+query error DataFusion error: type_coercion
+SELECT binary FROM t where binary LIKE '%F';
+
+query error DataFusion error: type_coercion
+SELECT largebinary FROM t where largebinary LIKE '%F';
+
+
+# character_length function
+# https://github.com/apache/arrow-datafusion/issues/7344
+query error DataFusion error: Error during planning: The "character_length" function can only accept strings, but got Binary\.
+SELECT
+  cast(binary as varchar) as str,
+  character_length(binary) as binary_len,
+  cast(largebinary as varchar) as large_str,
+  character_length(binary) as largebinary_len
+from t;
+
+# regexp_replace
+# https://github.com/apache/arrow-datafusion/issues/7345
+query error DataFusion error: Error during planning: The "regexp_replace" function can only accept strings, but got Binary\.
+SELECT
+  cast(binary as varchar) as str,
+  regexp_replace(binary, 'F', 'f') as binary_replaced,
+  cast(largebinary as varchar) as large_str,
+  regexp_replace(largebinary, 'F', 'f') as large_binary_replaced
+from t;
