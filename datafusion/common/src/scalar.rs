@@ -744,7 +744,7 @@ macro_rules! eq_array_primitive {
 }
 
 impl ScalarValue {
-    /// Create a [`ScalarValue`] with the provided value and datatype
+    /// Create a [`Result<ScalarValue>`] with the provided value and datatype
     ///
     /// # Panics
     ///
@@ -752,13 +752,13 @@ impl ScalarValue {
     pub fn new_primitive<T: ArrowPrimitiveType>(
         a: Option<T::Native>,
         d: &DataType,
-    ) -> Self {
+    ) -> Result<Self> {
         match a {
-            None => d.try_into().unwrap(),
+            None => d.try_into(),
             Some(v) => {
                 let array = PrimitiveArray::<T>::new(vec![v].into(), None)
                     .with_data_type(d.clone());
-                Self::try_from_array(&array, 0).unwrap()
+                Self::try_from_array(&array, 0)
             }
         }
     }

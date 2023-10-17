@@ -195,7 +195,7 @@ where
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
-        Ok(ScalarValue::new_primitive::<T>(self.value, &T::DATA_TYPE))
+        ScalarValue::new_primitive::<T>(self.value, &T::DATA_TYPE)
     }
 
     fn size(&self) -> usize {
@@ -356,7 +356,7 @@ where
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
-        Ok(ScalarValue::new_primitive::<T>(self.value, &T::DATA_TYPE))
+        ScalarValue::new_primitive::<T>(self.value, &T::DATA_TYPE)
     }
 
     fn size(&self) -> usize {
@@ -517,7 +517,7 @@ where
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
-        Ok(ScalarValue::new_primitive::<T>(self.value, &T::DATA_TYPE))
+        ScalarValue::new_primitive::<T>(self.value, &T::DATA_TYPE)
     }
 
     fn size(&self) -> usize {
@@ -638,11 +638,11 @@ where
         // 1. Stores aggregate state in `ScalarValue::List`
         // 2. Constructs `ScalarValue::List` state from distinct numeric stored in hash set
         let state_out = {
-            let values: Vec<ScalarValue> = self
+            let values = self
                 .values
                 .iter()
                 .map(|x| ScalarValue::new_primitive::<T>(Some(*x), &T::DATA_TYPE))
-                .collect();
+                .collect::<Result<Vec<_>>>()?;
 
             let arr = ScalarValue::new_list(&values, &T::DATA_TYPE);
             vec![ScalarValue::List(arr)]
@@ -685,7 +685,7 @@ where
             acc = acc ^ *distinct_value;
         }
         let v = (!self.values.is_empty()).then_some(acc);
-        Ok(ScalarValue::new_primitive::<T>(v, &T::DATA_TYPE))
+        ScalarValue::new_primitive::<T>(v, &T::DATA_TYPE)
     }
 
     fn size(&self) -> usize {
