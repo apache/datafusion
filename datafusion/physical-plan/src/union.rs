@@ -226,6 +226,8 @@ impl ExecutionPlan for UnionExec {
     }
 
     fn schema_properties(&self) -> SchemaProperties {
+        // TODO: In some cases equivalent groups and constants
+        //  can be preserved in union. Add support for these.
         let child_oeqs = self
             .inputs
             .iter()
