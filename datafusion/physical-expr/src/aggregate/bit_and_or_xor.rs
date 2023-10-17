@@ -18,6 +18,7 @@
 //! Defines BitAnd, BitOr, and BitXor Aggregate accumulators
 
 use ahash::RandomState;
+use datafusion_common::cast::as_list_array;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -637,13 +638,14 @@ where
         // 1. Stores aggregate state in `ScalarValue::List`
         // 2. Constructs `ScalarValue::List` state from distinct numeric stored in hash set
         let state_out = {
-            let values = self
+            let values: Vec<ScalarValue> = self
                 .values
                 .iter()
                 .map(|x| ScalarValue::new_primitive::<T>(Some(*x), &T::DATA_TYPE))
                 .collect();
 
-            vec![ScalarValue::new_list(Some(values), T::DATA_TYPE)]
+            let arr = ScalarValue::new_list(&values, &T::DATA_TYPE);
+            vec![ScalarValue::List(arr)]
         };
         Ok(state_out)
     }
@@ -668,12 +670,11 @@ where
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        if states.is_empty() {
-            return Ok(());
-        }
-
-        for x in states[0].as_list::<i32>().iter().flatten() {
-            self.update_batch(&[x])?
+        if let Some(state) = states.first() {
+            let list_arr = as_list_array(state)?;
+            for arr in list_arr.iter().flatten() {
+                self.update_batch(&[arr])?;
+            }
         }
         Ok(())
     }

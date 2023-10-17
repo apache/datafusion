@@ -25,14 +25,18 @@ use crate::protobuf::{
     AnalyzedLogicalPlanType, CubeNode, GroupingSetNode, OptimizedLogicalPlanType,
     OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
 };
-use arrow::datatypes::{
-    i256, DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, TimeUnit,
-    UnionFields, UnionMode,
+use arrow::{
+    buffer::{Buffer, MutableBuffer},
+    datatypes::{
+        i256, DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, TimeUnit,
+        UnionFields, UnionMode,
+    },
+    ipc::{reader::read_record_batch, root_as_message},
 };
 use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{
-    internal_err, Column, Constraint, Constraints, DFField, DFSchema, DFSchemaRef,
-    DataFusionError, OwnedTableReference, Result, ScalarValue,
+    internal_err, plan_datafusion_err, Column, Constraint, Constraints, DFField,
+    DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result, ScalarValue,
 };
 use datafusion_expr::{
     abs, acos, acosh, array, array_append, array_concat, array_dims, array_element,
@@ -643,23 +647,39 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
             Value::Date32Value(v) => Self::Date32(Some(*v)),
             Value::ListValue(scalar_list) => {
                 let protobuf::ScalarListValue {
-                    is_null,
-                    values,
-                    field,
+                    ipc_message,
+                    arrow_data,
+                    schema,
                 } = &scalar_list;
 
-                let field: Field = field.as_ref().required("field")?;
-                let field = Arc::new(field);
+                let schema: Schema = if let Some(schema_ref) = schema {
+                    schema_ref.try_into()?
+                } else {
+                    return Err(Error::General("Unexpected schema".to_string()));
+                };
 
-                let values: Result<Vec<ScalarValue>, Error> =
-                    values.iter().map(|val| val.try_into()).collect();
-                let values = values?;
+                let message = root_as_message(ipc_message.as_slice()).unwrap();
 
-                validate_list_values(field.as_ref(), &values)?;
+                // TODO: Add comment to why adding 0 before arrow_data.
+                // This code is from https://github.com/apache/arrow-rs/blob/4320a753beaee0a1a6870c59ef46b59e88c9c323/arrow-ipc/src/reader.rs#L1670-L1674C45
+                // Construct an unaligned buffer
+                let mut buffer = MutableBuffer::with_capacity(arrow_data.len() + 1);
+                buffer.push(0_u8);
+                buffer.extend_from_slice(arrow_data.as_slice());
+                let b = Buffer::from(buffer).slice(1);
 
-                let values = if *is_null { None } else { Some(values) };
-
-                Self::List(values, field)
+                let ipc_batch = message.header_as_record_batch().unwrap();
+                let record_batch = read_record_batch(
+                    &b,
+                    ipc_batch,
+                    Arc::new(schema),
+                    &Default::default(),
+                    None,
+                    &message.version(),
+                )
+                .unwrap();
+                let arr = record_batch.column(0);
+                Self::List(arr.to_owned())
             }
             Value::NullValue(v) => {
                 let null_type: DataType = v.try_into()?;
@@ -923,22 +943,6 @@ pub fn parse_i32_to_aggregate_function(value: &i32) -> Result<AggregateFunction,
     protobuf::AggregateFunction::try_from(*value)
         .map(|a| a.into())
         .map_err(|_| Error::unknown("AggregateFunction", *value))
-}
-
-/// Ensures that all `values` are of type DataType::List and have the
-/// same type as field
-fn validate_list_values(field: &Field, values: &[ScalarValue]) -> Result<(), Error> {
-    for value in values {
-        let field_type = field.data_type();
-        let value_type = value.data_type();
-
-        if field_type != &value_type {
-            return Err(proto_error(format!(
-                "Expected field type {field_type:?}, got scalar of type: {value_type:?}"
-            )));
-        }
-    }
-    Ok(())
 }
 
 pub fn parse_expr(
@@ -1740,9 +1744,7 @@ fn parse_vec_expr(
 ) -> Result<Option<Vec<Expr>>, Error> {
     let res = p
         .iter()
-        .map(|elem| {
-            parse_expr(elem, registry).map_err(|e| DataFusionError::Plan(e.to_string()))
-        })
+        .map(|elem| parse_expr(elem, registry).map_err(|e| plan_datafusion_err!("{}", e)))
         .collect::<Result<Vec<_>>>()?;
     // Convert empty vector to None.
     Ok((!res.is_empty()).then_some(res))

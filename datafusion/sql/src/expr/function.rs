@@ -16,7 +16,9 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{not_impl_err, plan_err, DFSchema, DataFusionError, Result};
+use datafusion_common::{
+    not_impl_err, plan_datafusion_err, plan_err, DFSchema, DataFusionError, Result,
+};
 use datafusion_expr::expr::{ScalarFunction, ScalarUDF};
 use datafusion_expr::function::suggest_valid_function;
 use datafusion_expr::window_frame::regularize;
@@ -189,7 +191,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .map(WindowFunction::WindowUDF)
             })
             .ok_or_else(|| {
-                DataFusionError::Plan(format!("There is no window function named {name}"))
+                plan_datafusion_err!("There is no window function named {name}")
             })
     }
 

@@ -146,14 +146,14 @@ impl<T: ArrowNumericType> std::fmt::Debug for MedianAccumulator<T> {
 
 impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
     fn state(&self) -> Result<Vec<ScalarValue>> {
-        let all_values = self
+        let all_values: Vec<ScalarValue> = self
             .all_values
             .iter()
             .map(|x| ScalarValue::new_primitive::<T>(Some(*x), &self.data_type))
             .collect();
-        let state = ScalarValue::new_list(Some(all_values), self.data_type.clone());
 
-        Ok(vec![state])
+        let arr = ScalarValue::new_list(&all_values, &self.data_type);
+        Ok(vec![ScalarValue::List(arr)])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {

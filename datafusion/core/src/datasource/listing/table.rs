@@ -233,10 +233,10 @@ impl FromStr for ListingTableInsertMode {
             "append_to_file" => Ok(ListingTableInsertMode::AppendToFile),
             "append_new_files" => Ok(ListingTableInsertMode::AppendNewFiles),
             "error" => Ok(ListingTableInsertMode::Error),
-            _ => Err(DataFusionError::Plan(format!(
+            _ => plan_err!(
                 "Unknown or unsupported insert mode {s}. Supported options are \
                 append_to_file, append_new_files, and error."
-            ))),
+            ),
         }
     }
 }
@@ -865,10 +865,10 @@ impl TableProvider for ListingTable {
         let writer_mode = match self.options.insert_mode {
             ListingTableInsertMode::AppendToFile => {
                 if input_partitions > file_groups.len() {
-                    return Err(DataFusionError::Plan(format!(
+                    return plan_err!(
                         "Cannot append {input_partitions} partitions to {} files!",
                         file_groups.len()
-                    )));
+                    );
                 }
 
                 crate::datasource::file_format::write::FileWriterMode::Append
@@ -919,9 +919,9 @@ impl TableProvider for ListingTable {
                 self.options().insert_mode,
                 ListingTableInsertMode::AppendToFile
             ) {
-                return Err(DataFusionError::Plan(
-                    "Cannot insert into a sorted ListingTable with mode append!".into(),
-                ));
+                return plan_err!(
+                    "Cannot insert into a sorted ListingTable with mode append!"
+                );
             }
             // Multiple sort orders in outer vec are equivalent, so we pass only the first one
             let ordering = self
