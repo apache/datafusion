@@ -1107,28 +1107,28 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::DatePart => Signature::one_of(
                 vec![
-                    Exact(vec![Utf8, Date32]),
-                    Exact(vec![Utf8, Date64]),
-                    Exact(vec![Utf8, Timestamp(Second, None)]),
+                    Exact(vec![Utf8, Timestamp(Nanosecond, None)]),
                     Exact(vec![
                         Utf8,
-                        Timestamp(Second, Some(TIMEZONE_WILDCARD.into())),
-                    ]),
-                    Exact(vec![Utf8, Timestamp(Microsecond, None)]),
-                    Exact(vec![
-                        Utf8,
-                        Timestamp(Microsecond, Some(TIMEZONE_WILDCARD.into())),
+                        Timestamp(Nanosecond, Some(TIMEZONE_WILDCARD.into())),
                     ]),
                     Exact(vec![Utf8, Timestamp(Millisecond, None)]),
                     Exact(vec![
                         Utf8,
                         Timestamp(Millisecond, Some(TIMEZONE_WILDCARD.into())),
                     ]),
-                    Exact(vec![Utf8, Timestamp(Nanosecond, None)]),
+                    Exact(vec![Utf8, Timestamp(Microsecond, None)]),
                     Exact(vec![
                         Utf8,
-                        Timestamp(Nanosecond, Some(TIMEZONE_WILDCARD.into())),
+                        Timestamp(Microsecond, Some(TIMEZONE_WILDCARD.into())),
                     ]),
+                    Exact(vec![Utf8, Timestamp(Second, None)]),
+                    Exact(vec![
+                        Utf8,
+                        Timestamp(Second, Some(TIMEZONE_WILDCARD.into())),
+                    ]),
+                    Exact(vec![Utf8, Date64]),
+                    Exact(vec![Utf8, Date32]),
                 ],
                 self.volatility(),
             ),
