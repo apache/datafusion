@@ -30,10 +30,13 @@ use crate::protobuf::{
     AnalyzedLogicalPlanType, CubeNode, EmptyMessage, GroupingSetNode, LogicalExprList,
     OptimizedLogicalPlanType, OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
 };
-
-use arrow::datatypes::{
-    DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, SchemaRef, TimeUnit,
-    UnionMode,
+use arrow::{
+    datatypes::{
+        DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, SchemaRef,
+        TimeUnit, UnionMode,
+    },
+    ipc::writer::{DictionaryTracker, IpcDataGenerator},
+    record_batch::RecordBatch,
 };
 use datafusion_common::{
     Column, Constraint, Constraints, DFField, DFSchema, DFSchemaRef, OwnedTableReference,
@@ -1142,27 +1145,27 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 "Proto serialization error: ScalarValue::Fixedsizelist not supported"
                     .to_string(),
             )),
-            ScalarValue::List(values, boxed_field) => {
-                let is_null = values.is_none();
+            ScalarValue::List(arr) => {
+                let batch =
+                    RecordBatch::try_from_iter(vec![("field_name", arr.to_owned())])
+                        .unwrap();
+                let gen = IpcDataGenerator {};
+                let mut dict_tracker = DictionaryTracker::new(false);
+                let (_, encoded_message) = gen
+                    .encoded_batch(&batch, &mut dict_tracker, &Default::default())
+                    .unwrap();
 
-                let values = if let Some(values) = values.as_ref() {
-                    values
-                        .iter()
-                        .map(|v| v.try_into())
-                        .collect::<Result<Vec<protobuf::ScalarValue>, _>>()?
-                } else {
-                    vec![]
+                let schema: protobuf::Schema = batch.schema().try_into()?;
+
+                let scalar_list_value = protobuf::ScalarListValue {
+                    ipc_message: encoded_message.ipc_message,
+                    arrow_data: encoded_message.arrow_data,
+                    schema: Some(schema),
                 };
-
-                let field = boxed_field.as_ref().try_into()?;
 
                 Ok(protobuf::ScalarValue {
                     value: Some(protobuf::scalar_value::Value::ListValue(
-                        protobuf::ScalarListValue {
-                            is_null,
-                            field: Some(field),
-                            values,
-                        },
+                        scalar_list_value,
                     )),
                 })
             }

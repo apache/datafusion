@@ -1613,10 +1613,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_insert_into_append_new_json_files() -> Result<()> {
+        let mut config_map: HashMap<String, String> = HashMap::new();
+        config_map.insert("datafusion.execution.batch_size".into(), "1".into());
         helper_test_append_new_files_to_table(
             FileType::JSON,
             FileCompressionType::UNCOMPRESSED,
-            None,
+            Some(config_map),
         )
         .await?;
         Ok(())
@@ -1635,10 +1637,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_insert_into_append_new_csv_files() -> Result<()> {
+        let mut config_map: HashMap<String, String> = HashMap::new();
+        config_map.insert("datafusion.execution.batch_size".into(), "1".into());
         helper_test_append_new_files_to_table(
             FileType::CSV,
             FileCompressionType::UNCOMPRESSED,
-            None,
+            Some(config_map),
         )
         .await?;
         Ok(())
@@ -1646,10 +1650,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_insert_into_append_new_parquet_files_defaults() -> Result<()> {
+        let mut config_map: HashMap<String, String> = HashMap::new();
+        config_map.insert("datafusion.execution.batch_size".into(), "1".into());
         helper_test_append_new_files_to_table(
             FileType::PARQUET,
             FileCompressionType::UNCOMPRESSED,
-            None,
+            Some(config_map),
         )
         .await?;
         Ok(())
@@ -1836,6 +1842,7 @@ mod tests {
             "datafusion.execution.parquet.write_batch_size".into(),
             "5".into(),
         );
+        config_map.insert("datafusion.execution.batch_size".into(), "1".into());
         helper_test_append_new_files_to_table(
             FileType::PARQUET,
             FileCompressionType::UNCOMPRESSED,

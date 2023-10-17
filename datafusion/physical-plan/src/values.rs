@@ -67,10 +67,11 @@ impl ValuesExec {
                 (0..n_row)
                     .map(|i| {
                         let r = data[i][j].evaluate(&batch);
+
                         match r {
                             Ok(ColumnarValue::Scalar(scalar)) => Ok(scalar),
                             Ok(ColumnarValue::Array(a)) if a.len() == 1 => {
-                                ScalarValue::try_from_array(&a, 0)
+                                Ok(ScalarValue::List(a))
                             }
                             Ok(ColumnarValue::Array(a)) => {
                                 plan_err!(

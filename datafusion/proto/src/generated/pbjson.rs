@@ -20184,24 +20184,26 @@ impl serde::Serialize for ScalarListValue {
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;
-        if self.is_null {
+        if !self.ipc_message.is_empty() {
             len += 1;
         }
-        if self.field.is_some() {
+        if !self.arrow_data.is_empty() {
             len += 1;
         }
-        if !self.values.is_empty() {
+        if self.schema.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.ScalarListValue", len)?;
-        if self.is_null {
-            struct_ser.serialize_field("isNull", &self.is_null)?;
+        if !self.ipc_message.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            struct_ser.serialize_field("ipcMessage", pbjson::private::base64::encode(&self.ipc_message).as_str())?;
         }
-        if let Some(v) = self.field.as_ref() {
-            struct_ser.serialize_field("field", v)?;
+        if !self.arrow_data.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            struct_ser.serialize_field("arrowData", pbjson::private::base64::encode(&self.arrow_data).as_str())?;
         }
-        if !self.values.is_empty() {
-            struct_ser.serialize_field("values", &self.values)?;
+        if let Some(v) = self.schema.as_ref() {
+            struct_ser.serialize_field("schema", v)?;
         }
         struct_ser.end()
     }
@@ -20213,17 +20215,18 @@ impl<'de> serde::Deserialize<'de> for ScalarListValue {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
-            "is_null",
-            "isNull",
-            "field",
-            "values",
+            "ipc_message",
+            "ipcMessage",
+            "arrow_data",
+            "arrowData",
+            "schema",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
-            IsNull,
-            Field,
-            Values,
+            IpcMessage,
+            ArrowData,
+            Schema,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -20245,9 +20248,9 @@ impl<'de> serde::Deserialize<'de> for ScalarListValue {
                         E: serde::de::Error,
                     {
                         match value {
-                            "isNull" | "is_null" => Ok(GeneratedField::IsNull),
-                            "field" => Ok(GeneratedField::Field),
-                            "values" => Ok(GeneratedField::Values),
+                            "ipcMessage" | "ipc_message" => Ok(GeneratedField::IpcMessage),
+                            "arrowData" | "arrow_data" => Ok(GeneratedField::ArrowData),
+                            "schema" => Ok(GeneratedField::Schema),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -20267,35 +20270,39 @@ impl<'de> serde::Deserialize<'de> for ScalarListValue {
                 where
                     V: serde::de::MapAccess<'de>,
             {
-                let mut is_null__ = None;
-                let mut field__ = None;
-                let mut values__ = None;
+                let mut ipc_message__ = None;
+                let mut arrow_data__ = None;
+                let mut schema__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
-                        GeneratedField::IsNull => {
-                            if is_null__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("isNull"));
+                        GeneratedField::IpcMessage => {
+                            if ipc_message__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("ipcMessage"));
                             }
-                            is_null__ = Some(map_.next_value()?);
+                            ipc_message__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
                         }
-                        GeneratedField::Field => {
-                            if field__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("field"));
+                        GeneratedField::ArrowData => {
+                            if arrow_data__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("arrowData"));
                             }
-                            field__ = map_.next_value()?;
+                            arrow_data__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
                         }
-                        GeneratedField::Values => {
-                            if values__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("values"));
+                        GeneratedField::Schema => {
+                            if schema__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("schema"));
                             }
-                            values__ = Some(map_.next_value()?);
+                            schema__ = map_.next_value()?;
                         }
                     }
                 }
                 Ok(ScalarListValue {
-                    is_null: is_null__.unwrap_or_default(),
-                    field: field__,
-                    values: values__.unwrap_or_default(),
+                    ipc_message: ipc_message__.unwrap_or_default(),
+                    arrow_data: arrow_data__.unwrap_or_default(),
+                    schema: schema__,
                 })
             }
         }

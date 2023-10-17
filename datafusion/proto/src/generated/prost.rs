@@ -1072,14 +1072,12 @@ pub struct Union {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ScalarListValue {
-    /// encode null explicitly to distinguish a list with a null value
-    /// from a list with no values)
-    #[prost(bool, tag = "3")]
-    pub is_null: bool,
-    #[prost(message, optional, tag = "1")]
-    pub field: ::core::option::Option<Field>,
-    #[prost(message, repeated, tag = "2")]
-    pub values: ::prost::alloc::vec::Vec<ScalarValue>,
+    #[prost(bytes = "vec", tag = "1")]
+    pub ipc_message: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "2")]
+    pub arrow_data: ::prost::alloc::vec::Vec<u8>,
+    #[prost(message, optional, tag = "3")]
+    pub schema: ::core::option::Option<Schema>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1224,7 +1222,6 @@ pub mod scalar_value {
         Date32Value(i32),
         #[prost(message, tag = "15")]
         Time32Value(super::ScalarTime32Value),
-        /// WAS: ScalarType null_list_value = 18;
         #[prost(message, tag = "17")]
         ListValue(super::ScalarListValue),
         #[prost(message, tag = "20")]
