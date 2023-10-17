@@ -57,14 +57,13 @@ pub async fn get_statistics_with_limit(
         result_files.push(file);
 
         // First file, we set them directly from the file statistics.
-        set_from_file_statistics(
-            &mut num_rows,
-            &mut total_byte_size,
-            &mut null_counts,
-            &mut max_values,
-            &mut min_values,
-            file_stats,
-        );
+        num_rows = file_stats.num_rows;
+        total_byte_size = file_stats.total_byte_size;
+        for (index, file_column) in file_stats.column_statistics.into_iter().enumerate() {
+            null_counts[index] = file_column.null_count;
+            max_values[index] = file_column.max_value;
+            min_values[index] = file_column.min_value;
+        }
 
         // If the number of rows exceeds the limit, we can stop processing
         // files. This only applies when we know the number of rows. It also
@@ -84,21 +83,13 @@ pub async fn get_statistics_with_limit(
                 total_byte_size =
                     add_row_stats(file_stats.total_byte_size, total_byte_size);
 
-                for (cs, target) in file_stats
-                    .column_statistics
-                    .iter()
-                    .map(|cs| cs.null_count.clone())
-                    .zip(null_counts.iter_mut())
+                for (index, file_cs) in
+                    file_stats.column_statistics.into_iter().enumerate()
                 {
-                    *target = add_row_stats(cs, target.clone());
-                }
-
-                for (i, cs) in file_stats.column_statistics.iter().enumerate() {
-                    set_max_if_greater(&mut max_values[i], cs.max_value.clone());
-                }
-
-                for (i, cs) in file_stats.column_statistics.iter().enumerate() {
-                    set_min_if_lesser(&mut min_values[i], cs.min_value.clone());
+                    null_counts[index] =
+                        add_row_stats(file_cs.null_count, null_counts[index].clone());
+                    set_max_if_greater(&mut max_values[index], file_cs.max_value);
+                    set_min_if_lesser(&mut min_values[index], file_cs.min_value);
                 }
 
                 // If the number of rows exceeds the limit, we can stop processing
@@ -143,33 +134,6 @@ pub(crate) fn create_max_min_accs(
         .map(|field| MinAccumulator::try_new(field.data_type()).ok())
         .collect();
     (max_values, min_values)
-}
-
-fn set_from_file_statistics(
-    num_rows: &mut Precision<usize>,
-    total_byte_size: &mut Precision<usize>,
-    null_counts: &mut Vec<Precision<usize>>,
-    max_values: &mut Vec<Precision<ScalarValue>>,
-    min_values: &mut Vec<Precision<ScalarValue>>,
-    file_stats: Statistics,
-) {
-    *num_rows = file_stats.num_rows;
-    *total_byte_size = file_stats.total_byte_size;
-    *null_counts = file_stats
-        .column_statistics
-        .iter()
-        .map(|cs| cs.null_count.clone())
-        .collect::<Vec<_>>();
-    *max_values = file_stats
-        .column_statistics
-        .iter()
-        .map(|cs| cs.max_value.clone())
-        .collect::<Vec<_>>();
-    *min_values = file_stats
-        .column_statistics
-        .iter()
-        .map(|cs| cs.min_value.clone())
-        .collect::<Vec<_>>();
 }
 
 fn add_row_stats(
