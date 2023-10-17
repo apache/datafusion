@@ -19,6 +19,12 @@
 //! The nested loop join can execute in parallel by partitions and it is
 //! determined by the [`JoinType`].
 
+use std::any::Any;
+use std::fmt::Formatter;
+use std::sync::Arc;
+use std::task::Poll;
+
+use crate::coalesce_batches::concat_batches;
 use crate::joins::utils::{
     append_right_indices, apply_join_filter_to_indices, build_batch_from_indices,
     build_join_schema, check_join_is_valid, combine_join_equivalence_properties,
@@ -32,26 +38,20 @@ use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
     RecordBatchStream, SendableRecordBatchStream,
 };
+
 use arrow::array::{
     BooleanBufferBuilder, UInt32Array, UInt32Builder, UInt64Array, UInt64Builder,
 };
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
-use datafusion_common::{exec_err, DataFusionError, Statistics};
-use datafusion_execution::memory_pool::MemoryReservation;
+use datafusion_common::{exec_err, DataFusionError, Result, Statistics};
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_execution::TaskContext;
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortExpr};
-use futures::{ready, Stream, StreamExt, TryStreamExt};
-use std::any::Any;
-use std::fmt::Formatter;
-use std::sync::Arc;
-use std::task::Poll;
 
-use crate::coalesce_batches::concat_batches;
-use datafusion_common::Result;
-use datafusion_execution::memory_pool::MemoryConsumer;
-use datafusion_execution::TaskContext;
+use futures::{ready, Stream, StreamExt, TryStreamExt};
 
 /// Data of the inner table side
 type JoinLeftData = (RecordBatch, MemoryReservation);
@@ -282,12 +282,13 @@ impl ExecutionPlan for NestedLoopJoinExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Result<Statistics> {
         estimate_join_statistics(
             self.left.clone(),
             self.right.clone(),
             vec![],
             &self.join_type,
+            &self.schema,
         )
     }
 }
@@ -739,21 +740,21 @@ impl RecordBatchStream for NestedLoopJoinStream {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
+    use crate::joins::utils::JoinSide;
     use crate::{
         common, expressions::Column, memory::MemoryExec, repartition::RepartitionExec,
         test::build_table_i32,
     };
+
     use arrow::datatypes::{DataType, Field};
+    use datafusion_common::{assert_batches_sorted_eq, assert_contains, ScalarValue};
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion_expr::Operator;
-    use datafusion_physical_expr::expressions::BinaryExpr;
-
-    use crate::joins::utils::JoinSide;
-    use datafusion_common::{assert_batches_sorted_eq, assert_contains, ScalarValue};
-    use datafusion_physical_expr::expressions::Literal;
+    use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
     use datafusion_physical_expr::PhysicalExpr;
-    use std::sync::Arc;
 
     fn build_table(
         a: (&str, &Vec<i32>),

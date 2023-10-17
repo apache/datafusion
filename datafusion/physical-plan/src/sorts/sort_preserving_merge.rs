@@ -28,10 +28,10 @@ use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
     SendableRecordBatchStream, Statistics,
 };
-use datafusion_execution::memory_pool::MemoryConsumer;
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{
     EquivalenceProperties, OrderingEquivalenceProperties, PhysicalSortRequirement,
@@ -264,22 +264,14 @@ impl ExecutionPlan for SortPreservingMergeExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Result<Statistics> {
         self.input.statistics()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::iter::FromIterator;
-
-    use arrow::array::ArrayRef;
-    use arrow::compute::SortOptions;
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::record_batch::RecordBatch;
-    use datafusion_execution::config::SessionConfig;
-    use futures::{FutureExt, StreamExt};
-
+    use super::*;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::expressions::col;
     use crate::memory::MemoryExec;
@@ -289,10 +281,16 @@ mod tests {
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::{self, assert_is_pending, make_partition};
     use crate::{collect, common};
+    use arrow::array::ArrayRef;
     use arrow::array::{Int32Array, StringArray, TimestampNanosecondArray};
+    use arrow::compute::SortOptions;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
     use datafusion_common::{assert_batches_eq, assert_contains};
+    use datafusion_execution::config::SessionConfig;
 
-    use super::*;
+    use futures::{FutureExt, StreamExt};
+    use std::iter::FromIterator;
 
     #[tokio::test]
     async fn test_merge_interleave() {

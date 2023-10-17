@@ -19,20 +19,24 @@
 //!
 //! Works with files following the [Arrow IPC format](https://arrow.apache.org/docs/format/Columnar.html#ipc-file-format)
 
+use std::any::Any;
+use std::io::{Read, Seek};
+use std::sync::Arc;
+
 use crate::datasource::file_format::FileFormat;
 use crate::datasource::physical_plan::{ArrowExec, FileScanConfig};
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::ExecutionPlan;
+
 use arrow::ipc::reader::FileReader;
 use arrow_schema::{Schema, SchemaRef};
-use async_trait::async_trait;
+
 use datafusion_common::{FileType, Statistics};
 use datafusion_physical_expr::PhysicalExpr;
+
+use async_trait::async_trait;
 use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
-use std::any::Any;
-use std::io::{Read, Seek};
-use std::sync::Arc;
 
 /// Arrow `FileFormat` implementation.
 #[derive(Default, Debug)]
@@ -74,10 +78,10 @@ impl FileFormat for ArrowFormat {
         &self,
         _state: &SessionState,
         _store: &Arc<dyn ObjectStore>,
-        _table_schema: SchemaRef,
+        table_schema: SchemaRef,
         _object: &ObjectMeta,
     ) -> Result<Statistics> {
-        Ok(Statistics::default())
+        Ok(Statistics::new_unknown(&table_schema))
     }
 
     async fn create_physical_plan(

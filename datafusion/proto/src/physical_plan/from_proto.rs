@@ -17,10 +17,12 @@
 
 //! Serde code to convert from protocol buffers to Rust data structures.
 
-use crate::protobuf;
+use std::convert::{TryFrom, TryInto};
+use std::ops::Deref;
+use std::sync::Arc;
+
+use arrow::compute::SortOptions;
 use arrow::datatypes::DataType;
-use chrono::TimeZone;
-use chrono::Utc;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::datasource::listing::{FileRange, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
@@ -29,31 +31,28 @@ use datafusion::execution::context::ExecutionProps;
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::window_function::WindowFunction;
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
-use datafusion::physical_plan::expressions::{in_list, LikeExpr};
-use datafusion::physical_plan::expressions::{GetFieldAccessExpr, GetIndexedFieldExpr};
-use datafusion::physical_plan::windows::create_window_expr;
-use datafusion::physical_plan::WindowExpr;
-use datafusion::physical_plan::{
-    expressions::{
-        BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, Literal,
-        NegativeExpr, NotExpr, TryCastExpr,
-    },
-    functions, Partitioning,
+use datafusion::physical_plan::expressions::{
+    in_list, BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr,
+    Literal, NegativeExpr, NotExpr, TryCastExpr,
 };
-use datafusion::physical_plan::{ColumnStatistics, PhysicalExpr, Statistics};
-use datafusion_common::{not_impl_err, DataFusionError, Result};
-use object_store::path::Path;
-use object_store::ObjectMeta;
-use std::convert::{TryFrom, TryInto};
-use std::ops::Deref;
-use std::sync::Arc;
+use datafusion::physical_plan::expressions::{GetFieldAccessExpr, GetIndexedFieldExpr};
+use datafusion::physical_plan::joins::utils::JoinSide;
+use datafusion::physical_plan::windows::create_window_expr;
+use datafusion::physical_plan::{
+    functions, ColumnStatistics, Partitioning, PhysicalExpr, Statistics, WindowExpr,
+};
+use datafusion_common::stats::Precision;
+use datafusion_common::{not_impl_err, DataFusionError, Result, ScalarValue};
 
 use crate::common::proto_error;
 use crate::convert_required;
 use crate::logical_plan;
+use crate::protobuf;
 use crate::protobuf::physical_expr_node::ExprType;
-use datafusion::physical_plan::joins::utils::JoinSide;
-use datafusion::physical_plan::sorts::sort::SortOptions;
+
+use chrono::{TimeZone, Utc};
+use object_store::path::Path;
+use object_store::ObjectMeta;
 
 impl From<&protobuf::PhysicalColumn> for Column {
     fn from(c: &protobuf::PhysicalColumn) -> Column {
@@ -581,10 +580,96 @@ impl TryFrom<&protobuf::FileGroup> for Vec<PartitionedFile> {
 impl From<&protobuf::ColumnStats> for ColumnStatistics {
     fn from(cs: &protobuf::ColumnStats) -> ColumnStatistics {
         ColumnStatistics {
-            null_count: Some(cs.null_count as usize),
-            max_value: cs.max_value.as_ref().map(|m| m.try_into().unwrap()),
-            min_value: cs.min_value.as_ref().map(|m| m.try_into().unwrap()),
-            distinct_count: Some(cs.distinct_count as usize),
+            null_count: if let Some(nc) = &cs.null_count {
+                nc.clone().into()
+            } else {
+                Precision::Absent
+            },
+            max_value: if let Some(max) = &cs.max_value {
+                max.clone().into()
+            } else {
+                Precision::Absent
+            },
+            min_value: if let Some(min) = &cs.min_value {
+                min.clone().into()
+            } else {
+                Precision::Absent
+            },
+            distinct_count: if let Some(dc) = &cs.distinct_count {
+                dc.clone().into()
+            } else {
+                Precision::Absent
+            },
+        }
+    }
+}
+
+impl From<protobuf::Precision> for Precision<usize> {
+    fn from(s: protobuf::Precision) -> Self {
+        let Ok(precision_type) = s.precision_info.try_into() else {
+            return Precision::Absent;
+        };
+        match precision_type {
+            protobuf::PrecisionInfo::Exact => {
+                if let Some(val) = s.val {
+                    if let Ok(ScalarValue::UInt64(Some(val))) =
+                        ScalarValue::try_from(&val)
+                    {
+                        Precision::Exact(val as usize)
+                    } else {
+                        Precision::Absent
+                    }
+                } else {
+                    Precision::Absent
+                }
+            }
+            protobuf::PrecisionInfo::Inexact => {
+                if let Some(val) = s.val {
+                    if let Ok(ScalarValue::UInt64(Some(val))) =
+                        ScalarValue::try_from(&val)
+                    {
+                        Precision::Inexact(val as usize)
+                    } else {
+                        Precision::Absent
+                    }
+                } else {
+                    Precision::Absent
+                }
+            }
+            protobuf::PrecisionInfo::Absent => Precision::Absent,
+        }
+    }
+}
+
+impl From<protobuf::Precision> for Precision<ScalarValue> {
+    fn from(s: protobuf::Precision) -> Self {
+        let Ok(precision_type) = s.precision_info.try_into() else {
+            return Precision::Absent;
+        };
+        match precision_type {
+            protobuf::PrecisionInfo::Exact => {
+                if let Some(val) = s.val {
+                    if let Ok(val) = ScalarValue::try_from(&val) {
+                        Precision::Exact(val)
+                    } else {
+                        Precision::Absent
+                    }
+                } else {
+                    Precision::Absent
+                }
+            }
+            protobuf::PrecisionInfo::Inexact => {
+                if let Some(val) = s.val {
+                    if let Ok(val) = ScalarValue::try_from(&val) {
+                        Precision::Inexact(val)
+                    } else {
+                        Precision::Absent
+                    }
+                } else {
+                    Precision::Absent
+                }
+            }
+            protobuf::PrecisionInfo::Absent => Precision::Absent,
         }
     }
 }
@@ -603,27 +688,19 @@ impl TryFrom<&protobuf::Statistics> for Statistics {
 
     fn try_from(s: &protobuf::Statistics) -> Result<Self, Self::Error> {
         // Keep it sync with Statistics::to_proto
-        let none_value = -1_i64;
-        let column_statistics =
-            s.column_stats.iter().map(|s| s.into()).collect::<Vec<_>>();
         Ok(Statistics {
-            num_rows: if s.num_rows == none_value {
-                None
+            num_rows: if let Some(nr) = &s.num_rows {
+                nr.clone().into()
             } else {
-                Some(s.num_rows as usize)
+                Precision::Absent
             },
-            total_byte_size: if s.total_byte_size == none_value {
-                None
+            total_byte_size: if let Some(tbs) = &s.total_byte_size {
+                tbs.clone().into()
             } else {
-                Some(s.total_byte_size as usize)
+                Precision::Absent
             },
             // No column statistic (None) is encoded with empty array
-            column_statistics: if column_statistics.is_empty() {
-                None
-            } else {
-                Some(column_statistics)
-            },
-            is_exact: s.is_exact,
+            column_statistics: s.column_stats.iter().map(|s| s.into()).collect(),
         })
     }
 }

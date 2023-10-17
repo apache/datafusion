@@ -17,8 +17,14 @@
 
 //! Aggregates functionalities
 
+use std::any::Any;
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use super::DisplayAs;
 use crate::aggregates::{
     no_grouping::AggregateStream, row_hash::GroupedHashAggregateStream,
+    topk_stream::GroupedTopKAggregateStream,
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::{
@@ -29,23 +35,25 @@ use crate::{
 use arrow::array::ArrayRef;
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use datafusion_common::stats::Precision;
 use datafusion_common::utils::longest_consecutive_prefix;
 use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Accumulator;
+use datafusion_physical_expr::utils::{
+    convert_to_expr, get_finer_ordering, get_indices_of_matching_exprs,
+    ordering_satisfy_requirement_concrete,
+};
 use datafusion_physical_expr::{
+    aggregate::is_order_sensitive,
     equivalence::project_equivalence_properties,
-    expressions::Column,
+    expressions::{Column, Max, Min},
     normalize_out_expr_with_columns_map, physical_exprs_contains, reverse_order_bys,
-    utils::{convert_to_expr, get_indices_of_matching_exprs},
     AggregateExpr, LexOrdering, LexOrderingReq, OrderingEquivalenceProperties,
     PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
 };
 
 use itertools::Itertools;
-use std::any::Any;
-use std::collections::HashMap;
-use std::sync::Arc;
 
 mod group_values;
 mod no_grouping;
@@ -54,16 +62,8 @@ mod row_hash;
 mod topk;
 mod topk_stream;
 
-use crate::aggregates::topk_stream::GroupedTopKAggregateStream;
 pub use datafusion_expr::AggregateFunction;
-use datafusion_physical_expr::aggregate::is_order_sensitive;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
-use datafusion_physical_expr::expressions::{Max, Min};
-use datafusion_physical_expr::utils::{
-    get_finer_ordering, ordering_satisfy_requirement_concrete,
-};
-
-use super::DisplayAs;
 
 /// Hash aggregate modes
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -1005,36 +1005,49 @@ impl ExecutionPlan for AggregateExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Result<Statistics> {
         // TODO stats: group expressions:
         // - once expressions will be able to compute their own stats, use it here
         // - case where we group by on a column for which with have the `distinct` stat
         // TODO stats: aggr expression:
         // - aggregations somtimes also preserve invariants such as min, max...
+        let column_statistics = Statistics::unknown_column(&self.schema());
         match self.mode {
             AggregateMode::Final | AggregateMode::FinalPartitioned
                 if self.group_by.expr.is_empty() =>
             {
-                Statistics {
-                    num_rows: Some(1),
-                    is_exact: true,
-                    ..Default::default()
-                }
+                Ok(Statistics {
+                    num_rows: Precision::Exact(1),
+                    column_statistics,
+                    total_byte_size: Precision::Absent,
+                })
             }
             _ => {
-                let input_stats = self.input.statistics();
-                // Input statistics is exact and number of rows not greater than 1:
-                let is_exact = input_stats.is_exact
-                    && (input_stats
-                        .num_rows
-                        .map(|num_rows| num_rows == 1)
-                        .unwrap_or(false));
-                Statistics {
-                    // the output row count is surely not larger than its input row count
-                    num_rows: self.input.statistics().num_rows,
-                    is_exact,
-                    ..Default::default()
-                }
+                // When the input row count is 0 or 1, we can adopt that statistic keeping its reliability.
+                // When it is larger than 1, we degrade the precision since it may decrease after aggregation.
+                let num_rows = if let Some(value) =
+                    self.input().statistics()?.num_rows.get_value()
+                {
+                    if *value > 1 {
+                        self.input().statistics()?.num_rows.to_inexact()
+                    } else if *value == 0 {
+                        // Aggregation on an empty table creates a null row.
+                        self.input()
+                            .statistics()?
+                            .num_rows
+                            .add(&Precision::Exact(1))
+                    } else {
+                        // num_rows = 1 case
+                        self.input().statistics()?.num_rows
+                    }
+                } else {
+                    Precision::Absent
+                };
+                Ok(Statistics {
+                    num_rows,
+                    column_statistics,
+                    total_byte_size: Precision::Absent,
+                })
             }
         }
     }
@@ -1835,9 +1848,13 @@ mod tests {
             Ok(Box::pin(stream))
         }
 
-        fn statistics(&self) -> Statistics {
+        fn statistics(&self) -> Result<Statistics> {
             let (_, batches) = some_data();
-            common::compute_record_batch_statistics(&[batches], &self.schema(), None)
+            Ok(common::compute_record_batch_statistics(
+                &[batches],
+                &self.schema(),
+                None,
+            ))
         }
     }
 

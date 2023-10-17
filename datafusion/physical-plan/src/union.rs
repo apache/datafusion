@@ -25,27 +25,25 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::{any::Any, sync::Arc};
 
-use arrow::{
-    datatypes::{Field, Schema, SchemaRef},
-    record_batch::RecordBatch,
-};
-use datafusion_common::{exec_err, internal_err, DFSchemaRef, DataFusionError};
-use futures::Stream;
-use itertools::Itertools;
-use log::{debug, trace, warn};
-
-use super::DisplayAs;
 use super::{
     expressions::PhysicalSortExpr,
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
-    ColumnStatistics, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
-    SendableRecordBatchStream, Statistics,
+    ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
+    RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 use crate::common::get_meet_of_orderings;
+use crate::metrics::BaselineMetrics;
 use crate::stream::ObservedStream;
-use crate::{expressions, metrics::BaselineMetrics};
-use datafusion_common::Result;
+
+use arrow::datatypes::{Field, Schema, SchemaRef};
+use arrow::record_batch::RecordBatch;
+use datafusion_common::stats::Precision;
+use datafusion_common::{exec_err, internal_err, DFSchemaRef, DataFusionError, Result};
 use datafusion_execution::TaskContext;
+
+use futures::Stream;
+use itertools::Itertools;
+use log::{debug, trace, warn};
 use tokio::macros::support::thread_rng_n;
 
 /// `UnionExec`: `UNION ALL` execution plan.
@@ -264,12 +262,17 @@ impl ExecutionPlan for UnionExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Statistics {
-        self.inputs
+    fn statistics(&self) -> Result<Statistics> {
+        let stats = self
+            .inputs
             .iter()
-            .map(|ep| ep.statistics())
+            .map(|stat| stat.statistics())
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(stats
+            .into_iter()
             .reduce(stats_union)
-            .unwrap_or_default()
+            .unwrap_or_else(|| Statistics::new_unknown(&self.schema())))
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
@@ -438,12 +441,17 @@ impl ExecutionPlan for InterleaveExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Statistics {
-        self.inputs
+    fn statistics(&self) -> Result<Statistics> {
+        let stats = self
+            .inputs
             .iter()
-            .map(|ep| ep.statistics())
+            .map(|stat| stat.statistics())
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(stats
+            .into_iter()
             .reduce(stats_union)
-            .unwrap_or_default()
+            .unwrap_or_else(|| Statistics::new_unknown(&self.schema())))
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
@@ -564,47 +572,32 @@ fn col_stats_union(
     mut left: ColumnStatistics,
     right: ColumnStatistics,
 ) -> ColumnStatistics {
-    left.distinct_count = None;
-    left.min_value = left
-        .min_value
-        .zip(right.min_value)
-        .map(|(a, b)| expressions::helpers::min(&a, &b))
-        .and_then(Result::ok);
-    left.max_value = left
-        .max_value
-        .zip(right.max_value)
-        .map(|(a, b)| expressions::helpers::max(&a, &b))
-        .and_then(Result::ok);
-    left.null_count = left.null_count.zip(right.null_count).map(|(a, b)| a + b);
+    left.distinct_count = Precision::Absent;
+    left.min_value = left.min_value.min(&right.min_value);
+    left.max_value = left.max_value.max(&right.max_value);
+    left.null_count = left.null_count.add(&right.null_count);
 
     left
 }
 
 fn stats_union(mut left: Statistics, right: Statistics) -> Statistics {
-    left.is_exact = left.is_exact && right.is_exact;
-    left.num_rows = left.num_rows.zip(right.num_rows).map(|(a, b)| a + b);
-    left.total_byte_size = left
-        .total_byte_size
-        .zip(right.total_byte_size)
-        .map(|(a, b)| a + b);
-    left.column_statistics =
-        left.column_statistics
-            .zip(right.column_statistics)
-            .map(|(a, b)| {
-                a.into_iter()
-                    .zip(b)
-                    .map(|(ca, cb)| col_stats_union(ca, cb))
-                    .collect()
-            });
+    left.num_rows = left.num_rows.add(&right.num_rows);
+    left.total_byte_size = left.total_byte_size.add(&right.total_byte_size);
+    left.column_statistics = left
+        .column_statistics
+        .into_iter()
+        .zip(right.column_statistics)
+        .map(|(a, b)| col_stats_union(a, b))
+        .collect::<Vec<_>>();
     left
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::collect;
     use crate::test;
 
-    use crate::collect;
     use arrow::record_batch::RecordBatch;
     use datafusion_common::ScalarValue;
 
@@ -630,82 +623,91 @@ mod tests {
     #[tokio::test]
     async fn test_stats_union() {
         let left = Statistics {
-            is_exact: true,
-            num_rows: Some(5),
-            total_byte_size: Some(23),
-            column_statistics: Some(vec![
+            num_rows: Precision::Exact(5),
+            total_byte_size: Precision::Exact(23),
+            column_statistics: vec![
                 ColumnStatistics {
-                    distinct_count: Some(5),
-                    max_value: Some(ScalarValue::Int64(Some(21))),
-                    min_value: Some(ScalarValue::Int64(Some(-4))),
-                    null_count: Some(0),
+                    distinct_count: Precision::Exact(5),
+                    max_value: Precision::Exact(ScalarValue::Int64(Some(21))),
+                    min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
+                    null_count: Precision::Exact(0),
                 },
                 ColumnStatistics {
-                    distinct_count: Some(1),
-                    max_value: Some(ScalarValue::Utf8(Some(String::from("x")))),
-                    min_value: Some(ScalarValue::Utf8(Some(String::from("a")))),
-                    null_count: Some(3),
+                    distinct_count: Precision::Exact(1),
+                    max_value: Precision::Exact(ScalarValue::Utf8(Some(String::from(
+                        "x",
+                    )))),
+                    min_value: Precision::Exact(ScalarValue::Utf8(Some(String::from(
+                        "a",
+                    )))),
+                    null_count: Precision::Exact(3),
                 },
                 ColumnStatistics {
-                    distinct_count: None,
-                    max_value: Some(ScalarValue::Float32(Some(1.1))),
-                    min_value: Some(ScalarValue::Float32(Some(0.1))),
-                    null_count: None,
+                    distinct_count: Precision::Absent,
+                    max_value: Precision::Exact(ScalarValue::Float32(Some(1.1))),
+                    min_value: Precision::Exact(ScalarValue::Float32(Some(0.1))),
+                    null_count: Precision::Absent,
                 },
-            ]),
+            ],
         };
 
         let right = Statistics {
-            is_exact: true,
-            num_rows: Some(7),
-            total_byte_size: Some(29),
-            column_statistics: Some(vec![
+            num_rows: Precision::Exact(7),
+            total_byte_size: Precision::Exact(29),
+            column_statistics: vec![
                 ColumnStatistics {
-                    distinct_count: Some(3),
-                    max_value: Some(ScalarValue::Int64(Some(34))),
-                    min_value: Some(ScalarValue::Int64(Some(1))),
-                    null_count: Some(1),
+                    distinct_count: Precision::Exact(3),
+                    max_value: Precision::Exact(ScalarValue::Int64(Some(34))),
+                    min_value: Precision::Exact(ScalarValue::Int64(Some(1))),
+                    null_count: Precision::Exact(1),
                 },
                 ColumnStatistics {
-                    distinct_count: None,
-                    max_value: Some(ScalarValue::Utf8(Some(String::from("c")))),
-                    min_value: Some(ScalarValue::Utf8(Some(String::from("b")))),
-                    null_count: None,
+                    distinct_count: Precision::Absent,
+                    max_value: Precision::Exact(ScalarValue::Utf8(Some(String::from(
+                        "c",
+                    )))),
+                    min_value: Precision::Exact(ScalarValue::Utf8(Some(String::from(
+                        "b",
+                    )))),
+                    null_count: Precision::Absent,
                 },
                 ColumnStatistics {
-                    distinct_count: None,
-                    max_value: None,
-                    min_value: None,
-                    null_count: None,
+                    distinct_count: Precision::Absent,
+                    max_value: Precision::Absent,
+                    min_value: Precision::Absent,
+                    null_count: Precision::Absent,
                 },
-            ]),
+            ],
         };
 
         let result = stats_union(left, right);
         let expected = Statistics {
-            is_exact: true,
-            num_rows: Some(12),
-            total_byte_size: Some(52),
-            column_statistics: Some(vec![
+            num_rows: Precision::Exact(12),
+            total_byte_size: Precision::Exact(52),
+            column_statistics: vec![
                 ColumnStatistics {
-                    distinct_count: None,
-                    max_value: Some(ScalarValue::Int64(Some(34))),
-                    min_value: Some(ScalarValue::Int64(Some(-4))),
-                    null_count: Some(1),
+                    distinct_count: Precision::Absent,
+                    max_value: Precision::Exact(ScalarValue::Int64(Some(34))),
+                    min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
+                    null_count: Precision::Exact(1),
                 },
                 ColumnStatistics {
-                    distinct_count: None,
-                    max_value: Some(ScalarValue::Utf8(Some(String::from("x")))),
-                    min_value: Some(ScalarValue::Utf8(Some(String::from("a")))),
-                    null_count: None,
+                    distinct_count: Precision::Absent,
+                    max_value: Precision::Exact(ScalarValue::Utf8(Some(String::from(
+                        "x",
+                    )))),
+                    min_value: Precision::Exact(ScalarValue::Utf8(Some(String::from(
+                        "a",
+                    )))),
+                    null_count: Precision::Absent,
                 },
                 ColumnStatistics {
-                    distinct_count: None,
-                    max_value: None,
-                    min_value: None,
-                    null_count: None,
+                    distinct_count: Precision::Absent,
+                    max_value: Precision::Absent,
+                    min_value: Precision::Absent,
+                    null_count: Precision::Absent,
                 },
-            ]),
+            ],
         };
 
         assert_eq!(result, expected);

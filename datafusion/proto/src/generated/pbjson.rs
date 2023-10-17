@@ -3289,10 +3289,10 @@ impl serde::Serialize for ColumnStats {
         if self.max_value.is_some() {
             len += 1;
         }
-        if self.null_count != 0 {
+        if self.null_count.is_some() {
             len += 1;
         }
-        if self.distinct_count != 0 {
+        if self.distinct_count.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.ColumnStats", len)?;
@@ -3302,11 +3302,11 @@ impl serde::Serialize for ColumnStats {
         if let Some(v) = self.max_value.as_ref() {
             struct_ser.serialize_field("maxValue", v)?;
         }
-        if self.null_count != 0 {
-            struct_ser.serialize_field("nullCount", &self.null_count)?;
+        if let Some(v) = self.null_count.as_ref() {
+            struct_ser.serialize_field("nullCount", v)?;
         }
-        if self.distinct_count != 0 {
-            struct_ser.serialize_field("distinctCount", &self.distinct_count)?;
+        if let Some(v) = self.distinct_count.as_ref() {
+            struct_ser.serialize_field("distinctCount", v)?;
         }
         struct_ser.end()
     }
@@ -3400,25 +3400,21 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
                             if null_count__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("nullCount"));
                             }
-                            null_count__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
-                            ;
+                            null_count__ = map_.next_value()?;
                         }
                         GeneratedField::DistinctCount => {
                             if distinct_count__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("distinctCount"));
                             }
-                            distinct_count__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
-                            ;
+                            distinct_count__ = map_.next_value()?;
                         }
                     }
                 }
                 Ok(ColumnStats {
                     min_value: min_value__,
                     max_value: max_value__,
-                    null_count: null_count__.unwrap_or_default(),
-                    distinct_count: distinct_count__.unwrap_or_default(),
+                    null_count: null_count__,
+                    distinct_count: distinct_count__,
                 })
             }
         }
@@ -18320,6 +18316,191 @@ impl<'de> serde::Deserialize<'de> for PlanType {
         deserializer.deserialize_struct("datafusion.PlanType", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for Precision {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.precision_info != 0 {
+            len += 1;
+        }
+        if self.val.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.Precision", len)?;
+        if self.precision_info != 0 {
+            let v = PrecisionInfo::try_from(self.precision_info)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.precision_info)))?;
+            struct_ser.serialize_field("precisionInfo", &v)?;
+        }
+        if let Some(v) = self.val.as_ref() {
+            struct_ser.serialize_field("val", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for Precision {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "precision_info",
+            "precisionInfo",
+            "val",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            PrecisionInfo,
+            Val,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "precisionInfo" | "precision_info" => Ok(GeneratedField::PrecisionInfo),
+                            "val" => Ok(GeneratedField::Val),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = Precision;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.Precision")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<Precision, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut precision_info__ = None;
+                let mut val__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::PrecisionInfo => {
+                            if precision_info__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("precisionInfo"));
+                            }
+                            precision_info__ = Some(map_.next_value::<PrecisionInfo>()? as i32);
+                        }
+                        GeneratedField::Val => {
+                            if val__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("val"));
+                            }
+                            val__ = map_.next_value()?;
+                        }
+                    }
+                }
+                Ok(Precision {
+                    precision_info: precision_info__.unwrap_or_default(),
+                    val: val__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.Precision", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for PrecisionInfo {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let variant = match self {
+            Self::Exact => "EXACT",
+            Self::Inexact => "INEXACT",
+            Self::Absent => "ABSENT",
+        };
+        serializer.serialize_str(variant)
+    }
+}
+impl<'de> serde::Deserialize<'de> for PrecisionInfo {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "EXACT",
+            "INEXACT",
+            "ABSENT",
+        ];
+
+        struct GeneratedVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = PrecisionInfo;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(formatter, "expected one of: {:?}", &FIELDS)
+            }
+
+            fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Signed(v), &self)
+                    })
+            }
+
+            fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Unsigned(v), &self)
+                    })
+            }
+
+            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                match value {
+                    "EXACT" => Ok(PrecisionInfo::Exact),
+                    "INEXACT" => Ok(PrecisionInfo::Inexact),
+                    "ABSENT" => Ok(PrecisionInfo::Absent),
+                    _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
+                }
+            }
+        }
+        deserializer.deserialize_any(GeneratedVisitor)
+    }
+}
 impl serde::Serialize for PrepareNode {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -22240,32 +22421,24 @@ impl serde::Serialize for Statistics {
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;
-        if self.num_rows != 0 {
+        if self.num_rows.is_some() {
             len += 1;
         }
-        if self.total_byte_size != 0 {
+        if self.total_byte_size.is_some() {
             len += 1;
         }
         if !self.column_stats.is_empty() {
-            len += 1;
-        }
-        if self.is_exact {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.Statistics", len)?;
-        if self.num_rows != 0 {
-            #[allow(clippy::needless_borrow)]
-            struct_ser.serialize_field("numRows", ToString::to_string(&self.num_rows).as_str())?;
+        if let Some(v) = self.num_rows.as_ref() {
+            struct_ser.serialize_field("numRows", v)?;
         }
-        if self.total_byte_size != 0 {
-            #[allow(clippy::needless_borrow)]
-            struct_ser.serialize_field("totalByteSize", ToString::to_string(&self.total_byte_size).as_str())?;
+        if let Some(v) = self.total_byte_size.as_ref() {
+            struct_ser.serialize_field("totalByteSize", v)?;
         }
         if !self.column_stats.is_empty() {
             struct_ser.serialize_field("columnStats", &self.column_stats)?;
-        }
-        if self.is_exact {
-            struct_ser.serialize_field("isExact", &self.is_exact)?;
         }
         struct_ser.end()
     }
@@ -22283,8 +22456,6 @@ impl<'de> serde::Deserialize<'de> for Statistics {
             "totalByteSize",
             "column_stats",
             "columnStats",
-            "is_exact",
-            "isExact",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -22292,7 +22463,6 @@ impl<'de> serde::Deserialize<'de> for Statistics {
             NumRows,
             TotalByteSize,
             ColumnStats,
-            IsExact,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -22317,7 +22487,6 @@ impl<'de> serde::Deserialize<'de> for Statistics {
                             "numRows" | "num_rows" => Ok(GeneratedField::NumRows),
                             "totalByteSize" | "total_byte_size" => Ok(GeneratedField::TotalByteSize),
                             "columnStats" | "column_stats" => Ok(GeneratedField::ColumnStats),
-                            "isExact" | "is_exact" => Ok(GeneratedField::IsExact),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -22340,24 +22509,19 @@ impl<'de> serde::Deserialize<'de> for Statistics {
                 let mut num_rows__ = None;
                 let mut total_byte_size__ = None;
                 let mut column_stats__ = None;
-                let mut is_exact__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::NumRows => {
                             if num_rows__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("numRows"));
                             }
-                            num_rows__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
-                            ;
+                            num_rows__ = map_.next_value()?;
                         }
                         GeneratedField::TotalByteSize => {
                             if total_byte_size__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("totalByteSize"));
                             }
-                            total_byte_size__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
-                            ;
+                            total_byte_size__ = map_.next_value()?;
                         }
                         GeneratedField::ColumnStats => {
                             if column_stats__.is_some() {
@@ -22365,19 +22529,12 @@ impl<'de> serde::Deserialize<'de> for Statistics {
                             }
                             column_stats__ = Some(map_.next_value()?);
                         }
-                        GeneratedField::IsExact => {
-                            if is_exact__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("isExact"));
-                            }
-                            is_exact__ = Some(map_.next_value()?);
-                        }
                     }
                 }
                 Ok(Statistics {
-                    num_rows: num_rows__.unwrap_or_default(),
-                    total_byte_size: total_byte_size__.unwrap_or_default(),
+                    num_rows: num_rows__,
+                    total_byte_size: total_byte_size__,
                     column_stats: column_stats__.unwrap_or_default(),
-                    is_exact: is_exact__.unwrap_or_default(),
                 })
             }
         }
