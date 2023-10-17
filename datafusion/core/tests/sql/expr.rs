@@ -686,35 +686,35 @@ async fn test_extract_date_part() -> Result<()> {
         "12.0"
     );
     test_expression!(
-        "EXTRACT(second FROM to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
+        "EXTRACT(second FROM timestamp '2020-09-08T12:00:12.12345678+00:00')",
         "12.12345678"
     );
     test_expression!(
-        "EXTRACT(millisecond FROM to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
+        "EXTRACT(millisecond FROM timestamp '2020-09-08T12:00:12.12345678+00:00')",
         "12123.45678"
     );
     test_expression!(
-        "EXTRACT(microsecond FROM to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
+        "EXTRACT(microsecond FROM timestamp '2020-09-08T12:00:12.12345678+00:00')",
         "12123456.78"
     );
     test_expression!(
-        "EXTRACT(nanosecond FROM to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
+        "EXTRACT(nanosecond FROM timestamp '2020-09-08T12:00:12.12345678+00:00')",
         "1.212345678e10"
     );
     test_expression!(
-        "date_part('second', to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
+        "date_part('second', timestamp '2020-09-08T12:00:12.12345678+00:00')",
         "12.12345678"
     );
     test_expression!(
-        "date_part('millisecond', to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
+        "date_part('millisecond', timestamp '2020-09-08T12:00:12.12345678+00:00')",
         "12123.45678"
     );
     test_expression!(
-        "date_part('microsecond', to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
+        "date_part('microsecond', timestamp '2020-09-08T12:00:12.12345678+00:00')",
         "12123456.78"
     );
     test_expression!(
-        "date_part('nanosecond', to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
+        "date_part('nanosecond', timestamp '2020-09-08T12:00:12.12345678+00:00')",
         "1.212345678e10"
     );
 

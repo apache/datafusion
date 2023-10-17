@@ -129,9 +129,9 @@ fn string_to_timestamp_nanos_shim(s: &str) -> Result<i64> {
 
 /// to_timestamp SQL function
 pub fn to_timestamp(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    handle::<TimestampNanosecondType, _, TimestampNanosecondType>(
+    handle::<TimestampSecondType, _, TimestampSecondType>(
         args,
-        string_to_timestamp_nanos_shim,
+        |s| string_to_timestamp_nanos_shim(s).map(|n| n / 1_000_000_000),
         "to_timestamp",
     )
 }
@@ -151,6 +151,15 @@ pub fn to_timestamp_micros(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         args,
         |s| string_to_timestamp_nanos_shim(s).map(|n| n / 1_000),
         "to_timestamp_micros",
+    )
+}
+
+/// to_timestamp_nanos SQL function
+pub fn to_timestamp_nanos(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    handle::<TimestampNanosecondType, _, TimestampNanosecondType>(
+        args,
+        string_to_timestamp_nanos_shim,
+        "to_timestamp_nanos",
     )
 }
 
@@ -960,10 +969,10 @@ mod tests {
         // ensure that arrow array implementation is wired up and handles nulls correctly
 
         let mut string_builder = StringBuilder::with_capacity(2, 1024);
-        let mut ts_builder = TimestampNanosecondArray::builder(2);
+        let mut ts_builder = TimestampSecondArray::builder(2);
 
-        string_builder.append_value("2020-09-08T13:42:29.190855Z");
-        ts_builder.append_value(1599572549190855000);
+        string_builder.append_value("2020-09-08T13:42:29");
+        ts_builder.append_value(1599572549);
 
         string_builder.append_null();
         ts_builder.append_null();

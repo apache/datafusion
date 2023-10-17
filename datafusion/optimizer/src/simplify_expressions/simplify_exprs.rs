@@ -460,7 +460,7 @@ mod tests {
             .project(proj)?
             .build()?;
 
-        let expected = "Projection: TimestampNanosecond(1599566400000000000, None) AS to_timestamp(Utf8(\"2020-09-08T12:00:00+00:00\"))\
+        let expected = "Projection: TimestampSecond(1599566400, None) AS to_timestamp(Utf8(\"2020-09-08T12:00:00+00:00\"))\
             \n  TableScan: test"
             .to_string();
         let actual = get_optimized_plan_formatted(&plan, &Utc::now());
@@ -571,8 +571,8 @@ mod tests {
                 .build()?;
 
         // Note that constant folder runs and folds the entire
-        // expression down to a single constant (true)
-        let expected = "Filter: Boolean(true)\
+        // expression down to a single constant (false)
+        let expected = "Filter: Boolean(false)\
                         \n  TableScan: test";
         let actual = get_optimized_plan_formatted(&plan, &time);
 

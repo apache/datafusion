@@ -261,6 +261,8 @@ pub enum BuiltinScalarFunction {
     ToTimestampMillis,
     /// to_timestamp_micros
     ToTimestampMicros,
+    /// to_timestamp_nanos
+    ToTimestampNanos,
     /// to_timestamp_seconds
     ToTimestampSeconds,
     /// from_unixtime
@@ -439,6 +441,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ToTimestamp => Volatility::Immutable,
             BuiltinScalarFunction::ToTimestampMillis => Volatility::Immutable,
             BuiltinScalarFunction::ToTimestampMicros => Volatility::Immutable,
+            BuiltinScalarFunction::ToTimestampNanos => Volatility::Immutable,
             BuiltinScalarFunction::ToTimestampSeconds => Volatility::Immutable,
             BuiltinScalarFunction::Translate => Volatility::Immutable,
             BuiltinScalarFunction::Trim => Volatility::Immutable,
@@ -745,9 +748,10 @@ impl BuiltinScalarFunction {
                     return plan_err!("The to_hex function can only accept integers.");
                 }
             }),
-            BuiltinScalarFunction::ToTimestamp => Ok(Timestamp(Nanosecond, None)),
+            BuiltinScalarFunction::ToTimestamp => Ok(Timestamp(Second, None)),
             BuiltinScalarFunction::ToTimestampMillis => Ok(Timestamp(Millisecond, None)),
             BuiltinScalarFunction::ToTimestampMicros => Ok(Timestamp(Microsecond, None)),
+            BuiltinScalarFunction::ToTimestampNanos => Ok(Timestamp(Nanosecond, None)),
             BuiltinScalarFunction::ToTimestampSeconds => Ok(Timestamp(Second, None)),
             BuiltinScalarFunction::FromUnixtime => Ok(Timestamp(Second, None)),
             BuiltinScalarFunction::Now => {
@@ -977,6 +981,18 @@ impl BuiltinScalarFunction {
                 self.volatility(),
             ),
             BuiltinScalarFunction::ToTimestampMicros => Signature::uniform(
+                1,
+                vec![
+                    Int64,
+                    Timestamp(Nanosecond, None),
+                    Timestamp(Microsecond, None),
+                    Timestamp(Millisecond, None),
+                    Timestamp(Second, None),
+                    Utf8,
+                ],
+                self.volatility(),
+            ),
+            BuiltinScalarFunction::ToTimestampNanos => Signature::uniform(
                 1,
                 vec![
                     Int64,
@@ -1424,6 +1440,7 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
         BuiltinScalarFunction::ToTimestampMillis => &["to_timestamp_millis"],
         BuiltinScalarFunction::ToTimestampMicros => &["to_timestamp_micros"],
         BuiltinScalarFunction::ToTimestampSeconds => &["to_timestamp_seconds"],
+        BuiltinScalarFunction::ToTimestampNanos => &["to_timestamp_nanos"],
         BuiltinScalarFunction::FromUnixtime => &["from_unixtime"],
 
         // hashing functions

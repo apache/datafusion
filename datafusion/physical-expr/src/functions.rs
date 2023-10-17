@@ -78,7 +78,7 @@ pub fn create_physical_expr(
                     |col_values: &[ColumnarValue]| {
                         cast_column(
                             &col_values[0],
-                            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+                            &DataType::Timestamp(TimeUnit::Second, None),
                             None,
                         )
                     }
@@ -125,6 +125,25 @@ pub fn create_physical_expr(
                 other => {
                     return internal_err!(
                         "Unsupported data type {other:?} for function to_timestamp_micros"
+                    );
+                }
+            })
+        }
+        BuiltinScalarFunction::ToTimestampNanos => {
+            Arc::new(match input_phy_exprs[0].data_type(input_schema) {
+                Ok(DataType::Int64) | Ok(DataType::Timestamp(_, None)) => {
+                    |col_values: &[ColumnarValue]| {
+                        cast_column(
+                            &col_values[0],
+                            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+                            None,
+                        )
+                    }
+                }
+                Ok(DataType::Utf8) => datetime_expressions::to_timestamp_nanos,
+                other => {
+                    return internal_err!(
+                        "Unsupported data type {other:?} for function to_timestamp_nanos"
                     );
                 }
             })
