@@ -34,7 +34,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // TODO: figure out if ScalarVariables should be insensitive.
             let var_names = vec![id.value];
             let ty = self
-                .schema_provider
+                .context_provider
                 .get_variable_type(&var_names)
                 .ok_or_else(|| {
                     plan_datafusion_err!("variable {var_names:?} has no type information")
@@ -98,7 +98,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .map(|id| self.normalizer.normalize(id))
                 .collect();
             let ty = self
-                .schema_provider
+                .context_provider
                 .get_variable_type(&var_names)
                 .ok_or_else(|| {
                     DataFusionError::Execution(format!(
