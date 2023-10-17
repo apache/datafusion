@@ -26,6 +26,7 @@ use datafusion_common::ScalarValue;
 
 use futures::{Stream, StreamExt};
 use itertools::izip;
+use itertools::multiunzip;
 
 /// Get all files as well as the file level summary statistics (no statistic for partition columns).
 /// If the optional `limit` is provided, includes only sufficient files.
@@ -83,14 +84,33 @@ pub async fn get_statistics_with_limit(
                 total_byte_size =
                     add_row_stats(file_stats.total_byte_size, total_byte_size);
 
-                for (index, file_cs) in
-                    file_stats.column_statistics.into_iter().enumerate()
-                {
-                    null_counts[index] =
-                        add_row_stats(file_cs.null_count, null_counts[index].clone());
-                    set_max_if_greater(&mut max_values[index], file_cs.max_value);
-                    set_min_if_lesser(&mut min_values[index], file_cs.min_value);
-                }
+                (null_counts, max_values, min_values) = multiunzip(
+                    izip!(
+                        file_stats.column_statistics.into_iter(),
+                        null_counts.into_iter(),
+                        max_values.into_iter(),
+                        min_values.into_iter()
+                    )
+                    .map(
+                        |(
+                            ColumnStatistics {
+                                null_count: file_nc,
+                                max_value: file_max,
+                                min_value: file_min,
+                                distinct_count: _,
+                            },
+                            null_count,
+                            max_value,
+                            min_value,
+                        )| {
+                            (
+                                add_row_stats(file_nc, null_count),
+                                set_max_if_greater(file_max, max_value),
+                                set_min_if_lesser(file_min, min_value),
+                            )
+                        },
+                    ),
+                );
 
                 // If the number of rows exceeds the limit, we can stop processing
                 // files. This only applies when we know the number of rows. It also
@@ -189,63 +209,47 @@ pub(crate) fn get_col_stats(
 }
 
 /// If the given value is numerically greater than the original maximum value,
-/// set the new maximum value with appropriate exactness information.
+/// return the new maximum value with appropriate exactness information.
 fn set_max_if_greater(
-    max_values: &mut Precision<ScalarValue>,
     max_nominee: Precision<ScalarValue>,
-) {
+    max_values: Precision<ScalarValue>,
+) -> Precision<ScalarValue> {
     match (&max_values, &max_nominee) {
-        (Precision::Exact(val1), Precision::Exact(val2)) => {
-            if val1 < val2 {
-                *max_values = max_nominee;
-            }
-        }
+        (Precision::Exact(val1), Precision::Exact(val2)) if val1 < val2 => max_nominee,
         (Precision::Exact(val1), Precision::Inexact(val2))
         | (Precision::Inexact(val1), Precision::Inexact(val2))
-        | (Precision::Inexact(val1), Precision::Exact(val2)) => {
-            if val1 < val2 {
-                *max_values = max_nominee.to_inexact()
-            }
+        | (Precision::Inexact(val1), Precision::Exact(val2))
+            if val1 < val2 =>
+        {
+            max_nominee.to_inexact()
         }
-        (Precision::Inexact(_), Precision::Absent)
-        | (Precision::Exact(_), Precision::Absent) => {
-            *max_values = max_values.clone().to_inexact()
-        }
-        (Precision::Absent, Precision::Exact(_))
-        | (Precision::Absent, Precision::Inexact(_)) => {
-            *max_values = max_nominee.to_inexact()
-        }
-        (Precision::Absent, Precision::Absent) => *max_values = Precision::Absent,
+        (Precision::Exact(_), Precision::Absent) => max_values.to_inexact(),
+        (Precision::Absent, Precision::Exact(_)) => max_nominee.to_inexact(),
+        (Precision::Absent, Precision::Inexact(_)) => max_nominee,
+        (Precision::Absent, Precision::Absent) => Precision::Absent,
+        _ => max_values,
     }
 }
 
 /// If the given value is numerically lesser than the original minimum value,
-/// set the new minimum value with appropriate exactness information.
+/// return the new minimum value with appropriate exactness information.
 fn set_min_if_lesser(
-    min_values: &mut Precision<ScalarValue>,
     min_nominee: Precision<ScalarValue>,
-) {
+    min_values: Precision<ScalarValue>,
+) -> Precision<ScalarValue> {
     match (&min_values, &min_nominee) {
-        (Precision::Exact(val1), Precision::Exact(val2)) => {
-            if val1 > val2 {
-                *min_values = min_nominee;
-            }
-        }
+        (Precision::Exact(val1), Precision::Exact(val2)) if val1 > val2 => min_nominee,
         (Precision::Exact(val1), Precision::Inexact(val2))
         | (Precision::Inexact(val1), Precision::Inexact(val2))
-        | (Precision::Inexact(val1), Precision::Exact(val2)) => {
-            if val1 > val2 {
-                *min_values = min_nominee.to_inexact()
-            }
+        | (Precision::Inexact(val1), Precision::Exact(val2))
+            if val1 > val2 =>
+        {
+            min_nominee.to_inexact()
         }
-        (Precision::Inexact(_), Precision::Absent)
-        | (Precision::Exact(_), Precision::Absent) => {
-            *min_values = min_values.clone().to_inexact()
-        }
-        (Precision::Absent, Precision::Exact(_))
-        | (Precision::Absent, Precision::Inexact(_)) => {
-            *min_values = min_nominee.to_inexact()
-        }
-        (Precision::Absent, Precision::Absent) => *min_values = Precision::Absent,
+        (Precision::Exact(_), Precision::Absent) => min_values.to_inexact(),
+        (Precision::Absent, Precision::Exact(_)) => min_nominee.to_inexact(),
+        (Precision::Absent, Precision::Inexact(_)) => min_nominee,
+        (Precision::Absent, Precision::Absent) => Precision::Absent,
+        _ => min_values,
     }
 }
