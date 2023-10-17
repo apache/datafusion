@@ -39,7 +39,7 @@ use crate::metrics::{BaselineMetrics, RecordOutput};
 use crate::sorts::sort::{read_spill_as_stream, sort_batch};
 use crate::sorts::streaming_merge;
 use crate::stream::RecordBatchStreamAdapter;
-use crate::{aggregates, PhysicalExpr};
+use crate::{aggregates, ExecutionPlan, PhysicalExpr};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::array::*;
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
@@ -329,12 +329,14 @@ impl GroupedHashAggregateStream {
 
         let name = format!("GroupedHashAggregateStream[{partition}]");
         let reservation = MemoryConsumer::new(name).register(context.memory_pool());
-
-        let out_ordering = agg.output_ordering.as_deref().unwrap_or(&[]);
+        let ordered_section = agg
+            .schema_properties()
+            .get_lex_ordering_section(&agg_group_by.output_exprs())
+            .unwrap_or_default();
         let group_ordering = GroupOrdering::try_new(
             &group_schema,
             &agg.partition_search_mode,
-            out_ordering,
+            &ordered_section,
         )?;
 
         let group_values = new_group_values(group_schema)?;
