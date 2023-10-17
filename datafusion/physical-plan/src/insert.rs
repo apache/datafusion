@@ -17,28 +17,29 @@
 
 //! Execution plan for writing data to [`DataSink`]s
 
+use std::any::Any;
+use std::fmt;
+use std::fmt::Debug;
+use std::sync::Arc;
+
 use super::expressions::PhysicalSortExpr;
 use super::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
     Statistics,
 };
+use crate::metrics::MetricsSet;
+use crate::stream::RecordBatchStreamAdapter;
+
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow_array::{ArrayRef, UInt64Array};
 use arrow_schema::{DataType, Field, Schema};
-use async_trait::async_trait;
-use core::fmt;
-use datafusion_common::Result;
-use datafusion_physical_expr::PhysicalSortRequirement;
-use futures::StreamExt;
-use std::any::Any;
-use std::fmt::Debug;
-use std::sync::Arc;
-
-use crate::metrics::MetricsSet;
-use crate::stream::RecordBatchStreamAdapter;
-use datafusion_common::{exec_err, internal_err, DataFusionError};
+use datafusion_common::{exec_err, internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::PhysicalSortRequirement;
+
+use async_trait::async_trait;
+use futures::StreamExt;
 
 /// `DataSink` implements writing streams of [`RecordBatch`]es to
 /// user defined destinations.
@@ -284,8 +285,8 @@ impl ExecutionPlan for FileSinkExec {
         )))
     }
 
-    fn statistics(&self) -> Statistics {
-        Statistics::default()
+    fn statistics(&self) -> Result<Statistics> {
+        Ok(Statistics::new_unknown(&self.schema()))
     }
 }
 

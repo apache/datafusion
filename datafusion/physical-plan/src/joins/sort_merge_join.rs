@@ -30,8 +30,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::expressions::Column;
-use crate::expressions::PhysicalSortExpr;
+use crate::expressions::{Column, PhysicalSortExpr};
 use crate::joins::utils::{
     build_join_schema, calculate_join_output_ordering, check_join_is_valid,
     estimate_join_statistics, partitioned_join_output_partitioning, JoinOn,
@@ -370,7 +369,7 @@ impl ExecutionPlan for SortMergeJoinExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Result<Statistics> {
         // TODO stats: it is not possible in general to know the output size of joins
         // There are some special cases though, for example:
         // - `A LEFT JOIN B ON A.col=B.col` with `COUNT_DISTINCT(B.col)=COUNT(B.col)`
@@ -379,6 +378,7 @@ impl ExecutionPlan for SortMergeJoinExec {
             self.right.clone(),
             self.on.clone(),
             &self.join_type,
+            &self.schema,
         )
     }
 }
@@ -1386,24 +1386,23 @@ fn is_join_arrays_equal(
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::{Date32Array, Date64Array, Int32Array};
-    use arrow::compute::SortOptions;
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::record_batch::RecordBatch;
-    use datafusion_execution::config::SessionConfig;
-    use datafusion_execution::TaskContext;
-
     use crate::expressions::Column;
     use crate::joins::utils::JoinOn;
     use crate::joins::SortMergeJoinExec;
     use crate::memory::MemoryExec;
     use crate::test::build_table_i32;
     use crate::{common, ExecutionPlan};
-    use datafusion_common::Result;
+
+    use arrow::array::{Date32Array, Date64Array, Int32Array};
+    use arrow::compute::SortOptions;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
     use datafusion_common::{
-        assert_batches_eq, assert_batches_sorted_eq, assert_contains, JoinType,
+        assert_batches_eq, assert_batches_sorted_eq, assert_contains, JoinType, Result,
     };
+    use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+    use datafusion_execution::TaskContext;
 
     fn build_table(
         a: (&str, &Vec<i32>),

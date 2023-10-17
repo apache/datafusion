@@ -20,20 +20,19 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::datatypes::SchemaRef;
-use async_trait::async_trait;
-use futures::stream::StreamExt;
-
-use datafusion_common::{internal_err, plan_err, DataFusionError, Result, Statistics};
-use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr, SchemaProperties};
-use log::debug;
-
+use super::{DisplayAs, DisplayFormatType};
 use crate::display::{OutputOrderingDisplay, ProjectSchemaDisplay};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
-use datafusion_execution::TaskContext;
 
-use super::{DisplayAs, DisplayFormatType};
+use arrow::datatypes::SchemaRef;
+use datafusion_common::{internal_err, plan_err, DataFusionError, Result, Statistics};
+use datafusion_execution::TaskContext;
+use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr, SchemaProperties};
+
+use async_trait::async_trait;
+use futures::stream::StreamExt;
+use log::debug;
 
 /// A partition that can be converted into a [`SendableRecordBatchStream`]
 pub trait PartitionStream: Send + Sync {
@@ -197,7 +196,7 @@ impl ExecutionPlan for StreamingTableExec {
         })
     }
 
-    fn statistics(&self) -> Statistics {
-        Default::default()
+    fn statistics(&self) -> Result<Statistics> {
+        Ok(Statistics::new_unknown(&self.schema()))
     }
 }

@@ -18,51 +18,38 @@
 //! Line delimited JSON format abstractions
 
 use std::any::Any;
-
-use bytes::Bytes;
-use datafusion_common::not_impl_err;
-use datafusion_common::DataFusionError;
-use datafusion_common::FileType;
-use datafusion_execution::TaskContext;
-use datafusion_physical_expr::PhysicalSortRequirement;
-use datafusion_physical_plan::metrics::MetricsSet;
-use rand::distributions::Alphanumeric;
-use rand::distributions::DistString;
 use std::fmt;
 use std::fmt::Debug;
 use std::io::BufReader;
 use std::sync::Arc;
 
-use arrow::datatypes::Schema;
-use arrow::datatypes::SchemaRef;
-use arrow::json;
-use arrow::json::reader::infer_json_schema_from_iterator;
-use arrow::json::reader::ValueIter;
-use arrow_array::RecordBatch;
-use async_trait::async_trait;
-use bytes::Buf;
-
-use datafusion_physical_expr::PhysicalExpr;
-use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
-
-use crate::datasource::physical_plan::FileGroupDisplay;
-use crate::physical_plan::insert::DataSink;
-use crate::physical_plan::insert::FileSinkExec;
-use crate::physical_plan::SendableRecordBatchStream;
-use crate::physical_plan::{DisplayAs, DisplayFormatType, Statistics};
-
-use super::FileFormat;
-use super::FileScanConfig;
+use super::{FileFormat, FileScanConfig};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::write::{
     create_writer, stateless_serialize_and_write_files, BatchSerializer, FileWriterMode,
 };
 use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
-use crate::datasource::physical_plan::FileSinkConfig;
-use crate::datasource::physical_plan::NdJsonExec;
+use crate::datasource::physical_plan::{FileGroupDisplay, FileSinkConfig, NdJsonExec};
 use crate::error::Result;
 use crate::execution::context::SessionState;
-use crate::physical_plan::ExecutionPlan;
+use crate::physical_plan::insert::{DataSink, FileSinkExec};
+use crate::physical_plan::{
+    DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream, Statistics,
+};
+
+use arrow::datatypes::{Schema, SchemaRef};
+use arrow::json;
+use arrow::json::reader::{infer_json_schema_from_iterator, ValueIter};
+use arrow_array::RecordBatch;
+use datafusion_common::{not_impl_err, DataFusionError, FileType};
+use datafusion_execution::TaskContext;
+use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
+use datafusion_physical_plan::metrics::MetricsSet;
+
+use async_trait::async_trait;
+use bytes::{Buf, Bytes};
+use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
+use rand::distributions::{Alphanumeric, DistString};
 
 /// New line delimited JSON `FileFormat` implementation.
 #[derive(Debug)]
@@ -154,10 +141,10 @@ impl FileFormat for JsonFormat {
         &self,
         _state: &SessionState,
         _store: &Arc<dyn ObjectStore>,
-        _table_schema: SchemaRef,
+        table_schema: SchemaRef,
         _object: &ObjectMeta,
     ) -> Result<Statistics> {
-        Ok(Statistics::default())
+        Ok(Statistics::new_unknown(&table_schema))
     }
 
     async fn create_physical_plan(
@@ -394,6 +381,7 @@ impl DataSink for JsonSink {
 mod tests {
     use super::super::test_util::scan_format;
     use datafusion_common::cast::as_int64_array;
+    use datafusion_common::stats::Precision;
     use futures::StreamExt;
     use object_store::local::LocalFileSystem;
 
@@ -424,8 +412,8 @@ mod tests {
         assert_eq!(tt_batches, 6 /* 12/2 */);
 
         // test metadata
-        assert_eq!(exec.statistics().num_rows, None);
-        assert_eq!(exec.statistics().total_byte_size, None);
+        assert_eq!(exec.statistics()?.num_rows, Precision::Absent);
+        assert_eq!(exec.statistics()?.total_byte_size, Precision::Absent);
 
         Ok(())
     }

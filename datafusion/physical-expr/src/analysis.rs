@@ -17,6 +17,9 @@
 
 //! Interval and selectivity in [`AnalysisContext`]
 
+use std::fmt::Debug;
+use std::sync::Arc;
+
 use crate::expressions::Column;
 use crate::intervals::cp_solver::PropagationResult;
 use crate::intervals::{cardinality_ratio, ExprIntervalGraph, Interval, IntervalBound};
@@ -24,12 +27,10 @@ use crate::utils::collect_columns;
 use crate::PhysicalExpr;
 
 use arrow::datatypes::Schema;
+use datafusion_common::stats::Precision;
 use datafusion_common::{
     internal_err, ColumnStatistics, DataFusionError, Result, ScalarValue,
 };
-
-use std::fmt::Debug;
-use std::sync::Arc;
 
 /// The shared context used during the analysis of an expression. Includes
 /// the boundaries for all known columns.
@@ -37,7 +38,7 @@ use std::sync::Arc;
 pub struct AnalysisContext {
     // A list of known column boundaries, ordered by the index
     // of the column in the current schema.
-    pub boundaries: Option<Vec<ExprBoundaries>>,
+    pub boundaries: Vec<ExprBoundaries>,
     /// The estimated percentage of rows that this expression would select, if
     /// it were to be used as a boolean predicate on a filter. The value will be
     /// between 0.0 (selects nothing) and 1.0 (selects everything).
@@ -47,7 +48,7 @@ pub struct AnalysisContext {
 impl AnalysisContext {
     pub fn new(boundaries: Vec<ExprBoundaries>) -> Self {
         Self {
-            boundaries: Some(boundaries),
+            boundaries,
             selectivity: None,
         }
     }
@@ -58,19 +59,16 @@ impl AnalysisContext {
     }
 
     /// Create a new analysis context from column statistics.
-    pub fn from_statistics(
+    pub fn try_from_statistics(
         input_schema: &Schema,
         statistics: &[ColumnStatistics],
-    ) -> Self {
-        let mut column_boundaries = vec![];
-        for (idx, stats) in statistics.iter().enumerate() {
-            column_boundaries.push(ExprBoundaries::from_column(
-                stats,
-                input_schema.fields()[idx].name().clone(),
-                idx,
-            ));
-        }
-        Self::new(column_boundaries)
+    ) -> Result<Self> {
+        statistics
+            .iter()
+            .enumerate()
+            .map(|(idx, stats)| ExprBoundaries::try_from_column(input_schema, stats, idx))
+            .collect::<Result<Vec<_>>>()
+            .map(Self::new)
     }
 }
 
@@ -82,24 +80,40 @@ pub struct ExprBoundaries {
     /// Minimum and maximum values this expression can have.
     pub interval: Interval,
     /// Maximum number of distinct values this expression can produce, if known.
-    pub distinct_count: Option<usize>,
+    pub distinct_count: Precision<usize>,
 }
 
 impl ExprBoundaries {
     /// Create a new `ExprBoundaries` object from column level statistics.
-    pub fn from_column(stats: &ColumnStatistics, col: String, index: usize) -> Self {
-        Self {
-            column: Column::new(&col, index),
-            interval: Interval::new(
-                IntervalBound::new_closed(
-                    stats.min_value.clone().unwrap_or(ScalarValue::Null),
-                ),
-                IntervalBound::new_closed(
-                    stats.max_value.clone().unwrap_or(ScalarValue::Null),
-                ),
+    pub fn try_from_column(
+        schema: &Schema,
+        col_stats: &ColumnStatistics,
+        col_index: usize,
+    ) -> Result<Self> {
+        let field = &schema.fields()[col_index];
+        let empty_field = ScalarValue::try_from(field.data_type())?;
+        let interval = Interval::new(
+            IntervalBound::new_closed(
+                col_stats
+                    .min_value
+                    .get_value()
+                    .cloned()
+                    .unwrap_or(empty_field.clone()),
             ),
-            distinct_count: stats.distinct_count,
-        }
+            IntervalBound::new_closed(
+                col_stats
+                    .max_value
+                    .get_value()
+                    .cloned()
+                    .unwrap_or(empty_field),
+            ),
+        );
+        let column = Column::new(field.name(), col_index);
+        Ok(ExprBoundaries {
+            column,
+            interval,
+            distinct_count: col_stats.distinct_count.clone(),
+        })
     }
 }
 
@@ -122,9 +136,7 @@ pub fn analyze(
     expr: &Arc<dyn PhysicalExpr>,
     context: AnalysisContext,
 ) -> Result<AnalysisContext> {
-    let target_boundaries = context.boundaries.ok_or_else(|| {
-        DataFusionError::Internal("No column exists at the input to filter".to_string())
-    })?;
+    let target_boundaries = context.boundaries;
 
     let mut graph = ExprIntervalGraph::try_new(expr.clone())?;
 
@@ -148,18 +160,22 @@ pub fn analyze(
                 })
             })
             .collect();
-
-    match graph.update_ranges(&mut target_indices_and_boundaries)? {
-        PropagationResult::Success => {
-            shrink_boundaries(expr, graph, target_boundaries, target_expr_and_indices)
-        }
-        PropagationResult::Infeasible => {
-            Ok(AnalysisContext::new(target_boundaries).with_selectivity(0.0))
-        }
-        PropagationResult::CannotPropagate => {
-            Ok(AnalysisContext::new(target_boundaries).with_selectivity(1.0))
-        }
-    }
+    Ok(
+        match graph.update_ranges(&mut target_indices_and_boundaries)? {
+            PropagationResult::Success => shrink_boundaries(
+                expr,
+                graph,
+                target_boundaries,
+                target_expr_and_indices,
+            )?,
+            PropagationResult::Infeasible => {
+                AnalysisContext::new(target_boundaries).with_selectivity(0.0)
+            }
+            PropagationResult::CannotPropagate => {
+                AnalysisContext::new(target_boundaries).with_selectivity(1.0)
+            }
+        },
+    )
 }
 
 /// If the `PropagationResult` indicates success, this function calculates the
@@ -184,24 +200,19 @@ fn shrink_boundaries(
         }
     });
     let graph_nodes = graph.gather_node_indices(&[expr.clone()]);
-    let (_, root_index) = graph_nodes.first().ok_or_else(|| {
-        DataFusionError::Internal("Error in constructing predicate graph".to_string())
-    })?;
+    let Some((_, root_index)) = graph_nodes.get(0) else {
+        return internal_err!(
+            "The ExprIntervalGraph under investigation does not have any nodes."
+        );
+    };
     let final_result = graph.get_interval(*root_index);
 
-    // If during selectivity calculation we encounter an error, use 1.0 as cardinality estimate
-    // safest estimate(e.q largest possible value).
     let selectivity = calculate_selectivity(
         &final_result.lower.value,
         &final_result.upper.value,
         &target_boundaries,
         &initial_boundaries,
-    )
-    .unwrap_or(1.0);
-
-    if !(0.0..=1.0).contains(&selectivity) {
-        return internal_err!("Selectivity is out of limit: {}", selectivity);
-    }
+    )?;
 
     Ok(AnalysisContext::new(target_boundaries).with_selectivity(selectivity))
 }

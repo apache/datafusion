@@ -22,21 +22,21 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::{DisplayFormatType, Distribution, ExecutionPlan, Partitioning};
-
 use super::expressions::PhysicalSortExpr;
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream, Statistics};
+use crate::{
+    DisplayFormatType, Distribution, ExecutionPlan, Partitioning, SchemaProperties,
+};
 
 use arrow::array::ArrayRef;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
+use datafusion_common::stats::Precision;
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::SchemaProperties;
 
-use futures::stream::Stream;
-use futures::stream::StreamExt;
+use futures::stream::{Stream, StreamExt};
 use log::trace;
 
 /// Limit execution plan
@@ -185,8 +185,8 @@ impl ExecutionPlan for GlobalLimitExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Statistics {
-        let input_stats = self.input.statistics();
+    fn statistics(&self) -> Result<Statistics> {
+        let input_stats = self.input.statistics()?;
         let skip = self.skip;
         // the maximum row number needs to be fetched
         let max_row_num = self
@@ -199,16 +199,29 @@ impl ExecutionPlan for GlobalLimitExec {
                 }
             })
             .unwrap_or(usize::MAX);
-        match input_stats {
+        let col_stats = Statistics::unknown_column(&self.schema());
+
+        let fetched_row_number_stats = Statistics {
+            num_rows: Precision::Exact(max_row_num),
+            column_statistics: col_stats.clone(),
+            total_byte_size: Precision::Absent,
+        };
+
+        let stats = match input_stats {
             Statistics {
-                num_rows: Some(nr), ..
+                num_rows: Precision::Exact(nr),
+                ..
+            }
+            | Statistics {
+                num_rows: Precision::Inexact(nr),
+                ..
             } => {
                 if nr <= skip {
                     // if all input data will be skipped, return 0
                     Statistics {
-                        num_rows: Some(0),
-                        is_exact: input_stats.is_exact,
-                        ..Default::default()
+                        num_rows: Precision::Exact(0),
+                        column_statistics: col_stats,
+                        total_byte_size: Precision::Absent,
                     }
                 } else if nr <= max_row_num {
                     // if the input does not reach the "fetch" globally, return input stats
@@ -216,20 +229,15 @@ impl ExecutionPlan for GlobalLimitExec {
                 } else {
                     // if the input is greater than the "fetch", the num_row will be the "fetch",
                     // but we won't be able to predict the other statistics
-                    Statistics {
-                        num_rows: Some(max_row_num),
-                        is_exact: input_stats.is_exact,
-                        ..Default::default()
-                    }
+                    fetched_row_number_stats
                 }
             }
-            _ => Statistics {
+            _ => {
                 // the result output row number will always be no greater than the limit number
-                num_rows: Some(max_row_num),
-                is_exact: false,
-                ..Default::default()
-            },
-        }
+                fetched_row_number_stats
+            }
+        };
+        Ok(stats)
     }
 }
 
@@ -351,32 +359,53 @@ impl ExecutionPlan for LocalLimitExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Statistics {
-        let input_stats = self.input.statistics();
-        match input_stats {
+    fn statistics(&self) -> Result<Statistics> {
+        let input_stats = self.input.statistics()?;
+        let col_stats = Statistics::unknown_column(&self.schema());
+        let stats = match input_stats {
             // if the input does not reach the limit globally, return input stats
             Statistics {
-                num_rows: Some(nr), ..
+                num_rows: Precision::Exact(nr),
+                ..
+            }
+            | Statistics {
+                num_rows: Precision::Inexact(nr),
+                ..
             } if nr <= self.fetch => input_stats,
             // if the input is greater than the limit, the num_row will be greater
             // than the limit because the partitions will be limited separatly
             // the statistic
             Statistics {
-                num_rows: Some(nr), ..
+                num_rows: Precision::Exact(nr),
+                ..
             } if nr > self.fetch => Statistics {
-                num_rows: Some(self.fetch),
+                num_rows: Precision::Exact(self.fetch),
                 // this is not actually exact, but will be when GlobalLimit is applied
                 // TODO stats: find a more explicit way to vehiculate this information
-                is_exact: input_stats.is_exact,
-                ..Default::default()
+                column_statistics: col_stats,
+                total_byte_size: Precision::Absent,
+            },
+            Statistics {
+                num_rows: Precision::Inexact(nr),
+                ..
+            } if nr > self.fetch => Statistics {
+                num_rows: Precision::Inexact(self.fetch),
+                // this is not actually exact, but will be when GlobalLimit is applied
+                // TODO stats: find a more explicit way to vehiculate this information
+                column_statistics: col_stats,
+                total_byte_size: Precision::Absent,
             },
             _ => Statistics {
                 // the result output row number will always be no greater than the limit number
-                num_rows: Some(self.fetch * self.output_partitioning().partition_count()),
-                is_exact: false,
-                ..Default::default()
+                num_rows: Precision::Inexact(
+                    self.fetch * self.output_partitioning().partition_count(),
+                ),
+
+                column_statistics: col_stats,
+                total_byte_size: Precision::Absent,
             },
-        }
+        };
+        Ok(stats)
     }
 }
 
@@ -518,14 +547,12 @@ impl RecordBatchStream for LimitStream {
 
 #[cfg(test)]
 mod tests {
-
-    use arrow_schema::Schema;
-    use common::collect;
-
     use super::*;
     use crate::coalesce_partitions::CoalescePartitionsExec;
-    use crate::common;
-    use crate::test;
+    use crate::common::collect;
+    use crate::{common, test};
+
+    use arrow_schema::Schema;
 
     #[tokio::test]
     async fn limit() -> Result<()> {
@@ -718,10 +745,10 @@ mod tests {
     #[tokio::test]
     async fn test_row_number_statistics_for_global_limit() -> Result<()> {
         let row_count = row_number_statistics_for_global_limit(0, Some(10)).await?;
-        assert_eq!(row_count, Some(10));
+        assert_eq!(row_count, Precision::Exact(10));
 
         let row_count = row_number_statistics_for_global_limit(5, Some(10)).await?;
-        assert_eq!(row_count, Some(15));
+        assert_eq!(row_count, Precision::Exact(15));
 
         Ok(())
     }
@@ -729,7 +756,7 @@ mod tests {
     #[tokio::test]
     async fn test_row_number_statistics_for_local_limit() -> Result<()> {
         let row_count = row_number_statistics_for_local_limit(4, 10).await?;
-        assert_eq!(row_count, Some(10));
+        assert_eq!(row_count, Precision::Exact(10));
 
         Ok(())
     }
@@ -737,7 +764,7 @@ mod tests {
     async fn row_number_statistics_for_global_limit(
         skip: usize,
         fetch: Option<usize>,
-    ) -> Result<Option<usize>> {
+    ) -> Result<Precision<usize>> {
         let num_partitions = 4;
         let csv = test::scan_partitioned(num_partitions);
 
@@ -746,20 +773,20 @@ mod tests {
         let offset =
             GlobalLimitExec::new(Arc::new(CoalescePartitionsExec::new(csv)), skip, fetch);
 
-        Ok(offset.statistics().num_rows)
+        Ok(offset.statistics()?.num_rows)
     }
 
     async fn row_number_statistics_for_local_limit(
         num_partitions: usize,
         fetch: usize,
-    ) -> Result<Option<usize>> {
+    ) -> Result<Precision<usize>> {
         let csv = test::scan_partitioned(num_partitions);
 
         assert_eq!(csv.output_partitioning().partition_count(), num_partitions);
 
         let offset = LocalLimitExec::new(csv, fetch);
 
-        Ok(offset.statistics().num_rows)
+        Ok(offset.statistics()?.num_rows)
     }
 
     /// Return a RecordBatch with a single array with row_count sz

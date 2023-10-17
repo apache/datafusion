@@ -22,57 +22,36 @@ use std::{
     sync::Arc,
 };
 
-use datafusion::physical_plan::{
-    expressions::{
-        ApproxDistinct, ApproxMedian, ApproxPercentileCont,
-        ApproxPercentileContWithWeight, ArrayAgg, Correlation, Covariance, CovariancePop,
-        DistinctArrayAgg, DistinctBitXor, DistinctSum, FirstValue, Grouping, LastValue,
-        Median, OrderSensitiveArrayAgg, Regr, RegrType, Stddev, StddevPop, Variance,
-        VariancePop,
-    },
-    windows::BuiltInWindowExpr,
-    ColumnStatistics,
-};
-use datafusion::{
-    physical_expr::window::NthValueKind,
-    physical_plan::{
-        expressions::{
-            CaseExpr, CumeDist, InListExpr, IsNotNullExpr, IsNullExpr, NegativeExpr,
-            NotExpr, NthValue, Ntile, Rank, RankType, RowNumber, WindowShift,
-        },
-        Statistics,
-    },
-};
-use datafusion::{
-    physical_expr::window::SlidingAggregateWindowExpr,
-    physical_plan::{
-        expressions::{CastExpr, TryCastExpr},
-        windows::PlainAggregateWindowExpr,
-        WindowExpr,
-    },
-};
-
-use datafusion::datasource::listing::{FileRange, PartitionedFile};
-use datafusion::datasource::physical_plan::FileScanConfig;
-
-use datafusion::physical_plan::expressions::{Count, DistinctCount, Literal};
-
-use datafusion::physical_plan::expressions::{
-    Avg, BinaryExpr, BitAnd, BitOr, BitXor, BoolAnd, BoolOr, Column, LikeExpr, Max, Min,
-    Sum,
-};
-use datafusion::physical_plan::{AggregateExpr, PhysicalExpr};
-
-use crate::protobuf::{self, physical_window_expr_node};
+use crate::protobuf::{self, physical_window_expr_node, scalar_value::Value};
 use crate::protobuf::{
     physical_aggregate_expr_node, PhysicalSortExprNode, PhysicalSortExprNodeCollection,
     ScalarValue,
 };
+
+use datafusion::datasource::listing::{FileRange, PartitionedFile};
+use datafusion::datasource::physical_plan::FileScanConfig;
 use datafusion::logical_expr::BuiltinScalarFunction;
 use datafusion::physical_expr::expressions::{GetFieldAccessExpr, GetIndexedFieldExpr};
+use datafusion::physical_expr::window::{NthValueKind, SlidingAggregateWindowExpr};
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
+use datafusion::physical_plan::expressions::{
+    ApproxDistinct, ApproxMedian, ApproxPercentileCont, ApproxPercentileContWithWeight,
+    ArrayAgg, Avg, BinaryExpr, BitAnd, BitOr, BitXor, BoolAnd, BoolOr, CaseExpr,
+    CastExpr, Column, Correlation, Count, Covariance, CovariancePop, CumeDist,
+    DistinctArrayAgg, DistinctBitXor, DistinctCount, DistinctSum, FirstValue, Grouping,
+    InListExpr, IsNotNullExpr, IsNullExpr, LastValue, LikeExpr, Literal, Max, Median,
+    Min, NegativeExpr, NotExpr, NthValue, Ntile, OrderSensitiveArrayAgg, Rank, RankType,
+    Regr, RegrType, RowNumber, Stddev, StddevPop, Sum, TryCastExpr, Variance,
+    VariancePop, WindowShift,
+};
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
-use datafusion_common::{internal_err, not_impl_err, DataFusionError, JoinSide, Result};
+use datafusion::physical_plan::windows::{BuiltInWindowExpr, PlainAggregateWindowExpr};
+use datafusion::physical_plan::{
+    AggregateExpr, ColumnStatistics, PhysicalExpr, Statistics, WindowExpr,
+};
+use datafusion_common::{
+    internal_err, not_impl_err, stats::Precision, DataFusionError, JoinSide, Result,
+};
 
 impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
     type Error = DataFusionError;
@@ -643,29 +622,66 @@ impl TryFrom<&[PartitionedFile]> for protobuf::FileGroup {
     }
 }
 
-impl From<&ColumnStatistics> for protobuf::ColumnStats {
-    fn from(cs: &ColumnStatistics) -> protobuf::ColumnStats {
-        protobuf::ColumnStats {
-            min_value: cs.min_value.as_ref().map(|m| m.try_into().unwrap()),
-            max_value: cs.max_value.as_ref().map(|m| m.try_into().unwrap()),
-            null_count: cs.null_count.map(|n| n as u32).unwrap_or(0),
-            distinct_count: cs.distinct_count.map(|n| n as u32).unwrap_or(0),
+impl From<&Precision<usize>> for protobuf::Precision {
+    fn from(s: &Precision<usize>) -> protobuf::Precision {
+        match s {
+            Precision::Exact(val) => protobuf::Precision {
+                precision_info: protobuf::PrecisionInfo::Exact.into(),
+                val: Some(ScalarValue {
+                    value: Some(Value::Uint64Value(*val as u64)),
+                }),
+            },
+            Precision::Inexact(val) => protobuf::Precision {
+                precision_info: protobuf::PrecisionInfo::Inexact.into(),
+                val: Some(ScalarValue {
+                    value: Some(Value::Uint64Value(*val as u64)),
+                }),
+            },
+            Precision::Absent => protobuf::Precision {
+                precision_info: protobuf::PrecisionInfo::Absent.into(),
+                val: Some(ScalarValue { value: None }),
+            },
+        }
+    }
+}
+
+impl From<&Precision<datafusion_common::ScalarValue>> for protobuf::Precision {
+    fn from(s: &Precision<datafusion_common::ScalarValue>) -> protobuf::Precision {
+        match s {
+            Precision::Exact(val) => protobuf::Precision {
+                precision_info: protobuf::PrecisionInfo::Exact.into(),
+                val: val.try_into().ok(),
+            },
+            Precision::Inexact(val) => protobuf::Precision {
+                precision_info: protobuf::PrecisionInfo::Inexact.into(),
+                val: val.try_into().ok(),
+            },
+            Precision::Absent => protobuf::Precision {
+                precision_info: protobuf::PrecisionInfo::Absent.into(),
+                val: Some(ScalarValue { value: None }),
+            },
         }
     }
 }
 
 impl From<&Statistics> for protobuf::Statistics {
     fn from(s: &Statistics) -> protobuf::Statistics {
-        let none_value = -1_i64;
-        let column_stats = match &s.column_statistics {
-            None => vec![],
-            Some(column_stats) => column_stats.iter().map(|s| s.into()).collect(),
-        };
+        let column_stats = s.column_statistics.iter().map(|s| s.into()).collect();
         protobuf::Statistics {
-            num_rows: s.num_rows.map(|n| n as i64).unwrap_or(none_value),
-            total_byte_size: s.total_byte_size.map(|n| n as i64).unwrap_or(none_value),
+            num_rows: Some(protobuf::Precision::from(&s.num_rows)),
+            total_byte_size: Some(protobuf::Precision::from(&s.total_byte_size)),
             column_stats,
-            is_exact: s.is_exact,
+        }
+    }
+}
+
+impl From<&ColumnStatistics> for protobuf::ColumnStats {
+    fn from(s: &ColumnStatistics) -> protobuf::ColumnStats {
+        protobuf::ColumnStats {
+            min_value: Some(protobuf::Precision::from(&s.min_value)),
+            max_value: Some(protobuf::Precision::from(&s.max_value)),
+            null_count: Some(protobuf::Precision::from(&s.null_count)),
+            distinct_count: Some(protobuf::Precision::from(&s.distinct_count)),
         }
     }
 }

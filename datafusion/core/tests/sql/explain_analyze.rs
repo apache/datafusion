@@ -16,6 +16,7 @@
 // under the License.
 
 use super::*;
+
 use datafusion::config::ConfigOptions;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::metrics::Timestamp;
@@ -826,5 +827,5 @@ async fn csv_explain_analyze_with_statistics() {
         .to_string();
 
     // should contain scan statistics
-    assert_contains!(&formatted, ", statistics=[]");
+    assert_contains!(&formatted, ", statistics=[Rows=Absent, Bytes=Absent]");
 }

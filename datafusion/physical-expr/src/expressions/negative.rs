@@ -106,7 +106,7 @@ impl PhysicalExpr for NegativeExpr {
 
     /// Given the child interval of a NegativeExpr, it calculates the NegativeExpr's interval.
     /// It replaces the upper and lower bounds after multiplying them with -1.
-    /// Ex: `(a, b] => [-b, -a)``
+    /// Ex: `(a, b]` => `[-b, -a)`
     fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
         Ok(Interval::new(
             children[0].upper.negate()?,
@@ -171,7 +171,6 @@ mod tests {
         expressions::{col, Column},
         intervals::Interval,
     };
-    #[allow(unused_imports)]
     use arrow::array::*;
     use arrow::datatypes::*;
     use arrow_schema::DataType::{Float32, Float64, Int16, Int32, Int64, Int8};

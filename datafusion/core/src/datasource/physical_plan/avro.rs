@@ -16,6 +16,11 @@
 // under the License.
 
 //! Execution plan for reading line-delimited Avro files
+
+use std::any::Any;
+use std::sync::Arc;
+
+use super::FileScanConfig;
 use crate::error::Result;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
@@ -23,15 +28,10 @@ use crate::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
     Statistics,
 };
-use datafusion_execution::TaskContext;
 
 use arrow::datatypes::SchemaRef;
+use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{schema_properties_helper, LexOrdering, SchemaProperties};
-
-use std::any::Any;
-use std::sync::Arc;
-
-use super::FileScanConfig;
 
 /// Execution plan for scanning Avro data source
 #[derive(Debug, Clone)]
@@ -149,8 +149,8 @@ impl ExecutionPlan for AvroExec {
         Ok(Box::pin(stream))
     }
 
-    fn statistics(&self) -> Statistics {
-        self.projected_statistics.clone()
+    fn statistics(&self) -> Result<Statistics> {
+        Ok(self.projected_statistics.clone())
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -267,8 +267,8 @@ mod tests {
         let avro_exec = AvroExec::new(FileScanConfig {
             object_store_url: ObjectStoreUrl::local_filesystem(),
             file_groups: vec![vec![meta.into()]],
+            statistics: Statistics::new_unknown(&file_schema),
             file_schema,
-            statistics: Statistics::default(),
             projection: Some(vec![0, 1, 2]),
             limit: None,
             table_partition_cols: vec![],
@@ -339,8 +339,8 @@ mod tests {
         let avro_exec = AvroExec::new(FileScanConfig {
             object_store_url,
             file_groups: vec![vec![meta.into()]],
+            statistics: Statistics::new_unknown(&file_schema),
             file_schema,
-            statistics: Statistics::default(),
             projection,
             limit: None,
             table_partition_cols: vec![],
@@ -412,8 +412,8 @@ mod tests {
             projection: Some(vec![0, 1, file_schema.fields().len(), 2]),
             object_store_url,
             file_groups: vec![vec![partitioned_file]],
+            statistics: Statistics::new_unknown(&file_schema),
             file_schema,
-            statistics: Statistics::default(),
             limit: None,
             table_partition_cols: vec![("date".to_owned(), DataType::Utf8)],
             output_ordering: vec![],

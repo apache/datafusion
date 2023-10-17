@@ -17,16 +17,13 @@
 
 //! Test queries on partitioned datasets
 
-use arrow::datatypes::DataType;
 use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use bytes::Bytes;
-use chrono::{TimeZone, Utc};
+use arrow::datatypes::DataType;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::{
     assert_batches_sorted_eq,
@@ -39,7 +36,12 @@ use datafusion::{
     prelude::SessionContext,
     test_util::{self, arrow_test_data, parquet_test_data},
 };
+use datafusion_common::stats::Precision;
 use datafusion_common::ScalarValue;
+
+use async_trait::async_trait;
+use bytes::Bytes;
+use chrono::{TimeZone, Utc};
 use futures::stream;
 use futures::stream::BoxStream;
 use object_store::{
@@ -458,34 +460,30 @@ async fn parquet_statistics() -> Result<()> {
     //// NO PROJECTION ////
     let dataframe = ctx.sql("SELECT * FROM t").await?;
     let physical_plan = dataframe.create_physical_plan().await?;
-    assert_eq!(physical_plan.schema().fields().len(), 4);
+    let schema = physical_plan.schema();
+    assert_eq!(schema.fields().len(), 4);
 
-    let stat_cols = physical_plan
-        .statistics()
-        .column_statistics
-        .expect("col stats should be defined");
+    let stat_cols = physical_plan.statistics()?.column_statistics;
     assert_eq!(stat_cols.len(), 4);
     // stats for the first col are read from the parquet file
-    assert_eq!(stat_cols[0].null_count, Some(3));
+    assert_eq!(stat_cols[0].null_count, Precision::Exact(3));
     // TODO assert partition column (1,2,3) stats once implemented (#1186)
-    assert_eq!(stat_cols[1], ColumnStatistics::default());
-    assert_eq!(stat_cols[2], ColumnStatistics::default());
-    assert_eq!(stat_cols[3], ColumnStatistics::default());
+    assert_eq!(stat_cols[1], ColumnStatistics::new_unknown(),);
+    assert_eq!(stat_cols[2], ColumnStatistics::new_unknown(),);
+    assert_eq!(stat_cols[3], ColumnStatistics::new_unknown(),);
 
     //// WITH PROJECTION ////
     let dataframe = ctx.sql("SELECT mycol, day FROM t WHERE day='28'").await?;
     let physical_plan = dataframe.create_physical_plan().await?;
-    assert_eq!(physical_plan.schema().fields().len(), 2);
+    let schema = physical_plan.schema();
+    assert_eq!(schema.fields().len(), 2);
 
-    let stat_cols = physical_plan
-        .statistics()
-        .column_statistics
-        .expect("col stats should be defined");
+    let stat_cols = physical_plan.statistics()?.column_statistics;
     assert_eq!(stat_cols.len(), 2);
     // stats for the first col are read from the parquet file
-    assert_eq!(stat_cols[0].null_count, Some(1));
+    assert_eq!(stat_cols[0].null_count, Precision::Exact(1));
     // TODO assert partition column stats once implemented (#1186)
-    assert_eq!(stat_cols[1], ColumnStatistics::default());
+    assert_eq!(stat_cols[1], ColumnStatistics::new_unknown(),);
 
     Ok(())
 }

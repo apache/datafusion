@@ -17,6 +17,17 @@
 
 //! Defines the unnest column plan for unnesting values in a column that contains a list
 //! type, conceptually is like joining each row with all the values in the list column.
+
+use std::time::Instant;
+use std::{any::Any, sync::Arc};
+
+use super::DisplayAs;
+use crate::{
+    expressions::Column, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
+    PhysicalExpr, PhysicalSortExpr, RecordBatchStream, SendableRecordBatchStream,
+    Statistics,
+};
+
 use arrow::array::{
     Array, ArrayRef, ArrowPrimitiveType, FixedSizeListArray, LargeListArray, ListArray,
     PrimitiveArray,
@@ -27,23 +38,12 @@ use arrow::datatypes::{
 };
 use arrow::record_batch::RecordBatch;
 use arrow_array::{GenericListArray, OffsetSizeTrait};
-use async_trait::async_trait;
-use datafusion_common::UnnestOptions;
-use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common::{exec_err, DataFusionError, Result, UnnestOptions};
 use datafusion_execution::TaskContext;
-use futures::Stream;
-use futures::StreamExt;
+
+use async_trait::async_trait;
+use futures::{Stream, StreamExt};
 use log::trace;
-use std::time::Instant;
-use std::{any::Any, sync::Arc};
-
-use crate::{
-    expressions::Column, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
-    PhysicalExpr, PhysicalSortExpr, RecordBatchStream, SendableRecordBatchStream,
-    Statistics,
-};
-
-use super::DisplayAs;
 
 /// Unnest the given column by joining the row with each value in the
 /// nested type.
@@ -156,8 +156,8 @@ impl ExecutionPlan for UnnestExec {
         }))
     }
 
-    fn statistics(&self) -> Statistics {
-        Default::default()
+    fn statistics(&self) -> Result<Statistics> {
+        Ok(Statistics::new_unknown(&self.schema()))
     }
 }
 

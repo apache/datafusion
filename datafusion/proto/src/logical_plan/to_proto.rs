@@ -56,13 +56,6 @@ use datafusion_expr::{
 pub enum Error {
     General(String),
 
-    InconsistentListTyping(DataType, DataType),
-
-    InconsistentListDesignated {
-        value: ScalarValue,
-        designated: DataType,
-    },
-
     InvalidScalarValue(ScalarValue),
 
     InvalidScalarType(DataType),
@@ -80,18 +73,6 @@ impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             Self::General(desc) => write!(f, "General error: {desc}"),
-            Self::InconsistentListTyping(type1, type2) => {
-                write!(
-                    f,
-                    "Lists with inconsistent typing; {type1:?} and {type2:?} found within list",
-                )
-            }
-            Self::InconsistentListDesignated { value, designated } => {
-                write!(
-                    f,
-                    "Value {value:?} was inconsistent with designated type {designated:?}"
-                )
-            }
             Self::InvalidScalarValue(value) => {
                 write!(f, "{value:?} is invalid as a DataFusion scalar value")
             }
@@ -1145,15 +1126,27 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 "Proto serialization error: ScalarValue::Fixedsizelist not supported"
                     .to_string(),
             )),
+            // ScalarValue::List is serialized using Arrow IPC messages.
+            // as a single column RecordBatch
             ScalarValue::List(arr) => {
-                let batch =
-                    RecordBatch::try_from_iter(vec![("field_name", arr.to_owned())])
-                        .unwrap();
+                // Wrap in a "field_name" column
+                let batch = RecordBatch::try_from_iter(vec![(
+                    "field_name",
+                    arr.to_owned(),
+                )])
+                .map_err(|e| {
+                   Error::General( format!("Error creating temporary batch while encoding ScalarValue::List: {e}"))
+                })?;
+
                 let gen = IpcDataGenerator {};
                 let mut dict_tracker = DictionaryTracker::new(false);
                 let (_, encoded_message) = gen
                     .encoded_batch(&batch, &mut dict_tracker, &Default::default())
-                    .unwrap();
+                    .map_err(|e| {
+                        Error::General(format!(
+                            "Error encoding ScalarValue::List as IPC: {e}"
+                        ))
+                    })?;
 
                 let schema: protobuf::Schema = batch.schema().try_into()?;
 

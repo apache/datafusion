@@ -17,51 +17,22 @@
 
 //! Parquet format abstractions
 
-use datafusion_physical_plan::metrics::MetricsSet;
-use parquet::column::writer::ColumnCloseResult;
-use parquet::file::writer::SerializedFileWriter;
-use rand::distributions::DistString;
 use std::any::Any;
 use std::fmt;
 use std::fmt::Debug;
 use std::io::Write;
 use std::sync::Arc;
-use tokio::io::{AsyncWrite, AsyncWriteExt};
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tokio::task::{JoinHandle, JoinSet};
-
-use crate::datasource::file_format::file_compression_type::FileCompressionType;
-use arrow::datatypes::SchemaRef;
-use arrow::datatypes::{Fields, Schema};
-use async_trait::async_trait;
-use bytes::{BufMut, BytesMut};
-use datafusion_common::{exec_err, not_impl_err, plan_err, DataFusionError, FileType};
-use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
-use futures::{StreamExt, TryStreamExt};
-use hashbrown::HashMap;
-use object_store::{ObjectMeta, ObjectStore};
-use parquet::arrow::{parquet_to_arrow_schema, AsyncArrowWriter};
-use parquet::file::footer::{decode_footer, decode_metadata};
-use parquet::file::metadata::ParquetMetaData;
-use parquet::file::properties::WriterProperties;
-use parquet::file::statistics::Statistics as ParquetStatistics;
-use rand::distributions::Alphanumeric;
 
 use super::write::{create_writer, AbortableWrite, FileWriterMode};
-use super::FileFormat;
-use super::FileScanConfig;
-use crate::arrow::array::{
-    BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array,
-};
-use crate::arrow::datatypes::DataType;
-use crate::config::ConfigOptions;
+use super::{FileFormat, FileScanConfig};
 
+use crate::config::ConfigOptions;
+use crate::datasource::file_format::file_compression_type::FileCompressionType;
+use crate::datasource::get_col_stats;
 use crate::datasource::physical_plan::{
     FileGroupDisplay, FileMeta, FileSinkConfig, ParquetExec, SchemaAdapter,
 };
-
-use crate::datasource::{create_max_min_accs, get_col_stats};
+use crate::datasource::statistics::create_max_min_accs;
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
@@ -70,6 +41,31 @@ use crate::physical_plan::{
     Accumulator, DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream,
     Statistics,
 };
+
+use arrow::array::{BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array};
+use arrow::datatypes::{DataType, Fields, Schema, SchemaRef};
+use datafusion_common::stats::Precision;
+use datafusion_common::{exec_err, not_impl_err, plan_err, DataFusionError, FileType};
+use datafusion_execution::TaskContext;
+use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
+use datafusion_physical_plan::metrics::MetricsSet;
+
+use async_trait::async_trait;
+use bytes::{BufMut, BytesMut};
+use futures::{StreamExt, TryStreamExt};
+use hashbrown::HashMap;
+use object_store::{ObjectMeta, ObjectStore};
+use parquet::arrow::{parquet_to_arrow_schema, AsyncArrowWriter};
+use parquet::column::writer::ColumnCloseResult;
+use parquet::file::footer::{decode_footer, decode_metadata};
+use parquet::file::metadata::ParquetMetaData;
+use parquet::file::properties::WriterProperties;
+use parquet::file::statistics::Statistics as ParquetStatistics;
+use parquet::file::writer::SerializedFileWriter;
+use rand::distributions::{Alphanumeric, DistString};
+use tokio::io::{AsyncWrite, AsyncWriteExt};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::task::{JoinHandle, JoinSet};
 
 /// The Apache Parquet `FileFormat` implementation
 ///
@@ -515,7 +511,7 @@ async fn fetch_statistics(
 
     let mut num_rows = 0;
     let mut total_byte_size = 0;
-    let mut null_counts = vec![0; num_fields];
+    let mut null_counts = vec![Precision::Exact(0); num_fields];
     let mut has_statistics = false;
 
     let schema_adapter = SchemaAdapter::new(table_schema.clone());
@@ -541,7 +537,7 @@ async fn fetch_statistics(
                     schema_adapter.map_column_index(table_idx, &file_schema)
                 {
                     if let Some((null_count, stats)) = column_stats.get(&file_idx) {
-                        *null_cnt += *null_count as usize;
+                        *null_cnt = null_cnt.add(&Precision::Exact(*null_count as usize));
                         summarize_min_max(
                             &mut max_values,
                             &mut min_values,
@@ -555,28 +551,22 @@ async fn fetch_statistics(
                         min_values[table_idx] = None;
                     }
                 } else {
-                    *null_cnt += num_rows as usize;
+                    *null_cnt = null_cnt.add(&Precision::Exact(num_rows as usize));
                 }
             }
         }
     }
 
     let column_stats = if has_statistics {
-        Some(get_col_stats(
-            &table_schema,
-            null_counts,
-            &mut max_values,
-            &mut min_values,
-        ))
+        get_col_stats(&table_schema, null_counts, &mut max_values, &mut min_values)
     } else {
-        None
+        Statistics::unknown_column(&table_schema)
     };
 
     let statistics = Statistics {
-        num_rows: Some(num_rows as usize),
-        total_byte_size: Some(total_byte_size as usize),
+        num_rows: Precision::Exact(num_rows as usize),
+        total_byte_size: Precision::Exact(total_byte_size as usize),
         column_statistics: column_stats,
-        is_exact: true,
     };
 
     Ok(statistics)
@@ -1186,20 +1176,26 @@ mod tests {
         let stats =
             fetch_statistics(store.as_ref(), schema.clone(), &meta[0], None).await?;
 
-        assert_eq!(stats.num_rows, Some(3));
-        let c1_stats = &stats.column_statistics.as_ref().expect("missing c1 stats")[0];
-        let c2_stats = &stats.column_statistics.as_ref().expect("missing c2 stats")[1];
-        assert_eq!(c1_stats.null_count, Some(1));
-        assert_eq!(c2_stats.null_count, Some(3));
+        assert_eq!(stats.num_rows, Precision::Exact(3));
+        let c1_stats = &stats.column_statistics[0];
+        let c2_stats = &stats.column_statistics[1];
+        assert_eq!(c1_stats.null_count, Precision::Exact(1));
+        assert_eq!(c2_stats.null_count, Precision::Exact(3));
 
         let stats = fetch_statistics(store.as_ref(), schema, &meta[1], None).await?;
-        assert_eq!(stats.num_rows, Some(3));
-        let c1_stats = &stats.column_statistics.as_ref().expect("missing c1 stats")[0];
-        let c2_stats = &stats.column_statistics.as_ref().expect("missing c2 stats")[1];
-        assert_eq!(c1_stats.null_count, Some(3));
-        assert_eq!(c2_stats.null_count, Some(1));
-        assert_eq!(c2_stats.max_value, Some(ScalarValue::Int64(Some(2))));
-        assert_eq!(c2_stats.min_value, Some(ScalarValue::Int64(Some(1))));
+        assert_eq!(stats.num_rows, Precision::Exact(3));
+        let c1_stats = &stats.column_statistics[0];
+        let c2_stats = &stats.column_statistics[1];
+        assert_eq!(c1_stats.null_count, Precision::Exact(3));
+        assert_eq!(c2_stats.null_count, Precision::Exact(1));
+        assert_eq!(
+            c2_stats.max_value,
+            Precision::Exact(ScalarValue::Int64(Some(2)))
+        );
+        assert_eq!(
+            c2_stats.min_value,
+            Precision::Exact(ScalarValue::Int64(Some(1)))
+        );
 
         Ok(())
     }
@@ -1335,11 +1331,11 @@ mod tests {
             fetch_statistics(store.upcast().as_ref(), schema.clone(), &meta[0], Some(9))
                 .await?;
 
-        assert_eq!(stats.num_rows, Some(3));
-        let c1_stats = &stats.column_statistics.as_ref().expect("missing c1 stats")[0];
-        let c2_stats = &stats.column_statistics.as_ref().expect("missing c2 stats")[1];
-        assert_eq!(c1_stats.null_count, Some(1));
-        assert_eq!(c2_stats.null_count, Some(3));
+        assert_eq!(stats.num_rows, Precision::Exact(3));
+        let c1_stats = &stats.column_statistics[0];
+        let c2_stats = &stats.column_statistics[1];
+        assert_eq!(c1_stats.null_count, Precision::Exact(1));
+        assert_eq!(c2_stats.null_count, Precision::Exact(3));
 
         let store = Arc::new(RequestCountingObjectStore::new(Arc::new(
             LocalFileSystem::new(),
@@ -1368,11 +1364,11 @@ mod tests {
         )
         .await?;
 
-        assert_eq!(stats.num_rows, Some(3));
-        let c1_stats = &stats.column_statistics.as_ref().expect("missing c1 stats")[0];
-        let c2_stats = &stats.column_statistics.as_ref().expect("missing c2 stats")[1];
-        assert_eq!(c1_stats.null_count, Some(1));
-        assert_eq!(c2_stats.null_count, Some(3));
+        assert_eq!(stats.num_rows, Precision::Exact(3));
+        let c1_stats = &stats.column_statistics[0];
+        let c2_stats = &stats.column_statistics[1];
+        assert_eq!(c1_stats.null_count, Precision::Exact(1));
+        assert_eq!(c2_stats.null_count, Precision::Exact(3));
 
         let store = Arc::new(RequestCountingObjectStore::new(Arc::new(
             LocalFileSystem::new(),
@@ -1412,8 +1408,8 @@ mod tests {
         assert_eq!(tt_batches, 4 /* 8/2 */);
 
         // test metadata
-        assert_eq!(exec.statistics().num_rows, Some(8));
-        assert_eq!(exec.statistics().total_byte_size, Some(671));
+        assert_eq!(exec.statistics()?.num_rows, Precision::Exact(8));
+        assert_eq!(exec.statistics()?.total_byte_size, Precision::Exact(671));
 
         Ok(())
     }
@@ -1454,9 +1450,8 @@ mod tests {
             get_exec(&state, "alltypes_plain.parquet", projection, Some(1)).await?;
 
         // note: even if the limit is set, the executor rounds up to the batch size
-        assert_eq!(exec.statistics().num_rows, Some(8));
-        assert_eq!(exec.statistics().total_byte_size, Some(671));
-        assert!(exec.statistics().is_exact);
+        assert_eq!(exec.statistics()?.num_rows, Precision::Exact(8));
+        assert_eq!(exec.statistics()?.total_byte_size, Precision::Exact(671));
         let batches = collect(exec, task_ctx).await?;
         assert_eq!(1, batches.len());
         assert_eq!(11, batches[0].num_columns());

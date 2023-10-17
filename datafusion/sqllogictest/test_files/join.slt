@@ -558,6 +558,10 @@ explain select * from t1 join t2 on false;
 logical_plan EmptyRelation
 physical_plan EmptyExec: produce_one_row=false
 
+# Make batch size smaller than table row number. to introduce parallelism to the plan.
+statement ok
+set datafusion.execution.batch_size = 1;
+
 # test covert inner join to cross join when condition is true
 query TT
 explain select * from t1 inner join t2 on true;
@@ -568,9 +572,9 @@ CrossJoin:
 --TableScan: t2 projection=[t2_id, t2_name, t2_int]
 physical_plan
 CrossJoinExec
---CoalescePartitionsExec
-----MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
---MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+--MemoryExec: partitions=1, partition_sizes=[1]
+--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+----MemoryExec: partitions=1, partition_sizes=[1]
 
 statement ok
 drop table IF EXISTS t1;

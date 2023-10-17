@@ -17,6 +17,10 @@
 
 //! Planner for [`LogicalPlan`] to [`ExecutionPlan`]
 
+use std::collections::HashMap;
+use std::fmt::Write;
+use std::sync::Arc;
+
 use crate::datasource::file_format::arrow::ArrowFormat;
 use crate::datasource::file_format::avro::AvroFormat;
 use crate::datasource::file_format::csv::CsvFormat;
@@ -27,6 +31,7 @@ use crate::datasource::file_format::FileFormat;
 use crate::datasource::listing::ListingTableUrl;
 use crate::datasource::physical_plan::FileSinkConfig;
 use crate::datasource::source_as_provider;
+use crate::error::{DataFusionError, Result};
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_expr::utils::generate_sort_key;
 use crate::logical_expr::{
@@ -37,47 +42,45 @@ use crate::logical_expr::{
     CrossJoin, Expr, LogicalPlan, Partitioning as LogicalPartitioning, PlanType,
     Repartition, Union, UserDefinedLogicalNode,
 };
-use crate::physical_plan::memory::MemoryExec;
-use arrow_array::builder::StringBuilder;
-use arrow_array::RecordBatch;
-use datafusion_common::display::ToStringifiedPlan;
-use datafusion_common::file_options::FileTypeWriterOptions;
-use datafusion_common::FileType;
-use datafusion_expr::dml::{CopyOptions, CopyTo};
-
 use crate::logical_expr::{Limit, Values};
 use crate::physical_expr::create_physical_expr;
 use crate::physical_optimizer::optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::analyze::AnalyzeExec;
+use crate::physical_plan::empty::EmptyExec;
 use crate::physical_plan::explain::ExplainExec;
 use crate::physical_plan::expressions::{Column, PhysicalSortExpr};
 use crate::physical_plan::filter::FilterExec;
-use crate::physical_plan::joins::HashJoinExec;
-use crate::physical_plan::joins::SortMergeJoinExec;
-use crate::physical_plan::joins::{CrossJoinExec, NestedLoopJoinExec};
+use crate::physical_plan::joins::utils as join_utils;
+use crate::physical_plan::joins::{
+    CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
+};
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use crate::physical_plan::memory::MemoryExec;
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
+use crate::physical_plan::union::UnionExec;
 use crate::physical_plan::unnest::UnnestExec;
-use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
+use crate::physical_plan::values::ValuesExec;
+use crate::physical_plan::windows::{
+    BoundedWindowAggExec, PartitionSearchMode, WindowAggExec,
+};
 use crate::physical_plan::{
-    aggregates, empty::EmptyExec, joins::PartitionMode, udaf, union::UnionExec,
-    values::ValuesExec, windows,
+    aggregates, displayable, udaf, windows, AggregateExpr, ExecutionPlan, Partitioning,
+    PhysicalExpr, WindowExpr,
 };
-use crate::physical_plan::{joins::utils as join_utils, Partitioning};
-use crate::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr, WindowExpr};
-use crate::{
-    error::{DataFusionError, Result},
-    physical_plan::displayable,
-};
+
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
-use async_trait::async_trait;
+use arrow_array::builder::StringBuilder;
+use arrow_array::RecordBatch;
+use datafusion_common::display::ToStringifiedPlan;
+use datafusion_common::file_options::FileTypeWriterOptions;
 use datafusion_common::{
-    exec_err, internal_err, not_impl_err, plan_err, DFSchema, ScalarValue,
+    exec_err, internal_err, not_impl_err, plan_err, DFSchema, FileType, ScalarValue,
 };
+use datafusion_expr::dml::{CopyOptions, CopyTo};
 use datafusion_expr::expr::{
     self, AggregateFunction, AggregateUDF, Alias, Between, BinaryExpr, Cast,
     GetFieldAccess, GetIndexedField, GroupingSet, InList, Like, ScalarUDF, TryCast,
@@ -85,18 +88,17 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::expr_rewriter::{unalias, unnormalize_cols};
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
-use datafusion_expr::{DescribeTable, DmlStatement, StringifiedPlan, WriteOp};
-use datafusion_expr::{WindowFrame, WindowFrameBound};
+use datafusion_expr::{
+    DescribeTable, DmlStatement, StringifiedPlan, WindowFrame, WindowFrameBound, WriteOp,
+};
 use datafusion_physical_expr::expressions::Literal;
-use datafusion_physical_plan::windows::PartitionSearchMode;
 use datafusion_sql::utils::window_expr_common_partition_keys;
+
+use async_trait::async_trait;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use itertools::{multiunzip, Itertools};
 use log::{debug, trace};
-use std::collections::HashMap;
-use std::fmt::Write;
-use std::sync::Arc;
 
 fn create_function_physical_name(
     fun: &str,
@@ -2669,7 +2671,7 @@ mod tests {
             unimplemented!("NoOpExecutionPlan::execute");
         }
 
-        fn statistics(&self) -> Statistics {
+        fn statistics(&self) -> Result<Statistics> {
             unimplemented!("NoOpExecutionPlan::statistics");
         }
     }

@@ -17,6 +17,13 @@
 
 //! Execution plan for reading CSV files
 
+use std::any::Any;
+use std::io::{Read, Seek, SeekFrom};
+use std::ops::Range;
+use std::sync::Arc;
+use std::task::Poll;
+
+use super::FileScanConfig;
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::listing::{FileRange, ListingTableUrl};
 use crate::datasource::physical_plan::file_stream::{
@@ -30,23 +37,16 @@ use crate::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
     Statistics,
 };
+
 use arrow::csv;
 use arrow::datatypes::SchemaRef;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{schema_properties_helper, LexOrdering, SchemaProperties};
-use tokio::io::AsyncWriteExt;
-
-use super::FileScanConfig;
 
 use bytes::{Buf, Bytes};
-use futures::ready;
-use futures::{StreamExt, TryStreamExt};
+use futures::{ready, StreamExt, TryStreamExt};
 use object_store::{GetOptions, GetResultPayload, ObjectStore};
-use std::any::Any;
-use std::io::{Read, Seek, SeekFrom};
-use std::ops::Range;
-use std::sync::Arc;
-use std::task::Poll;
+use tokio::io::AsyncWriteExt;
 use tokio::task::JoinSet;
 
 /// Execution plan for scanning a CSV file
@@ -229,8 +229,8 @@ impl ExecutionPlan for CsvExec {
         Ok(Box::pin(stream) as SendableRecordBatchStream)
     }
 
-    fn statistics(&self) -> Statistics {
-        self.projected_statistics.clone()
+    fn statistics(&self) -> Result<Statistics> {
+        Ok(self.projected_statistics.clone())
     }
 
     fn metrics(&self) -> Option<MetricsSet> {

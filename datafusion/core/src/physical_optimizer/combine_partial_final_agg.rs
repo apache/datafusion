@@ -17,13 +17,15 @@
 
 //! CombinePartialFinalAggregate optimizer rule checks the adjacent Partial and Final AggregateExecs
 //! and try to combine them if necessary
+
+use std::sync::Arc;
+
 use crate::error::Result;
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::ExecutionPlan;
-use datafusion_common::config::ConfigOptions;
-use std::sync::Arc;
 
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{AggregateExpr, PhysicalExpr};
@@ -191,10 +193,6 @@ fn discard_column_index(group_expr: Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalEx
 
 #[cfg(test)]
 mod tests {
-    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use datafusion_physical_expr::expressions::{col, Count, Sum};
-    use datafusion_physical_expr::AggregateExpr;
-
     use super::*;
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
@@ -205,6 +203,10 @@ mod tests {
     use crate::physical_plan::expressions::lit;
     use crate::physical_plan::repartition::RepartitionExec;
     use crate::physical_plan::{displayable, Partitioning, Statistics};
+
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+    use datafusion_physical_expr::expressions::{col, Count, Sum};
+    use datafusion_physical_expr::AggregateExpr;
 
     /// Runs the CombinePartialFinalAggregate optimizer and asserts the plan against the expected
     macro_rules! assert_optimized {
@@ -248,7 +250,7 @@ mod tests {
                 object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
                 file_schema: schema.clone(),
                 file_groups: vec![vec![PartitionedFile::new("x".to_string(), 100)]],
-                statistics: Statistics::default(),
+                statistics: Statistics::new_unknown(schema),
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],

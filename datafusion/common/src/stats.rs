@@ -17,10 +17,11 @@
 
 //! This module provides data structures to represent statistics
 
-use crate::ScalarValue;
-use arrow::datatypes::DataType;
-
 use std::fmt::{self, Debug, Display};
+
+use crate::ScalarValue;
+
+use arrow_schema::Schema;
 
 /// Represents a value with a degree of certainty. `Precision` is used to
 /// propagate information the precision of statistical values.
@@ -203,70 +204,95 @@ impl<T: fmt::Debug + Clone + PartialEq + Eq + PartialOrd> Display for Precision<
 /// Fields are optional and can be inexact because the sources
 /// sometimes provide approximate estimates for performance reasons
 /// and the transformations output are not always predictable.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Statistics {
-    /// The number of table rows
-    pub num_rows: Option<usize>,
-    /// total bytes of the table rows
-    pub total_byte_size: Option<usize>,
-    /// Statistics on a column level
-    pub column_statistics: Option<Vec<ColumnStatistics>>,
-    /// If true, any field that is `Some(..)` is the actual value in the data provided by the operator (it is not
-    /// an estimate). Any or all other fields might still be None, in which case no information is known.
-    /// if false, any field that is `Some(..)` may contain an inexact estimate and may not be the actual value.
-    pub is_exact: bool,
+    /// The number of table rows.
+    pub num_rows: Precision<usize>,
+    /// Total bytes of the table rows.
+    pub total_byte_size: Precision<usize>,
+    /// Statistics on a column level. It contains a [`ColumnStatistics`] for
+    /// each field in the schema of the the table to which the [`Statistics`] refer.
+    pub column_statistics: Vec<ColumnStatistics>,
+}
+
+impl Statistics {
+    /// Returns a [`Statistics`] instance for the given schema by assigning
+    /// unknown statistics to each column in the schema.
+    pub fn new_unknown(schema: &Schema) -> Self {
+        Self {
+            num_rows: Precision::Absent,
+            total_byte_size: Precision::Absent,
+            column_statistics: Statistics::unknown_column(schema),
+        }
+    }
+
+    /// Returns an unbounded `ColumnStatistics` for each field in the schema.
+    pub fn unknown_column(schema: &Schema) -> Vec<ColumnStatistics> {
+        schema
+            .fields()
+            .iter()
+            .map(|_| ColumnStatistics::new_unknown())
+            .collect()
+    }
+
+    /// If the exactness of a [`Statistics`] instance is lost, this function relaxes
+    /// the exactness of all information by converting them [`Precision::Inexact`].
+    pub fn into_inexact(self) -> Self {
+        Statistics {
+            num_rows: self.num_rows.to_inexact(),
+            total_byte_size: self.total_byte_size.to_inexact(),
+            column_statistics: self
+                .column_statistics
+                .into_iter()
+                .map(|cs| ColumnStatistics {
+                    null_count: cs.null_count.to_inexact(),
+                    max_value: cs.max_value.to_inexact(),
+                    min_value: cs.min_value.to_inexact(),
+                    distinct_count: cs.distinct_count.to_inexact(),
+                })
+                .collect::<Vec<_>>(),
+        }
+    }
 }
 
 impl Display for Statistics {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.num_rows.is_none() && self.total_byte_size.is_none() && !self.is_exact {
-            return Ok(());
-        }
-
-        let rows = self
-            .num_rows
-            .map_or_else(|| "None".to_string(), |v| v.to_string());
-        let bytes = self
-            .total_byte_size
-            .map_or_else(|| "None".to_string(), |v| v.to_string());
-
-        write!(f, "rows={}, bytes={}, exact={}", rows, bytes, self.is_exact)?;
+        write!(f, "Rows={}, Bytes={}", self.num_rows, self.total_byte_size)?;
 
         Ok(())
     }
 }
 
 /// Statistics for a column within a relation
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct ColumnStatistics {
     /// Number of null values on column
-    pub null_count: Option<usize>,
+    pub null_count: Precision<usize>,
     /// Maximum value of column
-    pub max_value: Option<ScalarValue>,
+    pub max_value: Precision<ScalarValue>,
     /// Minimum value of column
-    pub min_value: Option<ScalarValue>,
+    pub min_value: Precision<ScalarValue>,
     /// Number of distinct values
-    pub distinct_count: Option<usize>,
+    pub distinct_count: Precision<usize>,
 }
 
 impl ColumnStatistics {
     /// Column contains a single non null value (e.g constant).
     pub fn is_singleton(&self) -> bool {
-        match (&self.min_value, &self.max_value) {
+        match (self.min_value.get_value(), self.max_value.get_value()) {
             // Min and max values are the same and not infinity.
             (Some(min), Some(max)) => !min.is_null() && !max.is_null() && (min == max),
             (_, _) => false,
         }
     }
 
-    /// Returns the [`ColumnStatistics`] corresponding to the given datatype by assigning infinite bounds.
-    pub fn new_with_unbounded_column(dt: &DataType) -> ColumnStatistics {
-        let null = ScalarValue::try_from(dt.clone()).ok();
+    /// Returns a [`ColumnStatistics`] instance having all [`Precision::Absent`] parameters.
+    pub fn new_unknown() -> ColumnStatistics {
         ColumnStatistics {
-            null_count: None,
-            max_value: null.clone(),
-            min_value: null,
-            distinct_count: None,
+            null_count: Precision::Absent,
+            max_value: Precision::Absent,
+            min_value: Precision::Absent,
+            distinct_count: Precision::Absent,
         }
     }
 }

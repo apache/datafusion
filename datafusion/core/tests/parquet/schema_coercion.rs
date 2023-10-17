@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use arrow::datatypes::{Field, Schema};
 use arrow::record_batch::RecordBatch;
 use arrow_array::types::Int32Type;
@@ -24,14 +26,13 @@ use datafusion::assert_batches_sorted_eq;
 use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
 use datafusion::physical_plan::collect;
 use datafusion::prelude::SessionContext;
-use datafusion_common::Result;
-use datafusion_common::Statistics;
+use datafusion_common::{Result, Statistics};
 use datafusion_execution::object_store::ObjectStoreUrl;
+
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
-use std::sync::Arc;
 use tempfile::NamedTempFile;
 
 /// Test for reading data from multiple parquet files with different schemas and coercing them into a single schema.
@@ -62,8 +63,8 @@ async fn multi_parquet_coercion() {
         FileScanConfig {
             object_store_url: ObjectStoreUrl::local_filesystem(),
             file_groups: vec![file_groups],
+            statistics: Statistics::new_unknown(&file_schema),
             file_schema,
-            statistics: Statistics::default(),
             projection: None,
             limit: None,
             table_partition_cols: vec![],
@@ -126,8 +127,8 @@ async fn multi_parquet_coercion_projection() {
         FileScanConfig {
             object_store_url: ObjectStoreUrl::local_filesystem(),
             file_groups: vec![file_groups],
+            statistics: Statistics::new_unknown(&file_schema),
             file_schema,
-            statistics: Statistics::default(),
             projection: Some(vec![1, 0, 2]),
             limit: None,
             table_partition_cols: vec![],

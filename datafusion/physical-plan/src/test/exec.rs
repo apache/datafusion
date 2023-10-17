@@ -23,23 +23,21 @@ use std::{
     sync::{Arc, Weak},
     task::{Context, Poll},
 };
-use tokio::sync::Barrier;
 
-use arrow::{
-    datatypes::{DataType, Field, Schema, SchemaRef},
-    record_batch::RecordBatch,
-};
-use futures::Stream;
-
+use crate::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
 use crate::{
-    common, stream::RecordBatchReceiverStream, stream::RecordBatchStreamAdapter,
-    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
+    common, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
-use datafusion_physical_expr::PhysicalSortExpr;
 
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::record_batch::RecordBatch;
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::PhysicalSortExpr;
+
+use futures::Stream;
+use tokio::sync::Barrier;
 
 /// Index into the data that has been returned so far
 #[derive(Debug, Default, Clone)]
@@ -239,7 +237,7 @@ impl ExecutionPlan for MockExec {
     }
 
     // Panics if one of the batches is an error
-    fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Result<Statistics> {
         let data: Result<Vec<_>> = self
             .data
             .iter()
@@ -249,9 +247,13 @@ impl ExecutionPlan for MockExec {
             })
             .collect();
 
-        let data = data.unwrap();
+        let data = data?;
 
-        common::compute_record_batch_statistics(&[data], &self.schema, None)
+        Ok(common::compute_record_batch_statistics(
+            &[data],
+            &self.schema,
+            None,
+        ))
     }
 }
 
@@ -369,8 +371,12 @@ impl ExecutionPlan for BarrierExec {
         Ok(builder.build())
     }
 
-    fn statistics(&self) -> Statistics {
-        common::compute_record_batch_statistics(&self.data, &self.schema, None)
+    fn statistics(&self) -> Result<Statistics> {
+        Ok(common::compute_record_batch_statistics(
+            &self.data,
+            &self.schema,
+            None,
+        ))
     }
 }
 
@@ -448,8 +454,8 @@ impl ExecutionPlan for ErrorExec {
         internal_err!("ErrorExec, unsurprisingly, errored in partition {partition}")
     }
 
-    fn statistics(&self) -> Statistics {
-        Statistics::default()
+    fn statistics(&self) -> Result<Statistics> {
+        Ok(Statistics::new_unknown(&self.schema()))
     }
 }
 
@@ -461,12 +467,9 @@ pub struct StatisticsExec {
 }
 impl StatisticsExec {
     pub fn new(stats: Statistics, schema: Schema) -> Self {
-        assert!(
+        assert_eq!(
             stats
-                .column_statistics
-                .as_ref()
-                .map(|cols| cols.len() == schema.fields().len())
-                .unwrap_or(true),
+                .column_statistics.len(), schema.fields().len(),
             "if defined, the column statistics vector length should be the number of fields"
         );
         Self {
@@ -531,8 +534,8 @@ impl ExecutionPlan for StatisticsExec {
         unimplemented!("This plan only serves for testing statistics")
     }
 
-    fn statistics(&self) -> Statistics {
-        self.stats.clone()
+    fn statistics(&self) -> Result<Statistics> {
+        Ok(self.stats.clone())
     }
 }
 
@@ -625,7 +628,7 @@ impl ExecutionPlan for BlockingExec {
         }))
     }
 
-    fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Result<Statistics> {
         unimplemented!()
     }
 }
@@ -762,7 +765,7 @@ impl ExecutionPlan for PanicExec {
         }))
     }
 
-    fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Result<Statistics> {
         unimplemented!()
     }
 }
