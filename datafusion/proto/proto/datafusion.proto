@@ -1542,18 +1542,28 @@ message PartitionStats {
   repeated ColumnStats column_stats = 4;
 }
 
+message Precision{
+  PrecisionInfo precision_info = 1;
+  ScalarValue val = 2;
+}
+
+enum PrecisionInfo {
+  EXACT = 0;
+  INEXACT = 1;
+  ABSENT = 2;
+}
+
 message Statistics {
-  int64 num_rows = 1;
-  int64 total_byte_size = 2;
+  Precision num_rows = 1;
+  Precision total_byte_size = 2;
   repeated ColumnStats column_stats = 3;
-  bool is_exact = 4;
 }
 
 message ColumnStats {
-  ScalarValue min_value = 1;
-  ScalarValue max_value = 2;
-  uint32 null_count = 3;
-  uint32 distinct_count = 4;
+  Precision min_value = 1;
+  Precision max_value = 2;
+  Precision null_count = 3;
+  Precision distinct_count = 4;
 }
 
 message NamedStructFieldExpr {

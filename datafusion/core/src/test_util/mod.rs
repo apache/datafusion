@@ -37,12 +37,14 @@ use crate::physical_plan::{
     SendableRecordBatchStream,
 };
 use crate::prelude::{CsvReadOptions, SessionContext};
+
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use async_trait::async_trait;
 use datafusion_common::{Statistics, TableReference};
 use datafusion_expr::{CreateExternalTable, Expr, TableType};
 use datafusion_physical_expr::PhysicalSortExpr;
+
+use async_trait::async_trait;
 use futures::Stream;
 
 // backwards compatibility
@@ -50,8 +52,7 @@ pub use datafusion_common::test_util::{
     arrow_test_data, get_data_dir, parquet_test_data,
 };
 
-pub use datafusion_common::assert_batches_eq;
-pub use datafusion_common::assert_batches_sorted_eq;
+pub use datafusion_common::{assert_batches_eq, assert_batches_sorted_eq};
 
 /// Scan an empty data source, mainly used in tests
 pub fn scan_empty(
@@ -238,8 +239,8 @@ impl ExecutionPlan for UnboundedExec {
         }))
     }
 
-    fn statistics(&self) -> Statistics {
-        Statistics::default()
+    fn statistics(&self) -> Result<Statistics> {
+        Ok(Statistics::new_unknown(&self.schema()))
     }
 }
 

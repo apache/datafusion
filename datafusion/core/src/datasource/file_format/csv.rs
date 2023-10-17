@@ -23,21 +23,6 @@ use std::fmt;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use arrow::csv::WriterBuilder;
-use arrow::datatypes::{DataType, Field, Fields, Schema};
-use arrow::{self, datatypes::SchemaRef};
-use arrow_array::RecordBatch;
-use datafusion_common::{exec_err, not_impl_err, DataFusionError, FileType};
-use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
-
-use async_trait::async_trait;
-use bytes::{Buf, Bytes};
-use datafusion_physical_plan::metrics::MetricsSet;
-use futures::stream::BoxStream;
-use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
-use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore};
-
 use super::{FileFormat, DEFAULT_SCHEMA_INFER_MAX_RECORD};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::write::{
@@ -51,6 +36,21 @@ use crate::execution::context::SessionState;
 use crate::physical_plan::insert::{DataSink, FileSinkExec};
 use crate::physical_plan::{DisplayAs, DisplayFormatType, Statistics};
 use crate::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
+
+use arrow::csv::WriterBuilder;
+use arrow::datatypes::{DataType, Field, Fields, Schema};
+use arrow::{self, datatypes::SchemaRef};
+use arrow_array::RecordBatch;
+use datafusion_common::{exec_err, not_impl_err, DataFusionError, FileType};
+use datafusion_execution::TaskContext;
+use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
+use datafusion_physical_plan::metrics::MetricsSet;
+
+use async_trait::async_trait;
+use bytes::{Buf, Bytes};
+use futures::stream::BoxStream;
+use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
+use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore};
 use rand::distributions::{Alphanumeric, DistString};
 
 /// Character Separated Value `FileFormat` implementation.
@@ -236,10 +236,10 @@ impl FileFormat for CsvFormat {
         &self,
         _state: &SessionState,
         _store: &Arc<dyn ObjectStore>,
-        _table_schema: SchemaRef,
+        table_schema: SchemaRef,
         _object: &ObjectMeta,
     ) -> Result<Statistics> {
-        Ok(Statistics::default())
+        Ok(Statistics::new_unknown(&table_schema))
     }
 
     async fn create_physical_plan(
@@ -625,6 +625,7 @@ mod tests {
     use chrono::DateTime;
     use datafusion_common::cast::as_string_array;
     use datafusion_common::internal_err;
+    use datafusion_common::stats::Precision;
     use datafusion_common::FileType;
     use datafusion_common::GetExt;
     use datafusion_expr::{col, lit};
@@ -657,8 +658,8 @@ mod tests {
         assert_eq!(tt_batches, 50 /* 100/2 */);
 
         // test metadata
-        assert_eq!(exec.statistics().num_rows, None);
-        assert_eq!(exec.statistics().total_byte_size, None);
+        assert_eq!(exec.statistics()?.num_rows, Precision::Absent);
+        assert_eq!(exec.statistics()?.total_byte_size, Precision::Absent);
 
         Ok(())
     }

@@ -17,39 +17,78 @@
 
 //! Traits for physical query plan, supporting parallel execution for partitioned relations.
 
-mod topk;
-mod visitor;
-pub use self::metrics::Metric;
-use self::metrics::MetricsSet;
-use self::{
-    coalesce_partitions::CoalescePartitionsExec, display::DisplayableExecutionPlan,
-};
-pub use datafusion_common::{internal_err, ColumnStatistics, Statistics};
-use datafusion_common::{plan_err, Result};
-use datafusion_physical_expr::PhysicalSortExpr;
-pub use topk::TopK;
-pub use visitor::{accept, visit_execution_plan, ExecutionPlanVisitor};
+use std::any::Any;
+use std::fmt::Debug;
+use std::sync::Arc;
+
+use crate::coalesce_partitions::CoalescePartitionsExec;
+use crate::display::DisplayableExecutionPlan;
+use crate::metrics::MetricsSet;
+use crate::repartition::RepartitionExec;
+use crate::sorts::sort_preserving_merge::SortPreservingMergeExec;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-
+use datafusion_common::tree_node::Transformed;
 use datafusion_common::utils::DataPtr;
-pub use datafusion_expr::Accumulator;
-pub use datafusion_expr::ColumnarValue;
+use datafusion_common::{plan_err, DataFusionError, Result};
+use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::OrderingEquivalenceProperties;
-pub use display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::{
+    EquivalenceProperties, PhysicalSortExpr, PhysicalSortRequirement,
+};
+
 use futures::stream::TryStreamExt;
-use std::fmt::Debug;
 use tokio::task::JoinSet;
 
-use datafusion_common::tree_node::Transformed;
-use datafusion_common::DataFusionError;
-use std::any::Any;
-use std::sync::Arc;
+mod topk;
+mod visitor;
 
-// backwards compatibility
+pub mod aggregates;
+pub mod analyze;
+pub mod coalesce_batches;
+pub mod coalesce_partitions;
+pub mod common;
+pub mod display;
+pub mod empty;
+pub mod explain;
+pub mod filter;
+pub mod insert;
+pub mod joins;
+pub mod limit;
+pub mod memory;
+pub mod metrics;
+pub mod projection;
+pub mod repartition;
+pub mod sorts;
+pub mod stream;
+pub mod streaming;
+pub mod tree_node;
+pub mod udaf;
+pub mod union;
+pub mod unnest;
+pub mod values;
+pub mod windows;
+
+pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
+pub use crate::metrics::Metric;
+pub use crate::topk::TopK;
+pub use crate::visitor::{accept, visit_execution_plan, ExecutionPlanVisitor};
+
+pub use datafusion_common::hash_utils;
+pub use datafusion_common::utils::project_schema;
+pub use datafusion_common::{internal_err, ColumnStatistics, Statistics};
+pub use datafusion_expr::{Accumulator, ColumnarValue};
+pub use datafusion_physical_expr::window::WindowExpr;
+pub use datafusion_physical_expr::{
+    expressions, functions, ordering_equivalence_properties_helper, udf, AggregateExpr,
+    Distribution, Partitioning, PhysicalExpr,
+};
+
+// Backwards compatibility
+pub use crate::stream::EmptyRecordBatchStream;
 pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
-pub use stream::EmptyRecordBatchStream;
 
 /// `ExecutionPlan` represent nodes in the DataFusion Physical Plan.
 ///
@@ -193,7 +232,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     }
 
     /// Returns the global output statistics for this `ExecutionPlan` node.
-    fn statistics(&self) -> Statistics;
+    fn statistics(&self) -> Result<Statistics>;
 }
 
 /// Indicate whether a data exchange is needed for the input of `plan`, which will be very helpful
@@ -342,47 +381,6 @@ pub fn unbounded_output(plan: &Arc<dyn ExecutionPlan>) -> bool {
     plan.unbounded_output(&children_unbounded_output)
         .unwrap_or(true)
 }
-
-use datafusion_physical_expr::expressions::Column;
-pub use datafusion_physical_expr::window::WindowExpr;
-pub use datafusion_physical_expr::{AggregateExpr, PhysicalExpr};
-pub use datafusion_physical_expr::{Distribution, Partitioning};
-use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortRequirement};
-
-pub mod aggregates;
-pub mod analyze;
-pub mod coalesce_batches;
-pub mod coalesce_partitions;
-pub mod common;
-pub mod display;
-pub mod empty;
-pub mod explain;
-pub mod filter;
-pub mod insert;
-pub mod joins;
-pub mod limit;
-pub mod memory;
-pub mod metrics;
-pub mod projection;
-pub mod repartition;
-pub mod sorts;
-pub mod stream;
-pub mod streaming;
-pub mod tree_node;
-pub mod udaf;
-pub mod union;
-pub mod unnest;
-pub mod values;
-pub mod windows;
-
-use crate::repartition::RepartitionExec;
-use crate::sorts::sort_preserving_merge::SortPreservingMergeExec;
-pub use datafusion_common::hash_utils;
-pub use datafusion_common::utils::project_schema;
-use datafusion_execution::TaskContext;
-pub use datafusion_physical_expr::{
-    expressions, functions, ordering_equivalence_properties_helper, udf,
-};
 
 #[cfg(test)]
 pub mod test;

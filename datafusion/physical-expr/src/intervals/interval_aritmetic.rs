@@ -17,19 +17,19 @@
 
 //! Interval arithmetic library
 
+use std::borrow::Borrow;
+use std::fmt::{self, Display, Formatter};
+use std::ops::{AddAssign, SubAssign};
+
 use crate::aggregate::min_max::{max, min};
 use crate::intervals::rounding::{alter_fp_rounding_mode, next_down, next_up};
+
 use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::DataType;
 use arrow_array::ArrowNativeTypeOp;
-use datafusion_common::{exec_err, internal_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::Operator;
-
-use std::borrow::Borrow;
-use std::fmt;
-use std::fmt::{Display, Formatter};
-use std::ops::{AddAssign, SubAssign};
 
 /// This type represents a single endpoint of an [`Interval`]. An
 /// endpoint can be open (does not include the endpoint) or closed
@@ -87,7 +87,7 @@ impl IntervalBound {
     }
 
     /// Returns a new bound with a negated value, if any, and the same open/closed.
-    /// For example negating `[5` would return `[-5`, or `-1)` would return `1)`
+    /// For example negating `[5` would return `[-5`, or `-1)` would return `1)`.
     pub fn negate(&self) -> Result<IntervalBound> {
         self.value.arithmetic_negate().map(|value| IntervalBound {
             value,
@@ -535,60 +535,77 @@ impl Interval {
     };
 
     /// Returns the cardinality of this interval, which is the number of all
-    /// distinct points inside it.
-    pub fn cardinality(&self) -> Result<u64> {
-        match self.get_datatype() {
-            Ok(data_type) if data_type.is_integer() => {
-                if let Some(diff) = self.upper.value.distance(&self.lower.value) {
-                    Ok(calculate_cardinality_based_on_bounds(
+    /// distinct points inside it. This function returns `None` if:
+    /// - The interval is unbounded from either side, or
+    /// - Cardinality calculations for the datatype in question is not
+    ///   implemented yet, or
+    /// - An overflow occurs during the calculation.
+    ///
+    /// This function returns an error if the given interval is malformed.
+    pub fn cardinality(&self) -> Result<Option<u64>> {
+        let data_type = self.get_datatype()?;
+        if data_type.is_integer() {
+            Ok(self.upper.value.distance(&self.lower.value).map(|diff| {
+                calculate_cardinality_based_on_bounds(
+                    self.lower.open,
+                    self.upper.open,
+                    diff as u64,
+                )
+            }))
+        }
+        // Ordering floating-point numbers according to their binary representations
+        // coincide with their natural ordering. Therefore, we can consider their
+        // binary representations as "indices" and subtract them. For details, see:
+        // https://stackoverflow.com/questions/8875064/how-many-distinct-floating-point-numbers-in-a-specific-range
+        else if data_type.is_floating() {
+            match (&self.lower.value, &self.upper.value) {
+                (
+                    ScalarValue::Float32(Some(lower)),
+                    ScalarValue::Float32(Some(upper)),
+                ) => {
+                    // Negative numbers are sorted in the reverse order. To always have a positive difference after the subtraction,
+                    // we perform following transformation:
+                    let lower_bits = lower.to_bits() as i32;
+                    let upper_bits = upper.to_bits() as i32;
+                    let transformed_lower =
+                        lower_bits ^ ((lower_bits >> 31) & 0x7fffffff);
+                    let transformed_upper =
+                        upper_bits ^ ((upper_bits >> 31) & 0x7fffffff);
+                    let Ok(count) = transformed_upper.sub_checked(transformed_lower)
+                    else {
+                        return Ok(None);
+                    };
+                    Ok(Some(calculate_cardinality_based_on_bounds(
                         self.lower.open,
                         self.upper.open,
-                        diff as u64,
-                    ))
-                } else {
-                    exec_err!("Cardinality cannot be calculated for {:?}", self)
+                        count as u64,
+                    )))
                 }
-            }
-            // Ordering floating-point numbers according to their binary representations
-            // coincide with their natural ordering. Therefore, we can consider their
-            // binary representations as "indices" and subtract them. For details, see:
-            // https://stackoverflow.com/questions/8875064/how-many-distinct-floating-point-numbers-in-a-specific-range
-            Ok(data_type) if data_type.is_floating() => {
-                // If the minimum value is a negative number, we need to
-                // switch sides to ensure an unsigned result.
-                let (min, max) = if self.lower.value
-                    < ScalarValue::new_zero(&self.lower.value.data_type())?
-                {
-                    (self.upper.value.clone(), self.lower.value.clone())
-                } else {
-                    (self.lower.value.clone(), self.upper.value.clone())
-                };
-
-                match (min, max) {
-                    (
-                        ScalarValue::Float32(Some(lower)),
-                        ScalarValue::Float32(Some(upper)),
-                    ) => Ok(calculate_cardinality_based_on_bounds(
+                (
+                    ScalarValue::Float64(Some(lower)),
+                    ScalarValue::Float64(Some(upper)),
+                ) => {
+                    let lower_bits = lower.to_bits() as i64;
+                    let upper_bits = upper.to_bits() as i64;
+                    let transformed_lower =
+                        lower_bits ^ ((lower_bits >> 63) & 0x7fffffffffffffff);
+                    let transformed_upper =
+                        upper_bits ^ ((upper_bits >> 63) & 0x7fffffffffffffff);
+                    let Ok(count) = transformed_upper.sub_checked(transformed_lower)
+                    else {
+                        return Ok(None);
+                    };
+                    Ok(Some(calculate_cardinality_based_on_bounds(
                         self.lower.open,
                         self.upper.open,
-                        (upper.to_bits().sub_checked(lower.to_bits()))? as u64,
-                    )),
-                    (
-                        ScalarValue::Float64(Some(lower)),
-                        ScalarValue::Float64(Some(upper)),
-                    ) => Ok(calculate_cardinality_based_on_bounds(
-                        self.lower.open,
-                        self.upper.open,
-                        upper.to_bits().sub_checked(lower.to_bits())?,
-                    )),
-                    _ => exec_err!(
-                        "Cardinality cannot be calculated for the datatype {:?}",
-                        data_type
-                    ),
+                        count as u64,
+                    )))
                 }
+                _ => Ok(None),
             }
-            // If the cardinality cannot be calculated anyway, give an error.
-            _ => exec_err!("Cardinality cannot be calculated for {:?}", self),
+        } else {
+            // Cardinality calculations are not implemented for this data type yet:
+            Ok(None)
         }
     }
 
@@ -691,12 +708,25 @@ fn next_value<const INC: bool>(value: ScalarValue) -> ScalarValue {
     }
 }
 
-/// This function computes the cardinality ratio of the given intervals.
+/// This function computes the selectivity of an operation by computing the
+/// cardinality ratio of the given input/output intervals. If this can not be
+/// calculated for some reason, it returns `1.0` meaning fullly selective (no
+/// filtering).
 pub fn cardinality_ratio(
     initial_interval: &Interval,
     final_interval: &Interval,
 ) -> Result<f64> {
-    Ok(final_interval.cardinality()? as f64 / initial_interval.cardinality()? as f64)
+    Ok(
+        match (
+            final_interval.cardinality()?,
+            initial_interval.cardinality()?,
+        ) {
+            (Some(final_interval), Some(initial_interval)) => {
+                final_interval as f64 / initial_interval as f64
+            }
+            _ => 1.0,
+        },
+    )
 }
 
 pub fn apply_operator(op: &Operator, lhs: &Interval, rhs: &Interval) -> Result<Interval> {
@@ -1018,7 +1048,6 @@ impl NullableInterval {
 mod tests {
     use super::next_value;
     use crate::intervals::{Interval, IntervalBound};
-
     use arrow_schema::DataType;
     use datafusion_common::{Result, ScalarValue};
 
@@ -1716,7 +1745,7 @@ mod tests {
             ),
         ];
         for interval in intervals {
-            assert_eq!(interval.cardinality()?, distinct_f64);
+            assert_eq!(interval.cardinality()?.unwrap(), distinct_f64);
         }
 
         let intervals = [
@@ -1730,20 +1759,26 @@ mod tests {
             ),
         ];
         for interval in intervals {
-            assert_eq!(interval.cardinality()?, distinct_f32);
+            assert_eq!(interval.cardinality()?.unwrap(), distinct_f32);
         }
 
+        // The regular logarithmic distribution of floating-point numbers are
+        // only applicable outside of the `(-phi, phi)` interval where `phi`
+        // denotes the largest positive subnormal floating-point number. Since
+        // the following intervals include such subnormal points, we cannot use
+        // a simple powers-of-two type formula for our expectations. Therefore,
+        // we manually supply the actual expected cardinality.
         let interval = Interval::new(
             IntervalBound::new(ScalarValue::from(-0.0625), false),
             IntervalBound::new(ScalarValue::from(0.0625), true),
         );
-        assert_eq!(interval.cardinality()?, distinct_f64 * 2_048);
+        assert_eq!(interval.cardinality()?.unwrap(), 9178336040581070849);
 
         let interval = Interval::new(
             IntervalBound::new(ScalarValue::from(-0.0625_f32), false),
             IntervalBound::new(ScalarValue::from(0.0625_f32), true),
         );
-        assert_eq!(interval.cardinality()?, distinct_f32 * 256);
+        assert_eq!(interval.cardinality()?.unwrap(), 2063597569);
 
         Ok(())
     }

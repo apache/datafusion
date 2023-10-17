@@ -20,32 +20,33 @@
 mod arrow_file;
 mod avro;
 mod csv;
+mod file_scan_config;
 mod file_stream;
 mod json;
 pub mod parquet;
 
 pub(crate) use self::csv::plan_to_csv;
 pub use self::csv::{CsvConfig, CsvExec, CsvOpener};
+pub(crate) use self::file_scan_config::PartitionColumnProjector;
+pub(crate) use self::json::plan_to_json;
 pub(crate) use self::parquet::plan_to_parquet;
 pub use self::parquet::{ParquetExec, ParquetFileMetrics, ParquetFileReaderFactory};
-use arrow::{
-    array::new_null_array,
-    compute::can_cast_types,
-    datatypes::{DataType, Schema, SchemaRef},
-    record_batch::{RecordBatch, RecordBatchOptions},
-};
+
 pub use arrow_file::ArrowExec;
 pub use avro::AvroExec;
-use datafusion_physical_expr::PhysicalSortExpr;
-pub use file_stream::{FileOpenFuture, FileOpener, FileStream, OnError};
-pub(crate) use json::plan_to_json;
-pub use json::{JsonOpener, NdJsonExec};
-mod file_scan_config;
-pub(crate) use file_scan_config::PartitionColumnProjector;
 pub use file_scan_config::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
 };
+pub use file_stream::{FileOpenFuture, FileOpener, FileStream, OnError};
+pub use json::{JsonOpener, NdJsonExec};
 
+use std::{
+    fmt::{Debug, Formatter, Result as FmtResult},
+    sync::Arc,
+    vec,
+};
+
+use super::listing::ListingTableUrl;
 use crate::error::{DataFusionError, Result};
 use crate::{
     datasource::file_format::write::FileWriterMode,
@@ -59,21 +60,20 @@ use crate::{
     physical_plan::display::{OutputOrderingDisplay, ProjectSchemaDisplay},
 };
 
+use arrow::{
+    array::new_null_array,
+    compute::{can_cast_types, cast},
+    datatypes::{DataType, Schema, SchemaRef},
+    record_batch::{RecordBatch, RecordBatchOptions},
+};
 use datafusion_common::{file_options::FileTypeWriterOptions, plan_err};
 use datafusion_physical_expr::expressions::Column;
-
-use arrow::compute::cast;
+use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_plan::ExecutionPlan;
+
 use log::debug;
 use object_store::path::Path;
 use object_store::ObjectMeta;
-use std::{
-    fmt::{Debug, Formatter, Result as FmtResult},
-    sync::Arc,
-    vec,
-};
-
-use super::listing::ListingTableUrl;
 
 /// The base configurations to provide when creating a physical plan for
 /// writing to any given file format.
@@ -815,7 +815,7 @@ mod tests {
                     object_store_url: ObjectStoreUrl::local_filesystem(),
                     file_groups: file_group,
                     file_schema: Arc::new(Schema::empty()),
-                    statistics: Statistics::default(),
+                    statistics: Statistics::new_unknown(&Schema::empty()),
                     projection: None,
                     limit: None,
                     table_partition_cols: vec![],
@@ -878,7 +878,9 @@ mod tests {
                             object_store_url: ObjectStoreUrl::local_filesystem(),
                             file_groups: fg.clone(),
                             file_schema: Arc::new(Schema::empty()),
-                            statistics: Statistics::default(),
+                            statistics: Statistics::new_unknown(&Arc::new(
+                                Schema::empty(),
+                            )),
                             projection: None,
                             limit: None,
                             table_partition_cols: vec![],
@@ -912,7 +914,7 @@ mod tests {
                     object_store_url: ObjectStoreUrl::local_filesystem(),
                     file_groups: single_partition,
                     file_schema: Arc::new(Schema::empty()),
-                    statistics: Statistics::default(),
+                    statistics: Statistics::new_unknown(&Schema::empty()),
                     projection: None,
                     limit: None,
                     table_partition_cols: vec![],
@@ -949,7 +951,7 @@ mod tests {
                     object_store_url: ObjectStoreUrl::local_filesystem(),
                     file_groups: single_partition,
                     file_schema: Arc::new(Schema::empty()),
-                    statistics: Statistics::default(),
+                    statistics: Statistics::new_unknown(&Schema::empty()),
                     projection: None,
                     limit: None,
                     table_partition_cols: vec![],
@@ -992,7 +994,7 @@ mod tests {
                     object_store_url: ObjectStoreUrl::local_filesystem(),
                     file_groups: source_partitions,
                     file_schema: Arc::new(Schema::empty()),
-                    statistics: Statistics::default(),
+                    statistics: Statistics::new_unknown(&Schema::empty()),
                     projection: None,
                     limit: None,
                     table_partition_cols: vec![],
@@ -1031,7 +1033,7 @@ mod tests {
                     object_store_url: ObjectStoreUrl::local_filesystem(),
                     file_groups: source_partitions,
                     file_schema: Arc::new(Schema::empty()),
-                    statistics: Statistics::default(),
+                    statistics: Statistics::new_unknown(&Schema::empty()),
                     projection: None,
                     limit: None,
                     table_partition_cols: vec![],
@@ -1071,7 +1073,7 @@ mod tests {
                     object_store_url: ObjectStoreUrl::local_filesystem(),
                     file_groups: source_partitions,
                     file_schema: Arc::new(Schema::empty()),
-                    statistics: Statistics::default(),
+                    statistics: Statistics::new_unknown(&Schema::empty()),
                     projection: None,
                     limit: None,
                     table_partition_cols: vec![],
@@ -1100,7 +1102,7 @@ mod tests {
                     object_store_url: ObjectStoreUrl::local_filesystem(),
                     file_groups: single_partition,
                     file_schema: Arc::new(Schema::empty()),
-                    statistics: Statistics::default(),
+                    statistics: Statistics::new_unknown(&Schema::empty()),
                     projection: None,
                     limit: None,
                     table_partition_cols: vec![],
