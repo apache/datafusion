@@ -921,15 +921,15 @@ impl SchemaProperties {
     ) -> Option<Vec<PhysicalSortExpr>> {
         let lhs = self.normalize_sort_exprs(req1);
         let rhs = self.normalize_sort_exprs(req2);
-        if izip!(lhs.iter(), rhs.iter()).all(|(lhs, rhs)| lhs.eq(rhs)) {
-            if lhs.len() < rhs.len() {
-                return Some(lhs);
+        let mut meet = vec![];
+        for (lhs, rhs) in izip!(lhs.iter(), rhs.iter()) {
+            if lhs.eq(rhs) {
+                meet.push(lhs.clone());
             } else {
-                return Some(rhs);
+                break;
             }
         }
-        // There is no meet
-        None
+        (!meet.is_empty()).then_some(meet)
     }
 
     /// This function prunes lexicographical ordering requirement
@@ -2565,6 +2565,13 @@ mod tests {
             // Get meet ordering between [a ASC] and [a DESC]
             // result should be None.
             (vec![(col_a, option_asc)], vec![(col_a, option_desc)], None),
+            // Get meet ordering between [a ASC, b ASC] and [a ASC, b DESC]
+            // result should be [a ASC].
+            (
+                vec![(col_a, option_asc), (col_b, option_asc)],
+                vec![(col_a, option_asc), (col_b, option_desc)],
+                Some(vec![(col_a, option_asc)]),
+            ),
         ];
         for (lhs, rhs, expected) in tests_cases {
             let lhs = convert_to_sort_exprs(&lhs);

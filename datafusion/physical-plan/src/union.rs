@@ -644,8 +644,25 @@ mod tests {
     use crate::test;
 
     use crate::collect;
+    use crate::memory::MemoryExec;
     use arrow::record_batch::RecordBatch;
+    use arrow_schema::{DataType, SortOptions};
     use datafusion_common::ScalarValue;
+    use datafusion_physical_expr::expressions::col;
+
+    // Generate a schema which consists of 7 columns (a, b, c, d, e, f, g)
+    fn create_test_schema() -> Result<SchemaRef> {
+        let a = Field::new("a", DataType::Int32, true);
+        let b = Field::new("b", DataType::Int32, true);
+        let c = Field::new("c", DataType::Int32, true);
+        let d = Field::new("d", DataType::Int32, true);
+        let e = Field::new("e", DataType::Int32, true);
+        let f = Field::new("f", DataType::Int32, true);
+        let g = Field::new("g", DataType::Int32, true);
+        let schema = Arc::new(Schema::new(vec![a, b, c, d, e, f, g]));
+
+        Ok(schema)
+    }
 
     #[tokio::test]
     async fn test_union_partitions() -> Result<()> {
@@ -748,5 +765,84 @@ mod tests {
         };
 
         assert_eq!(result, expected);
+    }
+
+    #[tokio::test]
+    async fn test_union_schema_properties() -> Result<()> {
+        let schema = create_test_schema()?;
+        let col_a = &col("a", &schema)?;
+        let col_b = &col("b", &schema)?;
+        let col_c = &col("c", &schema)?;
+        let col_d = &col("d", &schema)?;
+        let col_e = &col("e", &schema)?;
+        let col_f = &col("f", &schema)?;
+        let options = SortOptions::default();
+        // [a ASC, b ASC, f ASC], [d ASC]
+        let orderings = vec![
+            vec![
+                PhysicalSortExpr {
+                    expr: col_a.clone(),
+                    options,
+                },
+                PhysicalSortExpr {
+                    expr: col_b.clone(),
+                    options,
+                },
+                PhysicalSortExpr {
+                    expr: col_f.clone(),
+                    options,
+                },
+            ],
+            vec![PhysicalSortExpr {
+                expr: col_d.clone(),
+                options,
+            }],
+        ];
+        let child1 = Arc::new(
+            MemoryExec::try_new(&[], schema.clone(), None)?
+                .with_sort_information(orderings),
+        );
+
+        // [a ASC, b ASC, c ASC], [e ASC]
+        let orderings = vec![
+            vec![
+                PhysicalSortExpr {
+                    expr: col_a.clone(),
+                    options,
+                },
+                PhysicalSortExpr {
+                    expr: col_b.clone(),
+                    options,
+                },
+                PhysicalSortExpr {
+                    expr: col_c.clone(),
+                    options,
+                },
+            ],
+            vec![PhysicalSortExpr {
+                expr: col_e.clone(),
+                options,
+            }],
+        ];
+        let child2 = Arc::new(
+            MemoryExec::try_new(&[], schema, None)?.with_sort_information(orderings),
+        );
+
+        let union = UnionExec::new(vec![child1, child2]);
+        // Expects union to have [a ASC, b ASC] (e.g meet of inout orderings)
+        let union_schema_properties = union.schema_properties();
+        let union_orderings = union_schema_properties.oeq_group();
+        println!("union_orderings:{:?}", union_orderings);
+        assert!(union_orderings.contains(&vec![
+            PhysicalSortExpr {
+                expr: col_a.clone(),
+                options
+            },
+            PhysicalSortExpr {
+                expr: col_b.clone(),
+                options
+            }
+        ]));
+        Ok(())
     }
 }
