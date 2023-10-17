@@ -1218,6 +1218,7 @@ regexp_replace(str, regexp, replacement, flags)
 - [to_timestamp_millis](#to_timestamp_millis)
 - [to_timestamp_micros](#to_timestamp_micros)
 - [to_timestamp_seconds](#to_timestamp_seconds)
+- [to_timestamp_nanos](#to_timestamp_nanos)
 - [from_unixtime](#from_unixtime)
 
 ### `now`
@@ -1390,10 +1391,10 @@ extract(field FROM source)
 
 ### `to_timestamp`
 
-Converts a value to RFC3339 nanosecond timestamp format (`YYYY-MM-DDT00:00:00.000000000Z`).
+Converts a value to RFC3339 second timestamp format (`YYYY-MM-DDT00:00:00Z`).
 Supports timestamp, integer, and unsigned integer types as input.
 Integers and unsigned integers are parsed as Unix nanosecond timestamps and
-return the corresponding RFC3339 nanosecond timestamp.
+return the corresponding RFC3339 timestamp.
 
 ```
 to_timestamp(expression)
@@ -1428,7 +1429,18 @@ Integers and unsigned integers are parsed as Unix nanosecond timestamps and
 return the corresponding RFC3339 timestamp.
 
 ```
-to_timestamp_micros(expression)
+to_timestamp_nanos(expression)
+```
+
+### `to_timestamp_nanos`
+
+Converts a value to RFC3339 nanosecond timestamp format (`YYYY-MM-DDT00:00:00.000000000Z`).
+Supports timestamp, integer, and unsigned integer types as input.
+Integers and unsigned integers are parsed as Unix nanosecond timestamps and
+return the corresponding RFC3339 timestamp.
+
+```
+to_timestamp_nanos(expression)
 ```
 
 #### Arguments
@@ -1438,10 +1450,7 @@ to_timestamp_micros(expression)
 
 ### `to_timestamp_seconds`
 
-Converts a value to RFC3339 second timestamp format (`YYYY-MM-DDT00:00:00Z`).
-Supports timestamp, integer, and unsigned integer types as input.
-Integers and unsigned integers are parsed as Unix nanosecond timestamps and
-return the corresponding RFC3339 timestamp.
+Alias for `to_timestamp()` function.
 
 ```
 to_timestamp_seconds(expression)
