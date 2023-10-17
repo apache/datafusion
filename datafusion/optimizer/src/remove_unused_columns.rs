@@ -19,8 +19,11 @@
 //! This saves time in planning and executing the query.
 //! Note that this rule should be applied after simplify expressions optimizer rule.
 use crate::optimizer::ApplyOrder;
-use datafusion_common::{get_required_group_by_exprs_indices, Result};
-use datafusion_expr::{logical_plan::LogicalPlan, Aggregate, Expr, Partitioning};
+use arrow::datatypes::SchemaRef;
+use datafusion_common::{get_required_group_by_exprs_indices, DFField, DFSchemaRef, OwnedTableReference, Result, TableReference, ToDFSchema, JoinType};
+use datafusion_expr::{
+    logical_plan::LogicalPlan, Aggregate, Expr, Partitioning, TableScan,
+};
 use itertools::izip;
 use std::sync::Arc;
 
@@ -110,7 +113,18 @@ fn join_child_requirement(
 fn split_join_requirement_indices_to_children(
     left_len: usize,
     indices: &[usize],
+    join_type: &JoinType
 ) -> (Vec<usize>, Vec<usize>) {
+     match join_type{
+         // In these cases split
+        JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {},
+        JoinType::LeftAnti | JoinType::LeftSemi => {
+            return (indices.to_vec(), vec![])
+        }
+        JoinType::RightSemi | JoinType::RightAnti => {
+            return (vec![], indices.to_vec())
+        }
+    }
     let left_requirements_from_parent = indices
         .iter()
         .filter_map(|&idx| if idx < left_len { Some(idx) } else { None })
@@ -129,6 +143,20 @@ fn split_join_requirement_indices_to_children(
         left_requirements_from_parent,
         right_requirements_from_parent,
     )
+}
+
+fn get_projected_schema(
+    indices: &[usize],
+    table_name: &OwnedTableReference,
+    schema: &SchemaRef,
+) -> Result<DFSchemaRef> {
+    // create the projected schema
+    let projected_fields: Vec<DFField> = indices
+        .iter()
+        .map(|i| DFField::from_qualified(table_name.clone(), schema.fields()[*i].clone()))
+        .collect();
+
+    projected_fields.to_dfschema_ref()
 }
 
 fn try_optimize_internal(
@@ -179,6 +207,7 @@ fn try_optimize_internal(
         LogicalPlan::Sort(sort) => {
             let indices_referred_by_sort = get_referred_indices(&sort.input, &sort.expr)?;
             let required_indices = merge_vectors(&indices, &indices_referred_by_sort);
+            // println!("required_indices: {:?}", required_indices);
             Some(vec![required_indices])
         }
         LogicalPlan::Filter(filter) => {
@@ -190,33 +219,55 @@ fn try_optimize_internal(
         LogicalPlan::Window(window) => {
             let indices_referred_by_window =
                 get_referred_indices(&window.input, &window.window_expr)?;
-            let required_indices = merge_vectors(&indices, &indices_referred_by_window);
+            let n_input_fields = window.input.schema().fields().len();
+            let window_child_indices = indices
+                .iter()
+                .filter_map(|idx| {
+                    if *idx < n_input_fields {
+                        Some(*idx)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            let required_indices =
+                merge_vectors(&window_child_indices, &indices_referred_by_window);
             Some(vec![required_indices])
         }
         LogicalPlan::Join(join) => {
             let left_len = join.left.schema().fields().len();
             let (left_requirements_from_parent, right_requirements_from_parent) =
-                split_join_requirement_indices_to_children(left_len, &indices);
+                split_join_requirement_indices_to_children(left_len, &indices, &join.join_type);
+            // println!("left_requirements_from_parent:{:?}", left_requirements_from_parent);
+            // println!("right_requirements_from_parent:{:?}", right_requirements_from_parent);
+            // println!("indices:{:?}", indices);
             let (left_on, right_on): (Vec<_>, Vec<_>) = join.on.iter().cloned().unzip();
             let join_filter = &join
                 .filter
                 .as_ref()
                 .map(|item| vec![item.clone()])
                 .unwrap_or_default();
+            // println!("&left_on:{:?}", left_on);
+            // println!("&join_filter:{:?}", join_filter);
             let left_indices = join_child_requirement(&join.left, &left_on, join_filter)?;
+            // println!("left indices: {:?}", left_indices);
             let left_indices =
                 merge_vectors(&left_requirements_from_parent, &left_indices);
 
             let right_indices =
                 join_child_requirement(&join.right, &right_on, join_filter)?;
+            // println!("right indices: {:?}", right_indices);
             let right_indices =
                 merge_vectors(&right_requirements_from_parent, &right_indices);
+            // println!("left_indices: {:?}", left_indices);
+            // println!("right_indices: {:?}", right_indices);
             Some(vec![left_indices, right_indices])
         }
         LogicalPlan::CrossJoin(cross_join) => {
             let left_len = cross_join.left.schema().fields().len();
             let (left_child_indices, right_child_indices) =
-                split_join_requirement_indices_to_children(left_len, &indices);
+                split_join_requirement_indices_to_children(left_len, &indices, &JoinType::Full);
             Some(vec![left_child_indices, right_child_indices])
         }
         LogicalPlan::Repartition(repartition) => {
@@ -236,8 +287,77 @@ fn try_optimize_internal(
             // Union directly re-routes requirements from its parents.
             Some(vec![indices; union.inputs.len()])
         }
+        LogicalPlan::TableScan(table_scan) => {
+            let filter_referred_indices =
+                get_referred_indices(&plan, &table_scan.filters)?;
+            // println!("bef indices:{:?}", indices);
+            let indices = merge_vectors(&indices, &filter_referred_indices);
+            // println!("aft indices:{:?}", indices);
+            // println!("table_scan.projection:{:?}", table_scan.projection);
+            // println!("table_scan.projected_schema.fields().len():{:?}", table_scan.projected_schema.fields().len());
+            // println!("table_scan.source.schema().fields().len():{:?}", table_scan.source.schema().fields().len());
+            let indices = if indices.is_empty() {
+                // Use at least 1 column if not empty
+                if table_scan.projected_schema.fields().is_empty(){
+                    vec![]
+                } else{
+                    vec![0]
+                }
+            } else {
+                indices
+            };
+            // println!("table_scan.projection: {:?}", table_scan.projection);
+            let projection_fields = table_scan.projected_schema.fields();
+            let schema = table_scan.source.schema();
+            let fields_used = indices
+                .iter()
+                .map(|idx| projection_fields[*idx].clone())
+                .collect::<Vec<_>>();
+            let mut projection = fields_used
+                .iter()
+                .map(|field_proj| {
+                    schema
+                        .fields()
+                        .iter()
+                        .position(|field_source| field_proj.field() == field_source)
+                })
+                .collect::<Option<Vec<_>>>();
+            // TODO: Remove this check.
+            if table_scan.projection.is_none(){
+                projection = None;
+            }
+            // let projection = table_scan.projection.as_ref().map(|_proj_indices| indices);
+            // println!(" after projection: {:?}", projection);
+            let projected_schema = if let Some(indices) = &projection {
+                get_projected_schema(
+                    indices,
+                    &table_scan.table_name,
+                    &table_scan.source.schema(),
+                )?
+            } else {
+                // Use existing projected schema.
+                table_scan.projected_schema.clone()
+            };
+            return Ok(Some(LogicalPlan::TableScan(TableScan {
+                table_name: table_scan.table_name.clone(),
+                source: table_scan.source.clone(),
+                projection,
+                projected_schema,
+                filters: table_scan.filters.clone(),
+                fetch: table_scan.fetch,
+            })));
+        }
         // SubqueryAlias alias can route requirement for its parent to its child
-        LogicalPlan::SubqueryAlias(_) => Some(vec![indices]),
+        LogicalPlan::SubqueryAlias(sub_query_alias) => {
+            // println!("insub_query_aliasput: {:?}", plan);
+            // println!("input: {:?}", sub_query_alias.input);
+            Some(vec![indices])
+        },
+        LogicalPlan::Subquery(sub_query) => {
+            let referred_indices = get_referred_indices(&sub_query.subquery, &sub_query.outer_ref_columns)?;
+            let required_indices = merge_vectors(&indices, &referred_indices);
+            Some(vec![required_indices])
+        },
         _ => None,
     };
     if let Some(child_required_indices) = child_required_indices {

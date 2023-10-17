@@ -229,6 +229,7 @@ impl Optimizer {
             Arc::new(DecorrelatePredicateSubquery::new()),
             Arc::new(ScalarSubqueryToJoin::new()),
             Arc::new(ExtractEquijoinPredicate::new()),
+            // Arc::new(RemoveUnusedColumns::new()),
             // simplify expressions does not simplify expressions in subqueries, so we
             // run it again after running the optimizations that potentially converted
             // subqueries to joins
