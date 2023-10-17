@@ -24,8 +24,8 @@ use crate::{Cast, Expr, ExprSchemable, GroupingSet, LogicalPlan, TryCast};
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_common::{
-    internal_err, plan_err, Column, DFField, DFSchema, DFSchemaRef, DataFusionError,
-    Result, ScalarValue, TableReference,
+    internal_err, plan_datafusion_err, plan_err, Column, DFField, DFSchema, DFSchemaRef,
+    DataFusionError, Result, ScalarValue, TableReference,
 };
 use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem, WildcardAdditionalOptions};
 use std::cmp::Ordering;
@@ -198,8 +198,8 @@ pub fn enumerate_grouping_sets(group_expr: Vec<Expr>) -> Result<Vec<Expr>> {
                     grouping_sets.iter().map(|e| e.iter().collect()).collect()
                 }
                 Expr::GroupingSet(GroupingSet::Cube(group_exprs)) => {
-                    let grouping_sets =
-                        powerset(group_exprs).map_err(DataFusionError::Plan)?;
+                    let grouping_sets = powerset(group_exprs)
+                        .map_err(|e| plan_datafusion_err!("{}", e))?;
                     check_grouping_sets_size_limit(grouping_sets.len())?;
                     grouping_sets
                 }

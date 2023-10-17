@@ -21,11 +21,13 @@ use crate::nullif::SUPPORTED_NULLIF_TYPES;
 use crate::signature::TIMEZONE_WILDCARD;
 use crate::type_coercion::functions::data_types;
 use crate::{
-    conditional_expressions, struct_expressions, utils, Signature, TypeSignature,
-    Volatility,
+    conditional_expressions, struct_expressions, utils, FuncMonotonicity, Signature,
+    TypeSignature, Volatility,
 };
 use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
-use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
+use datafusion_common::{
+    internal_err, plan_datafusion_err, plan_err, DataFusionError, Result,
+};
 use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
@@ -501,11 +503,14 @@ impl BuiltinScalarFunction {
 
         // verify that this is a valid set of data types for this function
         data_types(input_expr_types, &self.signature()).map_err(|_| {
-            DataFusionError::Plan(utils::generate_signature_error_msg(
-                &format!("{self}"),
-                self.signature(),
-                input_expr_types,
-            ))
+            plan_datafusion_err!(
+                "{}",
+                utils::generate_signature_error_msg(
+                    &format!("{self}"),
+                    self.signature(),
+                    input_expr_types,
+                )
+            )
         })?;
 
         // the return type of the built in function.
@@ -1281,6 +1286,47 @@ impl BuiltinScalarFunction {
                     self.volatility(),
                 )
             }
+        }
+    }
+
+    /// This function specifies monotonicity behaviors for built-in scalar functions.
+    /// The list can be extended, only mathematical and datetime functions are
+    /// considered for the initial implementation of this feature.
+    pub fn monotonicity(&self) -> Option<FuncMonotonicity> {
+        if matches!(
+            &self,
+            BuiltinScalarFunction::Atan
+                | BuiltinScalarFunction::Acosh
+                | BuiltinScalarFunction::Asinh
+                | BuiltinScalarFunction::Atanh
+                | BuiltinScalarFunction::Ceil
+                | BuiltinScalarFunction::Degrees
+                | BuiltinScalarFunction::Exp
+                | BuiltinScalarFunction::Factorial
+                | BuiltinScalarFunction::Floor
+                | BuiltinScalarFunction::Ln
+                | BuiltinScalarFunction::Log10
+                | BuiltinScalarFunction::Log2
+                | BuiltinScalarFunction::Radians
+                | BuiltinScalarFunction::Round
+                | BuiltinScalarFunction::Signum
+                | BuiltinScalarFunction::Sinh
+                | BuiltinScalarFunction::Sqrt
+                | BuiltinScalarFunction::Cbrt
+                | BuiltinScalarFunction::Tanh
+                | BuiltinScalarFunction::Trunc
+                | BuiltinScalarFunction::Pi
+        ) {
+            Some(vec![Some(true)])
+        } else if matches!(
+            &self,
+            BuiltinScalarFunction::DateTrunc | BuiltinScalarFunction::DateBin
+        ) {
+            Some(vec![None, Some(true)])
+        } else if *self == BuiltinScalarFunction::Log {
+            Some(vec![Some(true), Some(false)])
+        } else {
+            None
         }
     }
 }

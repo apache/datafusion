@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::fs;
+use std::sync::Arc;
+
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
@@ -23,6 +26,7 @@ use datafusion::datasource::physical_plan::ParquetExec;
 use datafusion::datasource::TableProvider;
 use datafusion::execution::context::SessionState;
 use datafusion::prelude::SessionContext;
+use datafusion_common::stats::Precision;
 use datafusion_execution::cache::cache_manager::CacheManagerConfig;
 use datafusion_execution::cache::cache_unit;
 use datafusion_execution::cache::cache_unit::{
@@ -30,8 +34,7 @@ use datafusion_execution::cache::cache_unit::{
 };
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
-use std::fs;
-use std::sync::Arc;
+
 use tempfile::tempdir;
 
 #[tokio::test]
@@ -54,24 +57,33 @@ async fn load_table_stats_with_session_level_cache() {
     assert_eq!(get_static_cache_size(&state1), 0);
     let exec1 = table1.scan(&state1, None, &[], None).await.unwrap();
 
-    assert_eq!(exec1.statistics().num_rows, Some(8));
-    assert_eq!(exec1.statistics().total_byte_size, Some(671));
+    assert_eq!(exec1.statistics().unwrap().num_rows, Precision::Exact(8));
+    assert_eq!(
+        exec1.statistics().unwrap().total_byte_size,
+        Precision::Exact(671)
+    );
     assert_eq!(get_static_cache_size(&state1), 1);
 
     //Session 2 first time list files
     //check session 1 cache result not show in session 2
     assert_eq!(get_static_cache_size(&state2), 0);
     let exec2 = table2.scan(&state2, None, &[], None).await.unwrap();
-    assert_eq!(exec2.statistics().num_rows, Some(8));
-    assert_eq!(exec2.statistics().total_byte_size, Some(671));
+    assert_eq!(exec2.statistics().unwrap().num_rows, Precision::Exact(8));
+    assert_eq!(
+        exec2.statistics().unwrap().total_byte_size,
+        Precision::Exact(671)
+    );
     assert_eq!(get_static_cache_size(&state2), 1);
 
     //Session 1 second time list files
     //check session 1 cache result not show in session 2
     assert_eq!(get_static_cache_size(&state1), 1);
     let exec3 = table1.scan(&state1, None, &[], None).await.unwrap();
-    assert_eq!(exec3.statistics().num_rows, Some(8));
-    assert_eq!(exec3.statistics().total_byte_size, Some(671));
+    assert_eq!(exec3.statistics().unwrap().num_rows, Precision::Exact(8));
+    assert_eq!(
+        exec3.statistics().unwrap().total_byte_size,
+        Precision::Exact(671)
+    );
     // List same file no increase
     assert_eq!(get_static_cache_size(&state1), 1);
 }

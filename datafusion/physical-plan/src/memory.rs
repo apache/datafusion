@@ -17,23 +17,24 @@
 
 //! Execution plan for reading in-memory batches of data
 
+use std::any::Any;
+use std::fmt;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+
 use super::expressions::PhysicalSortExpr;
 use super::{
     common, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
+use crate::ordering_equivalence_properties_helper;
+
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use core::fmt;
-use datafusion_common::{internal_err, project_schema, Result};
-use std::any::Any;
-use std::sync::Arc;
-use std::task::{Context, Poll};
-
-use crate::ordering_equivalence_properties_helper;
-use datafusion_common::DataFusionError;
+use datafusion_common::{internal_err, project_schema, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{LexOrdering, OrderingEquivalenceProperties};
+
 use futures::Stream;
 
 /// Execution plan for reading in-memory batches of data
@@ -77,9 +78,10 @@ impl DisplayAs for MemoryExec {
                     .sort_information
                     .first()
                     .map(|output_ordering| {
-                        let order_strings: Vec<_> =
-                            output_ordering.iter().map(|e| e.to_string()).collect();
-                        format!(", output_ordering={}", order_strings.join(","))
+                        format!(
+                            ", output_ordering={}",
+                            PhysicalSortExpr::format_list(output_ordering)
+                        )
                     })
                     .unwrap_or_default();
 
@@ -149,12 +151,12 @@ impl ExecutionPlan for MemoryExec {
     }
 
     /// We recompute the statistics dynamically from the arrow metadata as it is pretty cheap to do so
-    fn statistics(&self) -> Statistics {
-        common::compute_record_batch_statistics(
+    fn statistics(&self) -> Result<Statistics> {
+        Ok(common::compute_record_batch_statistics(
             &self.partitions,
             &self.schema,
             self.projection.clone(),
-        )
+        ))
     }
 }
 
@@ -265,12 +267,14 @@ impl RecordBatchStream for MemoryStream {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use crate::memory::MemoryExec;
     use crate::ExecutionPlan;
+
     use arrow_schema::{DataType, Field, Schema, SortOptions};
     use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr::PhysicalSortExpr;
-    use std::sync::Arc;
 
     #[test]
     fn test_memory_order_eq() -> datafusion_common::Result<()> {

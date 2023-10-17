@@ -15,13 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use async_trait::async_trait;
+use std::any::Any;
+use std::collections::{BTreeMap, HashMap};
+use std::fmt::{self, Debug, Formatter};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
 use datafusion::arrow::array::{UInt64Builder, UInt8Builder};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::dataframe::DataFrame;
-use datafusion::datasource::provider_as_source;
-use datafusion::datasource::{TableProvider, TableType};
+use datafusion::datasource::{provider_as_source, TableProvider, TableType};
 use datafusion::error::Result;
 use datafusion::execution::context::{SessionState, TaskContext};
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
@@ -32,11 +36,8 @@ use datafusion::physical_plan::{
 };
 use datafusion::prelude::*;
 use datafusion_expr::{Expr, LogicalPlanBuilder};
-use std::any::Any;
-use std::collections::{BTreeMap, HashMap};
-use std::fmt::{self, Debug, Formatter};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+
+use async_trait::async_trait;
 use tokio::time::timeout;
 
 /// This example demonstrates executing a simple query against a custom datasource
@@ -270,7 +271,7 @@ impl ExecutionPlan for CustomExec {
         )?))
     }
 
-    fn statistics(&self) -> Statistics {
-        Statistics::default()
+    fn statistics(&self) -> Result<Statistics> {
+        Ok(Statistics::new_unknown(&self.schema()))
     }
 }

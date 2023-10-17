@@ -308,7 +308,8 @@ pub struct RepartitionExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
 
-    /// Boolean flag to decide whether to preserve ordering
+    /// Boolean flag to decide whether to preserve ordering. If true means
+    /// `SortPreservingRepartitionExec`, false means `RepartitionExec`.
     preserve_order: bool,
 }
 
@@ -370,7 +371,7 @@ impl RepartitionExec {
         self.preserve_order
     }
 
-    /// Get name of the Executor
+    /// Get name used to display this Exec
     pub fn name(&self) -> &str {
         if self.preserve_order {
             "SortPreservingRepartitionExec"
@@ -394,7 +395,16 @@ impl DisplayAs for RepartitionExec {
                     self.name(),
                     self.partitioning,
                     self.input.output_partitioning().partition_count()
-                )
+                )?;
+
+                if let Some(sort_exprs) = self.sort_exprs() {
+                    write!(
+                        f,
+                        ", sort_exprs={}",
+                        PhysicalSortExpr::format_list(sort_exprs)
+                    )?;
+                }
+                Ok(())
             }
         }
     }
@@ -576,8 +586,8 @@ impl ExecutionPlan for RepartitionExec {
                 .collect::<Vec<_>>();
             // Note that receiver size (`rx.len()`) and `num_input_partitions` are same.
 
-            // Get existing ordering:
-            let sort_exprs = self.input.output_ordering().unwrap_or(&[]);
+            // Get existing ordering to use for merging
+            let sort_exprs = self.sort_exprs().unwrap_or(&[]);
 
             // Merge streams (while preserving ordering) coming from
             // input partitions to this partition:
@@ -610,7 +620,7 @@ impl ExecutionPlan for RepartitionExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Result<Statistics> {
         self.input.statistics()
     }
 }
@@ -644,6 +654,15 @@ impl RepartitionExec {
             self.preserve_order = preserve_order
         }
         self
+    }
+
+    /// Return the sort expressions that are used to merge
+    fn sort_exprs(&self) -> Option<&[PhysicalSortExpr]> {
+        if self.preserve_order {
+            self.input.output_ordering()
+        } else {
+            None
+        }
     }
 
     /// Pulls data from the specified input plan, feeding it to the

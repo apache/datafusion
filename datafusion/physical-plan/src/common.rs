@@ -17,24 +17,28 @@
 
 //! Defines common code used in execution plans
 
-use super::SendableRecordBatchStream;
-use crate::stream::RecordBatchReceiverStream;
-use crate::{ColumnStatistics, ExecutionPlan, Statistics};
-use arrow::datatypes::Schema;
-use arrow::ipc::writer::{FileWriter, IpcWriteOptions};
-use arrow::record_batch::RecordBatch;
-use datafusion_common::{plan_err, DataFusionError, Result};
-use datafusion_execution::memory_pool::MemoryReservation;
-use datafusion_physical_expr::expressions::{BinaryExpr, Column};
-use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
-use futures::{Future, StreamExt, TryStreamExt};
-use parking_lot::Mutex;
-use pin_project_lite::pin_project;
 use std::fs;
 use std::fs::{metadata, File};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::task::{Context, Poll};
+
+use super::SendableRecordBatchStream;
+use crate::stream::RecordBatchReceiverStream;
+use crate::{ColumnStatistics, ExecutionPlan, Statistics};
+
+use arrow::datatypes::Schema;
+use arrow::ipc::writer::{FileWriter, IpcWriteOptions};
+use arrow::record_batch::RecordBatch;
+use datafusion_common::stats::Precision;
+use datafusion_common::{plan_err, DataFusionError, Result};
+use datafusion_execution::memory_pool::MemoryReservation;
+use datafusion_physical_expr::expressions::{BinaryExpr, Column};
+use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+
+use futures::{Future, StreamExt, TryStreamExt};
+use parking_lot::Mutex;
+use pin_project_lite::pin_project;
 use tokio::task::JoinHandle;
 
 /// [`MemoryReservation`] used across query execution streams
@@ -146,22 +150,21 @@ pub fn compute_record_batch_statistics(
         None => (0..schema.fields().len()).collect(),
     };
 
-    let mut column_statistics = vec![ColumnStatistics::default(); projection.len()];
+    let mut column_statistics = vec![ColumnStatistics::new_unknown(); projection.len()];
 
     for partition in batches.iter() {
         for batch in partition {
             for (stat_index, col_index) in projection.iter().enumerate() {
-                *column_statistics[stat_index].null_count.get_or_insert(0) +=
-                    batch.column(*col_index).null_count();
+                column_statistics[stat_index].null_count =
+                    Precision::Exact(batch.column(*col_index).null_count());
             }
         }
     }
 
     Statistics {
-        num_rows: Some(nb_rows),
-        total_byte_size: Some(total_byte_size),
-        column_statistics: Some(column_statistics),
-        is_exact: true,
+        num_rows: Precision::Exact(nb_rows),
+        total_byte_size: Precision::Exact(total_byte_size),
+        column_statistics,
     }
 }
 
@@ -378,6 +381,7 @@ mod tests {
     use crate::memory::MemoryExec;
     use crate::sorts::sort::SortExec;
     use crate::union::UnionExec;
+
     use arrow::compute::SortOptions;
     use arrow::{
         array::{Float32Array, Float64Array},
@@ -671,9 +675,8 @@ mod tests {
         ]));
         let stats = compute_record_batch_statistics(&[], &schema, Some(vec![0, 1]));
 
-        assert_eq!(stats.num_rows, Some(0));
-        assert!(stats.is_exact);
-        assert_eq!(stats.total_byte_size, Some(0));
+        assert_eq!(stats.num_rows, Precision::Exact(0));
+        assert_eq!(stats.total_byte_size, Precision::Exact(0));
         Ok(())
     }
 
@@ -694,27 +697,26 @@ mod tests {
             compute_record_batch_statistics(&[vec![batch]], &schema, Some(vec![0, 1]));
 
         let mut expected = Statistics {
-            is_exact: true,
-            num_rows: Some(3),
-            total_byte_size: Some(464), // this might change a bit if the way we compute the size changes
-            column_statistics: Some(vec![
+            num_rows: Precision::Exact(3),
+            total_byte_size: Precision::Exact(464), // this might change a bit if the way we compute the size changes
+            column_statistics: vec![
                 ColumnStatistics {
-                    distinct_count: None,
-                    max_value: None,
-                    min_value: None,
-                    null_count: Some(0),
+                    distinct_count: Precision::Absent,
+                    max_value: Precision::Absent,
+                    min_value: Precision::Absent,
+                    null_count: Precision::Exact(0),
                 },
                 ColumnStatistics {
-                    distinct_count: None,
-                    max_value: None,
-                    min_value: None,
-                    null_count: Some(0),
+                    distinct_count: Precision::Absent,
+                    max_value: Precision::Absent,
+                    min_value: Precision::Absent,
+                    null_count: Precision::Exact(0),
                 },
-            ]),
+            ],
         };
 
         // Prevent test flakiness due to undefined / changing implementation details
-        expected.total_byte_size = actual.total_byte_size;
+        expected.total_byte_size = actual.total_byte_size.clone();
 
         assert_eq!(actual, expected);
         Ok(())

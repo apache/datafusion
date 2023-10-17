@@ -17,7 +17,6 @@
 
 //! Join related functionality used both on logical and physical plans
 
-use std::cmp::max;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use std::future::Future;
@@ -25,10 +24,11 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::usize;
 
+use crate::joins::hash_join_utils::{build_filter_input_order, SortedFilterExpr};
 use crate::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder};
-use crate::SchemaRef;
 use crate::{
-    ColumnStatistics, EquivalenceProperties, ExecutionPlan, Partitioning, Statistics,
+    ColumnStatistics, EquivalenceProperties, ExecutionPlan, Partitioning, SchemaRef,
+    Statistics,
 };
 
 use arrow::array::{
@@ -39,20 +39,21 @@ use arrow::compute;
 use arrow::datatypes::{Field, Schema, SchemaBuilder};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
-    exec_err, plan_err, DataFusionError, JoinType, Result, ScalarValue, SharedResult,
+    exec_err, plan_datafusion_err, plan_err, DataFusionError, JoinType, Result,
+    SharedResult,
 };
 use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::intervals::{ExprIntervalGraph, Interval, IntervalBound};
+use datafusion_physical_expr::utils::merge_vectors;
 use datafusion_physical_expr::{
     add_offset_to_lex_ordering, EquivalentClass, LexOrdering, LexOrderingRef,
     OrderingEquivalenceProperties, OrderingEquivalentClass, PhysicalExpr,
     PhysicalSortExpr,
 };
 
-use crate::joins::hash_join_utils::{build_filter_input_order, SortedFilterExpr};
-use datafusion_physical_expr::intervals::ExprIntervalGraph;
-use datafusion_physical_expr::utils::merge_vectors;
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};
 use parking_lot::Mutex;
@@ -363,11 +364,7 @@ pub fn combine_join_ordering_equivalence_properties(
     let left_maintains = maintains_input_order[0];
     let right_maintains = maintains_input_order[1];
     match (left_maintains, right_maintains) {
-        (true, true) => {
-            return Err(DataFusionError::Plan(
-                "Cannot maintain ordering of both sides".to_string(),
-            ))
-        }
+        (true, true) => return plan_err!("Cannot maintain ordering of both sides"),
         (true, false) => {
             new_properties.extend(left_oeq_properties.oeq_class().cloned());
             // In this special case, right side ordering can be prefixed with left side ordering.
@@ -726,21 +723,21 @@ pub(crate) fn estimate_join_statistics(
     right: Arc<dyn ExecutionPlan>,
     on: JoinOn,
     join_type: &JoinType,
-) -> Statistics {
-    let left_stats = left.statistics();
-    let right_stats = right.statistics();
+    schema: &Schema,
+) -> Result<Statistics> {
+    let left_stats = left.statistics()?;
+    let right_stats = right.statistics()?;
 
     let join_stats = estimate_join_cardinality(join_type, left_stats, right_stats, &on);
     let (num_rows, column_statistics) = match join_stats {
-        Some(stats) => (Some(stats.num_rows), Some(stats.column_statistics)),
-        None => (None, None),
+        Some(stats) => (Precision::Inexact(stats.num_rows), stats.column_statistics),
+        None => (Precision::Absent, Statistics::unknown_column(schema)),
     };
-    Statistics {
+    Ok(Statistics {
         num_rows,
-        total_byte_size: None,
+        total_byte_size: Precision::Absent,
         column_statistics,
-        is_exact: false,
-    }
+    })
 }
 
 // Estimate the cardinality for the given join with input statistics.
@@ -752,29 +749,27 @@ fn estimate_join_cardinality(
 ) -> Option<PartialJoinStatistics> {
     match join_type {
         JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
-            let left_num_rows = left_stats.num_rows?;
-            let right_num_rows = right_stats.num_rows?;
-
-            // Take the left_col_stats and right_col_stats using the index
-            // obtained from index() method of the each element of 'on'.
-            let all_left_col_stats = left_stats.column_statistics?;
-            let all_right_col_stats = right_stats.column_statistics?;
             let (left_col_stats, right_col_stats) = on
                 .iter()
                 .map(|(left, right)| {
                     (
-                        all_left_col_stats[left.index()].clone(),
-                        all_right_col_stats[right.index()].clone(),
+                        left_stats.column_statistics[left.index()].clone(),
+                        right_stats.column_statistics[right.index()].clone(),
                     )
                 })
                 .unzip::<_, _, Vec<_>, Vec<_>>();
 
             let ij_cardinality = estimate_inner_join_cardinality(
-                left_num_rows,
-                right_num_rows,
-                left_col_stats,
-                right_col_stats,
-                left_stats.is_exact && right_stats.is_exact,
+                Statistics {
+                    num_rows: left_stats.num_rows.clone(),
+                    total_byte_size: Precision::Absent,
+                    column_statistics: left_col_stats,
+                },
+                Statistics {
+                    num_rows: right_stats.num_rows.clone(),
+                    total_byte_size: Precision::Absent,
+                    column_statistics: right_col_stats,
+                },
             )?;
 
             // The cardinality for inner join can also be used to estimate
@@ -783,25 +778,25 @@ fn estimate_join_cardinality(
             // joins (so that we don't underestimate the cardinality).
             let cardinality = match join_type {
                 JoinType::Inner => ij_cardinality,
-                JoinType::Left => max(ij_cardinality, left_num_rows),
-                JoinType::Right => max(ij_cardinality, right_num_rows),
-                JoinType::Full => {
-                    max(ij_cardinality, left_num_rows)
-                        + max(ij_cardinality, right_num_rows)
-                        - ij_cardinality
-                }
+                JoinType::Left => ij_cardinality.max(&left_stats.num_rows),
+                JoinType::Right => ij_cardinality.max(&right_stats.num_rows),
+                JoinType::Full => ij_cardinality
+                    .max(&left_stats.num_rows)
+                    .add(&ij_cardinality.max(&right_stats.num_rows))
+                    .sub(&ij_cardinality),
                 _ => unreachable!(),
             };
 
             Some(PartialJoinStatistics {
-                num_rows: cardinality,
+                num_rows: *cardinality.get_value()?,
                 // We don't do anything specific here, just combine the existing
                 // statistics which might yield subpar results (although it is
                 // true, esp regarding min/max). For a better estimation, we need
                 // filter selectivity analysis first.
-                column_statistics: all_left_col_stats
+                column_statistics: left_stats
+                    .column_statistics
                     .into_iter()
-                    .chain(all_right_col_stats)
+                    .chain(right_stats.column_statistics)
                     .collect(),
             })
         }
@@ -818,30 +813,47 @@ fn estimate_join_cardinality(
 /// a very conservative implementation that can quickly give up if there is not
 /// enough input statistics.
 fn estimate_inner_join_cardinality(
-    left_num_rows: usize,
-    right_num_rows: usize,
-    left_col_stats: Vec<ColumnStatistics>,
-    right_col_stats: Vec<ColumnStatistics>,
-    is_exact: bool,
-) -> Option<usize> {
+    left_stats: Statistics,
+    right_stats: Statistics,
+) -> Option<Precision<usize>> {
     // The algorithm here is partly based on the non-histogram selectivity estimation
     // from Spark's Catalyst optimizer.
-
-    let mut join_selectivity = None;
-    for (left_stat, right_stat) in left_col_stats.iter().zip(right_col_stats.iter()) {
-        if (left_stat.min_value.clone()? > right_stat.max_value.clone()?)
-            || (left_stat.max_value.clone()? < right_stat.min_value.clone()?)
-        {
-            // If there is no overlap in any of the join columns, that means the join
-            // itself is disjoint and the cardinality is 0. Though we can only assume
-            // this when the statistics are exact (since it is a very strong assumption).
-            return if is_exact { Some(0) } else { None };
+    let mut join_selectivity = Precision::Absent;
+    for (left_stat, right_stat) in left_stats
+        .column_statistics
+        .iter()
+        .zip(right_stats.column_statistics.iter())
+    {
+        // If there is no overlap in any of the join columns, this means the join
+        // itself is disjoint and the cardinality is 0. Though we can only assume
+        // this when the statistics are exact (since it is a very strong assumption).
+        if left_stat.min_value.get_value()? > right_stat.max_value.get_value()? {
+            return Some(
+                if left_stat.min_value.is_exact().unwrap_or(false)
+                    && right_stat.max_value.is_exact().unwrap_or(false)
+                {
+                    Precision::Exact(0)
+                } else {
+                    Precision::Inexact(0)
+                },
+            );
+        }
+        if left_stat.max_value.get_value()? < right_stat.min_value.get_value()? {
+            return Some(
+                if left_stat.max_value.is_exact().unwrap_or(false)
+                    && right_stat.min_value.is_exact().unwrap_or(false)
+                {
+                    Precision::Exact(0)
+                } else {
+                    Precision::Inexact(0)
+                },
+            );
         }
 
-        let left_max_distinct = max_distinct_count(left_num_rows, left_stat.clone());
-        let right_max_distinct = max_distinct_count(right_num_rows, right_stat.clone());
-        let max_distinct = max(left_max_distinct, right_max_distinct);
-        if max_distinct > join_selectivity {
+        let left_max_distinct = max_distinct_count(&left_stats.num_rows, left_stat)?;
+        let right_max_distinct = max_distinct_count(&right_stats.num_rows, right_stat)?;
+        let max_distinct = left_max_distinct.max(&right_max_distinct);
+        if max_distinct.get_value().is_some() {
             // Seems like there are a few implementations of this algorithm that implement
             // exponential decay for the selectivity (like Hive's Optiq Optimizer). Needs
             // further exploration.
@@ -852,9 +864,14 @@ fn estimate_inner_join_cardinality(
     // With the assumption that the smaller input's domain is generally represented in the bigger
     // input's domain, we can estimate the inner join's cardinality by taking the cartesian product
     // of the two inputs and normalizing it by the selectivity factor.
+    let left_num_rows = left_stats.num_rows.get_value()?;
+    let right_num_rows = right_stats.num_rows.get_value()?;
     match join_selectivity {
-        Some(selectivity) if selectivity > 0 => {
-            Some((left_num_rows * right_num_rows) / selectivity)
+        Precision::Exact(value) if value > 0 => {
+            Some(Precision::Exact((left_num_rows * right_num_rows) / value))
+        }
+        Precision::Inexact(value) if value > 0 => {
+            Some(Precision::Inexact((left_num_rows * right_num_rows) / value))
         }
         // Since we don't have any information about the selectivity (which is derived
         // from the number of distinct rows information) we can give up here for now.
@@ -870,42 +887,44 @@ fn estimate_inner_join_cardinality(
 /// If distinct_count is available, uses it directly. If the column numeric, and
 /// has min/max values, then they might be used as a fallback option. Otherwise,
 /// returns None.
-fn max_distinct_count(num_rows: usize, stats: ColumnStatistics) -> Option<usize> {
-    match (stats.distinct_count, stats.max_value, stats.min_value) {
-        (Some(_), _, _) => stats.distinct_count,
+fn max_distinct_count(
+    num_rows: &Precision<usize>,
+    stats: &ColumnStatistics,
+) -> Option<Precision<usize>> {
+    match (
+        &stats.distinct_count,
+        stats.max_value.get_value(),
+        stats.min_value.get_value(),
+    ) {
+        (Precision::Exact(_), _, _) | (Precision::Inexact(_), _, _) => {
+            Some(stats.distinct_count.clone())
+        }
         (_, Some(max), Some(min)) => {
-            // Note that float support is intentionally omitted here, since the computation
-            // of a range between two float values is not trivial and the result would be
-            // highly inaccurate.
-            let numeric_range = get_int_range(min, max)?;
+            let numeric_range = Interval::new(
+                IntervalBound::new(min.clone(), false),
+                IntervalBound::new(max.clone(), false),
+            )
+            .cardinality()
+            .ok()
+            .flatten()? as usize;
 
             // The number can never be greater than the number of rows we have (minus
             // the nulls, since they don't count as distinct values).
-            let ceiling = num_rows - stats.null_count.unwrap_or(0);
-            Some(numeric_range.min(ceiling))
+            let ceiling =
+                num_rows.get_value()? - stats.null_count.get_value().unwrap_or(&0);
+            Some(
+                if num_rows.is_exact().unwrap_or(false)
+                    && stats.max_value.is_exact().unwrap_or(false)
+                    && stats.min_value.is_exact().unwrap_or(false)
+                {
+                    Precision::Exact(numeric_range.min(ceiling))
+                } else {
+                    Precision::Inexact(numeric_range.min(ceiling))
+                },
+            )
         }
         _ => None,
     }
-}
-
-/// Return the numeric range between the given min and max values.
-fn get_int_range(min: ScalarValue, max: ScalarValue) -> Option<usize> {
-    let delta = &max.sub(&min).ok()?;
-    match delta {
-        ScalarValue::Int8(Some(delta)) if *delta >= 0 => Some(*delta as usize),
-        ScalarValue::Int16(Some(delta)) if *delta >= 0 => Some(*delta as usize),
-        ScalarValue::Int32(Some(delta)) if *delta >= 0 => Some(*delta as usize),
-        ScalarValue::Int64(Some(delta)) if *delta >= 0 => Some(*delta as usize),
-        ScalarValue::UInt8(Some(delta)) => Some(*delta as usize),
-        ScalarValue::UInt16(Some(delta)) => Some(*delta as usize),
-        ScalarValue::UInt32(Some(delta)) => Some(*delta as usize),
-        ScalarValue::UInt64(Some(delta)) => Some(*delta as usize),
-        _ => None,
-    }
-    // The delta (directly) is not the real range, since it does not include the
-    // first term.
-    // E.g. (min=2, max=4) -> (4 - 2) -> 2, but the actual result should be 3 (1, 2, 3).
-    .map(|open_ended_range| open_ended_range + 1)
 }
 
 enum OnceFutState<T> {
@@ -1345,8 +1364,7 @@ pub fn prepare_sorted_exprs(
     right_sort_exprs: &[PhysicalSortExpr],
 ) -> Result<(SortedFilterExpr, SortedFilterExpr, ExprIntervalGraph)> {
     // Build the filter order for the left side
-    let err =
-        || DataFusionError::Plan("Filter does not include the child order".to_owned());
+    let err = || plan_datafusion_err!("Filter does not include the child order");
 
     let left_temp_sorted_filter_expr = build_filter_input_order(
         JoinSide::Left,
@@ -1384,13 +1402,15 @@ pub fn prepare_sorted_exprs(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use arrow::datatypes::Fields;
-    use arrow::error::Result as ArrowResult;
-    use arrow::{datatypes::DataType, error::ArrowError};
-    use arrow_schema::SortOptions;
-    use datafusion_common::ScalarValue;
     use std::pin::Pin;
+
+    use super::*;
+
+    use arrow::datatypes::{DataType, Fields};
+    use arrow::error::{ArrowError, Result as ArrowResult};
+    use arrow_schema::SortOptions;
+
+    use datafusion_common::ScalarValue;
 
     fn check(left: &[Column], right: &[Column], on: &[(Column, Column)]) -> Result<()> {
         let left = left
@@ -1543,14 +1563,18 @@ mod tests {
 
     fn create_stats(
         num_rows: Option<usize>,
-        column_stats: Option<Vec<ColumnStatistics>>,
+        column_stats: Vec<ColumnStatistics>,
         is_exact: bool,
     ) -> Statistics {
         Statistics {
-            num_rows,
+            num_rows: if is_exact {
+                num_rows.map(Precision::Exact)
+            } else {
+                num_rows.map(Precision::Inexact)
+            }
+            .unwrap_or(Precision::Absent),
             column_statistics: column_stats,
-            is_exact,
-            ..Default::default()
+            total_byte_size: Precision::Absent,
         }
     }
 
@@ -1560,9 +1584,15 @@ mod tests {
         distinct_count: Option<usize>,
     ) -> ColumnStatistics {
         ColumnStatistics {
-            distinct_count,
-            min_value: min.map(|size| ScalarValue::Int64(Some(size))),
-            max_value: max.map(|size| ScalarValue::Int64(Some(size))),
+            distinct_count: distinct_count
+                .map(Precision::Inexact)
+                .unwrap_or(Precision::Absent),
+            min_value: min
+                .map(|size| Precision::Inexact(ScalarValue::from(size)))
+                .unwrap_or(Precision::Absent),
+            max_value: max
+                .map(|size| Precision::Inexact(ScalarValue::from(size)))
+                .unwrap_or(Precision::Absent),
             ..Default::default()
         }
     }
@@ -1574,7 +1604,7 @@ mod tests {
     // over the expected output (since it depends on join type to join type).
     #[test]
     fn test_inner_join_cardinality_single_column() -> Result<()> {
-        let cases: Vec<(PartialStats, PartialStats, Option<usize>)> = vec![
+        let cases: Vec<(PartialStats, PartialStats, Option<Precision<usize>>)> = vec![
             // -----------------------------------------------------------------------------
             // | left(rows, min, max, distinct), right(rows, min, max, distinct), expected |
             // -----------------------------------------------------------------------------
@@ -1586,70 +1616,70 @@ mod tests {
             (
                 (10, Some(1), Some(10), None),
                 (10, Some(1), Some(10), None),
-                Some(10),
+                Some(Precision::Inexact(10)),
             ),
             // range(left) > range(right)
             (
                 (10, Some(6), Some(10), None),
                 (10, Some(8), Some(10), None),
-                Some(20),
+                Some(Precision::Inexact(20)),
             ),
             // range(right) > range(left)
             (
                 (10, Some(8), Some(10), None),
                 (10, Some(6), Some(10), None),
-                Some(20),
+                Some(Precision::Inexact(20)),
             ),
             // range(left) > len(left), range(right) > len(right)
             (
                 (10, Some(1), Some(15), None),
                 (20, Some(1), Some(40), None),
-                Some(10),
+                Some(Precision::Inexact(10)),
             ),
             // When we have distinct count.
             (
                 (10, Some(1), Some(10), Some(10)),
                 (10, Some(1), Some(10), Some(10)),
-                Some(10),
+                Some(Precision::Inexact(10)),
             ),
             // distinct(left) > distinct(right)
             (
                 (10, Some(1), Some(10), Some(5)),
                 (10, Some(1), Some(10), Some(2)),
-                Some(20),
+                Some(Precision::Inexact(20)),
             ),
             // distinct(right) > distinct(left)
             (
                 (10, Some(1), Some(10), Some(2)),
                 (10, Some(1), Some(10), Some(5)),
-                Some(20),
+                Some(Precision::Inexact(20)),
             ),
             // min(left) < 0 (range(left) > range(right))
             (
                 (10, Some(-5), Some(5), None),
                 (10, Some(1), Some(5), None),
-                Some(10),
+                Some(Precision::Inexact(10)),
             ),
             // min(right) < 0, max(right) < 0 (range(right) > range(left))
             (
                 (10, Some(-25), Some(-20), None),
                 (10, Some(-25), Some(-15), None),
-                Some(10),
+                Some(Precision::Inexact(10)),
             ),
             // range(left) < 0, range(right) >= 0
             // (there isn't a case where both left and right ranges are negative
             //  so one of them is always going to work, this just proves negative
             //  ranges with bigger absolute values are not are not accidentally used).
             (
-                (10, Some(10), Some(0), None),
+                (10, Some(-10), Some(0), None),
                 (10, Some(0), Some(10), Some(5)),
-                Some(20), // It would have been ten if we have used abs(range(left))
+                Some(Precision::Inexact(10)),
             ),
             // range(left) = 1, range(right) = 1
             (
                 (10, Some(1), Some(1), None),
                 (10, Some(1), Some(1), None),
-                Some(100),
+                Some(Precision::Inexact(100)),
             ),
             //
             // Edge cases
@@ -1674,22 +1704,12 @@ mod tests {
             (
                 (10, Some(0), Some(10), None),
                 (10, Some(11), Some(20), None),
-                None,
+                Some(Precision::Inexact(0)),
             ),
             (
                 (10, Some(11), Some(20), None),
                 (10, Some(0), Some(10), None),
-                None,
-            ),
-            (
-                (10, Some(5), Some(10), Some(10)),
-                (10, Some(11), Some(3), Some(10)),
-                None,
-            ),
-            (
-                (10, Some(10), Some(5), Some(10)),
-                (10, Some(3), Some(7), Some(10)),
-                None,
+                Some(Precision::Inexact(0)),
             ),
             // distinct(left) = 0, distinct(right) = 0
             (
@@ -1713,13 +1733,18 @@ mod tests {
 
             assert_eq!(
                 estimate_inner_join_cardinality(
-                    left_num_rows,
-                    right_num_rows,
-                    left_col_stats.clone(),
-                    right_col_stats.clone(),
-                    false,
+                    Statistics {
+                        num_rows: Precision::Inexact(left_num_rows),
+                        total_byte_size: Precision::Absent,
+                        column_statistics: left_col_stats.clone(),
+                    },
+                    Statistics {
+                        num_rows: Precision::Inexact(right_num_rows),
+                        total_byte_size: Precision::Absent,
+                        column_statistics: right_col_stats.clone(),
+                    },
                 ),
-                expected_cardinality
+                expected_cardinality.clone()
             );
 
             // We should also be able to use join_cardinality to get the same results
@@ -1727,18 +1752,22 @@ mod tests {
             let join_on = vec![(Column::new("a", 0), Column::new("b", 0))];
             let partial_join_stats = estimate_join_cardinality(
                 &join_type,
-                create_stats(Some(left_num_rows), Some(left_col_stats.clone()), false),
-                create_stats(Some(right_num_rows), Some(right_col_stats.clone()), false),
+                create_stats(Some(left_num_rows), left_col_stats.clone(), false),
+                create_stats(Some(right_num_rows), right_col_stats.clone(), false),
                 &join_on,
             );
 
             assert_eq!(
-                partial_join_stats.clone().map(|s| s.num_rows),
-                expected_cardinality
+                partial_join_stats
+                    .clone()
+                    .map(|s| Precision::Inexact(s.num_rows)),
+                expected_cardinality.clone()
             );
             assert_eq!(
                 partial_join_stats.map(|s| s.column_statistics),
-                expected_cardinality.map(|_| [left_col_stats, right_col_stats].concat())
+                expected_cardinality
+                    .clone()
+                    .map(|_| [left_col_stats, right_col_stats].concat())
             );
         }
         Ok(())
@@ -1760,13 +1789,18 @@ mod tests {
         // count is 200, so we are going to pick it.
         assert_eq!(
             estimate_inner_join_cardinality(
-                400,
-                400,
-                left_col_stats,
-                right_col_stats,
-                false
+                Statistics {
+                    num_rows: Precision::Inexact(400),
+                    total_byte_size: Precision::Absent,
+                    column_statistics: left_col_stats,
+                },
+                Statistics {
+                    num_rows: Precision::Inexact(400),
+                    total_byte_size: Precision::Absent,
+                    column_statistics: right_col_stats,
+                },
             ),
-            Some((400 * 400) / 200)
+            Some(Precision::Inexact((400 * 400) / 200))
         );
         Ok(())
     }
@@ -1774,26 +1808,31 @@ mod tests {
     #[test]
     fn test_inner_join_cardinality_decimal_range() -> Result<()> {
         let left_col_stats = vec![ColumnStatistics {
-            distinct_count: None,
-            min_value: Some(ScalarValue::Decimal128(Some(32500), 14, 4)),
-            max_value: Some(ScalarValue::Decimal128(Some(35000), 14, 4)),
+            distinct_count: Precision::Absent,
+            min_value: Precision::Inexact(ScalarValue::Decimal128(Some(32500), 14, 4)),
+            max_value: Precision::Inexact(ScalarValue::Decimal128(Some(35000), 14, 4)),
             ..Default::default()
         }];
 
         let right_col_stats = vec![ColumnStatistics {
-            distinct_count: None,
-            min_value: Some(ScalarValue::Decimal128(Some(33500), 14, 4)),
-            max_value: Some(ScalarValue::Decimal128(Some(34000), 14, 4)),
+            distinct_count: Precision::Absent,
+            min_value: Precision::Inexact(ScalarValue::Decimal128(Some(33500), 14, 4)),
+            max_value: Precision::Inexact(ScalarValue::Decimal128(Some(34000), 14, 4)),
             ..Default::default()
         }];
 
         assert_eq!(
             estimate_inner_join_cardinality(
-                100,
-                100,
-                left_col_stats,
-                right_col_stats,
-                false
+                Statistics {
+                    num_rows: Precision::Inexact(100),
+                    total_byte_size: Precision::Absent,
+                    column_statistics: left_col_stats,
+                },
+                Statistics {
+                    num_rows: Precision::Inexact(100),
+                    total_byte_size: Precision::Absent,
+                    column_statistics: right_col_stats,
+                },
             ),
             None
         );
@@ -1840,8 +1879,8 @@ mod tests {
 
             let partial_join_stats = estimate_join_cardinality(
                 &join_type,
-                create_stats(Some(1000), Some(left_col_stats.clone()), false),
-                create_stats(Some(2000), Some(right_col_stats.clone()), false),
+                create_stats(Some(1000), left_col_stats.clone(), false),
+                create_stats(Some(2000), right_col_stats.clone(), false),
                 &join_on,
             )
             .unwrap();
@@ -1905,8 +1944,8 @@ mod tests {
         for (join_type, expected_num_rows) in cases {
             let partial_join_stats = estimate_join_cardinality(
                 &join_type,
-                create_stats(Some(1000), Some(left_col_stats.clone()), true),
-                create_stats(Some(2000), Some(right_col_stats.clone()), true),
+                create_stats(Some(1000), left_col_stats.clone(), true),
+                create_stats(Some(2000), right_col_stats.clone(), true),
                 &join_on,
             )
             .unwrap();

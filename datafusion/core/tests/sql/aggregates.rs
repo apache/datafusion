@@ -47,25 +47,23 @@ async fn csv_query_array_agg_distinct() -> Result<()> {
     let column = actual[0].column(0);
     assert_eq!(column.len(), 1);
 
-    if let ScalarValue::List(Some(mut v), _) = ScalarValue::try_from_array(column, 0)? {
-        // workaround lack of Ord of ScalarValue
-        let cmp = |a: &ScalarValue, b: &ScalarValue| {
-            a.partial_cmp(b).expect("Can compare ScalarValues")
-        };
-        v.sort_by(cmp);
-        assert_eq!(
-            *v,
-            vec![
-                ScalarValue::UInt32(Some(1)),
-                ScalarValue::UInt32(Some(2)),
-                ScalarValue::UInt32(Some(3)),
-                ScalarValue::UInt32(Some(4)),
-                ScalarValue::UInt32(Some(5))
-            ]
-        );
-    } else {
-        unreachable!();
-    }
+    let scalar_vec = ScalarValue::convert_array_to_scalar_vec(&column)?;
+    let mut scalars = scalar_vec[0].clone();
+    // workaround lack of Ord of ScalarValue
+    let cmp = |a: &ScalarValue, b: &ScalarValue| {
+        a.partial_cmp(b).expect("Can compare ScalarValues")
+    };
+    scalars.sort_by(cmp);
+    assert_eq!(
+        scalars,
+        vec![
+            ScalarValue::UInt32(Some(1)),
+            ScalarValue::UInt32(Some(2)),
+            ScalarValue::UInt32(Some(3)),
+            ScalarValue::UInt32(Some(4)),
+            ScalarValue::UInt32(Some(5))
+        ]
+    );
 
     Ok(())
 }

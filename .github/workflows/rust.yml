@@ -505,12 +505,11 @@ jobs:
 
       - name: Check Cargo.toml formatting
         run: |
-          # if you encounter error, try rerun the command below, finally run 'git diff' to
-          # check which Cargo.toml introduces formatting violation
+          # if you encounter an error, try running 'cargo tomlfmt -p path/to/Cargo.toml' to fix the formatting automatically.
+          # If the error still persists, you need to manually edit the Cargo.toml file, which introduces formatting violation.
           #
           # ignore ./Cargo.toml because putting workspaces in multi-line lists make it easy to read
           ci/scripts/rust_toml_fmt.sh
-          git diff --exit-code
 
   config-docs-check:
     name: check configs.md is up-to-date

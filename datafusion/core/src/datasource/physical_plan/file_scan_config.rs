@@ -18,6 +18,12 @@
 //! [`FileScanConfig`] to configure scanning of possibly partitioned
 //! file sources.
 
+use std::{
+    borrow::Cow, cmp::min, collections::HashMap, fmt::Debug, marker::PhantomData,
+    sync::Arc, vec,
+};
+
+use super::get_projected_output_ordering;
 use crate::datasource::{
     listing::{FileRange, PartitionedFile},
     object_store::ObjectStoreUrl,
@@ -32,18 +38,12 @@ use arrow::buffer::Buffer;
 use arrow::datatypes::{ArrowNativeType, UInt16Type};
 use arrow_array::{ArrayRef, DictionaryArray, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
-use datafusion_common::exec_err;
-use datafusion_common::{ColumnStatistics, Statistics};
+use datafusion_common::stats::Precision;
+use datafusion_common::{exec_err, ColumnStatistics, Statistics};
 use datafusion_physical_expr::LexOrdering;
 
 use itertools::Itertools;
 use log::warn;
-use std::{
-    borrow::Cow, cmp::min, collections::HashMap, fmt::Debug, marker::PhantomData,
-    sync::Arc, vec,
-};
-
-use super::get_projected_output_ordering;
 
 /// Convert type to a type suitable for use as a [`ListingTable`]
 /// partition column. Returns `Dictionary(UInt16, val_type)`, which is
@@ -130,30 +130,23 @@ impl FileScanConfig {
         let mut table_cols_stats = vec![];
         for idx in proj_iter {
             if idx < self.file_schema.fields().len() {
-                table_fields.push(self.file_schema.field(idx).clone());
-                if let Some(file_cols_stats) = &self.statistics.column_statistics {
-                    table_cols_stats.push(file_cols_stats[idx].clone())
-                } else {
-                    table_cols_stats.push(ColumnStatistics::default())
-                }
+                let field = self.file_schema.field(idx);
+                table_fields.push(field.clone());
+                table_cols_stats.push(self.statistics.column_statistics[idx].clone())
             } else {
                 let partition_idx = idx - self.file_schema.fields().len();
-                table_fields.push(Field::new(
-                    &self.table_partition_cols[partition_idx].0,
-                    self.table_partition_cols[partition_idx].1.to_owned(),
-                    false,
-                ));
+                let (name, dtype) = &self.table_partition_cols[partition_idx];
+                table_fields.push(Field::new(name, dtype.to_owned(), false));
                 // TODO provide accurate stat for partition column (#1186)
-                table_cols_stats.push(ColumnStatistics::default())
+                table_cols_stats.push(ColumnStatistics::new_unknown())
             }
         }
 
         let table_stats = Statistics {
-            num_rows: self.statistics.num_rows,
-            is_exact: self.statistics.is_exact,
+            num_rows: self.statistics.num_rows.clone(),
             // TODO correct byte size?
-            total_byte_size: None,
-            column_statistics: Some(table_cols_stats),
+            total_byte_size: Precision::Absent,
+            column_statistics: table_cols_stats,
         };
 
         let table_schema = Arc::new(
@@ -507,7 +500,7 @@ mod tests {
         let conf = config_for_projection(
             Arc::clone(&file_schema),
             None,
-            Statistics::default(),
+            Statistics::new_unknown(&file_schema),
             vec![(
                 "date".to_owned(),
                 wrap_partition_type_in_dict(DataType::Utf8),
@@ -522,10 +515,7 @@ mod tests {
             "partition columns are the last columns"
         );
         assert_eq!(
-            proj_statistics
-                .column_statistics
-                .expect("projection creates column statistics")
-                .len(),
+            proj_statistics.column_statistics.len(),
             file_schema.fields().len() + 1
         );
         // TODO implement tests for partition column statistics once implemented
@@ -544,18 +534,16 @@ mod tests {
             Arc::clone(&file_schema),
             Some(vec![file_schema.fields().len(), 0]),
             Statistics {
-                num_rows: Some(10),
+                num_rows: Precision::Inexact(10),
                 // assign the column index to distinct_count to help assert
                 // the source statistic after the projection
-                column_statistics: Some(
-                    (0..file_schema.fields().len())
-                        .map(|i| ColumnStatistics {
-                            distinct_count: Some(i),
-                            ..Default::default()
-                        })
-                        .collect(),
-                ),
-                ..Default::default()
+                column_statistics: (0..file_schema.fields().len())
+                    .map(|i| ColumnStatistics {
+                        distinct_count: Precision::Inexact(i),
+                        ..Default::default()
+                    })
+                    .collect(),
+                total_byte_size: Precision::Absent,
             },
             vec![(
                 "date".to_owned(),
@@ -568,13 +556,11 @@ mod tests {
             columns(&proj_schema),
             vec!["date".to_owned(), "c1".to_owned()]
         );
-        let proj_stat_cols = proj_statistics
-            .column_statistics
-            .expect("projection creates column statistics");
+        let proj_stat_cols = proj_statistics.column_statistics;
         assert_eq!(proj_stat_cols.len(), 2);
         // TODO implement tests for proj_stat_cols[0] once partition column
         // statistics are implemented
-        assert_eq!(proj_stat_cols[1].distinct_count, Some(0));
+        assert_eq!(proj_stat_cols[1].distinct_count, Precision::Inexact(0));
 
         let col_names = conf.projected_file_column_names();
         assert_eq!(col_names, Some(vec!["c1".to_owned()]));
@@ -615,7 +601,7 @@ mod tests {
                 file_batch.schema().fields().len(),
                 file_batch.schema().fields().len() + 2,
             ]),
-            Statistics::default(),
+            Statistics::new_unknown(&file_batch.schema()),
             partition_cols.clone(),
         );
         let (proj_schema, ..) = conf.project();
