@@ -363,7 +363,7 @@
  </li>
  <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#bitwise-expressions">
-   Bitwise expressions
+   Bitwise Expressions
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
@@ -372,20 +372,13 @@
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#math-functions">
-   Math Functions
+  <a class="reference internal nav-link" href="#arithmetic-expressions">
+   Arithmetic Expressions
   </a>
-  <ul class="nav section-nav flex-column">
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#math-functions-usage-notes">
-     Math functions usage notes:
-    </a>
-   </li>
-  </ul>
  </li>
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#bitwise-operators">
-   Bitwise Operators
+  <a class="reference internal nav-link" href="#math-functions">
+   Math Functions
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
@@ -483,85 +476,110 @@
 <h1>Expression API<a class="headerlink" href="#expression-api" title="Link to this heading">¶</a></h1>
 <p>DataFrame methods such as <code class="docutils literal notranslate"><span class="pre">select</span></code> and <code class="docutils literal notranslate"><span class="pre">filter</span></code> accept one or more logical expressions and there are many functions
 available for creating logical expressions. These are documented below.</p>
-<p>Expressions can be chained together using a fluent-style API:</p>
+<div class="admonition tip">
+<p class="admonition-title">Tip</p>
+<p>Most functions and methods may receive and return an <code class="docutils literal notranslate"><span class="pre">Expr</span></code>, which can be chained together using a fluent-style API:</p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// create the expression `(a &gt; 6) AND (b &lt; 7)`</span>
 <span class="n">col</span><span class="p">(</span><span class="s">&quot;a&quot;</span><span class="p">).</span><span class="n">gt</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="mi">6</span><span class="p">)).</span><span class="n">and</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s">&quot;b&quot;</span><span class="p">).</span><span class="n">lt</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="mi">7</span><span class="p">)))</span>
 </pre></div>
+</div>
 </div>
 <section id="identifiers">
 <h2>Identifiers<a class="headerlink" href="#identifiers" title="Link to this heading">¶</a></h2>
 <table class="table">
 <thead>
-<tr class="row-odd"><th class="head"><p>Function</p></th>
-<th class="head"><p>Notes</p></th>
+<tr class="row-odd"><th class="head"><p>Syntax</p></th>
+<th class="head"><p>Description</p></th>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>col</p></td>
+<tr class="row-even"><td><p>col(ident)</p></td>
 <td><p>Reference a column in a dataframe <code class="docutils literal notranslate"><span class="pre">col(&quot;a&quot;)</span></code></p></td>
 </tr>
 </tbody>
 </table>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<dl class="simple myst">
+<dt>ident</dt><dd><p>A type which implement <code class="docutils literal notranslate"><span class="pre">Into&lt;Column&gt;</span></code> trait</p>
+</dd>
+</dl>
+</div>
 </section>
 <section id="literal-values">
 <h2>Literal Values<a class="headerlink" href="#literal-values" title="Link to this heading">¶</a></h2>
 <table class="table">
 <thead>
-<tr class="row-odd"><th class="head"><p>Function</p></th>
-<th class="head"><p>Notes</p></th>
+<tr class="row-odd"><th class="head"><p>Syntax</p></th>
+<th class="head"><p>Description</p></th>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>lit</p></td>
+<tr class="row-even"><td><p>lit(value)</p></td>
 <td><p>Literal value such as <code class="docutils literal notranslate"><span class="pre">lit(123)</span></code> or <code class="docutils literal notranslate"><span class="pre">lit(&quot;hello&quot;)</span></code></p></td>
 </tr>
 </tbody>
 </table>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<dl class="simple myst">
+<dt>value</dt><dd><p>A type which implement <code class="docutils literal notranslate"><span class="pre">Literal</span></code></p>
+</dd>
+</dl>
+</div>
 </section>
 <section id="boolean-expressions">
 <h2>Boolean Expressions<a class="headerlink" href="#boolean-expressions" title="Link to this heading">¶</a></h2>
 <table class="table">
 <thead>
-<tr class="row-odd"><th class="head"><p>Function</p></th>
-<th class="head"><p>Notes</p></th>
+<tr class="row-odd"><th class="head"><p>Syntax</p></th>
+<th class="head"><p>Description</p></th>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>and</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">and(expr1,</span> <span class="pre">expr2)</span></code> or <code class="docutils literal notranslate"><span class="pre">expr1.and(expr2)</span></code></p></td>
+<tr class="row-even"><td><p>and(x, y), x.and(y)</p></td>
+<td><p>Logical AND</p></td>
 </tr>
-<tr class="row-odd"><td><p>or</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">or(expr1,</span> <span class="pre">expr2)</span></code> or <code class="docutils literal notranslate"><span class="pre">expr1.or(expr2)</span></code></p></td>
+<tr class="row-odd"><td><p>or(x, y), x.or(y)</p></td>
+<td><p>Logical OR</p></td>
 </tr>
-<tr class="row-even"><td><p>not</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">not(expr)</span></code> or <code class="docutils literal notranslate"><span class="pre">expr.not()</span></code></p></td>
+<tr class="row-even"><td><p>!x, not(x), x.not()</p></td>
+<td><p>Logical NOT</p></td>
 </tr>
 </tbody>
 </table>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p><code class="docutils literal notranslate"><span class="pre">!</span></code> is a bitwise or logical complement operator in Rust, but it only works as a logical NOT in expression API.</p>
+</div>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Since <code class="docutils literal notranslate"><span class="pre">&amp;&amp;</span></code> and <code class="docutils literal notranslate"><span class="pre">||</span></code> are existed as logical operators in Rust, but those are not overloadable and not works with expression API.</p>
+</div>
 </section>
 <section id="bitwise-expressions">
-<h2>Bitwise expressions<a class="headerlink" href="#bitwise-expressions" title="Link to this heading">¶</a></h2>
+<h2>Bitwise Expressions<a class="headerlink" href="#bitwise-expressions" title="Link to this heading">¶</a></h2>
 <table class="table">
 <thead>
-<tr class="row-odd"><th class="head"><p>Function</p></th>
-<th class="head"><p>Notes</p></th>
+<tr class="row-odd"><th class="head"><p>Syntax</p></th>
+<th class="head"><p>Description</p></th>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>bitwise_and</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">bitwise_and(expr1,</span> <span class="pre">expr2)</span></code> or <code class="docutils literal notranslate"><span class="pre">expr1.bitwise_and(expr2)</span></code></p></td>
+<tr class="row-even"><td><p>x &amp; y, bitwise_and(x, y), x.bitand(y)</p></td>
+<td><p>AND</p></td>
 </tr>
-<tr class="row-odd"><td><p>bitwise_or</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">bitwise_or(expr1,</span> <span class="pre">expr2)</span></code> or <code class="docutils literal notranslate"><span class="pre">expr1.bitwise_or(expr2)</span></code></p></td>
+<tr class="row-odd"><td><p>x | y, bitwise_or(x, y), x.bitor(y)</p></td>
+<td><p>OR</p></td>
 </tr>
-<tr class="row-even"><td><p>bitwise_xor</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">bitwise_xor(expr1,</span> <span class="pre">expr2)</span></code> or <code class="docutils literal notranslate"><span class="pre">expr1.bitwise_xor(expr2)</span></code></p></td>
+<tr class="row-even"><td><p>x ^ y, bitwise_xor(x, y), x.bitxor(y)</p></td>
+<td><p>XOR</p></td>
 </tr>
-<tr class="row-odd"><td><p>bitwise_shift_right</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">bitwise_shift_right(expr1,</span> <span class="pre">expr2)</span></code> or <code class="docutils literal notranslate"><span class="pre">expr1.bitwise_shift_right(expr2)</span></code></p></td>
+<tr class="row-odd"><td><p>x &lt;&lt; y, bitwise_shift_left(x, y), x.shl(y)</p></td>
+<td><p>Left shift</p></td>
 </tr>
-<tr class="row-even"><td><p>bitwise_shift_left</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">bitwise_shift_left(expr1,</span> <span class="pre">expr2)</span></code> or <code class="docutils literal notranslate"><span class="pre">expr1.bitwise_shift_left(expr2)</span></code></p></td>
+<tr class="row-even"><td><p>x &gt;&gt; y, bitwise_shift_right(x, y), x.shr(y)</p></td>
+<td><p>Right shift</p></td>
 </tr>
 </tbody>
 </table>
@@ -570,40 +588,78 @@ available for creating logical expressions. These are documented below.</p>
 <h2>Comparison Expressions<a class="headerlink" href="#comparison-expressions" title="Link to this heading">¶</a></h2>
 <table class="table">
 <thead>
-<tr class="row-odd"><th class="head"><p>Function</p></th>
-<th class="head"><p>Notes</p></th>
+<tr class="row-odd"><th class="head"><p>Syntax</p></th>
+<th class="head"><p>Description</p></th>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>eq</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">expr1.eq(expr2)</span></code></p></td>
+<tr class="row-even"><td><p>x.eq(y)</p></td>
+<td><p>Equal</p></td>
 </tr>
-<tr class="row-odd"><td><p>gt</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">expr1.gt(expr2)</span></code></p></td>
+<tr class="row-odd"><td><p>x.not_eq(y)</p></td>
+<td><p>Not Equal</p></td>
 </tr>
-<tr class="row-even"><td><p>gt_eq</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">expr1.gt_eq(expr2)</span></code></p></td>
+<tr class="row-even"><td><p>x.gt(y)</p></td>
+<td><p>Greater Than</p></td>
 </tr>
-<tr class="row-odd"><td><p>lt</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">expr1.lt(expr2)</span></code></p></td>
+<tr class="row-odd"><td><p>x.gt_eq(y)</p></td>
+<td><p>Greater Than or Equal</p></td>
 </tr>
-<tr class="row-even"><td><p>lt_eq</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">expr1.lt_eq(expr2)</span></code></p></td>
+<tr class="row-even"><td><p>x.lt(y)</p></td>
+<td><p>Less Than</p></td>
 </tr>
-<tr class="row-odd"><td><p>not_eq</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">expr1.not_eq(expr2)</span></code></p></td>
+<tr class="row-odd"><td><p>x.lt_eq(y)</p></td>
+<td><p>Less Than or Equal</p></td>
 </tr>
 </tbody>
 </table>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Comparison operators (<code class="docutils literal notranslate"><span class="pre">&lt;</span></code>, <code class="docutils literal notranslate"><span class="pre">&lt;=</span></code>, <code class="docutils literal notranslate"><span class="pre">==</span></code>, <code class="docutils literal notranslate"><span class="pre">&gt;=</span></code>, <code class="docutils literal notranslate"><span class="pre">&gt;</span></code>) could be overloaded by the <code class="docutils literal notranslate"><span class="pre">PartialOrd</span></code> and <code class="docutils literal notranslate"><span class="pre">PartialEq</span></code> trait in Rust,
+but these operators always return a <code class="docutils literal notranslate"><span class="pre">bool</span></code> which makes them not work with the expression API.</p>
+</div>
+</section>
+<section id="arithmetic-expressions">
+<h2>Arithmetic Expressions<a class="headerlink" href="#arithmetic-expressions" title="Link to this heading">¶</a></h2>
+<table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Syntax</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>x + y, x.add(y)</p></td>
+<td><p>Addition</p></td>
+</tr>
+<tr class="row-odd"><td><p>x - y, x.sub(y)</p></td>
+<td><p>Subtraction</p></td>
+</tr>
+<tr class="row-even"><td><p>x * y, x.mul(y)</p></td>
+<td><p>Multiplication</p></td>
+</tr>
+<tr class="row-odd"><td><p>x / y, x.div(y)</p></td>
+<td><p>Division</p></td>
+</tr>
+<tr class="row-even"><td><p>x % y, x.rem(y)</p></td>
+<td><p>Remainder</p></td>
+</tr>
+<tr class="row-odd"><td><p>-x, x.neg()</p></td>
+<td><p>Negation</p></td>
+</tr>
+</tbody>
+</table>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>In Rust, the keyword <code class="docutils literal notranslate"><span class="pre">mod</span></code> is reserved and cannot be used as an identifier.
+To avoid any conflicts and ensure code completion works smoothly, we use <code class="docutils literal notranslate"><span class="pre">mod_</span></code> instead.</p>
+</div>
 </section>
 <section id="math-functions">
 <h2>Math Functions<a class="headerlink" href="#math-functions" title="Link to this heading">¶</a></h2>
-<p>In addition to the math functions listed here, some Rust operators are implemented for expressions, allowing
-expressions such as <code class="docutils literal notranslate"><span class="pre">col(&quot;a&quot;)</span> <span class="pre">+</span> <span class="pre">col(&quot;b&quot;)</span></code> to be used.</p>
 <table class="table">
 <thead>
-<tr class="row-odd"><th class="head"><p>Function</p></th>
-<th class="head"><p>Notes</p></th>
+<tr class="row-odd"><th class="head"><p>Syntax</p></th>
+<th class="head"><p>Description</p></th>
 </tr>
 </thead>
 <tbody>
@@ -717,62 +773,35 @@ expressions such as <code class="docutils literal notranslate"><span class="pre"
 </tr>
 </tbody>
 </table>
-<section id="math-functions-usage-notes">
-<h3>Math functions usage notes:<a class="headerlink" href="#math-functions-usage-notes" title="Link to this heading">¶</a></h3>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
 <p>Unlike to some databases the math functions in Datafusion works the same way as Rust math functions, avoiding failing on corner cases e.g</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select log(-1), log(0), sqrt(-1);
-+----------------+---------------+-----------------+
-| log(Int64(-1)) | log(Int64(0)) | sqrt(Int64(-1)) |
-+----------------+---------------+-----------------+
-| NaN            | -inf          | NaN             |
-+----------------+---------------+-----------------+
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="err">❯</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">log</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">),</span><span class="w"> </span><span class="n">log</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span><span class="w"> </span><span class="n">sqrt</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">);</span>
+<span class="o">+</span><span class="c1">----------------+---------------+-----------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">log</span><span class="p">(</span><span class="n">Int64</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">))</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">log</span><span class="p">(</span><span class="n">Int64</span><span class="p">(</span><span class="mi">0</span><span class="p">))</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">sqrt</span><span class="p">(</span><span class="n">Int64</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------+---------------+-----------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">NaN</span><span class="w">            </span><span class="o">|</span><span class="w"> </span><span class="o">-</span><span class="n">inf</span><span class="w">          </span><span class="o">|</span><span class="w"> </span><span class="n">NaN</span><span class="w">             </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------+---------------+-----------------+</span>
 </pre></div>
 </div>
-</section>
-</section>
-<section id="bitwise-operators">
-<h2>Bitwise Operators<a class="headerlink" href="#bitwise-operators" title="Link to this heading">¶</a></h2>
-<table class="table">
-<thead>
-<tr class="row-odd"><th class="head"><p>Operator</p></th>
-<th class="head"><p>Notes</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p>&amp;</p></td>
-<td><p>Bitwise AND =&gt; <code class="docutils literal notranslate"><span class="pre">(expr1</span> <span class="pre">&amp;</span> <span class="pre">expr2)</span></code></p></td>
-</tr>
-<tr class="row-odd"><td><p>|</p></td>
-<td><p>Bitwise OR =&gt; <code>(expr1 | expr2)</code></p></td>
-</tr>
-<tr class="row-even"><td><p>#</p></td>
-<td><p>Bitwise XOR =&gt; <code class="docutils literal notranslate"><span class="pre">(expr1</span> <span class="pre">#</span> <span class="pre">expr2)</span></code></p></td>
-</tr>
-<tr class="row-odd"><td><p>&lt;&lt;</p></td>
-<td><p>Bitwise left shift =&gt; <code class="docutils literal notranslate"><span class="pre">(expr1</span> <span class="pre">&lt;&lt;</span> <span class="pre">expr2)</span></code></p></td>
-</tr>
-<tr class="row-even"><td><p>&gt;&gt;</p></td>
-<td><p>Bitwise right shift =&gt; <code class="docutils literal notranslate"><span class="pre">(expr1</span> <span class="pre">&lt;&lt;</span> <span class="pre">expr2)</span></code></p></td>
-</tr>
-</tbody>
-</table>
+</div>
 </section>
 <section id="conditional-expressions">
 <h2>Conditional Expressions<a class="headerlink" href="#conditional-expressions" title="Link to this heading">¶</a></h2>
 <table class="table">
 <thead>
-<tr class="row-odd"><th class="head"><p>Function</p></th>
-<th class="head"><p>Notes</p></th>
+<tr class="row-odd"><th class="head"><p>Syntax</p></th>
+<th class="head"><p>Description</p></th>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>coalesce</p></td>
+<tr class="row-even"><td><p>coalesce([value, …])</p></td>
 <td><p>Returns the first of its arguments that is not null. Null is returned only if all arguments are null. It is often used to substitute a default value for null values when data is retrieved for display.</p></td>
 </tr>
-<tr class="row-odd"><td><p>case</p></td>
+<tr class="row-odd"><td><p>case(expr)</br>    .when(expr)</br>    .end(),</br>case(expr)</br>    .when(expr)</br>    .otherwise(expr)</p></td>
 <td><p>CASE expression. The expression may chain multiple <code class="docutils literal notranslate"><span class="pre">when</span></code> expressions and end with an <code class="docutils literal notranslate"><span class="pre">end</span></code> or <code class="docutils literal notranslate"><span class="pre">otherwise</span></code> expression. Example:</br> <pre><code>case(col(“a”) % lit(3))</br>    .when(lit(0), lit(“A”))</br>    .when(lit(1), lit(“B”))</br>    .when(lit(2), lit(“C”))</br>    .end()</code></pre>or, end with <code class="docutils literal notranslate"><span class="pre">otherwise</span></code> to match any other conditions: <pre><code>case(col(“b”).gt(lit(100)))</br>    .when(lit(true), lit(“value &gt; 100”))</br>    .otherwise(lit(“value &lt;= 100”))</code></pre></p></td>
 </tr>
-<tr class="row-even"><td><p>nullif</p></td>
+<tr class="row-even"><td><p>nullif(value1, value2)</p></td>
 <td><p>Returns a null value if <code class="docutils literal notranslate"><span class="pre">value1</span></code> equals <code class="docutils literal notranslate"><span class="pre">value2</span></code>; otherwise it returns <code class="docutils literal notranslate"><span class="pre">value1</span></code>. This can be used to perform the inverse operation of the <code class="docutils literal notranslate"><span class="pre">coalesce</span></code> expression.</p></td>
 </tr>
 </tbody>
@@ -782,8 +811,8 @@ expressions such as <code class="docutils literal notranslate"><span class="pre"
 <h2>String Expressions<a class="headerlink" href="#string-expressions" title="Link to this heading">¶</a></h2>
 <table class="table">
 <thead>
-<tr class="row-odd"><th class="head"><p>Function</p></th>
-<th class="head"><p>Notes</p></th>
+<tr class="row-odd"><th class="head"><p>Syntax</p></th>
+<th class="head"><p>Description</p></th>
 </tr>
 </thead>
 <tbody>
@@ -884,8 +913,8 @@ expressions such as <code class="docutils literal notranslate"><span class="pre"
 <h2>Array Expressions<a class="headerlink" href="#array-expressions" title="Link to this heading">¶</a></h2>
 <table class="table">
 <thead>
-<tr class="row-odd"><th class="head"><p>Function</p></th>
-<th class="head"><p>Notes</p></th>
+<tr class="row-odd"><th class="head"><p>Syntax</p></th>
+<th class="head"><p>Description</p></th>
 </tr>
 </thead>
 <tbody>
@@ -974,8 +1003,8 @@ expressions such as <code class="docutils literal notranslate"><span class="pre"
 <h2>Regular Expressions<a class="headerlink" href="#regular-expressions" title="Link to this heading">¶</a></h2>
 <table class="table">
 <thead>
-<tr class="row-odd"><th class="head"><p>Function</p></th>
-<th class="head"><p>Notes</p></th>
+<tr class="row-odd"><th class="head"><p>Syntax</p></th>
+<th class="head"><p>Description</p></th>
 </tr>
 </thead>
 <tbody>
@@ -992,8 +1021,8 @@ expressions such as <code class="docutils literal notranslate"><span class="pre"
 <h2>Temporal Expressions<a class="headerlink" href="#temporal-expressions" title="Link to this heading">¶</a></h2>
 <table class="table">
 <thead>
-<tr class="row-odd"><th class="head"><p>Function</p></th>
-<th class="head"><p>Notes</p></th>
+<tr class="row-odd"><th class="head"><p>Syntax</p></th>
+<th class="head"><p>Description</p></th>
 </tr>
 </thead>
 <tbody>
@@ -1028,8 +1057,8 @@ expressions such as <code class="docutils literal notranslate"><span class="pre"
 <h2>Other Expressions<a class="headerlink" href="#other-expressions" title="Link to this heading">¶</a></h2>
 <table class="table">
 <thead>
-<tr class="row-odd"><th class="head"><p>Function</p></th>
-<th class="head"><p>Notes</p></th>
+<tr class="row-odd"><th class="head"><p>Syntax</p></th>
+<th class="head"><p>Description</p></th>
 </tr>
 </thead>
 <tbody>
@@ -1064,8 +1093,8 @@ expressions such as <code class="docutils literal notranslate"><span class="pre"
 <h2>Aggregate Functions<a class="headerlink" href="#aggregate-functions" title="Link to this heading">¶</a></h2>
 <table class="table">
 <thead>
-<tr class="row-odd"><th class="head"><p>Function</p></th>
-<th class="head"><p>Notes</p></th>
+<tr class="row-odd"><th class="head"><p>Syntax</p></th>
+<th class="head"><p>Description</p></th>
 </tr>
 </thead>
 <tbody>
@@ -1133,8 +1162,8 @@ expressions such as <code class="docutils literal notranslate"><span class="pre"
 <h2>Subquery Expressions<a class="headerlink" href="#subquery-expressions" title="Link to this heading">¶</a></h2>
 <table class="table">
 <thead>
-<tr class="row-odd"><th class="head"><p>Function</p></th>
-<th class="head"><p>Notes</p></th>
+<tr class="row-odd"><th class="head"><p>Syntax</p></th>
+<th class="head"><p>Description</p></th>
 </tr>
 </thead>
 <tbody>
@@ -1160,8 +1189,8 @@ expressions such as <code class="docutils literal notranslate"><span class="pre"
 <h2>User-Defined Function Expressions<a class="headerlink" href="#user-defined-function-expressions" title="Link to this heading">¶</a></h2>
 <table class="table">
 <thead>
-<tr class="row-odd"><th class="head"><p>Function</p></th>
-<th class="head"><p>Notes</p></th>
+<tr class="row-odd"><th class="head"><p>Syntax</p></th>
+<th class="head"><p>Description</p></th>
 </tr>
 </thead>
 <tbody>
