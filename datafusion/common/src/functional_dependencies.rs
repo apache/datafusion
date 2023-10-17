@@ -25,6 +25,7 @@ use std::vec::IntoIter;
 
 use crate::{DFSchema, DFSchemaRef, DataFusionError, JoinType, Result};
 
+use crate::utils::{merge_and_order_indices, set_difference};
 use sqlparser::ast::TableConstraint;
 
 /// This object defines a constraint on a table.
@@ -542,6 +543,60 @@ pub fn get_target_functional_dependencies(
         res.sort();
         res
     })
+}
+
+/// Returns indices of group by exprs that is functionally equivalent to the argument but simpler.
+pub fn get_required_group_by_exprs_indices(
+    schema: &DFSchema,
+    group_by_expr_names: &[String],
+) -> Option<Vec<usize>> {
+    let dependencies = schema.functional_dependencies();
+    let field_names = schema
+        .fields()
+        .iter()
+        .map(|item| item.qualified_name())
+        .collect::<Vec<_>>();
+    let groupby_expr_indices = group_by_expr_names
+        .iter()
+        .map(|group_by_expr_name| {
+            field_names
+                .iter()
+                .position(|field_name| field_name == group_by_expr_name)
+        })
+        .collect::<Option<Vec<_>>>();
+    if let Some(mut indices) = groupby_expr_indices {
+        indices.sort();
+        for FunctionalDependence {
+            source_indices,
+            target_indices,
+            ..
+        } in &dependencies.deps
+        {
+            // All of the source indices is among indices.
+            if source_indices
+                .iter()
+                .all(|source_idx| indices.contains(source_idx))
+            {
+                // We can remove target indices from indices, then use source_indices instead.
+                indices = set_difference(&indices, target_indices);
+                indices = merge_and_order_indices(indices, source_indices);
+            }
+        }
+        if let Some(group_by_used_indices) = indices
+            .iter()
+            .map(|idx| {
+                group_by_expr_names.iter().position(|group_by_expr_name| {
+                    &field_names[*idx] == group_by_expr_name
+                })
+            })
+            .collect::<Option<Vec<_>>>()
+        {
+            if !group_by_used_indices.is_empty() {
+                return Some(group_by_used_indices);
+            }
+        }
+    }
+    None
 }
 
 /// Updates entries inside the `entries` vector with their corresponding

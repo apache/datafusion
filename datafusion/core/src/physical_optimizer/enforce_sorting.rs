@@ -2369,4 +2369,62 @@ mod tests {
 //         // assert_eq!(0, 1);
 //         Ok(())
 //     }
+//
+//     #[tokio::test]
+//     async fn test_subquery3() -> Result<()> {
+//         let config = SessionConfig::new().with_target_partitions(1);
+//         // config.options_mut().optimizer.max_passes = 1;
+//         let ctx = SessionContext::new_with_config(config);
+//         ctx.sql(
+//             "CREATE EXTERNAL TABLE multiple_ordered_table_with_pk (
+//               a0 INTEGER,
+//               a INTEGER,
+//               b INTEGER,
+//               c INTEGER,
+//               d INTEGER,
+//               primary key(c)
+//             )
+//             STORED AS CSV
+//             WITH HEADER ROW
+//             WITH ORDER (a ASC, b ASC)
+//             WITH ORDER (c ASC)
+//             LOCATION '../core/tests/data/window_2.csv'",
+//         )
+//         .await?;
+//
+//         let sql = "SELECT a, b, sum1
+//         FROM (SELECT c, b, a, SUM(d) as sum1
+//            FROM multiple_ordered_table_with_pk
+//            GROUP BY c)
+//         DISTRIBUTE BY a";
+//
+//         let msg = format!("Creating logical plan for '{sql}'");
+//         let dataframe = ctx.sql(sql).await.expect(&msg);
+//         let physical_plan = dataframe.create_physical_plan().await?;
+//         print_plan(&physical_plan)?;
+//
+//         let expected = vec![
+//             "ProjectionExec: expr=[c@0 as c, c@3 as c, sum1@2 as sum1, sum1@5 as sum1]",
+//             "  CoalesceBatchesExec: target_batch_size=8192",
+//             "    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(b@1, b@1)]",
+//             "      ProjectionExec: expr=[c@0 as c, b@1 as b, SUM(multiple_ordered_table_with_pk.d)@2 as sum1]",
+//             "        AggregateExec: mode=Single, gby=[c@1 as c, b@0 as b], aggr=[SUM(multiple_ordered_table_with_pk.d)], ordering_mode=PartiallyOrdered",
+//             "          CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[b, c, d], output_ordering=[c@1 ASC NULLS LAST], has_header=true",
+//             "      ProjectionExec: expr=[c@0 as c, b@1 as b, SUM(multiple_ordered_table_with_pk.d)@2 as sum1]",
+//             "        AggregateExec: mode=Single, gby=[c@1 as c, b@0 as b], aggr=[SUM(multiple_ordered_table_with_pk.d)], ordering_mode=PartiallyOrdered",
+//             "          CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[b, c, d], output_ordering=[c@1 ASC NULLS LAST], has_header=true",
+//         ];
+//         // Get string representation of the plan
+//         let actual = get_plan_string(&physical_plan);
+//         assert_eq!(
+//             expected, actual,
+//             "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+//         );
+//
+//         let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+//         print_batches(&batches)?;
+//
+//         // assert_eq!(0, 1);
+//         Ok(())
+//     }
 // }

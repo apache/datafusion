@@ -3812,3 +3812,17 @@ ProjectionExec: expr=[c@0 as c, c@2 as c, sum1@1 as sum1, sum1@3 as sum1]
 ----ProjectionExec: expr=[c@0 as c, SUM(multiple_ordered_table_with_pk.d)@1 as sum1]
 ------AggregateExec: mode=Single, gby=[c@0 as c], aggr=[SUM(multiple_ordered_table_with_pk.d)], ordering_mode=FullyOrdered
 --------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c, d], output_ordering=[c@0 ASC NULLS LAST], has_header=true
+
+# we do not generate physical plan for Repartition yet (e.g Distribute By queries).
+query TT
+EXPLAIN SELECT a, b, sum1
+FROM (SELECT c, b, a, SUM(d) as sum1
+   FROM multiple_ordered_table_with_pk
+   GROUP BY c)
+DISTRIBUTE BY a
+----
+logical_plan
+Repartition: DistributeBy(a)
+--Projection: multiple_ordered_table_with_pk.a, multiple_ordered_table_with_pk.b, SUM(multiple_ordered_table_with_pk.d) AS sum1
+----Aggregate: groupBy=[[multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.a, multiple_ordered_table_with_pk.b]], aggr=[[SUM(CAST(multiple_ordered_table_with_pk.d AS Int64))]]
+------TableScan: multiple_ordered_table_with_pk projection=[a, b, c, d]

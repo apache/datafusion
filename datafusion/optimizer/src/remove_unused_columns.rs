@@ -19,8 +19,8 @@
 //! This saves time in planning and executing the query.
 //! Note that this rule should be applied after simplify expressions optimizer rule.
 use crate::optimizer::ApplyOrder;
-use datafusion_common::{get_target_functional_dependencies, Result};
-use datafusion_expr::{logical_plan::LogicalPlan, Aggregate, Expr};
+use datafusion_common::{get_required_group_by_exprs_indices, Result};
+use datafusion_expr::{logical_plan::LogicalPlan, Aggregate, Expr, Partitioning};
 use itertools::izip;
 use std::sync::Arc;
 
@@ -143,28 +143,19 @@ fn try_optimize_internal(
             Some(vec![new_indices])
         }
         LogicalPlan::Aggregate(aggregate) => {
-            let group_bys_used = get_at_indices(&aggregate.group_expr, &indices);
-            let group_by_expr_names_used = group_bys_used
-                .iter()
-                .map(|group_by_expr| group_by_expr.display_name())
-                .collect::<Result<Vec<_>>>()?;
             let group_by_expr_existing = aggregate
                 .group_expr
                 .iter()
                 .map(|group_by_expr| group_by_expr.display_name())
                 .collect::<Result<Vec<_>>>()?;
-            let used_target_indices = get_target_functional_dependencies(
-                aggregate.input.schema(),
-                &group_by_expr_names_used,
-            );
-            let existing_target_indices = get_target_functional_dependencies(
+            if let Some(simplest_groupby_indices) = get_required_group_by_exprs_indices(
                 aggregate.input.schema(),
                 &group_by_expr_existing,
-            );
-            // Can simplify aggregate group by
-            if (used_target_indices == existing_target_indices)
-                && used_target_indices.is_some()
-            {
+            ) {
+                let required_indices = merge_vectors(&simplest_groupby_indices, &indices);
+                let group_bys_used =
+                    get_at_indices(&aggregate.group_expr, &required_indices);
+
                 let mut all_exprs = group_bys_used.clone();
                 all_exprs.extend(aggregate.aggr_expr.clone());
                 let necessary_indices =
@@ -227,9 +218,19 @@ fn try_optimize_internal(
             let (left_child_indices, right_child_indices) =
                 split_join_requirement_indices_to_children(left_len, &indices);
             Some(vec![left_child_indices, right_child_indices])
-        },
+        }
         LogicalPlan::Repartition(repartition) => {
-            // repartition 
+            // Repartition refers to these indices
+            let exprs_used =
+                if let Partitioning::Hash(exprs, _) = &repartition.partitioning_scheme {
+                    exprs.as_slice()
+                } else {
+                    &[]
+                };
+            let referred_indices = get_referred_indices(&repartition.input, exprs_used)?;
+            // required indices from parent propagated directly.
+            let required_indices = merge_vectors(&indices, &referred_indices);
+            Some(vec![required_indices])
         }
         // SubqueryAlias alias can route requirement for its parent to its child
         LogicalPlan::SubqueryAlias(_) => Some(vec![indices]),
