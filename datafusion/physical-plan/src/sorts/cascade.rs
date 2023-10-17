@@ -34,11 +34,12 @@ pub(crate) struct SortPreservingCascadeStream {
     /// If the stream has encountered an error, or fetch is reached
     aborted: bool,
 
+    /// The sorted input streams to merge together
+    /// TODO: this will become the root of the cascade tree
+    cascade: SendableRecordBatchStream,
+
     /// used to record execution metrics
     metrics: BaselineMetrics,
-
-    /// The sorted input streams to merge together
-    streams: SendableRecordBatchStream,
 
     /// The schema of the RecordBatches yielded by this stream
     schema: SchemaRef,
@@ -57,7 +58,7 @@ impl SortPreservingCascadeStream {
             aborted: false,
             metrics: metrics.clone(),
             schema: schema.clone(),
-            streams: Box::pin(SortPreservingMergeStream::new(
+            cascade: Box::pin(SortPreservingMergeStream::new(
                 streams,
                 schema,
                 metrics,
@@ -76,7 +77,7 @@ impl SortPreservingCascadeStream {
             return Poll::Ready(None);
         }
 
-        match ready!(self.streams.as_mut().poll_next(cx)) {
+        match ready!(self.cascade.as_mut().poll_next(cx)) {
             None => Poll::Ready(None),
             Some(Err(e)) => {
                 self.aborted = true;
