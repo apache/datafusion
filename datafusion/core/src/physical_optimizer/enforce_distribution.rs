@@ -48,7 +48,6 @@ use crate::physical_plan::{
 };
 
 use arrow::compute::SortOptions;
-use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_expr::logical_plan::JoinType;
 use datafusion_physical_expr::equivalence::EquivalenceProperties;
@@ -1291,11 +1290,11 @@ fn ensure_distribution(
             child_idx,
         )| {
             // Don't need to apply when the returned row count is not greater than 1:
-            let stats = child.statistics()?;
-            let repartition_beneficial_stats = if stats.is_exact {
-                stats
-                    .num_rows
-                    .map(|num_rows| num_rows > batch_size)
+            let num_rows = child.statistics()?.num_rows;
+            let repartition_beneficial_stats = if num_rows.is_exact().unwrap_or(false) {
+                num_rows
+                    .get_value()
+                    .map(|value| value > &batch_size)
                     .unwrap_or(true)
             } else {
                 true
