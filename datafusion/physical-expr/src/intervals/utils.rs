@@ -17,13 +17,13 @@
 
 //! Utility functions for the interval arithmetic library
 
-use super::{Interval, IntervalBound};
 use crate::{
     expressions::{BinaryExpr, CastExpr, Column, Literal, NegativeExpr},
     PhysicalExpr,
 };
 use arrow_schema::{DataType, SchemaRef};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_expr::interval_aritmetic::{Interval, IntervalBound};
 use datafusion_expr::Operator;
 
 use std::sync::Arc;

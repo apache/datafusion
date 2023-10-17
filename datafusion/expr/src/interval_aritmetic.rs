@@ -17,19 +17,19 @@
 
 //! Interval arithmetic library
 
-use crate::aggregate::min_max::{max, min};
-use crate::intervals::rounding::{alter_fp_rounding_mode, next_down, next_up};
 use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::DataType;
 use arrow_array::ArrowNativeTypeOp;
+use datafusion_common::rounding::{alter_fp_rounding_mode, next_down, next_up};
 use datafusion_common::{exec_err, internal_err, DataFusionError, Result, ScalarValue};
-use datafusion_expr::type_coercion::binary::get_result_type;
-use datafusion_expr::Operator;
 
 use std::borrow::Borrow;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::ops::{AddAssign, SubAssign};
+
+use crate::type_coercion::binary::get_result_type;
+use crate::Operator;
 
 /// This type represents a single endpoint of an [`Interval`]. An
 /// endpoint can be open (does not include the endpoint) or closed
@@ -148,31 +148,6 @@ impl IntervalBound {
         }
         .map(|v| IntervalBound::new(v, self.open || rhs.open))
     }
-
-    /// This function chooses one of the given `IntervalBound`s according to
-    /// the given function `decide`. The result is unbounded if both are. If
-    /// only one of the arguments is unbounded, the other one is chosen by
-    /// default. If neither is unbounded, the function `decide` is used.
-    pub fn choose(
-        first: &IntervalBound,
-        second: &IntervalBound,
-        decide: fn(&ScalarValue, &ScalarValue) -> Result<ScalarValue>,
-    ) -> Result<IntervalBound> {
-        Ok(if first.is_unbounded() {
-            second.clone()
-        } else if second.is_unbounded() {
-            first.clone()
-        } else if first.value != second.value {
-            let chosen = decide(&first.value, &second.value)?;
-            if chosen.eq(&first.value) {
-                first.clone()
-            } else {
-                second.clone()
-            }
-        } else {
-            IntervalBound::new(second.value.clone(), first.open || second.open)
-        })
-    }
 }
 
 impl Display for IntervalBound {
@@ -289,7 +264,7 @@ impl Interval {
     }
 
     /// Casts this interval to `data_type` using `cast_options`.
-    pub(crate) fn cast_to(
+    pub fn cast_to(
         &self,
         data_type: &DataType,
         cast_options: &CastOptions,
@@ -450,10 +425,7 @@ impl Interval {
 
     /// Compute the intersection of the interval with the given interval.
     /// If the intersection is empty, return None.
-    pub(crate) fn intersect<T: Borrow<Interval>>(
-        &self,
-        other: T,
-    ) -> Result<Option<Interval>> {
+    pub fn intersect<T: Borrow<Interval>>(&self, other: T) -> Result<Option<Interval>> {
         let rhs = other.borrow();
         // If it is evident that the result is an empty interval,
         // do not make any calculation and directly return None.
@@ -468,8 +440,8 @@ impl Interval {
             return Ok(None);
         }
 
-        let lower = IntervalBound::choose(&self.lower, &rhs.lower, max)?;
-        let upper = IntervalBound::choose(&self.upper, &rhs.upper, min)?;
+        let lower = intersected_lower_bounds(&self.lower, &rhs.lower);
+        let upper = intersected_upper_bounds(&self.upper, &rhs.upper);
 
         let non_empty = lower.is_unbounded()
             || upper.is_unbounded()
@@ -612,6 +584,46 @@ impl Interval {
     }
 }
 
+// Returns the greater one of two lower interval bounds.
+fn intersected_lower_bounds(
+    first: &IntervalBound,
+    second: &IntervalBound,
+) -> IntervalBound {
+    if first.is_unbounded() {
+        second.clone()
+    } else if second.is_unbounded() {
+        first.clone()
+    } else if first.value != second.value {
+        if first.value >= second.value {
+            first.clone()
+        } else {
+            second.clone()
+        }
+    } else {
+        IntervalBound::new(first.value.clone(), first.open || second.open)
+    }
+}
+
+// Returns the lesser one of two upper interval bounds.
+fn intersected_upper_bounds(
+    first: &IntervalBound,
+    second: &IntervalBound,
+) -> IntervalBound {
+    if first.is_unbounded() {
+        second.clone()
+    } else if second.is_unbounded() {
+        first.clone()
+    } else if first.value != second.value {
+        if first.value >= second.value {
+            second.clone()
+        } else {
+            first.clone()
+        }
+    } else {
+        IntervalBound::new(first.value.clone(), first.open || second.open)
+    }
+}
+
 trait OneTrait: Sized + std::ops::Add + std::ops::Sub {
     fn one() -> Self;
 }
@@ -745,8 +757,8 @@ fn calculate_cardinality_based_on_bounds(
 ///
 /// ```
 /// use arrow::datatypes::DataType;
-/// use datafusion_physical_expr::intervals::{Interval, NullableInterval};
 /// use datafusion_common::ScalarValue;
+/// use datafusion_expr::interval_aritmetic::{Interval, NullableInterval};
 ///
 /// // [1, 2) U {NULL}
 /// NullableInterval::MaybeNull {
@@ -874,7 +886,7 @@ impl NullableInterval {
     /// ```
     /// use datafusion_common::ScalarValue;
     /// use datafusion_expr::Operator;
-    /// use datafusion_physical_expr::intervals::{Interval, NullableInterval};
+    /// use datafusion_expr::interval_aritmetic::{Interval, NullableInterval};
     ///
     /// // 4 > 3 -> true
     /// let lhs = NullableInterval::from(ScalarValue::Int32(Some(4)));
@@ -985,7 +997,7 @@ impl NullableInterval {
     ///
     /// ```
     /// use datafusion_common::ScalarValue;
-    /// use datafusion_physical_expr::intervals::{Interval, NullableInterval};
+    /// use datafusion_expr::interval_aritmetic::{Interval, NullableInterval};
     ///
     /// let interval = NullableInterval::from(ScalarValue::Int32(Some(4)));
     /// assert_eq!(interval.single_value(), Some(ScalarValue::Int32(Some(4))));
@@ -1016,10 +1028,11 @@ impl NullableInterval {
 
 #[cfg(test)]
 mod tests {
-    use super::next_value;
-    use crate::intervals::{Interval, IntervalBound};
+    use crate::interval_aritmetic::IntervalBound;
 
-    use arrow_schema::DataType;
+    use super::{next_value, Interval};
+
+    use arrow::datatypes::DataType;
     use datafusion_common::{Result, ScalarValue};
 
     fn open_open<T>(lower: Option<T>, upper: Option<T>) -> Interval
@@ -1607,81 +1620,6 @@ mod tests {
         }
     }
 
-    macro_rules! capture_mode_change {
-        ($TYPE:ty) => {
-            paste::item! {
-                capture_mode_change_helper!([<capture_mode_change_ $TYPE>],
-                                            [<create_interval_ $TYPE>],
-                                            $TYPE);
-            }
-        };
-    }
-
-    macro_rules! capture_mode_change_helper {
-        ($TEST_FN_NAME:ident, $CREATE_FN_NAME:ident, $TYPE:ty) => {
-            fn $CREATE_FN_NAME(lower: $TYPE, upper: $TYPE) -> Interval {
-                Interval::make(Some(lower as $TYPE), Some(upper as $TYPE), (true, true))
-            }
-
-            fn $TEST_FN_NAME(input: ($TYPE, $TYPE), expect_low: bool, expect_high: bool) {
-                assert!(expect_low || expect_high);
-                let interval1 = $CREATE_FN_NAME(input.0, input.0);
-                let interval2 = $CREATE_FN_NAME(input.1, input.1);
-                let result = interval1.add(&interval2).unwrap();
-                let without_fe = $CREATE_FN_NAME(input.0 + input.1, input.0 + input.1);
-                assert!(
-                    (!expect_low || result.lower.value < without_fe.lower.value)
-                        && (!expect_high || result.upper.value > without_fe.upper.value)
-                );
-            }
-        };
-    }
-
-    capture_mode_change!(f32);
-    capture_mode_change!(f64);
-
-    #[cfg(all(
-        any(target_arch = "x86_64", target_arch = "aarch64"),
-        not(target_os = "windows")
-    ))]
-    #[test]
-    fn test_add_intervals_lower_affected_f32() {
-        // Lower is affected
-        let lower = f32::from_bits(1073741887); //1000000000000000000000000111111
-        let upper = f32::from_bits(1098907651); //1000001100000000000000000000011
-        capture_mode_change_f32((lower, upper), true, false);
-
-        // Upper is affected
-        let lower = f32::from_bits(1072693248); //111111111100000000000000000000
-        let upper = f32::from_bits(715827883); //101010101010101010101010101011
-        capture_mode_change_f32((lower, upper), false, true);
-
-        // Lower is affected
-        let lower = 1.0; // 0x3FF0000000000000
-        let upper = 0.3; // 0x3FD3333333333333
-        capture_mode_change_f64((lower, upper), true, false);
-
-        // Upper is affected
-        let lower = 1.4999999999999998; // 0x3FF7FFFFFFFFFFFF
-        let upper = 0.000_000_000_000_000_022_044_604_925_031_31; // 0x3C796A6B413BB21F
-        capture_mode_change_f64((lower, upper), false, true);
-    }
-
-    #[cfg(any(
-        not(any(target_arch = "x86_64", target_arch = "aarch64")),
-        target_os = "windows"
-    ))]
-    #[test]
-    fn test_next_impl_add_intervals_f64() {
-        let lower = 1.5;
-        let upper = 1.5;
-        capture_mode_change_f64((lower, upper), true, true);
-
-        let lower = 1.5;
-        let upper = 1.5;
-        capture_mode_change_f32((lower, upper), true, true);
-    }
-
     #[test]
     fn test_cardinality_of_intervals() -> Result<()> {
         // In IEEE 754 standard for floating-point arithmetic, if we keep the sign and exponent fields same,
@@ -1847,5 +1785,80 @@ mod tests {
             IntervalBound::new(ScalarValue::from(0.50_f32), false),
         );
         assert_eq!(format!("{}", interval), "[0.25, 0.5]");
+    }
+
+    macro_rules! capture_mode_change {
+        ($TYPE:ty) => {
+            paste::item! {
+                capture_mode_change_helper!([<capture_mode_change_ $TYPE>],
+                                            [<create_interval_ $TYPE>],
+                                            $TYPE);
+            }
+        };
+    }
+
+    macro_rules! capture_mode_change_helper {
+        ($TEST_FN_NAME:ident, $CREATE_FN_NAME:ident, $TYPE:ty) => {
+            fn $CREATE_FN_NAME(lower: $TYPE, upper: $TYPE) -> Interval {
+                Interval::make(Some(lower as $TYPE), Some(upper as $TYPE), (true, true))
+            }
+
+            fn $TEST_FN_NAME(input: ($TYPE, $TYPE), expect_low: bool, expect_high: bool) {
+                assert!(expect_low || expect_high);
+                let interval1 = $CREATE_FN_NAME(input.0, input.0);
+                let interval2 = $CREATE_FN_NAME(input.1, input.1);
+                let result = interval1.add(&interval2).unwrap();
+                let without_fe = $CREATE_FN_NAME(input.0 + input.1, input.0 + input.1);
+                assert!(
+                    (!expect_low || result.lower.value < without_fe.lower.value)
+                        && (!expect_high || result.upper.value > without_fe.upper.value)
+                );
+            }
+        };
+    }
+
+    capture_mode_change!(f32);
+    capture_mode_change!(f64);
+
+    #[cfg(all(
+        any(target_arch = "x86_64", target_arch = "aarch64"),
+        not(target_os = "windows")
+    ))]
+    #[test]
+    fn test_add_intervals_lower_affected_f32() {
+        // Lower is affected
+        let lower = f32::from_bits(1073741887); //1000000000000000000000000111111
+        let upper = f32::from_bits(1098907651); //1000001100000000000000000000011
+        capture_mode_change_f32((lower, upper), true, false);
+
+        // Upper is affected
+        let lower = f32::from_bits(1072693248); //111111111100000000000000000000
+        let upper = f32::from_bits(715827883); //101010101010101010101010101011
+        capture_mode_change_f32((lower, upper), false, true);
+
+        // Lower is affected
+        let lower = 1.0; // 0x3FF0000000000000
+        let upper = 0.3; // 0x3FD3333333333333
+        capture_mode_change_f64((lower, upper), true, false);
+
+        // Upper is affected
+        let lower = 1.4999999999999998; // 0x3FF7FFFFFFFFFFFF
+        let upper = 0.000_000_000_000_000_022_044_604_925_031_31; // 0x3C796A6B413BB21F
+        capture_mode_change_f64((lower, upper), false, true);
+    }
+
+    #[cfg(any(
+        not(any(target_arch = "x86_64", target_arch = "aarch64")),
+        target_os = "windows"
+    ))]
+    #[test]
+    fn test_next_impl_add_intervals_f64() {
+        let lower = 1.5;
+        let upper = 1.5;
+        capture_mode_change_f64((lower, upper), true, true);
+
+        let lower = 1.5;
+        let upper = 1.5;
+        capture_mode_change_f32((lower, upper), true, true);
     }
 }

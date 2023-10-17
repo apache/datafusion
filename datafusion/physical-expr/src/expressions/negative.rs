@@ -17,7 +17,6 @@
 
 //! Negation (-) expression
 
-use crate::intervals::Interval;
 use crate::physical_expr::down_cast_any_ref;
 use crate::sort_properties::SortProperties;
 use crate::PhysicalExpr;
@@ -27,6 +26,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_expr::interval_aritmetic::Interval;
 use datafusion_expr::{
     type_coercion::{is_interval, is_null, is_signed_numeric},
     ColumnarValue,
@@ -167,10 +167,7 @@ pub fn negative(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        expressions::{col, Column},
-        intervals::Interval,
-    };
+    use crate::expressions::{col, Column};
     #[allow(unused_imports)]
     use arrow::array::*;
     use arrow::datatypes::*;

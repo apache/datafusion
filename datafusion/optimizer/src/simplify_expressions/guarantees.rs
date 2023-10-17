@@ -19,10 +19,12 @@
 //!
 //! [`ExprSimplifier::with_guarantees()`]: crate::simplify_expressions::expr_simplifier::ExprSimplifier::with_guarantees
 use datafusion_common::{tree_node::TreeNodeRewriter, DataFusionError, Result};
-use datafusion_expr::{expr::InList, lit, Between, BinaryExpr, Expr};
+use datafusion_expr::{
+    expr::InList,
+    interval_aritmetic::{Interval, IntervalBound, NullableInterval},
+    lit, Between, BinaryExpr, Expr,
+};
 use std::collections::HashMap;
-
-use datafusion_physical_expr::intervals::{Interval, IntervalBound, NullableInterval};
 
 /// Rewrite expressions to incorporate guarantees.
 ///

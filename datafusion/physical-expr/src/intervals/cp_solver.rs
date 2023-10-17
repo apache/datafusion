@@ -24,14 +24,12 @@ use std::sync::Arc;
 use super::utils::{
     convert_duration_type_to_interval, convert_interval_type_to_duration, get_inverse_op,
 };
-use super::IntervalBound;
 use crate::expressions::Literal;
-use crate::intervals::interval_aritmetic::{apply_operator, Interval};
 use crate::utils::{build_dag, ExprTreeNode};
 use crate::PhysicalExpr;
-
 use arrow_schema::DataType;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_expr::interval_aritmetic::{apply_operator, Interval, IntervalBound};
 use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::Operator;
 
@@ -469,8 +467,9 @@ impl ExprIntervalGraph {
     ///  use std::sync::Arc;
     ///  use datafusion_common::ScalarValue;
     ///  use datafusion_expr::Operator;
+    ///  use datafusion_expr::interval_aritmetic::{Interval, IntervalBound};
     ///  use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
-    ///  use datafusion_physical_expr::intervals::{Interval, IntervalBound, ExprIntervalGraph};
+    ///  use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
     ///  use datafusion_physical_expr::PhysicalExpr;
     ///  let expr = Arc::new(BinaryExpr::new(
     ///             Arc::new(Column::new("gnz", 0)),

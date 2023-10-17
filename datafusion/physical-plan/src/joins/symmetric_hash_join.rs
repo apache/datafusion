@@ -66,7 +66,7 @@ use datafusion_common::{internal_err, plan_err, JoinType};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::intervals::ExprIntervalGraph;
+use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
 
 use crate::joins::utils::prepare_sorted_exprs;
 use ahash::RandomState;

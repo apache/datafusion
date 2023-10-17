@@ -44,6 +44,7 @@ use datafusion_common::{
     exec_err, plan_err, DataFusionError, JoinType, Result, ScalarValue, SharedResult,
 };
 use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
 use datafusion_physical_expr::{
     add_offset_to_lex_ordering, EquivalentClass, LexOrdering, LexOrderingRef,
     OrderingEquivalenceProperties, OrderingEquivalentClass, PhysicalExpr,
@@ -51,7 +52,6 @@ use datafusion_physical_expr::{
 };
 
 use crate::joins::hash_join_utils::{build_filter_input_order, SortedFilterExpr};
-use datafusion_physical_expr::intervals::ExprIntervalGraph;
 use datafusion_physical_expr::utils::merge_vectors;
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};

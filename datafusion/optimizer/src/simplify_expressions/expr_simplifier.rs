@@ -34,14 +34,15 @@ use datafusion_common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter}
 use datafusion_common::{
     exec_err, internal_err, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::expr::{InList, InSubquery, ScalarFunction};
 use datafusion_expr::{
     and, expr, lit, or, BinaryExpr, BuiltinScalarFunction, Case, ColumnarValue, Expr,
     Like, Volatility,
 };
-use datafusion_physical_expr::{
-    create_physical_expr, execution_props::ExecutionProps, intervals::NullableInterval,
+use datafusion_expr::{
+    expr::{InList, InSubquery, ScalarFunction},
+    interval_aritmetic::NullableInterval,
 };
+use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
 
 use crate::simplify_expressions::SimplifyInfo;
 
@@ -175,9 +176,9 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// ```rust
     /// use arrow::datatypes::{DataType, Field, Schema};
     /// use datafusion_expr::{col, lit, Expr};
+    /// use datafusion_expr::interval_aritmetic::{Interval, NullableInterval};
     /// use datafusion_common::{Result, ScalarValue, ToDFSchema};
     /// use datafusion_physical_expr::execution_props::ExecutionProps;
-    /// use datafusion_physical_expr::intervals::{Interval, NullableInterval};
     /// use datafusion_optimizer::simplify_expressions::{
     ///     ExprSimplifier, SimplifyContext};
     ///
@@ -1308,11 +1309,9 @@ mod tests {
     };
     use chrono::{DateTime, TimeZone, Utc};
     use datafusion_common::{assert_contains, cast::as_int32_array, DFField, ToDFSchema};
-    use datafusion_expr::*;
+    use datafusion_expr::{interval_aritmetic::Interval, *};
     use datafusion_physical_expr::{
-        execution_props::ExecutionProps,
-        functions::make_scalar_function,
-        intervals::{Interval, NullableInterval},
+        execution_props::ExecutionProps, functions::make_scalar_function,
     };
 
     // ------------------------------

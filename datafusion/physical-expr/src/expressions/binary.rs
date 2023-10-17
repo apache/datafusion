@@ -23,8 +23,8 @@ use std::{any::Any, sync::Arc};
 use crate::array_expressions::{
     array_append, array_concat, array_has_all, array_prepend,
 };
+use crate::expressions::datum::{apply, apply_cmp};
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
-use crate::intervals::{apply_operator, Interval};
 use crate::physical_expr::down_cast_any_ref;
 use crate::sort_properties::SortProperties;
 use crate::PhysicalExpr;
@@ -38,12 +38,13 @@ use arrow::compute::kernels::comparison::regexp_is_match_utf8_scalar;
 use arrow::compute::kernels::concat_elements::concat_elements_utf8;
 use arrow::datatypes::*;
 use arrow::record_batch::RecordBatch;
+
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
+use datafusion_expr::interval_aritmetic::{apply_operator, Interval};
 use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::{ColumnarValue, Operator};
 
-use crate::expressions::datum::{apply, apply_cmp};
 use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
     bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,

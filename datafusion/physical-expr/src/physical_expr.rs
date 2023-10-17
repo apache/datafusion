@@ -15,16 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::intervals::Interval;
 use crate::sort_properties::SortProperties;
 use crate::utils::scatter;
-
 use arrow::array::BooleanArray;
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::DataPtr;
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
+use datafusion_expr::interval_aritmetic::Interval;
 use datafusion_expr::ColumnarValue;
 
 use std::any::Any;

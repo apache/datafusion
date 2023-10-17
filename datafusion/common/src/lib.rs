@@ -34,6 +34,7 @@ pub mod file_options;
 pub mod format;
 pub mod hash_utils;
 pub mod parsers;
+pub mod rounding;
 pub mod scalar;
 pub mod stats;
 pub mod test_util;

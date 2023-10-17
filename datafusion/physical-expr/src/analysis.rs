@@ -18,8 +18,7 @@
 //! Interval and selectivity in [`AnalysisContext`]
 
 use crate::expressions::Column;
-use crate::intervals::cp_solver::PropagationResult;
-use crate::intervals::{cardinality_ratio, ExprIntervalGraph, Interval, IntervalBound};
+use crate::intervals::cp_solver::{ExprIntervalGraph, PropagationResult};
 use crate::utils::collect_columns;
 use crate::PhysicalExpr;
 
@@ -27,6 +26,7 @@ use arrow::datatypes::Schema;
 use datafusion_common::{
     internal_err, ColumnStatistics, DataFusionError, Result, ScalarValue,
 };
+use datafusion_expr::interval_aritmetic::{cardinality_ratio, Interval, IntervalBound};
 
 use std::fmt::Debug;
 use std::sync::Arc;

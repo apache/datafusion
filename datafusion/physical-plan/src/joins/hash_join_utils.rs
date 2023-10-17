@@ -32,8 +32,8 @@ use arrow_array::builder::BooleanBufferBuilder;
 use arrow_array::{ArrowPrimitiveType, NativeAdapter, PrimitiveArray, RecordBatch};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_expr::interval_aritmetic::{Interval, IntervalBound};
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::intervals::{Interval, IntervalBound};
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 
