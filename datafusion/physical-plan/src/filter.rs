@@ -217,6 +217,7 @@ impl ExecutionPlan for FilterExec {
         )?;
         let analysis_ctx = analyze(predicate, input_analysis_ctx)?;
 
+        // Estimate (inexact) selectivity of predicate
         let selectivity = analysis_ctx.selectivity.unwrap_or(1.0);
         let num_rows = match num_rows.get_value() {
             Some(nr) => Precision::Inexact((*nr as f64 * selectivity).ceil() as usize),
