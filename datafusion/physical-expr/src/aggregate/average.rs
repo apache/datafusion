@@ -34,16 +34,17 @@ use arrow::{
     array::{ArrayRef, UInt64Array},
     datatypes::Field,
 };
-use arrow_array::types::DecimalType;
+use arrow_array::types::{Decimal256Type, DecimalType};
 use arrow_array::{
     Array, ArrowNativeTypeOp, ArrowNumericType, ArrowPrimitiveType, PrimitiveArray,
 };
+use arrow_buffer::{i256, ArrowNativeType};
 use datafusion_common::{not_impl_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::type_coercion::aggregates::avg_return_type;
 use datafusion_expr::Accumulator;
 
 use super::groups_accumulator::EmitTo;
-use super::utils::Decimal128Averager;
+use super::utils::DecimalAverager;
 
 /// AVG aggregate expression
 #[derive(Debug, Clone)]
@@ -90,7 +91,19 @@ impl AggregateExpr for Avg {
             (
                 Decimal128(sum_precision, sum_scale),
                 Decimal128(target_precision, target_scale),
-            ) => Ok(Box::new(DecimalAvgAccumulator {
+            ) => Ok(Box::new(DecimalAvgAccumulator::<Decimal128Type> {
+                sum: None,
+                count: 0,
+                sum_scale: *sum_scale,
+                sum_precision: *sum_precision,
+                target_precision: *target_precision,
+                target_scale: *target_scale,
+            })),
+
+            (
+                Decimal256(sum_precision, sum_scale),
+                Decimal256(target_precision, target_scale),
+            ) => Ok(Box::new(DecimalAvgAccumulator::<Decimal256Type> {
                 sum: None,
                 count: 0,
                 sum_scale: *sum_scale,
@@ -158,7 +171,7 @@ impl AggregateExpr for Avg {
                 Decimal128(_sum_precision, sum_scale),
                 Decimal128(target_precision, target_scale),
             ) => {
-                let decimal_averager = Decimal128Averager::try_new(
+                let decimal_averager = DecimalAverager::<Decimal128Type>::try_new(
                     *sum_scale,
                     *target_precision,
                     *target_scale,
@@ -168,6 +181,27 @@ impl AggregateExpr for Avg {
                     move |sum: i128, count: u64| decimal_averager.avg(sum, count as i128);
 
                 Ok(Box::new(AvgGroupsAccumulator::<Decimal128Type, _>::new(
+                    &self.input_data_type,
+                    &self.result_data_type,
+                    avg_fn,
+                )))
+            }
+
+            (
+                Decimal256(_sum_precision, sum_scale),
+                Decimal256(target_precision, target_scale),
+            ) => {
+                let decimal_averager = DecimalAverager::<Decimal256Type>::try_new(
+                    *sum_scale,
+                    *target_precision,
+                    *target_scale,
+                )?;
+
+                let avg_fn = move |sum: i256, count: u64| {
+                    decimal_averager.avg(sum, i256::from_usize(count as usize).unwrap())
+                };
+
+                Ok(Box::new(AvgGroupsAccumulator::<Decimal256Type, _>::new(
                     &self.input_data_type,
                     &self.result_data_type,
                     avg_fn,
@@ -258,7 +292,7 @@ impl Accumulator for AvgAccumulator {
 }
 
 /// An accumulator to compute the average for decimals
-struct DecimalAvgAccumulator<T: DecimalType> {
+struct DecimalAvgAccumulator<T: DecimalType + ArrowNumericType> {
     sum: Option<T::Native>,
     count: u64,
     sum_scale: i8,
@@ -267,7 +301,7 @@ struct DecimalAvgAccumulator<T: DecimalType> {
     target_scale: i8,
 }
 
-impl<T: DecimalType> Debug for DecimalAvgAccumulator<T> {
+impl<T: DecimalType + ArrowNumericType> Debug for DecimalAvgAccumulator<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DecimalAvgAccumulator")
             .field("sum", &self.sum)
@@ -280,11 +314,14 @@ impl<T: DecimalType> Debug for DecimalAvgAccumulator<T> {
     }
 }
 
-impl<T: DecimalType> Accumulator for DecimalAvgAccumulator<T> {
+impl<T: DecimalType + ArrowNumericType> Accumulator for DecimalAvgAccumulator<T> {
     fn state(&self) -> Result<Vec<ScalarValue>> {
         Ok(vec![
             ScalarValue::from(self.count),
-            ScalarValue::Decimal128(self.sum, self.sum_precision, self.sum_scale),
+            ScalarValue::new_primitive::<T>(
+                self.sum,
+                &T::TYPE_CONSTRUCTOR(self.sum_precision, self.sum_scale),
+            ),
         ])
     }
 
@@ -293,17 +330,17 @@ impl<T: DecimalType> Accumulator for DecimalAvgAccumulator<T> {
 
         self.count += (values.len() - values.null_count()) as u64;
         if let Some(x) = sum(values) {
-            let v = self.sum.get_or_insert(0);
-            *v += x;
+            let v = self.sum.get_or_insert(T::Native::default());
+            self.sum = Some(v.add_wrapping(x));
         }
         Ok(())
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let values = values[0].as_primitive::<Decimal128Type>();
+        let values = values[0].as_primitive::<T>();
         self.count -= (values.len() - values.null_count()) as u64;
         if let Some(x) = sum(values) {
-            self.sum = Some(self.sum.unwrap() - x);
+            self.sum = Some(self.sum.unwrap().sub_wrapping(x));
         }
         Ok(())
     }
@@ -313,9 +350,9 @@ impl<T: DecimalType> Accumulator for DecimalAvgAccumulator<T> {
         self.count += sum(states[0].as_primitive::<UInt64Type>()).unwrap_or_default();
 
         // sums are summed
-        if let Some(x) = sum(states[1].as_primitive::<Decimal128Type>()) {
-            let v = self.sum.get_or_insert(0);
-            *v += x;
+        if let Some(x) = sum(states[1].as_primitive::<T>()) {
+            let v = self.sum.get_or_insert(T::Native::default());
+            self.sum = Some(v.add_wrapping(x));
         }
         Ok(())
     }
@@ -324,19 +361,18 @@ impl<T: DecimalType> Accumulator for DecimalAvgAccumulator<T> {
         let v = self
             .sum
             .map(|v| {
-                Decimal128Averager::try_new(
+                DecimalAverager::<T>::try_new(
                     self.sum_scale,
                     self.target_precision,
                     self.target_scale,
                 )?
-                .avg(v, self.count as _)
+                .avg(v, T::Native::from_usize(self.count as usize).unwrap())
             })
             .transpose()?;
 
-        Ok(ScalarValue::Decimal128(
+        Ok(ScalarValue::new_primitive::<T>(
             v,
-            self.target_precision,
-            self.target_scale,
+            &T::TYPE_CONSTRUCTOR(self.target_precision, self.target_scale),
         ))
     }
     fn supports_retract_batch(&self) -> bool {
