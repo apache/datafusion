@@ -228,7 +228,7 @@ fn coerced_from<'a>(
                 Timestamp(_, Some(from_tz)) => {
                     Some(Timestamp(unit.clone(), Some(from_tz.clone())))
                 }
-                Null | Date32 | Utf8 | LargeUtf8 => {
+                Null | Date32 | Utf8 | LargeUtf8 | Timestamp(_, None) => {
                     // In the absence of any other information assume the time zone is "+00" (UTC).
                     Some(Timestamp(unit.clone(), Some("+00".into())))
                 }
@@ -238,7 +238,7 @@ fn coerced_from<'a>(
         Timestamp(_, Some(_))
             if matches!(
                 type_from,
-                Null | Timestamp(_, Some(_)) | Date32 | Utf8 | LargeUtf8
+                Null | Timestamp(_, _) | Date32 | Utf8 | LargeUtf8
             ) =>
         {
             Some(type_into.clone())
