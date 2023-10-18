@@ -22,7 +22,7 @@ use crate::optimizer::ApplyOrder;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{
     get_required_group_by_exprs_indices, DFField, DFSchemaRef, JoinType,
-    OwnedTableReference, Result, TableReference, ToDFSchema,
+    OwnedTableReference, Result, ToDFSchema,
 };
 use datafusion_expr::{
     logical_plan::LogicalPlan, Aggregate, Expr, Partitioning, Projection, TableScan,
@@ -321,13 +321,8 @@ fn try_optimize_internal(
         }
         LogicalPlan::TableScan(table_scan) => {
             let filter_referred_indices =
-                get_referred_indices(&plan, &table_scan.filters)?;
-            // println!("bef indices:{:?}", indices);
+                get_referred_indices(plan, &table_scan.filters)?;
             let indices = merge_vectors(&indices, &filter_referred_indices);
-            // println!("aft indices:{:?}", indices);
-            // println!("table_scan.projection:{:?}", table_scan.projection);
-            // println!("table_scan.projected_schema.fields().len():{:?}", table_scan.projected_schema.fields().len());
-            // println!("table_scan.source.schema().fields().len():{:?}", table_scan.source.schema().fields().len());
             let indices = if indices.is_empty() {
                 // Use at least 1 column if not empty
                 if table_scan.projected_schema.fields().is_empty() {
@@ -338,7 +333,6 @@ fn try_optimize_internal(
             } else {
                 indices
             };
-            // println!("table_scan.projection: {:?}", table_scan.projection);
             let projection_fields = table_scan.projected_schema.fields();
             let schema = table_scan.source.schema();
             let fields_used = indices

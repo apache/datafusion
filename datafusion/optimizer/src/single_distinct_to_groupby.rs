@@ -202,12 +202,10 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                         new_aggr_exprs,
                     )?);
 
-                    Ok(Some(LogicalPlan::Projection(
-                        Projection::try_new(
-                            alias_expr,
-                            Arc::new(outer_aggr),
-                        )?,
-                    )))
+                    Ok(Some(LogicalPlan::Projection(Projection::try_new(
+                        alias_expr,
+                        Arc::new(outer_aggr),
+                    )?)))
                 } else {
                     Ok(None)
                 }

@@ -96,19 +96,7 @@ impl SimplifyExpressions {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        // println!("plan.inputs:{:?}", plan.inputs());
-        // println!("new_inputs:{:?}", new_inputs);
-        let res = plan.with_new_exprs(expr, &new_inputs);
-        if let Err(res) = &res{
-            // println!("plan.inputs:{:?}", plan.inputs());
-            // println!("new_inputs:{:?}", new_inputs);
-            // println!("plan.inputs()[0].schema():{:?}", plan.inputs()[0].schema());
-            // println!("   new_inputs[0].schema():{:?}", new_inputs[0].schema());
-        }
-        // println!("with res");
-        let res = res?;
-        // println!("without res");
-        Ok(res)
+        plan.with_new_exprs(expr, &new_inputs)
     }
 }
 

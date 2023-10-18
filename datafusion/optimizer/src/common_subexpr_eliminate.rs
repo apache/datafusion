@@ -111,12 +111,7 @@ impl CommonSubexprEliminate {
         projection: &Projection,
         config: &dyn OptimizerConfig,
     ) -> Result<LogicalPlan> {
-        let Projection {
-            expr,
-            input,
-            schema,
-            ..
-        } = projection;
+        let Projection { expr, input, .. } = projection;
         let input_schema = Arc::clone(input.schema());
         let mut expr_set = ExprSet::new();
         let arrays = to_arrays(expr, input_schema, &mut expr_set, ExprMask::Normal)?;

@@ -26,6 +26,7 @@ use crate::{
 };
 use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
 use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
@@ -314,7 +315,7 @@ fn function_to_name() -> &'static HashMap<BuiltinScalarFunction, &'static str> {
 }
 
 // TODO: Enrich this implementation
-fn concat_type2(lhs: &DataType, rhs: &DataType) -> Result<DataType> {
+fn get_larger_type(lhs: &DataType, rhs: &DataType) -> Result<DataType> {
     Ok(match (lhs, rhs) {
         (DataType::Null, _) => rhs.clone(),
         (_, DataType::Null) => lhs.clone(),
@@ -327,14 +328,11 @@ fn concat_type2(lhs: &DataType, rhs: &DataType) -> Result<DataType> {
             rhs.clone()
         }
         (DataType::Int32, DataType::Int32 | DataType::Int64) => rhs.clone(),
-        (
-            DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64,
-            DataType::Int8,
-        ) => lhs.clone(),
-        (DataType::Int16 | DataType::Int32 | DataType::Int64, DataType::Int16) => {
+        (DataType::Int16 | DataType::Int32 | DataType::Int64, DataType::Int8) => {
             lhs.clone()
         }
-        (DataType::Int32 | DataType::Int64, DataType::Int32) => lhs.clone(),
+        (DataType::Int32 | DataType::Int64, DataType::Int16) => lhs.clone(),
+        (DataType::Int64, DataType::Int32) => lhs.clone(),
         (DataType::Int64, DataType::Int64) => DataType::Int64,
         // Float
         (
@@ -342,30 +340,21 @@ fn concat_type2(lhs: &DataType, rhs: &DataType) -> Result<DataType> {
             DataType::Float16 | DataType::Float32 | DataType::Float64,
         ) => rhs.clone(),
         (DataType::Float32, DataType::Float32 | DataType::Float64) => rhs.clone(),
-        (
-            DataType::Float16 | DataType::Float32 | DataType::Float64,
-            DataType::Float16,
-        ) => lhs.clone(),
-        (DataType::Float32 | DataType::Float64, DataType::Float32) => lhs.clone(),
+        (DataType::Float32 | DataType::Float64, DataType::Float16) => lhs.clone(),
+        (DataType::Float64, DataType::Float32) => lhs.clone(),
         (DataType::Float64, DataType::Float64) => DataType::Float64,
         // String
         (DataType::Utf8, DataType::Utf8 | DataType::LargeUtf8) => rhs.clone(),
-        (DataType::Utf8 | DataType::LargeUtf8, DataType::Utf8) => lhs.clone(),
+        (DataType::LargeUtf8, DataType::Utf8) => lhs.clone(),
         (DataType::LargeUtf8, DataType::LargeUtf8) => DataType::LargeUtf8,
         (DataType::List(lhs_field), DataType::List(rhs_field)) => {
-            let field_type = concat_type2(lhs_field.data_type(), rhs_field.data_type())?;
+            let field_type =
+                get_larger_type(lhs_field.data_type(), rhs_field.data_type())?;
             assert_eq!(lhs_field.name(), rhs_field.name());
             let field_name = lhs_field.name();
             let nullable = lhs_field.is_nullable() | rhs_field.is_nullable();
             DataType::List(Arc::new(Field::new(field_name, field_type, nullable)))
         }
-        (DataType::List(lhs_field), _) => {
-            let field_type = concat_type2(lhs_field.data_type(), rhs)?;
-            let field_name = lhs_field.name();
-            let nullable = lhs_field.is_nullable();
-            DataType::List(Arc::new(Field::new(field_name, field_type, nullable)))
-        }
-        (_, DataType::List(_)) => concat_type2(rhs, lhs)?,
         (_, _) => {
             return Err(DataFusionError::Execution(format!(
                 "Cannot concat types lhs: {:?}, rhs:{:?}",
@@ -375,26 +364,25 @@ fn concat_type2(lhs: &DataType, rhs: &DataType) -> Result<DataType> {
     })
 }
 
-fn array_concat_type(args_types: &[DataType]) -> Result<DataType> {
-    if args_types.is_empty() {
-        // If empty make type Null.
-        return Ok(DataType::Null);
-        // return Err(DataFusionError::Execution("Expects to receive at least on argument.".to_string()))
-    }
-    let mut concat_type = args_types[0].clone();
-    for idx in 1..args_types.len() {
-        let arg_type = &args_types[idx];
-        if let DataType::List(field_) = arg_type {
-            concat_type = concat_type2(&concat_type, &args_types[idx])?;
-        } else {
-            return plan_err!(
-                "The array_concat function can only accept list as the args."
-            );
-        }
-        // concat_type = concat_type2(&concat_type, &args_types[idx])?;
-    }
-    Ok(concat_type)
-}
+// fn array_concat_type(args_types: &[DataType]) -> Result<DataType> {
+//     if args_types.is_empty() {
+//         // If empty make type Null.
+//         return Ok(DataType::Null);
+//         // return Err(DataFusionError::Execution("Expects to receive at least on argument.".to_string()))
+//     }
+//     let mut concat_type = args_types[0].clone();
+//     for arg_type in args_types.iter().skip(1) {
+//         if let DataType::List(_field) = arg_type {
+//             concat_type = concat_type2(&concat_type, arg_type)?;
+//         } else {
+//             return plan_err!(
+//                 "The array_concat function can only accept list as the args."
+//             );
+//         }
+//         // concat_type = concat_type2(&concat_type, &args_types[idx])?;
+//     }
+//     Ok(concat_type)
+// }
 
 impl BuiltinScalarFunction {
     /// an allowlist of functions to take zero arguments, so that they will get special treatment
@@ -610,28 +598,34 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::ArrayAppend => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayConcat => {
-                // let mut expr_type = Null;
-                // let mut max_dims = 0;
-                // for input_expr_type in input_expr_types {
-                //     match input_expr_type {
-                //         List(field) => {
-                //             if !field.data_type().equals_datatype(&Null) {
-                //                 let dims = self.return_dimension(input_expr_type.clone());
-                //                 if max_dims < dims {
-                //                     max_dims = dims;
-                //                     expr_type = input_expr_type.clone();
-                //                 }
-                //             }
-                //         }
-                //         _ => {
-                //             return plan_err!(
-                //                 "The {self} function can only accept list as the args."
-                //             )
-                //         }
-                //     }
-                // }
+                let mut expr_type = Null;
+                let mut max_dims = 0;
+                for input_expr_type in input_expr_types {
+                    match input_expr_type {
+                        List(field) => {
+                            if !field.data_type().equals_datatype(&Null) {
+                                let dims = self.return_dimension(input_expr_type.clone());
+                                expr_type = match max_dims.cmp(&dims) {
+                                    Ordering::Greater => expr_type,
+                                    Ordering::Equal => {
+                                        get_larger_type(&expr_type, input_expr_type)?
+                                    }
+                                    Ordering::Less => {
+                                        max_dims = dims;
+                                        input_expr_type.clone()
+                                    }
+                                };
+                            }
+                        }
+                        _ => {
+                            return plan_err!(
+                                "The {self} function can only accept list as the args."
+                            )
+                        }
+                    }
+                }
 
-                let expr_type = array_concat_type(&input_expr_types)?;
+                // let expr_type = array_concat_type(input_expr_types)?;
 
                 Ok(expr_type)
             }

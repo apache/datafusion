@@ -2236,665 +2236,665 @@ mod tests {
     }
 }
 
-mod tmp_tests {
-    use crate::assert_batches_eq;
-    use crate::physical_optimizer::utils::get_plan_string;
-    use crate::physical_plan::{collect, displayable, ExecutionPlan};
-    use crate::prelude::SessionContext;
-    use arrow::util::pretty::print_batches;
-    use datafusion_common::Result;
-    use datafusion_execution::config::SessionConfig;
-    use std::sync::Arc;
-
-    fn print_plan(plan: &Arc<dyn ExecutionPlan>) -> Result<()> {
-        let formatted = displayable(plan.as_ref()).indent(true).to_string();
-        let actual: Vec<&str> = formatted.trim().lines().collect();
-        println!("{:#?}", actual);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_subquery() -> Result<()> {
-        let config = SessionConfig::new().with_target_partitions(1);
-        // config.options_mut().optimizer.max_passes = 1;
-        let ctx = SessionContext::new_with_config(config);
-        ctx.sql(
-            "CREATE EXTERNAL TABLE multiple_ordered_table_with_pk (
-              a0 INTEGER,
-              a INTEGER,
-              b INTEGER,
-              c INTEGER,
-              d INTEGER,
-              primary key(c)
-            )
-            STORED AS CSV
-            WITH HEADER ROW
-            WITH ORDER (a ASC, b ASC)
-            WITH ORDER (c ASC)
-            LOCATION '../core/tests/data/window_2.csv'",
-        )
-        .await?;
-
-        let sql = "SELECT c, sum1
-                  FROM
-                    (SELECT c, b, a, SUM(d) as sum1
-                    FROM multiple_ordered_table_with_pk
-                    GROUP BY c)
-                GROUP BY c";
-
-        let msg = format!("Creating logical plan for '{sql}'");
-        let dataframe = ctx.sql(sql).await.expect(&msg);
-        let physical_plan = dataframe.create_physical_plan().await?;
-        print_plan(&physical_plan)?;
-
-        let expected = vec![
-            "AggregateExec: mode=Single, gby=[c@0 as c, sum1@1 as sum1], aggr=[], ordering_mode=PartiallyOrdered",
-            "  ProjectionExec: expr=[c@0 as c, SUM(multiple_ordered_table_with_pk.d)@1 as sum1]",
-            "    AggregateExec: mode=Single, gby=[c@0 as c], aggr=[SUM(multiple_ordered_table_with_pk.d)], ordering_mode=FullyOrdered",
-            "      CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[c, d], output_ordering=[c@0 ASC NULLS LAST], has_header=true",
-        ];
-        // Get string representation of the plan
-        let actual = get_plan_string(&physical_plan);
-        assert_eq!(
-            expected, actual,
-            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-        );
-
-        let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
-        print_batches(&batches)?;
-
-        // assert_eq!(0, 1);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_subquery2() -> Result<()> {
-        let config = SessionConfig::new().with_target_partitions(1);
-        // config.options_mut().optimizer.max_passes = 1;
-        let ctx = SessionContext::new_with_config(config);
-        ctx.sql(
-            "CREATE EXTERNAL TABLE multiple_ordered_table_with_pk (
-              a0 INTEGER,
-              a INTEGER,
-              b INTEGER,
-              c INTEGER,
-              d INTEGER,
-              primary key(c)
-            )
-            STORED AS CSV
-            WITH HEADER ROW
-            WITH ORDER (a ASC, b ASC)
-            WITH ORDER (c ASC)
-            LOCATION '../core/tests/data/window_2.csv'",
-        )
-        .await?;
-
-        let sql = "SELECT lhs.c, rhs.c, lhs.sum1, rhs.sum1
-          FROM
-            (SELECT c, b, a, SUM(d) as sum1
-            FROM multiple_ordered_table_with_pk
-            GROUP BY c) as lhs
-          JOIN
-            (SELECT c, b, a, SUM(d) as sum1
-            FROM multiple_ordered_table_with_pk
-            GROUP BY c) as rhs
-          ON lhs.b=rhs.b;";
-
-        let msg = format!("Creating logical plan for '{sql}'");
-        let dataframe = ctx.sql(sql).await.expect(&msg);
-        let physical_plan = dataframe.create_physical_plan().await?;
-        print_plan(&physical_plan)?;
-
-        let expected = vec![
-            "ProjectionExec: expr=[c@0 as c, c@3 as c, sum1@2 as sum1, sum1@5 as sum1]",
-            "  CoalesceBatchesExec: target_batch_size=8192",
-            "    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(b@1, b@1)]",
-            "      ProjectionExec: expr=[c@0 as c, b@1 as b, SUM(multiple_ordered_table_with_pk.d)@2 as sum1]",
-            "        AggregateExec: mode=Single, gby=[c@1 as c, b@0 as b], aggr=[SUM(multiple_ordered_table_with_pk.d)], ordering_mode=PartiallyOrdered",
-            "          CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[b, c, d], output_ordering=[c@1 ASC NULLS LAST], has_header=true",
-            "      ProjectionExec: expr=[c@0 as c, b@1 as b, SUM(multiple_ordered_table_with_pk.d)@2 as sum1]",
-            "        AggregateExec: mode=Single, gby=[c@1 as c, b@0 as b], aggr=[SUM(multiple_ordered_table_with_pk.d)], ordering_mode=PartiallyOrdered",
-            "          CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[b, c, d], output_ordering=[c@1 ASC NULLS LAST], has_header=true",
-        ];
-        // Get string representation of the plan
-        let actual = get_plan_string(&physical_plan);
-        assert_eq!(
-            expected, actual,
-            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-        );
-
-        let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
-        print_batches(&batches)?;
-
-        // assert_eq!(0, 1);
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[ignore]
-    async fn test_subquery3() -> Result<()> {
-        let config = SessionConfig::new().with_target_partitions(1);
-        // config.options_mut().optimizer.max_passes = 1;
-        let ctx = SessionContext::new_with_config(config);
-        ctx.sql(
-            "CREATE EXTERNAL TABLE multiple_ordered_table_with_pk (
-              a0 INTEGER,
-              a INTEGER,
-              b INTEGER,
-              c INTEGER,
-              d INTEGER,
-              primary key(c)
-            )
-            STORED AS CSV
-            WITH HEADER ROW
-            WITH ORDER (a ASC, b ASC)
-            WITH ORDER (c ASC)
-            LOCATION '../core/tests/data/window_2.csv'",
-        )
-        .await?;
-
-        let sql = "SELECT a, b, sum1
-        FROM (SELECT c, b, a, SUM(d) as sum1
-           FROM multiple_ordered_table_with_pk
-           GROUP BY c)
-        DISTRIBUTE BY a";
-
-        let msg = format!("Creating logical plan for '{sql}'");
-        let dataframe = ctx.sql(sql).await.expect(&msg);
-        let physical_plan = dataframe.create_physical_plan().await?;
-        print_plan(&physical_plan)?;
-
-        let expected = vec![
-            "ProjectionExec: expr=[c@0 as c, c@3 as c, sum1@2 as sum1, sum1@5 as sum1]",
-            "  CoalesceBatchesExec: target_batch_size=8192",
-            "    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(b@1, b@1)]",
-            "      ProjectionExec: expr=[c@0 as c, b@1 as b, SUM(multiple_ordered_table_with_pk.d)@2 as sum1]",
-            "        AggregateExec: mode=Single, gby=[c@1 as c, b@0 as b], aggr=[SUM(multiple_ordered_table_with_pk.d)], ordering_mode=PartiallyOrdered",
-            "          CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[b, c, d], output_ordering=[c@1 ASC NULLS LAST], has_header=true",
-            "      ProjectionExec: expr=[c@0 as c, b@1 as b, SUM(multiple_ordered_table_with_pk.d)@2 as sum1]",
-            "        AggregateExec: mode=Single, gby=[c@1 as c, b@0 as b], aggr=[SUM(multiple_ordered_table_with_pk.d)], ordering_mode=PartiallyOrdered",
-            "          CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[b, c, d], output_ordering=[c@1 ASC NULLS LAST], has_header=true",
-        ];
-        // Get string representation of the plan
-        let actual = get_plan_string(&physical_plan);
-        assert_eq!(
-            expected, actual,
-            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-        );
-
-        let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
-        print_batches(&batches)?;
-
-        // assert_eq!(0, 1);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_subquery4() -> Result<()> {
-        let config = SessionConfig::new().with_target_partitions(1);
-        // config.options_mut().optimizer.max_passes = 1;
-        let ctx = SessionContext::new_with_config(config);
-        ctx.sql(
-            "CREATE TABLE t1(t1_id INT, t1_name TEXT, t1_int INT) AS VALUES
-            (11, 'a', 1),
-            (22, 'b', 2),
-            (33, 'c', 3),
-            (44, 'd', 4);",
-        )
-        .await?;
-
-        let sql = "explain verbose SELECT t1_id, (SELECT a FROM (select 1 as a) WHERE a = t1.t1_int) as t2_int from t1";
-
-        let msg = format!("Creating logical plan for '{sql}'");
-        let dataframe = ctx.sql(sql).await.expect(&msg);
-        let physical_plan = dataframe.create_physical_plan().await?;
-        print_plan(&physical_plan)?;
-
-        // let expected = vec![
-        //     "ProjectionExec: expr=[t1_id@0 as t1_id, a@2 as t2_int]",
-        //     "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_int@1 as t1_int, a@3 as a]",
-        //     "    ProjectionExec: expr=[t1_id@1 as t1_id, t1_int@2 as t1_int, CAST(t1.t1_int AS Int64)@3 as CAST(t1.t1_int AS Int64), a@0 as a]",
-        //     "      CoalesceBatchesExec: target_batch_size=8192",
-        //     "        HashJoinExec: mode=CollectLeft, join_type=Right, on=[(a@0, CAST(t1.t1_int AS Int64)@2)]",
-        //     "          ProjectionExec: expr=[1 as a]",
-        //     "            EmptyExec: produce_one_row=true",
-        //     "          ProjectionExec: expr=[t1_id@0 as t1_id, t1_int@1 as t1_int, CAST(t1_int@1 AS Int64) as CAST(t1.t1_int AS Int64)]",
-        //     "            MemoryExec: partitions=1, partition_sizes=[1]",
-        // ];
-        // // Get string representation of the plan
-        // let actual = get_plan_string(&physical_plan);
-        // assert_eq!(
-        //     expected, actual,
-        //     "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-        // );
-
-        let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
-        print_batches(&batches)?;
-
-        // assert_eq!(0, 1);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_subquery5() -> Result<()> {
-        let config = SessionConfig::new().with_target_partitions(1);
-        // config.options_mut().optimizer.max_passes = 1;
-        let ctx = SessionContext::new_with_config(config);
-        ctx.sql(
-            "CREATE TABLE right_semi_anti_join_table_t2(t2_id INT UNSIGNED, t2_name VARCHAR)
-            AS VALUES
-            (11, 'a'),
-            (11, 'x'),
-            (NULL, NULL);",
-        )
-            .await?;
-
-        ctx.sql(
-            "CREATE TABLE right_semi_anti_join_table_t1(t1_id INT UNSIGNED, t1_name VARCHAR, t1_int INT UNSIGNED)
-            AS VALUES
-            (11, 'a', 1),
-            (22, 'b', 2),
-            (33, 'c', 3),
-            (44, 'd', 4),
-            (NULL, 'e', 0);",
-        )
-            .await?;
-
-        let sql = "SELECT t1_id, t1_name, t1_int FROM right_semi_anti_join_table_t2 t2 RIGHT SEMI JOIN right_semi_anti_join_table_t1 t1 on (t2.t2_id = t1.t1_id and t2.t2_name <> t1.t1_name) ORDER BY t1_id";
-
-        let msg = format!("Creating logical plan for '{sql}'");
-        let dataframe = ctx.sql(sql).await.expect(&msg);
-        let physical_plan = dataframe.create_physical_plan().await?;
-        print_plan(&physical_plan)?;
-
-        let expected = vec![
-            "SortExec: expr=[t1_id@0 ASC NULLS LAST]",
-            "  CoalesceBatchesExec: target_batch_size=8192",
-            "    HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(t2_id@0, t1_id@0)], filter=t2_name@0 != t1_name@1",
-            "      MemoryExec: partitions=1, partition_sizes=[1]",
-            "      MemoryExec: partitions=1, partition_sizes=[1]",
-        ];
-        // Get string representation of the plan
-        let actual = get_plan_string(&physical_plan);
-        assert_eq!(
-            expected, actual,
-            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-        );
-
-        let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
-        print_batches(&batches)?;
-
-        // assert_eq!(0, 1);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_subquery6() -> Result<()> {
-        let config = SessionConfig::new().with_target_partitions(1);
-        // config.options_mut().optimizer.max_passes = 1;
-        let ctx = SessionContext::new_with_config(config);
-
-        ctx.sql(
-            "CREATE TABLE join_t1(t1_id INT UNSIGNED, t1_name VARCHAR, t1_int INT UNSIGNED)
-        AS VALUES
-        (11, 'a', 1),
-        (22, 'b', 2),
-        (33, 'c', 3),
-        (44, 'd', 4);",
-        )
-            .await?;
-
-        ctx.sql(
-            "CREATE TABLE join_t2(t2_id INT UNSIGNED, t2_name VARCHAR, t2_int INT UNSIGNED)
-            AS VALUES
-            (11, 'z', 3),
-            (22, 'y', 1),
-            (44, 'x', 3),
-            (55, 'w', 3);",
-        )
-            .await?;
-
-        let sql = "SELECT *
-            FROM join_t1
-            WHERE NOT EXISTS (
-                SELECT DISTINCT t2_int
-                FROM join_t2
-                WHERE join_t1.t1_id + 1 > join_t2.t2_id * 2
-            )";
-
-        let msg = format!("Creating logical plan for '{sql}'");
-        let dataframe = ctx.sql(sql).await.expect(&msg);
-        let physical_plan = dataframe.create_physical_plan().await?;
-        print_plan(&physical_plan)?;
-
-        let expected = vec![
-            "NestedLoopJoinExec: join_type=LeftAnti, filter=CAST(t1_id@0 AS Int64) + 1 > CAST(t2_id@1 AS Int64) * 2",
-            "  MemoryExec: partitions=1, partition_sizes=[1]",
-            "  AggregateExec: mode=Single, gby=[t2_id@0 as t2_id], aggr=[]",
-            "    MemoryExec: partitions=1, partition_sizes=[1]",
-        ];
-        // Get string representation of the plan
-        let actual = get_plan_string(&physical_plan);
-        assert_eq!(
-            expected, actual,
-            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-        );
-
-        let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
-        print_batches(&batches)?;
-
-        // assert_eq!(0, 1);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_subquery7() -> Result<()> {
-        let config = SessionConfig::new().with_target_partitions(1);
-        // config.options_mut().optimizer.max_passes = 1;
-        let ctx = SessionContext::new_with_config(config);
-
-        ctx.sql("CREATE TABLE test_non_nullable_decimal(c1 DECIMAL(9,2) NOT NULL); ")
-            .await?;
-
-        let sql = "SELECT c1*0 FROM test_non_nullable_decimal";
-
-        let msg = format!("Creating logical plan for '{sql}'");
-        let dataframe = ctx.sql(sql).await.expect(&msg);
-        let physical_plan = dataframe.create_physical_plan().await?;
-        print_plan(&physical_plan)?;
-
-        let expected = vec![
-            "ProjectionExec: expr=[Some(0),20,0 as test_non_nullable_decimal.c1 * Int64(0)]",
-            "  MemoryExec: partitions=1, partition_sizes=[0]",
-        ];
-        // Get string representation of the plan
-        let actual = get_plan_string(&physical_plan);
-        assert_eq!(
-            expected, actual,
-            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-        );
-
-        let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
-        print_batches(&batches)?;
-
-        // assert_eq!(0, 1);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_subquery8() -> Result<()> {
-        let config = SessionConfig::new().with_target_partitions(1);
-        // config.options_mut().optimizer.max_passes = 1;
-        let ctx = SessionContext::new_with_config(config);
-
-        ctx.sql(
-            "CREATE EXTERNAL TABLE aggregate_test_100 (
-          c1  VARCHAR NOT NULL,
-          c2  TINYINT NOT NULL,
-          c3  SMALLINT NOT NULL,
-          c4  SMALLINT,
-          c5  INT,
-          c6  BIGINT NOT NULL,
-          c7  SMALLINT NOT NULL,
-          c8  INT NOT NULL,
-          c9  INT UNSIGNED NOT NULL,
-          c10 BIGINT UNSIGNED NOT NULL,
-          c11 FLOAT NOT NULL,
-          c12 DOUBLE NOT NULL,
-          c13 VARCHAR NOT NULL
-        )
-        STORED AS CSV
-        WITH HEADER ROW
-        LOCATION '../../testing/data/csv/aggregate_test_100.csv'",
-        )
-        .await?;
-
-        let sql = "WITH indices AS (
-          SELECT 1 AS idx UNION ALL
-          SELECT 2 AS idx UNION ALL
-          SELECT 3 AS idx UNION ALL
-          SELECT 4 AS idx UNION ALL
-          SELECT 5 AS idx
-        )
-        SELECT data.arr[indices.idx] as element, array_length(data.arr) as array_len, dummy
-        FROM (
-          SELECT array_agg(distinct c2) as arr, count(1) as dummy FROM aggregate_test_100
-        ) data
-          CROSS JOIN indices
-        ORDER BY 1";
-
-        let msg = format!("Creating logical plan for '{sql}'");
-        let dataframe = ctx.sql(sql).await.expect(&msg);
-        let physical_plan = dataframe.create_physical_plan().await?;
-        print_plan(&physical_plan)?;
-
-        let expected = vec![
-            "SortPreservingMergeExec: [element@0 ASC NULLS LAST]",
-            "  SortExec: expr=[element@0 ASC NULLS LAST]",
-            "    ProjectionExec: expr=[(arr@0).[idx@2] as element, array_length(arr@0) as array_len, dummy@1 as dummy]",
-            "      CrossJoinExec",
-            "        ProjectionExec: expr=[ARRAY_AGG(DISTINCT aggregate_test_100.c2)@0 as arr, COUNT(Int64(1))@1 as dummy]",
-            "          AggregateExec: mode=Single, gby=[], aggr=[ARRAY_AGG(DISTINCT aggregate_test_100.c2), COUNT(Int64(1))]",
-            "            CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2], has_header=true",
-            "        UnionExec",
-            "          ProjectionExec: expr=[1 as idx]",
-            "            EmptyExec: produce_one_row=true",
-            "          ProjectionExec: expr=[2 as idx]",
-            "            EmptyExec: produce_one_row=true",
-            "          ProjectionExec: expr=[3 as idx]",
-            "            EmptyExec: produce_one_row=true",
-            "          ProjectionExec: expr=[4 as idx]",
-            "            EmptyExec: produce_one_row=true",
-            "          ProjectionExec: expr=[5 as idx]",
-            "            EmptyExec: produce_one_row=true",
-        ];
-        // Get string representation of the plan
-        let actual = get_plan_string(&physical_plan);
-        assert_eq!(
-            expected, actual,
-            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-        );
-
-        let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
-        print_batches(&batches)?;
-
-        // assert_eq!(0, 1);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_subquery9() -> Result<()> {
-        let config = SessionConfig::new().with_target_partitions(1);
-        // config.options_mut().optimizer.max_passes = 1;
-        let ctx = SessionContext::new_with_config(config);
-
-        let sql = "select make_array(NULL), make_array(NULL, NULL, NULL), make_array(make_array(NULL, NULL), make_array(NULL, NULL))";
-
-        let msg = format!("Creating logical plan for '{sql}'");
-        let dataframe = ctx.sql(sql).await.expect(&msg);
-        let physical_plan = dataframe.create_physical_plan().await?;
-        print_plan(&physical_plan)?;
-
-        let expected = vec![
-            "ProjectionExec: expr=[NULL as make_array(NULL), NULL,NULL,NULL as make_array(NULL,NULL,NULL), NULL,NULL,NULL,NULL as make_array(make_array(NULL,NULL),make_array(NULL,NULL))]",
-            "  EmptyExec: produce_one_row=true",
-        ];
-        // Get string representation of the plan
-        let actual = get_plan_string(&physical_plan);
-        assert_eq!(
-            expected, actual,
-            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-        );
-
-        let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
-        print_batches(&batches)?;
-
-        // assert_eq!(0, 1);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_subquery10() -> Result<()> {
-        let config = SessionConfig::new().with_target_partitions(1);
-        // config.options_mut().optimizer.max_passes = 1;
-        let ctx = SessionContext::new_with_config(config);
-
-        let sql = "select array_concat(make_array(make_array()), make_array(make_array(1, 2), make_array(3, 4)));";
-
-        let msg = format!("Creating logical plan for '{sql}'");
-        let dataframe = ctx.sql(sql).await.expect(&msg);
-        let physical_plan = dataframe.create_physical_plan().await?;
-
-        print_plan(&physical_plan)?;
-        let expected = vec![
-            "ProjectionExec: expr=[1,2,3,4 as array_concat(make_array(make_array()),make_array(make_array(Int64(1),Int64(2)),make_array(Int64(3),Int64(4))))]",
-            "  EmptyExec: produce_one_row=true",
-        ];
-        // Get string representation of the plan
-        let actual = get_plan_string(&physical_plan);
-        assert_eq!(
-            expected, actual,
-            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-        );
-
-        let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
-        print_batches(&batches)?;
-
-        // assert_eq!(0, 1);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_subquery11() -> Result<()> {
-        let config = SessionConfig::new().with_target_partitions(1);
-        // config.options_mut().optimizer.max_passes = 1;
-        let ctx = SessionContext::new_with_config(config);
-
-        let sql = "select array_concat(make_array([1,2], [3,4]), make_array(5, 6));";
-
-        let msg = format!("Creating logical plan for '{sql}'");
-        let dataframe = ctx.sql(sql).await.expect(&msg);
-        let physical_plan = dataframe.create_physical_plan().await?;
-
-        print_plan(&physical_plan)?;
-        let expected = vec![
-            "ProjectionExec: expr=[1,2,3,4,5,6 as array_concat(make_array(List([1,2]),List([3,4])),make_array(Int64(5),Int64(6)))]",
-            "  EmptyExec: produce_one_row=true",
-        ];
-        // Get string representation of the plan
-        let actual = get_plan_string(&physical_plan);
-        assert_eq!(
-            expected, actual,
-            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-        );
-
-        let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
-        print_batches(&batches)?;
-
-        // assert_eq!(0, 1);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_subquery12() -> Result<()> {
-        let config = SessionConfig::new().with_target_partitions(1);
-        // config.options_mut().optimizer.max_passes = 1;
-        let ctx = SessionContext::new_with_config(config);
-
-        let sql = "select make_array(1,2,3) @> make_array(1,3);";
-
-        let msg = format!("Creating logical plan for '{sql}'");
-        let dataframe = ctx.sql(sql).await.expect(&msg);
-        let physical_plan = dataframe.create_physical_plan().await?;
-
-        print_plan(&physical_plan)?;
-        let expected = vec![
-            "ProjectionExec: expr=[true as make_array(Int64(1),Int64(2),Int64(3)) @> make_array(Int64(1),Int64(3))]",
-            "  EmptyExec: produce_one_row=true",
-        ];
-        // Get string representation of the plan
-        let actual = get_plan_string(&physical_plan);
-        assert_eq!(
-            expected, actual,
-            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-        );
-
-        let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
-        print_batches(&batches)?;
-
-        // assert_eq!(0, 1);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_subquery13() -> Result<()> {
-        let config = SessionConfig::new().with_target_partitions(1);
-        // config.options_mut().optimizer.max_passes = 1;
-        let ctx = SessionContext::new_with_config(config);
-
-        let sql = "select empty(NULL);";
-
-        let msg = format!("Creating logical plan for '{sql}'");
-        let dataframe = ctx.sql(sql).await.expect(&msg);
-        let physical_plan = dataframe.create_physical_plan().await?;
-
-        print_plan(&physical_plan)?;
-        let expected = vec![
-            "ProjectionExec: expr=[NULL as empty(NULL)]",
-            "  EmptyExec: produce_one_row=true",
-        ];
-        // Get string representation of the plan
-        let actual = get_plan_string(&physical_plan);
-        assert_eq!(
-            expected, actual,
-            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-        );
-
-        let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
-        print_batches(&batches)?;
-
-        // assert_eq!(0, 1);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_subquery14() -> Result<()> {
-        let config = SessionConfig::new().with_target_partitions(1);
-        // config.options_mut().optimizer.max_passes = 1;
-        let ctx = SessionContext::new_with_config(config);
-        ctx.sql(
-            "CREATE EXTERNAL TABLE hits
-            STORED AS PARQUET
-            LOCATION '../core/tests/data/clickbench_hits_10.parquet';",
-        )
-            .await?;
-        let sql = "SELECT \"RegionID\", COUNT(DISTINCT \"UserID\") AS u FROM hits GROUP BY \"RegionID\" ORDER BY u DESC LIMIT 10;";
-        // let sql = "explain verbose SELECT 'RegionID', COUNT(DISTINCT 'UserID') AS u FROM hits GROUP BY 'RegionID' ORDER BY u DESC LIMIT 10;";
-        // let sql = "explain verbose SELECT RegionID, COUNT(DISTINCT UserID) AS u FROM hits GROUP BY RegionID ORDER BY u DESC LIMIT 10;";
-
-        let msg = format!("Creating logical plan for '{sql}'");
-        let dataframe = ctx.sql(sql).await.expect(&msg);
-        let physical_plan = dataframe.create_physical_plan().await?;
-
-        print_plan(&physical_plan)?;
-        let expected = vec![
-            "GlobalLimitExec: skip=0, fetch=10",
-            "  SortExec: fetch=10, expr=[u@1 DESC]",
-            "    ProjectionExec: expr=[RegionID@0 as RegionID, COUNT(DISTINCT hits.UserID)@1 as u]",
-            "      AggregateExec: mode=Single, gby=[RegionID@0 as RegionID], aggr=[COUNT(DISTINCT hits.UserID)]",
-            "        ParquetExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[RegionID, UserID]",
-        ];
-        // Get string representation of the plan
-        let actual = get_plan_string(&physical_plan);
-        assert_eq!(
-            expected, actual,
-            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-        );
-
-        let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
-        print_batches(&batches)?;
-
-        // assert_eq!(0, 1);
-        Ok(())
-    }
-}
+// mod tmp_tests {
+//     use crate::assert_batches_eq;
+//     use crate::physical_optimizer::utils::get_plan_string;
+//     use crate::physical_plan::{collect, displayable, ExecutionPlan};
+//     use crate::prelude::SessionContext;
+//     use arrow::util::pretty::print_batches;
+//     use datafusion_common::Result;
+//     use datafusion_execution::config::SessionConfig;
+//     use std::sync::Arc;
+//
+//     fn print_plan(plan: &Arc<dyn ExecutionPlan>) -> Result<()> {
+//         let formatted = displayable(plan.as_ref()).indent(true).to_string();
+//         let actual: Vec<&str> = formatted.trim().lines().collect();
+//         println!("{:#?}", actual);
+//         Ok(())
+//     }
+//
+//     #[tokio::test]
+//     async fn test_subquery() -> Result<()> {
+//         let config = SessionConfig::new().with_target_partitions(1);
+//         // config.options_mut().optimizer.max_passes = 1;
+//         let ctx = SessionContext::new_with_config(config);
+//         ctx.sql(
+//             "CREATE EXTERNAL TABLE multiple_ordered_table_with_pk (
+//               a0 INTEGER,
+//               a INTEGER,
+//               b INTEGER,
+//               c INTEGER,
+//               d INTEGER,
+//               primary key(c)
+//             )
+//             STORED AS CSV
+//             WITH HEADER ROW
+//             WITH ORDER (a ASC, b ASC)
+//             WITH ORDER (c ASC)
+//             LOCATION '../core/tests/data/window_2.csv'",
+//         )
+//         .await?;
+//
+//         let sql = "SELECT c, sum1
+//                   FROM
+//                     (SELECT c, b, a, SUM(d) as sum1
+//                     FROM multiple_ordered_table_with_pk
+//                     GROUP BY c)
+//                 GROUP BY c";
+//
+//         let msg = format!("Creating logical plan for '{sql}'");
+//         let dataframe = ctx.sql(sql).await.expect(&msg);
+//         let physical_plan = dataframe.create_physical_plan().await?;
+//         print_plan(&physical_plan)?;
+//
+//         let expected = vec![
+//             "AggregateExec: mode=Single, gby=[c@0 as c, sum1@1 as sum1], aggr=[], ordering_mode=PartiallyOrdered",
+//             "  ProjectionExec: expr=[c@0 as c, SUM(multiple_ordered_table_with_pk.d)@1 as sum1]",
+//             "    AggregateExec: mode=Single, gby=[c@0 as c], aggr=[SUM(multiple_ordered_table_with_pk.d)], ordering_mode=FullyOrdered",
+//             "      CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[c, d], output_ordering=[c@0 ASC NULLS LAST], has_header=true",
+//         ];
+//         // Get string representation of the plan
+//         let actual = get_plan_string(&physical_plan);
+//         assert_eq!(
+//             expected, actual,
+//             "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+//         );
+//
+//         let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+//         print_batches(&batches)?;
+//
+//         // assert_eq!(0, 1);
+//         Ok(())
+//     }
+//
+//     #[tokio::test]
+//     async fn test_subquery2() -> Result<()> {
+//         let config = SessionConfig::new().with_target_partitions(1);
+//         // config.options_mut().optimizer.max_passes = 1;
+//         let ctx = SessionContext::new_with_config(config);
+//         ctx.sql(
+//             "CREATE EXTERNAL TABLE multiple_ordered_table_with_pk (
+//               a0 INTEGER,
+//               a INTEGER,
+//               b INTEGER,
+//               c INTEGER,
+//               d INTEGER,
+//               primary key(c)
+//             )
+//             STORED AS CSV
+//             WITH HEADER ROW
+//             WITH ORDER (a ASC, b ASC)
+//             WITH ORDER (c ASC)
+//             LOCATION '../core/tests/data/window_2.csv'",
+//         )
+//         .await?;
+//
+//         let sql = "SELECT lhs.c, rhs.c, lhs.sum1, rhs.sum1
+//           FROM
+//             (SELECT c, b, a, SUM(d) as sum1
+//             FROM multiple_ordered_table_with_pk
+//             GROUP BY c) as lhs
+//           JOIN
+//             (SELECT c, b, a, SUM(d) as sum1
+//             FROM multiple_ordered_table_with_pk
+//             GROUP BY c) as rhs
+//           ON lhs.b=rhs.b;";
+//
+//         let msg = format!("Creating logical plan for '{sql}'");
+//         let dataframe = ctx.sql(sql).await.expect(&msg);
+//         let physical_plan = dataframe.create_physical_plan().await?;
+//         print_plan(&physical_plan)?;
+//
+//         let expected = vec![
+//             "ProjectionExec: expr=[c@0 as c, c@3 as c, sum1@2 as sum1, sum1@5 as sum1]",
+//             "  CoalesceBatchesExec: target_batch_size=8192",
+//             "    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(b@1, b@1)]",
+//             "      ProjectionExec: expr=[c@0 as c, b@1 as b, SUM(multiple_ordered_table_with_pk.d)@2 as sum1]",
+//             "        AggregateExec: mode=Single, gby=[c@1 as c, b@0 as b], aggr=[SUM(multiple_ordered_table_with_pk.d)], ordering_mode=PartiallyOrdered",
+//             "          CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[b, c, d], output_ordering=[c@1 ASC NULLS LAST], has_header=true",
+//             "      ProjectionExec: expr=[c@0 as c, b@1 as b, SUM(multiple_ordered_table_with_pk.d)@2 as sum1]",
+//             "        AggregateExec: mode=Single, gby=[c@1 as c, b@0 as b], aggr=[SUM(multiple_ordered_table_with_pk.d)], ordering_mode=PartiallyOrdered",
+//             "          CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[b, c, d], output_ordering=[c@1 ASC NULLS LAST], has_header=true",
+//         ];
+//         // Get string representation of the plan
+//         let actual = get_plan_string(&physical_plan);
+//         assert_eq!(
+//             expected, actual,
+//             "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+//         );
+//
+//         let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+//         print_batches(&batches)?;
+//
+//         // assert_eq!(0, 1);
+//         Ok(())
+//     }
+//
+//     #[tokio::test]
+//     #[ignore]
+//     async fn test_subquery3() -> Result<()> {
+//         let config = SessionConfig::new().with_target_partitions(1);
+//         // config.options_mut().optimizer.max_passes = 1;
+//         let ctx = SessionContext::new_with_config(config);
+//         ctx.sql(
+//             "CREATE EXTERNAL TABLE multiple_ordered_table_with_pk (
+//               a0 INTEGER,
+//               a INTEGER,
+//               b INTEGER,
+//               c INTEGER,
+//               d INTEGER,
+//               primary key(c)
+//             )
+//             STORED AS CSV
+//             WITH HEADER ROW
+//             WITH ORDER (a ASC, b ASC)
+//             WITH ORDER (c ASC)
+//             LOCATION '../core/tests/data/window_2.csv'",
+//         )
+//         .await?;
+//
+//         let sql = "SELECT a, b, sum1
+//         FROM (SELECT c, b, a, SUM(d) as sum1
+//            FROM multiple_ordered_table_with_pk
+//            GROUP BY c)
+//         DISTRIBUTE BY a";
+//
+//         let msg = format!("Creating logical plan for '{sql}'");
+//         let dataframe = ctx.sql(sql).await.expect(&msg);
+//         let physical_plan = dataframe.create_physical_plan().await?;
+//         print_plan(&physical_plan)?;
+//
+//         let expected = vec![
+//             "ProjectionExec: expr=[c@0 as c, c@3 as c, sum1@2 as sum1, sum1@5 as sum1]",
+//             "  CoalesceBatchesExec: target_batch_size=8192",
+//             "    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(b@1, b@1)]",
+//             "      ProjectionExec: expr=[c@0 as c, b@1 as b, SUM(multiple_ordered_table_with_pk.d)@2 as sum1]",
+//             "        AggregateExec: mode=Single, gby=[c@1 as c, b@0 as b], aggr=[SUM(multiple_ordered_table_with_pk.d)], ordering_mode=PartiallyOrdered",
+//             "          CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[b, c, d], output_ordering=[c@1 ASC NULLS LAST], has_header=true",
+//             "      ProjectionExec: expr=[c@0 as c, b@1 as b, SUM(multiple_ordered_table_with_pk.d)@2 as sum1]",
+//             "        AggregateExec: mode=Single, gby=[c@1 as c, b@0 as b], aggr=[SUM(multiple_ordered_table_with_pk.d)], ordering_mode=PartiallyOrdered",
+//             "          CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[b, c, d], output_ordering=[c@1 ASC NULLS LAST], has_header=true",
+//         ];
+//         // Get string representation of the plan
+//         let actual = get_plan_string(&physical_plan);
+//         assert_eq!(
+//             expected, actual,
+//             "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+//         );
+//
+//         let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+//         print_batches(&batches)?;
+//
+//         // assert_eq!(0, 1);
+//         Ok(())
+//     }
+//
+//     #[tokio::test]
+//     async fn test_subquery4() -> Result<()> {
+//         let config = SessionConfig::new().with_target_partitions(1);
+//         // config.options_mut().optimizer.max_passes = 1;
+//         let ctx = SessionContext::new_with_config(config);
+//         ctx.sql(
+//             "CREATE TABLE t1(t1_id INT, t1_name TEXT, t1_int INT) AS VALUES
+//             (11, 'a', 1),
+//             (22, 'b', 2),
+//             (33, 'c', 3),
+//             (44, 'd', 4);",
+//         )
+//         .await?;
+//
+//         let sql = "explain verbose SELECT t1_id, (SELECT a FROM (select 1 as a) WHERE a = t1.t1_int) as t2_int from t1";
+//
+//         let msg = format!("Creating logical plan for '{sql}'");
+//         let dataframe = ctx.sql(sql).await.expect(&msg);
+//         let physical_plan = dataframe.create_physical_plan().await?;
+//         print_plan(&physical_plan)?;
+//
+//         // let expected = vec![
+//         //     "ProjectionExec: expr=[t1_id@0 as t1_id, a@2 as t2_int]",
+//         //     "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_int@1 as t1_int, a@3 as a]",
+//         //     "    ProjectionExec: expr=[t1_id@1 as t1_id, t1_int@2 as t1_int, CAST(t1.t1_int AS Int64)@3 as CAST(t1.t1_int AS Int64), a@0 as a]",
+//         //     "      CoalesceBatchesExec: target_batch_size=8192",
+//         //     "        HashJoinExec: mode=CollectLeft, join_type=Right, on=[(a@0, CAST(t1.t1_int AS Int64)@2)]",
+//         //     "          ProjectionExec: expr=[1 as a]",
+//         //     "            EmptyExec: produce_one_row=true",
+//         //     "          ProjectionExec: expr=[t1_id@0 as t1_id, t1_int@1 as t1_int, CAST(t1_int@1 AS Int64) as CAST(t1.t1_int AS Int64)]",
+//         //     "            MemoryExec: partitions=1, partition_sizes=[1]",
+//         // ];
+//         // // Get string representation of the plan
+//         // let actual = get_plan_string(&physical_plan);
+//         // assert_eq!(
+//         //     expected, actual,
+//         //     "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+//         // );
+//
+//         let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+//         print_batches(&batches)?;
+//
+//         // assert_eq!(0, 1);
+//         Ok(())
+//     }
+//
+//     #[tokio::test]
+//     async fn test_subquery5() -> Result<()> {
+//         let config = SessionConfig::new().with_target_partitions(1);
+//         // config.options_mut().optimizer.max_passes = 1;
+//         let ctx = SessionContext::new_with_config(config);
+//         ctx.sql(
+//             "CREATE TABLE right_semi_anti_join_table_t2(t2_id INT UNSIGNED, t2_name VARCHAR)
+//             AS VALUES
+//             (11, 'a'),
+//             (11, 'x'),
+//             (NULL, NULL);",
+//         )
+//             .await?;
+//
+//         ctx.sql(
+//             "CREATE TABLE right_semi_anti_join_table_t1(t1_id INT UNSIGNED, t1_name VARCHAR, t1_int INT UNSIGNED)
+//             AS VALUES
+//             (11, 'a', 1),
+//             (22, 'b', 2),
+//             (33, 'c', 3),
+//             (44, 'd', 4),
+//             (NULL, 'e', 0);",
+//         )
+//             .await?;
+//
+//         let sql = "SELECT t1_id, t1_name, t1_int FROM right_semi_anti_join_table_t2 t2 RIGHT SEMI JOIN right_semi_anti_join_table_t1 t1 on (t2.t2_id = t1.t1_id and t2.t2_name <> t1.t1_name) ORDER BY t1_id";
+//
+//         let msg = format!("Creating logical plan for '{sql}'");
+//         let dataframe = ctx.sql(sql).await.expect(&msg);
+//         let physical_plan = dataframe.create_physical_plan().await?;
+//         print_plan(&physical_plan)?;
+//
+//         let expected = vec![
+//             "SortExec: expr=[t1_id@0 ASC NULLS LAST]",
+//             "  CoalesceBatchesExec: target_batch_size=8192",
+//             "    HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(t2_id@0, t1_id@0)], filter=t2_name@0 != t1_name@1",
+//             "      MemoryExec: partitions=1, partition_sizes=[1]",
+//             "      MemoryExec: partitions=1, partition_sizes=[1]",
+//         ];
+//         // Get string representation of the plan
+//         let actual = get_plan_string(&physical_plan);
+//         assert_eq!(
+//             expected, actual,
+//             "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+//         );
+//
+//         let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+//         print_batches(&batches)?;
+//
+//         // assert_eq!(0, 1);
+//         Ok(())
+//     }
+//
+//     #[tokio::test]
+//     async fn test_subquery6() -> Result<()> {
+//         let config = SessionConfig::new().with_target_partitions(1);
+//         // config.options_mut().optimizer.max_passes = 1;
+//         let ctx = SessionContext::new_with_config(config);
+//
+//         ctx.sql(
+//             "CREATE TABLE join_t1(t1_id INT UNSIGNED, t1_name VARCHAR, t1_int INT UNSIGNED)
+//         AS VALUES
+//         (11, 'a', 1),
+//         (22, 'b', 2),
+//         (33, 'c', 3),
+//         (44, 'd', 4);",
+//         )
+//             .await?;
+//
+//         ctx.sql(
+//             "CREATE TABLE join_t2(t2_id INT UNSIGNED, t2_name VARCHAR, t2_int INT UNSIGNED)
+//             AS VALUES
+//             (11, 'z', 3),
+//             (22, 'y', 1),
+//             (44, 'x', 3),
+//             (55, 'w', 3);",
+//         )
+//             .await?;
+//
+//         let sql = "SELECT *
+//             FROM join_t1
+//             WHERE NOT EXISTS (
+//                 SELECT DISTINCT t2_int
+//                 FROM join_t2
+//                 WHERE join_t1.t1_id + 1 > join_t2.t2_id * 2
+//             )";
+//
+//         let msg = format!("Creating logical plan for '{sql}'");
+//         let dataframe = ctx.sql(sql).await.expect(&msg);
+//         let physical_plan = dataframe.create_physical_plan().await?;
+//         print_plan(&physical_plan)?;
+//
+//         let expected = vec![
+//             "NestedLoopJoinExec: join_type=LeftAnti, filter=CAST(t1_id@0 AS Int64) + 1 > CAST(t2_id@1 AS Int64) * 2",
+//             "  MemoryExec: partitions=1, partition_sizes=[1]",
+//             "  AggregateExec: mode=Single, gby=[t2_id@0 as t2_id], aggr=[]",
+//             "    MemoryExec: partitions=1, partition_sizes=[1]",
+//         ];
+//         // Get string representation of the plan
+//         let actual = get_plan_string(&physical_plan);
+//         assert_eq!(
+//             expected, actual,
+//             "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+//         );
+//
+//         let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+//         print_batches(&batches)?;
+//
+//         // assert_eq!(0, 1);
+//         Ok(())
+//     }
+//
+//     #[tokio::test]
+//     async fn test_subquery7() -> Result<()> {
+//         let config = SessionConfig::new().with_target_partitions(1);
+//         // config.options_mut().optimizer.max_passes = 1;
+//         let ctx = SessionContext::new_with_config(config);
+//
+//         ctx.sql("CREATE TABLE test_non_nullable_decimal(c1 DECIMAL(9,2) NOT NULL); ")
+//             .await?;
+//
+//         let sql = "SELECT c1*0 FROM test_non_nullable_decimal";
+//
+//         let msg = format!("Creating logical plan for '{sql}'");
+//         let dataframe = ctx.sql(sql).await.expect(&msg);
+//         let physical_plan = dataframe.create_physical_plan().await?;
+//         print_plan(&physical_plan)?;
+//
+//         let expected = vec![
+//             "ProjectionExec: expr=[Some(0),20,0 as test_non_nullable_decimal.c1 * Int64(0)]",
+//             "  MemoryExec: partitions=1, partition_sizes=[0]",
+//         ];
+//         // Get string representation of the plan
+//         let actual = get_plan_string(&physical_plan);
+//         assert_eq!(
+//             expected, actual,
+//             "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+//         );
+//
+//         let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+//         print_batches(&batches)?;
+//
+//         // assert_eq!(0, 1);
+//         Ok(())
+//     }
+//
+//     #[tokio::test]
+//     async fn test_subquery8() -> Result<()> {
+//         let config = SessionConfig::new().with_target_partitions(1);
+//         // config.options_mut().optimizer.max_passes = 1;
+//         let ctx = SessionContext::new_with_config(config);
+//
+//         ctx.sql(
+//             "CREATE EXTERNAL TABLE aggregate_test_100 (
+//           c1  VARCHAR NOT NULL,
+//           c2  TINYINT NOT NULL,
+//           c3  SMALLINT NOT NULL,
+//           c4  SMALLINT,
+//           c5  INT,
+//           c6  BIGINT NOT NULL,
+//           c7  SMALLINT NOT NULL,
+//           c8  INT NOT NULL,
+//           c9  INT UNSIGNED NOT NULL,
+//           c10 BIGINT UNSIGNED NOT NULL,
+//           c11 FLOAT NOT NULL,
+//           c12 DOUBLE NOT NULL,
+//           c13 VARCHAR NOT NULL
+//         )
+//         STORED AS CSV
+//         WITH HEADER ROW
+//         LOCATION '../../testing/data/csv/aggregate_test_100.csv'",
+//         )
+//         .await?;
+//
+//         let sql = "WITH indices AS (
+//           SELECT 1 AS idx UNION ALL
+//           SELECT 2 AS idx UNION ALL
+//           SELECT 3 AS idx UNION ALL
+//           SELECT 4 AS idx UNION ALL
+//           SELECT 5 AS idx
+//         )
+//         SELECT data.arr[indices.idx] as element, array_length(data.arr) as array_len, dummy
+//         FROM (
+//           SELECT array_agg(distinct c2) as arr, count(1) as dummy FROM aggregate_test_100
+//         ) data
+//           CROSS JOIN indices
+//         ORDER BY 1";
+//
+//         let msg = format!("Creating logical plan for '{sql}'");
+//         let dataframe = ctx.sql(sql).await.expect(&msg);
+//         let physical_plan = dataframe.create_physical_plan().await?;
+//         print_plan(&physical_plan)?;
+//
+//         let expected = vec![
+//             "SortPreservingMergeExec: [element@0 ASC NULLS LAST]",
+//             "  SortExec: expr=[element@0 ASC NULLS LAST]",
+//             "    ProjectionExec: expr=[(arr@0).[idx@2] as element, array_length(arr@0) as array_len, dummy@1 as dummy]",
+//             "      CrossJoinExec",
+//             "        ProjectionExec: expr=[ARRAY_AGG(DISTINCT aggregate_test_100.c2)@0 as arr, COUNT(Int64(1))@1 as dummy]",
+//             "          AggregateExec: mode=Single, gby=[], aggr=[ARRAY_AGG(DISTINCT aggregate_test_100.c2), COUNT(Int64(1))]",
+//             "            CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2], has_header=true",
+//             "        UnionExec",
+//             "          ProjectionExec: expr=[1 as idx]",
+//             "            EmptyExec: produce_one_row=true",
+//             "          ProjectionExec: expr=[2 as idx]",
+//             "            EmptyExec: produce_one_row=true",
+//             "          ProjectionExec: expr=[3 as idx]",
+//             "            EmptyExec: produce_one_row=true",
+//             "          ProjectionExec: expr=[4 as idx]",
+//             "            EmptyExec: produce_one_row=true",
+//             "          ProjectionExec: expr=[5 as idx]",
+//             "            EmptyExec: produce_one_row=true",
+//         ];
+//         // Get string representation of the plan
+//         let actual = get_plan_string(&physical_plan);
+//         assert_eq!(
+//             expected, actual,
+//             "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+//         );
+//
+//         let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+//         print_batches(&batches)?;
+//
+//         // assert_eq!(0, 1);
+//         Ok(())
+//     }
+//
+//     #[tokio::test]
+//     async fn test_subquery9() -> Result<()> {
+//         let config = SessionConfig::new().with_target_partitions(1);
+//         // config.options_mut().optimizer.max_passes = 1;
+//         let ctx = SessionContext::new_with_config(config);
+//
+//         let sql = "select make_array(NULL), make_array(NULL, NULL, NULL), make_array(make_array(NULL, NULL), make_array(NULL, NULL))";
+//
+//         let msg = format!("Creating logical plan for '{sql}'");
+//         let dataframe = ctx.sql(sql).await.expect(&msg);
+//         let physical_plan = dataframe.create_physical_plan().await?;
+//         print_plan(&physical_plan)?;
+//
+//         let expected = vec![
+//             "ProjectionExec: expr=[NULL as make_array(NULL), NULL,NULL,NULL as make_array(NULL,NULL,NULL), NULL,NULL,NULL,NULL as make_array(make_array(NULL,NULL),make_array(NULL,NULL))]",
+//             "  EmptyExec: produce_one_row=true",
+//         ];
+//         // Get string representation of the plan
+//         let actual = get_plan_string(&physical_plan);
+//         assert_eq!(
+//             expected, actual,
+//             "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+//         );
+//
+//         let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+//         print_batches(&batches)?;
+//
+//         // assert_eq!(0, 1);
+//         Ok(())
+//     }
+//
+//     #[tokio::test]
+//     async fn test_subquery10() -> Result<()> {
+//         let config = SessionConfig::new().with_target_partitions(1);
+//         // config.options_mut().optimizer.max_passes = 1;
+//         let ctx = SessionContext::new_with_config(config);
+//
+//         let sql = "select array_concat(make_array(make_array()), make_array(make_array(1, 2), make_array(3, 4)));";
+//
+//         let msg = format!("Creating logical plan for '{sql}'");
+//         let dataframe = ctx.sql(sql).await.expect(&msg);
+//         let physical_plan = dataframe.create_physical_plan().await?;
+//
+//         print_plan(&physical_plan)?;
+//         let expected = vec![
+//             "ProjectionExec: expr=[1,2,3,4 as array_concat(make_array(make_array()),make_array(make_array(Int64(1),Int64(2)),make_array(Int64(3),Int64(4))))]",
+//             "  EmptyExec: produce_one_row=true",
+//         ];
+//         // Get string representation of the plan
+//         let actual = get_plan_string(&physical_plan);
+//         assert_eq!(
+//             expected, actual,
+//             "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+//         );
+//
+//         let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+//         print_batches(&batches)?;
+//
+//         // assert_eq!(0, 1);
+//         Ok(())
+//     }
+//
+//     #[tokio::test]
+//     async fn test_subquery11() -> Result<()> {
+//         let config = SessionConfig::new().with_target_partitions(1);
+//         // config.options_mut().optimizer.max_passes = 1;
+//         let ctx = SessionContext::new_with_config(config);
+//
+//         let sql = "select array_concat(make_array([1,2], [3,4]), make_array(5, 6));";
+//
+//         let msg = format!("Creating logical plan for '{sql}'");
+//         let dataframe = ctx.sql(sql).await.expect(&msg);
+//         let physical_plan = dataframe.create_physical_plan().await?;
+//
+//         print_plan(&physical_plan)?;
+//         let expected = vec![
+//             "ProjectionExec: expr=[1,2,3,4,5,6 as array_concat(make_array(List([1,2]),List([3,4])),make_array(Int64(5),Int64(6)))]",
+//             "  EmptyExec: produce_one_row=true",
+//         ];
+//         // Get string representation of the plan
+//         let actual = get_plan_string(&physical_plan);
+//         assert_eq!(
+//             expected, actual,
+//             "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+//         );
+//
+//         let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+//         print_batches(&batches)?;
+//
+//         // assert_eq!(0, 1);
+//         Ok(())
+//     }
+//
+//     #[tokio::test]
+//     async fn test_subquery12() -> Result<()> {
+//         let config = SessionConfig::new().with_target_partitions(1);
+//         // config.options_mut().optimizer.max_passes = 1;
+//         let ctx = SessionContext::new_with_config(config);
+//
+//         let sql = "select make_array(1,2,3) @> make_array(1,3);";
+//
+//         let msg = format!("Creating logical plan for '{sql}'");
+//         let dataframe = ctx.sql(sql).await.expect(&msg);
+//         let physical_plan = dataframe.create_physical_plan().await?;
+//
+//         print_plan(&physical_plan)?;
+//         let expected = vec![
+//             "ProjectionExec: expr=[true as make_array(Int64(1),Int64(2),Int64(3)) @> make_array(Int64(1),Int64(3))]",
+//             "  EmptyExec: produce_one_row=true",
+//         ];
+//         // Get string representation of the plan
+//         let actual = get_plan_string(&physical_plan);
+//         assert_eq!(
+//             expected, actual,
+//             "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+//         );
+//
+//         let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+//         print_batches(&batches)?;
+//
+//         // assert_eq!(0, 1);
+//         Ok(())
+//     }
+//
+//     #[tokio::test]
+//     async fn test_subquery13() -> Result<()> {
+//         let config = SessionConfig::new().with_target_partitions(1);
+//         // config.options_mut().optimizer.max_passes = 1;
+//         let ctx = SessionContext::new_with_config(config);
+//
+//         let sql = "select empty(NULL);";
+//
+//         let msg = format!("Creating logical plan for '{sql}'");
+//         let dataframe = ctx.sql(sql).await.expect(&msg);
+//         let physical_plan = dataframe.create_physical_plan().await?;
+//
+//         print_plan(&physical_plan)?;
+//         let expected = vec![
+//             "ProjectionExec: expr=[NULL as empty(NULL)]",
+//             "  EmptyExec: produce_one_row=true",
+//         ];
+//         // Get string representation of the plan
+//         let actual = get_plan_string(&physical_plan);
+//         assert_eq!(
+//             expected, actual,
+//             "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+//         );
+//
+//         let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+//         print_batches(&batches)?;
+//
+//         // assert_eq!(0, 1);
+//         Ok(())
+//     }
+//
+//     #[tokio::test]
+//     async fn test_subquery14() -> Result<()> {
+//         let config = SessionConfig::new().with_target_partitions(1);
+//         // config.options_mut().optimizer.max_passes = 1;
+//         let ctx = SessionContext::new_with_config(config);
+//         ctx.sql(
+//             "CREATE EXTERNAL TABLE hits
+//             STORED AS PARQUET
+//             LOCATION '../core/tests/data/clickbench_hits_10.parquet';",
+//         )
+//         .await?;
+//         let sql = "SELECT \"RegionID\", COUNT(DISTINCT \"UserID\") AS u FROM hits GROUP BY \"RegionID\" ORDER BY u DESC LIMIT 10;";
+//         // let sql = "explain verbose SELECT 'RegionID', COUNT(DISTINCT 'UserID') AS u FROM hits GROUP BY 'RegionID' ORDER BY u DESC LIMIT 10;";
+//         // let sql = "explain verbose SELECT RegionID, COUNT(DISTINCT UserID) AS u FROM hits GROUP BY RegionID ORDER BY u DESC LIMIT 10;";
+//
+//         let msg = format!("Creating logical plan for '{sql}'");
+//         let dataframe = ctx.sql(sql).await.expect(&msg);
+//         let physical_plan = dataframe.create_physical_plan().await?;
+//
+//         print_plan(&physical_plan)?;
+//         let expected = vec![
+//             "GlobalLimitExec: skip=0, fetch=10",
+//             "  SortExec: fetch=10, expr=[u@1 DESC]",
+//             "    ProjectionExec: expr=[RegionID@0 as RegionID, COUNT(DISTINCT hits.UserID)@1 as u]",
+//             "      AggregateExec: mode=Single, gby=[RegionID@0 as RegionID], aggr=[COUNT(DISTINCT hits.UserID)]",
+//             "        ParquetExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[RegionID, UserID]",
+//         ];
+//         // Get string representation of the plan
+//         let actual = get_plan_string(&physical_plan);
+//         assert_eq!(
+//             expected, actual,
+//             "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+//         );
+//
+//         let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+//         print_batches(&batches)?;
+//
+//         // assert_eq!(0, 1);
+//         Ok(())
+//     }
+// }
