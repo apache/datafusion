@@ -58,7 +58,6 @@ use datafusion_common::{not_impl_err, DataFusionError, FileType};
 use datafusion_execution::TaskContext;
 use datafusion_physical_plan::metrics::MetricsSet;
 
-
 /// New line delimited JSON `FileFormat` implementation.
 #[derive(Debug)]
 pub struct JsonFormat {

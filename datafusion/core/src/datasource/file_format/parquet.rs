@@ -23,9 +23,9 @@ use std::fmt::Debug;
 use std::io::Write;
 use std::sync::Arc;
 
+use super::write::demux::start_demuxer_task;
 use super::write::{create_writer, AbortableWrite, FileWriterMode};
 use super::{FileFormat, FileScanConfig};
-use super::write::demux::start_demuxer_task;
 use crate::arrow::array::{
     BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array,
 };
