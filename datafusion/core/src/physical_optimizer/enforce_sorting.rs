@@ -2647,7 +2647,7 @@ mod tmp_tests {
         LOCATION '../../testing/data/csv/aggregate_test_100.csv'")
             .await?;
 
-        let sql = "explain verbose WITH indices AS (
+        let sql = "WITH indices AS (
           SELECT 1 AS idx UNION ALL
           SELECT 2 AS idx UNION ALL
           SELECT 3 AS idx UNION ALL
@@ -2666,16 +2666,63 @@ mod tmp_tests {
         let physical_plan = dataframe.create_physical_plan().await?;
         print_plan(&physical_plan)?;
 
-        // let expected = vec![
-        //     "ProjectionExec: expr=[Some(0),20,0 as test_non_nullable_decimal.c1 * Int64(0)]",
-        //     "  MemoryExec: partitions=1, partition_sizes=[0]",
-        // ];
-        // // Get string representation of the plan
-        // let actual = get_plan_string(&physical_plan);
-        // assert_eq!(
-        //     expected, actual,
-        //     "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-        // );
+        let expected = vec![
+            "SortPreservingMergeExec: [element@0 ASC NULLS LAST]",
+            "  SortExec: expr=[element@0 ASC NULLS LAST]",
+            "    ProjectionExec: expr=[(arr@0).[idx@2] as element, array_length(arr@0) as array_len, dummy@1 as dummy]",
+            "      CrossJoinExec",
+            "        ProjectionExec: expr=[ARRAY_AGG(DISTINCT aggregate_test_100.c2)@0 as arr, COUNT(Int64(1))@1 as dummy]",
+            "          AggregateExec: mode=Single, gby=[], aggr=[ARRAY_AGG(DISTINCT aggregate_test_100.c2), COUNT(Int64(1))]",
+            "            CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2], has_header=true",
+            "        UnionExec",
+            "          ProjectionExec: expr=[1 as idx]",
+            "            EmptyExec: produce_one_row=true",
+            "          ProjectionExec: expr=[2 as idx]",
+            "            EmptyExec: produce_one_row=true",
+            "          ProjectionExec: expr=[3 as idx]",
+            "            EmptyExec: produce_one_row=true",
+            "          ProjectionExec: expr=[4 as idx]",
+            "            EmptyExec: produce_one_row=true",
+            "          ProjectionExec: expr=[5 as idx]",
+            "            EmptyExec: produce_one_row=true",
+        ];
+        // Get string representation of the plan
+        let actual = get_plan_string(&physical_plan);
+        assert_eq!(
+            expected, actual,
+            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+        print_batches(&batches)?;
+
+        // assert_eq!(0, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_subquery9() -> Result<()> {
+        let config = SessionConfig::new().with_target_partitions(1);
+        // config.options_mut().optimizer.max_passes = 1;
+        let ctx = SessionContext::new_with_config(config);
+
+        let sql = "select make_array(NULL), make_array(NULL, NULL, NULL), make_array(make_array(NULL, NULL), make_array(NULL, NULL))";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        print_plan(&physical_plan)?;
+
+        let expected = vec![
+            "ProjectionExec: expr=[NULL as make_array(ACT_NULL), NULL,NULL,NULL as make_array(ACT_NULL,ACT_NULL,ACT_NULL), NULL,NULL,NULL,NULL as make_array(make_array(ACT_NULL,ACT_NULL),make_array(ACT_NULL,ACT_NULL))]",
+            "  EmptyExec: produce_one_row=true",
+        ];
+        // Get string representation of the plan
+        let actual = get_plan_string(&physical_plan);
+        assert_eq!(
+            expected, actual,
+            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
 
         let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
         print_batches(&batches)?;

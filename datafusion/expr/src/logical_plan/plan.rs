@@ -590,11 +590,10 @@ impl LogicalPlan {
         inputs: &[LogicalPlan],
     ) -> Result<LogicalPlan> {
         match self {
-            LogicalPlan::Projection(Projection { schema, .. }) => {
-                Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
+            LogicalPlan::Projection(Projection { .. }) => {
+                Ok(LogicalPlan::Projection(Projection::try_new(
                     expr,
                     Arc::new(inputs[0].clone()),
-                    schema.clone(),
                 )?))
             }
             LogicalPlan::Dml(DmlStatement {

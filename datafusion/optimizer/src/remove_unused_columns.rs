@@ -167,9 +167,15 @@ fn try_optimize_internal(
         LogicalPlan::Projection(proj) => {
             let exprs_used = get_at_indices(&proj.expr, &indices);
             let required_indices = get_referred_indices(&proj.input, &exprs_used)?;
-            println!("indices: {:?}, required_indices:{:?}", indices, required_indices);
-            println!("proj.expr: {:?}", proj.expr);
-            println!("exprs_used: {:?}", exprs_used);
+            // println!("indices: {:?}, required_indices:{:?}", indices, required_indices);
+            // println!("proj.expr: {:?}", proj.expr);
+            // println!("exprs_used: {:?}", exprs_used);
+            // println!("proj.input.schema():{:?}", proj.input.schema());
+            // for elem in &proj.expr{
+            //     let cols = elem.to_columns()?;
+            //     // println!("cols:{:?}", cols);
+            //     // println!("elem:{:?}", elem);
+            // }
             let projection_input = if let Some(input) =
                 try_optimize_internal(&proj.input, _config, required_indices)?
             {
@@ -177,7 +183,11 @@ fn try_optimize_internal(
             } else {
                 proj.input.clone()
             };
+            // println!("      proj.input.schema:{:?}", proj.input.schema());
+            // println!("projection_input.schema:{:?}", projection_input.schema());
             let new_proj = Projection::try_new(exprs_used, projection_input)?;
+            // println!("    proj.schema: {:?}", proj.schema);
+            // println!("new_proj.schema: {:?}", new_proj.schema);
             return Ok(Some(LogicalPlan::Projection(new_proj)));
         }
         LogicalPlan::Aggregate(aggregate) => {
@@ -253,9 +263,9 @@ fn try_optimize_internal(
                     &indices,
                     &join.join_type,
                 );
-            println!("left_requirements_from_parent:{:?}", left_requirements_from_parent);
-            println!("right_requirements_from_parent:{:?}", right_requirements_from_parent);
-            println!("indices:{:?}", indices);
+            // println!("left_requirements_from_parent:{:?}", left_requirements_from_parent);
+            // println!("right_requirements_from_parent:{:?}", right_requirements_from_parent);
+            // println!("indices:{:?}", indices);
             let (left_on, right_on): (Vec<_>, Vec<_>) = join.on.iter().cloned().unzip();
             let join_filter = &join
                 .filter
