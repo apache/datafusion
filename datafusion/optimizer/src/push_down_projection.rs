@@ -36,7 +36,6 @@ use datafusion_expr::{
     utils::{expr_to_columns, exprlist_to_columns},
     Expr, LogicalPlanBuilder, SubqueryAlias,
 };
-use itertools::Itertools;
 use std::collections::HashMap;
 use std::{
     collections::{BTreeSet, HashSet},
@@ -150,7 +149,9 @@ impl OptimizerRule for PushDownProjection {
             {
                 let mut used_columns: HashSet<Column> = HashSet::new();
                 if projection_is_empty {
-                    let field = find_small_field(scan.projected_schema.fields());
+                    let field = find_small_field(&scan.projected_schema.fields()).ok_or(
+                        DataFusionError::Internal("Scan with empty schema".to_string()),
+                    )?;
                     used_columns.insert(field.qualified_column());
                     push_down_scan(&used_columns, scan, true)?
                 } else {
@@ -163,7 +164,9 @@ impl OptimizerRule for PushDownProjection {
                 }
             }
             LogicalPlan::Values(values) if projection_is_empty => {
-                let field = find_small_field(values.schema.fields());
+                let field = find_small_field(&values.schema.fields()).ok_or(
+                    DataFusionError::Internal("Values with empty schema".to_string()),
+                )?;
                 let column = Expr::Column(field.qualified_column());
 
                 LogicalPlan::Projection(Projection::try_new(
@@ -428,7 +431,10 @@ pub fn collect_projection_expr(projection: &Projection) -> HashMap<String, Expr>
 
 /// Accumulate the memory size of a data type measured in bits.
 ///
-/// Nested types are traversed and increment `nesting` on every level.
+/// Types with a variable size get assigned with a fixed size which is greater than most
+/// primitive types.
+///
+/// While traversing nested types, `nesting` is incremented on every level.
 fn nested_size(data_type: &DataType, nesting: &mut usize) -> usize {
     use DataType::*;
     if data_type.is_primitive() {
@@ -489,27 +495,19 @@ fn nested_size(data_type: &DataType, nesting: &mut usize) -> usize {
 
 /// Find a field with a presumable small memory footprint based on its data type's memory size
 /// and the level of nesting.
-fn find_small_field(fields: &[DFField]) -> DFField {
-    let mut indexed_fields = fields
+fn find_small_field(fields: &[DFField]) -> Option<DFField> {
+    fields
         .iter()
         .map(|f| {
             let nesting = &mut 0;
-            let size = nested_size(f.field().data_type(), nesting);
+            let size = nested_size(f.data_type(), nesting);
             (*nesting, size)
         })
         .enumerate()
-        .collect_vec();
-
-    let (i, _) = indexed_fields
-        .select_nth_unstable_by(
-            0,
-            |(_, (nesting_a, size_a)), (_, (nesting_b, size_b))| {
-                nesting_a.cmp(nesting_b).then(size_a.cmp(size_b))
-            },
-        )
-        .1;
-
-    fields[*i].clone()
+        .min_by(|(_, (nesting_a, size_a)), (_, (nesting_b, size_b))| {
+            nesting_a.cmp(nesting_b).then(size_a.cmp(size_b))
+        })
+        .map(|(i, _)| fields[i].clone())
 }
 
 /// Get the projection exprs from columns in the order of the schema
@@ -578,21 +576,14 @@ fn push_down_scan(
         .filter_map(ArrowResult::ok)
         .collect();
 
-    if projection.is_empty() && !has_projection {
-        if has_projection && !schema.fields().is_empty() {
-            // Ensure that we are reading at least one column from the table in case the query
-            // does not reference any columns directly such as "SELECT COUNT(1) FROM table",
-            // except when the table is empty (no column)
-            projection.insert(0);
-        } else {
-            // for table scan without projection, we default to return all columns
-            projection = schema
-                .fields()
-                .iter()
-                .enumerate()
-                .map(|(i, _)| i)
-                .collect::<BTreeSet<usize>>();
-        }
+    if !has_projection && projection.is_empty() {
+        // for table scan without projection, we default to return all columns
+        projection = schema
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(i, _)| i)
+            .collect::<BTreeSet<usize>>();
     }
 
     // Building new projection from BTreeSet
@@ -1295,19 +1286,19 @@ mod tests {
                 list_i64.clone(),
                 time_s.clone()
             ]),
-            int32.clone()
+            Some(int32.clone())
         );
         assert_eq!(
             find_small_field(&[bin.clone(), list_i64.clone(), time_s.clone()]),
-            time_s.clone()
+            Some(time_s.clone())
         );
         assert_eq!(
             find_small_field(&[time_s.clone(), int32.clone()]),
-            time_s.clone()
+            Some(time_s.clone())
         );
         assert_eq!(
             find_small_field(&[bin.clone(), list_i64.clone()]),
-            bin.clone()
+            Some(bin.clone())
         );
     }
 }
