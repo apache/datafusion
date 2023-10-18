@@ -137,15 +137,28 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         // (evaluating constants can enable new simplifications and
         // simplifications can enable new constant evaluation)
         // https://github.com/apache/arrow-datafusion/issues/1160
-        // println!("expr before const: {:?}", expr);
+        let expr_before = expr.clone();
         let expr = expr.rewrite(&mut const_evaluator)?;
-            // println!("expr after const: {:?}", expr);
-            expr.rewrite(&mut simplifier)?
-            .rewrite(&mut or_in_list_simplifier)?
-            .rewrite(&mut guarantee_rewriter)?
+        // println!("after const");
+        // println!("expr after const: {:?}", expr);
+        let expr = expr.rewrite(&mut simplifier)?;
+        // println!("after simplifier");
+        let expr =expr.rewrite(&mut or_in_list_simplifier)?;
+        // println!("after or_in_list_simplifier");
+        let expr =expr.rewrite(&mut guarantee_rewriter)?;
+        // println!("after guarantee_rewriter");
+        let expr =expr.rewrite(&mut const_evaluator)?;
+        // println!("after const_evaluator");
+        let expr =expr.rewrite(&mut simplifier)?;
+        // println!("after simplifier");
+        // println!("expr before {:?}", expr_before);
+        // println!("expr after: {:?}", expr);
+        Ok(expr)
+            // .rewrite(&mut or_in_list_simplifier)?
+            // .rewrite(&mut guarantee_rewriter)?
             // run both passes twice to try an minimize simplifications that we missed
-            .rewrite(&mut const_evaluator)?
-            .rewrite(&mut simplifier)
+            // .rewrite(&mut const_evaluator)?
+            // .rewrite(&mut simplifier)
     }
 
     /// Apply type coercion to an [`Expr`] so that it can be

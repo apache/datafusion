@@ -124,10 +124,9 @@ impl CommonSubexprEliminate {
         let (mut new_expr, new_input) =
             self.rewrite_expr(&[expr], &[&arrays], input, &expr_set, config)?;
 
-        Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
+        Ok(LogicalPlan::Projection(Projection::try_new(
             pop_expr(&mut new_expr)?,
             Arc::new(new_input),
-            schema.clone(),
         )?))
     }
 

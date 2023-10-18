@@ -2869,6 +2869,8 @@ mod tmp_tests {
         )
             .await?;
         let sql = "SELECT \"RegionID\", COUNT(DISTINCT \"UserID\") AS u FROM hits GROUP BY \"RegionID\" ORDER BY u DESC LIMIT 10;";
+        // let sql = "explain verbose SELECT 'RegionID', COUNT(DISTINCT 'UserID') AS u FROM hits GROUP BY 'RegionID' ORDER BY u DESC LIMIT 10;";
+        // let sql = "explain verbose SELECT RegionID, COUNT(DISTINCT UserID) AS u FROM hits GROUP BY RegionID ORDER BY u DESC LIMIT 10;";
 
         let msg = format!("Creating logical plan for '{sql}'");
         let dataframe = ctx.sql(sql).await.expect(&msg);
@@ -2876,8 +2878,11 @@ mod tmp_tests {
 
         print_plan(&physical_plan)?;
         let expected = vec![
-            "ProjectionExec: expr=[NULL as empty(NULL)]",
-            "  EmptyExec: produce_one_row=true",
+            "GlobalLimitExec: skip=0, fetch=10",
+            "  SortExec: fetch=10, expr=[u@1 DESC]",
+            "    ProjectionExec: expr=[RegionID@0 as RegionID, COUNT(DISTINCT hits.UserID)@1 as u]",
+            "      AggregateExec: mode=Single, gby=[RegionID@0 as RegionID], aggr=[COUNT(DISTINCT hits.UserID)]",
+            "        ParquetExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[RegionID, UserID]",
         ];
         // Get string representation of the plan
         let actual = get_plan_string(&physical_plan);

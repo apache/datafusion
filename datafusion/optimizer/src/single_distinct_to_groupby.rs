@@ -203,10 +203,9 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                     )?);
 
                     Ok(Some(LogicalPlan::Projection(
-                        Projection::try_new_with_schema(
+                        Projection::try_new(
                             alias_expr,
                             Arc::new(outer_aggr),
-                            schema.clone(),
                         )?,
                     )))
                 } else {

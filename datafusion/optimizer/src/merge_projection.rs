@@ -84,10 +84,10 @@ pub(super) fn merge_projection(
             Err(e) => Err(e),
         })
         .collect::<Result<Vec<_>>>()?;
-    let new_plan = LogicalPlan::Projection(Projection::try_new_with_schema(
+    let new_plan = LogicalPlan::Projection(Projection::try_new(
         new_exprs,
         child_projection.input.clone(),
-        parent_projection.schema.clone(),
+        // parent_projection.schema.clone(),
     )?);
     Ok(new_plan)
 }
