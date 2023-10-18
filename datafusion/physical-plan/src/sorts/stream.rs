@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::sorts::cursor::{ArrayValues, CursorRows, FieldArray};
+use crate::sorts::cursor::{ArrayValues, RowValues, FieldArray};
 use crate::SendableRecordBatchStream;
 use crate::{PhysicalExpr, PhysicalSortExpr};
 use arrow::array::Array;
@@ -76,7 +76,7 @@ impl FusedStreams {
 }
 
 /// A [`PartitionedStream`] that wraps a set of [`SendableRecordBatchStream`]
-/// and computes [`RowCursor`] based on the provided [`PhysicalSortExpr`]
+/// and computes [`RowValues`] based on the provided [`PhysicalSortExpr`]
 #[derive(Debug)]
 pub struct RowCursorStream {
     /// Converter to convert output of physical expressions
@@ -114,7 +114,7 @@ impl RowCursorStream {
         })
     }
 
-    fn convert_batch(&mut self, batch: &RecordBatch) -> Result<CursorRows> {
+    fn convert_batch(&mut self, batch: &RecordBatch) -> Result<RowValues> {
         let cols = self
             .column_expressions
             .iter()
@@ -127,12 +127,12 @@ impl RowCursorStream {
         // track the memory in the newly created Rows.
         let mut rows_reservation = self.reservation.new_empty();
         rows_reservation.try_grow(rows.size())?;
-        Ok(CursorRows::new(rows, rows_reservation))
+        Ok(RowValues::new(rows, rows_reservation))
     }
 }
 
 impl PartitionedStream for RowCursorStream {
-    type Output = Result<(CursorRows, RecordBatch)>;
+    type Output = Result<(RowValues, RecordBatch)>;
 
     fn partitions(&self) -> usize {
         self.streams.0.len()

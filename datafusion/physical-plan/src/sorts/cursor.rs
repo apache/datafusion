@@ -85,7 +85,7 @@ impl<T: CursorValues> Ord for Cursor<T> {
 
 /// Implements [`CursorValues`] for [`Rows`]
 #[derive(Debug)]
-pub struct CursorRows {
+pub struct RowValues {
     rows: Rows,
 
     /// Tracks for the memory used by in the `Rows` of this
@@ -94,8 +94,8 @@ pub struct CursorRows {
     reservation: MemoryReservation,
 }
 
-impl CursorRows {
-    /// Create a new [`CursorRows`] from `rows` and a `reservation`
+impl RowValues {
+    /// Create a new [`RowValues`] from `rows` and a `reservation`
     /// that tracks its memory. There must be at least one row
     ///
     /// Panics if the reservation is not for exactly `rows.size()`
@@ -111,7 +111,7 @@ impl CursorRows {
     }
 }
 
-impl CursorValues for CursorRows {
+impl CursorValues for RowValues {
     fn len(&self) -> usize {
         self.rows.num_rows()
     }
@@ -125,7 +125,7 @@ impl CursorValues for CursorRows {
     }
 }
 
-/// An [`Array`] that can be converted into [`FieldValues`]
+/// An [`Array`] that can be converted into [`CursorValues`]
 pub trait FieldArray: Array + 'static {
     type Values: CursorValues;
 
