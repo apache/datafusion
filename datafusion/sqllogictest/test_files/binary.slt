@@ -217,30 +217,51 @@ SELECT largebinary FROM t ORDER BY largebinary;
 NULL
 
 # LIKE
-# https://github.com/apache/arrow-datafusion/issues/7342
-query error DataFusion error: type_coercion
-SELECT binary FROM t where binary LIKE '%F';
+query ?
+SELECT binary FROM t where binary LIKE '%F%';
+----
+466f6f
+466f6f426172
 
-query error DataFusion error: type_coercion
-SELECT largebinary FROM t where largebinary LIKE '%F';
-
+query ?
+SELECT largebinary FROM t where largebinary LIKE '%F%';
+----
+466f6f
+466f6f426172
 
 # character_length function
-# https://github.com/apache/arrow-datafusion/issues/7344
-query error DataFusion error: Error during planning: The "character_length" function can only accept strings, but got Binary\.
+query TITI
 SELECT
   cast(binary as varchar) as str,
   character_length(binary) as binary_len,
   cast(largebinary as varchar) as large_str,
   character_length(binary) as largebinary_len
 from t;
+----
+Foo 3 Foo 3
+NULL NULL NULL NULL
+Bar 3 Bar 3
+FooBar 6 FooBar 6
+
+query I
+SELECT character_length(X'20');
+----
+1
+
+# still errors on values that can not be coerced to utf8
+query error Encountered non UTF\-8 data: invalid utf\-8 sequence of 1 bytes from index 0
+SELECT character_length(X'c328');
 
 # regexp_replace
-# https://github.com/apache/arrow-datafusion/issues/7345
-query error DataFusion error: Error during planning: The "regexp_replace" function can only accept strings, but got Binary\.
+query TTTT
 SELECT
   cast(binary as varchar) as str,
   regexp_replace(binary, 'F', 'f') as binary_replaced,
   cast(largebinary as varchar) as large_str,
   regexp_replace(largebinary, 'F', 'f') as large_binary_replaced
 from t;
+----
+Foo foo Foo foo
+NULL NULL NULL NULL
+Bar Bar Bar Bar
+FooBar fooBar FooBar fooBar
