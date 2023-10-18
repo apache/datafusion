@@ -24,6 +24,7 @@ use arrow::datatypes::{
     DataType, Field, Fields, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
     Schema, SchemaRef, TimeUnit, UnionFields, UnionMode,
 };
+
 use prost::Message;
 
 use datafusion::datasource::provider::TableProviderFactory;
@@ -512,59 +513,6 @@ fn scalar_values_error_serialization() {
             Some(vec![]),
             vec![Field::new("item", DataType::Int16, true)].into(),
         ),
-        // Should fail due to inconsistent types in the list
-        ScalarValue::new_list(
-            Some(vec![
-                ScalarValue::Int16(None),
-                ScalarValue::Float32(Some(32.0)),
-            ]),
-            DataType::List(new_arc_field("item", DataType::Int16, true)),
-        ),
-        ScalarValue::new_list(
-            Some(vec![
-                ScalarValue::Float32(None),
-                ScalarValue::Float32(Some(32.0)),
-            ]),
-            DataType::List(new_arc_field("item", DataType::Int16, true)),
-        ),
-        ScalarValue::new_list(
-            Some(vec![
-                ScalarValue::Float32(None),
-                ScalarValue::Float32(Some(32.0)),
-            ]),
-            DataType::Int16,
-        ),
-        ScalarValue::new_list(
-            Some(vec![
-                ScalarValue::new_list(
-                    None,
-                    DataType::List(new_arc_field("level2", DataType::Float32, true)),
-                ),
-                ScalarValue::new_list(
-                    Some(vec![
-                        ScalarValue::Float32(Some(-213.1)),
-                        ScalarValue::Float32(None),
-                        ScalarValue::Float32(Some(5.5)),
-                        ScalarValue::Float32(Some(2.0)),
-                        ScalarValue::Float32(Some(1.0)),
-                    ]),
-                    DataType::List(new_arc_field("level2", DataType::Float32, true)),
-                ),
-                ScalarValue::new_list(
-                    None,
-                    DataType::List(new_arc_field(
-                        "lists are typed inconsistently",
-                        DataType::Int16,
-                        true,
-                    )),
-                ),
-            ]),
-            DataType::List(new_arc_field(
-                "level1",
-                DataType::List(new_arc_field("level2", DataType::Float32, true)),
-                true,
-            )),
-        ),
     ];
 
     for test_case in should_fail_on_seralize.into_iter() {
@@ -599,7 +547,7 @@ fn round_trip_scalar_values() {
         ScalarValue::UInt64(None),
         ScalarValue::Utf8(None),
         ScalarValue::LargeUtf8(None),
-        ScalarValue::new_list(None, DataType::Boolean),
+        ScalarValue::List(ScalarValue::new_list(&[], &DataType::Boolean)),
         ScalarValue::Date32(None),
         ScalarValue::Boolean(Some(true)),
         ScalarValue::Boolean(Some(false)),
@@ -690,32 +638,32 @@ fn round_trip_scalar_values() {
             i64::MAX,
         ))),
         ScalarValue::IntervalMonthDayNano(None),
-        ScalarValue::new_list(
-            Some(vec![
+        ScalarValue::List(ScalarValue::new_list(
+            &[
                 ScalarValue::Float32(Some(-213.1)),
                 ScalarValue::Float32(None),
                 ScalarValue::Float32(Some(5.5)),
                 ScalarValue::Float32(Some(2.0)),
                 ScalarValue::Float32(Some(1.0)),
-            ]),
-            DataType::Float32,
-        ),
-        ScalarValue::new_list(
-            Some(vec![
-                ScalarValue::new_list(None, DataType::Float32),
-                ScalarValue::new_list(
-                    Some(vec![
+            ],
+            &DataType::Float32,
+        )),
+        ScalarValue::List(ScalarValue::new_list(
+            &[
+                ScalarValue::List(ScalarValue::new_list(&[], &DataType::Float32)),
+                ScalarValue::List(ScalarValue::new_list(
+                    &[
                         ScalarValue::Float32(Some(-213.1)),
                         ScalarValue::Float32(None),
                         ScalarValue::Float32(Some(5.5)),
                         ScalarValue::Float32(Some(2.0)),
                         ScalarValue::Float32(Some(1.0)),
-                    ]),
-                    DataType::Float32,
-                ),
-            ]),
-            DataType::List(new_arc_field("item", DataType::Float32, true)),
-        ),
+                    ],
+                    &DataType::Float32,
+                )),
+            ],
+            &DataType::List(new_arc_field("item", DataType::Float32, true)),
+        )),
         ScalarValue::Dictionary(
             Box::new(DataType::Int32),
             Box::new(ScalarValue::Utf8(Some("foo".into()))),
@@ -978,7 +926,6 @@ fn roundtrip_null_scalar_values() {
         ScalarValue::Date32(None),
         ScalarValue::TimestampMicrosecond(None, None),
         ScalarValue::TimestampNanosecond(None, None),
-        ScalarValue::List(None, Arc::new(Field::new("item", DataType::Boolean, false))),
     ];
 
     for test_case in test_types.into_iter() {

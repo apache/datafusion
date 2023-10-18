@@ -15,12 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use crate::cache::CacheAccessor;
-use dashmap::DashMap;
+
 use datafusion_common::Statistics;
+
+use dashmap::DashMap;
 use object_store::path::Path;
 use object_store::ObjectMeta;
-use std::sync::Arc;
 
 /// Collected statistics for files
 /// Cache is invalided when file size or last modification has changed
@@ -158,6 +161,7 @@ impl CacheAccessor<Path, Arc<Vec<ObjectMeta>>> for DefaultListFilesCache {
 mod tests {
     use crate::cache::cache_unit::{DefaultFileStatisticsCache, DefaultListFilesCache};
     use crate::cache::CacheAccessor;
+    use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use chrono::DateTime;
     use datafusion_common::Statistics;
     use object_store::path::Path;
@@ -173,11 +177,19 @@ mod tests {
             size: 1024,
             e_tag: None,
         };
-
         let cache = DefaultFileStatisticsCache::default();
         assert!(cache.get_with_extra(&meta.location, &meta).is_none());
 
-        cache.put_with_extra(&meta.location, Statistics::default().into(), &meta);
+        cache.put_with_extra(
+            &meta.location,
+            Statistics::new_unknown(&Schema::new(vec![Field::new(
+                "test_column",
+                DataType::Timestamp(TimeUnit::Second, None),
+                false,
+            )]))
+            .into(),
+            &meta,
+        );
         assert!(cache.get_with_extra(&meta.location, &meta).is_some());
 
         // file size changed

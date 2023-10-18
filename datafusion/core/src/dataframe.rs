@@ -1229,7 +1229,42 @@ impl DataFrame {
         Ok(DataFrame::new(self.session_state, project_plan))
     }
 
-    /// Convert a prepare logical plan into its inner logical plan with all params replaced with their corresponding values
+    /// Replace all parameters in logical plan with the specified
+    /// values, in preparation for execution.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use datafusion::prelude::*;
+    /// # use datafusion::{error::Result, assert_batches_eq};
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// # use datafusion_common::ScalarValue;
+    /// let mut ctx = SessionContext::new();
+    /// # ctx.register_csv("example", "tests/data/example.csv", CsvReadOptions::new()).await?;
+    /// let results = ctx
+    ///   .sql("SELECT a FROM example WHERE b = $1")
+    ///   .await?
+    ///    // replace $1 with value 2
+    ///   .with_param_values(vec![
+    ///      // value at index 0 --> $1
+    ///      ScalarValue::from(2i64)
+    ///    ])?
+    ///   .collect()
+    ///   .await?;
+    /// assert_batches_eq!(
+    ///  &[
+    ///    "+---+",
+    ///    "| a |",
+    ///    "+---+",
+    ///    "| 1 |",
+    ///    "+---+",
+    ///  ],
+    ///  &results
+    /// );
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn with_param_values(self, param_values: Vec<ScalarValue>) -> Result<Self> {
         let plan = self.plan.with_param_values(param_values)?;
         Ok(Self::new(self.session_state, plan))

@@ -395,7 +395,7 @@ fn array_array(args: &[ArrayRef], data_type: DataType) -> Result<ArrayRef> {
 /// `ListArray`
 ///
 /// See [`array_array`] for more details.
-fn array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
+fn array(values: &[ColumnarValue]) -> Result<ArrayRef> {
     let arrays: Vec<ArrayRef> = values
         .iter()
         .map(|x| match x {
@@ -417,26 +417,17 @@ fn array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
 
     match data_type {
         // empty array
-        None => Ok(ColumnarValue::Scalar(ScalarValue::new_list(
-            Some(vec![]),
-            DataType::Null,
-        ))),
+        None => {
+            let list_arr = ScalarValue::new_list(&[], &DataType::Null);
+            Ok(Arc::new(list_arr))
+        }
         // all nulls, set default data type as int32
         Some(DataType::Null) => {
-            let nulls = arrays.len();
-            let null_arr = Int32Array::from(vec![None; nulls]);
-            let field = Arc::new(Field::new("item", DataType::Int32, true));
-            let offsets = OffsetBuffer::from_lengths([nulls]);
-            let values = Arc::new(null_arr) as ArrayRef;
-            let nulls = None;
-            Ok(ColumnarValue::Array(Arc::new(ListArray::new(
-                field, offsets, values, nulls,
-            ))))
+            let null_arr = vec![ScalarValue::Int32(None); arrays.len()];
+            let list_arr = ScalarValue::new_list(null_arr.as_slice(), &DataType::Int32);
+            Ok(Arc::new(list_arr))
         }
-        Some(data_type) => Ok(ColumnarValue::Array(array_array(
-            arrays.as_slice(),
-            data_type,
-        )?)),
+        Some(data_type) => Ok(array_array(arrays.as_slice(), data_type)?),
     }
 }
 
@@ -446,11 +437,7 @@ pub fn make_array(arrays: &[ArrayRef]) -> Result<ArrayRef> {
         .iter()
         .map(|x| ColumnarValue::Array(x.clone()))
         .collect();
-
-    match array(values.as_slice())? {
-        ColumnarValue::Array(array) => Ok(array),
-        ColumnarValue::Scalar(scalar) => Ok(scalar.to_array().clone()),
-    }
+    array(values.as_slice())
 }
 
 fn return_empty(return_null: bool, data_type: DataType) -> Arc<dyn Array> {
@@ -671,9 +658,7 @@ pub fn array_append(args: &[ArrayRef]) -> Result<ArrayRef> {
     check_datatypes("array_append", &[arr.values(), element])?;
     let res = match arr.value_type() {
         DataType::List(_) => concat_internal(args)?,
-        DataType::Null => {
-            return Ok(array(&[ColumnarValue::Array(args[1].clone())])?.into_array(1))
-        }
+        DataType::Null => return array(&[ColumnarValue::Array(args[1].clone())]),
         data_type => {
             macro_rules! array_function {
                 ($ARRAY_TYPE:ident) => {
@@ -747,9 +732,7 @@ pub fn array_prepend(args: &[ArrayRef]) -> Result<ArrayRef> {
     check_datatypes("array_prepend", &[element, arr.values()])?;
     let res = match arr.value_type() {
         DataType::List(_) => concat_internal(args)?,
-        DataType::Null => {
-            return Ok(array(&[ColumnarValue::Array(args[0].clone())])?.into_array(1))
-        }
+        DataType::Null => return array(&[ColumnarValue::Array(args[0].clone())]),
         data_type => {
             macro_rules! array_function {
                 ($ARRAY_TYPE:ident) => {
@@ -1636,7 +1619,7 @@ fn flatten_internal(
     indexes: Option<OffsetBuffer<i32>>,
 ) -> Result<ListArray> {
     let list_arr = as_list_array(array)?;
-    let (field, offsets, values, nulls) = list_arr.clone().into_parts();
+    let (field, offsets, values, _) = list_arr.clone().into_parts();
     let data_type = field.data_type();
 
     match data_type {
@@ -1653,7 +1636,7 @@ fn flatten_internal(
         _ => {
             if let Some(indexes) = indexes {
                 let offsets = get_offsets_for_flatten(offsets, indexes);
-                let list_arr = ListArray::new(field, offsets, values, nulls);
+                let list_arr = ListArray::new(field, offsets, values, None);
                 Ok(list_arr)
             } else {
                 Ok(list_arr.clone())
@@ -1974,9 +1957,7 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
             ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
         ];
-        let array = array(&args)
-            .expect("failed to initialize function array")
-            .into_array(1);
+        let array = array(&args).expect("failed to initialize function array");
         let result = as_list_array(&array).expect("failed to initialize function array");
         assert_eq!(result.len(), 1);
         assert_eq!(
@@ -1998,9 +1979,7 @@ mod tests {
             ColumnarValue::Array(Arc::new(Int64Array::from(vec![3, 4]))),
             ColumnarValue::Array(Arc::new(Int64Array::from(vec![5, 6]))),
         ];
-        let array = array(&args)
-            .expect("failed to initialize function array")
-            .into_array(1);
+        let array = array(&args).expect("failed to initialize function array");
         let result = as_list_array(&array).expect("failed to initialize function array");
         assert_eq!(result.len(), 2);
         assert_eq!(
@@ -3317,9 +3296,7 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
             ColumnarValue::Scalar(ScalarValue::Int64(Some(4))),
         ];
-        let result = array(&args)
-            .expect("failed to initialize function array")
-            .into_array(1);
+        let result = array(&args).expect("failed to initialize function array");
         ColumnarValue::Array(result.clone())
     }
 
@@ -3331,9 +3308,7 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Int64(Some(13))),
             ColumnarValue::Scalar(ScalarValue::Int64(Some(14))),
         ];
-        let result = array(&args)
-            .expect("failed to initialize function array")
-            .into_array(1);
+        let result = array(&args).expect("failed to initialize function array");
         ColumnarValue::Array(result.clone())
     }
 
@@ -3345,9 +3320,7 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
             ColumnarValue::Scalar(ScalarValue::Int64(Some(4))),
         ];
-        let arr1 = array(&args)
-            .expect("failed to initialize function array")
-            .into_array(1);
+        let arr1 = array(&args).expect("failed to initialize function array");
 
         let args = [
             ColumnarValue::Scalar(ScalarValue::Int64(Some(5))),
@@ -3355,14 +3328,10 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Int64(Some(7))),
             ColumnarValue::Scalar(ScalarValue::Int64(Some(8))),
         ];
-        let arr2 = array(&args)
-            .expect("failed to initialize function array")
-            .into_array(1);
+        let arr2 = array(&args).expect("failed to initialize function array");
 
         let args = [ColumnarValue::Array(arr1), ColumnarValue::Array(arr2)];
-        let result = array(&args)
-            .expect("failed to initialize function array")
-            .into_array(1);
+        let result = array(&args).expect("failed to initialize function array");
         ColumnarValue::Array(result.clone())
     }
 
@@ -3374,9 +3343,7 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
             ColumnarValue::Scalar(ScalarValue::Null),
         ];
-        let result = array(&args)
-            .expect("failed to initialize function array")
-            .into_array(1);
+        let result = array(&args).expect("failed to initialize function array");
         ColumnarValue::Array(result.clone())
     }
 
@@ -3388,9 +3355,7 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
             ColumnarValue::Scalar(ScalarValue::Null),
         ];
-        let arr1 = array(&args)
-            .expect("failed to initialize function array")
-            .into_array(1);
+        let arr1 = array(&args).expect("failed to initialize function array");
 
         let args = [
             ColumnarValue::Scalar(ScalarValue::Null),
@@ -3398,14 +3363,10 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Int64(Some(7))),
             ColumnarValue::Scalar(ScalarValue::Null),
         ];
-        let arr2 = array(&args)
-            .expect("failed to initialize function array")
-            .into_array(1);
+        let arr2 = array(&args).expect("failed to initialize function array");
 
         let args = [ColumnarValue::Array(arr1), ColumnarValue::Array(arr2)];
-        let result = array(&args)
-            .expect("failed to initialize function array")
-            .into_array(1);
+        let result = array(&args).expect("failed to initialize function array");
         ColumnarValue::Array(result.clone())
     }
 
@@ -3419,9 +3380,7 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
             ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
         ];
-        let result = array(&args)
-            .expect("failed to initialize function array")
-            .into_array(1);
+        let result = array(&args).expect("failed to initialize function array");
         ColumnarValue::Array(result.clone())
     }
 
@@ -3433,9 +3392,7 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
             ColumnarValue::Scalar(ScalarValue::Int64(Some(4))),
         ];
-        let arr1 = array(&args)
-            .expect("failed to initialize function array")
-            .into_array(1);
+        let arr1 = array(&args).expect("failed to initialize function array");
 
         let args = [
             ColumnarValue::Scalar(ScalarValue::Int64(Some(5))),
@@ -3443,9 +3400,7 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Int64(Some(7))),
             ColumnarValue::Scalar(ScalarValue::Int64(Some(8))),
         ];
-        let arr2 = array(&args)
-            .expect("failed to initialize function array")
-            .into_array(1);
+        let arr2 = array(&args).expect("failed to initialize function array");
 
         let args = [
             ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
@@ -3453,9 +3408,7 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
             ColumnarValue::Scalar(ScalarValue::Int64(Some(4))),
         ];
-        let arr3 = array(&args)
-            .expect("failed to initialize function array")
-            .into_array(1);
+        let arr3 = array(&args).expect("failed to initialize function array");
 
         let args = [
             ColumnarValue::Scalar(ScalarValue::Int64(Some(9))),
@@ -3463,9 +3416,7 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Int64(Some(11))),
             ColumnarValue::Scalar(ScalarValue::Int64(Some(12))),
         ];
-        let arr4 = array(&args)
-            .expect("failed to initialize function array")
-            .into_array(1);
+        let arr4 = array(&args).expect("failed to initialize function array");
 
         let args = [
             ColumnarValue::Scalar(ScalarValue::Int64(Some(5))),
@@ -3473,9 +3424,7 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Int64(Some(7))),
             ColumnarValue::Scalar(ScalarValue::Int64(Some(8))),
         ];
-        let arr5 = array(&args)
-            .expect("failed to initialize function array")
-            .into_array(1);
+        let arr5 = array(&args).expect("failed to initialize function array");
 
         let args = [
             ColumnarValue::Array(arr1),
@@ -3484,9 +3433,7 @@ mod tests {
             ColumnarValue::Array(arr4),
             ColumnarValue::Array(arr5),
         ];
-        let result = array(&args)
-            .expect("failed to initialize function array")
-            .into_array(1);
+        let result = array(&args).expect("failed to initialize function array");
         ColumnarValue::Array(result.clone())
     }
 }

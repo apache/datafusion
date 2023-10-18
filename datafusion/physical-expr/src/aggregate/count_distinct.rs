@@ -16,6 +16,7 @@
 // under the License.
 
 use arrow::datatypes::{DataType, Field};
+
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -27,8 +28,8 @@ use std::collections::HashSet;
 use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
+use datafusion_common::Result;
 use datafusion_common::ScalarValue;
-use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_expr::Accumulator;
 
 type DistinctScalarValues = ScalarValue;
@@ -142,18 +143,11 @@ impl DistinctCountAccumulator {
 
 impl Accumulator for DistinctCountAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
-        let mut cols_out =
-            ScalarValue::new_list(Some(Vec::new()), self.state_data_type.clone());
-        self.values
-            .iter()
-            .enumerate()
-            .for_each(|(_, distinct_values)| {
-                if let ScalarValue::List(Some(ref mut v), _) = cols_out {
-                    v.push(distinct_values.clone());
-                }
-            });
-        Ok(vec![cols_out])
+        let scalars = self.values.iter().cloned().collect::<Vec<_>>();
+        let arr = ScalarValue::new_list(scalars.as_slice(), &self.state_data_type);
+        Ok(vec![ScalarValue::List(arr)])
     }
+
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         if values.is_empty() {
             return Ok(());
@@ -167,25 +161,17 @@ impl Accumulator for DistinctCountAccumulator {
             Ok(())
         })
     }
+
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         if states.is_empty() {
             return Ok(());
         }
-        let arr = &states[0];
-        (0..arr.len()).try_for_each(|index| {
-            let scalar = ScalarValue::try_from_array(arr, index)?;
-
-            if let ScalarValue::List(Some(scalar), _) = scalar {
-                scalar.iter().for_each(|scalar| {
-                    if !ScalarValue::is_null(scalar) {
-                        self.values.insert(scalar.clone());
-                    }
-                });
-            } else {
-                return internal_err!("Unexpected accumulator state");
-            }
-            Ok(())
-        })
+        assert_eq!(states.len(), 1, "array_agg states must be singleton!");
+        let scalar_vec = ScalarValue::convert_array_to_scalar_vec(&states[0])?;
+        for scalars in scalar_vec.into_iter() {
+            self.values.extend(scalars)
+        }
+        Ok(())
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
@@ -211,33 +197,21 @@ mod tests {
         Int64Array, Int8Array, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
     };
     use arrow::datatypes::DataType;
+    use arrow::datatypes::{
+        Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type,
+        UInt32Type, UInt64Type, UInt8Type,
+    };
+    use datafusion_common::cast::{as_boolean_array, as_list_array, as_primitive_array};
     use datafusion_common::internal_err;
+    use datafusion_common::DataFusionError;
 
-    macro_rules! state_to_vec {
-        ($LIST:expr, $DATA_TYPE:ident, $PRIM_TY:ty) => {{
-            match $LIST {
-                ScalarValue::List(_, field) => match field.data_type() {
-                    &DataType::$DATA_TYPE => (),
-                    _ => panic!("Unexpected DataType for list"),
-                },
-                _ => panic!("Expected a ScalarValue::List"),
-            }
-
-            match $LIST {
-                ScalarValue::List(None, _) => None,
-                ScalarValue::List(Some(scalar_values), _) => {
-                    let vec = scalar_values
-                        .iter()
-                        .map(|scalar_value| match scalar_value {
-                            ScalarValue::$DATA_TYPE(value) => *value,
-                            _ => panic!("Unexpected ScalarValue variant"),
-                        })
-                        .collect::<Vec<Option<$PRIM_TY>>>();
-
-                    Some(vec)
-                }
-                _ => unreachable!(),
-            }
+    macro_rules! state_to_vec_primitive {
+        ($LIST:expr, $DATA_TYPE:ident) => {{
+            let arr = ScalarValue::raw_data($LIST).unwrap();
+            let list_arr = as_list_array(&arr).unwrap();
+            let arr = list_arr.values();
+            let arr = as_primitive_array::<$DATA_TYPE>(arr)?;
+            arr.values().iter().cloned().collect::<Vec<_>>()
         }};
     }
 
@@ -259,16 +233,23 @@ mod tests {
 
             let (states, result) = run_update_batch(&arrays)?;
 
-            let mut state_vec =
-                state_to_vec!(&states[0], $DATA_TYPE, $PRIM_TYPE).unwrap();
+            let mut state_vec = state_to_vec_primitive!(&states[0], $DATA_TYPE);
             state_vec.sort();
 
             assert_eq!(states.len(), 1);
-            assert_eq!(state_vec, vec![Some(1), Some(2), Some(3)]);
+            assert_eq!(state_vec, vec![1, 2, 3]);
             assert_eq!(result, ScalarValue::Int64(Some(3)));
 
             Ok(())
         }};
+    }
+
+    fn state_to_vec_bool(sv: &ScalarValue) -> Result<Vec<bool>> {
+        let arr = ScalarValue::raw_data(sv)?;
+        let list_arr = as_list_array(&arr)?;
+        let arr = list_arr.values();
+        let bool_arr = as_boolean_array(arr)?;
+        Ok(bool_arr.iter().flatten().collect())
     }
 
     fn run_update_batch(arrays: &[ArrayRef]) -> Result<(Vec<ScalarValue>, ScalarValue)> {
@@ -353,13 +334,11 @@ mod tests {
 
             let (states, result) = run_update_batch(&arrays)?;
 
-            let mut state_vec =
-                state_to_vec!(&states[0], $DATA_TYPE, $PRIM_TYPE).unwrap();
+            let mut state_vec = state_to_vec_primitive!(&states[0], $DATA_TYPE);
 
             dbg!(&state_vec);
             state_vec.sort_by(|a, b| match (a, b) {
-                (Some(lhs), Some(rhs)) => lhs.total_cmp(rhs),
-                _ => a.partial_cmp(b).unwrap(),
+                (lhs, rhs) => lhs.total_cmp(rhs),
             });
 
             let nan_idx = state_vec.len() - 1;
@@ -367,16 +346,16 @@ mod tests {
             assert_eq!(
                 &state_vec[..nan_idx],
                 vec![
-                    Some(<$PRIM_TYPE>::NEG_INFINITY),
-                    Some(-4.5),
-                    Some(<$PRIM_TYPE as SubNormal>::SUBNORMAL),
-                    Some(1.0),
-                    Some(2.0),
-                    Some(3.0),
-                    Some(<$PRIM_TYPE>::INFINITY)
+                    <$PRIM_TYPE>::NEG_INFINITY,
+                    -4.5,
+                    <$PRIM_TYPE as SubNormal>::SUBNORMAL,
+                    1.0,
+                    2.0,
+                    3.0,
+                    <$PRIM_TYPE>::INFINITY
                 ]
             );
-            assert!(state_vec[nan_idx].unwrap_or_default().is_nan());
+            assert!(state_vec[nan_idx].is_nan());
             assert_eq!(result, ScalarValue::Int64(Some(8)));
 
             Ok(())
@@ -385,61 +364,62 @@ mod tests {
 
     #[test]
     fn count_distinct_update_batch_i8() -> Result<()> {
-        test_count_distinct_update_batch_numeric!(Int8Array, Int8, i8)
+        test_count_distinct_update_batch_numeric!(Int8Array, Int8Type, i8)
     }
 
     #[test]
     fn count_distinct_update_batch_i16() -> Result<()> {
-        test_count_distinct_update_batch_numeric!(Int16Array, Int16, i16)
+        test_count_distinct_update_batch_numeric!(Int16Array, Int16Type, i16)
     }
 
     #[test]
     fn count_distinct_update_batch_i32() -> Result<()> {
-        test_count_distinct_update_batch_numeric!(Int32Array, Int32, i32)
+        test_count_distinct_update_batch_numeric!(Int32Array, Int32Type, i32)
     }
 
     #[test]
     fn count_distinct_update_batch_i64() -> Result<()> {
-        test_count_distinct_update_batch_numeric!(Int64Array, Int64, i64)
+        test_count_distinct_update_batch_numeric!(Int64Array, Int64Type, i64)
     }
 
     #[test]
     fn count_distinct_update_batch_u8() -> Result<()> {
-        test_count_distinct_update_batch_numeric!(UInt8Array, UInt8, u8)
+        test_count_distinct_update_batch_numeric!(UInt8Array, UInt8Type, u8)
     }
 
     #[test]
     fn count_distinct_update_batch_u16() -> Result<()> {
-        test_count_distinct_update_batch_numeric!(UInt16Array, UInt16, u16)
+        test_count_distinct_update_batch_numeric!(UInt16Array, UInt16Type, u16)
     }
 
     #[test]
     fn count_distinct_update_batch_u32() -> Result<()> {
-        test_count_distinct_update_batch_numeric!(UInt32Array, UInt32, u32)
+        test_count_distinct_update_batch_numeric!(UInt32Array, UInt32Type, u32)
     }
 
     #[test]
     fn count_distinct_update_batch_u64() -> Result<()> {
-        test_count_distinct_update_batch_numeric!(UInt64Array, UInt64, u64)
+        test_count_distinct_update_batch_numeric!(UInt64Array, UInt64Type, u64)
     }
 
     #[test]
     fn count_distinct_update_batch_f32() -> Result<()> {
-        test_count_distinct_update_batch_floating_point!(Float32Array, Float32, f32)
+        test_count_distinct_update_batch_floating_point!(Float32Array, Float32Type, f32)
     }
 
     #[test]
     fn count_distinct_update_batch_f64() -> Result<()> {
-        test_count_distinct_update_batch_floating_point!(Float64Array, Float64, f64)
+        test_count_distinct_update_batch_floating_point!(Float64Array, Float64Type, f64)
     }
 
     #[test]
     fn count_distinct_update_batch_boolean() -> Result<()> {
-        let get_count = |data: BooleanArray| -> Result<(Vec<Option<bool>>, i64)> {
+        let get_count = |data: BooleanArray| -> Result<(Vec<bool>, i64)> {
             let arrays = vec![Arc::new(data) as ArrayRef];
             let (states, result) = run_update_batch(&arrays)?;
-            let mut state_vec = state_to_vec!(&states[0], Boolean, bool).unwrap();
+            let mut state_vec = state_to_vec_bool(&states[0])?;
             state_vec.sort();
+
             let count = match result {
                 ScalarValue::Int64(c) => c.ok_or_else(|| {
                     DataFusionError::Internal("Found None count".to_string())
@@ -467,22 +447,13 @@ mod tests {
             Some(false),
         ]);
 
-        assert_eq!(
-            get_count(zero_count_values)?,
-            (Vec::<Option<bool>>::new(), 0)
-        );
-        assert_eq!(get_count(one_count_values)?, (vec![Some(false)], 1));
-        assert_eq!(
-            get_count(one_count_values_with_null)?,
-            (vec![Some(true)], 1)
-        );
-        assert_eq!(
-            get_count(two_count_values)?,
-            (vec![Some(false), Some(true)], 2)
-        );
+        assert_eq!(get_count(zero_count_values)?, (Vec::<bool>::new(), 0));
+        assert_eq!(get_count(one_count_values)?, (vec![false], 1));
+        assert_eq!(get_count(one_count_values_with_null)?, (vec![true], 1));
+        assert_eq!(get_count(two_count_values)?, (vec![false, true], 2));
         assert_eq!(
             get_count(two_count_values_with_null)?,
-            (vec![Some(false), Some(true)], 2)
+            (vec![false, true], 2)
         );
         Ok(())
     }
@@ -494,9 +465,9 @@ mod tests {
         )) as ArrayRef];
 
         let (states, result) = run_update_batch(&arrays)?;
-
+        let state_vec = state_to_vec_primitive!(&states[0], Int32Type);
         assert_eq!(states.len(), 1);
-        assert_eq!(state_to_vec!(&states[0], Int32, i32), Some(vec![]));
+        assert!(state_vec.is_empty());
         assert_eq!(result, ScalarValue::Int64(Some(0)));
 
         Ok(())
@@ -507,9 +478,9 @@ mod tests {
         let arrays = vec![Arc::new(Int32Array::from(vec![0_i32; 0])) as ArrayRef];
 
         let (states, result) = run_update_batch(&arrays)?;
-
+        let state_vec = state_to_vec_primitive!(&states[0], Int32Type);
         assert_eq!(states.len(), 1);
-        assert_eq!(state_to_vec!(&states[0], Int32, i32), Some(vec![]));
+        assert!(state_vec.is_empty());
         assert_eq!(result, ScalarValue::Int64(Some(0)));
 
         Ok(())

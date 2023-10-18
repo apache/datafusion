@@ -35,7 +35,7 @@ use arrow::{
     datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
-use datafusion_common::{downcast_value, ScalarValue};
+use datafusion_common::{downcast_value, plan_datafusion_err, ScalarValue};
 use datafusion_common::{
     internal_err, plan_err,
     tree_node::{Transformed, TreeNode},
@@ -451,7 +451,7 @@ fn build_statistics_record_batch<S: PruningStatistics>(
     );
 
     RecordBatch::try_new_with_options(schema, arrays, &options).map_err(|err| {
-        DataFusionError::Plan(format!("Can not create statistics record batch: {err}"))
+        plan_datafusion_err!("Can not create statistics record batch: {err}")
     })
 }
 

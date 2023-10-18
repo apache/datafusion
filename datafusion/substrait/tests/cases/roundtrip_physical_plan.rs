@@ -15,16 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use datafusion::arrow::datatypes::Schema;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
 use datafusion::error::Result;
-use datafusion::physical_plan::{displayable, ExecutionPlan};
+use datafusion::physical_plan::{displayable, ExecutionPlan, Statistics};
 use datafusion::prelude::SessionContext;
 use datafusion_substrait::physical_plan::{consumer, producer};
-use std::collections::HashMap;
-use std::sync::Arc;
+
 use substrait::proto::extensions;
 
 #[tokio::test]
@@ -42,7 +44,7 @@ async fn parquet_exec() -> Result<()> {
                 123,
             )],
         ],
-        statistics: Default::default(),
+        statistics: Statistics::new_unknown(&Schema::empty()),
         projection: None,
         limit: None,
         table_partition_cols: vec![],

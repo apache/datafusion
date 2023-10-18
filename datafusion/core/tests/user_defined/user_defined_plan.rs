@@ -58,7 +58,9 @@
 //! N elements, reducing the total amount of required buffer memory.
 //!
 
-use futures::{Stream, StreamExt};
+use std::fmt::Debug;
+use std::task::{Context, Poll};
+use std::{any::Any, collections::BTreeMap, fmt, sync::Arc};
 
 use arrow::{
     array::{Int64Array, StringArray},
@@ -68,8 +70,7 @@ use arrow::{
 };
 use datafusion::{
     common::cast::{as_int64_array, as_string_array},
-    common::internal_err,
-    common::DFSchemaRef,
+    common::{internal_err, DFSchemaRef},
     error::{DataFusionError, Result},
     execution::{
         context::{QueryPlanner, SessionState, TaskContext},
@@ -89,11 +90,8 @@ use datafusion::{
     prelude::{SessionConfig, SessionContext},
 };
 
-use fmt::Debug;
-use std::task::{Context, Poll};
-use std::{any::Any, collections::BTreeMap, fmt, sync::Arc};
-
 use async_trait::async_trait;
+use futures::{Stream, StreamExt};
 
 /// Execute the specified sql and return the resulting record batches
 /// pretty printed as a String.
@@ -490,10 +488,10 @@ impl ExecutionPlan for TopKExec {
         }))
     }
 
-    fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Result<Statistics> {
         // to improve the optimizability of this plan
         // better statistics inference could be provided
-        Statistics::default()
+        Ok(Statistics::new_unknown(&self.schema()))
     }
 }
 

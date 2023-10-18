@@ -18,7 +18,9 @@
 //! Utility functions for complex field access
 
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::{plan_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    plan_datafusion_err, plan_err, DataFusionError, Result, ScalarValue,
+};
 
 /// Types of the field access expression of a nested type, such as `Field` or `List`
 pub enum GetFieldAccessSchema {
@@ -45,6 +47,19 @@ impl GetFieldAccessSchema {
         match self {
             Self::NamedStructField{ name } => {
                 match (data_type, name) {
+                    (DataType::Map(fields, _), _) => {
+                        match fields.data_type() {
+                            DataType::Struct(fields) if fields.len() == 2 => {
+                                // Arrow's MapArray is essentially a ListArray of structs with two columns. They are
+                                // often named "key", and "value", but we don't require any specific naming here;
+                                // instead, we assume that the second columnis the "value" column both here and in
+                                // execution.
+                                let value_field = fields.get(1).expect("fields should have exactly two members");
+                                Ok(Field::new("map", value_field.data_type().clone(), true))
+                            },
+                            _ => plan_err!("Map fields must contain a Struct with exactly 2 fields"),
+                        }
+                    }
                     (DataType::Struct(fields), ScalarValue::Utf8(Some(s))) => {
                         if s.is_empty() {
                             plan_err!(
@@ -52,13 +67,13 @@ impl GetFieldAccessSchema {
                             )
                         } else {
                             let field = fields.iter().find(|f| f.name() == s);
-                            field.ok_or(DataFusionError::Plan(format!("Field {s} not found in struct"))).map(|f| f.as_ref().clone())
+                            field.ok_or(plan_datafusion_err!("Field {s} not found in struct")).map(|f| f.as_ref().clone())
                         }
                     }
                     (DataType::Struct(_), _) => plan_err!(
                         "Only utf8 strings are valid as an indexed field in a struct"
                     ),
-                    (other, _) => plan_err!("The expression to get an indexed field is only valid for `List` or `Struct` types, got {other}"),
+                    (other, _) => plan_err!("The expression to get an indexed field is only valid for `List`, `Struct`, or `Map` types, got {other}"),
                 }
             }
             Self::ListIndex{ key_dt } => {
