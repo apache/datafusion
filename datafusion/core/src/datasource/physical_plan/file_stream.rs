@@ -112,7 +112,7 @@ enum FileStreamState {
     /// The idle state, no file is currently being read
     Idle,
     /// Currently performing asynchronous IO to obtain a stream of RecordBatch
-    /// for a given parquet file
+    /// for a given file
     Open {
         /// A [`FileOpenFuture`] returned by [`FileOpener::open`]
         future: FileOpenFuture,
