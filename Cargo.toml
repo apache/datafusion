@@ -48,12 +48,12 @@ rust-version = "1.70"
 version = "32.0.0"
 
 [workspace.dependencies]
-arrow = { version = "47.0.0", features = ["prettyprint"] }
-arrow-array = { version = "47.0.0", default-features = false, features = ["chrono-tz"] }
-arrow-buffer = { version = "47.0.0", default-features = false }
-arrow-flight = { version = "47.0.0", features = ["flight-sql-experimental"] }
-arrow-schema = { version = "47.0.0", default-features = false }
-parquet = { version = "47.0.0", features = ["arrow", "async", "object_store"] }
+arrow = { version = "48.0.0", features = ["prettyprint"] }
+arrow-array = { version = "48.0.0", default-features = false, features = ["chrono-tz"] }
+arrow-buffer = { version = "48.0.0", default-features = false }
+arrow-flight = { version = "48.0.0", features = ["flight-sql-experimental"] }
+arrow-schema = { version = "48.0.0", default-features = false }
+parquet = { version = "48.0.0", features = ["arrow", "async", "object_store"] }
 sqlparser = { version = "0.38.0", features = ["visitor"] }
 chrono = { version = "0.4.31", default-features = false }
 
@@ -74,3 +74,11 @@ opt-level = 3
 overflow-checks = false
 panic = 'unwind'
 rpath = false
+
+[patch.crates-io]
+arrow = { git = "https://github.com/tustvold/arrow-rs.git", rev = "27c795d5e4dc2351eb57f7225cd9dd051d3651c3" }
+arrow-array = { git = "https://github.com/tustvold/arrow-rs.git", rev = "27c795d5e4dc2351eb57f7225cd9dd051d3651c3" }
+arrow-buffer = { git = "https://github.com/tustvold/arrow-rs.git", rev = "27c795d5e4dc2351eb57f7225cd9dd051d3651c3" }
+arrow-flight = { git = "https://github.com/tustvold/arrow-rs.git", rev = "27c795d5e4dc2351eb57f7225cd9dd051d3651c3" }
+arrow-schema = { git = "https://github.com/tustvold/arrow-rs.git", rev = "27c795d5e4dc2351eb57f7225cd9dd051d3651c3" }
+parquet = { git = "https://github.com/tustvold/arrow-rs.git", rev = "27c795d5e4dc2351eb57f7225cd9dd051d3651c3" }

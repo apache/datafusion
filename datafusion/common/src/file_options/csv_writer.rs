@@ -37,13 +37,6 @@ pub struct CsvWriterOptions {
     /// Compression to apply after ArrowWriter serializes RecordBatches.
     /// This compression is applied by DataFusion not the ArrowWriter itself.
     pub compression: CompressionTypeVariant,
-    /// Indicates whether WriterBuilder.has_header() is set to true.
-    /// This is duplicative as WriterBuilder also stores this information.
-    /// However, WriterBuilder does not allow public read access to the
-    /// has_header parameter.
-    pub has_header: bool,
-    // TODO: expose a way to read has_header in arrow create
-    // https://github.com/apache/arrow-rs/issues/4735
 }
 
 impl CsvWriterOptions {
@@ -54,7 +47,6 @@ impl CsvWriterOptions {
         Self {
             writer_options,
             compression,
-            has_header: true,
         }
     }
 }
@@ -65,29 +57,20 @@ impl TryFrom<(&ConfigOptions, &StatementOptions)> for CsvWriterOptions {
     fn try_from(value: (&ConfigOptions, &StatementOptions)) -> Result<Self> {
         let _configs = value.0;
         let statement_options = value.1;
-        let mut has_header = true;
         let mut builder = WriterBuilder::default();
         let mut compression = CompressionTypeVariant::UNCOMPRESSED;
         for (option, value) in &statement_options.options {
             builder = match option.to_lowercase().as_str(){
                 "header" => {
-                    has_header = value.parse()
+                    let has_header = value.parse()
                         .map_err(|_| DataFusionError::Configuration(format!("Unable to parse {value} as bool as required for {option}!")))?;
-                    builder.has_headers(has_header)
+                    builder.with_header(has_header)
                 },
                 "date_format" => builder.with_date_format(value.to_owned()),
                 "datetime_format" => builder.with_datetime_format(value.to_owned()),
                 "timestamp_format" => builder.with_timestamp_format(value.to_owned()),
                 "time_format" => builder.with_time_format(value.to_owned()),
-                "rfc3339" => {
-                    let value_bool = value.parse()
-                        .map_err(|_| DataFusionError::Configuration(format!("Unable to parse {value} as bool as required for {option}!")))?;
-                    if value_bool{
-                        builder.with_rfc3339()
-                    } else{
-                        builder
-                    }
-                },
+                "rfc3339" => builder, // No-op
                 "null_value" => builder.with_null(value.to_owned()),
                 "compression" => {
                     compression = CompressionTypeVariant::from_str(value.replace('\'', "").as_str())?;
@@ -112,7 +95,6 @@ impl TryFrom<(&ConfigOptions, &StatementOptions)> for CsvWriterOptions {
             }
         }
         Ok(CsvWriterOptions {
-            has_header,
             writer_options: builder,
             compression,
         })

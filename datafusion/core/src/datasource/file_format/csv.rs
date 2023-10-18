@@ -431,7 +431,7 @@ impl CsvSerializer {
 impl BatchSerializer for CsvSerializer {
     async fn serialize(&mut self, batch: RecordBatch) -> Result<Bytes> {
         let builder = self.builder.clone();
-        let mut writer = builder.has_headers(self.header).build(&mut self.buffer);
+        let mut writer = builder.with_header(self.header).build(&mut self.buffer);
         writer.write(&batch)?;
         drop(writer);
         self.header = false;
@@ -508,7 +508,7 @@ impl CsvSink {
             } else {
                 CsvSerializer::new()
                     .with_builder(inner_clone)
-                    .with_header(options_clone.has_header)
+                    .with_header(options_clone.writer_options.header())
             });
             serializer
         };
@@ -540,7 +540,7 @@ impl CsvSink {
             let serializer: Box<dyn BatchSerializer> = Box::new(
                 CsvSerializer::new()
                     .with_builder(inner_clone)
-                    .with_header(options_clone.has_header),
+                    .with_header(options_clone.writer_options.header()),
             );
             serializer
         };

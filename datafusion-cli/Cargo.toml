@@ -29,7 +29,7 @@ rust-version = "1.70"
 readme = "README.md"
 
 [dependencies]
-arrow = "47.0.0"
+arrow = "48.0.0"
 async-trait = "0.1.41"
 aws-config = "0.55"
 aws-credential-types = "0.55"
@@ -50,3 +50,10 @@ assert_cmd = "2.0"
 ctor = "0.2.0"
 predicates = "3.0"
 rstest = "0.17"
+
+[patch.crates-io]
+arrow = { git = "https://github.com/tustvold/arrow-rs.git", rev = "27c795d5e4dc2351eb57f7225cd9dd051d3651c3" }
+arrow-array = { git = "https://github.com/tustvold/arrow-rs.git", rev = "27c795d5e4dc2351eb57f7225cd9dd051d3651c3" }
+arrow-buffer = { git = "https://github.com/tustvold/arrow-rs.git", rev = "27c795d5e4dc2351eb57f7225cd9dd051d3651c3" }
+arrow-schema = { git = "https://github.com/tustvold/arrow-rs.git", rev = "27c795d5e4dc2351eb57f7225cd9dd051d3651c3" }
+parquet = { git = "https://github.com/tustvold/arrow-rs.git", rev = "27c795d5e4dc2351eb57f7225cd9dd051d3651c3" }

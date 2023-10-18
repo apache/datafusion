@@ -538,7 +538,7 @@ pub async fn plan_to_csv(
             let mut write_headers = true;
             while let Some(batch) = stream.next().await.transpose()? {
                 let mut writer = csv::WriterBuilder::new()
-                    .has_headers(write_headers)
+                    .with_header(write_headers)
                     .build(buffer);
                 writer.write(&batch)?;
                 buffer = writer.into_inner();
