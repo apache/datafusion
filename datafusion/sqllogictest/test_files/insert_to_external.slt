@@ -87,6 +87,126 @@ SELECT * from ordered_insert_test;
 7 8
 7 7
 
+# test partitioned insert
+
+statement ok
+CREATE EXTERNAL TABLE
+partitioned_insert_test(a string, b string, c bigint)
+STORED AS csv
+LOCATION 'test_files/scratch/insert_to_external/insert_to_partitioned/'
+PARTITIONED BY (a, b) 
+OPTIONS(
+create_local_path 'true',
+insert_mode 'append_new_files',
+);
+
+#note that partitioned cols are moved to the end so value tuples are (c, a, b)
+query ITT
+INSERT INTO partitioned_insert_test values (1, 1, 1), (1, 1, 2), (1, 2, 1), (1, 2, 2), (2, 2, 1), (2, 2, 2);
+----
+6
+
+query ITT
+select * from partitioned_insert_test order by a,b,c
+----
+1 1 1
+1 1 2
+1 2 1
+2 2 1
+1 2 2
+2 2 2
+
+statement ok
+CREATE EXTERNAL TABLE
+partitioned_insert_test_verify(c bigint)
+STORED AS csv
+LOCATION 'test_files/scratch/insert_to_external/insert_to_partitioned/a=2/b=1/'
+OPTIONS(
+insert_mode 'append_new_files',
+);
+
+query I
+select * from partitioned_insert_test_verify;
+----
+1
+2
+
+statement ok
+CREATE EXTERNAL TABLE
+partitioned_insert_test_json(a string, b string)
+STORED AS json
+LOCATION 'test_files/scratch/insert_to_external/insert_to_partitioned_json/'
+PARTITIONED BY (a) 
+OPTIONS(
+create_local_path 'true',
+insert_mode 'append_new_files',
+);
+
+query TT
+INSERT INTO partitioned_insert_test_json values (1, 2), (3, 4), (5, 6), (1, 2), (3, 4), (5, 6);
+----
+6
+
+query error DataFusion error: Arrow error: Json error: Encountered unmasked nulls in non\-nullable StructArray child: Field \{ name: "a", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}
+select * from partitioned_insert_test_json order by a,b
+
+statement ok
+CREATE EXTERNAL TABLE
+partitioned_insert_test_verify_json(b string)
+STORED AS json
+LOCATION 'test_files/scratch/insert_to_external/insert_to_partitioned_json/a=2/'
+OPTIONS(
+insert_mode 'append_new_files',
+);
+
+query T
+select * from partitioned_insert_test_verify_json;
+----
+1
+1
+
+statement ok
+CREATE EXTERNAL TABLE
+partitioned_insert_test_pq(a string, b bigint)
+STORED AS parquet
+LOCATION 'test_files/scratch/insert_to_external/insert_to_partitioned_pq/'
+PARTITIONED BY (a) 
+OPTIONS(
+create_local_path 'true',
+insert_mode 'append_new_files',
+);
+
+query IT
+INSERT INTO partitioned_insert_test_pq values (1, 2), (3, 4), (5, 6), (1, 2), (3, 4), (5, 6);
+----
+6
+
+query IT
+select * from partitioned_insert_test_pq order by a ASC, b ASC
+----
+1 2
+1 2
+3 4
+3 4
+5 6
+5 6
+
+statement ok
+CREATE EXTERNAL TABLE
+partitioned_insert_test_verify_pq(b bigint)
+STORED AS parquet
+LOCATION 'test_files/scratch/insert_to_external/insert_to_partitioned_pq/a=2/'
+OPTIONS(
+insert_mode 'append_new_files',
+);
+
+query I
+select * from partitioned_insert_test_verify_pq;
+----
+1
+1
+
+
 statement ok
 CREATE EXTERNAL TABLE
 single_file_test(a bigint, b bigint)

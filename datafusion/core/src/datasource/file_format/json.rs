@@ -25,6 +25,27 @@ use std::sync::Arc;
 
 use super::write::{stateless_append_all, stateless_multipart_put};
 use super::{FileFormat, FileScanConfig};
+use arrow::datatypes::Schema;
+use arrow::datatypes::SchemaRef;
+use arrow::json;
+use arrow::json::reader::infer_json_schema_from_iterator;
+use arrow::json::reader::ValueIter;
+use arrow_array::RecordBatch;
+use async_trait::async_trait;
+use bytes::Buf;
+
+use datafusion_physical_expr::PhysicalExpr;
+use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
+
+use crate::datasource::physical_plan::FileGroupDisplay;
+use crate::physical_plan::insert::DataSink;
+use crate::physical_plan::insert::FileSinkExec;
+use crate::physical_plan::SendableRecordBatchStream;
+use crate::physical_plan::{DisplayAs, DisplayFormatType, Statistics};
+
+use super::write::orchestration::{stateless_append_all, stateless_multipart_put};
+use super::FileFormat;
+use super::FileScanConfig;
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::write::{BatchSerializer, FileWriterMode};
 use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
@@ -258,6 +279,10 @@ impl JsonSink {
         data: SendableRecordBatchStream,
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
+        if !self.config.table_partition_cols.is_empty() {
+            return Err(DataFusionError::NotImplemented("Inserting in append mode to hive style partitioned tables is not supported".into()));
+        }
+
         let writer_options = self.config.file_type_writer_options.try_into_json()?;
         let compression = &writer_options.compression;
 

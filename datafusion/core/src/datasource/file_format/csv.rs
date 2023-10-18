@@ -24,6 +24,22 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use super::write::{stateless_append_all, stateless_multipart_put};
+use arrow::csv::WriterBuilder;
+use arrow::datatypes::{DataType, Field, Fields, Schema};
+use arrow::{self, datatypes::SchemaRef};
+use arrow_array::RecordBatch;
+use datafusion_common::{exec_err, not_impl_err, DataFusionError, FileType};
+use datafusion_execution::TaskContext;
+use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
+
+use async_trait::async_trait;
+use bytes::{Buf, Bytes};
+use datafusion_physical_plan::metrics::MetricsSet;
+use futures::stream::BoxStream;
+use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
+use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore};
+
+use super::write::orchestration::{stateless_append_all, stateless_multipart_put};
 use super::{FileFormat, DEFAULT_SCHEMA_INFER_MAX_RECORD};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::write::{BatchSerializer, FileWriterMode};
@@ -485,6 +501,9 @@ impl CsvSink {
         data: SendableRecordBatchStream,
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
+        if !self.config.table_partition_cols.is_empty() {
+            return Err(DataFusionError::NotImplemented("Inserting in append mode to hive style partitioned tables is not supported".into()));
+        }
         let writer_options = self.config.file_type_writer_options.try_into_csv()?;
         let (builder, compression) =
             (&writer_options.writer_options, &writer_options.compression);
