@@ -23,7 +23,6 @@ use std::fmt::Debug;
 use std::io::BufReader;
 use std::sync::Arc;
 
-use super::write::{stateless_append_all, stateless_multipart_put};
 use super::{FileFormat, FileScanConfig};
 use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
@@ -34,7 +33,10 @@ use arrow_array::RecordBatch;
 use async_trait::async_trait;
 use bytes::Buf;
 
+use bytes::Bytes;
 use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr::PhysicalSortRequirement;
+use datafusion_physical_plan::ExecutionPlan;
 use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
 
 use crate::datasource::physical_plan::FileGroupDisplay;
@@ -44,31 +46,18 @@ use crate::physical_plan::SendableRecordBatchStream;
 use crate::physical_plan::{DisplayAs, DisplayFormatType, Statistics};
 
 use super::write::orchestration::{stateless_append_all, stateless_multipart_put};
-use super::FileFormat;
-use super::FileScanConfig;
+
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::write::{BatchSerializer, FileWriterMode};
 use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
-use crate::datasource::physical_plan::{FileGroupDisplay, FileSinkConfig, NdJsonExec};
+use crate::datasource::physical_plan::{FileSinkConfig, NdJsonExec};
 use crate::error::Result;
 use crate::execution::context::SessionState;
-use crate::physical_plan::insert::{DataSink, FileSinkExec};
-use crate::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream, Statistics,
-};
 
-use arrow::datatypes::{Schema, SchemaRef};
-use arrow::json;
-use arrow::json::reader::{infer_json_schema_from_iterator, ValueIter};
-use arrow_array::RecordBatch;
 use datafusion_common::{not_impl_err, DataFusionError, FileType};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
 use datafusion_physical_plan::metrics::MetricsSet;
 
-use async_trait::async_trait;
-use bytes::{Buf, Bytes};
-use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
 
 /// New line delimited JSON `FileFormat` implementation.
 #[derive(Debug)]

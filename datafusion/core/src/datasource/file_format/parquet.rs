@@ -23,19 +23,15 @@ use std::fmt::Debug;
 use std::io::Write;
 use std::sync::Arc;
 
-use super::write::{create_writer, start_demuxer_task, AbortableWrite, FileWriterMode};
+use super::write::{create_writer, AbortableWrite, FileWriterMode};
 use super::{FileFormat, FileScanConfig};
 use super::write::demux::start_demuxer_task;
-use super::write::{create_writer, AbortableWrite, FileWriterMode};
-use super::FileFormat;
-use super::FileScanConfig;
 use crate::arrow::array::{
     BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array,
 };
 use crate::arrow::datatypes::DataType;
 use crate::config::ConfigOptions;
 
-use crate::config::ConfigOptions;
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::get_col_stats;
 use crate::datasource::physical_plan::{
@@ -51,8 +47,7 @@ use crate::physical_plan::{
     Statistics,
 };
 
-use arrow::array::{BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array};
-use arrow::datatypes::{DataType, Fields, Schema, SchemaRef};
+use arrow::datatypes::{Fields, Schema, SchemaRef};
 use datafusion_common::stats::Precision;
 use datafusion_common::{exec_err, not_impl_err, plan_err, DataFusionError, FileType};
 use datafusion_execution::TaskContext;

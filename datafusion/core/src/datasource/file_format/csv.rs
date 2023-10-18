@@ -23,16 +23,11 @@ use std::fmt;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use super::write::{stateless_append_all, stateless_multipart_put};
-use arrow::csv::WriterBuilder;
-use arrow::datatypes::{DataType, Field, Fields, Schema};
-use arrow::{self, datatypes::SchemaRef};
 use arrow_array::RecordBatch;
 use datafusion_common::{exec_err, not_impl_err, DataFusionError, FileType};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
 
-use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use datafusion_physical_plan::metrics::MetricsSet;
 use futures::stream::BoxStream;
@@ -55,17 +50,8 @@ use crate::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{DataType, Field, Fields, Schema};
 use arrow::{self, datatypes::SchemaRef};
-use arrow_array::RecordBatch;
-use datafusion_common::{exec_err, not_impl_err, DataFusionError, FileType};
-use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
-use datafusion_physical_plan::metrics::MetricsSet;
 
 use async_trait::async_trait;
-use bytes::{Buf, Bytes};
-use futures::stream::BoxStream;
-use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
-use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore};
 
 /// Character Separated Value `FileFormat` implementation.
 #[derive(Debug)]
