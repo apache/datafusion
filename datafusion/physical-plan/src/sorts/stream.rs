@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::sorts::cursor::{ArrayValues, RowValues, FieldArray};
+use crate::sorts::cursor::{ArrayValues, FieldArray, RowValues};
 use crate::SendableRecordBatchStream;
 use crate::{PhysicalExpr, PhysicalSortExpr};
 use arrow::array::Array;
