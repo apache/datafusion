@@ -321,7 +321,7 @@ impl<T: DecimalType + ArrowNumericType> Accumulator for DecimalAvgAccumulator<T>
             ScalarValue::new_primitive::<T>(
                 self.sum,
                 &T::TYPE_CONSTRUCTOR(self.sum_precision, self.sum_scale),
-            ),
+            )?,
         ])
     }
 
@@ -370,10 +370,10 @@ impl<T: DecimalType + ArrowNumericType> Accumulator for DecimalAvgAccumulator<T>
             })
             .transpose()?;
 
-        Ok(ScalarValue::new_primitive::<T>(
+        ScalarValue::new_primitive::<T>(
             v,
             &T::TYPE_CONSTRUCTOR(self.target_precision, self.target_scale),
-        ))
+        )
     }
     fn supports_retract_batch(&self) -> bool {
         true
