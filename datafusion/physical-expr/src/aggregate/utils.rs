@@ -73,13 +73,13 @@ impl<T: DecimalType> DecimalAverager<T> {
         target_precision: u8,
         target_scale: i8,
     ) -> Result<Self> {
-        let sum_mul = T::Native::from_usize(10 as usize)
+        let sum_mul = T::Native::from_usize(10_usize)
             .map(|b| b.pow_wrapping(sum_scale as u32))
             .ok_or(DataFusionError::Internal(
                 "Failed to compute sum_mul in DecimalAverager".to_string(),
             ))?;
 
-        let target_mul = T::Native::from_usize(10 as usize)
+        let target_mul = T::Native::from_usize(10_usize)
             .map(|b| b.pow_wrapping(target_scale as u32))
             .ok_or(DataFusionError::Internal(
                 "Failed to compute target_mul in DecimalAverager".to_string(),
