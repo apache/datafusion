@@ -147,6 +147,7 @@ INSERT INTO partitioned_insert_test_json values (1, 2), (3, 4), (5, 6), (1, 2), 
 ----
 6
 
+# Issue open for this error: https://github.com/apache/arrow-datafusion/issues/7816
 query error DataFusion error: Arrow error: Json error: Encountered unmasked nulls in non\-nullable StructArray child: Field \{ name: "a", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}
 select * from partitioned_insert_test_json order by a,b
 
