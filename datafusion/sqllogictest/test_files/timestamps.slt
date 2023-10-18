@@ -1764,3 +1764,10 @@ query T
 SELECT arrow_typeof(date_bin(INTERVAL '1 day', time, '1970-01-01T00:00:00+05:00')) FROM foo LIMIT 1
 ----
 Timestamp(Nanosecond, Some("+05:00"))
+
+
+# timestamp comparison with and without timezone
+query B
+SELECT TIMESTAMPTZ '2022-01-01 20:10:00Z' = TIMESTAMP '2020-01-01'
+----
+false
