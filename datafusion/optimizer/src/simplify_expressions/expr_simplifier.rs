@@ -137,8 +137,10 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         // (evaluating constants can enable new simplifications and
         // simplifications can enable new constant evaluation)
         // https://github.com/apache/arrow-datafusion/issues/1160
-        expr.rewrite(&mut const_evaluator)?
-            .rewrite(&mut simplifier)?
+        // println!("expr before const: {:?}", expr);
+        let expr = expr.rewrite(&mut const_evaluator)?;
+            // println!("expr after const: {:?}", expr);
+            expr.rewrite(&mut simplifier)?
             .rewrite(&mut or_in_list_simplifier)?
             .rewrite(&mut guarantee_rewriter)?
             // run both passes twice to try an minimize simplifications that we missed

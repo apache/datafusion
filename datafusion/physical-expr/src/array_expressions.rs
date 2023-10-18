@@ -1010,7 +1010,9 @@ macro_rules! general_repeat_list {
 /// Array_empty SQL function
 pub fn array_empty(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args[0].as_any().downcast_ref::<NullArray>().is_some() {
-        return Ok(args[0].clone());
+        // Make sure to return Boolean type.
+        return Ok(Arc::new(BooleanArray::new_null(args[0].len())))
+        // return Ok(args[0].clone());
     }
 
     let array = as_list_array(&args[0])?;

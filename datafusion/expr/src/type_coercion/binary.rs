@@ -116,7 +116,22 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
         }
         Operator::AtArrow
         | Operator::ArrowAt => {
-            array_coercion(lhs, rhs).map(Signature::uniform).ok_or_else(|| {
+            // let coerced_type = array_coercion(lhs, rhs).ok_or_else(|| {
+            //     DataFusionError::Plan(format!(
+            //         "Cannot infer common array type for arrow operation {lhs} {op} {rhs}"
+            //     ))
+            // })?;
+            // Ok(Signature{
+            //     lhs: coerced_type.clone(),
+            //     rhs: coerced_type,
+            //     ret: DataType::Boolean,
+            // })
+            // array_coercion(lhs, rhs).map(|_| Signature::uniform(DataType::Boolean)).ok_or_else(|| {
+            //     DataFusionError::Plan(format!(
+            //         "Cannot infer common array type for arrow operation {lhs} {op} {rhs}"
+            //     ))
+            // })
+            array_coercion(lhs, rhs).map(Signature::comparison).ok_or_else(|| {
                 DataFusionError::Plan(format!(
                     "Cannot infer common array type for arrow operation {lhs} {op} {rhs}"
                 ))
