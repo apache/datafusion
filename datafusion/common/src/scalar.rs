@@ -3001,7 +3001,7 @@ impl fmt::Debug for ScalarValue {
                 }
             }
             ScalarValue::Dictionary(k, v) => write!(f, "Dictionary({k:?}, {v:?})"),
-            ScalarValue::Null => write!(f, "ACT_NULL"),
+            ScalarValue::Null => write!(f, "NULL"),
         }
     }
 }

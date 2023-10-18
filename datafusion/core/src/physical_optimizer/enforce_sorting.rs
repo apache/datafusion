@@ -2730,4 +2730,66 @@ mod tmp_tests {
         // assert_eq!(0, 1);
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_subquery10() -> Result<()> {
+        let config = SessionConfig::new().with_target_partitions(1);
+        // config.options_mut().optimizer.max_passes = 1;
+        let ctx = SessionContext::new_with_config(config);
+
+        let sql = "select array_concat(make_array(make_array()), make_array(make_array(1, 2), make_array(3, 4)));";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+
+        print_plan(&physical_plan)?;
+        let expected = vec![
+            "ProjectionExec: expr=[1,2,3,4 as array_concat(make_array(make_array()),make_array(make_array(Int64(1),Int64(2)),make_array(Int64(3),Int64(4))))]",
+            "  EmptyExec: produce_one_row=true",
+        ];
+        // Get string representation of the plan
+        let actual = get_plan_string(&physical_plan);
+        assert_eq!(
+            expected, actual,
+            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+        print_batches(&batches)?;
+
+        // assert_eq!(0, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_subquery11() -> Result<()> {
+        let config = SessionConfig::new().with_target_partitions(1);
+        // config.options_mut().optimizer.max_passes = 1;
+        let ctx = SessionContext::new_with_config(config);
+
+        let sql = "explain verbose select array_concat(make_array([1,2], [3,4]), make_array(5, 6));";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+
+        // print_plan(&physical_plan)?;
+        // let expected = vec![
+        //     "ProjectionExec: expr=[1,2,3,4 as array_concat(make_array(make_array()),make_array(make_array(Int64(1),Int64(2)),make_array(Int64(3),Int64(4))))]",
+        //     "  EmptyExec: produce_one_row=true",
+        // ];
+        // // Get string representation of the plan
+        // let actual = get_plan_string(&physical_plan);
+        // assert_eq!(
+        //     expected, actual,
+        //     "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        // );
+
+        let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
+        print_batches(&batches)?;
+
+        // assert_eq!(0, 1);
+        Ok(())
+    }
 }
