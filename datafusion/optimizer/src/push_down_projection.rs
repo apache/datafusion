@@ -149,7 +149,7 @@ impl OptimizerRule for PushDownProjection {
             {
                 let mut used_columns: HashSet<Column> = HashSet::new();
                 if projection_is_empty {
-                    let field = find_small_field(&scan.projected_schema.fields()).ok_or(
+                    let field = find_small_field(scan.projected_schema.fields()).ok_or(
                         DataFusionError::Internal("Scan with empty schema".to_string()),
                     )?;
                     used_columns.insert(field.qualified_column());
@@ -164,7 +164,7 @@ impl OptimizerRule for PushDownProjection {
                 }
             }
             LogicalPlan::Values(values) if projection_is_empty => {
-                let field = find_small_field(&values.schema.fields()).ok_or(
+                let field = find_small_field(values.schema.fields()).ok_or(
                     DataFusionError::Internal("Values with empty schema".to_string()),
                 )?;
                 let column = Expr::Column(field.qualified_column());
