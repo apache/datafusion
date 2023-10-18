@@ -1976,24 +1976,7 @@ mod tests {
             ParquetReadOptions::default(),
         )
         .await?;
-        ctx.register_parquet(
-            "part1",
-            &format!("{out_dir}/{write_id}_1.parquet"),
-            ParquetReadOptions::default(),
-        )
-        .await?;
-        ctx.register_parquet(
-            "part2",
-            &format!("{out_dir}/{write_id}_2.parquet"),
-            ParquetReadOptions::default(),
-        )
-        .await?;
-        ctx.register_parquet(
-            "part3",
-            &format!("{out_dir}/{write_id}_3.parquet"),
-            ParquetReadOptions::default(),
-        )
-        .await?;
+
         ctx.register_parquet("allparts", &out_dir, ParquetReadOptions::default())
             .await?;
 

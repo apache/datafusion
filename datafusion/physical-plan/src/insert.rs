@@ -36,7 +36,7 @@ use arrow_array::{ArrayRef, UInt64Array};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion_common::{exec_err, internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::PhysicalSortRequirement;
+use datafusion_physical_expr::{Distribution, PhysicalSortRequirement};
 
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -68,7 +68,7 @@ pub trait DataSink: DisplayAs + Debug + Send + Sync {
     /// or rollback required.
     async fn write_all(
         &self,
-        data: Vec<SendableRecordBatchStream>,
+        data: SendableRecordBatchStream,
         context: &Arc<TaskContext>,
     ) -> Result<u64>;
 }
@@ -152,18 +152,6 @@ impl FileSinkExec {
         }
     }
 
-    fn execute_all_input_streams(
-        &self,
-        context: Arc<TaskContext>,
-    ) -> Result<Vec<SendableRecordBatchStream>> {
-        let n_input_parts = self.input.output_partitioning().partition_count();
-        let mut streams = Vec::with_capacity(n_input_parts);
-        for part in 0..n_input_parts {
-            streams.push(self.execute_input_stream(part, context.clone())?);
-        }
-        Ok(streams)
-    }
-
     /// Returns insert sink
     pub fn sink(&self) -> &dyn DataSink {
         self.sink.as_ref()
@@ -210,11 +198,15 @@ impl ExecutionPlan for FileSinkExec {
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
-        // Incoming number of partitions is taken to be the
-        // number of files the query is required to write out.
-        // The optimizer should not change this number.
-        // Parrallelism is handled within the appropriate DataSink
+        // DataSink is responsible for dynamically partitioning its
+        // own input at execution time.
         vec![false]
+    }
+
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        // DataSink is responsible for dynamically partitioning its
+        // own input at execution time, and so requires a single input partition.
+        vec![Distribution::SinglePartition; self.children().len()]
     }
 
     fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
@@ -269,7 +261,7 @@ impl ExecutionPlan for FileSinkExec {
         if partition != 0 {
             return internal_err!("FileSinkExec can only be called on partition 0!");
         }
-        let data = self.execute_all_input_streams(context.clone())?;
+        let data = self.execute_input_stream(0, context.clone())?;
 
         let count_schema = self.count_schema.clone();
         let sink = self.sink.clone();
