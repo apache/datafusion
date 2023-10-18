@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::sorts::cursor::{FieldArray, FieldCursor, RowCursor};
+use crate::sorts::cursor::{ArrayValues, CursorRows, FieldArray};
 use crate::SendableRecordBatchStream;
 use crate::{PhysicalExpr, PhysicalSortExpr};
 use arrow::array::Array;
@@ -114,7 +114,7 @@ impl RowCursorStream {
         })
     }
 
-    fn convert_batch(&mut self, batch: &RecordBatch) -> Result<RowCursor> {
+    fn convert_batch(&mut self, batch: &RecordBatch) -> Result<CursorRows> {
         let cols = self
             .column_expressions
             .iter()
@@ -127,12 +127,12 @@ impl RowCursorStream {
         // track the memory in the newly created Rows.
         let mut rows_reservation = self.reservation.new_empty();
         rows_reservation.try_grow(rows.size())?;
-        Ok(RowCursor::new(rows, rows_reservation))
+        Ok(CursorRows::new(rows, rows_reservation))
     }
 }
 
 impl PartitionedStream for RowCursorStream {
-    type Output = Result<(RowCursor, RecordBatch)>;
+    type Output = Result<(CursorRows, RecordBatch)>;
 
     fn partitions(&self) -> usize {
         self.streams.0.len()
@@ -179,16 +179,16 @@ impl<T: FieldArray> FieldCursorStream<T> {
         }
     }
 
-    fn convert_batch(&mut self, batch: &RecordBatch) -> Result<FieldCursor<T::Values>> {
+    fn convert_batch(&mut self, batch: &RecordBatch) -> Result<ArrayValues<T::Values>> {
         let value = self.sort.expr.evaluate(batch)?;
         let array = value.into_array(batch.num_rows());
         let array = array.as_any().downcast_ref::<T>().expect("field values");
-        Ok(FieldCursor::new(self.sort.options, array))
+        Ok(ArrayValues::new(self.sort.options, array))
     }
 }
 
 impl<T: FieldArray> PartitionedStream for FieldCursorStream<T> {
-    type Output = Result<(FieldCursor<T::Values>, RecordBatch)>;
+    type Output = Result<(ArrayValues<T::Values>, RecordBatch)>;
 
     fn partitions(&self) -> usize {
         self.streams.0.len()
