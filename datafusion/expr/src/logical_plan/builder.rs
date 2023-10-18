@@ -667,7 +667,7 @@ impl LogicalPlanBuilder {
     ///
     /// // Perform the equivalent of `left INNER JOIN right ON (a != a2 AND b != b2)`
     /// // finding all pairs of rows from `left` and `right` where
-    /// // where `a != a2` and `b != b2`.
+    /// // where `a = a2` and `b != b2`.
     /// let plan = LogicalPlanBuilder::scan("left", left_table, None)?
     ///     .join_on(right_plan, JoinType::Inner, exprs)?
     ///     .build()?;
