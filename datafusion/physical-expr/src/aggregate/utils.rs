@@ -43,7 +43,7 @@ pub fn get_accum_scalar_values_as_arrays(
         .collect::<Vec<_>>())
 }
 
-/// Computes averages for `Decimal128` values, checking for overflow
+/// Computes averages for `Decimal128`/`Decimal256` values, checking for overflow
 ///
 /// This is needed because different precisions for Decimal128/Decimal256 can
 /// store different ranges of values and thus sum/count may not fit in
