@@ -714,7 +714,6 @@ fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
     use arrow::datatypes::TimeUnit::*;
 
     match (lhs_type, rhs_type) {
-        // interval +/-
         (Interval(_), Interval(_)) => Some(Interval(MonthDayNano)),
         (Date64, Date32) | (Date32, Date64) => Some(Date64),
         (Timestamp(_, None), Date32) | (Date32, Timestamp(_, None)) => {

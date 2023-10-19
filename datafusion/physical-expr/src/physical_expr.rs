@@ -87,7 +87,7 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
         &self,
         _interval: &Interval,
         _children: &[&Interval],
-    ) -> Result<Vec<Option<Interval>>> {
+    ) -> Result<Option<Vec<Interval>>> {
         not_impl_err!("Not implemented for {self}")
     }
 

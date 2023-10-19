@@ -119,19 +119,19 @@ impl ExprBoundaries {
 ///
 /// * `AnalysisContext` constructed by pruned boundaries and a selectivity value.
 pub fn analyze(
-    expr: &Arc<dyn PhysicalExpr>,
+    expr: Arc<dyn PhysicalExpr>,
     context: AnalysisContext,
 ) -> Result<AnalysisContext> {
     let target_boundaries = context.boundaries.ok_or_else(|| {
         DataFusionError::Internal("No column exists at the input to filter".to_string())
     })?;
 
-    let mut graph = ExprIntervalGraph::try_new(expr.clone())?;
-
-    let columns: Vec<Arc<dyn PhysicalExpr>> = collect_columns(expr)
+    let columns: Vec<Arc<dyn PhysicalExpr>> = collect_columns(&expr)
         .into_iter()
         .map(|c| Arc::new(c) as Arc<dyn PhysicalExpr>)
         .collect();
+
+    let mut graph = ExprIntervalGraph::try_new(expr)?;
 
     let target_expr_and_indices: Vec<(Arc<dyn PhysicalExpr>, usize)> =
         graph.gather_node_indices(columns.as_slice());
@@ -149,9 +149,11 @@ pub fn analyze(
             })
             .collect();
 
-    match graph.update_ranges(&mut target_indices_and_boundaries)? {
+    match graph
+        .update_ranges(&mut target_indices_and_boundaries, Interval::CERTAINLY_TRUE)?
+    {
         PropagationResult::Success => {
-            shrink_boundaries(expr, graph, target_boundaries, target_expr_and_indices)
+            shrink_boundaries(graph, target_boundaries, target_expr_and_indices)
         }
         PropagationResult::Infeasible => {
             Ok(AnalysisContext::new(target_boundaries).with_selectivity(0.0))
@@ -167,8 +169,7 @@ pub fn analyze(
 /// Following this, it constructs and returns a new `AnalysisContext` with the
 /// updated parameters.
 fn shrink_boundaries(
-    expr: &Arc<dyn PhysicalExpr>,
-    mut graph: ExprIntervalGraph,
+    graph: ExprIntervalGraph,
     mut target_boundaries: Vec<ExprBoundaries>,
     target_expr_and_indices: Vec<(Arc<dyn PhysicalExpr>, usize)>,
 ) -> Result<AnalysisContext> {
@@ -183,21 +184,11 @@ fn shrink_boundaries(
             };
         }
     });
-    let graph_nodes = graph.gather_node_indices(&[expr.clone()]);
-    let (_, root_index) = graph_nodes.first().ok_or_else(|| {
-        DataFusionError::Internal("Error in constructing predicate graph".to_string())
-    })?;
-    let final_result = graph.get_interval(*root_index);
 
     // If during selectivity calculation we encounter an error, use 1.0 as cardinality estimate
     // safest estimate(e.q largest possible value).
-    let selectivity = calculate_selectivity(
-        &final_result.lower.value,
-        &final_result.upper.value,
-        &target_boundaries,
-        &initial_boundaries,
-    )
-    .unwrap_or(1.0);
+    let selectivity =
+        calculate_selectivity(&target_boundaries, &initial_boundaries).unwrap_or(1.0);
 
     if !(0.0..=1.0).contains(&selectivity) {
         return internal_err!("Selectivity is out of limit: {}", selectivity);
@@ -209,33 +200,18 @@ fn shrink_boundaries(
 /// This function calculates the filter predicate's selectivity by comparing
 /// the initial and pruned column boundaries. Selectivity is defined as the
 /// ratio of rows in a table that satisfy the filter's predicate.
-///
-/// An exact propagation result at the root, i.e. `[true, true]` or `[false, false]`,
-/// leads to early exit (returning a selectivity value of either 1.0 or 0.0). In such
-/// a case, `[true, true]` indicates that all data values satisfy the predicate (hence,
-/// selectivity is 1.0), and `[false, false]` suggests that no data value meets the
-/// predicate (therefore, selectivity is 0.0).
 fn calculate_selectivity(
-    lower_value: &ScalarValue,
-    upper_value: &ScalarValue,
     target_boundaries: &[ExprBoundaries],
     initial_boundaries: &[ExprBoundaries],
 ) -> Result<f64> {
-    match (lower_value, upper_value) {
-        (ScalarValue::Boolean(Some(true)), ScalarValue::Boolean(Some(true))) => Ok(1.0),
-        (ScalarValue::Boolean(Some(false)), ScalarValue::Boolean(Some(false))) => Ok(0.0),
-        _ => {
-            // Since the intervals are assumed uniform and the values
-            // are not correlated, we need to multiply the selectivities
-            // of multiple columns to get the overall selectivity.
-            target_boundaries.iter().enumerate().try_fold(
-                1.0,
-                |acc, (i, ExprBoundaries { interval, .. })| {
-                    let temp =
-                        cardinality_ratio(&initial_boundaries[i].interval, interval)?;
-                    Ok(acc * temp)
-                },
-            )
-        }
-    }
+    // Since the intervals are assumed uniform and the values
+    // are not correlated, we need to multiply the selectivities
+    // of multiple columns to get the overall selectivity.
+    target_boundaries.iter().enumerate().try_fold(
+        1.0,
+        |acc, (i, ExprBoundaries { interval, .. })| {
+            let temp = cardinality_ratio(&initial_boundaries[i].interval, interval)?;
+            Ok(acc * temp)
+        },
+    )
 }

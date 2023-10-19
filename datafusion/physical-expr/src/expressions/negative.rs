@@ -120,12 +120,14 @@ impl PhysicalExpr for NegativeExpr {
         &self,
         interval: &Interval,
         children: &[&Interval],
-    ) -> Result<Vec<Option<Interval>>> {
+    ) -> Result<Option<Vec<Interval>>> {
         let child_interval = children[0];
         let negated_interval =
             Interval::new(interval.upper.negate()?, interval.lower.negate()?);
 
-        Ok(vec![child_interval.intersect(negated_interval)?])
+        Ok(child_interval
+            .intersect(negated_interval)?
+            .and_then(|result| Some(vec![result])))
     }
 
     /// The ordering of a [`NegativeExpr`] is simply the reverse of its child.
@@ -233,7 +235,7 @@ mod tests {
         let original_child_interval = Interval::make(Some(-2), Some(3), (false, false));
         let negative_expr_interval = Interval::make(Some(0), Some(4), (true, false));
         let after_propagation =
-            vec![Some(Interval::make(Some(-2), Some(0), (false, true)))];
+            Some(vec![Interval::make(Some(-2), Some(0), (false, true))]);
         assert_eq!(
             negative_expr.propagate_constraints(
                 &negative_expr_interval,

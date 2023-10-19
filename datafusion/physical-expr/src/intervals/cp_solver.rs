@@ -29,7 +29,9 @@ use crate::utils::{build_dag, ExprTreeNode};
 use crate::PhysicalExpr;
 use arrow_schema::DataType;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::interval_aritmetic::{apply_operator, Interval, IntervalBound};
+use datafusion_expr::interval_aritmetic::{
+    apply_operator, equalize_intervals, satisfy_comparison, Interval, IntervalBound,
+};
 use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::Operator;
 
@@ -219,109 +221,90 @@ pub fn propagate_arithmetic(
     parent: &Interval,
     left_child: &Interval,
     right_child: &Interval,
-) -> Result<(Option<Interval>, Option<Interval>)> {
+) -> Result<Option<Vec<Interval>>> {
     let inverse_op = get_inverse_op(*op);
-    match (left_child.get_datatype()?, right_child.get_datatype()?) {
-        // If we have a child whose type is a time interval (i.e. DataType::Interval), we need special handling
-        // since timestamp differencing results in a Duration type.
-        (DataType::Timestamp(..), DataType::Interval(_)) => {
-            propagate_time_interval_at_right(
-                left_child,
-                right_child,
-                parent,
-                op,
-                &inverse_op,
-            )
-        }
-        (DataType::Interval(_), DataType::Timestamp(..)) => {
-            propagate_time_interval_at_left(
-                left_child,
-                right_child,
-                parent,
-                op,
-                &inverse_op,
-            )
-        }
-        _ => {
-            // First, propagate to the left:
-            match apply_operator(&inverse_op, parent, right_child)?
-                .intersect(left_child)?
-            {
-                // Left is feasible:
-                Some(value) => {
-                    // Propagate to the right using the new left.
-                    let right =
-                        propagate_right(&value, parent, right_child, op, &inverse_op)?;
+    // First, propagate to the left:
+    match apply_operator(&inverse_op, parent, right_child)?.intersect(left_child)? {
+        // Left is feasible:
+        Some(value) => {
+            // Propagate to the right using the new left.
 
-                    // Return intervals for both children:
-                    Ok((Some(value), right))
-                }
-                // If the left child is infeasible, short-circuit.
-                None => Ok((None, None)),
+            if let Some(right) =
+                propagate_right(&value, parent, right_child, op, &inverse_op)?
+            {
+                // Return intervals for both children:
+                Ok(Some(vec![value, right]))
+            } else {
+                Ok(None)
             }
         }
+        // If the left child is infeasible, short-circuit.
+        None => Ok(None),
     }
 }
 
-/// This function provides a target parent interval for comparison operators.
-/// If we have expression > 0, expression must have the range (0, ∞).
-/// If we have expression >= 0, expression must have the range [0, ∞).
-/// If we have expression < 0, expression must have the range (-∞, 0).
-/// If we have expression <= 0, expression must have the range (-∞, 0].
-fn comparison_operator_target(
-    left_datatype: &DataType,
-    op: &Operator,
-    right_datatype: &DataType,
-) -> Result<Interval> {
-    let datatype = get_result_type(left_datatype, &Operator::Minus, right_datatype)?;
-    let unbounded = IntervalBound::make_unbounded(&datatype)?;
-    let zero = ScalarValue::new_zero(&datatype)?;
-    Ok(match *op {
-        Operator::GtEq => Interval::new(IntervalBound::new_closed(zero), unbounded),
-        Operator::Gt => Interval::new(IntervalBound::new_open(zero), unbounded),
-        Operator::LtEq => Interval::new(unbounded, IntervalBound::new_closed(zero)),
-        Operator::Lt => Interval::new(unbounded, IntervalBound::new_open(zero)),
-        Operator::Eq => Interval::new(
-            IntervalBound::new_closed(zero.clone()),
-            IntervalBound::new_closed(zero),
-        ),
-        _ => unreachable!(),
-    })
-}
-
-/// This function propagates constraints arising from comparison operators.
-/// The main idea is that we can analyze an inequality like x > y through the
-/// equivalent inequality x - y > 0. Assuming that x and y has ranges [xL, xU]
-/// and [yL, yU], we simply apply constraint propagation across [xL, xU],
-/// [yL, yH] and [0, ∞]. Specifically, we would first do
-///     - [xL, xU] <- ([yL, yU] + [0, ∞]) ∩ [xL, xU], and then
-///     - [yL, yU] <- ([xL, xU] - [0, ∞]) ∩ [yL, yU].
+// Two intervals can be ordered in 6 ways for a Gt `>` operator:
+//
+//                              (1): Infeasible, short-circuit
+// left:   |        ================                                               |
+// right:  |                           ========================                    |
+//
+//                              (2): Update both interval
+// left:   |              ====================                                     |
+// right:  |                           ========================                    |
+//                                          |
+//                                          V
+// left:   |                             =======                                   |
+// right:  |                             =======                                   |
+//
+//                              (3): Update left interval
+// left:   |                  ==============================                       |
+// right:  |                           ==========                                  |
+//                                          |
+//                                          V
+// left:   |                           =====================                       |
+// right:  |                           ==========                                  |
+//
+//                              (4): Update right interval
+// left:   |                           ==========                                  |
+// right:  |                   ===========================                         |
+//                                          |
+//                                          V
+// left:   |                           ==========                                  |
+// right   |                   ==================                                  |
+//
+//                              (5): No change
+// left:   |                       ============================                    |
+// right:  |               ===================                                     |
+//
+//                              (6): No change
+// left:   |                                    ====================               |
+// right:  |                ===============                                        |
+//
+//         -inf --------------------------------------------------------------- +inf
 pub fn propagate_comparison(
     op: &Operator,
+    parent: &Interval,
     left_child: &Interval,
     right_child: &Interval,
-) -> Result<(Option<Interval>, Option<Interval>)> {
-    let left_type = left_child.get_datatype()?;
-    let right_type = right_child.get_datatype()?;
-    let parent = comparison_operator_target(&left_type, op, &right_type)?;
-    match (&left_type, &right_type) {
-        // We can not compare a Duration type with a time interval type
-        // without a reference timestamp unless the latter has a zero month field.
-        (DataType::Interval(_), DataType::Duration(_)) => {
-            propagate_comparison_to_time_interval_at_left(
-                left_child,
-                &parent,
-                right_child,
-            )
+) -> Result<Option<Vec<Interval>>> {
+    if parent == &Interval::CERTAINLY_FALSE {
+        // TODO: False expecting comparison operators are not supported yet.
+        Ok(None)
+    } else if parent == &Interval::UNCERTAIN {
+        // We cannot propagate over an uncertain interval.
+        Ok(None)
+    } else {
+        match op {
+            Operator::Eq => equalize_intervals(left_child, right_child),
+            Operator::Lt => satisfy_comparison(left_child, right_child, false, false),
+            Operator::LtEq => satisfy_comparison(left_child, right_child, true, false),
+            Operator::Gt => satisfy_comparison(left_child, right_child, false, true),
+            Operator::GtEq => satisfy_comparison(left_child, right_child, true, true),
+            _ => panic!(
+                "The operator must be a comparison operator to propagate intervals"
+            ),
         }
-        (DataType::Duration(_), DataType::Interval(_)) => {
-            propagate_comparison_to_time_interval_at_left(
-                left_child,
-                &parent,
-                right_child,
-            )
-        }
-        _ => propagate_arithmetic(&Operator::Minus, &parent, left_child, right_child),
     }
 }
 
@@ -515,8 +498,13 @@ impl ExprIntervalGraph {
 
     /// Updates/shrinks bounds for leaf expressions using interval arithmetic
     /// via a top-down traversal.
-    fn propagate_constraints(&mut self) -> Result<PropagationResult> {
+    fn propagate_constraints(
+        &mut self,
+        expression_request: Interval,
+    ) -> Result<PropagationResult> {
         let mut bfs = Bfs::new(&self.graph, self.root);
+        self.graph[self.root].interval = expression_request;
+
         while let Some(node) = bfs.next(&self.graph) {
             let neighbors = self.graph.neighbors_directed(node, Outgoing);
             let mut children = neighbors.collect::<Vec<_>>();
@@ -535,13 +523,13 @@ impl ExprIntervalGraph {
             let propagated_intervals = self.graph[node]
                 .expr
                 .propagate_constraints(node_interval, &children_intervals)?;
-            for (child, interval) in children.into_iter().zip(propagated_intervals) {
-                if let Some(interval) = interval {
+            if let Some(propagated_intervals) = propagated_intervals {
+                for (child, interval) in children.into_iter().zip(propagated_intervals) {
                     self.graph[child].interval = interval;
-                } else {
-                    // The constraint is infeasible, report:
-                    return Ok(PropagationResult::Infeasible);
                 }
+            } else {
+                // The constraint is infeasible, report:
+                return Ok(PropagationResult::Infeasible);
             }
         }
         Ok(PropagationResult::Success)
@@ -552,85 +540,31 @@ impl ExprIntervalGraph {
     pub fn update_ranges(
         &mut self,
         leaf_bounds: &mut [(usize, Interval)],
+        expression_request: Interval,
     ) -> Result<PropagationResult> {
         self.assign_intervals(leaf_bounds);
         let bounds = self.evaluate_bounds()?;
-        if bounds == &Interval::CERTAINLY_FALSE {
-            Ok(PropagationResult::Infeasible)
-        } else if bounds == &Interval::UNCERTAIN {
-            let result = self.propagate_constraints();
+        // There are 4 cases to consider:
+        // 1) bounds ⊂ expression_request => CannotPropagate
+        // 2) expression_request ⊂ bounds => Success
+        // 3) Disjoint sets => Infeasible
+        // 4) Partially intersecting sets => Success
+        if expression_request.contains(bounds)? == Interval::CERTAINLY_TRUE {
+            Ok(PropagationResult::CannotPropagate)
+        } else if bounds.contains(&expression_request)? == Interval::CERTAINLY_TRUE
+            || bounds.contains(&expression_request)? == Interval::UNCERTAIN
+        {
+            let result = self.propagate_constraints(expression_request);
             self.update_intervals(leaf_bounds);
             result
         } else {
-            Ok(PropagationResult::CannotPropagate)
+            Ok(PropagationResult::Infeasible)
         }
     }
 
     /// Returns the interval associated with the node at the given `index`.
     pub fn get_interval(&self, index: usize) -> Interval {
         self.graph[NodeIndex::new(index)].interval.clone()
-    }
-}
-
-/// During the propagation of [`Interval`] values on an [`ExprIntervalGraph`], if there exists a `timestamp - timestamp`
-/// operation, the result would be of type `Duration`. However, we may encounter a situation where a time interval
-/// is involved in an arithmetic operation with a `Duration` type. This function offers special handling for such cases,
-/// where the time interval resides on the left side of the operation.
-fn propagate_time_interval_at_left(
-    left_child: &Interval,
-    right_child: &Interval,
-    parent: &Interval,
-    op: &Operator,
-    inverse_op: &Operator,
-) -> Result<(Option<Interval>, Option<Interval>)> {
-    // We check if the child's time interval(s) has a non-zero month or day field(s).
-    // If so, we return it as is without propagating. Otherwise, we first convert
-    // the time intervals to the Duration type, then propagate, and then convert the bounds to time intervals again.
-    if let Some(duration) = convert_interval_type_to_duration(left_child) {
-        match apply_operator(inverse_op, parent, right_child)?.intersect(duration)? {
-            Some(value) => {
-                let right = propagate_right(&value, parent, right_child, op, inverse_op)?;
-                let new_interval = convert_duration_type_to_interval(&value);
-                Ok((new_interval, right))
-            }
-            None => Ok((None, None)),
-        }
-    } else {
-        let right = propagate_right(left_child, parent, right_child, op, inverse_op)?;
-        Ok((Some(left_child.clone()), right))
-    }
-}
-
-/// During the propagation of [`Interval`] values on an [`ExprIntervalGraph`], if there exists a `timestamp - timestamp`
-/// operation, the result would be of type `Duration`. However, we may encounter a situation where a time interval
-/// is involved in an arithmetic operation with a `Duration` type. This function offers special handling for such cases,
-/// where the time interval resides on the right side of the operation.
-fn propagate_time_interval_at_right(
-    left_child: &Interval,
-    right_child: &Interval,
-    parent: &Interval,
-    op: &Operator,
-    inverse_op: &Operator,
-) -> Result<(Option<Interval>, Option<Interval>)> {
-    // We check if the child's time interval(s) has a non-zero month or day field(s).
-    // If so, we return it as is without propagating. Otherwise, we first convert
-    // the time intervals to the Duration type, then propagate, and then convert the bounds to time intervals again.
-    if let Some(duration) = convert_interval_type_to_duration(right_child) {
-        match apply_operator(inverse_op, parent, &duration)?.intersect(left_child)? {
-            Some(value) => {
-                let right =
-                    propagate_right(left_child, parent, &duration, op, inverse_op)?;
-                let right =
-                    right.and_then(|right| convert_duration_type_to_interval(&right));
-                Ok((Some(value), right))
-            }
-            None => Ok((None, None)),
-        }
-    } else {
-        match apply_operator(inverse_op, parent, right_child)?.intersect(left_child)? {
-            Some(value) => Ok((Some(value), Some(right_child.clone()))),
-            None => Ok((None, None)),
-        }
     }
 }
 
@@ -648,36 +582,6 @@ fn propagate_right(
         _ => unreachable!(),
     }?
     .intersect(right)
-}
-
-/// Converts the `time interval` (as the left child) to duration, then performs the propagation rule for comparison operators.
-pub fn propagate_comparison_to_time_interval_at_left(
-    left_child: &Interval,
-    parent: &Interval,
-    right_child: &Interval,
-) -> Result<(Option<Interval>, Option<Interval>)> {
-    if let Some(converted) = convert_interval_type_to_duration(left_child) {
-        propagate_arithmetic(&Operator::Minus, parent, &converted, right_child)
-    } else {
-        Err(DataFusionError::Internal(
-                    "Interval type has a non-zero month field, cannot compare with a Duration type".to_string(),
-                ))
-    }
-}
-
-/// Converts the `time interval` (as the right child) to duration, then performs the propagation rule for comparison operators.
-pub fn propagate_comparison_to_time_interval_at_right(
-    left_child: &Interval,
-    parent: &Interval,
-    right_child: &Interval,
-) -> Result<(Option<Interval>, Option<Interval>)> {
-    if let Some(converted) = convert_interval_type_to_duration(right_child) {
-        propagate_arithmetic(&Operator::Minus, parent, left_child, &converted)
-    } else {
-        Err(DataFusionError::Internal(
-                    "Interval type has a non-zero month field, cannot compare with a Duration type".to_string(),
-                ))
-    }
 }
 
 #[cfg(test)]
@@ -725,7 +629,8 @@ mod tests {
             .map(|((_, interval), (_, index))| (*index, interval.clone()))
             .collect_vec();
 
-        let exp_result = graph.update_ranges(&mut col_stat_nodes[..])?;
+        let exp_result =
+            graph.update_ranges(&mut col_stat_nodes[..], Interval::CERTAINLY_TRUE)?;
         assert_eq!(exp_result, result);
         col_stat_nodes.iter().zip(expected_nodes.iter()).for_each(
             |((_, calculated_interval_node), (_, expected))| {
@@ -1293,43 +1198,44 @@ mod tests {
             ),
         );
         let children = vec![&left_child, &right_child];
-        let result = expression.propagate_constraints(&parent, &children)?;
+        let result = expression
+            .propagate_constraints(&parent, &children)?
+            .unwrap();
 
         assert_eq!(
-            Some(Interval::new(
-                // 14.10.2020 - 10:11:12 AM
-                IntervalBound::new(
-                    ScalarValue::TimestampNanosecond(
-                        Some(1_602_670_272_000_000_000),
-                        None
+            vec![
+                Interval::new(
+                    // 14.10.2020 - 10:11:12 AM
+                    IntervalBound::new(
+                        ScalarValue::TimestampNanosecond(
+                            Some(1_602_670_272_000_000_000),
+                            None
+                        ),
+                        false,
                     ),
-                    false,
-                ),
-                // 15.10.2020 - 10:11:12 AM
-                IntervalBound::new(
-                    ScalarValue::TimestampNanosecond(
-                        Some(1_602_756_672_000_000_000),
-                        None
+                    // 15.10.2020 - 10:11:12 AM
+                    IntervalBound::new(
+                        ScalarValue::TimestampNanosecond(
+                            Some(1_602_756_672_000_000_000),
+                            None
+                        ),
+                        false,
                     ),
-                    false,
                 ),
-            )),
-            result[0]
-        );
-        assert_eq!(
-            Some(Interval::new(
-                // 1 day 321 ns in Duration type
-                IntervalBound::new(
-                    ScalarValue::IntervalMonthDayNano(Some(0x1_0000_0000_0000_0141)),
-                    false,
-                ),
-                // 1 day 321 ns in Duration type
-                IntervalBound::new(
-                    ScalarValue::IntervalMonthDayNano(Some(0x1_0000_0000_0000_0141)),
-                    false,
-                ),
-            )),
-            result[1]
+                Interval::new(
+                    // 1 day 321 ns in Duration type
+                    IntervalBound::new(
+                        ScalarValue::IntervalMonthDayNano(Some(0x1_0000_0000_0000_0141)),
+                        false,
+                    ),
+                    // 1 day 321 ns in Duration type
+                    IntervalBound::new(
+                        ScalarValue::IntervalMonthDayNano(Some(0x1_0000_0000_0000_0141)),
+                        false,
+                    ),
+                )
+            ],
+            result
         );
 
         Ok(())
@@ -1379,37 +1285,38 @@ mod tests {
             ),
         );
         let children = vec![&left_child, &right_child];
-        let result = expression.propagate_constraints(&parent, &children)?;
+        let result = expression
+            .propagate_constraints(&parent, &children)?
+            .unwrap();
 
         assert_eq!(
-            Some(Interval::new(
-                // 10.10.2020 - 10:11:12 AM
-                IntervalBound::new(
-                    ScalarValue::TimestampMillisecond(Some(1_602_324_672_000), None),
-                    false,
+            vec![
+                Interval::new(
+                    IntervalBound::new(
+                        // 2 days
+                        ScalarValue::IntervalDayTime(Some(172_800_000)),
+                        false,
+                    ),
+                    IntervalBound::new(
+                        // 6 days
+                        ScalarValue::IntervalDayTime(Some(518_400_000)),
+                        false,
+                    ),
                 ),
-                // 14.10.2020 - 10:11:12 AM
-                IntervalBound::new(
-                    ScalarValue::TimestampMillisecond(Some(1_602_670_272_000), None),
-                    false,
+                Interval::new(
+                    // 10.10.2020 - 10:11:12 AM
+                    IntervalBound::new(
+                        ScalarValue::TimestampMillisecond(Some(1_602_324_672_000), None),
+                        false,
+                    ),
+                    // 14.10.2020 - 10:11:12 AM
+                    IntervalBound::new(
+                        ScalarValue::TimestampMillisecond(Some(1_602_670_272_000), None),
+                        false,
+                    )
                 )
-            )),
-            result[1]
-        );
-        assert_eq!(
-            Some(Interval::new(
-                IntervalBound::new(
-                    // 2 days
-                    ScalarValue::IntervalDayTime(Some(172_800_000)),
-                    false,
-                ),
-                IntervalBound::new(
-                    // 6 days
-                    ScalarValue::IntervalDayTime(Some(518_400_000)),
-                    false,
-                ),
-            )),
-            result[0]
+            ],
+            result
         );
 
         Ok(())
@@ -1430,17 +1337,18 @@ mod tests {
             IntervalBound::new(ScalarValue::Int64(Some(1000)), false),
         );
         assert_eq!(
-            (
-                Some(Interval::new(
+            (Some(vec![
+                Interval::new(
                     IntervalBound::make_unbounded(DataType::Int64).unwrap(),
                     IntervalBound::new(ScalarValue::Int64(Some(1000)), true)
-                )),
-                Some(Interval::new(
+                ),
+                Interval::new(
                     IntervalBound::new(ScalarValue::Int64(Some(1000)), false),
                     IntervalBound::new(ScalarValue::Int64(Some(1000)), false)
-                )),
-            ),
-            propagate_comparison(&Operator::Lt, &left, &right).unwrap()
+                )
+            ])),
+            propagate_comparison(&Operator::Lt, &Interval::CERTAINLY_TRUE, &left, &right)
+                .unwrap()
         );
 
         let left = Interval::new(
@@ -1460,8 +1368,8 @@ mod tests {
             IntervalBound::new(ScalarValue::TimestampNanosecond(Some(1000), None), false),
         );
         assert_eq!(
-            (
-                Some(Interval::new(
+            (Some(vec![
+                Interval::new(
                     IntervalBound::make_unbounded(DataType::Timestamp(
                         TimeUnit::Nanosecond,
                         None
@@ -1471,8 +1379,8 @@ mod tests {
                         ScalarValue::TimestampNanosecond(Some(1000), None),
                         true
                     )
-                )),
-                Some(Interval::new(
+                ),
+                Interval::new(
                     IntervalBound::new(
                         ScalarValue::TimestampNanosecond(Some(1000), None),
                         false
@@ -1481,9 +1389,10 @@ mod tests {
                         ScalarValue::TimestampNanosecond(Some(1000), None),
                         false
                     )
-                )),
-            ),
-            propagate_comparison(&Operator::Lt, &left, &right).unwrap()
+                )
+            ])),
+            propagate_comparison(&Operator::Lt, &Interval::CERTAINLY_TRUE, &left, &right)
+                .unwrap()
         );
 
         let left = Interval::new(
@@ -1509,8 +1418,8 @@ mod tests {
             ),
         );
         assert_eq!(
-            (
-                Some(Interval::new(
+            (Some(vec![
+                Interval::new(
                     IntervalBound::make_unbounded(DataType::Timestamp(
                         TimeUnit::Nanosecond,
                         Some("+05:00".into()),
@@ -1523,8 +1432,8 @@ mod tests {
                         ),
                         true
                     )
-                )),
-                Some(Interval::new(
+                ),
+                Interval::new(
                     IntervalBound::new(
                         ScalarValue::TimestampNanosecond(
                             Some(1000),
@@ -1539,9 +1448,10 @@ mod tests {
                         ),
                         false
                     )
-                )),
-            ),
-            propagate_comparison(&Operator::Lt, &left, &right).unwrap()
+                )
+            ])),
+            propagate_comparison(&Operator::Lt, &Interval::CERTAINLY_TRUE, &left, &right)
+                .unwrap()
         );
     }
 }

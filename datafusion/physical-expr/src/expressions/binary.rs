@@ -339,32 +339,29 @@ impl PhysicalExpr for BinaryExpr {
         &self,
         interval: &Interval,
         children: &[&Interval],
-    ) -> Result<Vec<Option<Interval>>> {
+    ) -> Result<Option<Vec<Interval>>> {
         // Get children intervals.
         let left_interval = children[0];
         let right_interval = children[1];
 
-        let (left, right) = if self.op.is_logic_operator() {
-            // TODO: Currently, this implementation only supports the AND operator
-            //       and does not require any further propagation. In the future,
-            //       upon adding support for additional logical operators, this
-            //       method will require modification to support propagating the
-            //       changes accordingly.
-            return Ok(vec![]);
-        } else if self.op.is_comparison_operator() {
-            if interval == &Interval::CERTAINLY_FALSE {
-                // TODO: We will handle strictly false clauses by negating
-                //       the comparison operator (e.g. GT to LE, LT to GE)
-                //       once open/closed intervals are supported.
-                return Ok(vec![]);
+        if self.op.eq(&Operator::And) {
+            if interval.eq(&Interval::CERTAINLY_TRUE) {
+                Ok(Some(vec![
+                    Interval::CERTAINLY_TRUE,
+                    Interval::CERTAINLY_TRUE,
+                ]))
+            } else {
+                // TODO: Other expectations of AND. It may be expected to return false.
+                Ok(None)
             }
-            // Propagate the comparison operator.
-            propagate_comparison(&self.op, left_interval, right_interval)?
+        }
+        // TODO: Other logical operators.
+        // False expected OR operator could be a meaningful implementation as the next step.
+        else if self.op.is_comparison_operator() {
+            propagate_comparison(&self.op, interval, left_interval, right_interval)
         } else {
-            // Propagate the arithmetic operator.
-            propagate_arithmetic(&self.op, interval, left_interval, right_interval)?
-        };
-        Ok(vec![left, right])
+            propagate_arithmetic(&self.op, interval, left_interval, right_interval)
+        }
     }
 
     fn dyn_hash(&self, state: &mut dyn Hasher) {

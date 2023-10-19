@@ -240,6 +240,20 @@ pub fn join_expr_tests_fixture_temporal(
             ScalarValue::TimestampMillisecond(Some(1672574402000), None), // 2023-01-01:12.00.02
             schema,
         ),
+        // constructs ((left_col - DURATION '3 secs')  > (right_col - DURATION '2 secs')) AND ((left_col - DURATION '5 secs') < (right_col - DURATION '4 secs'))
+        2 => gen_conjunctive_temporal_expr(
+            left_col,
+            right_col,
+            Operator::Minus,
+            Operator::Minus,
+            Operator::Minus,
+            Operator::Minus,
+            ScalarValue::DurationMillisecond(Some(3000)), // 3 secs
+            ScalarValue::DurationMillisecond(Some(2000)), // 2 secs
+            ScalarValue::DurationMillisecond(Some(5000)), // 5 secs
+            ScalarValue::DurationMillisecond(Some(4000)), // 4 secs
+            schema,
+        ),
         _ => unreachable!(),
     }
 }

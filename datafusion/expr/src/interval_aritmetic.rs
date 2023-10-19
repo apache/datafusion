@@ -148,6 +148,20 @@ impl IntervalBound {
         }
         .map(|v| IntervalBound::new(v, self.open || rhs.open))
     }
+
+    pub fn next_value(&self) -> IntervalBound {
+        IntervalBound {
+            value: next_value::<true>(self.value.clone()),
+            open: self.open,
+        }
+    }
+
+    pub fn previous_value(&self) -> IntervalBound {
+        IntervalBound {
+            value: next_value::<false>(self.value.clone()),
+            open: self.open,
+        }
+    }
 }
 
 impl Display for IntervalBound {
@@ -746,6 +760,147 @@ fn calculate_cardinality_based_on_bounds(
         (false, false) => diff + 1,
         (true, true) => diff - 1,
         _ => diff,
+    }
+}
+
+/// Finds the equatable parts of two intervals and updates them with that new result.
+/// None means they are disjoint intervals.
+pub fn equalize_intervals(
+    first: &Interval,
+    second: &Interval,
+) -> Result<Option<Vec<Interval>>> {
+    println!("{:?}", first);
+    println!("{:?}", second);
+    let first_l = first.lower.clone();
+    let first_u = first.upper.clone();
+    let second_l = second.lower.clone();
+    let second_u = second.upper.clone();
+
+    // Unbounded case is handled naturally since None < Some(x)
+    let new_lower = if first.lower.value > second.lower.value {
+        IntervalBound::new(first_l.value, first_l.open)
+    } else if first.lower.value < second.lower.value {
+        IntervalBound::new(second_l.value, second_l.open)
+    } else {
+        IntervalBound::new(first_l.value, first_l.open || second_l.open)
+    };
+    let new_upper = if first_u.value < second_u.value || second_u.is_unbounded() {
+        IntervalBound::new(first_u.value, first_u.open)
+    } else if first_u.value > second_u.value || first_u.is_unbounded() {
+        IntervalBound::new(second_u.value, second_u.open)
+    } else {
+        IntervalBound::new(first_u.value, first_u.open || second_u.open)
+    };
+
+    println!("{:?}", new_lower);
+    println!("{:?}", new_upper);
+    println!("{:?}", new_lower.value < new_upper.value);
+    assert!(
+        new_lower.value < new_upper.value
+            || (new_lower.value == new_upper.value && !new_lower.open && !new_upper.open)
+            || new_upper.is_unbounded()
+    );
+    Ok(Some(vec![
+        Interval::new(new_lower.clone(), new_upper.clone()),
+        Interval::new(new_lower, new_upper),
+    ]))
+}
+
+/// It either updates one or both of the intervals, or does not modify
+/// the intervals, or it can return None meaning infeasible result.
+/// op => includes_endpoints / op_gt
+///
+/// GtEq => true / true
+///
+/// Gt => false / true
+///
+/// LtEq => true / false
+///
+/// Lt => false / false
+pub fn satisfy_comparison(
+    left: &Interval,
+    right: &Interval,
+    includes_endpoints: bool,
+    op_gt: bool,
+) -> Result<Option<Vec<Interval>>> {
+    let (left, right) = if op_gt { (left, right) } else { (right, left) };
+
+    if left.upper.value <= right.lower.value && !left.upper.is_unbounded() {
+        if includes_endpoints
+            && left.upper.value == right.lower.value
+            && !left.upper.open
+            && !right.lower.open
+        {
+            // Singleton intervals
+            return Ok(Some(vec![
+                Interval::new(left.upper.clone(), left.upper.clone()),
+                Interval::new(left.upper.clone(), left.upper.clone()),
+            ]));
+        } else {
+            // No intersection, infeasible to propagate
+            return Ok(None);
+        }
+    }
+
+    // Gt operator can only change left lower bound and right upper bound.
+    let new_left_lower = if left.lower.value < right.lower.value {
+        right.lower.clone()
+    } else if left.lower.value > right.lower.value {
+        left.lower.clone()
+    } else {
+        match (left.lower.open, right.lower.open) {
+            (true, true) | (false, false) => {
+                if includes_endpoints || left.lower.is_unbounded() {
+                    left.lower.clone()
+                } else {
+                    left.lower.next_value()
+                }
+            }
+            (true, false) => left.lower.clone(),
+            (false, true) => {
+                if includes_endpoints {
+                    left.lower.next_value()
+                } else {
+                    left.lower.next_value().next_value()
+                }
+            }
+        }
+    };
+    let new_right_upper =
+        if left.upper.value < right.upper.value || right.upper.is_unbounded() {
+            left.upper.clone()
+        } else if left.upper.value > right.upper.value || left.upper.is_unbounded() {
+            right.upper.clone()
+        } else {
+            match (left.upper.open, right.upper.open) {
+                (true, true) | (false, false) => {
+                    if includes_endpoints || right.upper.is_unbounded() {
+                        right.upper.clone()
+                    } else {
+                        right.upper.previous_value()
+                    }
+                }
+                (true, false) => {
+                    if includes_endpoints {
+                        right.upper.previous_value()
+                    } else {
+                        right.upper.previous_value().previous_value()
+                    }
+                }
+                (false, true) => right.upper.clone(),
+            }
+        };
+
+    if op_gt {
+        Ok(Some(vec![
+            Interval::new(new_left_lower, left.upper.clone()),
+            Interval::new(right.lower.clone(), new_right_upper),
+        ]))
+    } else {
+        Ok(Some(vec![
+            Interval::new(right.lower.clone(), new_right_upper),
+            Interval::new(new_left_lower, left.upper.clone()),
+        ]))
     }
 }
 

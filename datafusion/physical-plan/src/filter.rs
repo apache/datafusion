@@ -201,9 +201,9 @@ impl ExecutionPlan for FilterExec {
     /// The output statistics of a filtering operation can be estimated if the
     /// predicate's selectivity value can be determined for the incoming data.
     fn statistics(&self) -> Statistics {
-        let predicate = self.predicate();
+        let predicate = self.predicate().clone();
 
-        if !check_support(predicate, &self.schema()) {
+        if !check_support(&predicate, &self.schema()) {
             return Statistics::default();
         }
 
