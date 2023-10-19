@@ -622,8 +622,10 @@ create table t as values (arrow_cast(123, 'Decimal256(5,2)'));
 statement ok
 set datafusion.execution.target_partitions = 1;
 
-query error DataFusion error: This feature is not implemented: AvgAccumulator for \(Decimal256\(5, 2\) --> Decimal256\(9, 6\)\)
+query R
 select AVG(column1) from t;
+----
+123
 
 statement ok
 drop table t;
