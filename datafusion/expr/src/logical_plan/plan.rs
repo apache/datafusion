@@ -45,7 +45,7 @@ use datafusion_common::tree_node::{
 use datafusion_common::{
     aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
     DFField, DFSchema, DFSchemaRef, DataFusionError, FunctionalDependencies,
-    OwnedTableReference, Result, ScalarValue, UnnestOptions,
+    OwnedTableReference, Result, ScalarValue, ToDFSchema, UnnestOptions,
 };
 // backwards compatibility
 pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
@@ -531,10 +531,9 @@ impl LogicalPlan {
         // so we don't need to recompute Schema.
         match &self {
             LogicalPlan::Projection(projection) => {
-                Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
+                Ok(LogicalPlan::Projection(Projection::try_new(
                     projection.expr.to_vec(),
                     Arc::new(inputs[0].clone()),
-                    projection.schema.clone(),
                 )?))
             }
             LogicalPlan::Window(Window {
@@ -549,13 +548,11 @@ impl LogicalPlan {
             LogicalPlan::Aggregate(Aggregate {
                 group_expr,
                 aggr_expr,
-                schema,
                 ..
-            }) => Ok(LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
+            }) => Ok(LogicalPlan::Aggregate(Aggregate::try_new(
                 Arc::new(inputs[0].clone()),
                 group_expr.to_vec(),
                 aggr_expr.to_vec(),
-                schema.clone(),
             )?)),
             _ => self.with_new_exprs(self.expressions(), inputs),
         }
@@ -707,17 +704,14 @@ impl LogicalPlan {
                     schema: schema.clone(),
                 }))
             }
-            LogicalPlan::Aggregate(Aggregate {
-                group_expr, schema, ..
-            }) => {
+            LogicalPlan::Aggregate(Aggregate { group_expr, .. }) => {
                 // group exprs are the first expressions
                 let agg_expr = expr.split_off(group_expr.len());
 
-                Ok(LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
+                Ok(LogicalPlan::Aggregate(Aggregate::try_new(
                     Arc::new(inputs[0].clone()),
                     expr,
                     agg_expr,
-                    schema.clone(),
                 )?))
             }
             LogicalPlan::Sort(Sort { fetch, .. }) => Ok(LogicalPlan::Sort(Sort {
@@ -1907,6 +1901,47 @@ impl Hash for TableScan {
         self.projected_schema.hash(state);
         self.filters.hash(state);
         self.fetch.hash(state);
+    }
+}
+
+impl TableScan {
+    pub fn project_schema(&self, projection: &[usize]) -> Result<Arc<DFSchema>> {
+        let schema = self.source.schema();
+        let projected_fields: Vec<DFField> = projection
+            .iter()
+            .map(|i| {
+                DFField::from_qualified(
+                    self.table_name.clone(),
+                    schema.fields()[*i].clone(),
+                )
+            })
+            .collect();
+
+        // Find indices among previous schema
+        let old_indices = self
+            .projection
+            .clone()
+            .unwrap_or((0..self.projected_schema.fields().len()).collect());
+        let new_proj = projection
+            .iter()
+            .map(|idx| {
+                old_indices
+                    .iter()
+                    .position(|old_idx| old_idx == idx)
+                    // TODO: Remove this unwrap
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let func_dependencies = self.projected_schema.functional_dependencies();
+        let new_func_dependencies = func_dependencies
+            .project_functional_dependencies(&new_proj, projection.len());
+
+        let projected_schema = Arc::new(
+            projected_fields
+                .to_dfschema()?
+                .with_functional_dependencies(new_func_dependencies),
+        );
+        Ok(projected_schema)
     }
 }
 

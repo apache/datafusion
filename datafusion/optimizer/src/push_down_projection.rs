@@ -520,15 +520,39 @@ fn push_down_scan(
         projection.into_iter().collect::<Vec<_>>()
     };
 
-    // create the projected schema
-    let projected_fields: Vec<DFField> = projection
-        .iter()
-        .map(|i| {
-            DFField::from_qualified(scan.table_name.clone(), schema.fields()[*i].clone())
-        })
-        .collect();
+    // // create the projected schema
+    // let projected_fields: Vec<DFField> = projection
+    //     .iter()
+    //     .map(|i| {
+    //         DFField::from_qualified(scan.table_name.clone(), schema.fields()[*i].clone())
+    //     })
+    //     .collect();
+    //
+    // // Find indices among previous schema
+    // let old_indices = scan
+    //     .projection
+    //     .clone()
+    //     .unwrap_or((0..scan.projected_schema.fields().len()).collect());
+    // let new_proj = projection
+    //     .iter()
+    //     .map(|idx| {
+    //         old_indices
+    //             .iter()
+    //             .position(|old_idx| old_idx == idx)
+    //             .unwrap()
+    //     })
+    //     .collect::<Vec<_>>();
+    // let func_dependencies = scan.projected_schema.functional_dependencies();
+    // let new_func_dependencies =
+    //     func_dependencies.project_functional_dependencies(&new_proj, projection.len());
+    //
+    // let projected_schema = Arc::new(
+    //     projected_fields
+    //         .to_dfschema()?
+    //         .with_functional_dependencies(new_func_dependencies),
+    // );
 
-    let projected_schema = projected_fields.to_dfschema_ref()?;
+    let projected_schema = scan.project_schema(&projection)?;
 
     Ok(LogicalPlan::TableScan(TableScan {
         table_name: scan.table_name.clone(),

@@ -20,6 +20,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{DFSchemaRef, Result};
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::{Expr, Projection};
+use std::sync::Arc;
 
 /// Optimization rule that eliminate unnecessary [LogicalPlan::Projection].
 #[derive(Default)]

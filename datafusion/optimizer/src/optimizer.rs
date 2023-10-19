@@ -221,7 +221,6 @@ impl Optimizer {
     /// Create a new optimizer using the recommended list of rules
     pub fn new() -> Self {
         let rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
-            Arc::new(RemoveUnusedColumns::new()),
             Arc::new(SimplifyExpressions::new()),
             Arc::new(UnwrapCastInComparison::new()),
             Arc::new(ReplaceDistinctWithAggregate::new()),
@@ -229,7 +228,6 @@ impl Optimizer {
             Arc::new(DecorrelatePredicateSubquery::new()),
             Arc::new(ScalarSubqueryToJoin::new()),
             Arc::new(ExtractEquijoinPredicate::new()),
-            // Arc::new(RemoveUnusedColumns::new()),
             // simplify expressions does not simplify expressions in subqueries, so we
             // run it again after running the optimizations that potentially converted
             // subqueries to joins
@@ -257,6 +255,7 @@ impl Optimizer {
             Arc::new(EliminateProjection::new()),
             // PushDownProjection can pushdown Projections through Limits, do PushDownLimit again.
             Arc::new(PushDownLimit::new()),
+            Arc::new(RemoveUnusedColumns::new()),
         ];
 
         Self::with_rules(rules)

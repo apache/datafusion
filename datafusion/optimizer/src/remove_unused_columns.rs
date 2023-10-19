@@ -51,7 +51,8 @@ impl OptimizerRule for RemoveUnusedColumns {
         config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         let indices = (0..plan.schema().fields().len()).collect();
-        try_optimize_internal(plan, config, indices)
+        let res = try_optimize_internal(plan, config, indices)?;
+        Ok(res)
     }
 
     fn name(&self) -> &str {
@@ -63,21 +64,36 @@ impl OptimizerRule for RemoveUnusedColumns {
     }
 }
 
+fn is_subquery(expr: &Expr) -> bool {
+    match expr {
+        Expr::ScalarSubquery(_) => true,
+        Expr::Alias(alias) => is_subquery(&alias.expr),
+        Expr::BinaryExpr(binary) => {
+            is_subquery(&binary.left) | is_subquery(&binary.right)
+        }
+        _ => false,
+    }
+}
+
 fn get_referred_indices(input: &LogicalPlan, exprs: &[Expr]) -> Result<Vec<usize>> {
-    let mut new_indices = vec![];
-    for expr in exprs {
-        let cols = expr.to_columns()?;
-        for col in cols {
-            if input.schema().has_column(&col) {
-                let idx = input.schema().index_of_column(&col)?;
-                if !new_indices.contains(&idx) {
-                    new_indices.push(idx);
+    if exprs.iter().any(|expr| is_subquery(expr)) {
+        Ok((0..input.schema().fields().len()).collect())
+    } else {
+        let mut new_indices = vec![];
+        for expr in exprs {
+            let cols = expr.to_columns()?;
+            for col in cols {
+                if input.schema().has_column(&col) {
+                    let idx = input.schema().index_of_column(&col)?;
+                    if !new_indices.contains(&idx) {
+                        new_indices.push(idx);
+                    }
                 }
             }
         }
+        new_indices.sort();
+        Ok(new_indices)
     }
-    new_indices.sort();
-    Ok(new_indices)
 }
 
 fn get_at_indices(exprs: &[Expr], indices: &[usize]) -> Vec<Expr> {
@@ -322,10 +338,10 @@ fn try_optimize_internal(
                         .position(|field_source| field_proj.field() == field_source)
                 })
                 .collect::<Option<Vec<_>>>();
-            // TODO: Remove this check.
-            if table_scan.projection.is_none() {
-                projection = None;
-            }
+            // // TODO: Remove this check.
+            // if table_scan.projection.is_none() {
+            //     projection = None;
+            // }
             let projected_schema = if let Some(indices) = &projection {
                 get_projected_schema(
                     indices,
@@ -346,12 +362,17 @@ fn try_optimize_internal(
             })));
         }
         // SubqueryAlias alias can route requirement for its parent to its child
-        LogicalPlan::SubqueryAlias(_sub_query_alias) => Some(vec![indices]),
+        LogicalPlan::SubqueryAlias(sub_query_alias) => {
+            // let referred_indices = get_referred_indices(&sub_query_alias.input)
+            Some(vec![indices])
+            // None
+        }
         LogicalPlan::Subquery(sub_query) => {
-            let referred_indices =
-                get_referred_indices(&sub_query.subquery, &sub_query.outer_ref_columns)?;
-            let required_indices = merge_vectors(&indices, &referred_indices);
-            Some(vec![required_indices])
+            // let referred_indices =
+            //     get_referred_indices(&sub_query.subquery, &sub_query.outer_ref_columns)?;
+            // let required_indices = merge_vectors(&indices, &referred_indices);
+            // Some(vec![required_indices])
+            None
         }
         LogicalPlan::EmptyRelation(_empty_relation) => {
             // Empty Relation has no children
