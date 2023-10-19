@@ -88,7 +88,7 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
     /// target batch size
     batch_size: usize,
 
-    /// Vector that holds cursors for each non-exhausted input partition
+    /// Cursors for each input partition. `None` means the input is exhausted
     cursors: Vec<Option<Cursor<C>>>,
 
     /// Optional number of rows to fetch

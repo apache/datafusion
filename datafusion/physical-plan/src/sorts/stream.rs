@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::sorts::cursor::{ArrayValues, FieldArray, RowValues};
+use crate::sorts::cursor::{ArrayValues, CursorArray, RowValues};
 use crate::SendableRecordBatchStream;
 use crate::{PhysicalExpr, PhysicalSortExpr};
 use arrow::array::Array;
@@ -153,7 +153,7 @@ impl PartitionedStream for RowCursorStream {
 }
 
 /// Specialized stream for sorts on single primitive columns
-pub struct FieldCursorStream<T: FieldArray> {
+pub struct FieldCursorStream<T: CursorArray> {
     /// The physical expressions to sort by
     sort: PhysicalSortExpr,
     /// Input streams
@@ -161,7 +161,7 @@ pub struct FieldCursorStream<T: FieldArray> {
     phantom: PhantomData<fn(T) -> T>,
 }
 
-impl<T: FieldArray> std::fmt::Debug for FieldCursorStream<T> {
+impl<T: CursorArray> std::fmt::Debug for FieldCursorStream<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PrimitiveCursorStream")
             .field("num_streams", &self.streams)
@@ -169,7 +169,7 @@ impl<T: FieldArray> std::fmt::Debug for FieldCursorStream<T> {
     }
 }
 
-impl<T: FieldArray> FieldCursorStream<T> {
+impl<T: CursorArray> FieldCursorStream<T> {
     pub fn new(sort: PhysicalSortExpr, streams: Vec<SendableRecordBatchStream>) -> Self {
         let streams = streams.into_iter().map(|s| s.fuse()).collect();
         Self {
@@ -187,7 +187,7 @@ impl<T: FieldArray> FieldCursorStream<T> {
     }
 }
 
-impl<T: FieldArray> PartitionedStream for FieldCursorStream<T> {
+impl<T: CursorArray> PartitionedStream for FieldCursorStream<T> {
     type Output = Result<(ArrayValues<T::Values>, RecordBatch)>;
 
     fn partitions(&self) -> usize {

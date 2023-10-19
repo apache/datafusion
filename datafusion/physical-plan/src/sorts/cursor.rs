@@ -29,15 +29,49 @@ use arrow_buffer::{Buffer, OffsetBuffer};
 use datafusion_execution::memory_pool::MemoryReservation;
 
 /// A comparable collection of values for use with [`Cursor`]
+///
+/// This is a trait as there are several specialized implementations, such as for
+/// single columns or for normalized multi column keys ([`Rows`])
 pub trait CursorValues {
     fn len(&self) -> usize;
 
+    /// Returns true if `l[l_idx] == r[r_idx]`
     fn eq(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> bool;
 
+    /// Returns comparison of `l[l_idx]` and `r[r_idx]`
     fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering;
 }
 
 /// A comparable cursor, used by sort operations
+///
+/// A `Cursor` is a pointer into a collection of rows, stored in
+/// [`CursorValues`]
+///
+/// ```text
+///
+/// ┌───────────────────────┐
+/// │                       │           ┌──────────────────────┐
+/// │ ┌─────────┐ ┌─────┐   │    ─ ─ ─ ─│      Cursor<T>       │
+/// │ │    1    │ │  A  │   │   │       └──────────────────────┘
+/// │ ├─────────┤ ├─────┤   │
+/// │ │    2    │ │  A  │◀─ ┼ ─ ┘          Cursor<T> tracks an
+/// │ └─────────┘ └─────┘   │                offset within a
+/// │     ...       ...     │                  CursorValues
+/// │                       │
+/// │ ┌─────────┐ ┌─────┐   │
+/// │ │    3    │ │  E  │   │
+/// │ └─────────┘ └─────┘   │
+/// │                       │
+/// │     CursorValues      │
+/// └───────────────────────┘
+///
+///
+/// Store logical rows using
+/// one of several  formats,
+/// with specialized
+/// implementations
+/// depending on the column
+/// types
 #[derive(Debug)]
 pub struct Cursor<T: CursorValues> {
     offset: usize,
@@ -84,6 +118,8 @@ impl<T: CursorValues> Ord for Cursor<T> {
 }
 
 /// Implements [`CursorValues`] for [`Rows`]
+///
+/// Used for sorting when there are multiple columns in the sort key
 #[derive(Debug)]
 pub struct RowValues {
     rows: Rows,
@@ -126,13 +162,13 @@ impl CursorValues for RowValues {
 }
 
 /// An [`Array`] that can be converted into [`CursorValues`]
-pub trait FieldArray: Array + 'static {
+pub trait CursorArray: Array + 'static {
     type Values: CursorValues;
 
     fn values(&self) -> Self::Values;
 }
 
-impl<T: ArrowPrimitiveType> FieldArray for PrimitiveArray<T> {
+impl<T: ArrowPrimitiveType> CursorArray for PrimitiveArray<T> {
     type Values = PrimitiveValues<T::Native>;
 
     fn values(&self) -> Self::Values {
@@ -185,7 +221,7 @@ impl<T: OffsetSizeTrait> CursorValues for ByteArrayValues<T> {
     }
 }
 
-impl<T: ByteArrayType> FieldArray for GenericByteArray<T> {
+impl<T: ByteArrayType> CursorArray for GenericByteArray<T> {
     type Values = ByteArrayValues<T::Offset>;
 
     fn values(&self) -> Self::Values {
@@ -196,7 +232,7 @@ impl<T: ByteArrayType> FieldArray for GenericByteArray<T> {
     }
 }
 
-/// A collection of sorted, nullable [`FieldArray`]
+/// A collection of sorted, nullable [`CursorValues`]
 ///
 /// Note: comparing cursors with different `SortOptions` will yield an arbitrary ordering
 #[derive(Debug)]
@@ -213,7 +249,7 @@ impl<T: CursorValues> ArrayValues<T> {
     /// to `options`.
     ///
     /// Panics if the array is empty
-    pub fn new<A: FieldArray<Values = T>>(options: SortOptions, array: &A) -> Self {
+    pub fn new<A: CursorArray<Values = T>>(options: SortOptions, array: &A) -> Self {
         assert!(array.len() > 0, "Empty array passed to FieldCursor");
         let null_threshold = match options.nulls_first {
             true => array.null_count(),
