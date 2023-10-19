@@ -1569,7 +1569,7 @@ macro_rules! make_utf8_to_return_type {
 // `utf8_to_str_type`: returns either a Utf8 or LargeUtf8 based on the input type size.
 make_utf8_to_return_type!(utf8_to_str_type, DataType::LargeUtf8, DataType::Utf8);
 
-// `utf8_to_str_type`: returns either a Int32 or Int64 based on the input type size.
+// `utf8_to_int_type`: returns either a Int32 or Int64 based on the input type size.
 make_utf8_to_return_type!(utf8_to_int_type, DataType::Int64, DataType::Int32);
 
 fn utf8_or_binary_to_binary_type(arg_type: &DataType, name: &str) -> Result<DataType> {
