@@ -104,14 +104,29 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                 if is_single_distinct_agg(plan)? && !contains_grouping_set(group_expr) {
                     // alias all original group_by exprs
                     let mut group_expr_alias = Vec::with_capacity(group_expr.len());
+                    // let mut outer_group_exprs = vec![];
                     let mut inner_group_exprs = group_expr
                         .iter()
                         .enumerate()
                         .map(|(i, group_expr)| {
-                            let alias_str = format!("group_alias_{i}");
-                            let alias_expr = group_expr.clone().alias(&alias_str);
-                            group_expr_alias
-                                .push((alias_str, schema.fields()[i].clone()));
+                            // let alias_str = format!("group_alias_{i}");
+                            // let alias_expr = group_expr.clone().alias(&alias_str);
+                            let (alias_expr, out_group_expr, original_name) =
+                                if let Expr::Column(_) = group_expr {
+                                    // outer_group_exprs.push(group_expr.clone());
+                                    (group_expr.clone(), group_expr.clone(), None)
+                                } else {
+                                    let alias_str = format!("group_alias_{i}");
+                                    let alias_expr = group_expr.clone().alias(&alias_str);
+                                    // outer_group_exprs.push(col(alias_str));
+                                    (
+                                        alias_expr,
+                                        col(alias_str),
+                                        Some(schema.fields()[i].qualified_name()),
+                                    )
+                                };
+                            // outer_group_exprs.push(col(alias_str));
+                            group_expr_alias.push((out_group_expr, original_name));
                             alias_expr
                         })
                         .collect::<Vec<_>>();
@@ -119,7 +134,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                     // and they can be referenced by the alias in the outer aggr plan
                     let outer_group_exprs = group_expr_alias
                         .iter()
-                        .map(|(alias, _)| col(alias))
+                        .map(|(out_group_expr, _)| out_group_expr.clone())
                         .collect::<Vec<_>>();
 
                     // replace the distinct arg with alias
@@ -182,9 +197,13 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                     // - group_by aggr
                     // - aggr expr
                     let mut alias_expr: Vec<Expr> = Vec::new();
-                    for (alias, original_field) in group_expr_alias {
-                        alias_expr
-                            .push(col(alias).alias(original_field.qualified_name()));
+                    for (group_expr, original_field) in group_expr_alias {
+                        let expr = if let Some(name) = original_field {
+                            group_expr.alias(name)
+                        } else {
+                            group_expr
+                        };
+                        alias_expr.push(expr);
                     }
                     for (i, expr) in new_aggr_exprs.iter().enumerate() {
                         alias_expr.push(columnize_expr(
@@ -359,9 +378,9 @@ mod tests {
             .build()?;
 
         // Should work
-        let expected = "Projection: group_alias_0 AS test.a, COUNT(alias1) AS COUNT(DISTINCT test.b) [a:UInt32, COUNT(DISTINCT test.b):Int64;N]\
-                            \n  Aggregate: groupBy=[[group_alias_0]], aggr=[[COUNT(alias1)]] [group_alias_0:UInt32, COUNT(alias1):Int64;N]\
-                            \n    Aggregate: groupBy=[[test.a AS group_alias_0, test.b AS alias1]], aggr=[[]] [group_alias_0:UInt32, alias1:UInt32]\
+        let expected = "Projection: test.a, COUNT(alias1) AS COUNT(DISTINCT test.b) [a:UInt32, COUNT(DISTINCT test.b):Int64;N]\
+                            \n  Aggregate: groupBy=[[test.a]], aggr=[[COUNT(alias1)]] [a:UInt32, COUNT(alias1):Int64;N]\
+                            \n    Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[]] [a:UInt32, alias1:UInt32]\
                             \n      TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_equal(&plan, expected)
@@ -405,9 +424,9 @@ mod tests {
             )?
             .build()?;
         // Should work
-        let expected = "Projection: group_alias_0 AS test.a, COUNT(alias1) AS COUNT(DISTINCT test.b), MAX(alias1) AS MAX(DISTINCT test.b) [a:UInt32, COUNT(DISTINCT test.b):Int64;N, MAX(DISTINCT test.b):UInt32;N]\
-                            \n  Aggregate: groupBy=[[group_alias_0]], aggr=[[COUNT(alias1), MAX(alias1)]] [group_alias_0:UInt32, COUNT(alias1):Int64;N, MAX(alias1):UInt32;N]\
-                            \n    Aggregate: groupBy=[[test.a AS group_alias_0, test.b AS alias1]], aggr=[[]] [group_alias_0:UInt32, alias1:UInt32]\
+        let expected = "Projection: test.a, COUNT(alias1) AS COUNT(DISTINCT test.b), MAX(alias1) AS MAX(DISTINCT test.b) [a:UInt32, COUNT(DISTINCT test.b):Int64;N, MAX(DISTINCT test.b):UInt32;N]\
+                            \n  Aggregate: groupBy=[[test.a]], aggr=[[COUNT(alias1), MAX(alias1)]] [a:UInt32, COUNT(alias1):Int64;N, MAX(alias1):UInt32;N]\
+                            \n    Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[]] [a:UInt32, alias1:UInt32]\
                             \n      TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_equal(&plan, expected)

@@ -2236,8 +2236,8 @@ mod tests {
     }
 }
 
+// #[cfg(test)]
 // mod tmp_tests {
-//     use crate::assert_batches_eq;
 //     use crate::physical_optimizer::utils::get_plan_string;
 //     use crate::physical_plan::{collect, displayable, ExecutionPlan};
 //     use crate::prelude::SessionContext;
@@ -2869,6 +2869,7 @@ mod tests {
 //         )
 //         .await?;
 //         let sql = "SELECT \"RegionID\", COUNT(DISTINCT \"UserID\") AS u FROM hits GROUP BY \"RegionID\" ORDER BY u DESC LIMIT 10;";
+//         // let sql = "explain verbose SELECT \"RegionID\", SUM(DISTINCT \"UserID\") AS u, COUNT(DISTINCT \"RegionID\") AS u1 FROM hits GROUP BY \"RegionID\" ORDER BY u DESC LIMIT 10;";
 //         // let sql = "explain verbose SELECT 'RegionID', COUNT(DISTINCT 'UserID') AS u FROM hits GROUP BY 'RegionID' ORDER BY u DESC LIMIT 10;";
 //         // let sql = "explain verbose SELECT RegionID, COUNT(DISTINCT UserID) AS u FROM hits GROUP BY RegionID ORDER BY u DESC LIMIT 10;";
 //
@@ -2880,9 +2881,11 @@ mod tests {
 //         let expected = vec![
 //             "GlobalLimitExec: skip=0, fetch=10",
 //             "  SortExec: fetch=10, expr=[u@1 DESC]",
-//             "    ProjectionExec: expr=[RegionID@0 as RegionID, COUNT(DISTINCT hits.UserID)@1 as u]",
-//             "      AggregateExec: mode=Single, gby=[RegionID@0 as RegionID], aggr=[COUNT(DISTINCT hits.UserID)]",
-//             "        ParquetExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[RegionID, UserID]",
+//             "    ProjectionExec: expr=[RegionID@0 as RegionID, COUNT(alias1)@1 as u]",
+//             "      AggregateExec: mode=Single, gby=[RegionID@0 as RegionID], aggr=[COUNT(alias1)]",
+//             "        AggregateExec: mode=Final, gby=[RegionID@0 as RegionID, alias1@1 as alias1], aggr=[]",
+//             "          AggregateExec: mode=Partial, gby=[RegionID@0 as RegionID, UserID@1 as alias1], aggr=[]",
+//             "            ParquetExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/clickbench_hits_10.parquet]]}, projection=[RegionID, UserID]",
 //         ];
 //         // Get string representation of the plan
 //         let actual = get_plan_string(&physical_plan);
