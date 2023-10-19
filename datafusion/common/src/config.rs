@@ -350,7 +350,7 @@ config_namespace! {
         /// Sets "created by" property
         pub created_by: String, default = concat!("datafusion version ", env!("CARGO_PKG_VERSION")).into()
 
-        /// Sets column index trucate length
+        /// Sets column index truncate length
         pub column_index_truncate_length: Option<usize>, default = None
 
         /// Sets best effort maximum number of rows in data page
