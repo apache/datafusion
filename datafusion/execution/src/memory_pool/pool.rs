@@ -49,7 +49,7 @@ impl MemoryPool for UnboundedMemoryPool {
 /// A [`MemoryPool`] that implements a greedy first-come first-serve limit.
 ///
 /// This pool works well for queries that do not need to spill or have
-/// a single spillable operator. See [`GreedyMemoryPool`] if there are
+/// a single spillable operator. See [`FairSpillPool`] if there are
 /// multiple spillable operators that all will spill.
 #[derive(Debug)]
 pub struct GreedyMemoryPool {
