@@ -26,7 +26,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 use arrow::error::Result as ArrowResult;
 use datafusion_common::ScalarValue::UInt8;
 use datafusion_common::{
-    plan_err, Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ToDFSchema,
+    plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, Result,
 };
 use datafusion_expr::expr::{AggregateFunction, Alias};
 use datafusion_expr::utils::exprlist_to_fields;
@@ -587,7 +587,7 @@ mod tests {
     use crate::test::*;
     use crate::OptimizerContext;
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::DFSchema;
+    use datafusion_common::{DFField, DFSchema};
     use datafusion_expr::builder::table_scan_with_filters;
     use datafusion_expr::expr;
     use datafusion_expr::expr::Cast;

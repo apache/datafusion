@@ -430,7 +430,6 @@ pub fn aggregate_functional_dependencies(
         source_indices,
         nullable,
         mode,
-        target_indices: targets,
         ..
     } in &func_dependencies.deps
     {

@@ -19,11 +19,7 @@
 //! This saves time in planning and executing the query.
 //! Note that this rule should be applied after simplify expressions optimizer rule.
 use crate::optimizer::ApplyOrder;
-use arrow::datatypes::SchemaRef;
-use datafusion_common::{
-    get_required_group_by_exprs_indices, DFField, DFSchemaRef, JoinType,
-    OwnedTableReference, Result, ToDFSchema,
-};
+use datafusion_common::{get_required_group_by_exprs_indices, JoinType, Result};
 use datafusion_expr::{
     logical_plan::LogicalPlan, Aggregate, Analyze, Explain, Expr, Partitioning,
     Projection, TableScan,
@@ -76,7 +72,7 @@ fn is_subquery(expr: &Expr) -> bool {
 }
 
 fn get_referred_indices(input: &LogicalPlan, exprs: &[Expr]) -> Result<Vec<usize>> {
-    if exprs.iter().any(|expr| is_subquery(expr)) {
+    if exprs.iter().any(is_subquery) {
         Ok((0..input.schema().fields().len()).collect())
     } else {
         let mut new_indices = vec![];
@@ -159,20 +155,6 @@ fn split_join_requirement_indices_to_children(
         left_requirements_from_parent,
         right_requirements_from_parent,
     )
-}
-
-fn get_projected_schema(
-    indices: &[usize],
-    table_name: &OwnedTableReference,
-    schema: &SchemaRef,
-) -> Result<DFSchemaRef> {
-    // create the projected schema
-    let projected_fields: Vec<DFField> = indices
-        .iter()
-        .map(|i| DFField::from_qualified(table_name.clone(), schema.fields()[*i].clone()))
-        .collect();
-
-    projected_fields.to_dfschema_ref()
 }
 
 fn try_optimize_internal(
@@ -329,7 +311,7 @@ fn try_optimize_internal(
                 .iter()
                 .map(|idx| projection_fields[*idx].clone())
                 .collect::<Vec<_>>();
-            let mut projection = fields_used
+            let projection = fields_used
                 .iter()
                 .map(|field_proj| {
                     schema
@@ -338,16 +320,8 @@ fn try_optimize_internal(
                         .position(|field_source| field_proj.field() == field_source)
                 })
                 .collect::<Option<Vec<_>>>();
-            // // TODO: Remove this check.
-            // if table_scan.projection.is_none() {
-            //     projection = None;
-            // }
             let projected_schema = if let Some(indices) = &projection {
-                get_projected_schema(
-                    indices,
-                    &table_scan.table_name,
-                    &table_scan.source.schema(),
-                )?
+                table_scan.project_schema(indices)?
             } else {
                 // Use existing projected schema.
                 table_scan.projected_schema.clone()
@@ -362,16 +336,11 @@ fn try_optimize_internal(
             })));
         }
         // SubqueryAlias alias can route requirement for its parent to its child
-        LogicalPlan::SubqueryAlias(sub_query_alias) => {
-            // let referred_indices = get_referred_indices(&sub_query_alias.input)
-            Some(vec![indices])
-            // None
-        }
-        LogicalPlan::Subquery(sub_query) => {
-            // let referred_indices =
-            //     get_referred_indices(&sub_query.subquery, &sub_query.outer_ref_columns)?;
-            // let required_indices = merge_vectors(&indices, &referred_indices);
-            // Some(vec![required_indices])
+        LogicalPlan::SubqueryAlias(_sub_query_alias) => Some(vec![indices]),
+        LogicalPlan::Subquery(_sub_query) => {
+            // Subquery may use additional fields other than requirement from above.
+            // Additionally, it is not trivial how to find all indices that may be used by subquery
+            // Hence, we stop iteration here to be in the safe side.
             None
         }
         LogicalPlan::EmptyRelation(_empty_relation) => {
