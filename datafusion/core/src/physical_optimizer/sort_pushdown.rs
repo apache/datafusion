@@ -128,27 +128,29 @@ pub(crate) fn pushdown_sorts(
     const ERR_MSG: &str = "Expects parent requirement to contain something";
     let err = || plan_datafusion_err!("{}", ERR_MSG);
     if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
-        let mut new_plan = plan.clone();
-        if !plan
+        let new_plan = if !plan
             .schema_properties()
             .ordering_satisfy_requirement(parent_required)
         {
             // If the current plan is a SortExec, modify it to satisfy parent requirements:
             let parent_requirement = parent_required.ok_or_else(err)?;
-            new_plan = sort_exec.input().clone();
-            add_sort_above(&mut new_plan, parent_requirement, sort_exec.fetch())?;
+            let mut new_plan = sort_exec.input().clone();
+            add_sort_above(&mut new_plan, parent_requirement, sort_exec.fetch());
+            new_plan
+        } else {
+            requirements.plan
         };
         let required_ordering = new_plan
             .output_ordering()
             .map(PhysicalSortRequirement::from_sort_exprs);
         // Since new_plan is a SortExec, we can safely get the 0th index.
-        let child = &new_plan.children()[0];
+        let child = new_plan.children().swap_remove(0);
         if let Some(adjusted) =
-            pushdown_requirement_to_children(child, required_ordering.as_deref())?
+            pushdown_requirement_to_children(&child, required_ordering.as_deref())?
         {
             // Can push down requirements
             Ok(Transformed::Yes(SortPushDown {
-                plan: child.clone(),
+                plan: child,
                 required_ordering: None,
                 adjusted_request_ordering: adjusted,
             }))
@@ -171,15 +173,15 @@ pub(crate) fn pushdown_sorts(
         // Can not satisfy the parent requirements, check whether the requirements can be pushed down:
         if let Some(adjusted) = pushdown_requirement_to_children(plan, parent_required)? {
             Ok(Transformed::Yes(SortPushDown {
-                plan: plan.clone(),
+                plan: requirements.plan,
                 required_ordering: None,
                 adjusted_request_ordering: adjusted,
             }))
         } else {
             // Can not push down requirements, add new SortExec:
-            let mut new_plan = plan.clone();
+            let mut new_plan = requirements.plan;
             let parent_requirement = parent_required.ok_or_else(err)?;
-            add_sort_above(&mut new_plan, parent_requirement, None)?;
+            add_sort_above(&mut new_plan, parent_requirement, None);
             Ok(Transformed::Yes(SortPushDown::init(new_plan)))
         }
     }
@@ -195,7 +197,7 @@ fn pushdown_requirement_to_children(
     if is_window(plan) {
         let required_input_ordering = plan.required_input_ordering();
         let request_child = required_input_ordering[0].as_deref();
-        let child_plan = plan.children()[0].clone();
+        let child_plan = plan.children().swap_remove(0);
         match determine_children_requirement(parent_required, request_child, child_plan) {
             RequirementsCompatibility::Satisfy => {
                 Ok(Some(vec![request_child.map(|r| r.to_vec())]))
@@ -207,7 +209,7 @@ fn pushdown_requirement_to_children(
         // UnionExec does not have real sort requirements for its input. Here we change the adjusted_request_ordering to UnionExec's output ordering and
         // propagate the sort requirements down to correct the unnecessary descendant SortExec under the UnionExec
         Ok(Some(vec![
-            parent_required.map(|elem| elem.to_vec());
+            parent_required.map(|item| item.to_vec());
             plan.children().len()
         ]))
     } else if let Some(smj) = plan.as_any().downcast_ref::<SortMergeJoinExec>() {
@@ -230,9 +232,8 @@ fn pushdown_requirement_to_children(
                     smj.schema().fields.len() - smj.right().schema().fields.len();
                 let new_right_required =
                     shift_right_required(parent_required.ok_or_else(err)?, right_offset)?;
-                let new_right_required_expr = PhysicalSortRequirement::to_sort_exprs(
-                    new_right_required.iter().cloned(),
-                );
+                let new_right_required_expr =
+                    PhysicalSortRequirement::to_sort_exprs(new_right_required);
                 try_pushdown_requirements_to_join(
                     smj,
                     parent_required,
@@ -271,20 +272,20 @@ fn pushdown_requirement_to_children(
         } else {
             // Can push-down through SortPreservingMergeExec, because parent requirement is finer
             // than SortPreservingMergeExec output ordering.
-            Ok(Some(vec![parent_required.map(|elem| elem.to_vec())]))
+            Ok(Some(vec![parent_required.map(|item| item.to_vec())]))
         }
     } else {
         Ok(Some(
             maintains_input_order
-                .iter()
+                .into_iter()
                 .map(|flag| {
-                    if *flag {
-                        parent_required.map(|elem| elem.to_vec())
+                    if flag {
+                        parent_required.map(|item| item.to_vec())
                     } else {
                         None
                     }
                 })
-                .collect::<Vec<_>>(),
+                .collect(),
         ))
     }
     // TODO: Add support for Projection push down
@@ -328,30 +329,33 @@ fn try_pushdown_requirements_to_join(
         JoinSide::Left => (sort_expr.as_slice(), right_ordering),
         JoinSide::Right => (left_ordering, sort_expr.as_slice()),
     };
+    let join_type = smj.join_type();
+    let probe_side = SortMergeJoinExec::probe_side(&join_type);
     let new_output_ordering = calculate_join_output_ordering(
         new_left_ordering,
         new_right_ordering,
-        smj.join_type(),
+        join_type,
         smj.on(),
         smj.left().schema().fields.len(),
         &smj.maintains_input_order(),
-        Some(SortMergeJoinExec::probe_side(&smj.join_type())),
+        Some(probe_side),
     )?;
     let mut smj_oeq = smj.schema_properties();
     // smj will have this ordering when its input changes.
     smj_oeq = smj_oeq.with_reorder(new_output_ordering.unwrap_or(vec![]));
     let should_pushdown = smj_oeq.ordering_satisfy_requirement(parent_required);
     Ok(should_pushdown.then(|| {
-        let required_input_ordering = smj.required_input_ordering();
+        let mut required_input_ordering = smj.required_input_ordering();
         let new_req = Some(PhysicalSortRequirement::from_sort_exprs(&sort_expr));
         match push_side {
             JoinSide::Left => {
-                vec![new_req, required_input_ordering[1].clone()]
+                required_input_ordering[0] = new_req;
             }
             JoinSide::Right => {
-                vec![required_input_ordering[0].clone(), new_req]
+                required_input_ordering[1] = new_req;
             }
         }
+        required_input_ordering
     }))
 }
 

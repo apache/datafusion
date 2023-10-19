@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`JoinType`] and [`JoinConstraint`]
+//! Defines the [`JoinType`], [`JoinConstraint`] and [`JoinSide`] types.
 
 use std::{
     fmt::{self, Display, Formatter},
@@ -105,7 +105,8 @@ impl Display for JoinSide {
     }
 }
 
-/// Used in ColumnIndex to distinguish which side the index is for
+/// Join side.
+/// Used in `ColumnIndex` type to distinguish which side the index is for.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum JoinSide {
     /// Left side of the join

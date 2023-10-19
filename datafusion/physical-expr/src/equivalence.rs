@@ -186,7 +186,7 @@ impl EquivalentGroups {
         exprs
             .iter()
             .map(|expr| self.normalize_expr(expr.clone()))
-            .collect::<Vec<_>>()
+            .collect()
     }
 
     /// This function normalizes `sort_requirement` according to `EquivalenceClasses` in the `self`.
@@ -1238,15 +1238,11 @@ pub fn schema_properties_helper(
     orderings: &[LexOrdering],
 ) -> SchemaProperties {
     let mut oep = SchemaProperties::new(schema);
-    if orderings.is_empty() {
-        // Return an empty `SchemaProperties`:
-        oep
-    } else {
-        oep.add_ordering_equivalent_group(OrderingEquivalentGroup::new(
-            orderings.to_vec(),
-        ));
-        oep
+    if !orderings.is_empty() {
+        let group = OrderingEquivalentGroup::new(orderings.to_vec());
+        oep.add_ordering_equivalent_group(group);
     }
+    oep
 }
 
 /// This function constructs a duplicate-free `LexOrderingReq` by filtering out duplicate

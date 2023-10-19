@@ -15,6 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
+use std::fmt::{Debug, Display};
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+
 use crate::intervals::Interval;
 use crate::sort_properties::SortProperties;
 use crate::utils::scatter;
@@ -28,10 +33,6 @@ use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
 use itertools::izip;
-use std::any::Any;
-use std::fmt::{Debug, Display};
-use std::hash::{Hash, Hasher};
-use std::sync::Arc;
 
 /// Expression that can be evaluated against a RecordBatch
 /// A Physical expression knows its type, nullability and how to evaluate itself.
@@ -55,13 +56,12 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
         let tmp_batch = filter_record_batch(batch, selection)?;
 
         let tmp_result = self.evaluate(&tmp_batch)?;
-        // All values from the `selection` filter are true.
+
         if batch.num_rows() == tmp_batch.num_rows() {
-            return Ok(tmp_result);
-        }
-        if let ColumnarValue::Array(a) = tmp_result {
-            let result = scatter(selection, a.as_ref())?;
-            Ok(ColumnarValue::Array(result))
+            // All values from the `selection` filter are true.
+            Ok(tmp_result)
+        } else if let ColumnarValue::Array(a) = tmp_result {
+            scatter(selection, a.as_ref()).map(ColumnarValue::Array)
         } else {
             Ok(tmp_result)
         }
