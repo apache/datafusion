@@ -44,7 +44,6 @@ use arrow::array::{
 };
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use arrow::util::bit_util;
 use datafusion_common::{exec_err, DataFusionError, Result, Statistics};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
@@ -430,9 +429,7 @@ impl NestedLoopJoinStream {
         build_timer.done();
 
         if self.visited_left_side.is_none() && self.join_type == JoinType::Full {
-            // TODO: Replace `ceil` wrapper with stable `div_cell` after
-            // https://github.com/rust-lang/rust/issues/88581
-            let visited_bitmap_size = bit_util::ceil(left_data.num_rows(), 8);
+            let visited_bitmap_size = left_data.num_rows().div_ceil(8);
             self.reservation.try_grow(visited_bitmap_size)?;
             self.join_metrics.build_mem_used.add(visited_bitmap_size);
         }

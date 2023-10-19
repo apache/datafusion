@@ -60,7 +60,6 @@ use arrow::array::{
 use arrow::compute::{and, take, FilterBuilder};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use arrow::util::bit_util;
 use arrow_array::cast::downcast_array;
 use arrow_schema::ArrowError;
 use datafusion_common::{
@@ -918,9 +917,7 @@ impl HashJoinStream {
         if self.visited_left_side.is_none()
             && need_produce_result_in_final(self.join_type)
         {
-            // TODO: Replace `ceil` wrapper with stable `div_cell` after
-            // https://github.com/rust-lang/rust/issues/88581
-            let visited_bitmap_size = bit_util::ceil(left_data.1.num_rows(), 8);
+            let visited_bitmap_size = left_data.1.num_rows().div_ceil(8);
             self.reservation.try_grow(visited_bitmap_size)?;
             self.join_metrics.build_mem_used.add(visited_bitmap_size);
         }

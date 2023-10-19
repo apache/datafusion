@@ -477,7 +477,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
         // build list offsets
         let mut cur_offset = OffsetSize::zero();
         let list_len = rows.len();
-        let num_list_bytes = bit_util::ceil(list_len, 8);
+        let num_list_bytes = list_len.div_ceil(8);
         let mut offsets = Vec::with_capacity(list_len + 1);
         let mut list_nulls = MutableBuffer::from_len_zeroed(num_list_bytes);
         offsets.push(cur_offset);
@@ -498,7 +498,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
         let array_data = match list_field.data_type() {
             DataType::Null => NullArray::new(valid_len).into_data(),
             DataType::Boolean => {
-                let num_bytes = bit_util::ceil(valid_len, 8);
+                let num_bytes = valid_len.div_ceil(8);
                 let mut bool_values = MutableBuffer::from_len_zeroed(num_bytes);
                 let mut bool_nulls =
                     MutableBuffer::new(num_bytes).with_bitset(num_bytes, true);
@@ -574,14 +574,14 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
             }
             DataType::Struct(fields) => {
                 // extract list values, with non-lists converted to Value::Null
-                let array_item_count = rows
+                let array_item_count: usize = rows
                     .iter()
                     .map(|row| match row {
                         Value::Array(values) => values.len(),
                         _ => 1,
                     })
                     .sum();
-                let num_bytes = bit_util::ceil(array_item_count, 8);
+                let num_bytes = array_item_count.div_ceil(8);
                 let mut null_buffer = MutableBuffer::from_len_zeroed(num_bytes);
                 let mut struct_index = 0;
                 let null_struct_array = vec![("null".to_string(), Value::Null)];
@@ -820,7 +820,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                         )?,
                     DataType::Struct(fields) => {
                         let len = rows.len();
-                        let num_bytes = bit_util::ceil(len, 8);
+                        let num_bytes = len.div_ceil(8);
                         let mut null_buffer = MutableBuffer::from_len_zeroed(num_bytes);
                         let empty_vec = vec![];
                         let struct_rows = rows
