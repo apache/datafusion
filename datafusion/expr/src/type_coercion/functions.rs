@@ -111,7 +111,7 @@ fn get_valid_types(
 ///
 /// For example, if a function `func` accepts arguments of  `(int64, int64)`,
 /// but was called with `(int32, int64)`, this function could match the
-/// valid_types by by coercing the first argument to `int64`, and would return
+/// valid_types by coercing the first argument to `int64`, and would return
 /// `Some([int64, int64])`.
 fn maybe_data_types(
     valid_types: &[DataType],

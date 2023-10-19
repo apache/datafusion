@@ -652,7 +652,7 @@ fn string_concat_internal_coercion(
     }
 }
 
-/// Coercion rules for string types (Utf8/LargeUtf8): If at least on argument is
+/// Coercion rules for string types (Utf8/LargeUtf8): If at least one argument is
 /// a string type and both arguments can be coerced into a string type, coerce
 /// to string type.
 fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
@@ -691,7 +691,7 @@ fn binary_to_string_coercion(
     }
 }
 
-/// Coercion rules for binary types (Binary/LargeBinary): If at least on argument is
+/// Coercion rules for binary types (Binary/LargeBinary): If at least one argument is
 /// a binary type and both arguments can be coerced into a binary type, coerce
 /// to binary type.
 fn binary_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
