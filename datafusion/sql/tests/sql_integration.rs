@@ -219,7 +219,7 @@ fn cast_to_invalid_decimal_type_precision_gt_38() {
 
 #[test]
 fn cast_to_invalid_decimal_type_precision_gt_76() {
-    // precision > 38
+    // precision > 76
     {
         let sql = "SELECT CAST(10 AS DECIMAL(79))";
         let err = logical_plan(sql).expect_err("query should have failed");
