@@ -200,10 +200,13 @@ pub struct ByteArrayValues<T: OffsetSizeTrait> {
 
 impl<T: OffsetSizeTrait> ByteArrayValues<T> {
     fn value(&self, idx: usize) -> &[u8] {
-        let end = self.offsets[idx + 1].as_usize();
-        let start = self.offsets[idx].as_usize();
-        // Safety: offsets are valid
-        unsafe { self.values.get_unchecked(start..end) }
+        assert!(idx < self.len());
+        // Safety: offsets are valid and checked bounds above
+        unsafe {
+            let start = self.offsets.get_unchecked(idx).as_usize();
+            let end = self.offsets.get_unchecked(idx + 1).as_usize();
+            self.values.get_unchecked(start..end)
+        }
     }
 }
 
