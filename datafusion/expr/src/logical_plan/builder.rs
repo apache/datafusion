@@ -881,8 +881,6 @@ impl LogicalPlanBuilder {
         {
             for idx in target_indices {
                 let field = schema.field(idx);
-                // let res = field.qualifier();
-                // let name = input_schema.field(idx).name();
                 let expr =
                     Expr::Column(Column::new(field.qualifier().cloned(), field.name()));
                 if !group_expr.contains(&expr) {

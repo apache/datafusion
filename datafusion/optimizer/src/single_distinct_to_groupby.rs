@@ -109,23 +109,18 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                         .iter()
                         .enumerate()
                         .map(|(i, group_expr)| {
-                            // let alias_str = format!("group_alias_{i}");
-                            // let alias_expr = group_expr.clone().alias(&alias_str);
                             let (alias_expr, out_group_expr, original_name) =
                                 if let Expr::Column(_) = group_expr {
-                                    // outer_group_exprs.push(group_expr.clone());
                                     (group_expr.clone(), group_expr.clone(), None)
                                 } else {
                                     let alias_str = format!("group_alias_{i}");
                                     let alias_expr = group_expr.clone().alias(&alias_str);
-                                    // outer_group_exprs.push(col(alias_str));
                                     (
                                         alias_expr,
                                         col(alias_str),
                                         Some(schema.fields()[i].qualified_name()),
                                     )
                                 };
-                            // outer_group_exprs.push(col(alias_str));
                             group_expr_alias.push((out_group_expr, original_name));
                             alias_expr
                         })

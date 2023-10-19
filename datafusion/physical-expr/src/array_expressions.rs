@@ -429,7 +429,6 @@ fn array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
         Some(DataType::Null) => {
             let nulls = arrays.len();
             let null_arr = NullArray::new(nulls);
-            // let null_arr = Int32Array::from(vec![None; nulls]);
             let field = Arc::new(Field::new("item", DataType::Null, true));
             let offsets = OffsetBuffer::from_lengths([nulls]);
             let values = Arc::new(null_arr) as ArrayRef;
@@ -1012,7 +1011,6 @@ pub fn array_empty(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args[0].as_any().downcast_ref::<NullArray>().is_some() {
         // Make sure to return Boolean type.
         return Ok(Arc::new(BooleanArray::new_null(args[0].len())));
-        // return Ok(args[0].clone());
     }
 
     let array = as_list_array(&args[0])?;

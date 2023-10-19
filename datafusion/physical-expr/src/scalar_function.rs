@@ -148,7 +148,6 @@ impl PhysicalExpr for ScalarFunctionExpr {
                 .map(|e| e.evaluate(batch))
                 .collect::<Result<Vec<_>>>()?,
         };
-        // println!("inputs: {:?}", inputs);
         // evaluate the function
         let fun = self.fun.as_ref();
         (fun)(&inputs)

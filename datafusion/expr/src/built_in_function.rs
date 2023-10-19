@@ -364,26 +364,6 @@ fn get_larger_type(lhs: &DataType, rhs: &DataType) -> Result<DataType> {
     })
 }
 
-// fn array_concat_type(args_types: &[DataType]) -> Result<DataType> {
-//     if args_types.is_empty() {
-//         // If empty make type Null.
-//         return Ok(DataType::Null);
-//         // return Err(DataFusionError::Execution("Expects to receive at least on argument.".to_string()))
-//     }
-//     let mut concat_type = args_types[0].clone();
-//     for arg_type in args_types.iter().skip(1) {
-//         if let DataType::List(_field) = arg_type {
-//             concat_type = concat_type2(&concat_type, arg_type)?;
-//         } else {
-//             return plan_err!(
-//                 "The array_concat function can only accept list as the args."
-//             );
-//         }
-//         // concat_type = concat_type2(&concat_type, &args_types[idx])?;
-//     }
-//     Ok(concat_type)
-// }
-
 impl BuiltinScalarFunction {
     /// an allowlist of functions to take zero arguments, so that they will get special treatment
     /// while executing.
@@ -624,8 +604,6 @@ impl BuiltinScalarFunction {
                         }
                     }
                 }
-
-                // let expr_type = array_concat_type(input_expr_types)?;
 
                 Ok(expr_type)
             }
