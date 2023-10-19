@@ -19,6 +19,7 @@ use arrow::{
     array::ArrayRef,
     datatypes::{DataType, Schema},
 };
+use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_common::{Column, DataFusionError, Result, ScalarValue};
 use parquet::{
     arrow::{async_reader::AsyncFileReader, ParquetRecordBatchStreamBuilder},
@@ -175,12 +176,15 @@ struct BloomFilterPruningPredicate {
 
 impl BloomFilterPruningPredicate {
     fn try_new(expr: &Arc<dyn PhysicalExpr>) -> Result<Self> {
-        let expr = expr.as_any().downcast_ref::<phys_expr::BinaryExpr>();
-        match Self::get_predicate_columns(expr) {
-            Some(columns) => Ok(Self {
-                predicate_expr: expr.cloned(),
-                required_columns: columns.into_iter().collect(),
-            }),
+        let binary_expr = expr.as_any().downcast_ref::<phys_expr::BinaryExpr>();
+        match binary_expr {
+            Some(binary_expr) => {
+                let columns = Self::get_predicate_columns(expr);
+                Ok(Self {
+                    predicate_expr: Some(binary_expr.clone()),
+                    required_columns: columns.into_iter().collect(),
+                })
+            }
             None => Err(DataFusionError::Execution(
                 "BloomFilterPruningPredicate only support binary expr".to_string(),
             )),
@@ -252,61 +256,24 @@ impl BloomFilterPruningPredicate {
         }
     }
 
-    fn get_predicate_columns(
-        expr: Option<&phys_expr::BinaryExpr>,
-    ) -> Option<HashSet<String>> {
-        match expr {
-            None => None,
-            Some(expr) => match expr.op() {
-                Operator::And => {
-                    let left = Self::get_predicate_columns(
-                        expr.left().as_any().downcast_ref::<phys_expr::BinaryExpr>(),
-                    );
-                    let right = Self::get_predicate_columns(
-                        expr.right()
-                            .as_any()
-                            .downcast_ref::<phys_expr::BinaryExpr>(),
-                    );
-                    match (left, right) {
-                        (Some(left), Some(right)) => {
-                            let mut columns = left;
-                            columns.extend(right);
-                            Some(columns)
-                        }
-                        (Some(left), None) => Some(left),
-                        (None, Some(right)) => Some(right),
-                        _ => None,
-                    }
+    fn get_predicate_columns(expr: &Arc<dyn PhysicalExpr>) -> HashSet<String> {
+        let mut columns = HashSet::new();
+        expr.apply(&mut |expr| {
+            if let Some(binary_expr) =
+                expr.as_any().downcast_ref::<phys_expr::BinaryExpr>()
+            {
+                if let Some((column, _)) =
+                    Self::check_expr_is_col_equal_const(binary_expr)
+                {
+                    columns.insert(column.name().to_string());
                 }
-                Operator::Or => {
-                    let left = Self::get_predicate_columns(
-                        expr.left().as_any().downcast_ref::<phys_expr::BinaryExpr>(),
-                    );
-                    let right = Self::get_predicate_columns(
-                        expr.right()
-                            .as_any()
-                            .downcast_ref::<phys_expr::BinaryExpr>(),
-                    );
-                    match (left, right) {
-                        (Some(left), Some(right)) => {
-                            let mut columns = left;
-                            columns.extend(right);
-                            Some(columns)
-                        }
-                        _ => None,
-                    }
-                }
-                Operator::Eq => match Self::check_expr_is_col_equal_const(expr) {
-                    Some((column, _)) => {
-                        let mut columns = HashSet::new();
-                        columns.insert(column.name().to_string());
-                        Some(columns)
-                    }
-                    None => None,
-                },
-                _ => None,
-            },
-        }
+            }
+            Ok(VisitRecursion::Continue)
+        })
+        // no way to fail as only Ok(VisitRecursion::Continue) is returned
+        .unwrap();
+
+        columns
     }
 
     fn check_expr_is_col_equal_const(
