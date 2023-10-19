@@ -26,6 +26,7 @@ use crate::{
     },
     print_options::{MaxRows, PrintOptions},
 };
+use datafusion::common::plan_datafusion_err;
 use datafusion::sql::{parser::DFParser, sqlparser::dialect::dialect_from_str};
 use datafusion::{
     datasource::listing::ListingTableUrl,
@@ -202,11 +203,11 @@ async fn exec_and_print(
     let task_ctx = ctx.task_ctx();
     let dialect = &task_ctx.session_config().options().sql_parser.dialect;
     let dialect = dialect_from_str(dialect).ok_or_else(|| {
-        DataFusionError::Plan(format!(
+        plan_datafusion_err!(
             "Unsupported SQL dialect: {dialect}. Available dialects: \
                  Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
                  MsSQL, ClickHouse, BigQuery, Ansi."
-        ))
+        )
     })?;
     let statements = DFParser::parse_sql_with_dialect(&sql, dialect.as_ref())?;
     for statement in statements {

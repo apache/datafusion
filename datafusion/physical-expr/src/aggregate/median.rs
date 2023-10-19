@@ -150,10 +150,10 @@ impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
             .all_values
             .iter()
             .map(|x| ScalarValue::new_primitive::<T>(Some(*x), &self.data_type))
-            .collect();
-        let state = ScalarValue::new_list(Some(all_values), self.data_type.clone());
+            .collect::<Result<Vec<_>>>()?;
 
-        Ok(vec![state])
+        let arr = ScalarValue::new_list(&all_values, &self.data_type);
+        Ok(vec![ScalarValue::List(arr)])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
@@ -188,7 +188,7 @@ impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
             let (_, median, _) = d.select_nth_unstable_by(len / 2, cmp);
             Some(*median)
         };
-        Ok(ScalarValue::new_primitive::<T>(median, &self.data_type))
+        ScalarValue::new_primitive::<T>(median, &self.data_type)
     }
 
     fn size(&self) -> usize {

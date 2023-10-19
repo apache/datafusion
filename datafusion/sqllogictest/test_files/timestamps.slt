@@ -1389,6 +1389,12 @@ SELECT date_bin('1 day', TIMESTAMPTZ '2022-01-01 20:10:00Z', TIMESTAMPTZ '2020-0
 ----
 2022-01-02T00:00:00+07:00
 
+# coerce TIMESTAMP to TIMESTAMPTZ
+query P
+SELECT date_bin('1 day', TIMESTAMPTZ '2022-01-01 20:10:00Z', TIMESTAMP '2020-01-01')
+----
+2022-01-01T07:00:00+07:00
+
 # postgresql: 1
 query R
 SELECT date_part('hour', TIMESTAMPTZ '2000-01-01T01:01:01') as part
@@ -1758,3 +1764,15 @@ query T
 SELECT arrow_typeof(date_bin(INTERVAL '1 day', time, '1970-01-01T00:00:00+05:00')) FROM foo LIMIT 1
 ----
 Timestamp(Nanosecond, Some("+05:00"))
+
+
+# timestamp comparison with and without timezone
+query B
+SELECT TIMESTAMPTZ '2022-01-01 20:10:00Z' = TIMESTAMP '2020-01-01'
+----
+false
+
+query B
+SELECT TIMESTAMPTZ '2020-01-01 00:00:00Z' = TIMESTAMP '2020-01-01'
+----
+true

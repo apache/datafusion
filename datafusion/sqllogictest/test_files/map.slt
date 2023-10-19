@@ -1,5 +1,3 @@
-#!/usr/bin/env bash
-#
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -17,11 +15,32 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# Run cargo-tomlfmt with flag `-d` in dry run to check formatting
-# without overwritng the file. If any error occur, you may want to
-# rerun 'cargo tomlfmt -p path/to/Cargo.toml' without '-d' to fix
-# the formatting automatically.
-set -ex
-for toml in $(find . -mindepth 2 -name 'Cargo.toml'); do
-	cargo tomlfmt -d -p $toml
-done
+statement ok
+CREATE EXTERNAL TABLE data
+STORED AS PARQUET
+LOCATION '../core/tests/data/parquet_map.parquet';
+
+query I
+SELECT SUM(ints['bytes']) FROM data;
+----
+5636785
+
+query I
+SELECT SUM(ints['bytes']) FROM data WHERE strings['method'] == 'GET';
+----
+649668
+
+query TI
+SELECT strings['method'] AS method, COUNT(*) as count FROM data GROUP BY method ORDER BY count DESC;
+----
+POST 41
+HEAD 33
+PATCH 30
+OPTION 29
+GET 27
+PUT 25
+DELETE 24
+
+query T
+SELECT strings['not_found'] FROM data LIMIT 1;
+----

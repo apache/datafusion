@@ -22,60 +22,99 @@
 DataFrame methods such as `select` and `filter` accept one or more logical expressions and there are many functions
 available for creating logical expressions. These are documented below.
 
-Expressions can be chained together using a fluent-style API:
+:::{tip}
+Most functions and methods may receive and return an `Expr`, which can be chained together using a fluent-style API:
 
 ```rust
 // create the expression `(a > 6) AND (b < 7)`
 col("a").gt(lit(6)).and(col("b").lt(lit(7)))
 ```
 
+:::
+
 ## Identifiers
 
-| Function | Notes                                        |
-| -------- | -------------------------------------------- |
-| col      | Reference a column in a dataframe `col("a")` |
+| Syntax     | Description                                  |
+| ---------- | -------------------------------------------- |
+| col(ident) | Reference a column in a dataframe `col("a")` |
+
+:::{note}
+ident
+: A type which implement `Into<Column>` trait
+:::
 
 ## Literal Values
 
-| Function | Notes                                              |
-| -------- | -------------------------------------------------- |
-| lit      | Literal value such as `lit(123)` or `lit("hello")` |
+| Syntax     | Description                                        |
+| ---------- | -------------------------------------------------- |
+| lit(value) | Literal value such as `lit(123)` or `lit("hello")` |
+
+:::{note}
+value
+: A type which implement `Literal`
+:::
 
 ## Boolean Expressions
 
-| Function | Notes                                     |
-| -------- | ----------------------------------------- |
-| and      | `and(expr1, expr2)` or `expr1.and(expr2)` |
-| or       | `or(expr1, expr2)` or `expr1.or(expr2)`   |
-| not      | `not(expr)` or `expr.not()`               |
+| Syntax              | Description |
+| ------------------- | ----------- |
+| and(x, y), x.and(y) | Logical AND |
+| or(x, y), x.or(y)   | Logical OR  |
+| !x, not(x), x.not() | Logical NOT |
 
-## Bitwise expressions
+:::{note}
+`!` is a bitwise or logical complement operator in Rust, but it only works as a logical NOT in expression API.
+:::
 
-| Function            | Notes                                                                     |
-| ------------------- | ------------------------------------------------------------------------- |
-| bitwise_and         | `bitwise_and(expr1, expr2)` or `expr1.bitwise_and(expr2)`                 |
-| bitwise_or          | `bitwise_or(expr1, expr2)` or `expr1.bitwise_or(expr2)`                   |
-| bitwise_xor         | `bitwise_xor(expr1, expr2)` or `expr1.bitwise_xor(expr2)`                 |
-| bitwise_shift_right | `bitwise_shift_right(expr1, expr2)` or `expr1.bitwise_shift_right(expr2)` |
-| bitwise_shift_left  | `bitwise_shift_left(expr1, expr2)` or `expr1.bitwise_shift_left(expr2)`   |
+:::{note}
+Since `&&` and `||` are existed as logical operators in Rust, but those are not overloadable and not works with expression API.
+:::
+
+## Bitwise Expressions
+
+| Syntax                                      | Description |
+| ------------------------------------------- | ----------- |
+| x & y, bitwise_and(x, y), x.bitand(y)       | AND         |
+| x \| y, bitwise_or(x, y), x.bitor(y)        | OR          |
+| x ^ y, bitwise_xor(x, y), x.bitxor(y)       | XOR         |
+| x << y, bitwise_shift_left(x, y), x.shl(y)  | Left shift  |
+| x >> y, bitwise_shift_right(x, y), x.shr(y) | Right shift |
 
 ## Comparison Expressions
 
-| Function | Notes                 |
-| -------- | --------------------- |
-| eq       | `expr1.eq(expr2)`     |
-| gt       | `expr1.gt(expr2)`     |
-| gt_eq    | `expr1.gt_eq(expr2)`  |
-| lt       | `expr1.lt(expr2)`     |
-| lt_eq    | `expr1.lt_eq(expr2)`  |
-| not_eq   | `expr1.not_eq(expr2)` |
+| Syntax      | Description           |
+| ----------- | --------------------- |
+| x.eq(y)     | Equal                 |
+| x.not_eq(y) | Not Equal             |
+| x.gt(y)     | Greater Than          |
+| x.gt_eq(y)  | Greater Than or Equal |
+| x.lt(y)     | Less Than             |
+| x.lt_eq(y)  | Less Than or Equal    |
+
+:::{note}
+Comparison operators (`<`, `<=`, `==`, `>=`, `>`) could be overloaded by the `PartialOrd` and `PartialEq` trait in Rust,
+but these operators always return a `bool` which makes them not work with the expression API.
+:::
+
+## Arithmetic Expressions
+
+| Syntax           | Description    |
+| ---------------- | -------------- |
+| x + y, x.add(y)  | Addition       |
+| x - y, x.sub(y)  | Subtraction    |
+| x \* y, x.mul(y) | Multiplication |
+| x / y, x.div(y)  | Division       |
+| x % y, x.rem(y)  | Remainder      |
+| -x, x.neg()      | Negation       |
+
+:::{note}
+In Rust, the keyword `mod` is reserved and cannot be used as an identifier.
+To avoid any conflicts and ensure code completion works smoothly, we use `mod_` instead.
+:::
 
 ## Math Functions
 
-In addition to the math functions listed here, some Rust operators are implemented for expressions, allowing
-expressions such as `col("a") + col("b")` to be used.
-
-| Function              | Notes                                             |
+| Syntax                | Description                                       |
 | --------------------- | ------------------------------------------------- |
 | abs(x)                | absolute value                                    |
 | acos(x)               | inverse cosine                                    |
@@ -114,11 +153,10 @@ expressions such as `col("a") + col("b")` to be used.
 | tanh(x)               | hyperbolic tangent                                |
 | trunc(x)              | truncate toward zero                              |
 
-### Math functions usage notes:
-
+:::{note}
 Unlike to some databases the math functions in Datafusion works the same way as Rust math functions, avoiding failing on corner cases e.g
 
-```
+```sql
 ❯ select log(-1), log(0), sqrt(-1);
 +----------------+---------------+-----------------+
 | log(Int64(-1)) | log(Int64(0)) | sqrt(Int64(-1)) |
@@ -127,27 +165,19 @@ Unlike to some databases the math functions in Datafusion works the same way as 
 +----------------+---------------+-----------------+
 ```
 
-## Bitwise Operators
-
-| Operator | Notes                                           |
-| -------- | ----------------------------------------------- |
-| &        | Bitwise AND => `(expr1 & expr2)`                |
-| &#124;   | Bitwise OR => <code>(expr1 &#124; expr2)</code> |
-| #        | Bitwise XOR => `(expr1 # expr2)`                |
-| <<       | Bitwise left shift => `(expr1 << expr2)`        |
-| >>       | Bitwise right shift => `(expr1 << expr2)`       |
+:::
 
 ## Conditional Expressions
 
-| Function | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| coalesce | Returns the first of its arguments that is not null. Null is returned only if all arguments are null. It is often used to substitute a default value for null values when data is retrieved for display.                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| case     | CASE expression. The expression may chain multiple `when` expressions and end with an `end` or `otherwise` expression. Example:</br> <pre><code>case(col("a") % lit(3))</br>&nbsp;&nbsp;&nbsp;&nbsp;.when(lit(0), lit("A"))</br>&nbsp;&nbsp;&nbsp;&nbsp;.when(lit(1), lit("B"))</br>&nbsp;&nbsp;&nbsp;&nbsp;.when(lit(2), lit("C"))</br>&nbsp;&nbsp;&nbsp;&nbsp;.end()</code></pre>or, end with `otherwise` to match any other conditions: <pre><code>case(col("b").gt(lit(100)))</br>&nbsp;&nbsp;&nbsp;&nbsp;.when(lit(true), lit("value > 100"))</br>&nbsp;&nbsp;&nbsp;&nbsp;.otherwise(lit("value <= 100"))</code></pre> |
-| nullif   | Returns a null value if `value1` equals `value2`; otherwise it returns `value1`. This can be used to perform the inverse operation of the `coalesce` expression.                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Syntax                                                                                                                                                                                     | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| coalesce([value, ...])                                                                                                                                                                     | Returns the first of its arguments that is not null. Null is returned only if all arguments are null. It is often used to substitute a default value for null values when data is retrieved for display.                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| case(expr)</br>&nbsp;&nbsp;&nbsp;&nbsp;.when(expr)</br>&nbsp;&nbsp;&nbsp;&nbsp;.end(),</br>case(expr)</br>&nbsp;&nbsp;&nbsp;&nbsp;.when(expr)</br>&nbsp;&nbsp;&nbsp;&nbsp;.otherwise(expr) | CASE expression. The expression may chain multiple `when` expressions and end with an `end` or `otherwise` expression. Example:</br> <pre><code>case(col("a") % lit(3))</br>&nbsp;&nbsp;&nbsp;&nbsp;.when(lit(0), lit("A"))</br>&nbsp;&nbsp;&nbsp;&nbsp;.when(lit(1), lit("B"))</br>&nbsp;&nbsp;&nbsp;&nbsp;.when(lit(2), lit("C"))</br>&nbsp;&nbsp;&nbsp;&nbsp;.end()</code></pre>or, end with `otherwise` to match any other conditions: <pre><code>case(col("b").gt(lit(100)))</br>&nbsp;&nbsp;&nbsp;&nbsp;.when(lit(true), lit("value > 100"))</br>&nbsp;&nbsp;&nbsp;&nbsp;.otherwise(lit("value <= 100"))</code></pre> |
+| nullif(value1, value2)                                                                                                                                                                     | Returns a null value if `value1` equals `value2`; otherwise it returns `value1`. This can be used to perform the inverse operation of the `coalesce` expression.                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 
 ## String Expressions
 
-| Function                                       | Notes                                                                                                                                                                                                                                    |
+| Syntax                                         | Description                                                                                                                                                                                                                              |
 | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | ascii(character)                               | Returns a numeric representation of the character (`character`). Example: `ascii('a') -> 97`                                                                                                                                             |
 | bit_length(text)                               | Returns the length of the string (`text`) in bits. Example: `bit_length('spider') -> 48`                                                                                                                                                 |
@@ -182,7 +212,7 @@ Unlike to some databases the math functions in Datafusion works the same way as 
 
 ## Array Expressions
 
-| Function                              | Notes                                                                                                                                                                    |
+| Syntax                                | Description                                                                                                                                                              |
 | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | array_append(array, element)          | Appends an element to the end of an array. `array_append([1, 2, 3], 4) -> [1, 2, 3, 4]`                                                                                  |
 | array_concat(array[, ..., array_n])   | Concatenates arrays. `array_concat([1, 2, 3], [4, 5, 6]) -> [1, 2, 3, 4, 5, 6]`                                                                                          |
@@ -213,14 +243,14 @@ Unlike to some databases the math functions in Datafusion works the same way as 
 
 ## Regular Expressions
 
-| Function       | Notes                                                                         |
+| Syntax         | Description                                                                   |
 | -------------- | ----------------------------------------------------------------------------- |
 | regexp_match   | Matches a regular expression against a string and returns matched substrings. |
 | regexp_replace | Replaces strings that match a regular expression                              |
 
 ## Temporal Expressions
 
-| Function             | Notes                                                  |
+| Syntax               | Description                                            |
 | -------------------- | ------------------------------------------------------ |
 | date_part            | Extracts a subfield from the date.                     |
 | date_trunc           | Truncates the date to a specified level of precision.  |
@@ -233,7 +263,7 @@ Unlike to some databases the math functions in Datafusion works the same way as 
 
 ## Other Expressions
 
-| Function                     | Notes                                                                                                      |
+| Syntax                       | Description                                                                                                |
 | ---------------------------- | ---------------------------------------------------------------------------------------------------------- |
 | array([value1, ...])         | Returns an array of fixed size with each argument (`[value1, ...]`) on it.                                 |
 | in_list(expr, list, negated) | Returns `true` if (`expr`) belongs or not belongs (`negated`) to a list (`list`), otherwise returns false. |
@@ -246,7 +276,7 @@ Unlike to some databases the math functions in Datafusion works the same way as 
 
 ## Aggregate Functions
 
-| Function                                                          | Notes                                                                                   |
+| Syntax                                                            | Description                                                                             |
 | ----------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
 | avg(expr)                                                         | Сalculates the average value for `expr`.                                                |
 | approx_distinct(expr)                                             | Calculates an approximate count of the number of distinct values for `expr`.            |
@@ -270,7 +300,7 @@ Unlike to some databases the math functions in Datafusion works the same way as 
 
 ## Subquery Expressions
 
-| Function        | Notes                                                                                         |
+| Syntax          | Description                                                                                   |
 | --------------- | --------------------------------------------------------------------------------------------- |
 | exists          | Creates an `EXISTS` subquery expression                                                       |
 | in_subquery     | `df1.filter(in_subquery(col("foo"), df2))?` is the equivalent of the SQL `WHERE foo IN <df2>` |
@@ -280,7 +310,7 @@ Unlike to some databases the math functions in Datafusion works the same way as 
 
 ## User-Defined Function Expressions
 
-| Function    | Notes                                                                     |
+| Syntax      | Description                                                               |
 | ----------- | ------------------------------------------------------------------------- |
 | create_udf  | Creates a new UDF with a specific signature and specific return type.     |
 | create_udaf | Creates a new UDAF with a specific signature, state type and return type. |

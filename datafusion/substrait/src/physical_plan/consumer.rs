@@ -15,19 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use async_recursion::async_recursion;
-use chrono::DateTime;
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use datafusion::arrow::datatypes::Schema;
 use datafusion::common::not_impl_err;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
 use datafusion::error::{DataFusionError, Result};
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::{ExecutionPlan, Statistics};
 use datafusion::prelude::SessionContext;
+
+use async_recursion::async_recursion;
+use chrono::DateTime;
 use object_store::ObjectMeta;
-use std::collections::HashMap;
-use std::sync::Arc;
 use substrait::proto::read_rel::local_files::file_or_files::PathType;
 use substrait::proto::{
     expression::MaskExpression, read_rel::ReadType, rel::RelType, Rel,
@@ -104,7 +106,7 @@ pub async fn from_substrait_rel(
                         object_store_url: ObjectStoreUrl::local_filesystem(),
                         file_schema: Arc::new(Schema::empty()),
                         file_groups,
-                        statistics: Default::default(),
+                        statistics: Statistics::new_unknown(&Schema::empty()),
                         projection: None,
                         limit: None,
                         table_partition_cols: vec![],

@@ -15,14 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::sorts::sort::SortOptions;
+use std::cmp::Ordering;
+
 use arrow::buffer::ScalarBuffer;
+use arrow::compute::SortOptions;
 use arrow::datatypes::ArrowNativeTypeOp;
 use arrow::row::{Row, Rows};
 use arrow_array::types::ByteArrayType;
 use arrow_array::{Array, ArrowPrimitiveType, GenericByteArray, PrimitiveArray};
 use datafusion_execution::memory_pool::MemoryReservation;
-use std::cmp::Ordering;
 
 /// A [`Cursor`] for [`Rows`]
 pub struct RowCursor {
@@ -48,16 +49,17 @@ impl std::fmt::Debug for RowCursor {
 
 impl RowCursor {
     /// Create a new SortKeyCursor from `rows` and a `reservation`
-    /// that tracks its memory.
+    /// that tracks its memory. There must be at least one row
     ///
-    /// Panic's if the reservation is not for exactly `rows.size()`
-    /// bytes
+    /// Panics if the reservation is not for exactly `rows.size()`
+    /// bytes or if `rows` is empty.
     pub fn new(rows: Rows, reservation: MemoryReservation) -> Self {
         assert_eq!(
             rows.size(),
             reservation.size(),
             "memory reservation mismatch"
         );
+        assert!(rows.num_rows() > 0);
         Self {
             cur_row: 0,
             num_rows: rows.num_rows(),
@@ -92,7 +94,10 @@ impl Ord for RowCursor {
     }
 }
 
-/// A cursor into a sorted batch of rows
+/// A cursor into a sorted batch of rows.
+///
+/// Each cursor must have at least one row so `advance` can be called at least
+/// once prior to calling `is_finished`.
 pub trait Cursor: Ord {
     /// Returns true if there are no more rows in this cursor
     fn is_finished(&self) -> bool;
@@ -207,8 +212,12 @@ pub struct FieldCursor<T: FieldValues> {
 }
 
 impl<T: FieldValues> FieldCursor<T> {
-    /// Create a new [`FieldCursor`] from the provided `values` sorted according to `options`
+    /// Create a new [`FieldCursor`] from the provided `values` sorted according
+    /// to `options`.
+    ///
+    /// Panics if the array is empty
     pub fn new<A: FieldArray<Values = T>>(options: SortOptions, array: &A) -> Self {
+        assert!(array.len() > 0, "Empty array passed to FieldCursor");
         let null_threshold = match options.nulls_first {
             true => array.null_count(),
             false => array.len() - array.null_count(),

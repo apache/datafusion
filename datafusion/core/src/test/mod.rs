@@ -17,6 +17,13 @@
 
 //! Common unit test utility methods
 
+use std::any::Any;
+use std::fs::File;
+use std::io::prelude::*;
+use std::io::{BufReader, BufWriter};
+use std::path::Path;
+use std::sync::Arc;
+
 use crate::datasource::file_format::file_compression_type::{
     FileCompressionType, FileTypeExt,
 };
@@ -29,29 +36,23 @@ use crate::logical_expr::LogicalPlan;
 use crate::physical_plan::ExecutionPlan;
 use crate::test::object_store::local_unpartitioned_file;
 use crate::test_util::{aggr_test_schema, arrow_test_data};
-use array::ArrayRef;
-use arrow::array::{self, Array, Decimal128Builder, Int32Array};
+
+use arrow::array::{self, Array, ArrayRef, Decimal128Builder, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use datafusion_common::{DataFusionError, FileType, Statistics};
+use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use datafusion_physical_expr::{Partitioning, PhysicalSortExpr};
+use datafusion_physical_plan::{DisplayAs, DisplayFormatType};
+
 #[cfg(feature = "compression")]
 use bzip2::write::BzEncoder;
 #[cfg(feature = "compression")]
 use bzip2::Compression as BzCompression;
-use datafusion_common::FileType;
-use datafusion_common::{DataFusionError, Statistics};
-use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_physical_expr::{Partitioning, PhysicalSortExpr};
-use datafusion_physical_plan::{DisplayAs, DisplayFormatType};
 #[cfg(feature = "compression")]
 use flate2::write::GzEncoder;
 #[cfg(feature = "compression")]
 use flate2::Compression as GzCompression;
-use std::any::Any;
-use std::fs::File;
-use std::io::prelude::*;
-use std::io::{BufReader, BufWriter};
-use std::path::Path;
-use std::sync::Arc;
 #[cfg(feature = "compression")]
 use xz2::write::XzEncoder;
 #[cfg(feature = "compression")]
@@ -195,9 +196,9 @@ pub fn partitioned_csv_config(
 ) -> Result<FileScanConfig> {
     Ok(FileScanConfig {
         object_store_url: ObjectStoreUrl::local_filesystem(),
-        file_schema: schema,
+        file_schema: schema.clone(),
         file_groups,
-        statistics: Default::default(),
+        statistics: Statistics::new_unknown(&schema),
         projection: None,
         limit: None,
         table_partition_cols: vec![],
@@ -285,7 +286,7 @@ pub fn csv_exec_sorted(
             object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
             file_schema: schema.clone(),
             file_groups: vec![vec![PartitionedFile::new("x".to_string(), 100)]],
-            statistics: Statistics::default(),
+            statistics: Statistics::new_unknown(schema),
             projection: None,
             limit: None,
             table_partition_cols: vec![],
@@ -308,12 +309,8 @@ pub struct StatisticsExec {
 }
 impl StatisticsExec {
     pub fn new(stats: Statistics, schema: Schema) -> Self {
-        assert!(
-            stats
-                .column_statistics
-                .as_ref()
-                .map(|cols| cols.len() == schema.fields().len())
-                .unwrap_or(true),
+        assert_eq!(
+            stats.column_statistics.len(), schema.fields().len(),
             "if defined, the column statistics vector length should be the number of fields"
         );
         Self {
@@ -378,8 +375,8 @@ impl ExecutionPlan for StatisticsExec {
         unimplemented!("This plan only serves for testing statistics")
     }
 
-    fn statistics(&self) -> Statistics {
-        self.stats.clone()
+    fn statistics(&self) -> Result<Statistics> {
+        Ok(self.stats.clone())
     }
 }
 

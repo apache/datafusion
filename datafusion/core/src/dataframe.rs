@@ -582,12 +582,21 @@ impl DataFrame {
         Ok(DataFrame::new(self.session_state, plan))
     }
 
-    /// Join this DataFrame with another DataFrame using the specified columns as join keys.
+    /// Join this `DataFrame` with another `DataFrame` using explicitly specified
+    /// columns and an optional filter expression.
     ///
-    /// Filter expression expected to contain non-equality predicates that can not be pushed
-    /// down to any of join inputs.
-    /// In case of outer join, filter applied to only matched rows.
+    /// See [`join_on`](Self::join_on) for a more concise way to specify the
+    /// join condition. Since DataFusion will automatically identify and
+    /// optimize equality predicates there is no performance difference between
+    /// this function and `join_on`
     ///
+    /// `left_cols` and `right_cols` are used to form "equijoin" predicates (see
+    /// example below), which are then combined with the optional `filter`
+    /// expression.
+    ///
+    /// Note that in case of outer join, the `filter` is applied to only matched rows.
+    ///
+    /// # Example
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
@@ -600,11 +609,14 @@ impl DataFrame {
     ///     col("a").alias("a2"),
     ///     col("b").alias("b2"),
     ///     col("c").alias("c2")])?;
+    /// // Perform the equivalent of `left INNER JOIN right ON (a = a2 AND b = b2)`
+    /// // finding all pairs of rows from `left` and `right` where `a = a2` and `b = b2`.
     /// let join = left.join(right, JoinType::Inner, &["a", "b"], &["a2", "b2"], None)?;
     /// let batches = join.collect().await?;
     /// # Ok(())
     /// # }
     /// ```
+    ///
     pub fn join(
         self,
         right: DataFrame,
@@ -624,10 +636,13 @@ impl DataFrame {
         Ok(DataFrame::new(self.session_state, plan))
     }
 
-    /// Join this DataFrame with another DataFrame using the specified expressions.
+    /// Join this `DataFrame` with another `DataFrame` using the specified
+    /// expressions.
     ///
-    /// Simply a thin wrapper over [`join`](Self::join) where the join keys are not provided,
-    /// and the provided expressions are AND'ed together to form the filter expression.
+    /// Note that DataFusion automatically optimizes joins, including
+    /// identifying and optimizing equality predicates.
+    ///
+    /// # Example
     ///
     /// ```
     /// # use datafusion::prelude::*;
@@ -646,6 +661,10 @@ impl DataFrame {
     ///         col("b").alias("b2"),
     ///         col("c").alias("c2"),
     ///     ])?;
+    ///
+    /// // Perform the equivalent of `left INNER JOIN right ON (a != a2 AND b != b2)`
+    /// // finding all pairs of rows from `left` and `right` where
+    /// // where `a != a2` and `b != b2`.
     /// let join_on = left.join_on(
     ///     right,
     ///     JoinType::Inner,
@@ -1210,7 +1229,42 @@ impl DataFrame {
         Ok(DataFrame::new(self.session_state, project_plan))
     }
 
-    /// Convert a prepare logical plan into its inner logical plan with all params replaced with their corresponding values
+    /// Replace all parameters in logical plan with the specified
+    /// values, in preparation for execution.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use datafusion::prelude::*;
+    /// # use datafusion::{error::Result, assert_batches_eq};
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// # use datafusion_common::ScalarValue;
+    /// let mut ctx = SessionContext::new();
+    /// # ctx.register_csv("example", "tests/data/example.csv", CsvReadOptions::new()).await?;
+    /// let results = ctx
+    ///   .sql("SELECT a FROM example WHERE b = $1")
+    ///   .await?
+    ///    // replace $1 with value 2
+    ///   .with_param_values(vec![
+    ///      // value at index 0 --> $1
+    ///      ScalarValue::from(2i64)
+    ///    ])?
+    ///   .collect()
+    ///   .await?;
+    /// assert_batches_eq!(
+    ///  &[
+    ///    "+---+",
+    ///    "| a |",
+    ///    "+---+",
+    ///    "| 1 |",
+    ///    "+---+",
+    ///  ],
+    ///  &results
+    /// );
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn with_param_values(self, param_values: Vec<ScalarValue>) -> Result<Self> {
         let plan = self.plan.with_param_values(param_values)?;
         Ok(Self::new(self.session_state, plan))

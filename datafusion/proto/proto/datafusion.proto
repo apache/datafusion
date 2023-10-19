@@ -883,12 +883,10 @@ message Union{
   repeated int32 type_ids = 3;
 }
 
-message ScalarListValue{
-  // encode null explicitly to distinguish a list with a null value
-  // from a list with no values)
-  bool is_null = 3;
-  Field field = 1;
-  repeated ScalarValue values = 2;
+message ScalarListValue {
+  bytes ipc_message = 1;
+  bytes arrow_data = 2;
+  Schema schema = 3;
 }
 
 message ScalarTime32Value {
@@ -965,7 +963,6 @@ message ScalarValue{
     int32  date_32_value = 14;
     ScalarTime32Value time32_value = 15;
     ScalarListValue list_value = 17;
-    //WAS: ScalarType null_list_value = 18;
 
     Decimal128 decimal128_value = 20;
     Decimal256 decimal256_value = 39;
@@ -1545,18 +1542,28 @@ message PartitionStats {
   repeated ColumnStats column_stats = 4;
 }
 
+message Precision{
+  PrecisionInfo precision_info = 1;
+  ScalarValue val = 2;
+}
+
+enum PrecisionInfo {
+  EXACT = 0;
+  INEXACT = 1;
+  ABSENT = 2;
+}
+
 message Statistics {
-  int64 num_rows = 1;
-  int64 total_byte_size = 2;
+  Precision num_rows = 1;
+  Precision total_byte_size = 2;
   repeated ColumnStats column_stats = 3;
-  bool is_exact = 4;
 }
 
 message ColumnStats {
-  ScalarValue min_value = 1;
-  ScalarValue max_value = 2;
-  uint32 null_count = 3;
-  uint32 distinct_count = 4;
+  Precision min_value = 1;
+  Precision max_value = 2;
+  Precision null_count = 3;
+  Precision distinct_count = 4;
 }
 
 message NamedStructFieldExpr {

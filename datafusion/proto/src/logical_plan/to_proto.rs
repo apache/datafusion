@@ -30,10 +30,13 @@ use crate::protobuf::{
     AnalyzedLogicalPlanType, CubeNode, EmptyMessage, GroupingSetNode, LogicalExprList,
     OptimizedLogicalPlanType, OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
 };
-
-use arrow::datatypes::{
-    DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, SchemaRef, TimeUnit,
-    UnionMode,
+use arrow::{
+    datatypes::{
+        DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, SchemaRef,
+        TimeUnit, UnionMode,
+    },
+    ipc::writer::{DictionaryTracker, IpcDataGenerator},
+    record_batch::RecordBatch,
 };
 use datafusion_common::{
     Column, Constraint, Constraints, DFField, DFSchema, DFSchemaRef, OwnedTableReference,
@@ -53,13 +56,6 @@ use datafusion_expr::{
 pub enum Error {
     General(String),
 
-    InconsistentListTyping(DataType, DataType),
-
-    InconsistentListDesignated {
-        value: ScalarValue,
-        designated: DataType,
-    },
-
     InvalidScalarValue(ScalarValue),
 
     InvalidScalarType(DataType),
@@ -77,18 +73,6 @@ impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             Self::General(desc) => write!(f, "General error: {desc}"),
-            Self::InconsistentListTyping(type1, type2) => {
-                write!(
-                    f,
-                    "Lists with inconsistent typing; {type1:?} and {type2:?} found within list",
-                )
-            }
-            Self::InconsistentListDesignated { value, designated } => {
-                write!(
-                    f,
-                    "Value {value:?} was inconsistent with designated type {designated:?}"
-                )
-            }
             Self::InvalidScalarValue(value) => {
                 write!(f, "{value:?} is invalid as a DataFusion scalar value")
             }
@@ -1142,27 +1126,39 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 "Proto serialization error: ScalarValue::Fixedsizelist not supported"
                     .to_string(),
             )),
-            ScalarValue::List(values, boxed_field) => {
-                let is_null = values.is_none();
+            // ScalarValue::List is serialized using Arrow IPC messages.
+            // as a single column RecordBatch
+            ScalarValue::List(arr) => {
+                // Wrap in a "field_name" column
+                let batch = RecordBatch::try_from_iter(vec![(
+                    "field_name",
+                    arr.to_owned(),
+                )])
+                .map_err(|e| {
+                   Error::General( format!("Error creating temporary batch while encoding ScalarValue::List: {e}"))
+                })?;
 
-                let values = if let Some(values) = values.as_ref() {
-                    values
-                        .iter()
-                        .map(|v| v.try_into())
-                        .collect::<Result<Vec<protobuf::ScalarValue>, _>>()?
-                } else {
-                    vec![]
+                let gen = IpcDataGenerator {};
+                let mut dict_tracker = DictionaryTracker::new(false);
+                let (_, encoded_message) = gen
+                    .encoded_batch(&batch, &mut dict_tracker, &Default::default())
+                    .map_err(|e| {
+                        Error::General(format!(
+                            "Error encoding ScalarValue::List as IPC: {e}"
+                        ))
+                    })?;
+
+                let schema: protobuf::Schema = batch.schema().try_into()?;
+
+                let scalar_list_value = protobuf::ScalarListValue {
+                    ipc_message: encoded_message.ipc_message,
+                    arrow_data: encoded_message.arrow_data,
+                    schema: Some(schema),
                 };
-
-                let field = boxed_field.as_ref().try_into()?;
 
                 Ok(protobuf::ScalarValue {
                     value: Some(protobuf::scalar_value::Value::ListValue(
-                        protobuf::ScalarListValue {
-                            is_null,
-                            field: Some(field),
-                            values,
-                        },
+                        scalar_list_value,
                     )),
                 })
             }

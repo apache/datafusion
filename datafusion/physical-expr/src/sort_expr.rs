@@ -17,6 +17,7 @@
 
 //! Sort expressions
 
+use std::fmt::Display;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -88,6 +89,26 @@ impl PhysicalSortExpr {
             && requirement
                 .options
                 .map_or(true, |opts| self.options == opts)
+    }
+
+    /// Returns a [`Display`]able list of `PhysicalSortExpr`.
+    pub fn format_list(input: &[PhysicalSortExpr]) -> impl Display + '_ {
+        struct DisplayableList<'a>(&'a [PhysicalSortExpr]);
+        impl<'a> Display for DisplayableList<'a> {
+            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                let mut first = true;
+                for sort_expr in self.0 {
+                    if first {
+                        first = false;
+                    } else {
+                        write!(f, ",")?;
+                    }
+                    write!(f, "{}", sort_expr)?;
+                }
+                Ok(())
+            }
+        }
+        DisplayableList(input)
     }
 }
 

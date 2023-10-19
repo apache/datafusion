@@ -17,16 +17,18 @@
 
 //! Utility functions for the interval arithmetic library
 
+use std::sync::Arc;
+
+use super::{Interval, IntervalBound};
 use crate::{
     expressions::{BinaryExpr, CastExpr, Column, Literal, NegativeExpr},
     PhysicalExpr,
 };
+
 use arrow_schema::{DataType, SchemaRef};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::interval_aritmetic::{Interval, IntervalBound};
 use datafusion_expr::Operator;
-
-use std::sync::Arc;
 
 const MDN_DAY_MASK: i128 = 0xFFFF_FFFF_0000_0000_0000_0000;
 const MDN_NS_MASK: i128 = 0xFFFF_FFFF_FFFF_FFFF;

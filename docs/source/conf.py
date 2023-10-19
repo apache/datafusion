@@ -118,4 +118,4 @@ html_sidebars = {
 myst_heading_anchors = 3
 
 # enable nice rendering of checkboxes for the task lists
-myst_enable_extensions = [ "tasklist"]
+myst_enable_extensions = ["colon_fence", "deflist", "tasklist"]

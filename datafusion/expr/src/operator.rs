@@ -363,6 +363,7 @@ impl ops::Neg for Expr {
     }
 }
 
+/// Support `NOT <expr>` fluent style
 impl Not for Expr {
     type Output = Self;
 
