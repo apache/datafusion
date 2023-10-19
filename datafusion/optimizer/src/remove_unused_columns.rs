@@ -25,7 +25,8 @@ use datafusion_common::{
     OwnedTableReference, Result, ToDFSchema,
 };
 use datafusion_expr::{
-    logical_plan::LogicalPlan, Aggregate, Expr, Partitioning, Projection, TableScan,
+    logical_plan::LogicalPlan, Aggregate, Analyze, Explain, Expr, Partitioning,
+    Projection, TableScan,
 };
 use itertools::izip;
 use std::sync::Arc;
@@ -167,15 +168,6 @@ fn try_optimize_internal(
         LogicalPlan::Projection(proj) => {
             let exprs_used = get_at_indices(&proj.expr, &indices);
             let required_indices = get_referred_indices(&proj.input, &exprs_used)?;
-            // println!("indices: {:?}, required_indices:{:?}", indices, required_indices);
-            // println!("proj.expr: {:?}", proj.expr);
-            // println!("exprs_used: {:?}", exprs_used);
-            // println!("proj.input.schema():{:?}", proj.input.schema());
-            // for elem in &proj.expr{
-            //     let cols = elem.to_columns()?;
-            //     // println!("cols:{:?}", cols);
-            //     // println!("elem:{:?}", elem);
-            // }
             let projection_input = if let Some(input) =
                 try_optimize_internal(&proj.input, _config, required_indices)?
             {
@@ -183,11 +175,7 @@ fn try_optimize_internal(
             } else {
                 proj.input.clone()
             };
-            // println!("      proj.input.schema:{:?}", proj.input.schema());
-            // println!("projection_input.schema:{:?}", projection_input.schema());
             let new_proj = Projection::try_new(exprs_used, projection_input)?;
-            // println!("    proj.schema: {:?}", proj.schema);
-            // println!("new_proj.schema: {:?}", new_proj.schema);
             return Ok(Some(LogicalPlan::Projection(new_proj)));
         }
         LogicalPlan::Aggregate(aggregate) => {
@@ -227,7 +215,6 @@ fn try_optimize_internal(
         LogicalPlan::Sort(sort) => {
             let indices_referred_by_sort = get_referred_indices(&sort.input, &sort.expr)?;
             let required_indices = merge_vectors(&indices, &indices_referred_by_sort);
-            // println!("required_indices: {:?}", required_indices);
             Some(vec![required_indices])
         }
         LogicalPlan::Filter(filter) => {
@@ -263,29 +250,20 @@ fn try_optimize_internal(
                     &indices,
                     &join.join_type,
                 );
-            // println!("left_requirements_from_parent:{:?}", left_requirements_from_parent);
-            // println!("right_requirements_from_parent:{:?}", right_requirements_from_parent);
-            // println!("indices:{:?}", indices);
             let (left_on, right_on): (Vec<_>, Vec<_>) = join.on.iter().cloned().unzip();
             let join_filter = &join
                 .filter
                 .as_ref()
                 .map(|item| vec![item.clone()])
                 .unwrap_or_default();
-            // println!("&left_on:{:?}", left_on);
-            // println!("&join_filter:{:?}", join_filter);
             let left_indices = join_child_requirement(&join.left, &left_on, join_filter)?;
-            // println!("left indices: {:?}", left_indices);
             let left_indices =
                 merge_vectors(&left_requirements_from_parent, &left_indices);
 
             let right_indices =
                 join_child_requirement(&join.right, &right_on, join_filter)?;
-            // println!("right indices: {:?}", right_indices);
             let right_indices =
                 merge_vectors(&right_requirements_from_parent, &right_indices);
-            // println!("left_indices: {:?}", left_indices);
-            // println!("right_indices: {:?}", right_indices);
             Some(vec![left_indices, right_indices])
         }
         LogicalPlan::CrossJoin(cross_join) => {
@@ -296,10 +274,6 @@ fn try_optimize_internal(
                     &indices,
                     &JoinType::Inner,
                 );
-            // println!("left_len: {:?}", left_len);
-            // println!("left_child_indices:{:?}", left_child_indices);
-            // println!("right_child_indices:{:?}", right_child_indices);
-            // println!("indices:{:?}", indices);
             Some(vec![left_child_indices, right_child_indices])
         }
         LogicalPlan::Repartition(repartition) => {
@@ -349,12 +323,9 @@ fn try_optimize_internal(
                 })
                 .collect::<Option<Vec<_>>>();
             // TODO: Remove this check.
-            // println!("table_scan.projection: {:?}", table_scan.projection);
             if table_scan.projection.is_none() {
                 projection = None;
             }
-            // let projection = table_scan.projection.as_ref().map(|_proj_indices| indices);
-            // println!(" after projection: {:?}", projection);
             let projected_schema = if let Some(indices) = &projection {
                 get_projected_schema(
                     indices,
@@ -375,11 +346,7 @@ fn try_optimize_internal(
             })));
         }
         // SubqueryAlias alias can route requirement for its parent to its child
-        LogicalPlan::SubqueryAlias(_sub_query_alias) => {
-            // println!("insub_query_aliasput: {:?}", plan);
-            // println!("input: {:?}", sub_query_alias.input);
-            Some(vec![indices])
-        }
+        LogicalPlan::SubqueryAlias(_sub_query_alias) => Some(vec![indices]),
         LogicalPlan::Subquery(sub_query) => {
             let referred_indices =
                 get_referred_indices(&sub_query.subquery, &sub_query.outer_ref_columns)?;
@@ -399,13 +366,38 @@ fn try_optimize_internal(
             // Values has no children
             None
         }
-        LogicalPlan::Explain(_explain) => {
-            // Direct plan to its child.
-            Some(vec![indices])
+        LogicalPlan::Explain(Explain {
+            plan,
+            verbose,
+            stringified_plans,
+            schema,
+            ..
+        }) => {
+            let indices = (0..plan.schema().fields().len()).collect();
+            if let Some(new_plan) = try_optimize_internal(plan, _config, indices)? {
+                return Ok(Some(LogicalPlan::Explain(Explain {
+                    verbose: *verbose,
+                    plan: Arc::new(new_plan),
+                    stringified_plans: stringified_plans.to_vec(),
+                    schema: schema.clone(),
+                    logical_optimization_succeeded: true,
+                })));
+            } else {
+                return Ok(None);
+            }
         }
-        LogicalPlan::Analyze(_analyze) => {
-            // Direct plan to its child.
-            Some(vec![indices])
+        LogicalPlan::Analyze(analyze) => {
+            let input = &analyze.input;
+            let indices = (0..input.schema().fields().len()).collect();
+            if let Some(new_input) = try_optimize_internal(input, _config, indices)? {
+                return Ok(Some(LogicalPlan::Analyze(Analyze {
+                    verbose: analyze.verbose,
+                    input: Arc::new(new_input),
+                    schema: analyze.schema.clone(),
+                })));
+            } else {
+                return Ok(None);
+            }
         }
         LogicalPlan::Distinct(_distinct) => {
             // Direct plan to its child.
