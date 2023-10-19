@@ -92,7 +92,7 @@ The following options are available when writing JSON files. Note: If any unsupp
 | ----------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------------- |
 | COMPRESSION | Sets the compression that should be applied to the entire JSON file. Supported values are GZIP, BZIP2, XZ, ZSTD, and UNCOMPRESSED. | UNCOMPRESSED  |
 
-### CSV Format Sepcific Options
+### CSV Format Specific Options
 
 The following options are available when writing CSV files. Note: if any unsupported options is specified an error will be raised and the query will fail.
 
