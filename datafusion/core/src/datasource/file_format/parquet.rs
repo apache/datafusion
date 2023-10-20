@@ -614,17 +614,20 @@ impl ParquetSink {
     fn get_writer_schema(&self) -> Arc<Schema> {
         if !self.config.table_partition_cols.is_empty() {
             let schema = self.config.output_schema();
-            let mut non_part_fields = vec![];
-            'outer: for field in schema.all_fields() {
-                let name = field.name();
-                for (part_name, _) in self.config.table_partition_cols.iter() {
-                    if name == part_name {
-                        continue 'outer;
-                    }
-                }
-                non_part_fields.push(field.to_owned())
-            }
-            Arc::new(Schema::new(non_part_fields))
+            let partition_names: Vec<_> = self
+                .config
+                .table_partition_cols
+                .iter()
+                .map(|(s, _)| s)
+                .collect();
+            Arc::new(Schema::new(
+                schema
+                    .fields()
+                    .iter()
+                    .filter(|f| !partition_names.contains(&f.name()))
+                    .map(|f| (**f).clone())
+                    .collect::<Vec<_>>(),
+            ))
         } else {
             self.config.output_schema().clone()
         }

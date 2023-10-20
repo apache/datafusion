@@ -352,7 +352,7 @@ fn remove_partition_by_columns(
     let non_part_schema = Schema::new(
         parted_batch
             .schema()
-            .all_fields()
+            .fields()
             .iter()
             .filter(|f| !partition_names.contains(&f.name()))
             .map(|f| (**f).clone())
