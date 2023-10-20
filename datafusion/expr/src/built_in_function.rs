@@ -316,18 +316,14 @@ fn function_to_name() -> &'static HashMap<BuiltinScalarFunction, &'static str> {
     })
 }
 
-/// Returns the wider type among lhs and rhs
-/// Wider type is the type that can represent other type without loss safely.
-/// Returns Error if types are incompatible
+/// Returns the wider type among lhs and rhs.
+/// Wider type is the type that can safely represent the other type without information loss.
+/// Returns Error if types are incompatible.
 fn get_wider_type(lhs: &DataType, rhs: &DataType) -> Result<DataType> {
     Ok(match (lhs, rhs) {
+        (lhs, rhs) if lhs == rhs => lhs.clone(),
         (DataType::Null, _) => rhs.clone(),
         (_, DataType::Null) => lhs.clone(),
-        // Same UInt types
-        (DataType::UInt8, DataType::UInt8) => DataType::UInt8,
-        (DataType::UInt16, DataType::UInt16) => DataType::UInt16,
-        (DataType::UInt32, DataType::UInt32) => DataType::UInt32,
-        (DataType::UInt64, DataType::UInt64) => DataType::UInt64,
         // Right UInt is larger than left UInt
         (DataType::UInt8, DataType::UInt16 | DataType::UInt32 | DataType::UInt64) => {
             rhs.clone()
@@ -340,11 +336,6 @@ fn get_wider_type(lhs: &DataType, rhs: &DataType) -> Result<DataType> {
         }
         (DataType::UInt32 | DataType::UInt64, DataType::UInt16) => lhs.clone(),
         (DataType::UInt64, DataType::UInt32) => lhs.clone(),
-        // Same Int types
-        (DataType::Int8, DataType::Int8) => DataType::Int8,
-        (DataType::Int16, DataType::Int16) => DataType::Int16,
-        (DataType::Int32, DataType::Int32) => DataType::Int32,
-        (DataType::Int64, DataType::Int64) => DataType::Int64,
         // Right Int is larger than left Int
         (DataType::Int8, DataType::Int16 | DataType::Int32 | DataType::Int64) => {
             rhs.clone()
@@ -357,10 +348,6 @@ fn get_wider_type(lhs: &DataType, rhs: &DataType) -> Result<DataType> {
         }
         (DataType::Int32 | DataType::Int64, DataType::Int16) => lhs.clone(),
         (DataType::Int64, DataType::Int32) => lhs.clone(),
-        // Same Float Types
-        (DataType::Float16, DataType::Float16) => DataType::Float16,
-        (DataType::Float32, DataType::Float32) => DataType::Float32,
-        (DataType::Float64, DataType::Float64) => DataType::Float64,
         // Right Float is larger than left Float
         (DataType::Float16, DataType::Float32 | DataType::Float64) => rhs.clone(),
         (DataType::Float32, DataType::Float64) => rhs.clone(),
@@ -368,9 +355,8 @@ fn get_wider_type(lhs: &DataType, rhs: &DataType) -> Result<DataType> {
         (DataType::Float32 | DataType::Float64, DataType::Float16) => lhs.clone(),
         (DataType::Float64, DataType::Float32) => lhs.clone(),
         // String
-        (DataType::Utf8, DataType::Utf8 | DataType::LargeUtf8) => rhs.clone(),
+        (DataType::Utf8, DataType::LargeUtf8) => rhs.clone(),
         (DataType::LargeUtf8, DataType::Utf8) => lhs.clone(),
-        (DataType::LargeUtf8, DataType::LargeUtf8) => DataType::LargeUtf8,
         (DataType::List(lhs_field), DataType::List(rhs_field)) => {
             let field_type =
                 get_wider_type(lhs_field.data_type(), rhs_field.data_type())?;

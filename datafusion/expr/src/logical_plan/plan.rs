@@ -1969,10 +1969,8 @@ impl TableScan {
             .collect();
 
         // Find indices among previous schema
-        let old_indices = self
-            .projection
-            .clone()
-            .unwrap_or((0..self.projected_schema.fields().len()).collect());
+        let projected_range = (0..self.projected_schema.fields().len()).collect();
+        let old_indices = self.projection.as_ref().unwrap_or(&projected_range);
         let new_proj = projection
             .iter()
             .map(|idx| {
