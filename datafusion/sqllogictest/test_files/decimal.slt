@@ -701,5 +701,10 @@ select arrow_typeof(max(c1)), max(c1) from decimal256_simple where c4=false;
 ----
 Decimal256(50, 6) 0.00005
 
+query TR
+select arrow_typeof(sum(c1)), sum(c1) from decimal256_simple;
+----
+Decimal256(60, 6) 0.00055
+
 statement ok
 drop table decimal256_simple;
