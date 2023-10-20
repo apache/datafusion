@@ -110,8 +110,11 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                         .map(|(i, group_expr)| {
                             let (alias_expr, out_group_expr, original_name) =
                                 if let Expr::Column(_) = group_expr {
+                                    // For Column expressions we can use existing expression as is.
                                     (group_expr.clone(), group_expr.clone(), None)
                                 } else {
+                                    // For complex expression write is as alias, to be able to refer
+                                    // if from parent operators successfully.
                                     let alias_str = format!("group_alias_{i}");
                                     let alias_expr = group_expr.clone().alias(&alias_str);
                                     (

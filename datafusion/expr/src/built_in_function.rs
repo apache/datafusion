@@ -317,6 +317,7 @@ fn function_to_name() -> &'static HashMap<BuiltinScalarFunction, &'static str> {
 }
 
 /// Returns the wider type among lhs and rhs
+/// Wider type is the type that can represent other type without loss safely.
 /// Returns Error if types are incompatible
 fn get_wider_type(lhs: &DataType, rhs: &DataType) -> Result<DataType> {
     Ok(match (lhs, rhs) {
@@ -378,12 +379,10 @@ fn get_wider_type(lhs: &DataType, rhs: &DataType) -> Result<DataType> {
             let nullable = lhs_field.is_nullable() | rhs_field.is_nullable();
             DataType::List(Arc::new(Field::new(field_name, field_type, nullable)))
         }
-        (_, _) => {
-            return Err(DataFusionError::Execution(format!(
-                "Cannot concat types lhs: {:?}, rhs:{:?}",
-                lhs, rhs
-            )))
-        }
+        (_, _) => return Err(DataFusionError::Execution(format!(
+            "There is no wider type (that can represent other) among lhs: {:?}, rhs:{:?}",
+            lhs, rhs
+        ))),
     })
 }
 

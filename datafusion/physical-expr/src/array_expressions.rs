@@ -421,15 +421,11 @@ fn array(values: &[ColumnarValue]) -> Result<ArrayRef> {
             let list_arr = ScalarValue::new_list(&[], &DataType::Null);
             Ok(Arc::new(list_arr))
         }
-        // all nulls, set default data type as int32
+        // all nulls, return a NullArray.
         Some(DataType::Null) => {
-            let nulls = arrays.len();
-            let null_arr = NullArray::new(nulls);
-            let field = Arc::new(Field::new("item", DataType::Null, true));
-            let offsets = OffsetBuffer::from_lengths([nulls]);
-            let values = Arc::new(null_arr) as ArrayRef;
-            let nulls = None;
-            Ok(Arc::new(ListArray::new(field, offsets, values, nulls)))
+            let null_arr = vec![ScalarValue::Null; arrays.len()];
+            let list_arr = ScalarValue::new_list(null_arr.as_slice(), &DataType::Null);
+            Ok(Arc::new(list_arr))
         }
         Some(data_type) => Ok(array_array(arrays.as_slice(), data_type)?),
     }
