@@ -420,7 +420,11 @@ mod tests {
             statistics: Statistics::new_unknown(&file_schema),
             file_schema,
             limit: None,
-            table_partition_cols: vec![("date".to_owned(), DataType::Utf8)],
+            table_partition_cols: vec![Field::new(
+                "date".to_owned(),
+                DataType::Utf8,
+                false,
+            )],
             output_ordering: vec![],
             infinite_source: false,
         });
