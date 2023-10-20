@@ -421,7 +421,7 @@ mod tests {
             file_schema,
             limit: None,
             table_partition_cols: vec![Field::new(
-                "date".to_owned(),
+                "date",
                 DataType::Utf8,
                 false,
             )],

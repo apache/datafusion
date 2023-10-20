@@ -532,7 +532,7 @@ mod tests {
 
         // make a table_partition_col as a field
         let table_partition_col = Field::new(
-            "date".to_owned(),
+            "date",
             wrap_partition_type_in_dict(DataType::Utf8),
             true,
         )
