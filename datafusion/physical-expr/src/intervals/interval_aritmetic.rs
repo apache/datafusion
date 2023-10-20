@@ -256,11 +256,11 @@ impl Interval {
     /// function ensures they are one of the three valid values:
     ///
     /// 1. An open `false` lower bound is mapped to a `true` closed lower bound.
-    /// 2. an open `true` upper bound is mapped to  `false` closed
+    /// 2. An open `true` upper bound is mapped to  `false` closed
     /// upper bound.
     /// 3. An unbounded lower endpoints is mapped to a `false` closed lower
     /// bound
-    /// 4. An unbounded lower endpoint is mapped to a `true` closed upper bound.
+    /// 4. An unbounded upper endpoint is mapped to a `true` closed upper bound.
     pub fn new(lower: IntervalBound, upper: IntervalBound) -> Interval {
         if let ScalarValue::Boolean(_) = lower.value {
             let standardized_lower = match lower.value {
@@ -1105,7 +1105,7 @@ mod tests {
             expected_open_open: (bool, bool),
             /// expected bounds when lower is open, upper is closed
             expected_open_closed: (bool, bool),
-            /// expected bounds when lower is closes, upper is open
+            /// expected bounds when lower is closed, upper is open
             expected_closed_open: (bool, bool),
             // Not: closed/closed is the same as lower/upper
         }
@@ -1167,7 +1167,6 @@ mod tests {
         }
 
         for case in cases {
-            println!("Case: {case:?}");
             let TestCase {
                 lower,
                 upper,
