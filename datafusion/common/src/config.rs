@@ -261,11 +261,6 @@ config_namespace! {
         /// number of rows written is not roughly divisible by the soft max
         pub soft_max_rows_per_output_file: usize, default = 50000000
 
-        /// This is the maximum number of output files being written
-        /// in parallel. Higher values can potentially give faster write
-        /// performance at the cost of higher peak memory consumption.
-        pub max_parallel_ouput_files: usize, default = 8
-
         /// This is the maximum number of RecordBatches buffered
         /// for each output file being worked. Higher values can potentially
         /// give faster write performance at the cost of higher peak
