@@ -54,11 +54,10 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
         match plan {
             LogicalPlan::Distinct(Distinct { input }) => {
                 let group_expr = expand_wildcard(input.schema(), input, None)?;
-                let aggregate = LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
+                let aggregate = LogicalPlan::Aggregate(Aggregate::try_new(
                     input.clone(),
                     group_expr,
                     vec![],
-                    input.schema().clone(), // input schema and aggregate schema are the same in this case
                 )?);
                 Ok(Some(aggregate))
             }
