@@ -43,9 +43,10 @@ use datafusion_common::tree_node::{
     VisitRecursion,
 };
 use datafusion_common::{
-    aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
-    DFField, DFSchema, DFSchemaRef, DataFusionError, FunctionalDependencies,
-    OwnedTableReference, Result, ScalarValue, ToDFSchema, UnnestOptions,
+    aggregate_functional_dependencies, internal_err, plan_datafusion_err, plan_err,
+    Column, Constraints, DFField, DFSchema, DFSchemaRef, DataFusionError,
+    FunctionalDependencies, OwnedTableReference, Result, ScalarValue, ToDFSchema,
+    UnnestOptions,
 };
 // backwards compatibility
 pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
@@ -1978,10 +1979,9 @@ impl TableScan {
                 old_indices
                     .iter()
                     .position(|old_idx| old_idx == idx)
-                    // TODO: Remove this unwrap
-                    .unwrap()
+                    .ok_or_else(|| plan_datafusion_err!("Refers to invalid index"))
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>>>()?;
         let func_dependencies = self.projected_schema.functional_dependencies();
         let new_func_dependencies = func_dependencies
             .project_functional_dependencies(&new_proj, projection.len());

@@ -316,35 +316,56 @@ fn function_to_name() -> &'static HashMap<BuiltinScalarFunction, &'static str> {
     })
 }
 
-// TODO: Enrich this implementation
+/// Returns the wider type among lhs and rhs
+/// Returns Error if types are incompatible
 fn get_wider_type(lhs: &DataType, rhs: &DataType) -> Result<DataType> {
     Ok(match (lhs, rhs) {
         (DataType::Null, _) => rhs.clone(),
         (_, DataType::Null) => lhs.clone(),
-        // Int
-        (
-            DataType::Int8,
-            DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64,
-        ) => rhs.clone(),
-        (DataType::Int16, DataType::Int16 | DataType::Int32 | DataType::Int64) => {
+        // Same UInt types
+        (DataType::UInt8, DataType::UInt8) => DataType::UInt8,
+        (DataType::UInt16, DataType::UInt16) => DataType::UInt16,
+        (DataType::UInt32, DataType::UInt32) => DataType::UInt32,
+        (DataType::UInt64, DataType::UInt64) => DataType::UInt64,
+        // Right UInt is larger than left UInt
+        (DataType::UInt8, DataType::UInt16 | DataType::UInt32 | DataType::UInt64) => {
             rhs.clone()
         }
-        (DataType::Int32, DataType::Int32 | DataType::Int64) => rhs.clone(),
+        (DataType::UInt16, DataType::UInt32 | DataType::UInt64) => rhs.clone(),
+        (DataType::UInt32, DataType::UInt64) => rhs.clone(),
+        // Left UInt is larger than right UInt.
+        (DataType::UInt16 | DataType::UInt32 | DataType::UInt64, DataType::UInt8) => {
+            lhs.clone()
+        }
+        (DataType::UInt32 | DataType::UInt64, DataType::UInt16) => lhs.clone(),
+        (DataType::UInt64, DataType::UInt32) => lhs.clone(),
+        // Same Int types
+        (DataType::Int8, DataType::Int8) => DataType::Int8,
+        (DataType::Int16, DataType::Int16) => DataType::Int16,
+        (DataType::Int32, DataType::Int32) => DataType::Int32,
+        (DataType::Int64, DataType::Int64) => DataType::Int64,
+        // Right Int is larger than left Int
+        (DataType::Int8, DataType::Int16 | DataType::Int32 | DataType::Int64) => {
+            rhs.clone()
+        }
+        (DataType::Int16, DataType::Int32 | DataType::Int64) => rhs.clone(),
+        (DataType::Int32, DataType::Int64) => rhs.clone(),
+        // Left Int is larger than right Int.
         (DataType::Int16 | DataType::Int32 | DataType::Int64, DataType::Int8) => {
             lhs.clone()
         }
         (DataType::Int32 | DataType::Int64, DataType::Int16) => lhs.clone(),
         (DataType::Int64, DataType::Int32) => lhs.clone(),
-        (DataType::Int64, DataType::Int64) => DataType::Int64,
-        // Float
-        (
-            DataType::Float16,
-            DataType::Float16 | DataType::Float32 | DataType::Float64,
-        ) => rhs.clone(),
-        (DataType::Float32, DataType::Float32 | DataType::Float64) => rhs.clone(),
+        // Same Float Types
+        (DataType::Float16, DataType::Float16) => DataType::Float16,
+        (DataType::Float32, DataType::Float32) => DataType::Float32,
+        (DataType::Float64, DataType::Float64) => DataType::Float64,
+        // Right Float is larger than left Float
+        (DataType::Float16, DataType::Float32 | DataType::Float64) => rhs.clone(),
+        (DataType::Float32, DataType::Float64) => rhs.clone(),
+        // Left Float is larger than right Float.
         (DataType::Float32 | DataType::Float64, DataType::Float16) => lhs.clone(),
         (DataType::Float64, DataType::Float32) => lhs.clone(),
-        (DataType::Float64, DataType::Float64) => DataType::Float64,
         // String
         (DataType::Utf8, DataType::Utf8 | DataType::LargeUtf8) => rhs.clone(),
         (DataType::LargeUtf8, DataType::Utf8) => lhs.clone(),
