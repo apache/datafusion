@@ -204,7 +204,7 @@ impl ExecutionPlan for FilterExec {
         let predicate = self.predicate().clone();
 
         let schema = self.schema();
-        if !check_support(predicate, &schema) {
+        if !check_support(&predicate, &schema) {
             return Ok(Statistics::new_unknown(&schema));
         }
         let input_stats = self.input.statistics()?;

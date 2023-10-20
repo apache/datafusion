@@ -21,7 +21,7 @@ use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::DataType;
 use arrow_array::ArrowNativeTypeOp;
 use datafusion_common::rounding::{alter_fp_rounding_mode, next_down, next_up};
-use datafusion_common::{exec_err, internal_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 
 use std::borrow::Borrow;
 use std::fmt;
@@ -799,8 +799,6 @@ pub fn equalize_intervals(
     first: &Interval,
     second: &Interval,
 ) -> Result<Option<Vec<Interval>>> {
-    println!("{:?}", first);
-    println!("{:?}", second);
     let first_l = first.lower.clone();
     let first_u = first.upper.clone();
     let second_l = second.lower.clone();
@@ -822,9 +820,6 @@ pub fn equalize_intervals(
         IntervalBound::new(first_u.value, first_u.open || second_u.open)
     };
 
-    println!("{:?}", new_lower);
-    println!("{:?}", new_upper);
-    println!("{:?}", new_lower.value < new_upper.value);
     assert!(
         new_lower.value < new_upper.value
             || (new_lower.value == new_upper.value && !new_lower.open && !new_upper.open)
@@ -874,7 +869,10 @@ pub fn satisfy_comparison(
 
     // Gt operator can only change left lower bound and right upper bound.
     let new_left_lower = if left.lower.value < right.lower.value {
-        right.lower.clone()
+        IntervalBound::new(
+            right.lower.value.clone(),
+            !includes_endpoints || right.lower.open,
+        )
     } else if left.lower.value > right.lower.value {
         left.lower.clone()
     } else {
@@ -898,7 +896,10 @@ pub fn satisfy_comparison(
     };
     let new_right_upper =
         if left.upper.value < right.upper.value || right.upper.is_unbounded() {
-            left.upper.clone()
+            IntervalBound::new(
+                left.upper.value.clone(),
+                !includes_endpoints || left.upper.open,
+            )
         } else if left.upper.value > right.upper.value || left.upper.is_unbounded() {
             right.upper.clone()
         } else {
@@ -1213,9 +1214,10 @@ impl NullableInterval {
 
 #[cfg(test)]
 mod tests {
-    use super::next_value;
-    use crate::intervals::{Interval, IntervalBound};
-    use arrow_schema::DataType;
+    use crate::interval_aritmetic::IntervalBound;
+
+    use super::{next_value, Interval};
+    use arrow::datatypes::DataType;
     use datafusion_common::{Result, ScalarValue};
 
     fn open_open<T>(lower: Option<T>, upper: Option<T>) -> Interval

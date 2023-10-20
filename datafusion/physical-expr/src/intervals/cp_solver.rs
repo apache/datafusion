@@ -28,11 +28,10 @@ use crate::expressions::Literal;
 use crate::utils::{build_dag, ExprTreeNode};
 use crate::PhysicalExpr;
 use arrow_schema::DataType;
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::Result;
 use datafusion_expr::interval_aritmetic::{
     apply_operator, equalize_intervals, satisfy_comparison, Interval, IntervalBound,
 };
-use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::Operator;
 
 use petgraph::graph::NodeIndex;
@@ -223,23 +222,49 @@ pub fn propagate_arithmetic(
     right_child: &Interval,
 ) -> Result<Option<Vec<Interval>>> {
     let inverse_op = get_inverse_op(*op);
-    // First, propagate to the left:
-    match apply_operator(&inverse_op, parent, right_child)?.intersect(left_child)? {
-        // Left is feasible:
-        Some(value) => {
-            // Propagate to the right using the new left.
-
-            if let Some(right) =
-                propagate_right(&value, parent, right_child, op, &inverse_op)?
+    match (left_child.get_datatype()?, right_child.get_datatype()?) {
+        // If we have a child whose type is a time interval (i.e. DataType::Interval), we need special handling
+        // since timestamp differencing results in a Duration type.
+        (DataType::Timestamp(..), DataType::Interval(_)) => {
+            propagate_time_interval_at_right(
+                left_child,
+                right_child,
+                parent,
+                op,
+                &inverse_op,
+            )
+        }
+        (DataType::Interval(_), DataType::Timestamp(..)) => {
+            propagate_time_interval_at_left(
+                left_child,
+                right_child,
+                parent,
+                op,
+                &inverse_op,
+            )
+        }
+        _ => {
+            // First, propagate to the left:
+            match apply_operator(&inverse_op, parent, right_child)?
+                .intersect(left_child)?
             {
-                // Return intervals for both children:
-                Ok(Some(vec![value, right]))
-            } else {
-                Ok(None)
+                // Left is feasible:
+                Some(value) => {
+                    // Propagate to the right using the new left.
+
+                    if let Some(right) =
+                        propagate_right(&value, parent, right_child, op, &inverse_op)?
+                    {
+                        // Return intervals for both children:
+                        Ok(Some(vec![value, right]))
+                    } else {
+                        Ok(None)
+                    }
+                }
+                // If the left child is infeasible, short-circuit.
+                None => Ok(None),
             }
         }
-        // If the left child is infeasible, short-circuit.
-        None => Ok(None),
     }
 }
 
@@ -288,10 +313,8 @@ pub fn propagate_comparison(
     left_child: &Interval,
     right_child: &Interval,
 ) -> Result<Option<Vec<Interval>>> {
-    if parent == &Interval::CERTAINLY_FALSE {
+    if parent == &Interval::CERTAINLY_FALSE || parent == &Interval::UNCERTAIN {
         // TODO: False expecting comparison operators are not supported yet.
-        Ok(None)
-    } else if parent == &Interval::UNCERTAIN {
         // We cannot propagate over an uncertain interval.
         Ok(None)
     } else {
@@ -584,9 +607,82 @@ fn propagate_right(
     .intersect(right)
 }
 
+/// During the propagation of [`Interval`] values on an [`ExprIntervalGraph`], if there exists a `timestamp - timestamp`
+/// operation, the result would be of type `Duration`. However, we may encounter a situation where a time interval
+/// is involved in an arithmetic operation with a `Duration` type. This function offers special handling for such cases,
+/// where the time interval resides on the right side of the operation.
+fn propagate_time_interval_at_right(
+    left_child: &Interval,
+    right_child: &Interval,
+    parent: &Interval,
+    op: &Operator,
+    inverse_op: &Operator,
+) -> Result<Option<Vec<Interval>>> {
+    // We check if the child's time interval(s) has a non-zero month or day field(s).
+    // If so, we return it as is without propagating. Otherwise, we first convert
+    // the time intervals to the Duration type, then propagate, and then convert the bounds to time intervals again.
+    if let Some(duration) = convert_interval_type_to_duration(right_child) {
+        match apply_operator(inverse_op, parent, &duration)?.intersect(left_child)? {
+            Some(value) => {
+                let right =
+                    propagate_right(left_child, parent, &duration, op, inverse_op)?;
+                if let Some(right) =
+                    right.and_then(|right| convert_duration_type_to_interval(&right))
+                {
+                    Ok(Some(vec![value, right]))
+                } else {
+                    Ok(None)
+                }
+            }
+            None => Ok(None),
+        }
+    } else {
+        match apply_operator(inverse_op, parent, right_child)?.intersect(left_child)? {
+            Some(value) => Ok(Some(vec![value, right_child.clone()])),
+            None => Ok(None),
+        }
+    }
+}
+
+/// During the propagation of [`Interval`] values on an [`ExprIntervalGraph`], if there exists a `timestamp - timestamp`
+/// operation, the result would be of type `Duration`. However, we may encounter a situation where a time interval
+/// is involved in an arithmetic operation with a `Duration` type. This function offers special handling for such cases,
+/// where the time interval resides on the left side of the operation.
+fn propagate_time_interval_at_left(
+    left_child: &Interval,
+    right_child: &Interval,
+    parent: &Interval,
+    op: &Operator,
+    inverse_op: &Operator,
+) -> Result<Option<Vec<Interval>>> {
+    // We check if the child's time interval(s) has a non-zero month or day field(s).
+    // If so, we return it as is without propagating. Otherwise, we first convert
+    // the time intervals to the Duration type, then propagate, and then convert the bounds to time intervals again.
+    if let Some(duration) = convert_interval_type_to_duration(left_child) {
+        match apply_operator(inverse_op, parent, right_child)?.intersect(duration)? {
+            Some(value) => {
+                let right = propagate_right(&value, parent, right_child, op, inverse_op)?;
+                let new_interval = convert_duration_type_to_interval(&value);
+                match (new_interval, right) {
+                    (Some(left), Some(right)) => Ok(Some(vec![left, right])),
+                    _ => Ok(None),
+                }
+            }
+            None => Ok(None),
+        }
+    } else if let Some(right) =
+        propagate_right(left_child, parent, right_child, op, inverse_op)?
+    {
+        Ok(Some(vec![left_child.clone(), right]))
+    } else {
+        Ok(None)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_schema::DataType;
     use itertools::Itertools;
 
     use crate::expressions::{BinaryExpr, Column};

@@ -45,8 +45,9 @@ use datafusion_common::{
     exec_err, plan_datafusion_err, plan_err, DataFusionError, JoinType, Result,
     SharedResult,
 };
+use datafusion_expr::interval_aritmetic::{Interval, IntervalBound};
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::intervals::{ExprIntervalGraph, Interval, IntervalBound};
+use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
 use datafusion_physical_expr::utils::merge_vectors;
 use datafusion_physical_expr::{
     add_offset_to_lex_ordering, EquivalentClass, LexOrdering, LexOrderingRef,

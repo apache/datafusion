@@ -127,7 +127,7 @@ impl PhysicalExpr for NegativeExpr {
 
         Ok(child_interval
             .intersect(negated_interval)?
-            .and_then(|result| Some(vec![result])))
+            .map(|result| vec![result]))
     }
 
     /// The ordering of a [`NegativeExpr`] is simply the reverse of its child.
@@ -169,10 +169,8 @@ pub fn negative(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        expressions::{col, Column},
-        intervals::Interval,
-    };
+    use crate::expressions::col;
+    use crate::expressions::Column;
     use arrow::array::*;
     use arrow::datatypes::*;
     use arrow_schema::DataType::{Float32, Float64, Int16, Int32, Int64, Int8};

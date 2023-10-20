@@ -19,7 +19,6 @@
 
 use std::sync::Arc;
 
-use super::{Interval, IntervalBound};
 use crate::{
     expressions::{BinaryExpr, CastExpr, Column, Literal, NegativeExpr},
     PhysicalExpr,
