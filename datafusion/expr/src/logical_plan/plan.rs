@@ -43,10 +43,9 @@ use datafusion_common::tree_node::{
     VisitRecursion,
 };
 use datafusion_common::{
-    aggregate_functional_dependencies, internal_err, plan_datafusion_err, plan_err,
-    Column, Constraints, DFField, DFSchema, DFSchemaRef, DataFusionError,
-    FunctionalDependencies, OwnedTableReference, Result, ScalarValue, ToDFSchema,
-    UnnestOptions,
+    aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
+    DFField, DFSchema, DFSchemaRef, DataFusionError, FunctionalDependencies,
+    OwnedTableReference, Result, ScalarValue, UnnestOptions,
 };
 // backwards compatibility
 pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
@@ -1955,41 +1954,59 @@ impl Hash for TableScan {
 }
 
 impl TableScan {
-    /// Create projection schema using entries at the projection indices
-    pub fn project_schema(&self, projection: &[usize]) -> Result<Arc<DFSchema>> {
-        let schema = self.source.schema();
-        let projected_fields: Vec<DFField> = projection
-            .iter()
-            .map(|i| {
-                DFField::from_qualified(
-                    self.table_name.clone(),
-                    schema.fields()[*i].clone(),
-                )
-            })
-            .collect();
+    /// Initialize TableScan with appropriate schema from the given
+    /// arguments.
+    pub fn try_new(
+        table_name: impl Into<OwnedTableReference>,
+        table_source: Arc<dyn TableSource>,
+        projection: Option<Vec<usize>>,
+        filters: Vec<Expr>,
+        fetch: Option<usize>,
+    ) -> Result<Self> {
+        let table_name = table_name.into();
 
-        // Find indices among previous schema
-        let projected_range = (0..self.projected_schema.fields().len()).collect();
-        let old_indices = self.projection.as_ref().unwrap_or(&projected_range);
-        let new_proj = projection
-            .iter()
-            .map(|idx| {
-                old_indices
-                    .iter()
-                    .position(|old_idx| old_idx == idx)
-                    .ok_or_else(|| plan_datafusion_err!("Refers to invalid index"))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let func_dependencies = self.projected_schema.functional_dependencies();
-        let new_func_dependencies = func_dependencies
-            .project_functional_dependencies(&new_proj, projection.len());
-
-        let projected_schema = Arc::new(
-            projected_fields
-                .to_dfschema()?
-                .with_functional_dependencies(new_func_dependencies),
+        if table_name.table().is_empty() {
+            return plan_err!("table_name cannot be empty");
+        }
+        let schema = table_source.schema();
+        let func_dependencies = FunctionalDependencies::new_from_constraints(
+            table_source.constraints(),
+            schema.fields.len(),
         );
-        Ok(projected_schema)
+        let projected_schema = projection
+            .as_ref()
+            .map(|p| {
+                let projected_func_dependencies =
+                    func_dependencies.project_functional_dependencies(p, p.len());
+                DFSchema::new_with_metadata(
+                    p.iter()
+                        .map(|i| {
+                            DFField::from_qualified(
+                                table_name.clone(),
+                                schema.field(*i).clone(),
+                            )
+                        })
+                        .collect(),
+                    schema.metadata().clone(),
+                )
+                .map(|df_schema| {
+                    df_schema.with_functional_dependencies(projected_func_dependencies)
+                })
+            })
+            .unwrap_or_else(|| {
+                DFSchema::try_from_qualified_schema(table_name.clone(), &schema).map(
+                    |df_schema| df_schema.with_functional_dependencies(func_dependencies),
+                )
+            })?;
+        let projected_schema = Arc::new(projected_schema);
+        Ok(Self {
+            table_name,
+            source: table_source,
+            projection,
+            projected_schema,
+            filters,
+            fetch,
+        })
     }
 }
 

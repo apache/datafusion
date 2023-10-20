@@ -598,16 +598,14 @@ fn push_down_scan(
         projection.into_iter().collect::<Vec<_>>()
     };
 
-    let projected_schema = scan.project_schema(&projection)?;
-
-    Ok(LogicalPlan::TableScan(TableScan {
-        table_name: scan.table_name.clone(),
-        source: scan.source.clone(),
-        projection: Some(projection),
-        projected_schema,
-        filters: scan.filters.clone(),
-        fetch: scan.fetch,
-    }))
+    let table_scan = TableScan::try_new(
+        scan.table_name.clone(),
+        scan.source.clone(),
+        Some(projection),
+        scan.filters.clone(),
+        scan.fetch,
+    )?;
+    Ok(LogicalPlan::TableScan(table_scan))
 }
 
 fn restrict_outputs(

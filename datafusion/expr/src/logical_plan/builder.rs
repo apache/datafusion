@@ -46,8 +46,7 @@ use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::UnnestOptions;
 use datafusion_common::{
     display::ToStringifiedPlan, Column, DFField, DFSchema, DFSchemaRef, DataFusionError,
-    FileType, FunctionalDependencies, OwnedTableReference, Result, ScalarValue,
-    TableReference, ToDFSchema,
+    FileType, OwnedTableReference, Result, ScalarValue, TableReference, ToDFSchema,
 };
 use datafusion_common::{plan_datafusion_err, plan_err};
 use std::any::Any;
@@ -283,52 +282,9 @@ impl LogicalPlanBuilder {
         projection: Option<Vec<usize>>,
         filters: Vec<Expr>,
     ) -> Result<Self> {
-        let table_name = table_name.into();
-
-        if table_name.table().is_empty() {
-            return plan_err!("table_name cannot be empty");
-        }
-
-        let schema = table_source.schema();
-        let func_dependencies = FunctionalDependencies::new_from_constraints(
-            table_source.constraints(),
-            schema.fields.len(),
-        );
-
-        let projected_schema = projection
-            .as_ref()
-            .map(|p| {
-                let projected_func_dependencies =
-                    func_dependencies.project_functional_dependencies(p, p.len());
-                DFSchema::new_with_metadata(
-                    p.iter()
-                        .map(|i| {
-                            DFField::from_qualified(
-                                table_name.clone(),
-                                schema.field(*i).clone(),
-                            )
-                        })
-                        .collect(),
-                    schema.metadata().clone(),
-                )
-                .map(|df_schema| {
-                    df_schema.with_functional_dependencies(projected_func_dependencies)
-                })
-            })
-            .unwrap_or_else(|| {
-                DFSchema::try_from_qualified_schema(table_name.clone(), &schema).map(
-                    |df_schema| df_schema.with_functional_dependencies(func_dependencies),
-                )
-            })?;
-
-        let table_scan = LogicalPlan::TableScan(TableScan {
-            table_name,
-            source: table_source,
-            projected_schema: Arc::new(projected_schema),
-            projection,
-            filters,
-            fetch: None,
-        });
+        let table_scan =
+            TableScan::try_new(table_name, table_source, projection, filters, None)?;
+        let table_scan = LogicalPlan::TableScan(table_scan);
         Ok(Self::from(table_scan))
     }
 
@@ -1548,9 +1504,7 @@ mod tests {
     use super::*;
 
     use arrow::datatypes::{DataType, Field};
-    use datafusion_common::{
-        FunctionalDependence, OwnedTableReference, SchemaError, TableReference,
-    };
+    use datafusion_common::{OwnedTableReference, SchemaError, TableReference};
 
     #[test]
     fn plan_builder_simple() -> Result<()> {
@@ -2050,22 +2004,5 @@ mod tests {
             .build()?;
 
         Ok(())
-    }
-
-    #[test]
-    fn test_get_updated_id_keys() {
-        let fund_dependencies =
-            FunctionalDependencies::new(vec![FunctionalDependence::new(
-                vec![1],
-                vec![0, 1, 2],
-                true,
-            )]);
-        let res = fund_dependencies.project_functional_dependencies(&[1, 2], 2);
-        let expected = FunctionalDependencies::new(vec![FunctionalDependence::new(
-            vec![0],
-            vec![0, 1],
-            true,
-        )]);
-        assert_eq!(res, expected);
     }
 }
