@@ -42,6 +42,8 @@ pub type DFSchemaRef = Arc<DFSchema>;
 pub struct DFSchema {
     /// Fields
     fields: Vec<DFField>,
+    // For searching column id by field name
+    fields_index: HashMap<String, Vec<usize>>,
     /// Additional metadata in form of key value pairs
     metadata: HashMap<String, String>,
     /// Stores functional dependencies in the schema.
@@ -53,6 +55,7 @@ impl DFSchema {
     pub fn empty() -> Self {
         Self {
             fields: vec![],
+            fields_index: HashMap::new(),
             metadata: HashMap::new(),
             functional_dependencies: FunctionalDependencies::empty(),
         }
@@ -104,9 +107,24 @@ impl DFSchema {
                 ));
             }
         }
+
+        let mut fields_index: HashMap<String, Vec<usize>> = HashMap::new();
+        for (idx, field) in fields.iter().enumerate() {
+            let unqualified_name = match field.qualifier {
+                Some(_) => field.name().to_owned(),
+                None => Column::from_qualified_name(field.name()).name,
+            };
+            field.qualified_name();
+            fields_index
+                .entry(unqualified_name)
+                .and_modify(|vec| vec.push(idx))
+                .or_insert(vec![idx]);
+        }
+
         Ok(Self {
             fields,
             metadata,
+            fields_index,
             functional_dependencies: FunctionalDependencies::empty(),
         })
     }
@@ -161,6 +179,16 @@ impl DFSchema {
             };
             if !duplicated_field {
                 self.fields.push(field.clone());
+
+                let idx = self.fields.len() - 1;
+                let unqualified_name = match field.qualifier {
+                    Some(_) => field.name().to_owned(),
+                    None => Column::from_qualified_name(field.name()).name,
+                };
+                self.fields_index
+                    .entry(unqualified_name)
+                    .and_modify(|vec| vec.push(idx))
+                    .or_insert(vec![idx]);
             }
         }
         self.metadata.extend(other_schema.metadata.clone())
@@ -208,32 +236,50 @@ impl DFSchema {
         qualifier: Option<&TableReference>,
         name: &str,
     ) -> Result<Option<usize>> {
-        let mut matches = self
-            .fields
+        let unqualified_name = match qualifier {
+            Some(_) => name.to_owned(),
+            None => Column::from_qualified_name(name).name,
+        };
+        let Some(matched_fields_idx) = self.fields_index.get(&unqualified_name) else {
+            return Ok(None);
+        };
+
+        let Some(qualifier) = qualifier else {
+            // field to lookup is unqualified, no need to compare qualifier
+            let mut matches = matched_fields_idx
+                .iter()
+                .map(|idx| (*idx, self.field(*idx)))
+                .filter(|(_, field)| field.name() == name)
+                .map(|(idx, _)| idx);
+            return Ok(matches.next());
+        };
+
+        // field to lookup is qualified.
+        let mut matches = matched_fields_idx
             .iter()
-            .enumerate()
-            .filter(|(_, field)| match (qualifier, &field.qualifier) {
+            .map(|idx| (*idx, self.field(*idx)))
+            .filter(|(_, field)| match &field.qualifier {
                 // field to lookup is qualified.
                 // current field is qualified and not shared between relations, compare both
                 // qualifier and name.
-                (Some(q), Some(field_q)) => {
-                    q.resolved_eq(field_q) && field.name() == name
+                Some(field_qualifier) => {
+                    qualifier.resolved_eq(field_qualifier) && field.name() == name
                 }
                 // field to lookup is qualified but current field is unqualified.
-                (Some(qq), None) => {
+                None => {
                     // the original field may now be aliased with a name that matches the
                     // original qualified name
                     let column = Column::from_qualified_name(field.name());
                     match column {
                         Column {
-                            relation: Some(r),
+                            relation: Some(column_qualifier),
                             name: column_name,
-                        } => &r == qq && column_name == name,
+                        } => {
+                            column_qualifier.resolved_eq(qualifier) && column_name == name
+                        }
                         _ => false,
                     }
                 }
-                // field to lookup is unqualified, no need to compare qualifier
-                (None, Some(_)) | (None, None) => field.name() == name,
             })
             .map(|(idx, _)| idx);
         Ok(matches.next())

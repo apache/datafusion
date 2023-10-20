@@ -438,9 +438,11 @@ fn assert_schema_is_the_same(
 
     if !equivalent {
         let e = DataFusionError::Internal(format!(
-            "Failed due to generate a different schema, original schema: {:?}, new schema: {:?}",
-            prev_plan.schema(),
-            new_plan.schema()
+            "Failed due to generate a different schema\
+            , original schema: DFSchema {{ fields: {:?}, metadata: {:?}, functional_dependencies: {:?} }}\
+            , new schema: DFSchema {{ fields: {:?}, metadata: {:?}, functional_dependencies: {:?} }}",
+            prev_plan.schema().fields(), prev_plan.schema().metadata(), prev_plan.schema().functional_dependencies(),
+            new_plan.schema().fields(), new_plan.schema().metadata(), new_plan.schema().functional_dependencies(),
         ));
         Err(DataFusionError::Context(
             String::from(rule_name),
