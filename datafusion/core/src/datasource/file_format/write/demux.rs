@@ -27,6 +27,7 @@ use crate::datasource::listing::ListingTableUrl;
 use crate::error::Result;
 use crate::physical_plan::SendableRecordBatchStream;
 
+use arrow::compute::kernels::partition;
 use arrow_array::builder::UInt64Builder;
 use arrow_array::cast::AsArray;
 use arrow_array::{RecordBatch, StructArray};
@@ -58,9 +59,7 @@ type DemuxedStreamReceiver = UnboundedReceiver<(Path, RecordBatchReceiver)>;
 /// the demux task for errors and abort accordingly. The single_file_ouput parameter
 /// overrides all other settings to force only a single file to be written.
 /// partition_by parameter will additionally split the input based on the unique
-/// values of a specific column `<https://github.com/apache/arrow-datafusion/issues/7744>
-///
-/// ```text
+/// values of a specific column `<https://github.com/apache/arrow-datafusion/issues/7744>``
 ///                                                                              ┌───────────┐               ┌────────────┐    ┌─────────────┐
 ///                                                                     ┌──────▶ │  batch 1  ├────▶...──────▶│   Batch a  │    │ Output File1│
 ///                                                                     │        └───────────┘               └────────────┘    └─────────────┘
@@ -114,7 +113,7 @@ pub(crate) fn start_demuxer_task(
     (task, rx)
 }
 
-/// Dynamically partitions input stream to achieve desired maximum rows per file
+/// Dynamically partitions input stream to acheive desired maximum rows per file
 async fn row_count_demuxer(
     mut tx: UnboundedSender<(Path, Receiver<RecordBatch>)>,
     mut input: SendableRecordBatchStream,
@@ -236,7 +235,7 @@ async fn hive_style_partitions_demuxer(
         // Divide up the batch into distinct partition key batches and send each batch
         for (part_key, mut builder) in take_map.into_iter() {
             // Take method adapted from https://github.com/lancedb/lance/pull/1337/files
-            // TODO: use RecordBatch::take in arrow-rs https://github.com/apache/arrow-rs/issues/4958
+            // TODO: upstream RecordBatch::take to arrow-rs
             let take_indices = builder.finish();
             let struct_array: StructArray = rb.clone().into();
             let parted_batch = RecordBatch::try_from(
@@ -315,7 +314,7 @@ fn compute_partition_keys_by_row<'a>(
             }
             _ => {
                 return Err(DataFusionError::NotImplemented(format!(
-                "it is not yet supported to write to hive partitions with datatype {} while writing column {col}",
+                "it is not yet supported to write to hive partitions with datatype {}",
                 dtype
             )))
             }
@@ -349,19 +348,19 @@ fn remove_partition_by_columns(
 ) -> Result<RecordBatch> {
     let end_idx = parted_batch.num_columns() - partition_by.len();
     let non_part_cols = &parted_batch.columns()[..end_idx];
-    let mut non_part_fields = vec![];
-    'outer: for field in parted_batch.schema().all_fields() {
-        let name = field.name();
-        for (part_name, _) in partition_by.iter() {
-            if name == part_name {
-                continue 'outer;
-            }
-        }
-        non_part_fields.push(field.to_owned())
-    }
-    let schema = Schema::new(non_part_fields);
+
+    let partition_names: Vec<_> = partition_by.iter().map(|(s, d)| s).collect();
+    let non_part_schema = Schema::new(
+        parted_batch
+            .schema()
+            .all_fields()
+            .iter()
+            .filter(|f| !partition_names.contains(&f.name()))
+            .map(|f| (**f).clone())
+            .collect::<Vec<_>>(),
+    );
     let final_batch_to_send =
-        RecordBatch::try_new(Arc::new(schema), non_part_cols.into())?;
+        RecordBatch::try_new(Arc::new(non_part_schema), non_part_cols.into())?;
 
     Ok(final_batch_to_send)
 }
