@@ -17,7 +17,8 @@
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{
-    internal_err, Column, DFField, DFSchema, DataFusionError, Result, TableReference,
+    internal_err, plan_datafusion_err, Column, DFField, DFSchema, DataFusionError,
+    Result, TableReference,
 };
 use datafusion_expr::{Case, Expr};
 use sqlparser::ast::{Expr as SQLExpr, Ident};
@@ -33,12 +34,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // TODO: figure out if ScalarVariables should be insensitive.
             let var_names = vec![id.value];
             let ty = self
-                .schema_provider
+                .context_provider
                 .get_variable_type(&var_names)
                 .ok_or_else(|| {
-                    DataFusionError::Plan(format!(
-                        "variable {var_names:?} has no type information"
-                    ))
+                    plan_datafusion_err!("variable {var_names:?} has no type information")
                 })?;
             Ok(Expr::ScalarVariable(ty, var_names))
         } else {
@@ -99,7 +98,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .map(|id| self.normalizer.normalize(id))
                 .collect();
             let ty = self
-                .schema_provider
+                .context_provider
                 .get_variable_type(&var_names)
                 .ok_or_else(|| {
                     DataFusionError::Execution(format!(

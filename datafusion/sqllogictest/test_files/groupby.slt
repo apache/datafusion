@@ -2024,13 +2024,11 @@ SortPreservingMergeExec: [col0@0 ASC NULLS LAST]
 ----------------CoalesceBatchesExec: target_batch_size=8192
 ------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(col0@0, col0@0)]
 --------------------CoalesceBatchesExec: target_batch_size=8192
-----------------------RepartitionExec: partitioning=Hash([col0@0], 4), input_partitions=4
-------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
---------------------------MemoryExec: partitions=1, partition_sizes=[3]
+----------------------RepartitionExec: partitioning=Hash([col0@0], 4), input_partitions=1
+------------------------MemoryExec: partitions=1, partition_sizes=[3]
 --------------------CoalesceBatchesExec: target_batch_size=8192
-----------------------RepartitionExec: partitioning=Hash([col0@0], 4), input_partitions=4
-------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
---------------------------MemoryExec: partitions=1, partition_sizes=[3]
+----------------------RepartitionExec: partitioning=Hash([col0@0], 4), input_partitions=1
+------------------------MemoryExec: partitions=1, partition_sizes=[3]
 
 # Columns in the table are a,b,c,d. Source is CsvExec which is ordered by
 # a,b,c column. Column a has cardinality 2, column b has cardinality 4.
@@ -2762,9 +2760,9 @@ SortPreservingMergeExec: [country@0 ASC NULLS LAST]
 ------AggregateExec: mode=FinalPartitioned, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)]
 --------CoalesceBatchesExec: target_batch_size=8192
 ----------RepartitionExec: partitioning=Hash([country@0], 8), input_partitions=8
-------------AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)]
---------------SortExec: expr=[ts@1 ASC NULLS LAST]
-----------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+--------------AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)]
+----------------SortExec: expr=[ts@1 ASC NULLS LAST]
 ------------------MemoryExec: partitions=1, partition_sizes=[1]
 
 query TRR
@@ -2799,9 +2797,9 @@ SortPreservingMergeExec: [country@0 ASC NULLS LAST]
 ------AggregateExec: mode=FinalPartitioned, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount), FIRST_VALUE(sales_global.amount)]
 --------CoalesceBatchesExec: target_batch_size=8192
 ----------RepartitionExec: partitioning=Hash([country@0], 8), input_partitions=8
-------------AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount), FIRST_VALUE(sales_global.amount)]
---------------SortExec: expr=[ts@1 ASC NULLS LAST]
-----------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+--------------AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount), FIRST_VALUE(sales_global.amount)]
+----------------SortExec: expr=[ts@1 ASC NULLS LAST]
 ------------------MemoryExec: partitions=1, partition_sizes=[1]
 
 query TRR
@@ -2814,6 +2812,11 @@ SELECT country, FIRST_VALUE(amount ORDER BY ts ASC) AS fv1,
 FRA 50 50
 GRC 30 30
 TUR 75 75
+
+# make sure that batch size is small. So that query below runs in multi partitions
+# row number of the sales_global is 5. Hence we choose batch size 4 to make is smaller.
+statement ok
+set datafusion.execution.batch_size = 4;
 
 # order-sensitive FIRST_VALUE and LAST_VALUE aggregators should work in
 # multi-partitions without group by also.
@@ -2958,7 +2961,7 @@ SortPreservingMergeExec: [country@0 ASC NULLS LAST]
 --SortExec: expr=[country@0 ASC NULLS LAST]
 ----ProjectionExec: expr=[country@0 as country, ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]@1 as array_agg1]
 ------AggregateExec: mode=FinalPartitioned, gby=[country@0 as country], aggr=[ARRAY_AGG(sales_global.amount)]
---------CoalesceBatchesExec: target_batch_size=8192
+--------CoalesceBatchesExec: target_batch_size=4
 ----------RepartitionExec: partitioning=Hash([country@0], 8), input_partitions=8
 ------------AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[ARRAY_AGG(sales_global.amount)]
 --------------SortExec: expr=[amount@1 ASC NULLS LAST]
@@ -2994,7 +2997,7 @@ SortPreservingMergeExec: [country@0 ASC NULLS LAST]
 --SortExec: expr=[country@0 ASC NULLS LAST]
 ----ProjectionExec: expr=[country@0 as country, ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]@1 as amounts, FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]@2 as fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]@3 as fv2]
 ------AggregateExec: mode=FinalPartitioned, gby=[country@0 as country], aggr=[ARRAY_AGG(sales_global.amount), LAST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)]
---------CoalesceBatchesExec: target_batch_size=8192
+--------CoalesceBatchesExec: target_batch_size=4
 ----------RepartitionExec: partitioning=Hash([country@0], 8), input_partitions=8
 ------------AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[ARRAY_AGG(sales_global.amount), LAST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)]
 --------------SortExec: expr=[amount@1 DESC]
@@ -3195,7 +3198,7 @@ SortPreservingMergeExec: [sn@0 ASC NULLS LAST]
 --SortExec: expr=[sn@0 ASC NULLS LAST]
 ----ProjectionExec: expr=[sn@0 as sn, amount@1 as amount, 2 * CAST(sn@0 AS Int64) as Int64(2) * s.sn]
 ------AggregateExec: mode=FinalPartitioned, gby=[sn@0 as sn, amount@1 as amount], aggr=[]
---------CoalesceBatchesExec: target_batch_size=8192
+--------CoalesceBatchesExec: target_batch_size=4
 ----------RepartitionExec: partitioning=Hash([sn@0, amount@1], 8), input_partitions=8
 ------------AggregateExec: mode=Partial, gby=[sn@0 as sn, amount@1 as amount], aggr=[]
 --------------MemoryExec: partitions=8, partition_sizes=[1, 0, 0, 0, 0, 0, 0, 0]
@@ -3263,7 +3266,7 @@ SortPreservingMergeExec: [sn@0 ASC NULLS LAST]
 --SortExec: expr=[sn@0 ASC NULLS LAST]
 ----ProjectionExec: expr=[sn@0 as sn, SUM(l.amount)@2 as SUM(l.amount), amount@1 as amount]
 ------AggregateExec: mode=FinalPartitioned, gby=[sn@0 as sn, amount@1 as amount], aggr=[SUM(l.amount)]
---------CoalesceBatchesExec: target_batch_size=8192
+--------CoalesceBatchesExec: target_batch_size=4
 ----------RepartitionExec: partitioning=Hash([sn@0, amount@1], 8), input_partitions=8
 ------------AggregateExec: mode=Partial, gby=[sn@1 as sn, amount@2 as amount], aggr=[SUM(l.amount)]
 --------------ProjectionExec: expr=[amount@1 as amount, sn@2 as sn, amount@3 as amount]
@@ -3411,7 +3414,7 @@ SortPreservingMergeExec: [sn@2 ASC NULLS LAST]
 --SortExec: expr=[sn@2 ASC NULLS LAST]
 ----ProjectionExec: expr=[zip_code@1 as zip_code, country@2 as country, sn@0 as sn, ts@3 as ts, currency@4 as currency, amount@5 as amount, sum_amount@6 as sum_amount]
 ------AggregateExec: mode=FinalPartitioned, gby=[sn@0 as sn, zip_code@1 as zip_code, country@2 as country, ts@3 as ts, currency@4 as currency, amount@5 as amount, sum_amount@6 as sum_amount], aggr=[]
---------CoalesceBatchesExec: target_batch_size=8192
+--------CoalesceBatchesExec: target_batch_size=4
 ----------RepartitionExec: partitioning=Hash([sn@0, zip_code@1, country@2, ts@3, currency@4, amount@5, sum_amount@6], 8), input_partitions=8
 ------------AggregateExec: mode=Partial, gby=[sn@2 as sn, zip_code@0 as zip_code, country@1 as country, ts@3 as ts, currency@4 as currency, amount@5 as amount, sum_amount@6 as sum_amount], aggr=[]
 --------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
@@ -3580,6 +3583,12 @@ ORDER BY y;
 2 1
 3 1
 
+# Make sure to choose a batch size smaller than, row number of the table.
+# In this case we choose 2 (Row number of the table is 3).
+# otherwise we won't see parallelism in tests.
+statement ok
+set datafusion.execution.batch_size = 2;
+
 # plan of the query above should contain partial
 # and final aggregation stages
 query TT
@@ -3593,7 +3602,8 @@ physical_plan
 AggregateExec: mode=Final, gby=[], aggr=[LAST_VALUE(foo.x)]
 --CoalescePartitionsExec
 ----AggregateExec: mode=Partial, gby=[], aggr=[LAST_VALUE(foo.x)]
-------MemoryExec: partitions=8, partition_sizes=[1, 0, 0, 0, 0, 0, 0, 0]
+------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+--------MemoryExec: partitions=1, partition_sizes=[1]
 
 query I
 SELECT FIRST_VALUE(x)
@@ -3614,7 +3624,8 @@ physical_plan
 AggregateExec: mode=Final, gby=[], aggr=[FIRST_VALUE(foo.x)]
 --CoalescePartitionsExec
 ----AggregateExec: mode=Partial, gby=[], aggr=[FIRST_VALUE(foo.x)]
-------MemoryExec: partitions=8, partition_sizes=[1, 0, 0, 0, 0, 0, 0, 0]
+------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+--------MemoryExec: partitions=1, partition_sizes=[1]
 
 
 query TT
@@ -3658,7 +3669,7 @@ Aggregate: groupBy=[[multiple_ordered_table_with_pk.c, multiple_ordered_table_wi
 physical_plan
 AggregateExec: mode=FinalPartitioned, gby=[c@0 as c, b@1 as b], aggr=[SUM(multiple_ordered_table_with_pk.d)], ordering_mode=PartiallyOrdered
 --SortExec: expr=[c@0 ASC NULLS LAST]
-----CoalesceBatchesExec: target_batch_size=8192
+----CoalesceBatchesExec: target_batch_size=2
 ------RepartitionExec: partitioning=Hash([c@0, b@1], 8), input_partitions=8
 --------AggregateExec: mode=Partial, gby=[c@1 as c, b@0 as b], aggr=[SUM(multiple_ordered_table_with_pk.d)], ordering_mode=PartiallyOrdered
 ----------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
@@ -3699,7 +3710,7 @@ Aggregate: groupBy=[[multiple_ordered_table_with_pk.c, multiple_ordered_table_wi
 physical_plan
 AggregateExec: mode=FinalPartitioned, gby=[c@0 as c, b@1 as b], aggr=[SUM(multiple_ordered_table_with_pk.d)], ordering_mode=PartiallyOrdered
 --SortExec: expr=[c@0 ASC NULLS LAST]
-----CoalesceBatchesExec: target_batch_size=8192
+----CoalesceBatchesExec: target_batch_size=2
 ------RepartitionExec: partitioning=Hash([c@0, b@1], 8), input_partitions=8
 --------AggregateExec: mode=Partial, gby=[c@1 as c, b@0 as b], aggr=[SUM(multiple_ordered_table_with_pk.d)], ordering_mode=PartiallyOrdered
 ----------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
@@ -3772,7 +3783,7 @@ Projection: lhs.c, rhs.c, lhs.sum1, rhs.sum1
 ----------TableScan: multiple_ordered_table_with_pk projection=[b, c, d]
 physical_plan
 ProjectionExec: expr=[c@0 as c, c@3 as c, sum1@2 as sum1, sum1@5 as sum1]
---CoalesceBatchesExec: target_batch_size=8192
+--CoalesceBatchesExec: target_batch_size=2
 ----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(b@1, b@1)]
 ------ProjectionExec: expr=[c@0 as c, b@1 as b, SUM(multiple_ordered_table_with_pk.d)@2 as sum1]
 --------AggregateExec: mode=Single, gby=[c@1 as c, b@0 as b], aggr=[SUM(multiple_ordered_table_with_pk.d)], ordering_mode=PartiallyOrdered

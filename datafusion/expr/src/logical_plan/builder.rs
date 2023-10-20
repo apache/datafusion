@@ -43,17 +43,18 @@ use crate::{
     Expr, ExprSchemable, TableSource,
 };
 use arrow::datatypes::{DataType, Schema, SchemaRef};
-use datafusion_common::UnnestOptions;
 use datafusion_common::{
     display::ToStringifiedPlan, Column, DFField, DFSchema, DFSchemaRef, DataFusionError,
     FileType, FunctionalDependencies, OwnedTableReference, Result, ScalarValue,
     TableReference, ToDFSchema,
 };
-use datafusion_common::{get_target_functional_dependencies, plan_err};
+use datafusion_common::{get_target_functional_dependencies, UnnestOptions};
+use datafusion_common::{plan_datafusion_err, plan_err};
 use std::any::Any;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
+use std::iter::zip;
 use std::sync::Arc;
 
 /// Default table name for unnamed table
@@ -610,11 +611,19 @@ impl LogicalPlanBuilder {
         })))
     }
 
-    /// Apply a join with on constraint.
+    /// Apply a join to `right` using explicitly specified columns and an
+    /// optional filter expression.
     ///
-    /// Filter expression expected to contain non-equality predicates that can not be pushed
-    /// down to any of join inputs.
-    /// In case of outer join, filter applied to only matched rows.
+    /// See [`join_on`](Self::join_on) for a more concise way to specify the
+    /// join condition. Since DataFusion will automatically identify and
+    /// optimize equality predicates there is no performance difference between
+    /// this function and `join_on`
+    ///
+    /// `left_cols` and `right_cols` are used to form "equijoin" predicates (see
+    /// example below), which are then combined with the optional `filter`
+    /// expression.
+    ///
+    /// Note that in case of outer join, the `filter` is applied to only matched rows.
     pub fn join(
         self,
         right: LogicalPlan,
@@ -623,6 +632,63 @@ impl LogicalPlanBuilder {
         filter: Option<Expr>,
     ) -> Result<Self> {
         self.join_detailed(right, join_type, join_keys, filter, false)
+    }
+
+    /// Apply a join with using the specified expressions.
+    ///
+    /// Note that DataFusion automatically optimizes joins, including
+    /// identifying and optimizing equality predicates.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use datafusion_expr::{Expr, col, LogicalPlanBuilder,
+    /// #  logical_plan::builder::LogicalTableSource, logical_plan::JoinType,};
+    /// # use std::sync::Arc;
+    /// # use arrow::datatypes::{Schema, DataType, Field};
+    /// # use datafusion_common::Result;
+    /// # fn main() -> Result<()> {
+    /// let example_schema = Arc::new(Schema::new(vec![
+    ///     Field::new("a", DataType::Int32, false),
+    ///     Field::new("b", DataType::Int32, false),
+    ///     Field::new("c", DataType::Int32, false),
+    /// ]));
+    /// let table_source = Arc::new(LogicalTableSource::new(example_schema));
+    /// let left_table = table_source.clone();
+    /// let right_table = table_source.clone();
+    ///
+    /// let right_plan = LogicalPlanBuilder::scan("right", right_table, None)?.build()?;
+    ///
+    /// // Form the expression `(left.a != right.a)` AND `(left.b != right.b)`
+    /// let exprs = vec![
+    ///     col("left.a").eq(col("right.a")),
+    ///     col("left.b").not_eq(col("right.b"))
+    ///  ];
+    ///
+    /// // Perform the equivalent of `left INNER JOIN right ON (a != a2 AND b != b2)`
+    /// // finding all pairs of rows from `left` and `right` where
+    /// // where `a = a2` and `b != b2`.
+    /// let plan = LogicalPlanBuilder::scan("left", left_table, None)?
+    ///     .join_on(right_plan, JoinType::Inner, exprs)?
+    ///     .build()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn join_on(
+        self,
+        right: LogicalPlan,
+        join_type: JoinType,
+        on_exprs: impl IntoIterator<Item = Expr>,
+    ) -> Result<Self> {
+        let filter = on_exprs.into_iter().reduce(Expr::and);
+
+        self.join_detailed(
+            right,
+            join_type,
+            (Vec::<Column>::new(), Vec::<Column>::new()),
+            filter,
+            false,
+        )
     }
 
     pub(crate) fn normalize(
@@ -638,8 +704,14 @@ impl LogicalPlanBuilder {
         )
     }
 
-    /// Apply a join with on constraint and specified null equality
-    /// If null_equals_null is true then null == null, else null != null
+    /// Apply a join with on constraint and specified null equality.
+    ///
+    /// The behavior is the same as [`join`](Self::join) except that it allows
+    /// specifying the null equality behavior.
+    ///
+    /// If `null_equals_null=true`, rows where both join keys are `null` will be
+    /// emitted. Otherwise rows where either or both join keys are `null` will be
+    /// omitted.
     pub fn join_detailed(
         self,
         right: LogicalPlan,
@@ -1044,9 +1116,9 @@ impl LogicalPlanBuilder {
                         self.plan.schema().clone(),
                         right.schema().clone(),
                     )?.ok_or_else(||
-                        DataFusionError::Plan(format!(
+                        plan_datafusion_err!(
                             "can't create join plan, join key should belong to one input, error key: ({normalized_left_key},{normalized_right_key})"
-                        )))
+                        ))
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -1215,39 +1287,36 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
     }
 
     // create union schema
-    let union_schema = (0..left_col_num)
-        .map(|i| {
-            let left_field = left_plan.schema().field(i);
-            let right_field = right_plan.schema().field(i);
-            let nullable = left_field.is_nullable() || right_field.is_nullable();
-            let data_type =
-                comparison_coercion(left_field.data_type(), right_field.data_type())
-                    .ok_or_else(|| {
-                        DataFusionError::Plan(format!(
-                    "UNION Column {} (type: {}) is not compatible with column {} (type: {})",
-                    right_field.name(),
-                    right_field.data_type(),
-                    left_field.name(),
-                    left_field.data_type()
-                ))
-                    })?;
-
-            Ok(DFField::new(
-                left_field.qualifier().cloned(),
+    let union_schema = zip(
+        left_plan.schema().fields().iter(),
+        right_plan.schema().fields().iter(),
+    )
+    .map(|(left_field, right_field)| {
+        let nullable = left_field.is_nullable() || right_field.is_nullable();
+        let data_type =
+            comparison_coercion(left_field.data_type(), right_field.data_type())
+                .ok_or_else(|| {
+                    plan_datafusion_err!(
+                "UNION Column {} (type: {}) is not compatible with column {} (type: {})",
+                right_field.name(),
+                right_field.data_type(),
                 left_field.name(),
-                data_type,
-                nullable,
-            ))
-        })
-        .collect::<Result<Vec<_>>>()?
-        .to_dfschema()?;
+                left_field.data_type()
+            )
+                })?;
+
+        Ok(DFField::new(
+            left_field.qualifier().cloned(),
+            left_field.name(),
+            data_type,
+            nullable,
+        ))
+    })
+    .collect::<Result<Vec<_>>>()?
+    .to_dfschema()?;
 
     let inputs = vec![left_plan, right_plan]
         .into_iter()
-        .flat_map(|p| match p {
-            LogicalPlan::Union(Union { inputs, .. }) => inputs,
-            other_plan => vec![Arc::new(other_plan)],
-        })
         .map(|p| {
             let plan = coerce_plan_expr_for_schema(&p, &union_schema)?;
             match plan {
@@ -1615,7 +1684,7 @@ mod tests {
     }
 
     #[test]
-    fn plan_builder_union_combined_single_union() -> Result<()> {
+    fn plan_builder_union() -> Result<()> {
         let plan =
             table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?;
 
@@ -1626,11 +1695,12 @@ mod tests {
             .union(plan.build()?)?
             .build()?;
 
-        // output has only one union
         let expected = "Union\
-        \n  TableScan: employee_csv projection=[state, salary]\
-        \n  TableScan: employee_csv projection=[state, salary]\
-        \n  TableScan: employee_csv projection=[state, salary]\
+        \n  Union\
+        \n    Union\
+        \n      TableScan: employee_csv projection=[state, salary]\
+        \n      TableScan: employee_csv projection=[state, salary]\
+        \n    TableScan: employee_csv projection=[state, salary]\
         \n  TableScan: employee_csv projection=[state, salary]";
 
         assert_eq!(expected, format!("{plan:?}"));
@@ -1639,7 +1709,7 @@ mod tests {
     }
 
     #[test]
-    fn plan_builder_union_distinct_combined_single_union() -> Result<()> {
+    fn plan_builder_union_distinct() -> Result<()> {
         let plan =
             table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?;
 

@@ -33,7 +33,7 @@ CopyTo: format=parquet output_url=test_files/scratch/copy/table single_file_outp
 --TableScan: source_table projection=[col1, col2]
 physical_plan
 InsertExec: sink=ParquetSink(writer_mode=PutMultipart, file_groups=[])
---MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+--MemoryExec: partitions=1, partition_sizes=[1]
 
 # Error case
 query error DataFusion error: Invalid or Unsupported Configuration: Format not explicitly set and unable to get file extension!

@@ -20,17 +20,17 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use super::expressions::PhysicalSortExpr;
+use super::{common, DisplayAs, SendableRecordBatchStream, Statistics};
 use crate::{memory::MemoryStream, DisplayFormatType, ExecutionPlan, Partitioning};
+
 use arrow::array::{ArrayRef, NullArray};
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{internal_err, DataFusionError, Result};
-use log::trace;
-
-use super::expressions::PhysicalSortExpr;
-use super::{common, DisplayAs, SendableRecordBatchStream, Statistics};
-
 use datafusion_execution::TaskContext;
+
+use log::trace;
 
 /// Execution plan for empty relation (produces no rows)
 #[derive(Debug)]
@@ -161,11 +161,15 @@ impl ExecutionPlan for EmptyExec {
         )?))
     }
 
-    fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Result<Statistics> {
         let batch = self
             .data()
             .expect("Create empty RecordBatch should not fail");
-        common::compute_record_batch_statistics(&[batch], &self.schema, None)
+        Ok(common::compute_record_batch_statistics(
+            &[batch],
+            &self.schema,
+            None,
+        ))
     }
 }
 

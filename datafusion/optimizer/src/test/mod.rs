@@ -169,6 +169,25 @@ pub fn assert_optimized_plan_eq(
     Ok(())
 }
 
+pub fn assert_optimized_plan_eq_with_rules(
+    rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
+    plan: &LogicalPlan,
+    expected: &str,
+) -> Result<()> {
+    fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
+    let config = &mut OptimizerContext::new()
+        .with_max_passes(1)
+        .with_skip_failing_rules(false);
+    let optimizer = Optimizer::with_rules(rules);
+    let optimized_plan = optimizer
+        .optimize(plan, config, observe)
+        .expect("failed to optimize plan");
+    let formatted_plan = format!("{optimized_plan:?}");
+    assert_eq!(formatted_plan, expected);
+    assert_eq!(plan.schema(), optimized_plan.schema());
+    Ok(())
+}
+
 pub fn assert_optimized_plan_eq_display_indent(
     rule: Arc<dyn OptimizerRule + Send + Sync>,
     plan: &LogicalPlan,

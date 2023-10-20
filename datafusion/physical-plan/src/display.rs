@@ -20,12 +20,11 @@
 
 use std::fmt;
 
-use arrow_schema::SchemaRef;
-use datafusion_common::display::StringifiedPlan;
-use datafusion_physical_expr::PhysicalSortExpr;
-
 use super::{accept, ExecutionPlan, ExecutionPlanVisitor};
-use datafusion_common::display::{GraphvizBuilder, PlanType};
+
+use arrow_schema::SchemaRef;
+use datafusion_common::display::{GraphvizBuilder, PlanType, StringifiedPlan};
+use datafusion_physical_expr::PhysicalSortExpr;
 
 /// Options for controlling how each [`ExecutionPlan`] should format itself
 #[derive(Debug, Clone, Copy)]
@@ -261,8 +260,9 @@ impl<'a, 'b> ExecutionPlanVisitor for IndentVisitor<'a, 'b> {
                 }
             }
         }
+        let stats = plan.statistics().map_err(|_e| fmt::Error)?;
         if self.show_statistics {
-            write!(self.f, ", statistics=[{}]", plan.statistics())?;
+            write!(self.f, ", statistics=[{}]", stats)?;
         }
         writeln!(self.f)?;
         self.indent += 1;
@@ -341,8 +341,9 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
             }
         };
 
+        let stats = plan.statistics().map_err(|_e| fmt::Error)?;
         let statistics = if self.show_statistics {
-            format!("statistics=[{}]", plan.statistics())
+            format!("statistics=[{}]", stats)
         } else {
             "".to_string()
         };

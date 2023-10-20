@@ -17,8 +17,6 @@
 
 //! Implementation of `InList` expressions: [`InListExpr`]
 
-use ahash::RandomState;
-use datafusion_common::exec_err;
 use std::any::Any;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
@@ -27,6 +25,7 @@ use std::sync::Arc;
 use crate::physical_expr::down_cast_any_ref;
 use crate::utils::expr_list_eq_any_order;
 use crate::PhysicalExpr;
+
 use arrow::array::*;
 use arrow::buffer::BooleanBuffer;
 use arrow::compute::kernels::boolean::{not, or_kleene};
@@ -36,12 +35,16 @@ use arrow::datatypes::*;
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_iterator::BitIndexIterator;
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
+use datafusion_common::cast::{
+    as_boolean_array, as_generic_binary_array, as_string_array,
+};
 use datafusion_common::hash_utils::HashValue;
 use datafusion_common::{
-    cast::{as_boolean_array, as_generic_binary_array, as_string_array},
-    internal_err, not_impl_err, DataFusionError, Result, ScalarValue,
+    exec_err, internal_err, not_impl_err, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::ColumnarValue;
+
+use ahash::RandomState;
 use hashbrown::hash_map::RawEntryMut;
 use hashbrown::HashMap;
 

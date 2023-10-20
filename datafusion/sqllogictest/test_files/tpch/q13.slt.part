@@ -56,7 +56,7 @@ Limit: skip=0, fetch=10
 physical_plan
 GlobalLimitExec: skip=0, fetch=10
 --SortPreservingMergeExec: [custdist@1 DESC,c_count@0 DESC], fetch=10
-----SortExec: fetch=10, expr=[custdist@1 DESC,c_count@0 DESC]
+----SortExec: TopK(fetch=10), expr=[custdist@1 DESC,c_count@0 DESC]
 ------ProjectionExec: expr=[c_count@0 as c_count, COUNT(*)@1 as custdist]
 --------AggregateExec: mode=FinalPartitioned, gby=[c_count@0 as c_count], aggr=[COUNT(*)]
 ----------CoalesceBatchesExec: target_batch_size=8192

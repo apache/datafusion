@@ -82,7 +82,7 @@ async fn group_by_limit() -> Result<()> {
     let physical_plan = dataframe.create_physical_plan().await?;
     let mut expected_physical_plan = r#"
 GlobalLimitExec: skip=0, fetch=4
-  SortExec: fetch=4, expr=[MAX(traces.ts)@1 DESC]
+  SortExec: TopK(fetch=4), expr=[MAX(traces.ts)@1 DESC]
     AggregateExec: mode=Single, gby=[trace_id@0 as trace_id], aggr=[MAX(traces.ts)], lim=[4]
     "#.trim().to_string();
     let actual_phys_plan =

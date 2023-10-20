@@ -238,7 +238,6 @@ pub fn bounded_window_exec(
             )
             .unwrap()],
             input.clone(),
-            input.schema(),
             vec![],
             crate::physical_plan::windows::PartitionSearchMode::Sorted,
         )
@@ -268,7 +267,7 @@ pub fn parquet_exec(schema: &SchemaRef) -> Arc<ParquetExec> {
             object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
             file_schema: schema.clone(),
             file_groups: vec![vec![PartitionedFile::new("x".to_string(), 100)]],
-            statistics: Statistics::default(),
+            statistics: Statistics::new_unknown(schema),
             projection: None,
             limit: None,
             table_partition_cols: vec![],
@@ -292,7 +291,7 @@ pub fn parquet_exec_sorted(
             object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
             file_schema: schema.clone(),
             file_groups: vec![vec![PartitionedFile::new("x".to_string(), 100)]],
-            statistics: Statistics::default(),
+            statistics: Statistics::new_unknown(schema),
             projection: None,
             limit: None,
             table_partition_cols: vec![],
@@ -322,6 +321,14 @@ pub fn global_limit_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan
 
 pub fn repartition_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
     Arc::new(RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(10)).unwrap())
+}
+
+pub fn spr_repartition_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
+    Arc::new(
+        RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(10))
+            .unwrap()
+            .with_preserve_order(true),
+    )
 }
 
 pub fn aggregate_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {

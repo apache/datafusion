@@ -17,6 +17,7 @@
 
 //! [`MemTable`] for querying `Vec<RecordBatch>` by DataFusion.
 
+use datafusion_physical_plan::metrics::MetricsSet;
 use futures::StreamExt;
 use log::debug;
 use std::any::Any;
@@ -259,9 +260,17 @@ impl MemSink {
 
 #[async_trait]
 impl DataSink for MemSink {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        None
+    }
+
     async fn write_all(
         &self,
-        mut data: Vec<SendableRecordBatchStream>,
+        mut data: SendableRecordBatchStream,
         _context: &Arc<TaskContext>,
     ) -> Result<u64> {
         let num_partitions = self.batches.len();
@@ -271,14 +280,10 @@ impl DataSink for MemSink {
         let mut new_batches = vec![vec![]; num_partitions];
         let mut i = 0;
         let mut row_count = 0;
-        let num_parts = data.len();
-        // TODO parallelize outer and inner loops
-        for data_part in data.iter_mut().take(num_parts) {
-            while let Some(batch) = data_part.next().await.transpose()? {
-                row_count += batch.num_rows();
-                new_batches[i].push(batch);
-                i = (i + 1) % num_partitions;
-            }
+        while let Some(batch) = data.next().await.transpose()? {
+            row_count += batch.num_rows();
+            new_batches[i].push(batch);
+            i = (i + 1) % num_partitions;
         }
 
         // write the outputs into the batches

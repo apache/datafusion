@@ -21,11 +21,13 @@ use crate::nullif::SUPPORTED_NULLIF_TYPES;
 use crate::signature::TIMEZONE_WILDCARD;
 use crate::type_coercion::functions::data_types;
 use crate::{
-    conditional_expressions, struct_expressions, utils, Signature, TypeSignature,
-    Volatility,
+    conditional_expressions, struct_expressions, utils, FuncMonotonicity, Signature,
+    TypeSignature, Volatility,
 };
 use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
-use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
+use datafusion_common::{
+    internal_err, plan_datafusion_err, plan_err, DataFusionError, Result,
+};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt;
@@ -552,11 +554,14 @@ impl BuiltinScalarFunction {
 
         // verify that this is a valid set of data types for this function
         data_types(input_expr_types, &self.signature()).map_err(|_| {
-            DataFusionError::Plan(utils::generate_signature_error_msg(
-                &format!("{self}"),
-                self.signature(),
-                input_expr_types,
-            ))
+            plan_datafusion_err!(
+                "{}",
+                utils::generate_signature_error_msg(
+                    &format!("{self}"),
+                    self.signature(),
+                    input_expr_types,
+                )
+            )
         })?;
 
         // the return type of the built in function.
@@ -1159,28 +1164,28 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::DatePart => Signature::one_of(
                 vec![
-                    Exact(vec![Utf8, Date32]),
-                    Exact(vec![Utf8, Date64]),
-                    Exact(vec![Utf8, Timestamp(Second, None)]),
+                    Exact(vec![Utf8, Timestamp(Nanosecond, None)]),
                     Exact(vec![
                         Utf8,
-                        Timestamp(Second, Some(TIMEZONE_WILDCARD.into())),
-                    ]),
-                    Exact(vec![Utf8, Timestamp(Microsecond, None)]),
-                    Exact(vec![
-                        Utf8,
-                        Timestamp(Microsecond, Some(TIMEZONE_WILDCARD.into())),
+                        Timestamp(Nanosecond, Some(TIMEZONE_WILDCARD.into())),
                     ]),
                     Exact(vec![Utf8, Timestamp(Millisecond, None)]),
                     Exact(vec![
                         Utf8,
                         Timestamp(Millisecond, Some(TIMEZONE_WILDCARD.into())),
                     ]),
-                    Exact(vec![Utf8, Timestamp(Nanosecond, None)]),
+                    Exact(vec![Utf8, Timestamp(Microsecond, None)]),
                     Exact(vec![
                         Utf8,
-                        Timestamp(Nanosecond, Some(TIMEZONE_WILDCARD.into())),
+                        Timestamp(Microsecond, Some(TIMEZONE_WILDCARD.into())),
                     ]),
+                    Exact(vec![Utf8, Timestamp(Second, None)]),
+                    Exact(vec![
+                        Utf8,
+                        Timestamp(Second, Some(TIMEZONE_WILDCARD.into())),
+                    ]),
+                    Exact(vec![Utf8, Date64]),
+                    Exact(vec![Utf8, Date32]),
                 ],
                 self.volatility(),
             ),
@@ -1338,6 +1343,47 @@ impl BuiltinScalarFunction {
                     self.volatility(),
                 )
             }
+        }
+    }
+
+    /// This function specifies monotonicity behaviors for built-in scalar functions.
+    /// The list can be extended, only mathematical and datetime functions are
+    /// considered for the initial implementation of this feature.
+    pub fn monotonicity(&self) -> Option<FuncMonotonicity> {
+        if matches!(
+            &self,
+            BuiltinScalarFunction::Atan
+                | BuiltinScalarFunction::Acosh
+                | BuiltinScalarFunction::Asinh
+                | BuiltinScalarFunction::Atanh
+                | BuiltinScalarFunction::Ceil
+                | BuiltinScalarFunction::Degrees
+                | BuiltinScalarFunction::Exp
+                | BuiltinScalarFunction::Factorial
+                | BuiltinScalarFunction::Floor
+                | BuiltinScalarFunction::Ln
+                | BuiltinScalarFunction::Log10
+                | BuiltinScalarFunction::Log2
+                | BuiltinScalarFunction::Radians
+                | BuiltinScalarFunction::Round
+                | BuiltinScalarFunction::Signum
+                | BuiltinScalarFunction::Sinh
+                | BuiltinScalarFunction::Sqrt
+                | BuiltinScalarFunction::Cbrt
+                | BuiltinScalarFunction::Tanh
+                | BuiltinScalarFunction::Trunc
+                | BuiltinScalarFunction::Pi
+        ) {
+            Some(vec![Some(true)])
+        } else if matches!(
+            &self,
+            BuiltinScalarFunction::DateTrunc | BuiltinScalarFunction::DateBin
+        ) {
+            Some(vec![None, Some(true)])
+        } else if *self == BuiltinScalarFunction::Log {
+            Some(vec![Some(true), Some(false)])
+        } else {
+            None
         }
     }
 }
@@ -1534,16 +1580,29 @@ impl FromStr for BuiltinScalarFunction {
     }
 }
 
+/// Creates a function that returns the return type of a string function given
+/// the type of its first argument.
+///
+/// If the input type is `LargeUtf8` or `LargeBinary` the return type is
+/// `$largeUtf8Type`,
+///
+/// If the input type is `Utf8` or `Binary` the return type is `$utf8Type`,
 macro_rules! make_utf8_to_return_type {
     ($FUNC:ident, $largeUtf8Type:expr, $utf8Type:expr) => {
         fn $FUNC(arg_type: &DataType, name: &str) -> Result<DataType> {
             Ok(match arg_type {
-                DataType::LargeUtf8 => $largeUtf8Type,
-                DataType::Utf8 => $utf8Type,
+                DataType::LargeUtf8  => $largeUtf8Type,
+                // LargeBinary inputs are automatically coerced to Utf8
+                DataType::LargeBinary => $largeUtf8Type,
+                DataType::Utf8  => $utf8Type,
+                // Binary inputs are automatically coerced to Utf8
+                DataType::Binary => $utf8Type,
                 DataType::Null => DataType::Null,
                 DataType::Dictionary(_, value_type) => match **value_type {
-                    DataType::LargeUtf8 => $largeUtf8Type,
+                    DataType::LargeUtf8  => $largeUtf8Type,
+                    DataType::LargeBinary => $largeUtf8Type,
                     DataType::Utf8 => $utf8Type,
+                    DataType::Binary => $utf8Type,
                     DataType::Null => DataType::Null,
                     _ => {
                         return plan_err!(
@@ -1564,8 +1623,10 @@ macro_rules! make_utf8_to_return_type {
         }
     };
 }
-
+// `utf8_to_str_type`: returns either a Utf8 or LargeUtf8 based on the input type size.
 make_utf8_to_return_type!(utf8_to_str_type, DataType::LargeUtf8, DataType::Utf8);
+
+// `utf8_to_int_type`: returns either a Int32 or Int64 based on the input type size.
 make_utf8_to_return_type!(utf8_to_int_type, DataType::Int64, DataType::Int32);
 
 fn utf8_or_binary_to_binary_type(arg_type: &DataType, name: &str) -> Result<DataType> {

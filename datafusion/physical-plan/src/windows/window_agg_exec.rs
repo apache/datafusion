@@ -42,6 +42,7 @@ use arrow::{
     datatypes::{Schema, SchemaRef},
     record_batch::RecordBatch,
 };
+use datafusion_common::stats::Precision;
 use datafusion_common::utils::{evaluate_partition_ranges, get_at_indices};
 use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
@@ -59,8 +60,6 @@ pub struct WindowAggExec {
     window_expr: Vec<Arc<dyn WindowExpr>>,
     /// Schema after the window is run
     schema: SchemaRef,
-    /// Schema before the window
-    input_schema: SchemaRef,
     /// Partition Keys
     pub partition_keys: Vec<Arc<dyn PhysicalExpr>>,
     /// Execution metrics
@@ -75,10 +74,9 @@ impl WindowAggExec {
     pub fn try_new(
         window_expr: Vec<Arc<dyn WindowExpr>>,
         input: Arc<dyn ExecutionPlan>,
-        input_schema: SchemaRef,
         partition_keys: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Self> {
-        let schema = create_schema(&input_schema, &window_expr)?;
+        let schema = create_schema(&input.schema(), &window_expr)?;
         let schema = Arc::new(schema);
 
         let ordered_partition_by_indices =
@@ -87,7 +85,6 @@ impl WindowAggExec {
             input,
             window_expr,
             schema,
-            input_schema,
             partition_keys,
             metrics: ExecutionPlanMetricsSet::new(),
             ordered_partition_by_indices,
@@ -102,11 +99,6 @@ impl WindowAggExec {
     /// Input plan
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
-    }
-
-    /// Get the input schema before any window functions are applied
-    pub fn input_schema(&self) -> SchemaRef {
-        self.input_schema.clone()
     }
 
     /// Return the output sort order of partition keys: For example
@@ -230,7 +222,6 @@ impl ExecutionPlan for WindowAggExec {
         Ok(Arc::new(WindowAggExec::try_new(
             self.window_expr.clone(),
             children[0].clone(),
-            self.input_schema.clone(),
             self.partition_keys.clone(),
         )?))
     }
@@ -256,24 +247,22 @@ impl ExecutionPlan for WindowAggExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Statistics {
-        let input_stat = self.input.statistics();
+    fn statistics(&self) -> Result<Statistics> {
+        let input_stat = self.input.statistics()?;
         let win_cols = self.window_expr.len();
-        let input_cols = self.input_schema.fields().len();
+        let input_cols = self.input.schema().fields().len();
         // TODO stats: some windowing function will maintain invariants such as min, max...
         let mut column_statistics = Vec::with_capacity(win_cols + input_cols);
-        if let Some(input_col_stats) = input_stat.column_statistics {
-            column_statistics.extend(input_col_stats);
-        } else {
-            column_statistics.extend(vec![ColumnStatistics::default(); input_cols]);
+        // copy stats of the input to the beginning of the schema.
+        column_statistics.extend(input_stat.column_statistics);
+        for _ in 0..win_cols {
+            column_statistics.push(ColumnStatistics::new_unknown())
         }
-        column_statistics.extend(vec![ColumnStatistics::default(); win_cols]);
-        Statistics {
-            is_exact: input_stat.is_exact,
+        Ok(Statistics {
             num_rows: input_stat.num_rows,
-            column_statistics: Some(column_statistics),
-            total_byte_size: None,
-        }
+            column_statistics,
+            total_byte_size: Precision::Absent,
+        })
     }
 }
 

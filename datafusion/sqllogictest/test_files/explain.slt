@@ -184,6 +184,7 @@ logical_plan after inline_table_scan SAME TEXT AS ABOVE
 logical_plan after type_coercion SAME TEXT AS ABOVE
 logical_plan after count_wildcard_rule SAME TEXT AS ABOVE
 analyzed_logical_plan SAME TEXT AS ABOVE
+logical_plan after eliminate_nested_union SAME TEXT AS ABOVE
 logical_plan after simplify_expressions SAME TEXT AS ABOVE
 logical_plan after unwrap_cast_in_comparison SAME TEXT AS ABOVE
 logical_plan after replace_distinct_aggregate SAME TEXT AS ABOVE
@@ -200,6 +201,7 @@ logical_plan after eliminate_cross_join SAME TEXT AS ABOVE
 logical_plan after common_sub_expression_eliminate SAME TEXT AS ABOVE
 logical_plan after eliminate_limit SAME TEXT AS ABOVE
 logical_plan after propagate_empty_relation SAME TEXT AS ABOVE
+logical_plan after eliminate_one_union SAME TEXT AS ABOVE
 logical_plan after filter_null_join_keys SAME TEXT AS ABOVE
 logical_plan after eliminate_outer_join SAME TEXT AS ABOVE
 logical_plan after push_down_limit SAME TEXT AS ABOVE
@@ -214,6 +216,7 @@ Projection: simple_explain_test.a, simple_explain_test.b, simple_explain_test.c
 logical_plan after eliminate_projection TableScan: simple_explain_test projection=[a, b, c]
 logical_plan after push_down_limit SAME TEXT AS ABOVE
 logical_plan after RemoveUnusedColumns SAME TEXT AS ABOVE
+logical_plan after eliminate_nested_union SAME TEXT AS ABOVE
 logical_plan after simplify_expressions SAME TEXT AS ABOVE
 logical_plan after unwrap_cast_in_comparison SAME TEXT AS ABOVE
 logical_plan after replace_distinct_aggregate SAME TEXT AS ABOVE
@@ -230,6 +233,7 @@ logical_plan after eliminate_cross_join SAME TEXT AS ABOVE
 logical_plan after common_sub_expression_eliminate SAME TEXT AS ABOVE
 logical_plan after eliminate_limit SAME TEXT AS ABOVE
 logical_plan after propagate_empty_relation SAME TEXT AS ABOVE
+logical_plan after eliminate_one_union SAME TEXT AS ABOVE
 logical_plan after filter_null_join_keys SAME TEXT AS ABOVE
 logical_plan after eliminate_outer_join SAME TEXT AS ABOVE
 logical_plan after push_down_limit SAME TEXT AS ABOVE
@@ -271,8 +275,8 @@ query TT
 EXPLAIN SELECT a, b, c FROM simple_explain_test limit 10;
 ----
 physical_plan
-GlobalLimitExec: skip=0, fetch=10, statistics=[rows=10, bytes=None, exact=false]
---CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a, b, c], limit=10, has_header=true, statistics=[]
+GlobalLimitExec: skip=0, fetch=10, statistics=[Rows=Exact(10), Bytes=Absent]
+--CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a, b, c], limit=10, has_header=true, statistics=[Rows=Absent, Bytes=Absent]
 
 # Parquet scan with statistics collected
 statement ok
@@ -285,8 +289,8 @@ query TT
 EXPLAIN SELECT * FROM alltypes_plain limit 10;
 ----
 physical_plan
-GlobalLimitExec: skip=0, fetch=10, statistics=[rows=8, bytes=None, exact=true]
---ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id, bool_col, tinyint_col, smallint_col, int_col, bigint_col, float_col, double_col, date_string_col, string_col, timestamp_col], limit=10, statistics=[rows=8, bytes=None, exact=true]
+GlobalLimitExec: skip=0, fetch=10, statistics=[Rows=Exact(8), Bytes=Absent]
+--ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id, bool_col, tinyint_col, smallint_col, int_col, bigint_col, float_col, double_col, date_string_col, string_col, timestamp_col], limit=10, statistics=[Rows=Exact(8), Bytes=Absent]
 
 statement ok
 set datafusion.execution.collect_statistics = false;

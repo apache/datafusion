@@ -23,6 +23,7 @@ use std::fmt::{Display, Formatter};
 use std::ops::Deref;
 use std::vec::IntoIter;
 
+use crate::error::_plan_err;
 use crate::{DFSchema, DFSchemaRef, DataFusionError, JoinType, Result};
 
 use crate::utils::{merge_and_order_indices, set_difference};
@@ -96,18 +97,18 @@ impl Constraints {
                         Constraint::Unique(indices)
                     })
                 }
-                TableConstraint::ForeignKey { .. } => Err(DataFusionError::Plan(
-                    "Foreign key constraints are not currently supported".to_string(),
-                )),
-                TableConstraint::Check { .. } => Err(DataFusionError::Plan(
-                    "Check constraints are not currently supported".to_string(),
-                )),
-                TableConstraint::Index { .. } => Err(DataFusionError::Plan(
-                    "Indexes are not currently supported".to_string(),
-                )),
-                TableConstraint::FulltextOrSpatial { .. } => Err(DataFusionError::Plan(
-                    "Indexes are not currently supported".to_string(),
-                )),
+                TableConstraint::ForeignKey { .. } => {
+                    _plan_err!("Foreign key constraints are not currently supported")
+                }
+                TableConstraint::Check { .. } => {
+                    _plan_err!("Check constraints are not currently supported")
+                }
+                TableConstraint::Index { .. } => {
+                    _plan_err!("Indexes are not currently supported")
+                }
+                TableConstraint::FulltextOrSpatial { .. } => {
+                    _plan_err!("Indexes are not currently supported")
+                }
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(Constraints::new_unverified(constraints))

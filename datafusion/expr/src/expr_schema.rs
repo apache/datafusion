@@ -27,8 +27,8 @@ use crate::{LogicalPlan, Projection, Subquery};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{
-    internal_err, plan_err, Column, DFField, DFSchema, DataFusionError, ExprSchema,
-    Result,
+    internal_err, plan_datafusion_err, plan_err, Column, DFField, DFSchema,
+    DataFusionError, ExprSchema, Result,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -140,9 +140,7 @@ impl ExprSchemable for Expr {
             Expr::Like { .. } | Expr::SimilarTo { .. } => Ok(DataType::Boolean),
             Expr::Placeholder(Placeholder { data_type, .. }) => {
                 data_type.clone().ok_or_else(|| {
-                    DataFusionError::Plan(
-                        "Placeholder type could not be resolved".to_owned(),
-                    )
+                    plan_datafusion_err!("Placeholder type could not be resolved")
                 })
             }
             Expr::Wildcard => {

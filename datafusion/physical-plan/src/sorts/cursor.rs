@@ -15,20 +15,113 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::sorts::sort::SortOptions;
-use arrow::buffer::ScalarBuffer;
-use arrow::datatypes::ArrowNativeTypeOp;
-use arrow::row::{Row, Rows};
-use arrow_array::types::ByteArrayType;
-use arrow_array::{Array, ArrowPrimitiveType, GenericByteArray, PrimitiveArray};
-use datafusion_execution::memory_pool::MemoryReservation;
 use std::cmp::Ordering;
 
-/// A [`Cursor`] for [`Rows`]
-pub struct RowCursor {
-    cur_row: usize,
-    num_rows: usize,
+use arrow::buffer::ScalarBuffer;
+use arrow::compute::SortOptions;
+use arrow::datatypes::ArrowNativeTypeOp;
+use arrow::row::Rows;
+use arrow_array::types::ByteArrayType;
+use arrow_array::{
+    Array, ArrowPrimitiveType, GenericByteArray, OffsetSizeTrait, PrimitiveArray,
+};
+use arrow_buffer::{Buffer, OffsetBuffer};
+use datafusion_execution::memory_pool::MemoryReservation;
 
+/// A comparable collection of values for use with [`Cursor`]
+///
+/// This is a trait as there are several specialized implementations, such as for
+/// single columns or for normalized multi column keys ([`Rows`])
+pub trait CursorValues {
+    fn len(&self) -> usize;
+
+    /// Returns true if `l[l_idx] == r[r_idx]`
+    fn eq(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> bool;
+
+    /// Returns comparison of `l[l_idx]` and `r[r_idx]`
+    fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering;
+}
+
+/// A comparable cursor, used by sort operations
+///
+/// A `Cursor` is a pointer into a collection of rows, stored in
+/// [`CursorValues`]
+///
+/// ```text
+///
+/// ┌───────────────────────┐
+/// │                       │           ┌──────────────────────┐
+/// │ ┌─────────┐ ┌─────┐   │    ─ ─ ─ ─│      Cursor<T>       │
+/// │ │    1    │ │  A  │   │   │       └──────────────────────┘
+/// │ ├─────────┤ ├─────┤   │
+/// │ │    2    │ │  A  │◀─ ┼ ─ ┘          Cursor<T> tracks an
+/// │ └─────────┘ └─────┘   │                offset within a
+/// │     ...       ...     │                  CursorValues
+/// │                       │
+/// │ ┌─────────┐ ┌─────┐   │
+/// │ │    3    │ │  E  │   │
+/// │ └─────────┘ └─────┘   │
+/// │                       │
+/// │     CursorValues      │
+/// └───────────────────────┘
+///
+///
+/// Store logical rows using
+/// one of several  formats,
+/// with specialized
+/// implementations
+/// depending on the column
+/// types
+#[derive(Debug)]
+pub struct Cursor<T: CursorValues> {
+    offset: usize,
+    values: T,
+}
+
+impl<T: CursorValues> Cursor<T> {
+    /// Create a [`Cursor`] from the given [`CursorValues`]
+    pub fn new(values: T) -> Self {
+        Self { offset: 0, values }
+    }
+
+    /// Returns true if there are no more rows in this cursor
+    pub fn is_finished(&self) -> bool {
+        self.offset == self.values.len()
+    }
+
+    /// Advance the cursor, returning the previous row index
+    pub fn advance(&mut self) -> usize {
+        let t = self.offset;
+        self.offset += 1;
+        t
+    }
+}
+
+impl<T: CursorValues> PartialEq for Cursor<T> {
+    fn eq(&self, other: &Self) -> bool {
+        T::eq(&self.values, self.offset, &other.values, other.offset)
+    }
+}
+
+impl<T: CursorValues> Eq for Cursor<T> {}
+
+impl<T: CursorValues> PartialOrd for Cursor<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<T: CursorValues> Ord for Cursor<T> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        T::compare(&self.values, self.offset, &other.values, other.offset)
+    }
+}
+
+/// Implements [`CursorValues`] for [`Rows`]
+///
+/// Used for sorting when there are multiple columns in the sort key
+#[derive(Debug)]
+pub struct RowValues {
     rows: Rows,
 
     /// Tracks for the memory used by in the `Rows` of this
@@ -37,103 +130,45 @@ pub struct RowCursor {
     reservation: MemoryReservation,
 }
 
-impl std::fmt::Debug for RowCursor {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_struct("SortKeyCursor")
-            .field("cur_row", &self.cur_row)
-            .field("num_rows", &self.num_rows)
-            .finish()
-    }
-}
-
-impl RowCursor {
-    /// Create a new SortKeyCursor from `rows` and a `reservation`
-    /// that tracks its memory.
+impl RowValues {
+    /// Create a new [`RowValues`] from `rows` and a `reservation`
+    /// that tracks its memory. There must be at least one row
     ///
-    /// Panic's if the reservation is not for exactly `rows.size()`
-    /// bytes
+    /// Panics if the reservation is not for exactly `rows.size()`
+    /// bytes or if `rows` is empty.
     pub fn new(rows: Rows, reservation: MemoryReservation) -> Self {
         assert_eq!(
             rows.size(),
             reservation.size(),
             "memory reservation mismatch"
         );
-        Self {
-            cur_row: 0,
-            num_rows: rows.num_rows(),
-            rows,
-            reservation,
-        }
-    }
-
-    /// Returns the current row
-    fn current(&self) -> Row<'_> {
-        self.rows.row(self.cur_row)
+        assert!(rows.num_rows() > 0);
+        Self { rows, reservation }
     }
 }
 
-impl PartialEq for RowCursor {
-    fn eq(&self, other: &Self) -> bool {
-        self.current() == other.current()
+impl CursorValues for RowValues {
+    fn len(&self) -> usize {
+        self.rows.num_rows()
+    }
+
+    fn eq(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> bool {
+        l.rows.row(l_idx) == r.rows.row(r_idx)
+    }
+
+    fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering {
+        l.rows.row(l_idx).cmp(&r.rows.row(r_idx))
     }
 }
 
-impl Eq for RowCursor {}
-
-impl PartialOrd for RowCursor {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for RowCursor {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.current().cmp(&other.current())
-    }
-}
-
-/// A cursor into a sorted batch of rows
-pub trait Cursor: Ord {
-    /// Returns true if there are no more rows in this cursor
-    fn is_finished(&self) -> bool;
-
-    /// Advance the cursor, returning the previous row index
-    fn advance(&mut self) -> usize;
-}
-
-impl Cursor for RowCursor {
-    #[inline]
-    fn is_finished(&self) -> bool {
-        self.num_rows == self.cur_row
-    }
-
-    #[inline]
-    fn advance(&mut self) -> usize {
-        let t = self.cur_row;
-        self.cur_row += 1;
-        t
-    }
-}
-
-/// An [`Array`] that can be converted into [`FieldValues`]
-pub trait FieldArray: Array + 'static {
-    type Values: FieldValues;
+/// An [`Array`] that can be converted into [`CursorValues`]
+pub trait CursorArray: Array + 'static {
+    type Values: CursorValues;
 
     fn values(&self) -> Self::Values;
 }
 
-/// A comparable set of non-nullable values
-pub trait FieldValues {
-    type Value: ?Sized;
-
-    fn len(&self) -> usize;
-
-    fn compare(a: &Self::Value, b: &Self::Value) -> Ordering;
-
-    fn value(&self, idx: usize) -> &Self::Value;
-}
-
-impl<T: ArrowPrimitiveType> FieldArray for PrimitiveArray<T> {
+impl<T: ArrowPrimitiveType> CursorArray for PrimitiveArray<T> {
     type Values = PrimitiveValues<T::Native>;
 
     fn values(&self) -> Self::Values {
@@ -144,71 +179,81 @@ impl<T: ArrowPrimitiveType> FieldArray for PrimitiveArray<T> {
 #[derive(Debug)]
 pub struct PrimitiveValues<T: ArrowNativeTypeOp>(ScalarBuffer<T>);
 
-impl<T: ArrowNativeTypeOp> FieldValues for PrimitiveValues<T> {
-    type Value = T;
-
+impl<T: ArrowNativeTypeOp> CursorValues for PrimitiveValues<T> {
     fn len(&self) -> usize {
         self.0.len()
     }
 
-    #[inline]
-    fn compare(a: &Self::Value, b: &Self::Value) -> Ordering {
-        T::compare(*a, *b)
+    fn eq(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> bool {
+        l.0[l_idx].is_eq(r.0[r_idx])
     }
 
-    #[inline]
-    fn value(&self, idx: usize) -> &Self::Value {
-        &self.0[idx]
+    fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering {
+        l.0[l_idx].compare(r.0[r_idx])
     }
 }
 
-impl<T: ByteArrayType> FieldArray for GenericByteArray<T> {
-    type Values = Self;
+pub struct ByteArrayValues<T: OffsetSizeTrait> {
+    offsets: OffsetBuffer<T>,
+    values: Buffer,
+}
+
+impl<T: OffsetSizeTrait> ByteArrayValues<T> {
+    fn value(&self, idx: usize) -> &[u8] {
+        assert!(idx < self.len());
+        // Safety: offsets are valid and checked bounds above
+        unsafe {
+            let start = self.offsets.get_unchecked(idx).as_usize();
+            let end = self.offsets.get_unchecked(idx + 1).as_usize();
+            self.values.get_unchecked(start..end)
+        }
+    }
+}
+
+impl<T: OffsetSizeTrait> CursorValues for ByteArrayValues<T> {
+    fn len(&self) -> usize {
+        self.offsets.len() - 1
+    }
+
+    fn eq(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> bool {
+        l.value(l_idx) == r.value(r_idx)
+    }
+
+    fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering {
+        l.value(l_idx).cmp(r.value(r_idx))
+    }
+}
+
+impl<T: ByteArrayType> CursorArray for GenericByteArray<T> {
+    type Values = ByteArrayValues<T::Offset>;
 
     fn values(&self) -> Self::Values {
-        // Once https://github.com/apache/arrow-rs/pull/4048 is released
-        // Could potentially destructure array into buffers to reduce codegen,
-        // in a similar vein to what is done for PrimitiveArray
-        self.clone()
+        ByteArrayValues {
+            offsets: self.offsets().clone(),
+            values: self.values().clone(),
+        }
     }
 }
 
-impl<T: ByteArrayType> FieldValues for GenericByteArray<T> {
-    type Value = T::Native;
-
-    fn len(&self) -> usize {
-        Array::len(self)
-    }
-
-    #[inline]
-    fn compare(a: &Self::Value, b: &Self::Value) -> Ordering {
-        let a: &[u8] = a.as_ref();
-        let b: &[u8] = b.as_ref();
-        a.cmp(b)
-    }
-
-    #[inline]
-    fn value(&self, idx: usize) -> &Self::Value {
-        self.value(idx)
-    }
-}
-
-/// A cursor over sorted, nullable [`FieldValues`]
+/// A collection of sorted, nullable [`CursorValues`]
 ///
 /// Note: comparing cursors with different `SortOptions` will yield an arbitrary ordering
 #[derive(Debug)]
-pub struct FieldCursor<T: FieldValues> {
+pub struct ArrayValues<T: CursorValues> {
     values: T,
-    offset: usize,
     // If nulls first, the first non-null index
     // Otherwise, the first null index
     null_threshold: usize,
     options: SortOptions,
 }
 
-impl<T: FieldValues> FieldCursor<T> {
-    /// Create a new [`FieldCursor`] from the provided `values` sorted according to `options`
-    pub fn new<A: FieldArray<Values = T>>(options: SortOptions, array: &A) -> Self {
+impl<T: CursorValues> ArrayValues<T> {
+    /// Create a new [`ArrayValues`] from the provided `values` sorted according
+    /// to `options`.
+    ///
+    /// Panics if the array is empty
+    pub fn new<A: CursorArray<Values = T>>(options: SortOptions, array: &A) -> Self {
+        assert!(array.len() > 0, "Empty array passed to FieldCursor");
         let null_threshold = match options.nulls_first {
             true => array.null_count(),
             false => array.len() - array.null_count(),
@@ -216,64 +261,45 @@ impl<T: FieldValues> FieldCursor<T> {
 
         Self {
             values: array.values(),
-            offset: 0,
             null_threshold,
             options,
         }
     }
 
-    fn is_null(&self) -> bool {
-        (self.offset < self.null_threshold) == self.options.nulls_first
+    fn is_null(&self, idx: usize) -> bool {
+        (idx < self.null_threshold) == self.options.nulls_first
     }
 }
 
-impl<T: FieldValues> PartialEq for FieldCursor<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.cmp(other).is_eq()
+impl<T: CursorValues> CursorValues for ArrayValues<T> {
+    fn len(&self) -> usize {
+        self.values.len()
     }
-}
 
-impl<T: FieldValues> Eq for FieldCursor<T> {}
-impl<T: FieldValues> PartialOrd for FieldCursor<T> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
+    fn eq(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> bool {
+        match (l.is_null(l_idx), r.is_null(r_idx)) {
+            (true, true) => true,
+            (false, false) => T::eq(&l.values, l_idx, &r.values, r_idx),
+            _ => false,
+        }
     }
-}
 
-impl<T: FieldValues> Ord for FieldCursor<T> {
-    fn cmp(&self, other: &Self) -> Ordering {
-        match (self.is_null(), other.is_null()) {
+    fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering {
+        match (l.is_null(l_idx), r.is_null(r_idx)) {
             (true, true) => Ordering::Equal,
-            (true, false) => match self.options.nulls_first {
+            (true, false) => match l.options.nulls_first {
                 true => Ordering::Less,
                 false => Ordering::Greater,
             },
-            (false, true) => match self.options.nulls_first {
+            (false, true) => match l.options.nulls_first {
                 true => Ordering::Greater,
                 false => Ordering::Less,
             },
-            (false, false) => {
-                let s_v = self.values.value(self.offset);
-                let o_v = other.values.value(other.offset);
-
-                match self.options.descending {
-                    true => T::compare(o_v, s_v),
-                    false => T::compare(s_v, o_v),
-                }
-            }
+            (false, false) => match l.options.descending {
+                true => T::compare(&r.values, r_idx, &l.values, l_idx),
+                false => T::compare(&l.values, l_idx, &r.values, r_idx),
+            },
         }
-    }
-}
-
-impl<T: FieldValues> Cursor for FieldCursor<T> {
-    fn is_finished(&self) -> bool {
-        self.offset == self.values.len()
-    }
-
-    fn advance(&mut self) -> usize {
-        let t = self.offset;
-        self.offset += 1;
-        t
     }
 }
 
@@ -285,18 +311,19 @@ mod tests {
         options: SortOptions,
         values: ScalarBuffer<i32>,
         null_count: usize,
-    ) -> FieldCursor<PrimitiveValues<i32>> {
+    ) -> Cursor<ArrayValues<PrimitiveValues<i32>>> {
         let null_threshold = match options.nulls_first {
             true => null_count,
             false => values.len() - null_count,
         };
 
-        FieldCursor {
-            offset: 0,
+        let values = ArrayValues {
             values: PrimitiveValues(values),
             null_threshold,
             options,
-        }
+        };
+
+        Cursor::new(values)
     }
 
     #[test]

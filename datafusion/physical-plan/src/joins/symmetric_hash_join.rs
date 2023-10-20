@@ -18,11 +18,11 @@
 //! This file implements the symmetric hash join algorithm with range-based
 //! data pruning to join two (potentially infinite) streams.
 //!
-//! A [SymmetricHashJoinExec] plan takes two children plan (with appropriate
+//! A [`SymmetricHashJoinExec`] plan takes two children plan (with appropriate
 //! output ordering) and produces the join output according to the given join
 //! type and other options.
 //!
-//! This plan uses the [OneSideHashJoiner] object to facilitate join calculations
+//! This plan uses the [`OneSideHashJoiner`] object to facilitate join calculations
 //! for both its children.
 
 use std::fmt;
@@ -38,23 +38,19 @@ use crate::joins::hash_join_utils::{
     calculate_filter_expr_intervals, combine_two_batches,
     convert_sort_expr_with_filter_schema, get_pruning_anti_indices,
     get_pruning_semi_indices, record_visited_indices, PruningJoinHashMap,
+    SortedFilterExpr,
 };
-use crate::joins::StreamJoinPartitionMode;
-use crate::DisplayAs;
+use crate::joins::utils::{
+    build_batch_from_indices, build_join_schema, check_join_is_valid,
+    combine_join_equivalence_properties, partitioned_join_output_partitioning,
+    prepare_sorted_exprs, ColumnIndex, JoinFilter, JoinOn, JoinSide,
+};
 use crate::{
-    expressions::Column,
-    expressions::PhysicalSortExpr,
-    joins::{
-        hash_join_utils::SortedFilterExpr,
-        utils::{
-            build_batch_from_indices, build_join_schema, check_join_is_valid,
-            combine_join_equivalence_properties, partitioned_join_output_partitioning,
-            ColumnIndex, JoinFilter, JoinOn, JoinSide,
-        },
-    },
+    expressions::{Column, PhysicalSortExpr},
+    joins::StreamJoinPartitionMode,
     metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
-    DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan, Partitioning,
-    RecordBatchStream, SendableRecordBatchStream, Statistics,
+    DisplayAs, DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan,
+    Partitioning, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
 use arrow::array::{ArrowPrimitiveType, NativeAdapter, PrimitiveArray, PrimitiveBuilder};
@@ -62,13 +58,11 @@ use arrow::compute::concat_batches;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::bisect;
-use datafusion_common::{internal_err, plan_err, JoinType};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{internal_err, plan_err, DataFusionError, JoinType, Result};
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::intervals::ExprIntervalGraph;
 
-use crate::joins::utils::prepare_sorted_exprs;
 use ahash::RandomState;
 use futures::stream::{select, BoxStream};
 use futures::{Stream, StreamExt};
@@ -467,9 +461,9 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Result<Statistics> {
         // TODO stats: it is not possible in general to know the output size of joins
-        Statistics::default()
+        Ok(Statistics::new_unknown(&self.schema()))
     }
 
     fn execute(
@@ -1204,17 +1198,11 @@ impl SymmetricHashJoinStream {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
     use super::*;
-    use arrow::compute::SortOptions;
-    use arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
-    use datafusion_execution::config::SessionConfig;
-    use rstest::*;
-
-    use datafusion_expr::Operator;
-    use datafusion_physical_expr::expressions::{binary, col, Column};
-
     use crate::joins::hash_join_utils::tests::complicated_filter;
-
     use crate::joins::test_utils::{
         build_sides_record_batches, compare_batches, create_memory_table,
         join_expr_tests_fixture_f64, join_expr_tests_fixture_i32,
@@ -1222,11 +1210,16 @@ mod tests {
         partitioned_sym_join_with_filter, split_record_batches,
     };
 
-    const TABLE_SIZE: i32 = 30;
+    use arrow::compute::SortOptions;
+    use arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
+    use datafusion_execution::config::SessionConfig;
+    use datafusion_expr::Operator;
+    use datafusion_physical_expr::expressions::{binary, col, Column};
 
     use once_cell::sync::Lazy;
-    use std::collections::HashMap;
-    use std::sync::Mutex;
+    use rstest::*;
+
+    const TABLE_SIZE: i32 = 30;
 
     type TableKey = (i32, i32, usize); // (cardinality.0, cardinality.1, batch_size)
     type TableValue = (Vec<RecordBatch>, Vec<RecordBatch>); // (left, right)

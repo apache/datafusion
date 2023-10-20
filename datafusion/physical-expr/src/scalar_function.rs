@@ -30,7 +30,6 @@
 //! to a function that supports f64, it is coerced to f64.
 
 use crate::functions::out_ordering;
-use crate::functions::FuncMonotonicity;
 use crate::physical_expr::down_cast_any_ref;
 use crate::sort_properties::SortProperties;
 use crate::utils::expr_list_eq_strict_order;
@@ -41,6 +40,7 @@ use datafusion_common::Result;
 use datafusion_expr::expr_vec_fmt;
 use datafusion_expr::BuiltinScalarFunction;
 use datafusion_expr::ColumnarValue;
+use datafusion_expr::FuncMonotonicity;
 use datafusion_expr::ScalarFunctionImplementation;
 use std::any::Any;
 use std::fmt::Debug;

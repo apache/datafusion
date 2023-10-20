@@ -24,6 +24,8 @@ pub mod eliminate_duplicated_expr;
 pub mod eliminate_filter;
 pub mod eliminate_join;
 pub mod eliminate_limit;
+pub mod eliminate_nested_union;
+pub mod eliminate_one_union;
 pub mod eliminate_outer_join;
 pub mod eliminate_project;
 pub mod extract_equijoin_predicate;

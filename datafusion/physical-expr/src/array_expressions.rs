@@ -18,7 +18,7 @@
 //! Array expressions
 
 use arrow::array::*;
-use arrow::buffer::{Buffer, OffsetBuffer};
+use arrow::buffer::OffsetBuffer;
 use arrow::compute;
 use arrow::datatypes::{DataType, Field, UInt64Type};
 use arrow_buffer::NullBuffer;
@@ -261,12 +261,6 @@ macro_rules! call_array_function {
     }};
 }
 
-#[derive(Debug)]
-enum ListOrNull<'a> {
-    List(&'a dyn Array),
-    Null,
-}
-
 /// Convert one or more [`ArrayRef`] of the same type into a
 /// `ListArray`
 ///
@@ -315,64 +309,66 @@ fn array_array(args: &[ArrayRef], data_type: DataType) -> Result<ArrayRef> {
 
     let res = match data_type {
         DataType::List(..) => {
-            let mut arrays = vec![];
-            let mut row_count = 0;
-
-            for arg in args {
-                let list_arr = arg.as_list_opt::<i32>();
-                if let Some(list_arr) = list_arr {
-                    // Assume number of rows is the same for all arrays
-                    row_count = list_arr.len();
-                    arrays.push(ListOrNull::List(list_arr));
-                } else if arg.as_any().downcast_ref::<NullArray>().is_some() {
-                    arrays.push(ListOrNull::Null);
-                } else {
-                    return internal_err!("Unsupported argument type for array");
-                }
-            }
-
-            let mut total_capacity = 0;
-            let mut array_data = vec![];
-            for arr in arrays.iter() {
-                if let ListOrNull::List(arr) = arr {
-                    total_capacity += arr.len();
-                    array_data.push(arr.to_data());
-                }
-            }
-            let capacity = Capacities::Array(total_capacity);
-            let array_data = array_data.iter().collect();
-
-            let mut mutable =
-                MutableArrayData::with_capacities(array_data, true, capacity);
-
-            for i in 0..row_count {
-                let mut nulls = 0;
-                for (j, arr) in arrays.iter().enumerate() {
-                    match arr {
-                        ListOrNull::List(_) => {
-                            mutable.extend(j - nulls, i, i + 1);
-                        }
-                        ListOrNull::Null => {
-                            mutable.extend_nulls(1);
-                            nulls += 1;
-                        }
+            let row_count = args[0].len();
+            let column_count = args.len();
+            let mut list_arrays = vec![];
+            let mut list_array_lengths = vec![];
+            let mut list_valid = BooleanBufferBuilder::new(row_count);
+            // Construct ListArray per row
+            for index in 0..row_count {
+                let mut arrays = vec![];
+                let mut array_lengths = vec![];
+                let mut valid = BooleanBufferBuilder::new(column_count);
+                for arg in args {
+                    if arg.as_any().downcast_ref::<NullArray>().is_some() {
+                        array_lengths.push(0);
+                        valid.append(false);
+                    } else {
+                        let list_arr = as_list_array(arg)?;
+                        let arr = list_arr.value(index);
+                        array_lengths.push(arr.len());
+                        arrays.push(arr);
+                        valid.append(true);
                     }
                 }
+                if arrays.is_empty() {
+                    list_valid.append(false);
+                    list_array_lengths.push(0);
+                } else {
+                    let buffer = valid.finish();
+                    // Assume all list arrays have the same data type
+                    let data_type = arrays[0].data_type();
+                    let field = Arc::new(Field::new("item", data_type.to_owned(), true));
+                    let elements = arrays.iter().map(|x| x.as_ref()).collect::<Vec<_>>();
+                    let values = arrow::compute::concat(elements.as_slice())?;
+                    let list_arr = ListArray::new(
+                        field,
+                        OffsetBuffer::from_lengths(array_lengths),
+                        values,
+                        Some(NullBuffer::new(buffer)),
+                    );
+                    list_valid.append(true);
+                    list_array_lengths.push(list_arr.len());
+                    list_arrays.push(list_arr);
+                }
             }
-
-            let list_data_type =
-                DataType::List(Arc::new(Field::new("item", data_type, true)));
-
-            let offsets: Vec<i32> = (0..row_count as i32 + 1)
-                .map(|i| i * arrays.len() as i32)
-                .collect();
-
-            let list_data = ArrayData::builder(list_data_type)
-                .len(row_count)
-                .buffers(vec![Buffer::from_vec(offsets)])
-                .add_child_data(mutable.freeze())
-                .build()?;
-            Arc::new(ListArray::from(list_data))
+            // Construct ListArray for all rows
+            let buffer = list_valid.finish();
+            // Assume all list arrays have the same data type
+            let data_type = list_arrays[0].data_type();
+            let field = Arc::new(Field::new("item", data_type.to_owned(), true));
+            let elements = list_arrays
+                .iter()
+                .map(|x| x as &dyn Array)
+                .collect::<Vec<_>>();
+            let values = arrow::compute::concat(elements.as_slice())?;
+            let list_arr = ListArray::new(
+                field,
+                OffsetBuffer::from_lengths(list_array_lengths),
+                values,
+                Some(NullBuffer::new(buffer)),
+            );
+            Arc::new(list_arr)
         }
         DataType::Utf8 => array!(args, StringArray, StringBuilder),
         DataType::LargeUtf8 => array!(args, LargeStringArray, LargeStringBuilder),
@@ -399,7 +395,7 @@ fn array_array(args: &[ArrayRef], data_type: DataType) -> Result<ArrayRef> {
 /// `ListArray`
 ///
 /// See [`array_array`] for more details.
-fn array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
+fn array(values: &[ColumnarValue]) -> Result<ArrayRef> {
     let arrays: Vec<ArrayRef> = values
         .iter()
         .map(|x| match x {
@@ -421,10 +417,10 @@ fn array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
 
     match data_type {
         // empty array
-        None => Ok(ColumnarValue::Scalar(ScalarValue::new_list(
-            Some(vec![]),
-            DataType::Null,
-        ))),
+        None => {
+            let list_arr = ScalarValue::new_list(&[], &DataType::Null);
+            Ok(Arc::new(list_arr))
+        }
         // all nulls, set default data type as int32
         Some(DataType::Null) => {
             let nulls = arrays.len();
@@ -433,14 +429,9 @@ fn array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
             let offsets = OffsetBuffer::from_lengths([nulls]);
             let values = Arc::new(null_arr) as ArrayRef;
             let nulls = None;
-            Ok(ColumnarValue::Array(Arc::new(ListArray::new(
-                field, offsets, values, nulls,
-            ))))
+            Ok(Arc::new(ListArray::new(field, offsets, values, nulls)))
         }
-        Some(data_type) => Ok(ColumnarValue::Array(array_array(
-            arrays.as_slice(),
-            data_type,
-        )?)),
+        Some(data_type) => Ok(array_array(arrays.as_slice(), data_type)?),
     }
 }
 
@@ -450,11 +441,7 @@ pub fn make_array(arrays: &[ArrayRef]) -> Result<ArrayRef> {
         .iter()
         .map(|x| ColumnarValue::Array(x.clone()))
         .collect();
-
-    match array(values.as_slice())? {
-        ColumnarValue::Array(array) => Ok(array),
-        ColumnarValue::Scalar(scalar) => Ok(scalar.to_array().clone()),
-    }
+    array(values.as_slice())
 }
 
 fn return_empty(return_null: bool, data_type: DataType) -> Arc<dyn Array> {
@@ -675,9 +662,7 @@ pub fn array_append(args: &[ArrayRef]) -> Result<ArrayRef> {
     check_datatypes("array_append", &[arr.values(), element])?;
     let res = match arr.value_type() {
         DataType::List(_) => concat_internal(args)?,
-        DataType::Null => {
-            return Ok(array(&[ColumnarValue::Array(args[1].clone())])?.into_array(1))
-        }
+        DataType::Null => return array(&[ColumnarValue::Array(args[1].clone())]),
         data_type => {
             macro_rules! array_function {
                 ($ARRAY_TYPE:ident) => {
@@ -751,9 +736,7 @@ pub fn array_prepend(args: &[ArrayRef]) -> Result<ArrayRef> {
     check_datatypes("array_prepend", &[element, arr.values()])?;
     let res = match arr.value_type() {
         DataType::List(_) => concat_internal(args)?,
-        DataType::Null => {
-            return Ok(array(&[ColumnarValue::Array(args[0].clone())])?.into_array(1))
-        }
+        DataType::Null => return array(&[ColumnarValue::Array(args[0].clone())]),
         data_type => {
             macro_rules! array_function {
                 ($ARRAY_TYPE:ident) => {
@@ -1641,7 +1624,7 @@ fn flatten_internal(
     indexes: Option<OffsetBuffer<i32>>,
 ) -> Result<ListArray> {
     let list_arr = as_list_array(array)?;
-    let (field, offsets, values, nulls) = list_arr.clone().into_parts();
+    let (field, offsets, values, _) = list_arr.clone().into_parts();
     let data_type = field.data_type();
 
     match data_type {
@@ -1658,7 +1641,7 @@ fn flatten_internal(
         _ => {
             if let Some(indexes) = indexes {
                 let offsets = get_offsets_for_flatten(offsets, indexes);
-                let list_arr = ListArray::new(field, offsets, values, nulls);
+                let list_arr = ListArray::new(field, offsets, values, None);
                 Ok(list_arr)
             } else {
                 Ok(list_arr.clone())
@@ -1979,9 +1962,7 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
             ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
         ];
-        let array = array(&args)
-            .expect("failed to initialize function array")
-            .into_array(1);
+        let array = array(&args).expect("failed to initialize function array");
         let result = as_list_array(&array).expect("failed to initialize function array");
         assert_eq!(result.len(), 1);
         assert_eq!(
@@ -2003,9 +1984,7 @@ mod tests {
             ColumnarValue::Array(Arc::new(Int64Array::from(vec![3, 4]))),
             ColumnarValue::Array(Arc::new(Int64Array::from(vec![5, 6]))),
         ];
-        let array = array(&args)
-            .expect("failed to initialize function array")
-            .into_array(1);
+        let array = array(&args).expect("failed to initialize function array");
         let result = as_list_array(&array).expect("failed to initialize function array");
         assert_eq!(result.len(), 2);
         assert_eq!(
@@ -3322,9 +3301,7 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
             ColumnarValue::Scalar(ScalarValue::Int64(Some(4))),
         ];
-        let result = array(&args)
-            .expect("failed to initialize function array")
-            .into_array(1);
+        let result = array(&args).expect("failed to initialize function array");
         ColumnarValue::Array(result.clone())
     }
 
@@ -3336,9 +3313,7 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Int64(Some(13))),
             ColumnarValue::Scalar(ScalarValue::Int64(Some(14))),
         ];
-        let result = array(&args)
-            .expect("failed to initialize function array")
-            .into_array(1);
+        let result = array(&args).expect("failed to initialize function array");
         ColumnarValue::Array(result.clone())
     }
 
@@ -3350,9 +3325,7 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
             ColumnarValue::Scalar(ScalarValue::Int64(Some(4))),
         ];
-        let arr1 = array(&args)
-            .expect("failed to initialize function array")
-            .into_array(1);
+        let arr1 = array(&args).expect("failed to initialize function array");
 
         let args = [
             ColumnarValue::Scalar(ScalarValue::Int64(Some(5))),
@@ -3360,14 +3333,10 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Int64(Some(7))),
             ColumnarValue::Scalar(ScalarValue::Int64(Some(8))),
         ];
-        let arr2 = array(&args)
-            .expect("failed to initialize function array")
-            .into_array(1);
+        let arr2 = array(&args).expect("failed to initialize function array");
 
         let args = [ColumnarValue::Array(arr1), ColumnarValue::Array(arr2)];
-        let result = array(&args)
-            .expect("failed to initialize function array")
-            .into_array(1);
+        let result = array(&args).expect("failed to initialize function array");
         ColumnarValue::Array(result.clone())
     }
 
@@ -3379,9 +3348,7 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
             ColumnarValue::Scalar(ScalarValue::Null),
         ];
-        let result = array(&args)
-            .expect("failed to initialize function array")
-            .into_array(1);
+        let result = array(&args).expect("failed to initialize function array");
         ColumnarValue::Array(result.clone())
     }
 
@@ -3393,9 +3360,7 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
             ColumnarValue::Scalar(ScalarValue::Null),
         ];
-        let arr1 = array(&args)
-            .expect("failed to initialize function array")
-            .into_array(1);
+        let arr1 = array(&args).expect("failed to initialize function array");
 
         let args = [
             ColumnarValue::Scalar(ScalarValue::Null),
@@ -3403,14 +3368,10 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Int64(Some(7))),
             ColumnarValue::Scalar(ScalarValue::Null),
         ];
-        let arr2 = array(&args)
-            .expect("failed to initialize function array")
-            .into_array(1);
+        let arr2 = array(&args).expect("failed to initialize function array");
 
         let args = [ColumnarValue::Array(arr1), ColumnarValue::Array(arr2)];
-        let result = array(&args)
-            .expect("failed to initialize function array")
-            .into_array(1);
+        let result = array(&args).expect("failed to initialize function array");
         ColumnarValue::Array(result.clone())
     }
 
@@ -3424,9 +3385,7 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
             ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
         ];
-        let result = array(&args)
-            .expect("failed to initialize function array")
-            .into_array(1);
+        let result = array(&args).expect("failed to initialize function array");
         ColumnarValue::Array(result.clone())
     }
 
@@ -3438,9 +3397,7 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
             ColumnarValue::Scalar(ScalarValue::Int64(Some(4))),
         ];
-        let arr1 = array(&args)
-            .expect("failed to initialize function array")
-            .into_array(1);
+        let arr1 = array(&args).expect("failed to initialize function array");
 
         let args = [
             ColumnarValue::Scalar(ScalarValue::Int64(Some(5))),
@@ -3448,9 +3405,7 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Int64(Some(7))),
             ColumnarValue::Scalar(ScalarValue::Int64(Some(8))),
         ];
-        let arr2 = array(&args)
-            .expect("failed to initialize function array")
-            .into_array(1);
+        let arr2 = array(&args).expect("failed to initialize function array");
 
         let args = [
             ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
@@ -3458,9 +3413,7 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
             ColumnarValue::Scalar(ScalarValue::Int64(Some(4))),
         ];
-        let arr3 = array(&args)
-            .expect("failed to initialize function array")
-            .into_array(1);
+        let arr3 = array(&args).expect("failed to initialize function array");
 
         let args = [
             ColumnarValue::Scalar(ScalarValue::Int64(Some(9))),
@@ -3468,9 +3421,7 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Int64(Some(11))),
             ColumnarValue::Scalar(ScalarValue::Int64(Some(12))),
         ];
-        let arr4 = array(&args)
-            .expect("failed to initialize function array")
-            .into_array(1);
+        let arr4 = array(&args).expect("failed to initialize function array");
 
         let args = [
             ColumnarValue::Scalar(ScalarValue::Int64(Some(5))),
@@ -3478,9 +3429,7 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Int64(Some(7))),
             ColumnarValue::Scalar(ScalarValue::Int64(Some(8))),
         ];
-        let arr5 = array(&args)
-            .expect("failed to initialize function array")
-            .into_array(1);
+        let arr5 = array(&args).expect("failed to initialize function array");
 
         let args = [
             ColumnarValue::Array(arr1),
@@ -3489,9 +3438,7 @@ mod tests {
             ColumnarValue::Array(arr4),
             ColumnarValue::Array(arr5),
         ];
-        let result = array(&args)
-            .expect("failed to initialize function array")
-            .into_array(1);
+        let result = array(&args).expect("failed to initialize function array");
         ColumnarValue::Array(result.clone())
     }
 }

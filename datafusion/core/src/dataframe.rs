@@ -582,12 +582,21 @@ impl DataFrame {
         Ok(DataFrame::new(self.session_state, plan))
     }
 
-    /// Join this DataFrame with another DataFrame using the specified columns as join keys.
+    /// Join this `DataFrame` with another `DataFrame` using explicitly specified
+    /// columns and an optional filter expression.
     ///
-    /// Filter expression expected to contain non-equality predicates that can not be pushed
-    /// down to any of join inputs.
-    /// In case of outer join, filter applied to only matched rows.
+    /// See [`join_on`](Self::join_on) for a more concise way to specify the
+    /// join condition. Since DataFusion will automatically identify and
+    /// optimize equality predicates there is no performance difference between
+    /// this function and `join_on`
     ///
+    /// `left_cols` and `right_cols` are used to form "equijoin" predicates (see
+    /// example below), which are then combined with the optional `filter`
+    /// expression.
+    ///
+    /// Note that in case of outer join, the `filter` is applied to only matched rows.
+    ///
+    /// # Example
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
@@ -600,11 +609,14 @@ impl DataFrame {
     ///     col("a").alias("a2"),
     ///     col("b").alias("b2"),
     ///     col("c").alias("c2")])?;
+    /// // Perform the equivalent of `left INNER JOIN right ON (a = a2 AND b = b2)`
+    /// // finding all pairs of rows from `left` and `right` where `a = a2` and `b = b2`.
     /// let join = left.join(right, JoinType::Inner, &["a", "b"], &["a2", "b2"], None)?;
     /// let batches = join.collect().await?;
     /// # Ok(())
     /// # }
     /// ```
+    ///
     pub fn join(
         self,
         right: DataFrame,
@@ -624,10 +636,13 @@ impl DataFrame {
         Ok(DataFrame::new(self.session_state, plan))
     }
 
-    /// Join this DataFrame with another DataFrame using the specified expressions.
+    /// Join this `DataFrame` with another `DataFrame` using the specified
+    /// expressions.
     ///
-    /// Simply a thin wrapper over [`join`](Self::join) where the join keys are not provided,
-    /// and the provided expressions are AND'ed together to form the filter expression.
+    /// Note that DataFusion automatically optimizes joins, including
+    /// identifying and optimizing equality predicates.
+    ///
+    /// # Example
     ///
     /// ```
     /// # use datafusion::prelude::*;
@@ -646,6 +661,10 @@ impl DataFrame {
     ///         col("b").alias("b2"),
     ///         col("c").alias("c2"),
     ///     ])?;
+    ///
+    /// // Perform the equivalent of `left INNER JOIN right ON (a != a2 AND b != b2)`
+    /// // finding all pairs of rows from `left` and `right` where
+    /// // where `a != a2` and `b != b2`.
     /// let join_on = left.join_on(
     ///     right,
     ///     JoinType::Inner,
@@ -663,12 +682,7 @@ impl DataFrame {
     ) -> Result<DataFrame> {
         let expr = on_exprs.into_iter().reduce(Expr::and);
         let plan = LogicalPlanBuilder::from(self.plan)
-            .join(
-                right.plan,
-                join_type,
-                (Vec::<Column>::new(), Vec::<Column>::new()),
-                expr,
-            )?
+            .join_on(right.plan, join_type, expr)?
             .build()?;
         Ok(DataFrame::new(self.session_state, plan))
     }
@@ -1144,10 +1158,7 @@ impl DataFrame {
                     col_exists = true;
                     new_column.clone()
                 } else {
-                    Expr::Column(Column {
-                        relation: None,
-                        name: f.name().into(),
-                    })
+                    col(f.qualified_column())
                 }
             })
             .collect();
@@ -1218,7 +1229,42 @@ impl DataFrame {
         Ok(DataFrame::new(self.session_state, project_plan))
     }
 
-    /// Convert a prepare logical plan into its inner logical plan with all params replaced with their corresponding values
+    /// Replace all parameters in logical plan with the specified
+    /// values, in preparation for execution.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use datafusion::prelude::*;
+    /// # use datafusion::{error::Result, assert_batches_eq};
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// # use datafusion_common::ScalarValue;
+    /// let mut ctx = SessionContext::new();
+    /// # ctx.register_csv("example", "tests/data/example.csv", CsvReadOptions::new()).await?;
+    /// let results = ctx
+    ///   .sql("SELECT a FROM example WHERE b = $1")
+    ///   .await?
+    ///    // replace $1 with value 2
+    ///   .with_param_values(vec![
+    ///      // value at index 0 --> $1
+    ///      ScalarValue::from(2i64)
+    ///    ])?
+    ///   .collect()
+    ///   .await?;
+    /// assert_batches_eq!(
+    ///  &[
+    ///    "+---+",
+    ///    "| a |",
+    ///    "+---+",
+    ///    "| 1 |",
+    ///    "+---+",
+    ///  ],
+    ///  &results
+    /// );
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn with_param_values(self, param_values: Vec<ScalarValue>) -> Result<Self> {
         let plan = self.plan.with_param_values(param_values)?;
         Ok(Self::new(self.session_state, plan))
@@ -2149,6 +2195,131 @@ mod tests {
             ],
             &df_results_overwrite_self
         );
+
+        Ok(())
+    }
+
+    // Test issue: https://github.com/apache/arrow-datafusion/issues/7790
+    // The join operation outputs two identical column names, but they belong to different relations.
+    #[tokio::test]
+    async fn with_column_join_same_columns() -> Result<()> {
+        let df = test_table().await?.select_columns(&["c1"])?;
+        let ctx = SessionContext::new();
+
+        let table = df.into_view();
+        ctx.register_table("t1", table.clone())?;
+        ctx.register_table("t2", table)?;
+        let df = ctx
+            .table("t1")
+            .await?
+            .join(
+                ctx.table("t2").await?,
+                JoinType::Inner,
+                &["c1"],
+                &["c1"],
+                None,
+            )?
+            .sort(vec![
+                // make the test deterministic
+                col("t1.c1").sort(true, true),
+            ])?
+            .limit(0, Some(1))?;
+
+        let df_results = df.clone().collect().await?;
+        assert_batches_sorted_eq!(
+            [
+                "+----+----+",
+                "| c1 | c1 |",
+                "+----+----+",
+                "| a  | a  |",
+                "+----+----+",
+            ],
+            &df_results
+        );
+
+        let df_with_column = df.clone().with_column("new_column", lit(true))?;
+
+        assert_eq!(
+            "\
+        Projection: t1.c1, t2.c1, Boolean(true) AS new_column\
+        \n  Limit: skip=0, fetch=1\
+        \n    Sort: t1.c1 ASC NULLS FIRST\
+        \n      Inner Join: t1.c1 = t2.c1\
+        \n        TableScan: t1\
+        \n        TableScan: t2",
+            format!("{:?}", df_with_column.logical_plan())
+        );
+
+        assert_eq!(
+            "\
+        Projection: t1.c1, t2.c1, Boolean(true) AS new_column\
+        \n  Limit: skip=0, fetch=1\
+        \n    Sort: t1.c1 ASC NULLS FIRST, fetch=1\
+        \n      Inner Join: t1.c1 = t2.c1\
+        \n        SubqueryAlias: t1\
+        \n          TableScan: aggregate_test_100 projection=[c1]\
+        \n        SubqueryAlias: t2\
+        \n          TableScan: aggregate_test_100 projection=[c1]",
+            format!("{:?}", df_with_column.clone().into_optimized_plan()?)
+        );
+
+        let df_results = df_with_column.collect().await?;
+
+        assert_batches_sorted_eq!(
+            [
+                "+----+----+------------+",
+                "| c1 | c1 | new_column |",
+                "+----+----+------------+",
+                "| a  | a  | true       |",
+                "+----+----+------------+",
+            ],
+            &df_results
+        );
+        Ok(())
+    }
+
+    // Table 't1' self join
+    // Supplementary test of issue: https://github.com/apache/arrow-datafusion/issues/7790
+    #[tokio::test]
+    async fn with_column_self_join() -> Result<()> {
+        let df = test_table().await?.select_columns(&["c1"])?;
+        let ctx = SessionContext::new();
+
+        ctx.register_table("t1", df.into_view())?;
+
+        let df = ctx
+            .table("t1")
+            .await?
+            .join(
+                ctx.table("t1").await?,
+                JoinType::Inner,
+                &["c1"],
+                &["c1"],
+                None,
+            )?
+            .sort(vec![
+                // make the test deterministic
+                col("t1.c1").sort(true, true),
+            ])?
+            .limit(0, Some(1))?;
+
+        let df_results = df.clone().collect().await?;
+        assert_batches_sorted_eq!(
+            [
+                "+----+----+",
+                "| c1 | c1 |",
+                "+----+----+",
+                "| a  | a  |",
+                "+----+----+",
+            ],
+            &df_results
+        );
+
+        let actual_err = df.clone().with_column("new_column", lit(true)).unwrap_err();
+        let expected_err = "Error during planning: Projections require unique expression names \
+            but the expression \"t1.c1\" at position 0 and \"t1.c1\" at position 1 have the same name. \
+            Consider aliasing (\"AS\") one of them.";
+        assert_eq!(actual_err.strip_backtrace(), expected_err);
 
         Ok(())
     }

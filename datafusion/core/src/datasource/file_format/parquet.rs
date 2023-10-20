@@ -17,50 +17,22 @@
 
 //! Parquet format abstractions
 
-use parquet::column::writer::ColumnCloseResult;
-use parquet::file::writer::SerializedFileWriter;
-use rand::distributions::DistString;
 use std::any::Any;
 use std::fmt;
 use std::fmt::Debug;
 use std::io::Write;
 use std::sync::Arc;
-use tokio::io::{AsyncWrite, AsyncWriteExt};
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tokio::task::{JoinHandle, JoinSet};
 
-use crate::datasource::file_format::file_compression_type::FileCompressionType;
-use arrow::datatypes::SchemaRef;
-use arrow::datatypes::{Fields, Schema};
-use async_trait::async_trait;
-use bytes::{BufMut, BytesMut};
-use datafusion_common::{exec_err, not_impl_err, plan_err, DataFusionError, FileType};
-use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
-use futures::{StreamExt, TryStreamExt};
-use hashbrown::HashMap;
-use object_store::{ObjectMeta, ObjectStore};
-use parquet::arrow::{parquet_to_arrow_schema, AsyncArrowWriter};
-use parquet::file::footer::{decode_footer, decode_metadata};
-use parquet::file::metadata::ParquetMetaData;
-use parquet::file::properties::WriterProperties;
-use parquet::file::statistics::Statistics as ParquetStatistics;
-use rand::distributions::Alphanumeric;
+use super::write::{create_writer, start_demuxer_task, AbortableWrite, FileWriterMode};
+use super::{FileFormat, FileScanConfig};
 
-use super::write::{create_writer, AbortableWrite, FileWriterMode};
-use super::FileFormat;
-use super::FileScanConfig;
-use crate::arrow::array::{
-    BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array,
-};
-use crate::arrow::datatypes::DataType;
 use crate::config::ConfigOptions;
-
+use crate::datasource::file_format::file_compression_type::FileCompressionType;
+use crate::datasource::get_col_stats;
 use crate::datasource::physical_plan::{
     FileGroupDisplay, FileMeta, FileSinkConfig, ParquetExec, SchemaAdapter,
 };
-
-use crate::datasource::{create_max_min_accs, get_col_stats};
+use crate::datasource::statistics::create_max_min_accs;
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
@@ -69,6 +41,30 @@ use crate::physical_plan::{
     Accumulator, DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream,
     Statistics,
 };
+
+use arrow::array::{BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array};
+use arrow::datatypes::{DataType, Fields, Schema, SchemaRef};
+use datafusion_common::stats::Precision;
+use datafusion_common::{exec_err, not_impl_err, plan_err, DataFusionError, FileType};
+use datafusion_execution::TaskContext;
+use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
+use datafusion_physical_plan::metrics::MetricsSet;
+
+use async_trait::async_trait;
+use bytes::{BufMut, BytesMut};
+use futures::{StreamExt, TryStreamExt};
+use hashbrown::HashMap;
+use object_store::{ObjectMeta, ObjectStore};
+use parquet::arrow::{parquet_to_arrow_schema, AsyncArrowWriter};
+use parquet::column::writer::ColumnCloseResult;
+use parquet::file::footer::{decode_footer, decode_metadata};
+use parquet::file::metadata::ParquetMetaData;
+use parquet::file::properties::WriterProperties;
+use parquet::file::statistics::Statistics as ParquetStatistics;
+use parquet::file::writer::SerializedFileWriter;
+use tokio::io::{AsyncWrite, AsyncWriteExt};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::task::{JoinHandle, JoinSet};
 
 /// The Apache Parquet `FileFormat` implementation
 ///
@@ -514,7 +510,7 @@ async fn fetch_statistics(
 
     let mut num_rows = 0;
     let mut total_byte_size = 0;
-    let mut null_counts = vec![0; num_fields];
+    let mut null_counts = vec![Precision::Exact(0); num_fields];
     let mut has_statistics = false;
 
     let schema_adapter = SchemaAdapter::new(table_schema.clone());
@@ -540,7 +536,7 @@ async fn fetch_statistics(
                     schema_adapter.map_column_index(table_idx, &file_schema)
                 {
                     if let Some((null_count, stats)) = column_stats.get(&file_idx) {
-                        *null_cnt += *null_count as usize;
+                        *null_cnt = null_cnt.add(&Precision::Exact(*null_count as usize));
                         summarize_min_max(
                             &mut max_values,
                             &mut min_values,
@@ -554,28 +550,22 @@ async fn fetch_statistics(
                         min_values[table_idx] = None;
                     }
                 } else {
-                    *null_cnt += num_rows as usize;
+                    *null_cnt = null_cnt.add(&Precision::Exact(num_rows as usize));
                 }
             }
         }
     }
 
     let column_stats = if has_statistics {
-        Some(get_col_stats(
-            &table_schema,
-            null_counts,
-            &mut max_values,
-            &mut min_values,
-        ))
+        get_col_stats(&table_schema, null_counts, &mut max_values, &mut min_values)
     } else {
-        None
+        Statistics::unknown_column(&table_schema)
     };
 
     let statistics = Statistics {
-        num_rows: Some(num_rows as usize),
-        total_byte_size: Some(total_byte_size as usize),
+        num_rows: Precision::Exact(num_rows as usize),
+        total_byte_size: Precision::Exact(total_byte_size as usize),
         column_statistics: column_stats,
-        is_exact: true,
     };
 
     Ok(statistics)
@@ -650,79 +640,6 @@ impl ParquetSink {
         }
     }
 
-    /// Creates an AsyncArrowWriter for each partition to be written out
-    /// AsyncArrowWriters are used when individual parquet file serialization is not parallelized
-    async fn create_all_async_arrow_writers(
-        &self,
-        num_partitions: usize,
-        parquet_props: &WriterProperties,
-        object_store: Arc<dyn ObjectStore>,
-    ) -> Result<
-        Vec<AsyncArrowWriter<Box<dyn tokio::io::AsyncWrite + std::marker::Send + Unpin>>>,
-    > {
-        // Construct writer for each file group
-        let mut writers = vec![];
-        match self.config.writer_mode {
-            FileWriterMode::Append => {
-                return plan_err!(
-                    "Parquet format does not support appending to existing file!"
-                )
-            }
-            FileWriterMode::Put => {
-                return not_impl_err!("Put Mode is not implemented for ParquetSink yet")
-            }
-            FileWriterMode::PutMultipart => {
-                // Currently assuming only 1 partition path (i.e. not hive-style partitioning on a column)
-                let base_path = &self.config.table_paths[0];
-                match self.config.single_file_output {
-                    false => {
-                        // Uniquely identify this batch of files with a random string, to prevent collisions overwriting files
-                        let write_id =
-                            Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
-                        for part_idx in 0..num_partitions {
-                            let file_path = base_path
-                                .prefix()
-                                .child(format!("{}_{}.parquet", write_id, part_idx));
-                            let object_meta = ObjectMeta {
-                                location: file_path,
-                                last_modified: chrono::offset::Utc::now(),
-                                size: 0,
-                                e_tag: None,
-                            };
-                            let writer = self
-                                .create_async_arrow_writer(
-                                    object_meta.into(),
-                                    object_store.clone(),
-                                    parquet_props.clone(),
-                                )
-                                .await?;
-                            writers.push(writer);
-                        }
-                    }
-                    true => {
-                        let file_path = base_path.prefix();
-                        let object_meta = ObjectMeta {
-                            location: file_path.clone(),
-                            last_modified: chrono::offset::Utc::now(),
-                            size: 0,
-                            e_tag: None,
-                        };
-                        let writer = self
-                            .create_async_arrow_writer(
-                                object_meta.into(),
-                                object_store.clone(),
-                                parquet_props.clone(),
-                            )
-                            .await?;
-                        writers.push(writer);
-                    }
-                }
-            }
-        }
-
-        Ok(writers)
-    }
-
     /// Creates an object store writer for each output partition
     /// This is used when parallelizing individual parquet file writes.
     async fn create_object_store_writers(
@@ -757,12 +674,19 @@ impl ParquetSink {
 
 #[async_trait]
 impl DataSink for ParquetSink {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        None
+    }
+
     async fn write_all(
         &self,
-        mut data: Vec<SendableRecordBatchStream>,
+        data: SendableRecordBatchStream,
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
-        let num_partitions = data.len();
         let parquet_props = self
             .config
             .file_type_writer_options
@@ -773,63 +697,93 @@ impl DataSink for ParquetSink {
             .runtime_env()
             .object_store(&self.config.object_store_url)?;
 
-        let mut row_count = 0;
+        let exec_options = &context.session_config().options().execution;
 
-        let allow_single_file_parallelism = context
-            .session_config()
-            .options()
-            .execution
-            .parquet
-            .allow_single_file_parallelism;
+        let allow_single_file_parallelism =
+            exec_options.parquet.allow_single_file_parallelism;
 
-        match self.config.single_file_output {
-            false => {
-                let writers = self
-                    .create_all_async_arrow_writers(
-                        num_partitions,
-                        parquet_props,
-                        object_store.clone(),
-                    )
-                    .await?;
-                // TODO parallelize individual parquet serialization when already outputting multiple parquet files
-                // e.g. if outputting 2 parquet files on a system with 32 threads, spawn 16 tasks for each individual
-                // file to be serialized.
-                row_count = output_multiple_parquet_files(writers, data).await?;
-            }
-            true => {
-                if !allow_single_file_parallelism || data.len() <= 1 {
-                    let mut writer = self
-                        .create_all_async_arrow_writers(
-                            num_partitions,
-                            parquet_props,
-                            object_store.clone(),
-                        )
-                        .await?
-                        .remove(0);
-                    for data_stream in data.iter_mut() {
-                        while let Some(batch) = data_stream.next().await.transpose()? {
-                            row_count += batch.num_rows();
-                            writer.write(&batch).await?;
-                        }
+        // This is a temporary special case until https://github.com/apache/arrow-datafusion/pull/7655
+        // can be pulled in.
+        if allow_single_file_parallelism && self.config.single_file_output {
+            let object_store_writer = self
+                .create_object_store_writers(1, object_store)
+                .await?
+                .remove(0);
+
+            let schema_clone = self.config.output_schema.clone();
+            return output_single_parquet_file_parallelized(
+                object_store_writer,
+                vec![data],
+                schema_clone,
+                parquet_props,
+            )
+            .await
+            .map(|r| r as u64);
+        }
+
+        let (demux_task, mut file_stream_rx) = start_demuxer_task(
+            data,
+            context,
+            None,
+            self.config.table_paths[0].clone(),
+            "parquet".into(),
+            self.config.single_file_output,
+        );
+
+        let mut file_write_tasks: JoinSet<std::result::Result<usize, DataFusionError>> =
+            JoinSet::new();
+        while let Some((path, mut rx)) = file_stream_rx.recv().await {
+            let mut writer = self
+                .create_async_arrow_writer(
+                    ObjectMeta {
+                        location: path,
+                        last_modified: chrono::offset::Utc::now(),
+                        size: 0,
+                        e_tag: None,
                     }
+                    .into(),
+                    object_store.clone(),
+                    parquet_props.clone(),
+                )
+                .await?;
 
-                    writer.close().await?;
-                } else {
-                    let object_store_writer = self
-                        .create_object_store_writers(1, object_store)
-                        .await?
-                        .remove(0);
-                    row_count = output_single_parquet_file_parallelized(
-                        object_store_writer,
-                        data,
-                        self.config.output_schema.clone(),
-                        parquet_props,
-                    )
-                    .await?;
+            file_write_tasks.spawn(async move {
+                let mut row_count = 0;
+                while let Some(batch) = rx.recv().await {
+                    row_count += batch.num_rows();
+                    writer.write(&batch).await?;
+                }
+                writer.close().await?;
+                Ok(row_count)
+            });
+        }
+
+        let mut row_count = 0;
+        while let Some(result) = file_write_tasks.join_next().await {
+            match result {
+                Ok(r) => {
+                    row_count += r?;
+                }
+                Err(e) => {
+                    if e.is_panic() {
+                        std::panic::resume_unwind(e.into_panic());
+                    } else {
+                        unreachable!();
+                    }
                 }
             }
         }
 
+        match demux_task.await {
+            Ok(r) => r?,
+            Err(e) => {
+                if e.is_panic() {
+                    std::panic::resume_unwind(e.into_panic());
+                } else {
+                    unreachable!();
+                }
+            }
+        }
         Ok(row_count as u64)
     }
 }
@@ -975,48 +929,6 @@ async fn output_single_parquet_file_parallelized(
     };
     object_store_writer.write_all(final_buff.as_slice()).await?;
     object_store_writer.shutdown().await?;
-    println!("done!");
-
-    Ok(row_count)
-}
-
-/// Serializes multiple parquet files independently in parallel from different RecordBatch streams.
-/// AsyncArrowWriter is used to coordinate serialization and MultiPart puts to ObjectStore
-/// Only a single CPU thread is used to serialize each individual parquet file, so write speed and overall
-/// CPU utilization is dependent on the number of output files.
-async fn output_multiple_parquet_files(
-    writers: Vec<
-        AsyncArrowWriter<Box<dyn tokio::io::AsyncWrite + std::marker::Send + Unpin>>,
-    >,
-    data: Vec<SendableRecordBatchStream>,
-) -> Result<usize> {
-    let mut row_count = 0;
-    let mut join_set: JoinSet<Result<usize, DataFusionError>> = JoinSet::new();
-    for (mut data_stream, mut writer) in data.into_iter().zip(writers.into_iter()) {
-        join_set.spawn(async move {
-            let mut cnt = 0;
-            while let Some(batch) = data_stream.next().await.transpose()? {
-                cnt += batch.num_rows();
-                writer.write(&batch).await?;
-            }
-            writer.close().await?;
-            Ok(cnt)
-        });
-    }
-    while let Some(result) = join_set.join_next().await {
-        match result {
-            Ok(res) => {
-                row_count += res?;
-            } // propagate DataFusion error
-            Err(e) => {
-                if e.is_panic() {
-                    std::panic::resume_unwind(e.into_panic());
-                } else {
-                    unreachable!();
-                }
-            }
-        }
-    }
 
     Ok(row_count)
 }
@@ -1177,20 +1089,26 @@ mod tests {
         let stats =
             fetch_statistics(store.as_ref(), schema.clone(), &meta[0], None).await?;
 
-        assert_eq!(stats.num_rows, Some(3));
-        let c1_stats = &stats.column_statistics.as_ref().expect("missing c1 stats")[0];
-        let c2_stats = &stats.column_statistics.as_ref().expect("missing c2 stats")[1];
-        assert_eq!(c1_stats.null_count, Some(1));
-        assert_eq!(c2_stats.null_count, Some(3));
+        assert_eq!(stats.num_rows, Precision::Exact(3));
+        let c1_stats = &stats.column_statistics[0];
+        let c2_stats = &stats.column_statistics[1];
+        assert_eq!(c1_stats.null_count, Precision::Exact(1));
+        assert_eq!(c2_stats.null_count, Precision::Exact(3));
 
         let stats = fetch_statistics(store.as_ref(), schema, &meta[1], None).await?;
-        assert_eq!(stats.num_rows, Some(3));
-        let c1_stats = &stats.column_statistics.as_ref().expect("missing c1 stats")[0];
-        let c2_stats = &stats.column_statistics.as_ref().expect("missing c2 stats")[1];
-        assert_eq!(c1_stats.null_count, Some(3));
-        assert_eq!(c2_stats.null_count, Some(1));
-        assert_eq!(c2_stats.max_value, Some(ScalarValue::Int64(Some(2))));
-        assert_eq!(c2_stats.min_value, Some(ScalarValue::Int64(Some(1))));
+        assert_eq!(stats.num_rows, Precision::Exact(3));
+        let c1_stats = &stats.column_statistics[0];
+        let c2_stats = &stats.column_statistics[1];
+        assert_eq!(c1_stats.null_count, Precision::Exact(3));
+        assert_eq!(c2_stats.null_count, Precision::Exact(1));
+        assert_eq!(
+            c2_stats.max_value,
+            Precision::Exact(ScalarValue::Int64(Some(2)))
+        );
+        assert_eq!(
+            c2_stats.min_value,
+            Precision::Exact(ScalarValue::Int64(Some(1)))
+        );
 
         Ok(())
     }
@@ -1326,11 +1244,11 @@ mod tests {
             fetch_statistics(store.upcast().as_ref(), schema.clone(), &meta[0], Some(9))
                 .await?;
 
-        assert_eq!(stats.num_rows, Some(3));
-        let c1_stats = &stats.column_statistics.as_ref().expect("missing c1 stats")[0];
-        let c2_stats = &stats.column_statistics.as_ref().expect("missing c2 stats")[1];
-        assert_eq!(c1_stats.null_count, Some(1));
-        assert_eq!(c2_stats.null_count, Some(3));
+        assert_eq!(stats.num_rows, Precision::Exact(3));
+        let c1_stats = &stats.column_statistics[0];
+        let c2_stats = &stats.column_statistics[1];
+        assert_eq!(c1_stats.null_count, Precision::Exact(1));
+        assert_eq!(c2_stats.null_count, Precision::Exact(3));
 
         let store = Arc::new(RequestCountingObjectStore::new(Arc::new(
             LocalFileSystem::new(),
@@ -1359,11 +1277,11 @@ mod tests {
         )
         .await?;
 
-        assert_eq!(stats.num_rows, Some(3));
-        let c1_stats = &stats.column_statistics.as_ref().expect("missing c1 stats")[0];
-        let c2_stats = &stats.column_statistics.as_ref().expect("missing c2 stats")[1];
-        assert_eq!(c1_stats.null_count, Some(1));
-        assert_eq!(c2_stats.null_count, Some(3));
+        assert_eq!(stats.num_rows, Precision::Exact(3));
+        let c1_stats = &stats.column_statistics[0];
+        let c2_stats = &stats.column_statistics[1];
+        assert_eq!(c1_stats.null_count, Precision::Exact(1));
+        assert_eq!(c2_stats.null_count, Precision::Exact(3));
 
         let store = Arc::new(RequestCountingObjectStore::new(Arc::new(
             LocalFileSystem::new(),
@@ -1403,8 +1321,8 @@ mod tests {
         assert_eq!(tt_batches, 4 /* 8/2 */);
 
         // test metadata
-        assert_eq!(exec.statistics().num_rows, Some(8));
-        assert_eq!(exec.statistics().total_byte_size, Some(671));
+        assert_eq!(exec.statistics()?.num_rows, Precision::Exact(8));
+        assert_eq!(exec.statistics()?.total_byte_size, Precision::Exact(671));
 
         Ok(())
     }
@@ -1445,9 +1363,8 @@ mod tests {
             get_exec(&state, "alltypes_plain.parquet", projection, Some(1)).await?;
 
         // note: even if the limit is set, the executor rounds up to the batch size
-        assert_eq!(exec.statistics().num_rows, Some(8));
-        assert_eq!(exec.statistics().total_byte_size, Some(671));
-        assert!(exec.statistics().is_exact);
+        assert_eq!(exec.statistics()?.num_rows, Precision::Exact(8));
+        assert_eq!(exec.statistics()?.total_byte_size, Precision::Exact(671));
         let batches = collect(exec, task_ctx).await?;
         assert_eq!(1, batches.len());
         assert_eq!(11, batches[0].num_columns());

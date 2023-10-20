@@ -19,19 +19,27 @@
 //! It will do in-memory sorting if it has enough memory budget
 //! but spills to disk if needed.
 
+use std::any::Any;
+use std::fmt;
+use std::fmt::{Debug, Formatter};
+use std::fs::File;
+use std::io::BufReader;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
 use crate::common::{spawn_buffered, IPCWriter};
 use crate::expressions::PhysicalSortExpr;
 use crate::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
 };
-use crate::sorts::merge::streaming_merge;
+use crate::sorts::streaming_merge::streaming_merge;
 use crate::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
 use crate::topk::TopK;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionPlan,
     Partitioning, SendableRecordBatchStream, Statistics,
 };
-pub use arrow::compute::SortOptions;
+
 use arrow::compute::{concat_batches, lexsort_to_indices, take};
 use arrow::datatypes::SchemaRef;
 use arrow::ipc::reader::FileReader;
@@ -44,15 +52,9 @@ use datafusion_execution::memory_pool::{
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
+
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, error, trace};
-use std::any::Any;
-use std::fmt;
-use std::fmt::{Debug, Formatter};
-use std::fs::File;
-use std::io::BufReader;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use tokio::sync::mpsc::Sender;
 use tokio::task;
 
@@ -763,17 +765,12 @@ impl DisplayAs for SortExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                let expr: Vec<String> = self.expr.iter().map(|e| e.to_string()).collect();
+                let expr = PhysicalSortExpr::format_list(&self.expr);
                 match self.fetch {
                     Some(fetch) => {
-                        write!(
-                            f,
-                            // TODO should this say topk?
-                            "SortExec: fetch={fetch}, expr=[{}]",
-                            expr.join(",")
-                        )
+                        write!(f, "SortExec: TopK(fetch={fetch}), expr=[{expr}]",)
                     }
-                    None => write!(f, "SortExec: expr=[{}]", expr.join(",")),
+                    None => write!(f, "SortExec: expr=[{expr}]"),
                 }
             }
         }
@@ -913,13 +910,15 @@ impl ExecutionPlan for SortExec {
         Some(self.metrics_set.clone_inner())
     }
 
-    fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Result<Statistics> {
         self.input.statistics()
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::collect;
@@ -928,14 +927,15 @@ mod tests {
     use crate::test;
     use crate::test::assert_is_pending;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
+
     use arrow::array::*;
     use arrow::compute::SortOptions;
     use arrow::datatypes::*;
     use datafusion_common::cast::as_primitive_array;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeConfig;
+
     use futures::FutureExt;
-    use std::collections::HashMap;
 
     #[tokio::test]
     async fn test_in_mem_sort() -> Result<()> {

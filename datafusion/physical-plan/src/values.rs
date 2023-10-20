@@ -17,20 +17,21 @@
 
 //! Values execution plan
 
+use std::any::Any;
+use std::sync::Arc;
+
 use super::expressions::PhysicalSortExpr;
 use super::{common, DisplayAs, SendableRecordBatchStream, Statistics};
 use crate::{
     memory::MemoryStream, ColumnarValue, DisplayFormatType, ExecutionPlan, Partitioning,
     PhysicalExpr,
 };
+
 use arrow::array::new_null_array;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{internal_err, plan_err, ScalarValue};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{internal_err, plan_err, DataFusionError, Result, ScalarValue};
 use datafusion_execution::TaskContext;
-use std::any::Any;
-use std::sync::Arc;
 
 /// Execution plan for values list based relation (produces constant rows)
 #[derive(Debug)]
@@ -66,10 +67,11 @@ impl ValuesExec {
                 (0..n_row)
                     .map(|i| {
                         let r = data[i][j].evaluate(&batch);
+
                         match r {
                             Ok(ColumnarValue::Scalar(scalar)) => Ok(scalar),
                             Ok(ColumnarValue::Array(a)) if a.len() == 1 => {
-                                ScalarValue::try_from_array(&a, 0)
+                                Ok(ScalarValue::List(a))
                             }
                             Ok(ColumnarValue::Array(a)) => {
                                 plan_err!(
@@ -186,9 +188,13 @@ impl ExecutionPlan for ValuesExec {
         )?))
     }
 
-    fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Result<Statistics> {
         let batch = self.data();
-        common::compute_record_batch_statistics(&[batch], &self.schema, None)
+        Ok(common::compute_record_batch_statistics(
+            &[batch],
+            &self.schema,
+            None,
+        ))
     }
 }
 
@@ -196,6 +202,7 @@ impl ExecutionPlan for ValuesExec {
 mod tests {
     use super::*;
     use crate::test::{self, make_partition};
+
     use arrow_schema::{DataType, Field, Schema};
 
     #[tokio::test]
