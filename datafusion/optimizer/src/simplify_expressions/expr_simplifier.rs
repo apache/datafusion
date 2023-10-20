@@ -1504,10 +1504,7 @@ mod tests {
         // to_timestamp("2020-09-08T12:00:00+00:00") --> timestamp(1599566400i64)
         let expr =
             call_fn("to_timestamp", vec![lit("2020-09-08T12:00:00+00:00")]).unwrap();
-        test_evaluate(
-            expr,
-            lit(ScalarValue::TimestampSecond(Some(1599566400i64), None)),
-        );
+        test_evaluate(expr, lit_timestamp_nano(1599566400000000000i64));
 
         // check that non foldable arguments are folded
         // to_timestamp(a) --> to_timestamp(a) [no rewrite possible]
@@ -1543,10 +1540,10 @@ mod tests {
         let expr = cast_to_int64_expr(now_expr()) + lit(100_i64);
         test_evaluate_with_start_time(expr, lit(ts_nanos + 100), &time);
 
-        //  CAST(now() as int64) < cast(to_timestamp(...) as int64) + 50000_i64 ---> false
+        //  CAST(now() as int64) < cast(to_timestamp(...) as int64) + 50000_i64 ---> true
         let expr = cast_to_int64_expr(now_expr())
             .lt(cast_to_int64_expr(to_timestamp_expr(ts_string)) + lit(50000i64));
-        test_evaluate_with_start_time(expr, lit(false), &time);
+        test_evaluate_with_start_time(expr, lit(true), &time);
     }
 
     #[test]

@@ -1391,9 +1391,9 @@ extract(field FROM source)
 
 ### `to_timestamp`
 
-Converts a value to RFC3339 second timestamp format (`YYYY-MM-DDT00:00:00Z`).
+Converts a value to RFC3339 nanosecond timestamp format (`YYYY-MM-DDT00:00:00Z`).
 Supports timestamp, integer, and unsigned integer types as input.
-Integers and unsigned integers are parsed as Unix nanosecond timestamps and
+Integers and unsigned integers are parsed as Unix second timestamps and
 return the corresponding RFC3339 timestamp.
 
 ```
@@ -1450,7 +1450,10 @@ to_timestamp_nanos(expression)
 
 ### `to_timestamp_seconds`
 
-Alias for `to_timestamp()` function.
+Converts a value to RFC3339 second timestamp format (`YYYY-MM-DDT00:00:00Z`).
+Supports timestamp, integer, and unsigned integer types as input.
+Integers and unsigned integers are parsed as Unix nanosecond timestamps and
+return the corresponding RFC3339 timestamp.
 
 ```
 to_timestamp_seconds(expression)

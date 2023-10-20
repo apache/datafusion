@@ -444,7 +444,7 @@ Dml: op=[Insert Into] table=[test_decimal]
 )]
 #[case::type_mismatch(
     "INSERT INTO test_decimal SELECT '2022-01-01', to_timestamp('2022-01-01T12:00:00')",
-    "Error during planning: Cannot automatically convert Timestamp(Second, None) to Decimal128(10, 2)"
+    "Error during planning: Cannot automatically convert Timestamp(Nanosecond, None) to Decimal128(10, 2)"
 )]
 #[case::target_column_count_mismatch(
     "INSERT INTO person (id, first_name, last_name) VALUES ($1, $2)",

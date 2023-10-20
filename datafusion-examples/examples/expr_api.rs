@@ -82,10 +82,10 @@ fn simplify_demo() -> Result<()> {
     let expr = simplifier.simplify(expr)?;
 
     // DataFusion has simplified the expression to a comparison with a constant
-    // ts = 1599566400i64; Tada!
+    // ts = 1599566400000000000; Tada!
     assert_eq!(
         expr,
-        col("ts").eq(lit(ScalarValue::TimestampSecond(Some(1599566400i64), None)))
+        col("ts").eq(lit_timestamp_nano(1599566400000000000i64))
     );
 
     // here are some other examples of what DataFusion is capable of

@@ -639,7 +639,7 @@ async fn test_uuid_expression() -> Result<()> {
 async fn test_extract_date_part() -> Result<()> {
     test_expression!("date_part('YEAR', CAST('2000-01-01' AS DATE))", "2000.0");
     test_expression!(
-        "EXTRACT(year FROM to_timestamp('2020-09-08T12:00:00+00:00'))",
+        "EXTRACT(year FROM  timestamp '2020-09-08T12:00:00+00:00')",
         "2020.0"
     );
     test_expression!("date_part('QUARTER', CAST('2000-01-01' AS DATE))", "1.0");

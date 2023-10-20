@@ -249,9 +249,9 @@ SELECT to_timestamp_seconds(ts) FROM ts_data_micros LIMIT 3
 query P
 SELECT to_timestamp(ts) FROM ts_data_micros LIMIT 3
 ----
-2020-09-08T13:42:29
-2020-09-08T12:42:29
-2020-09-08T11:42:29
+2020-09-08T13:42:29.190855
+2020-09-08T12:42:29.190855
+2020-09-08T11:42:29.190855
 
 # query_cast_timestamp_from_unixtime
 
@@ -266,7 +266,7 @@ SELECT from_unixtime(ts / 1000000000) FROM ts_data LIMIT 3;
 # to_timestamp
 
 query I
-SELECT COUNT(*) FROM ts_data_nanos where ts > to_timestamp('2020-09-08T12:00:00+00:00')
+SELECT COUNT(*) FROM ts_data_nanos where ts > timestamp '2020-09-08T12:00:00+00:00'
 ----
 2
 

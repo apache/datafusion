@@ -74,15 +74,20 @@ pub fn create_physical_expr(
         // so we don't have to pay a per-array/batch cost.
         BuiltinScalarFunction::ToTimestamp => {
             Arc::new(match input_phy_exprs[0].data_type(input_schema) {
-                Ok(DataType::Int64) | Ok(DataType::Timestamp(_, None)) => {
-                    |col_values: &[ColumnarValue]| {
-                        cast_column(
-                            &col_values[0],
-                            &DataType::Timestamp(TimeUnit::Second, None),
-                            None,
-                        )
-                    }
-                }
+                Ok(DataType::Int64) => |col_values: &[ColumnarValue]| {
+                    cast_column(
+                        &col_values[0],
+                        &DataType::Timestamp(TimeUnit::Second, None),
+                        None,
+                    )
+                },
+                Ok(DataType::Timestamp(_, None)) => |col_values: &[ColumnarValue]| {
+                    cast_column(
+                        &col_values[0],
+                        &DataType::Timestamp(TimeUnit::Nanosecond, None),
+                        None,
+                    )
+                },
                 Ok(DataType::Utf8) => datetime_expressions::to_timestamp,
                 other => {
                     return internal_err!(
