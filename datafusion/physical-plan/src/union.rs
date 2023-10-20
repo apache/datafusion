@@ -232,13 +232,15 @@ impl ExecutionPlan for UnionExec {
             .map(|child| child.schema_properties())
             .collect::<Vec<_>>();
         let mut union_oeq = SchemaProperties::new(self.schema());
+        // Get first ordering equivalent group as seed group.
         let mut existing_meets = child_oeqs[0]
             .oeq_group()
             .iter()
             .map(|elem| elem.to_vec())
             .collect::<Vec<_>>();
-        // Iterate ordering equivalent group of first child
+        // Iterate ordering equivalent group of other childs
         for next_child_oeq in child_oeqs.iter().skip(1) {
+            // Find the valid meet orderings of existing meet and new group.
             let mut next_meets = vec![];
             for existing_meet in &existing_meets {
                 let new_meets = next_child_oeq
