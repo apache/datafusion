@@ -202,8 +202,11 @@ impl Display for IntervalBound {
 ///
 /// Given there are only two  boolean values, and they are ordered such that
 /// `false` is less than `true`, there are only three possible valid intervals
-/// for a boolean `[false, false]`, `[false, true]` or `[true, true]`, all with
-/// closed bounds.
+/// for a boolean:
+/// 
+/// 1. `[false, false]`: definitely `false`
+/// 2. `[false, true]`: either `false` or `true`
+/// 3. `[true, true]`: definitely `true`
 ///
 /// [`Interval::new`] takes this into account and adjusts any arguments as
 /// needed.
