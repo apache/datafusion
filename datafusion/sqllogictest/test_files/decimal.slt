@@ -691,5 +691,15 @@ select arrow_typeof(avg(c1)), avg(c1) from decimal256_simple;
 ----
 Decimal256(54, 10) 0.0000366666
 
+query TR
+select arrow_typeof(min(c1)), min(c1) from decimal256_simple where c4=false;
+----
+Decimal256(50, 6) 0.00002
+
+query TR
+select arrow_typeof(max(c1)), max(c1) from decimal256_simple where c4=false;
+----
+Decimal256(50, 6) 0.00005
+
 statement ok
 drop table decimal256_simple;
