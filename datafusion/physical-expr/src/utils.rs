@@ -113,17 +113,13 @@ pub fn project_out_expr(
         .transform(&|expr| {
             // If expression is not valid after projection. Treat it is as UnknownColumn.
             let mut normalized_form =
-                Some(Arc::new(UnKnownColumn::new(&expr.to_string())) as _);
+                Arc::new(UnKnownColumn::new(&expr.to_string())) as _;
             for (source, target) in projection_map {
                 if source.eq(&expr) {
-                    normalized_form = Some(target.clone())
+                    normalized_form = target.clone()
                 }
             }
-            Ok(if let Some(normalized_form) = normalized_form {
-                Transformed::Yes(normalized_form)
-            } else {
-                Transformed::No(expr)
-            })
+            Ok(Transformed::Yes(normalized_form))
         })
         .unwrap_or(expr)
 }
