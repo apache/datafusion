@@ -1107,28 +1107,28 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::DatePart => Signature::one_of(
                 vec![
-                    Exact(vec![Utf8, Date32]),
-                    Exact(vec![Utf8, Date64]),
-                    Exact(vec![Utf8, Timestamp(Second, None)]),
+                    Exact(vec![Utf8, Timestamp(Nanosecond, None)]),
                     Exact(vec![
                         Utf8,
-                        Timestamp(Second, Some(TIMEZONE_WILDCARD.into())),
-                    ]),
-                    Exact(vec![Utf8, Timestamp(Microsecond, None)]),
-                    Exact(vec![
-                        Utf8,
-                        Timestamp(Microsecond, Some(TIMEZONE_WILDCARD.into())),
+                        Timestamp(Nanosecond, Some(TIMEZONE_WILDCARD.into())),
                     ]),
                     Exact(vec![Utf8, Timestamp(Millisecond, None)]),
                     Exact(vec![
                         Utf8,
                         Timestamp(Millisecond, Some(TIMEZONE_WILDCARD.into())),
                     ]),
-                    Exact(vec![Utf8, Timestamp(Nanosecond, None)]),
+                    Exact(vec![Utf8, Timestamp(Microsecond, None)]),
                     Exact(vec![
                         Utf8,
-                        Timestamp(Nanosecond, Some(TIMEZONE_WILDCARD.into())),
+                        Timestamp(Microsecond, Some(TIMEZONE_WILDCARD.into())),
                     ]),
+                    Exact(vec![Utf8, Timestamp(Second, None)]),
+                    Exact(vec![
+                        Utf8,
+                        Timestamp(Second, Some(TIMEZONE_WILDCARD.into())),
+                    ]),
+                    Exact(vec![Utf8, Date64]),
+                    Exact(vec![Utf8, Date32]),
                 ],
                 self.volatility(),
             ),
@@ -1523,16 +1523,29 @@ impl FromStr for BuiltinScalarFunction {
     }
 }
 
+/// Creates a function that returns the return type of a string function given
+/// the type of its first argument.
+///
+/// If the input type is `LargeUtf8` or `LargeBinary` the return type is
+/// `$largeUtf8Type`,
+///
+/// If the input type is `Utf8` or `Binary` the return type is `$utf8Type`,
 macro_rules! make_utf8_to_return_type {
     ($FUNC:ident, $largeUtf8Type:expr, $utf8Type:expr) => {
         fn $FUNC(arg_type: &DataType, name: &str) -> Result<DataType> {
             Ok(match arg_type {
-                DataType::LargeUtf8 => $largeUtf8Type,
-                DataType::Utf8 => $utf8Type,
+                DataType::LargeUtf8  => $largeUtf8Type,
+                // LargeBinary inputs are automatically coerced to Utf8
+                DataType::LargeBinary => $largeUtf8Type,
+                DataType::Utf8  => $utf8Type,
+                // Binary inputs are automatically coerced to Utf8
+                DataType::Binary => $utf8Type,
                 DataType::Null => DataType::Null,
                 DataType::Dictionary(_, value_type) => match **value_type {
-                    DataType::LargeUtf8 => $largeUtf8Type,
+                    DataType::LargeUtf8  => $largeUtf8Type,
+                    DataType::LargeBinary => $largeUtf8Type,
                     DataType::Utf8 => $utf8Type,
+                    DataType::Binary => $utf8Type,
                     DataType::Null => DataType::Null,
                     _ => {
                         return plan_err!(
@@ -1553,8 +1566,10 @@ macro_rules! make_utf8_to_return_type {
         }
     };
 }
-
+// `utf8_to_str_type`: returns either a Utf8 or LargeUtf8 based on the input type size.
 make_utf8_to_return_type!(utf8_to_str_type, DataType::LargeUtf8, DataType::Utf8);
+
+// `utf8_to_int_type`: returns either a Int32 or Int64 based on the input type size.
 make_utf8_to_return_type!(utf8_to_int_type, DataType::Int64, DataType::Int32);
 
 fn utf8_or_binary_to_binary_type(arg_type: &DataType, name: &str) -> Result<DataType> {

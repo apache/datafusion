@@ -16,6 +16,7 @@
 // under the License.
 
 use super::*;
+
 use datafusion::config::ConfigOptions;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::metrics::Timestamp;
@@ -787,7 +788,7 @@ async fn explain_logical_plan_only() {
             "logical_plan",
             "Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]\
             \n  SubqueryAlias: t\
-            \n    Projection: column1\
+            \n    Projection: column2\
             \n      Values: (Utf8(\"a\"), Int64(1), Int64(100)), (Utf8(\"a\"), Int64(2), Int64(150))"
         ]];
     assert_eq!(expected, actual);
@@ -826,5 +827,5 @@ async fn csv_explain_analyze_with_statistics() {
         .to_string();
 
     // should contain scan statistics
-    assert_contains!(&formatted, ", statistics=[]");
+    assert_contains!(&formatted, ", statistics=[Rows=Absent, Bytes=Absent]");
 }

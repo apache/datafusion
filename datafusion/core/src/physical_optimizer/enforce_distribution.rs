@@ -40,13 +40,14 @@ use crate::physical_plan::joins::{
 };
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
-use crate::physical_plan::sorts::sort::SortOptions;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::physical_plan::union::{can_interleave, InterleaveExec, UnionExec};
 use crate::physical_plan::windows::WindowAggExec;
-use crate::physical_plan::Partitioning;
-use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
+use crate::physical_plan::{
+    with_new_children_if_necessary, Distribution, ExecutionPlan, Partitioning,
+};
 
+use arrow::compute::SortOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_expr::logical_plan::JoinType;
 use datafusion_physical_expr::equivalence::EquivalenceProperties;
@@ -58,8 +59,8 @@ use datafusion_physical_expr::{
     expr_list_eq_strict_order, PhysicalExpr, PhysicalSortRequirement,
 };
 use datafusion_physical_plan::unbounded_output;
-
 use datafusion_physical_plan::windows::{get_best_fitting_window, BoundedWindowAggExec};
+
 use itertools::izip;
 
 /// The `EnforceDistribution` rule ensures that distribution requirements are
@@ -1021,6 +1022,7 @@ fn add_hash_on_top(
     // until Repartition(Hash).
     dist_onward: &mut Option<ExecTree>,
     input_idx: usize,
+    repartition_beneficial_stats: bool,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     if n_target == input.output_partitioning().partition_count() && n_target == 1 {
         // In this case adding a hash repartition is unnecessary as the hash
@@ -1044,9 +1046,13 @@ fn add_hash_on_top(
         // - Usage of order preserving variants is not desirable (per the flag
         //   `config.optimizer.bounded_order_preserving_variants`).
         let should_preserve_ordering = input.output_ordering().is_some();
-        // Since hashing benefits from partitioning, add a round-robin repartition
-        // before it:
-        let mut new_plan = add_roundrobin_on_top(input, n_target, dist_onward, 0)?;
+        let mut new_plan = if repartition_beneficial_stats {
+            // Since hashing benefits from partitioning, add a round-robin repartition
+            // before it:
+            add_roundrobin_on_top(input, n_target, dist_onward, 0)?
+        } else {
+            input
+        };
         new_plan = Arc::new(
             RepartitionExec::try_new(new_plan, Partitioning::Hash(hash_exprs, n_target))?
                 .with_preserve_order(should_preserve_ordering),
@@ -1223,6 +1229,7 @@ fn ensure_distribution(
     let enable_round_robin = config.optimizer.enable_round_robin_repartition;
     let repartition_file_scans = config.optimizer.repartition_file_scans;
     let repartition_file_min_size = config.optimizer.repartition_file_min_size;
+    let batch_size = config.execution.batch_size;
     let is_unbounded = unbounded_output(&dist_context.plan);
     // Use order preserving variants either of the conditions true
     // - it is desired according to config
@@ -1233,13 +1240,7 @@ fn ensure_distribution(
     if dist_context.plan.children().is_empty() {
         return Ok(Transformed::No(dist_context));
     }
-    // Don't need to apply when the returned row count is not greater than 1:
-    let stats = dist_context.plan.statistics();
-    let mut repartition_beneficial_stat = true;
-    if stats.is_exact {
-        repartition_beneficial_stat =
-            stats.num_rows.map(|num_rows| num_rows > 1).unwrap_or(true);
-    }
+
     // Remove unnecessary repartition from the physical plan if any
     let DistributionContext {
         mut plan,
@@ -1263,7 +1264,6 @@ fn ensure_distribution(
             plan = updated_window;
         }
     };
-
     let n_children = plan.children().len();
     // This loop iterates over all the children to:
     // - Increase parallelism for every child if it is beneficial.
@@ -1289,9 +1289,19 @@ fn ensure_distribution(
             maintains,
             child_idx,
         )| {
+            // Don't need to apply when the returned row count is not greater than 1:
+            let num_rows = child.statistics()?.num_rows;
+            let repartition_beneficial_stats = if num_rows.is_exact().unwrap_or(false) {
+                num_rows
+                    .get_value()
+                    .map(|value| value > &batch_size)
+                    .unwrap_or(true)
+            } else {
+                true
+            };
             if enable_round_robin
                 // Operator benefits from partitioning (e.g. filter):
-                && (would_benefit && repartition_beneficial_stat)
+                && (would_benefit && repartition_beneficial_stats)
                 // Unless partitioning doesn't increase the partition count, it is not beneficial:
                 && child.output_partitioning().partition_count() < target_partitions
             {
@@ -1340,6 +1350,7 @@ fn ensure_distribution(
                         target_partitions,
                         dist_onward,
                         child_idx,
+                        repartition_beneficial_stats,
                     )?;
                 }
                 Distribution::UnspecifiedDistribution => {}
@@ -1798,7 +1809,7 @@ mod tests {
             unreachable!();
         }
 
-        fn statistics(&self) -> Statistics {
+        fn statistics(&self) -> Result<Statistics> {
             self.input.statistics()
         }
     }
@@ -1825,7 +1836,7 @@ mod tests {
                 object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
                 file_schema: schema(),
                 file_groups: vec![vec![PartitionedFile::new("x".to_string(), 100)]],
-                statistics: Statistics::default(),
+                statistics: Statistics::new_unknown(&schema()),
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],
@@ -1853,7 +1864,7 @@ mod tests {
                     vec![PartitionedFile::new("x".to_string(), 100)],
                     vec![PartitionedFile::new("y".to_string(), 100)],
                 ],
-                statistics: Statistics::default(),
+                statistics: Statistics::new_unknown(&schema()),
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],
@@ -1875,7 +1886,7 @@ mod tests {
                 object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
                 file_schema: schema(),
                 file_groups: vec![vec![PartitionedFile::new("x".to_string(), 100)]],
-                statistics: Statistics::default(),
+                statistics: Statistics::new_unknown(&schema()),
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],
@@ -1906,7 +1917,7 @@ mod tests {
                     vec![PartitionedFile::new("x".to_string(), 100)],
                     vec![PartitionedFile::new("y".to_string(), 100)],
                 ],
-                statistics: Statistics::default(),
+                statistics: Statistics::new_unknown(&schema()),
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],
@@ -3943,7 +3954,7 @@ mod tests {
                             "x".to_string(),
                             100,
                         )]],
-                        statistics: Statistics::default(),
+                        statistics: Statistics::new_unknown(&schema()),
                         projection: None,
                         limit: None,
                         table_partition_cols: vec![],

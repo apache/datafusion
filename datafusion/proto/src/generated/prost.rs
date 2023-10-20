@@ -1072,14 +1072,12 @@ pub struct Union {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ScalarListValue {
-    /// encode null explicitly to distinguish a list with a null value
-    /// from a list with no values)
-    #[prost(bool, tag = "3")]
-    pub is_null: bool,
-    #[prost(message, optional, tag = "1")]
-    pub field: ::core::option::Option<Field>,
-    #[prost(message, repeated, tag = "2")]
-    pub values: ::prost::alloc::vec::Vec<ScalarValue>,
+    #[prost(bytes = "vec", tag = "1")]
+    pub ipc_message: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "2")]
+    pub arrow_data: ::prost::alloc::vec::Vec<u8>,
+    #[prost(message, optional, tag = "3")]
+    pub schema: ::core::option::Option<Schema>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1224,7 +1222,6 @@ pub mod scalar_value {
         Date32Value(i32),
         #[prost(message, tag = "15")]
         Time32Value(super::ScalarTime32Value),
-        /// WAS: ScalarType null_list_value = 18;
         #[prost(message, tag = "17")]
         ListValue(super::ScalarListValue),
         #[prost(message, tag = "20")]
@@ -2208,27 +2205,33 @@ pub struct PartitionStats {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Precision {
+    #[prost(enumeration = "PrecisionInfo", tag = "1")]
+    pub precision_info: i32,
+    #[prost(message, optional, tag = "2")]
+    pub val: ::core::option::Option<ScalarValue>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Statistics {
-    #[prost(int64, tag = "1")]
-    pub num_rows: i64,
-    #[prost(int64, tag = "2")]
-    pub total_byte_size: i64,
+    #[prost(message, optional, tag = "1")]
+    pub num_rows: ::core::option::Option<Precision>,
+    #[prost(message, optional, tag = "2")]
+    pub total_byte_size: ::core::option::Option<Precision>,
     #[prost(message, repeated, tag = "3")]
     pub column_stats: ::prost::alloc::vec::Vec<ColumnStats>,
-    #[prost(bool, tag = "4")]
-    pub is_exact: bool,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ColumnStats {
     #[prost(message, optional, tag = "1")]
-    pub min_value: ::core::option::Option<ScalarValue>,
+    pub min_value: ::core::option::Option<Precision>,
     #[prost(message, optional, tag = "2")]
-    pub max_value: ::core::option::Option<ScalarValue>,
-    #[prost(uint32, tag = "3")]
-    pub null_count: u32,
-    #[prost(uint32, tag = "4")]
-    pub distinct_count: u32,
+    pub max_value: ::core::option::Option<Precision>,
+    #[prost(message, optional, tag = "3")]
+    pub null_count: ::core::option::Option<Precision>,
+    #[prost(message, optional, tag = "4")]
+    pub distinct_count: ::core::option::Option<Precision>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -3156,6 +3159,35 @@ impl JoinSide {
         match value {
             "LEFT_SIDE" => Some(Self::LeftSide),
             "RIGHT_SIDE" => Some(Self::RightSide),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum PrecisionInfo {
+    Exact = 0,
+    Inexact = 1,
+    Absent = 2,
+}
+impl PrecisionInfo {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            PrecisionInfo::Exact => "EXACT",
+            PrecisionInfo::Inexact => "INEXACT",
+            PrecisionInfo::Absent => "ABSENT",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "EXACT" => Some(Self::Exact),
+            "INEXACT" => Some(Self::Inexact),
+            "ABSENT" => Some(Self::Absent),
             _ => None,
         }
     }

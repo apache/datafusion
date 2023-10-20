@@ -238,7 +238,7 @@ impl BatchPartitioner {
 ///
 /// # Background
 ///
-/// DataFusion, like most other commercial systems, with the the
+/// DataFusion, like most other commercial systems, with the
 /// notable exception of DuckDB, uses the "Exchange Operator" based
 /// approach to parallelism which works well in practice given
 /// sufficient care in implementation.
@@ -620,7 +620,7 @@ impl ExecutionPlan for RepartitionExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Result<Statistics> {
         self.input.statistics()
     }
 }

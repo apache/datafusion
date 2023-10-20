@@ -31,6 +31,7 @@ use crate::{
 };
 use arrow::datatypes::DataType;
 use datafusion_common::{Column, Result};
+use std::ops::Not;
 use std::sync::Arc;
 
 /// Create a column expression based on a qualified or unqualified column name. Will
@@ -119,6 +120,11 @@ pub fn or(left: Expr, right: Expr) -> Expr {
         Operator::Or,
         Box::new(right),
     ))
+}
+
+/// Return a new expression with a logical NOT
+pub fn not(expr: Expr) -> Expr {
+    expr.not()
 }
 
 /// Create an expression to represent the min() aggregate function

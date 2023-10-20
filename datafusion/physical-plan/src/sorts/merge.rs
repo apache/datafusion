@@ -20,7 +20,7 @@
 
 use crate::metrics::BaselineMetrics;
 use crate::sorts::builder::SortOrderBuilder;
-use crate::sorts::cursor::Cursor;
+use crate::sorts::cursor::{Cursor, CursorValues};
 use crate::RecordBatchStream;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -33,7 +33,7 @@ use std::task::{ready, Context, Poll};
 use super::stream::CursorStream;
 
 #[derive(Debug)]
-pub(crate) struct SortPreservingMergeStream<C> {
+pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
     in_progress: SortOrderBuilder<C>,
 
     /// The sorted input streams to merge together
@@ -93,7 +93,7 @@ pub(crate) struct SortPreservingMergeStream<C> {
     produced: usize,
 }
 
-impl<C: Cursor> SortPreservingMergeStream<C> {
+impl<C: CursorValues> SortPreservingMergeStream<C> {
     pub(crate) fn new(
         streams: CursorStream<C>,
         schema: SchemaRef,
@@ -139,6 +139,7 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
             None => Poll::Ready(Ok(())),
             Some(Err(e)) => Poll::Ready(Err(e)),
             Some(Ok((cursor, batch))) => {
+                self.cursors[idx] = Some(Cursor::new(cursor));
                 Poll::Ready(self.in_progress.push_batch(idx, cursor, batch))
             }
         }
@@ -284,7 +285,7 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
     }
 }
 
-impl<C: Cursor + Unpin> Stream for SortPreservingMergeStream<C> {
+impl<C: CursorValues + Unpin> Stream for SortPreservingMergeStream<C> {
     type Item = Result<RecordBatch>;
 
     fn poll_next(
@@ -295,7 +296,7 @@ impl<C: Cursor + Unpin> Stream for SortPreservingMergeStream<C> {
     }
 }
 
-impl<C: Cursor + Unpin> RecordBatchStream for SortPreservingMergeStream<C> {
+impl<C: CursorValues + Unpin> RecordBatchStream for SortPreservingMergeStream<C> {
     fn schema(&self) -> SchemaRef {
         self.in_progress.schema().clone()
     }

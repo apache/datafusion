@@ -622,8 +622,84 @@ create table t as values (arrow_cast(123, 'Decimal256(5,2)'));
 statement ok
 set datafusion.execution.target_partitions = 1;
 
-query error DataFusion error: This feature is not implemented: AvgAccumulator for \(Decimal256\(5, 2\) --> Decimal256\(9, 6\)\)
+query R
 select AVG(column1) from t;
+----
+123
 
 statement ok
 drop table t;
+
+statement ok
+CREATE EXTERNAL TABLE decimal256_simple (
+c1 DECIMAL(50,6) NOT NULL,
+c2 DOUBLE NOT NULL,
+c3 BIGINT NOT NULL,
+c4 BOOLEAN NOT NULL,
+c5 DECIMAL(52,7) NOT NULL
+)
+STORED AS CSV
+WITH HEADER ROW
+LOCATION '../core/tests/data/decimal_data.csv';
+
+query TT
+select arrow_typeof(c1), arrow_typeof(c5) from decimal256_simple limit 1;
+----
+Decimal256(50, 6) Decimal256(52, 7)
+
+query R rowsort
+SELECT c1 from decimal256_simple;
+----
+0.00001
+0.00002
+0.00002
+0.00003
+0.00003
+0.00003
+0.00004
+0.00004
+0.00004
+0.00004
+0.00005
+0.00005
+0.00005
+0.00005
+0.00005
+
+query R rowsort
+select c1 from decimal256_simple where c1 > 0.000030;
+----
+0.00004
+0.00004
+0.00004
+0.00004
+0.00005
+0.00005
+0.00005
+0.00005
+0.00005
+
+query RRIBR rowsort
+select * from decimal256_simple where c1 > c5;
+----
+0.00002 0.000000000002 3 false 0.000019
+0.00003 0.000000000003 5 true 0.000011
+0.00005 0.000000000005 8 false 0.000033
+
+query TR
+select arrow_typeof(avg(c1)), avg(c1) from decimal256_simple;
+----
+Decimal256(54, 10) 0.0000366666
+
+query TR
+select arrow_typeof(min(c1)), min(c1) from decimal256_simple where c4=false;
+----
+Decimal256(50, 6) 0.00002
+
+query TR
+select arrow_typeof(max(c1)), max(c1) from decimal256_simple where c4=false;
+----
+Decimal256(50, 6) 0.00005
+
+statement ok
+drop table decimal256_simple;

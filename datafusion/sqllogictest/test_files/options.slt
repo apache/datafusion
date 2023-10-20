@@ -33,7 +33,7 @@ Filter: a.c0 < Int32(1)
 physical_plan
 CoalesceBatchesExec: target_batch_size=8192
 --FilterExec: c0@0 < 1
-----MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+----MemoryExec: partitions=1, partition_sizes=[1]
 
 ##
 # test_disable_coalesce
@@ -51,7 +51,7 @@ Filter: a.c0 < Int32(1)
 --TableScan: a projection=[c0]
 physical_plan
 FilterExec: c0@0 < 1
---MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+--MemoryExec: partitions=1, partition_sizes=[1]
 
 statement ok
 set datafusion.execution.coalesce_batches = true
@@ -74,7 +74,7 @@ Filter: a.c0 < Int32(1)
 physical_plan
 CoalesceBatchesExec: target_batch_size=1234
 --FilterExec: c0@0 < 1
-----MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+----MemoryExec: partitions=1, partition_sizes=[1]
 
 
 statement ok

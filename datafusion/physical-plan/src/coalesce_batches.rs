@@ -23,6 +23,9 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use super::expressions::PhysicalSortExpr;
+use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+use super::{DisplayAs, Statistics};
 use crate::{
     DisplayFormatType, EquivalenceProperties, ExecutionPlan, Partitioning,
     RecordBatchStream, SendableRecordBatchStream,
@@ -34,11 +37,6 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::OrderingEquivalenceProperties;
-
-use super::expressions::PhysicalSortExpr;
-use super::metrics::{BaselineMetrics, MetricsSet};
-use super::DisplayAs;
-use super::{metrics::ExecutionPlanMetricsSet, Statistics};
 
 use futures::stream::{Stream, StreamExt};
 use log::trace;
@@ -174,7 +172,7 @@ impl ExecutionPlan for CoalesceBatchesExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Result<Statistics> {
         self.input.statistics()
     }
 }

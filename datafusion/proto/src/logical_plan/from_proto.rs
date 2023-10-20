@@ -25,9 +25,13 @@ use crate::protobuf::{
     AnalyzedLogicalPlanType, CubeNode, GroupingSetNode, OptimizedLogicalPlanType,
     OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
 };
-use arrow::datatypes::{
-    i256, DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, TimeUnit,
-    UnionFields, UnionMode,
+use arrow::{
+    buffer::Buffer,
+    datatypes::{
+        i256, DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, TimeUnit,
+        UnionFields, UnionMode,
+    },
+    ipc::{reader::read_record_batch, root_as_message},
 };
 use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{
@@ -641,25 +645,49 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
             Value::Float32Value(v) => Self::Float32(Some(*v)),
             Value::Float64Value(v) => Self::Float64(Some(*v)),
             Value::Date32Value(v) => Self::Date32(Some(*v)),
+            // ScalarValue::List is serialized using arrow IPC format
             Value::ListValue(scalar_list) => {
                 let protobuf::ScalarListValue {
-                    is_null,
-                    values,
-                    field,
+                    ipc_message,
+                    arrow_data,
+                    schema,
                 } = &scalar_list;
 
-                let field: Field = field.as_ref().required("field")?;
-                let field = Arc::new(field);
+                let schema: Schema = if let Some(schema_ref) = schema {
+                    schema_ref.try_into()?
+                } else {
+                    return Err(Error::General(
+                        "Invalid schema while deserializing ScalarValue::List"
+                            .to_string(),
+                    ));
+                };
 
-                let values: Result<Vec<ScalarValue>, Error> =
-                    values.iter().map(|val| val.try_into()).collect();
-                let values = values?;
+                let message = root_as_message(ipc_message.as_slice()).map_err(|e| {
+                    Error::General(format!(
+                        "Error IPC message while deserializing ScalarValue::List: {e}"
+                    ))
+                })?;
+                let buffer = Buffer::from(arrow_data);
 
-                validate_list_values(field.as_ref(), &values)?;
+                let ipc_batch = message.header_as_record_batch().ok_or_else(|| {
+                    Error::General(
+                        "Unexpected message type deserializing ScalarValue::List"
+                            .to_string(),
+                    )
+                })?;
 
-                let values = if *is_null { None } else { Some(values) };
-
-                Self::List(values, field)
+                let record_batch = read_record_batch(
+                    &buffer,
+                    ipc_batch,
+                    Arc::new(schema),
+                    &Default::default(),
+                    None,
+                    &message.version(),
+                )
+                .map_err(DataFusionError::ArrowError)
+                .map_err(|e| e.context("Decoding ScalarValue::List Value"))?;
+                let arr = record_batch.column(0);
+                Self::List(arr.to_owned())
             }
             Value::NullValue(v) => {
                 let null_type: DataType = v.try_into()?;
@@ -923,22 +951,6 @@ pub fn parse_i32_to_aggregate_function(value: &i32) -> Result<AggregateFunction,
     protobuf::AggregateFunction::try_from(*value)
         .map(|a| a.into())
         .map_err(|_| Error::unknown("AggregateFunction", *value))
-}
-
-/// Ensures that all `values` are of type DataType::List and have the
-/// same type as field
-fn validate_list_values(field: &Field, values: &[ScalarValue]) -> Result<(), Error> {
-    for value in values {
-        let field_type = field.data_type();
-        let value_type = value.data_type();
-
-        if field_type != &value_type {
-            return Err(proto_error(format!(
-                "Expected field type {field_type:?}, got scalar of type: {value_type:?}"
-            )));
-        }
-    }
-    Ok(())
 }
 
 pub fn parse_expr(

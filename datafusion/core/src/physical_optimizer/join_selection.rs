@@ -60,21 +60,29 @@ impl JoinSelection {
 // TODO: We need some performance test for Right Semi/Right Join swap to Left Semi/Left Join in case that the right side is smaller but not much smaller.
 // TODO: In PrestoSQL, the optimizer flips join sides only if one side is much smaller than the other by more than SIZE_DIFFERENCE_THRESHOLD times, by default is is 8 times.
 /// Checks statistics for join swap.
-fn should_swap_join_order(left: &dyn ExecutionPlan, right: &dyn ExecutionPlan) -> bool {
+fn should_swap_join_order(
+    left: &dyn ExecutionPlan,
+    right: &dyn ExecutionPlan,
+) -> Result<bool> {
     // Get the left and right table's total bytes
     // If both the left and right tables contain total_byte_size statistics,
     // use `total_byte_size` to determine `should_swap_join_order`, else use `num_rows`
-    let (left_size, right_size) = match (
-        left.statistics().total_byte_size,
-        right.statistics().total_byte_size,
+    let left_stats = left.statistics()?;
+    let right_stats = right.statistics()?;
+    // First compare `total_byte_size` of left and right side,
+    // if information in this field is insufficient fallback to the `num_rows`
+    match (
+        left_stats.total_byte_size.get_value(),
+        right_stats.total_byte_size.get_value(),
     ) {
-        (Some(l), Some(r)) => (Some(l), Some(r)),
-        _ => (left.statistics().num_rows, right.statistics().num_rows),
-    };
-
-    match (left_size, right_size) {
-        (Some(l), Some(r)) => l > r,
-        _ => false,
+        (Some(l), Some(r)) => Ok(l > r),
+        _ => match (
+            left_stats.num_rows.get_value(),
+            right_stats.num_rows.get_value(),
+        ) {
+            (Some(l), Some(r)) => Ok(l > r),
+            _ => Ok(false),
+        },
     }
 }
 
@@ -84,10 +92,13 @@ fn supports_collect_by_size(
 ) -> bool {
     // Currently we do not trust the 0 value from stats, due to stats collection might have bug
     // TODO check the logic in datasource::get_statistics_with_limit()
-    if let Some(size) = plan.statistics().total_byte_size {
-        size != 0 && size < collection_size_threshold
-    } else if let Some(row_count) = plan.statistics().num_rows {
-        row_count != 0 && row_count < collection_size_threshold
+    let Ok(stats) = plan.statistics() else {
+        return false;
+    };
+    if let Some(size) = stats.total_byte_size.get_value() {
+        *size != 0 && *size < collection_size_threshold
+    } else if let Some(row_count) = stats.num_rows.get_value() {
+        *row_count != 0 && *row_count < collection_size_threshold
     } else {
         false
     }
@@ -294,7 +305,7 @@ fn try_collect_left(
     };
     match (left_can_collect, right_can_collect) {
         (true, true) => {
-            if should_swap_join_order(&**left, &**right)
+            if should_swap_join_order(&**left, &**right)?
                 && supports_swap(*hash_join.join_type())
             {
                 Ok(Some(swap_hash_join(hash_join, PartitionMode::CollectLeft)?))
@@ -333,7 +344,7 @@ fn try_collect_left(
 fn partitioned_hash_join(hash_join: &HashJoinExec) -> Result<Arc<dyn ExecutionPlan>> {
     let left = hash_join.left();
     let right = hash_join.right();
-    if should_swap_join_order(&**left, &**right) && supports_swap(*hash_join.join_type())
+    if should_swap_join_order(&**left, &**right)? && supports_swap(*hash_join.join_type())
     {
         swap_hash_join(hash_join, PartitionMode::Partitioned)
     } else {
@@ -373,7 +384,7 @@ fn statistical_join_selection_subrule(
             PartitionMode::Partitioned => {
                 let left = hash_join.left();
                 let right = hash_join.right();
-                if should_swap_join_order(&**left, &**right)
+                if should_swap_join_order(&**left, &**right)?
                     && supports_swap(*hash_join.join_type())
                 {
                     swap_hash_join(hash_join, PartitionMode::Partitioned).map(Some)?
@@ -385,7 +396,7 @@ fn statistical_join_selection_subrule(
     } else if let Some(cross_join) = plan.as_any().downcast_ref::<CrossJoinExec>() {
         let left = cross_join.left();
         let right = cross_join.right();
-        if should_swap_join_order(&**left, &**right) {
+        if should_swap_join_order(&**left, &**right)? {
             let new_join = CrossJoinExec::new(Arc::clone(right), Arc::clone(left));
             // TODO avoid adding ProjectionExec again and again, only adding Final Projection
             let proj: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
@@ -579,6 +590,8 @@ fn apply_subrules(
 
 #[cfg(test)]
 mod tests_statistical {
+    use std::sync::Arc;
+
     use super::*;
     use crate::{
         physical_plan::{
@@ -587,28 +600,26 @@ mod tests_statistical {
         test::StatisticsExec,
     };
 
-    use std::sync::Arc;
-
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::{JoinType, ScalarValue};
+    use datafusion_common::{stats::Precision, JoinType, ScalarValue};
     use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_expr::PhysicalExpr;
 
     fn create_big_and_small() -> (Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>) {
         let big = Arc::new(StatisticsExec::new(
             Statistics {
-                num_rows: Some(10),
-                total_byte_size: Some(100000),
-                ..Default::default()
+                num_rows: Precision::Inexact(10),
+                total_byte_size: Precision::Inexact(100000),
+                column_statistics: vec![ColumnStatistics::new_unknown()],
             },
             Schema::new(vec![Field::new("big_col", DataType::Int32, false)]),
         ));
 
         let small = Arc::new(StatisticsExec::new(
             Statistics {
-                num_rows: Some(100000),
-                total_byte_size: Some(10),
-                ..Default::default()
+                num_rows: Precision::Inexact(100000),
+                total_byte_size: Precision::Inexact(10),
+                column_statistics: vec![ColumnStatistics::new_unknown()],
             },
             Schema::new(vec![Field::new("small_col", DataType::Int32, false)]),
         ));
@@ -624,13 +635,19 @@ mod tests_statistical {
         min: Option<u64>,
         max: Option<u64>,
         distinct_count: Option<usize>,
-    ) -> Option<Vec<ColumnStatistics>> {
-        Some(vec![ColumnStatistics {
-            distinct_count,
-            min_value: min.map(|size| ScalarValue::UInt64(Some(size))),
-            max_value: max.map(|size| ScalarValue::UInt64(Some(size))),
+    ) -> Vec<ColumnStatistics> {
+        vec![ColumnStatistics {
+            distinct_count: distinct_count
+                .map(Precision::Inexact)
+                .unwrap_or(Precision::Absent),
+            min_value: min
+                .map(|size| Precision::Inexact(ScalarValue::UInt64(Some(size))))
+                .unwrap_or(Precision::Absent),
+            max_value: max
+                .map(|size| Precision::Inexact(ScalarValue::UInt64(Some(size))))
+                .unwrap_or(Precision::Absent),
             ..Default::default()
-        }])
+        }]
     }
 
     /// Returns three plans with statistics of (min, max, distinct_count)
@@ -644,39 +661,39 @@ mod tests_statistical {
     ) {
         let big = Arc::new(StatisticsExec::new(
             Statistics {
-                num_rows: Some(100_000),
+                num_rows: Precision::Inexact(100_000),
                 column_statistics: create_column_stats(
                     Some(0),
                     Some(50_000),
                     Some(50_000),
                 ),
-                ..Default::default()
+                total_byte_size: Precision::Absent,
             },
             Schema::new(vec![Field::new("big_col", DataType::Int32, false)]),
         ));
 
         let medium = Arc::new(StatisticsExec::new(
             Statistics {
-                num_rows: Some(10_000),
+                num_rows: Precision::Inexact(10_000),
                 column_statistics: create_column_stats(
                     Some(1000),
                     Some(5000),
                     Some(1000),
                 ),
-                ..Default::default()
+                total_byte_size: Precision::Absent,
             },
             Schema::new(vec![Field::new("medium_col", DataType::Int32, false)]),
         ));
 
         let small = Arc::new(StatisticsExec::new(
             Statistics {
-                num_rows: Some(1000),
+                num_rows: Precision::Inexact(1000),
                 column_statistics: create_column_stats(
                     Some(0),
                     Some(100_000),
                     Some(1000),
                 ),
-                ..Default::default()
+                total_byte_size: Precision::Absent,
             },
             Schema::new(vec![Field::new("small_col", DataType::Int32, false)]),
         ));
@@ -725,10 +742,13 @@ mod tests_statistical {
             .downcast_ref::<HashJoinExec>()
             .expect("The type of the plan should not be changed");
 
-        assert_eq!(swapped_join.left().statistics().total_byte_size, Some(10));
         assert_eq!(
-            swapped_join.right().statistics().total_byte_size,
-            Some(100000)
+            swapped_join.left().statistics().unwrap().total_byte_size,
+            Precision::Inexact(10)
+        );
+        assert_eq!(
+            swapped_join.right().statistics().unwrap().total_byte_size,
+            Precision::Inexact(100000)
         );
     }
 
@@ -774,10 +794,13 @@ mod tests_statistical {
             .expect("The type of the plan should not be changed");
 
         assert_eq!(
-            swapped_join.left().statistics().total_byte_size,
-            Some(100000)
+            swapped_join.left().statistics().unwrap().total_byte_size,
+            Precision::Inexact(100000)
         );
-        assert_eq!(swapped_join.right().statistics().total_byte_size, Some(10));
+        assert_eq!(
+            swapped_join.right().statistics().unwrap().total_byte_size,
+            Precision::Inexact(10)
+        );
     }
 
     #[tokio::test]
@@ -815,10 +838,13 @@ mod tests_statistical {
 
             assert_eq!(swapped_join.schema().fields().len(), 1);
 
-            assert_eq!(swapped_join.left().statistics().total_byte_size, Some(10));
             assert_eq!(
-                swapped_join.right().statistics().total_byte_size,
-                Some(100000)
+                swapped_join.left().statistics().unwrap().total_byte_size,
+                Precision::Inexact(10)
+            );
+            assert_eq!(
+                swapped_join.right().statistics().unwrap().total_byte_size,
+                Precision::Inexact(100000)
             );
 
             assert_eq!(original_schema, swapped_join.schema());
@@ -893,9 +919,9 @@ mod tests_statistical {
             "  HashJoinExec: mode=CollectLeft, join_type=Right, on=[(small_col@1, medium_col@0)]",
             "    ProjectionExec: expr=[big_col@1 as big_col, small_col@0 as small_col]",
             "      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(small_col@0, big_col@0)]",
-            "        StatisticsExec: col_count=1, row_count=Some(1000)",
-            "        StatisticsExec: col_count=1, row_count=Some(100000)",
-            "    StatisticsExec: col_count=1, row_count=Some(10000)",
+            "        StatisticsExec: col_count=1, row_count=Inexact(1000)",
+            "        StatisticsExec: col_count=1, row_count=Inexact(100000)",
+            "    StatisticsExec: col_count=1, row_count=Inexact(10000)",
             "",
         ];
         assert_optimized!(expected, join);
@@ -927,10 +953,13 @@ mod tests_statistical {
             .downcast_ref::<HashJoinExec>()
             .expect("The type of the plan should not be changed");
 
-        assert_eq!(swapped_join.left().statistics().total_byte_size, Some(10));
         assert_eq!(
-            swapped_join.right().statistics().total_byte_size,
-            Some(100000)
+            swapped_join.left().statistics().unwrap().total_byte_size,
+            Precision::Inexact(10)
+        );
+        assert_eq!(
+            swapped_join.right().statistics().unwrap().total_byte_size,
+            Precision::Inexact(100000)
         );
     }
 
@@ -973,27 +1002,27 @@ mod tests_statistical {
     async fn test_join_selection_collect_left() {
         let big = Arc::new(StatisticsExec::new(
             Statistics {
-                num_rows: Some(10000000),
-                total_byte_size: Some(10000000),
-                ..Default::default()
+                num_rows: Precision::Inexact(10000000),
+                total_byte_size: Precision::Inexact(10000000),
+                column_statistics: vec![ColumnStatistics::new_unknown()],
             },
             Schema::new(vec![Field::new("big_col", DataType::Int32, false)]),
         ));
 
         let small = Arc::new(StatisticsExec::new(
             Statistics {
-                num_rows: Some(10),
-                total_byte_size: Some(10),
-                ..Default::default()
+                num_rows: Precision::Inexact(10),
+                total_byte_size: Precision::Inexact(10),
+                column_statistics: vec![ColumnStatistics::new_unknown()],
             },
             Schema::new(vec![Field::new("small_col", DataType::Int32, false)]),
         ));
 
         let empty = Arc::new(StatisticsExec::new(
             Statistics {
-                num_rows: None,
-                total_byte_size: None,
-                ..Default::default()
+                num_rows: Precision::Absent,
+                total_byte_size: Precision::Absent,
+                column_statistics: vec![ColumnStatistics::new_unknown()],
             },
             Schema::new(vec![Field::new("empty_col", DataType::Int32, false)]),
         ));
@@ -1051,27 +1080,27 @@ mod tests_statistical {
     async fn test_join_selection_partitioned() {
         let big1 = Arc::new(StatisticsExec::new(
             Statistics {
-                num_rows: Some(10000000),
-                total_byte_size: Some(10000000),
-                ..Default::default()
+                num_rows: Precision::Inexact(10000000),
+                total_byte_size: Precision::Inexact(10000000),
+                column_statistics: vec![ColumnStatistics::new_unknown()],
             },
             Schema::new(vec![Field::new("big_col1", DataType::Int32, false)]),
         ));
 
         let big2 = Arc::new(StatisticsExec::new(
             Statistics {
-                num_rows: Some(20000000),
-                total_byte_size: Some(20000000),
-                ..Default::default()
+                num_rows: Precision::Inexact(20000000),
+                total_byte_size: Precision::Inexact(20000000),
+                column_statistics: vec![ColumnStatistics::new_unknown()],
             },
             Schema::new(vec![Field::new("big_col2", DataType::Int32, false)]),
         ));
 
         let empty = Arc::new(StatisticsExec::new(
             Statistics {
-                num_rows: None,
-                total_byte_size: None,
-                ..Default::default()
+                num_rows: Precision::Absent,
+                total_byte_size: Precision::Absent,
+                column_statistics: vec![ColumnStatistics::new_unknown()],
             },
             Schema::new(vec![Field::new("empty_col", DataType::Int32, false)]),
         ));
@@ -1173,12 +1202,13 @@ mod tests_statistical {
 
 #[cfg(test)]
 mod util_tests {
+    use std::sync::Arc;
+
     use arrow_schema::{DataType, Field, Schema};
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Column, NegativeExpr};
     use datafusion_physical_expr::intervals::utils::check_support;
     use datafusion_physical_expr::PhysicalExpr;
-    use std::sync::Arc;
 
     #[test]
     fn check_expr_supported() {

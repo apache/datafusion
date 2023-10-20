@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::sorts::cursor::{FieldArray, FieldCursor, RowCursor};
+use crate::sorts::cursor::{ArrayValues, CursorArray, RowValues};
 use crate::SendableRecordBatchStream;
 use crate::{PhysicalExpr, PhysicalSortExpr};
 use arrow::array::Array;
@@ -80,7 +80,7 @@ impl FusedStreams {
 }
 
 /// A [`PartitionedStream`] that wraps a set of [`SendableRecordBatchStream`]
-/// and computes [`RowCursor`] based on the provided [`PhysicalSortExpr`]
+/// and computes [`RowValues`] based on the provided [`PhysicalSortExpr`]
 #[derive(Debug)]
 pub struct RowCursorStream {
     /// Converter to convert output of physical expressions
@@ -118,7 +118,7 @@ impl RowCursorStream {
         })
     }
 
-    fn convert_batch(&mut self, batch: &RecordBatch) -> Result<RowCursor> {
+    fn convert_batch(&mut self, batch: &RecordBatch) -> Result<RowValues> {
         let cols = self
             .column_expressions
             .iter()
@@ -131,12 +131,12 @@ impl RowCursorStream {
         // track the memory in the newly created Rows.
         let mut rows_reservation = self.reservation.new_empty();
         rows_reservation.try_grow(rows.size())?;
-        Ok(RowCursor::new(rows, rows_reservation))
+        Ok(RowValues::new(rows, rows_reservation))
     }
 }
 
 impl PartitionedStream for RowCursorStream {
-    type Output = Result<(RowCursor, RecordBatch)>;
+    type Output = Result<(RowValues, RecordBatch)>;
 
     fn partitions(&self) -> usize {
         self.streams.0.len()
@@ -157,7 +157,7 @@ impl PartitionedStream for RowCursorStream {
 }
 
 /// Specialized stream for sorts on single primitive columns
-pub struct FieldCursorStream<T: FieldArray> {
+pub struct FieldCursorStream<T: CursorArray> {
     /// The physical expressions to sort by
     sort: PhysicalSortExpr,
     /// Input streams
@@ -165,7 +165,7 @@ pub struct FieldCursorStream<T: FieldArray> {
     phantom: PhantomData<fn(T) -> T>,
 }
 
-impl<T: FieldArray> std::fmt::Debug for FieldCursorStream<T> {
+impl<T: CursorArray> std::fmt::Debug for FieldCursorStream<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PrimitiveCursorStream")
             .field("num_streams", &self.streams)
@@ -173,7 +173,7 @@ impl<T: FieldArray> std::fmt::Debug for FieldCursorStream<T> {
     }
 }
 
-impl<T: FieldArray> FieldCursorStream<T> {
+impl<T: CursorArray> FieldCursorStream<T> {
     pub fn new(sort: PhysicalSortExpr, streams: Vec<SendableRecordBatchStream>) -> Self {
         let streams = streams.into_iter().map(|s| s.fuse()).collect();
         Self {
@@ -183,16 +183,16 @@ impl<T: FieldArray> FieldCursorStream<T> {
         }
     }
 
-    fn convert_batch(&mut self, batch: &RecordBatch) -> Result<FieldCursor<T::Values>> {
+    fn convert_batch(&mut self, batch: &RecordBatch) -> Result<ArrayValues<T::Values>> {
         let value = self.sort.expr.evaluate(batch)?;
         let array = value.into_array(batch.num_rows());
         let array = array.as_any().downcast_ref::<T>().expect("field values");
-        Ok(FieldCursor::new(self.sort.options, array))
+        Ok(ArrayValues::new(self.sort.options, array))
     }
 }
 
-impl<T: FieldArray> PartitionedStream for FieldCursorStream<T> {
-    type Output = Result<(FieldCursor<T::Values>, RecordBatch)>;
+impl<T: CursorArray> PartitionedStream for FieldCursorStream<T> {
+    type Output = Result<(ArrayValues<T::Values>, RecordBatch)>;
 
     fn partitions(&self) -> usize {
         self.streams.0.len()

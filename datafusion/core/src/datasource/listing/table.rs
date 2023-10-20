@@ -837,12 +837,6 @@ impl TableProvider for ListingTable {
             );
         }
 
-        if self.table_paths().len() > 1 {
-            return plan_err!(
-                "Writing to a table backed by multiple partitions is not supported yet"
-            );
-        }
-
         let table_path = &self.table_paths()[0];
         // Get the object store for the table path.
         let store = state.runtime_env().object_store(table_path)?;
@@ -962,7 +956,7 @@ impl ListingTable {
         let store = if let Some(url) = self.table_paths.get(0) {
             ctx.runtime_env().object_store(url)?
         } else {
-            return Ok((vec![], Statistics::default()));
+            return Ok((vec![], Statistics::new_unknown(&self.file_schema)));
         };
         // list files (with partitions)
         let file_list = future::try_join_all(self.table_paths.iter().map(|table_path| {
@@ -976,14 +970,12 @@ impl ListingTable {
             )
         }))
         .await?;
-
         let file_list = stream::iter(file_list).flatten();
-
         // collect the statistics if required by the config
         let files = file_list
             .map(|part_file| async {
                 let part_file = part_file?;
-                let mut statistics_result = Statistics::default();
+                let mut statistics_result = Statistics::new_unknown(&self.file_schema);
                 if self.options.collect_stat {
                     let statistics_cache = self.collected_statistics.clone();
                     match statistics_cache.get_with_extra(
@@ -1051,9 +1043,9 @@ mod tests {
 
     use arrow::datatypes::{DataType, Schema};
     use arrow::record_batch::RecordBatch;
+    use datafusion_common::stats::Precision;
     use datafusion_common::{assert_contains, GetExt, ScalarValue};
     use datafusion_expr::{BinaryExpr, LogicalPlanBuilder, Operator};
-
     use rstest::*;
     use tempfile::TempDir;
 
@@ -1100,8 +1092,8 @@ mod tests {
         assert_eq!(exec.output_partitioning().partition_count(), 1);
 
         // test metadata
-        assert_eq!(exec.statistics().num_rows, Some(8));
-        assert_eq!(exec.statistics().total_byte_size, Some(671));
+        assert_eq!(exec.statistics()?.num_rows, Precision::Exact(8));
+        assert_eq!(exec.statistics()?.total_byte_size, Precision::Exact(671));
 
         Ok(())
     }
@@ -1123,8 +1115,8 @@ mod tests {
         let table = ListingTable::try_new(config)?;
 
         let exec = table.scan(&state, None, &[], None).await?;
-        assert_eq!(exec.statistics().num_rows, Some(8));
-        assert_eq!(exec.statistics().total_byte_size, Some(671));
+        assert_eq!(exec.statistics()?.num_rows, Precision::Exact(8));
+        assert_eq!(exec.statistics()?.total_byte_size, Precision::Exact(671));
 
         Ok(())
     }
@@ -1147,8 +1139,8 @@ mod tests {
         let table = ListingTable::try_new(config)?;
 
         let exec = table.scan(&state, None, &[], None).await?;
-        assert_eq!(exec.statistics().num_rows, None);
-        assert_eq!(exec.statistics().total_byte_size, None);
+        assert_eq!(exec.statistics()?.num_rows, Precision::Absent);
+        assert_eq!(exec.statistics()?.total_byte_size, Precision::Absent);
 
         Ok(())
     }
@@ -1615,10 +1607,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_insert_into_append_new_json_files() -> Result<()> {
+        let mut config_map: HashMap<String, String> = HashMap::new();
+        config_map.insert("datafusion.execution.batch_size".into(), "1".into());
+        config_map.insert(
+            "datafusion.execution.soft_max_rows_per_output_file".into(),
+            "1".into(),
+        );
         helper_test_append_new_files_to_table(
             FileType::JSON,
             FileCompressionType::UNCOMPRESSED,
-            None,
+            Some(config_map),
         )
         .await?;
         Ok(())
@@ -1637,10 +1635,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_insert_into_append_new_csv_files() -> Result<()> {
+        let mut config_map: HashMap<String, String> = HashMap::new();
+        config_map.insert("datafusion.execution.batch_size".into(), "1".into());
+        config_map.insert(
+            "datafusion.execution.soft_max_rows_per_output_file".into(),
+            "1".into(),
+        );
         helper_test_append_new_files_to_table(
             FileType::CSV,
             FileCompressionType::UNCOMPRESSED,
-            None,
+            Some(config_map),
         )
         .await?;
         Ok(())
@@ -1648,10 +1652,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_insert_into_append_new_parquet_files_defaults() -> Result<()> {
+        let mut config_map: HashMap<String, String> = HashMap::new();
+        config_map.insert("datafusion.execution.batch_size".into(), "1".into());
+        config_map.insert(
+            "datafusion.execution.soft_max_rows_per_output_file".into(),
+            "1".into(),
+        );
         helper_test_append_new_files_to_table(
             FileType::PARQUET,
             FileCompressionType::UNCOMPRESSED,
-            None,
+            Some(config_map),
         )
         .await?;
         Ok(())
@@ -1778,6 +1788,11 @@ mod tests {
     #[tokio::test]
     async fn test_insert_into_append_new_parquet_files_session_overrides() -> Result<()> {
         let mut config_map: HashMap<String, String> = HashMap::new();
+        config_map.insert("datafusion.execution.batch_size".into(), "1".into());
+        config_map.insert(
+            "datafusion.execution.soft_max_rows_per_output_file".into(),
+            "1".into(),
+        );
         config_map.insert(
             "datafusion.execution.parquet.compression".into(),
             "zstd(5)".into(),
@@ -1838,6 +1853,7 @@ mod tests {
             "datafusion.execution.parquet.write_batch_size".into(),
             "5".into(),
         );
+        config_map.insert("datafusion.execution.batch_size".into(), "1".into());
         helper_test_append_new_files_to_table(
             FileType::PARQUET,
             FileCompressionType::UNCOMPRESSED,
@@ -2085,7 +2101,6 @@ mod tests {
             }
             None => SessionContext::new(),
         };
-        let target_partition_number = session_ctx.state().config().target_partitions();
 
         // Create a new schema with one field called "a" of type Int32
         let schema = Arc::new(Schema::new(vec![Field::new(
@@ -2225,7 +2240,7 @@ mod tests {
 
         // Assert that `target_partition_number` many files were added to the table.
         let num_files = tmp_dir.path().read_dir()?.count();
-        assert_eq!(num_files, target_partition_number);
+        assert_eq!(num_files, 3);
 
         // Create a physical plan from the insert plan
         let plan = session_ctx
@@ -2268,7 +2283,7 @@ mod tests {
 
         // Assert that another `target_partition_number` many files were added to the table.
         let num_files = tmp_dir.path().read_dir()?.count();
-        assert_eq!(num_files, 2 * target_partition_number);
+        assert_eq!(num_files, 6);
 
         // Return Ok if the function
         Ok(())

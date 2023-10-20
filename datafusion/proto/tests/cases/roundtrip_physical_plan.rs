@@ -25,20 +25,19 @@ use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
 use datafusion::execution::context::ExecutionProps;
-use datafusion::logical_expr::create_udf;
-use datafusion::logical_expr::{BuiltinScalarFunction, Volatility};
-use datafusion::logical_expr::{JoinType, Operator};
-use datafusion::physical_expr::expressions::GetFieldAccessExpr;
-use datafusion::physical_expr::expressions::{cast, in_list};
+use datafusion::logical_expr::{
+    create_udf, BuiltinScalarFunction, JoinType, Operator, Volatility,
+};
 use datafusion::physical_expr::window::SlidingAggregateWindowExpr;
 use datafusion::physical_expr::ScalarFunctionExpr;
-use datafusion::physical_plan::aggregates::PhysicalGroupBy;
-use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode};
+use datafusion::physical_plan::aggregates::{
+    AggregateExec, AggregateMode, PhysicalGroupBy,
+};
 use datafusion::physical_plan::analyze::AnalyzeExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::{
-    binary, col, like, lit, Avg, BinaryExpr, Column, DistinctCount, GetIndexedFieldExpr,
-    NotExpr, NthValue, PhysicalSortExpr, Sum,
+    binary, cast, col, in_list, like, lit, Avg, BinaryExpr, Column, DistinctCount,
+    GetFieldAccessExpr, GetIndexedFieldExpr, NotExpr, NthValue, PhysicalSortExpr, Sum,
 };
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::functions::make_scalar_function;
@@ -49,10 +48,12 @@ use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::windows::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowAggExec,
 };
-use datafusion::physical_plan::{functions, udaf};
-use datafusion::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr, Statistics};
+use datafusion::physical_plan::{
+    functions, udaf, AggregateExpr, ExecutionPlan, PhysicalExpr, Statistics,
+};
 use datafusion::prelude::SessionContext;
 use datafusion::scalar::ScalarValue;
+use datafusion_common::stats::Precision;
 use datafusion_common::Result;
 use datafusion_expr::{
     Accumulator, AccumulatorFactoryFunction, AggregateUDF, ReturnTypeFunction, Signature,
@@ -472,10 +473,11 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
             1024,
         )]],
         statistics: Statistics {
-            num_rows: Some(100),
-            total_byte_size: Some(1024),
-            column_statistics: None,
-            is_exact: false,
+            num_rows: Precision::Inexact(100),
+            total_byte_size: Precision::Inexact(1024),
+            column_statistics: Statistics::unknown_column(&Arc::new(Schema::new(vec![
+                Field::new("col", DataType::Utf8, false),
+            ]))),
         },
         projection: None,
         limit: None,

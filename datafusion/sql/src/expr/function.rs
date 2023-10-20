@@ -49,7 +49,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         };
 
         // user-defined function (UDF) should have precedence in case it has the same name as a scalar built-in function
-        if let Some(fm) = self.schema_provider.get_function_meta(&name) {
+        if let Some(fm) = self.context_provider.get_function_meta(&name) {
             let args =
                 self.function_args_to_expr(function.args, schema, planner_context)?;
             return Ok(Expr::ScalarUDF(ScalarUDF::new(fm, args)));
@@ -127,7 +127,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
         } else {
             // User defined aggregate functions (UDAF) have precedence in case it has the same name as a scalar built-in function
-            if let Some(fm) = self.schema_provider.get_aggregate_meta(&name) {
+            if let Some(fm) = self.context_provider.get_aggregate_meta(&name) {
                 let args =
                     self.function_args_to_expr(function.args, schema, planner_context)?;
                 return Ok(Expr::AggregateUDF(expr::AggregateUDF::new(
@@ -180,13 +180,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         window_function::find_df_window_func(name)
             // next check user defined aggregates
             .or_else(|| {
-                self.schema_provider
+                self.context_provider
                     .get_aggregate_meta(name)
                     .map(WindowFunction::AggregateUDF)
             })
             // next check user defined window functions
             .or_else(|| {
-                self.schema_provider
+                self.context_provider
                     .get_window_meta(name)
                     .map(WindowFunction::WindowUDF)
             })
