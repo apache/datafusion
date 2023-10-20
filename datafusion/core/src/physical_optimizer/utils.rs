@@ -105,7 +105,7 @@ pub fn add_sort_above(
     // If the ordering requirement is already satisfied, do not add a sort.
     if !node
         .schema_properties()
-        .ordering_satisfy_requirement_concrete(sort_requirement)
+        .ordering_satisfy_requirement(sort_requirement)
     {
         let sort_expr = PhysicalSortRequirement::to_sort_exprs(sort_requirement.to_vec());
         let new_sort = SortExec::new(sort_expr, node.clone()).with_fetch(fetch);

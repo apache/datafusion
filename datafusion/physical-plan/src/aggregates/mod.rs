@@ -340,12 +340,12 @@ fn get_finest_requirement(
     // ordering. If so, we return `None` to indicate this.
     let mut all_satisfied = true;
     for (aggr_expr, fn_req) in aggr_expr.iter_mut().zip(order_by_expr.iter_mut()) {
-        if schema_properties.ordering_satisfy(fn_req.as_deref()) {
+        if schema_properties.ordering_satisfy(fn_req.as_deref().unwrap_or(&[])) {
             continue;
         }
         if let Some(reverse) = aggr_expr.reverse_expr() {
             let reverse_req = fn_req.as_ref().map(|item| reverse_order_bys(item));
-            if schema_properties.ordering_satisfy(reverse_req.as_deref()) {
+            if schema_properties.ordering_satisfy(reverse_req.as_deref().unwrap_or(&[])) {
                 // We need to update `aggr_expr` with its reverse since only its
                 // reverse requirement is compatible with the existing requirements:
                 *aggr_expr = reverse;

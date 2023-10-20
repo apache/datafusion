@@ -256,6 +256,9 @@ impl EquivalentGroups {
                     return Some(target.clone());
                 }
                 // if equivalent group of source contains expr, expr can be projected
+                // Assume that projection mapping is (a as a1, a+c)
+                // and input table is (a, b, c), where a=b
+                // Expression b is projected as a1 also.
                 else if let Some(group) = self.get_equivalent_group(source) {
                     if physical_exprs_contains(&group, expr) {
                         return Some(target.clone());
@@ -782,37 +785,17 @@ impl SchemaProperties {
         collapse_lex_req(normalized_sort_reqs)
     }
 
-    /// Checks whether given ordering requirements are satisfied by provided [PhysicalSortExpr]s.
-    pub fn ordering_satisfy(&self, required: Option<&[PhysicalSortExpr]>) -> bool {
-        match required {
-            None => true,
-            Some(required) => self.ordering_satisfy_concrete(required),
-        }
-    }
-
     /// Checks whether the required [`PhysicalSortExpr`]s are satisfied by the
     /// any of the existing orderings.
-    pub fn ordering_satisfy_concrete(&self, required: &[PhysicalSortExpr]) -> bool {
+    pub fn ordering_satisfy(&self, required: &[PhysicalSortExpr]) -> bool {
         // Convert `PhysicalSortExpr`s to `PhysicalSortRequirement`s
         let sort_requirements = PhysicalSortRequirement::from_sort_exprs(required.iter());
-        self.ordering_satisfy_requirement_concrete(&sort_requirements)
+        self.ordering_satisfy_requirement(&sort_requirements)
     }
 
     /// Checks whether the given [`PhysicalSortRequirement`]s are satisfied by the
     /// provided [`PhysicalSortExpr`]s.
     pub fn ordering_satisfy_requirement(
-        &self,
-        required: Option<&[PhysicalSortRequirement]>,
-    ) -> bool {
-        match required {
-            None => true,
-            Some(required) => self.ordering_satisfy_requirement_concrete(required),
-        }
-    }
-
-    /// Checks whether the given [`PhysicalSortRequirement`]s are satisfied by the
-    /// provided [`PhysicalSortExpr`]s.
-    pub fn ordering_satisfy_requirement_concrete(
         &self,
         required: &[PhysicalSortRequirement],
     ) -> bool {
@@ -822,22 +805,6 @@ impl SchemaProperties {
     /// Checks whether the given [`PhysicalSortRequirement`]s are equal or more
     /// specific than the provided [`PhysicalSortRequirement`]s.
     pub fn requirements_compatible(
-        &self,
-        provided: Option<&[PhysicalSortRequirement]>,
-        required: Option<&[PhysicalSortRequirement]>,
-    ) -> bool {
-        match (provided, required) {
-            (_, None) => true,
-            (None, Some(_)) => false,
-            (Some(provided), Some(required)) => {
-                self.requirements_compatible_concrete(provided, required)
-            }
-        }
-    }
-
-    /// Checks whether the given [`PhysicalSortRequirement`]s are equal or more
-    /// specific than the provided [`PhysicalSortRequirement`]s.
-    fn requirements_compatible_concrete(
         &self,
         provided: &[PhysicalSortRequirement],
         required: &[PhysicalSortRequirement],
@@ -988,7 +955,7 @@ impl SchemaProperties {
         &self,
         leading_requirement: &PhysicalSortRequirement,
     ) -> bool {
-        self.ordering_satisfy_requirement_concrete(&[leading_requirement.clone()])
+        self.ordering_satisfy_requirement(&[leading_requirement.clone()])
     }
 
     /// Projects `SchemaProperties` according to mapping given in `source_to_target_mapping`.
@@ -1697,12 +1664,12 @@ mod tests {
         let empty_schema = &Arc::new(Schema::empty());
         let mut schema_properties = SchemaProperties::new(empty_schema.clone());
         schema_properties.oeq_group.push(finer.clone());
-        assert!(schema_properties.ordering_satisfy(Some(&crude)));
+        assert!(schema_properties.ordering_satisfy(&crude));
 
         // Crude ordering doesn't satisfy finer ordering. should return false
         let mut schema_properties = SchemaProperties::new(empty_schema.clone());
         schema_properties.oeq_group.push(crude.clone());
-        assert!(!schema_properties.ordering_satisfy(Some(&finer)));
+        assert!(!schema_properties.ordering_satisfy(&finer));
         Ok(())
     }
 
@@ -1856,9 +1823,8 @@ mod tests {
                 )?,
                 expected
             );
-            let required = Some(&required[..]);
             assert_eq!(
-                schema_properties.ordering_satisfy(required),
+                schema_properties.ordering_satisfy(&required),
                 expected,
                 "{err_msg}"
             );
@@ -1910,7 +1876,7 @@ mod tests {
                         requirement, expected
                     );
                     assert_eq!(
-                        schema_properties.ordering_satisfy_concrete(&requirement),
+                        schema_properties.ordering_satisfy(&requirement),
                         expected,
                         "{}",
                         err_msg
@@ -1997,28 +1963,28 @@ mod tests {
             options,
         };
 
-        assert!(schema_properties.ordering_satisfy_concrete(
+        assert!(schema_properties.ordering_satisfy(
             // After normalization would be a ASC
             &[sort_req_c.clone(), sort_req_a.clone(), sort_req_e.clone(),],
         ));
-        assert!(!schema_properties.ordering_satisfy_concrete(
+        assert!(!schema_properties.ordering_satisfy(
             // After normalization would be a ASC, b ASC
             // which is not satisfied
             &[sort_req_c.clone(), sort_req_b.clone(),],
         ));
 
-        assert!(schema_properties.ordering_satisfy_concrete(
+        assert!(schema_properties.ordering_satisfy(
             // After normalization would be a ASC
             &[sort_req_c.clone(), sort_req_d.clone(),],
         ));
 
-        assert!(!schema_properties.ordering_satisfy_concrete(
+        assert!(!schema_properties.ordering_satisfy(
             // After normalization would be a ASC, b ASC
             // which is not satisfied
             &[sort_req_d.clone(), sort_req_f.clone(), sort_req_b.clone(),],
         ));
 
-        assert!(schema_properties.ordering_satisfy_concrete(
+        assert!(schema_properties.ordering_satisfy(
             // After normalization would be a ASC
             // which is satisfied
             &[sort_req_d.clone(), sort_req_f.clone()],

@@ -1318,7 +1318,7 @@ fn ensure_distribution(
                 // - using order preserving variant is not desirable.
                 let ordering_satisfied = child
                     .schema_properties()
-                    .ordering_satisfy_requirement_concrete(required_input_ordering);
+                    .ordering_satisfy_requirement(required_input_ordering);
                 if !ordering_satisfied || !order_preserving_variants_desirable {
                     replace_order_preserving_variants(&mut child, dist_onward)?;
                     // If ordering requirements were satisfied before repartitioning,
