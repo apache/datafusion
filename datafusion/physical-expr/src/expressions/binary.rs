@@ -344,8 +344,8 @@ impl PhysicalExpr for BinaryExpr {
         let right_interval = children[1];
 
         let (left, right) = if self.op.is_logic_operator() {
-            // TODO: Currently, this implementation only supports the AND operator
-            //       and does not require any further propagation. In the future,
+            // TODO: Currently, this implementation only supports the AND/OR operator
+            //       and does not require any further propagation (??). In the future,
             //       upon adding support for additional logical operators, this
             //       method will require modification to support propagating the
             //       changes accordingly.

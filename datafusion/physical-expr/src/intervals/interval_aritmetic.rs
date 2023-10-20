@@ -432,6 +432,33 @@ impl Interval {
         }
     }
 
+    /// Compute the logical disjunction of this (boolean) interval with the given boolean interval.
+    pub(crate) fn or<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
+        let rhs = other.borrow();
+        match (
+            &self.lower.value,
+            &self.upper.value,
+            &rhs.lower.value,
+            &rhs.upper.value,
+        ) {
+            (
+                ScalarValue::Boolean(Some(self_lower)),
+                ScalarValue::Boolean(Some(self_upper)),
+                ScalarValue::Boolean(Some(other_lower)),
+                ScalarValue::Boolean(Some(other_upper)),
+            ) => {
+                let lower = *self_lower || *other_lower;
+                let upper = *self_upper || *other_upper;
+
+                Ok(Interval {
+                    lower: IntervalBound::new(ScalarValue::Boolean(Some(lower)), false),
+                    upper: IntervalBound::new(ScalarValue::Boolean(Some(upper)), false),
+                })
+            }
+            _ => internal_err!("Incompatible types for logical disjunction"),
+        }
+    }
+
     /// Compute the logical negation of this (boolean) interval.
     pub(crate) fn not(&self) -> Result<Self> {
         if !matches!(self.get_datatype()?, DataType::Boolean) {
@@ -738,6 +765,7 @@ pub fn apply_operator(op: &Operator, lhs: &Interval, rhs: &Interval) -> Result<I
         Operator::Lt => Ok(lhs.lt(rhs)),
         Operator::LtEq => Ok(lhs.lt_eq(rhs)),
         Operator::And => lhs.and(rhs),
+        Operator::Or => lhs.or(rhs),
         Operator::Plus => lhs.add(rhs),
         Operator::Minus => lhs.sub(rhs),
         _ => Ok(Interval::default()),
@@ -1053,9 +1081,12 @@ mod tests {
 
     fn open_open<T>(lower: Option<T>, upper: Option<T>) -> Interval
     where
+        T: std::fmt::Debug,
         ScalarValue: From<Option<T>>,
     {
+        println!("Creating open_open from {:?} to {:?}", lower, upper);
         Interval::make(lower, upper, (true, true))
+
     }
 
     fn open_closed<T>(lower: Option<T>, upper: Option<T>) -> Interval
@@ -1221,6 +1252,8 @@ mod tests {
 
     #[test]
     fn and_test() -> Result<()> {
+        // check that (lhs AND rhs) is equal to result
+        // (lhs_lower, lhs_upper, rhs_lower, rhs_upper, lower_result, upper_result)
         let cases = vec![
             (false, true, false, false, false, false),
             (false, false, false, true, false, false),
@@ -1235,6 +1268,33 @@ mod tests {
                 open_open(Some(case.0), Some(case.1))
                     .and(open_open(Some(case.2), Some(case.3)))?,
                 open_open(Some(case.4), Some(case.5))
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn or_test() -> Result<()> {
+        // check that (lhs OR rhs) is equal to result
+        // (lhs_lower, lhs_upper, rhs_lower, rhs_upper, lower_result, upper_result)
+        let cases = vec![
+            (false, true, false, false, true, false),
+            (false, false, false, true, false, false),
+            (false, true, false, true, false, true),
+            (false, true, true, true, false, true),
+            (false, false, false, false, false, false),
+            (true, true, true, true, true, true),
+        ];
+
+        for case in cases {
+            println!("case: {:?}", case);
+            let lhs = open_open(Some(case.0), Some(case.1));
+            let rhs = open_open(Some(case.2), Some(case.3));
+            let expected = open_open(Some(case.4), Some(case.5));
+            println!("lhs: {:?}, rhs: {:?}, expected: {:?}", lhs, rhs, expected);
+            assert_eq!(
+                lhs.or(rhs)?,
+                expected,
             );
         }
         Ok(())
