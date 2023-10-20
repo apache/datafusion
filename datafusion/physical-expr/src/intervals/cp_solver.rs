@@ -498,22 +498,15 @@ impl ExprIntervalGraph {
     pub fn evaluate_bounds(&mut self) -> Result<&Interval> {
         let mut dfs = DfsPostOrder::new(&self.graph, self.root);
         while let Some(node) = dfs.next(&self.graph) {
-            println!("Considering node: {}", self.graph[node].expr);
             let neighbors = self.graph.neighbors_directed(node, Outgoing);
             let mut children_intervals = neighbors
-                .map(|child| {
-                    println!("  child: {}", self.graph[child].expr);
-                    self.graph[child].interval()
-                })
+                .map(|child| self.graph[child].interval())
                 .collect::<Vec<_>>();
-            println!("  children_intervals: {:?}", children_intervals);
             // If the current expression is a leaf, its interval should already
             // be set externally, just continue with the evaluation procedure:
             if !children_intervals.is_empty() {
                 // Reverse to align with [PhysicalExpr]'s children:
                 children_intervals.reverse();
-                println!("  evaluating bounds with: {:?}", children_intervals);
-
                 self.graph[node].interval =
                     self.graph[node].expr.evaluate_bounds(&children_intervals)?;
             }

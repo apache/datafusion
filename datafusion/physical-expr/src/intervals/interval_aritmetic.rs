@@ -1081,12 +1081,9 @@ mod tests {
 
     fn open_open<T>(lower: Option<T>, upper: Option<T>) -> Interval
     where
-        T: std::fmt::Debug,
         ScalarValue: From<Option<T>>,
     {
-        println!("Creating open_open from {:?} to {:?}", lower, upper);
         Interval::make(lower, upper, (true, true))
-
     }
 
     fn open_closed<T>(lower: Option<T>, upper: Option<T>) -> Interval
@@ -1286,16 +1283,15 @@ mod tests {
             (true, true, true, true, true, true),
         ];
 
+        // Something is not right here -- lhs, rhs and expected are always the same Interval
+        //
         for case in cases {
             println!("case: {:?}", case);
             let lhs = open_open(Some(case.0), Some(case.1));
             let rhs = open_open(Some(case.2), Some(case.3));
             let expected = open_open(Some(case.4), Some(case.5));
             println!("lhs: {:?}, rhs: {:?}, expected: {:?}", lhs, rhs, expected);
-            assert_eq!(
-                lhs.or(rhs)?,
-                expected,
-            );
+            assert_eq!(lhs.or(rhs)?, expected,);
         }
         Ok(())
     }
