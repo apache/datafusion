@@ -248,7 +248,7 @@ impl ParquetExec {
             .unwrap_or(config_options.execution.parquet.enable_page_index)
     }
 
-    /// If enabled, the reader will read the bloom filter
+    /// If enabled, the reader will read by the bloom filter
     pub fn with_enable_bloom_filter(mut self, enable_bloom_filter: bool) -> Self {
         self.enable_bloom_filter = Some(enable_bloom_filter);
         self

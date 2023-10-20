@@ -168,7 +168,7 @@ pub(crate) async fn prune_row_groups_by_bloom_filters<
 }
 
 struct BloomFilterPruningPredicate {
-    /// Actual pruning predicate (rewritten in terms of column min/max statistics)
+    /// Actual pruning predicate
     predicate_expr: Option<phys_expr::BinaryExpr>,
     /// The statistics required to evaluate this predicate
     required_columns: Vec<String>,
@@ -195,15 +195,19 @@ impl BloomFilterPruningPredicate {
         Self::prune_expr_with_bloom_filter(self.predicate_expr.as_ref(), column_sbbf)
     }
 
-    /// Return true if the expr can be pruned by the bloom filter
+    /// Return true if the `expr` can be proved not `true`
+    /// based on the bloom filter.
+    ///
+    /// We only checked `BinaryExpr` but it also support `InList`,
+    /// Because of the `optimizer` will convert `InList` to `BinaryExpr`.
     fn prune_expr_with_bloom_filter(
         expr: Option<&phys_expr::BinaryExpr>,
         column_sbbf: &HashMap<String, Sbbf>,
     ) -> bool {
-        if expr.is_none() {
+        let Some(expr) = expr else {
+            // unsupported predicate
             return false;
-        }
-        let expr = expr.unwrap();
+        };
         match expr.op() {
             Operator::And | Operator::Or => {
                 let left = Self::prune_expr_with_bloom_filter(
@@ -1111,35 +1115,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_row_group_bloom_filter_pruning_predicate_partial_expr() {
-        // load parquet file
-        let testdata = datafusion_common::test_util::parquet_test_data();
-        let file_name = "data_index_bloom_encoding_stats.parquet";
-        let path = format!("{testdata}/{file_name}");
-        let data = bytes::Bytes::from(std::fs::read(path).unwrap());
-
-        // generate pruning predicate
-        let schema = Schema::new(vec![Field::new("String", DataType::Utf8, false)]);
-        let expr = col(r#""String""#)
-            .eq(lit("Hello_Not_Exists"))
-            .and(lit("1").eq(lit("1")));
-        let expr = logical2physical(&expr, &schema);
-        let pruning_predicate =
-            PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
-
-        let row_groups = vec![0];
-        let pruned_row_groups = test_row_group_bloom_filter_pruning_predicate(
-            file_name,
-            data,
-            &pruning_predicate,
-            &row_groups,
-        )
-        .await
-        .unwrap();
-        assert!(pruned_row_groups.is_empty());
-    }
-
-    #[tokio::test]
     async fn test_row_group_bloom_filter_pruning_predicate_mutiple_expr() {
         // load parquet file
         let testdata = datafusion_common::test_util::parquet_test_data();
@@ -1149,9 +1124,11 @@ mod tests {
 
         // generate pruning predicate
         let schema = Schema::new(vec![Field::new("String", DataType::Utf8, false)]);
-        let expr = col(r#""String""#)
-            .eq(lit("Hello_Not_Exists"))
-            .or(col(r#""String""#).eq(lit("Hello_Not_Exists2")));
+        let expr = lit("1").eq(lit("1")).and(
+            col(r#""String""#)
+                .eq(lit("Hello_Not_Exists"))
+                .or(col(r#""String""#).eq(lit("Hello_Not_Exists2"))),
+        );
         let expr = logical2physical(&expr, &schema);
         let pruning_predicate =
             PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
@@ -1326,7 +1303,7 @@ mod tests {
         let exprs = plan.expressions();
         let expr = &exprs[0];
         let df_schema = plan.schema().as_ref().to_owned();
-        let tb_schema: Schema = df_schema.into();
+        let tb_schema: Schema = df_schema.clone().into();
         let execution_props = ExecutionProps::new();
         create_physical_expr(expr, &df_schema, &tb_schema, &execution_props)
     }
