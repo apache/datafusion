@@ -195,7 +195,7 @@ impl BloomFilterPruningPredicate {
         Self::prune_expr_with_bloom_filter(self.predicate_expr.as_ref(), column_sbbf)
     }
 
-    /// filter the expr with bloom filter return true if the expr can be pruned
+    /// Return true if the expr can be pruned by the bloom filter
     fn prune_expr_with_bloom_filter(
         expr: Option<&phys_expr::BinaryExpr>,
         column_sbbf: &HashMap<String, Sbbf>,
@@ -205,7 +205,7 @@ impl BloomFilterPruningPredicate {
         }
         let expr = expr.unwrap();
         match expr.op() {
-            Operator::And => {
+            Operator::And | Operator::Or => {
                 let left = Self::prune_expr_with_bloom_filter(
                     expr.left().as_any().downcast_ref::<phys_expr::BinaryExpr>(),
                     column_sbbf,
@@ -216,20 +216,11 @@ impl BloomFilterPruningPredicate {
                         .downcast_ref::<phys_expr::BinaryExpr>(),
                     column_sbbf,
                 );
-                left || right
-            }
-            Operator::Or => {
-                let left = Self::prune_expr_with_bloom_filter(
-                    expr.left().as_any().downcast_ref::<phys_expr::BinaryExpr>(),
-                    column_sbbf,
-                );
-                let right = Self::prune_expr_with_bloom_filter(
-                    expr.right()
-                        .as_any()
-                        .downcast_ref::<phys_expr::BinaryExpr>(),
-                    column_sbbf,
-                );
-                left && right
+                match expr.op() {
+                    Operator::And => left || right,
+                    Operator::Or => left && right,
+                    _ => false,
+                }
             }
             Operator::Eq => {
                 if let Some((col, val)) = Self::check_expr_is_col_equal_const(expr) {
