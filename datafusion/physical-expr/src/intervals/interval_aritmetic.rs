@@ -436,7 +436,7 @@ impl Interval {
     pub(crate) fn or<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
         let rhs = other.borrow();
         if self.get_datatype()? != DataType::Boolean
-            && rhs.get_datatype()? != DataType::Boolean
+            || rhs.get_datatype()? != DataType::Boolean
         {
             return internal_err!(
                 "Incompatible types for logical disjunction: {self:?}, {rhs:?}"
