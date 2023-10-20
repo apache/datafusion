@@ -871,7 +871,8 @@ mod tests {
         let mut config = partitioned_csv_config(file_schema, file_groups)?;
 
         // Add partition columns
-        config.table_partition_cols = vec![("date".to_owned(), DataType::Utf8)];
+        config.table_partition_cols =
+            vec![Field::new("date".to_owned(), DataType::Utf8, false)];
         config.file_groups[0][0].partition_values =
             vec![ScalarValue::Utf8(Some("2021-10-26".to_owned()))];
 
