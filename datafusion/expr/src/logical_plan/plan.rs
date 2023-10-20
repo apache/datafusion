@@ -549,13 +549,11 @@ impl LogicalPlan {
             LogicalPlan::Aggregate(Aggregate {
                 group_expr,
                 aggr_expr,
-                schema,
                 ..
-            }) => Ok(LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
+            }) => Ok(LogicalPlan::Aggregate(Aggregate::try_new(
                 Arc::new(inputs[0].clone()),
                 group_expr.to_vec(),
                 aggr_expr.to_vec(),
-                schema.clone(),
             )?)),
             _ => self.with_new_exprs(self.expressions(), inputs),
         }
@@ -710,17 +708,14 @@ impl LogicalPlan {
                     schema: schema.clone(),
                 }))
             }
-            LogicalPlan::Aggregate(Aggregate {
-                group_expr, schema, ..
-            }) => {
+            LogicalPlan::Aggregate(Aggregate { group_expr, .. }) => {
                 // group exprs are the first expressions
                 let agg_expr = expr.split_off(group_expr.len());
 
-                Ok(LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
+                Ok(LogicalPlan::Aggregate(Aggregate::try_new(
                     Arc::new(inputs[0].clone()),
                     expr,
                     agg_expr,
-                    schema.clone(),
                 )?))
             }
             LogicalPlan::Sort(Sort { fetch, .. }) => Ok(LogicalPlan::Sort(Sort {
