@@ -227,7 +227,7 @@ datafusion.execution.parquet.allow_single_file_parallelism false Controls whethe
 datafusion.execution.parquet.bloom_filter_enabled false Sets if bloom filter is enabled for any column
 datafusion.execution.parquet.bloom_filter_fpp NULL Sets bloom filter false positive probability. If NULL, uses default parquet writer setting
 datafusion.execution.parquet.bloom_filter_ndv NULL Sets bloom filter number of distinct values. If NULL, uses default parquet writer setting
-datafusion.execution.parquet.column_index_truncate_length NULL Sets column index trucate length
+datafusion.execution.parquet.column_index_truncate_length NULL Sets column index truncate length
 datafusion.execution.parquet.compression zstd(3) Sets default parquet compression codec Valid values are: uncompressed, snappy, gzip(level), lzo, brotli(level), lz4, zstd(level), and lz4_raw. These values are not case sensitive. If NULL, uses default parquet writer setting
 datafusion.execution.parquet.created_by datafusion Sets "created by" property
 datafusion.execution.parquet.data_page_row_count_limit 18446744073709551615 Sets best effort maximum number of rows in data page
