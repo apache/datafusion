@@ -63,10 +63,10 @@ use datafusion_common::{
 };
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::equivalence::join_schema_properties;
 use datafusion_physical_expr::intervals::ExprIntervalGraph;
 
 use ahash::RandomState;
-use datafusion_physical_expr::equivalence::join_schema_properties;
 use futures::stream::{select, BoxStream};
 use futures::{Stream, StreamExt};
 use hashbrown::HashSet;
@@ -442,7 +442,6 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             None,
             self.on(),
         )
-        .unwrap()
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

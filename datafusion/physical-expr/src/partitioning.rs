@@ -155,8 +155,8 @@ impl Distribution {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;    
-    
+    use std::sync::Arc;
+
     use super::*;
     use crate::expressions::Column;
 

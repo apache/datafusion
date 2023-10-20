@@ -242,7 +242,7 @@ pub fn deduplicate_physical_exprs(
     unique_physical_exprs
 }
 
-/// Check whether vectors in the arguments have common entries
+/// Checks whether the given slices have any common entries.
 pub fn have_common_entries(
     lhs: &[Arc<dyn PhysicalExpr>],
     rhs: &[Arc<dyn PhysicalExpr>],
@@ -250,7 +250,7 @@ pub fn have_common_entries(
     lhs.iter().any(|expr| physical_exprs_contains(rhs, expr))
 }
 
-/// Check whether physical exprs vectors are equal.
+/// Checks whether the given physical expression slices are equal.
 #[allow(dead_code)]
 pub fn physical_exprs_equal(
     lhs: &[Arc<dyn PhysicalExpr>],
@@ -261,13 +261,15 @@ pub fn physical_exprs_equal(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use crate::expressions::{Column, Literal};
     use crate::physical_expr::{
         deduplicate_physical_exprs, have_common_entries, physical_exprs_equal,
     };
     use crate::{physical_exprs_contains, PhysicalExpr};
+
     use datafusion_common::{Result, ScalarValue};
-    use std::sync::Arc;
 
     #[test]
     fn test_physical_exprs_contains() -> Result<()> {

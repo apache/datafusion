@@ -425,12 +425,11 @@ impl ExecutionPlan for RepartitionExec {
 
     fn with_new_children(
         self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let repartition =
-            RepartitionExec::try_new(children[0].clone(), self.partitioning.clone())?
-                .with_preserve_order(self.preserve_order);
-        Ok(Arc::new(repartition))
+            RepartitionExec::try_new(children.swap_remove(0), self.partitioning.clone());
+        repartition.map(|r| Arc::new(r.with_preserve_order(self.preserve_order)) as _)
     }
 
     /// Specifies whether this plan generates an infinite stream of records.

@@ -40,8 +40,8 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
 use datafusion_common::{exec_err, internal_err, DFSchemaRef, DataFusionError, Result};
 use datafusion_execution::TaskContext;
-
 use datafusion_physical_expr::SchemaProperties;
+
 use futures::Stream;
 use itertools::Itertools;
 use log::{debug, trace, warn};
@@ -225,7 +225,7 @@ impl ExecutionPlan for UnionExec {
 
     fn schema_properties(&self) -> SchemaProperties {
         // TODO: In some cases equivalent groups and constants
-        //  can be preserved in union. Add support for these.
+        //       can be preserved in union. Add support for these.
         let child_oeqs = self
             .inputs
             .iter()
@@ -233,27 +233,26 @@ impl ExecutionPlan for UnionExec {
             .collect::<Vec<_>>();
         let mut union_oeq = SchemaProperties::new(self.schema());
         // Iterate ordering equivalent group of first child
-        for elem in child_oeqs[0].oeq_group().iter() {
+        for item in child_oeqs[0].oeq_group().iter() {
             // Seed for the meet.
-            let mut meet = Some(elem.clone());
-            child_oeqs.iter().for_each(|child_oeq| {
+            let mut meet = Some(item.clone());
+            for child_oeq in child_oeqs.iter() {
                 if let Some(meet_vec) = &meet {
-                    let res = child_oeq
+                    let result = child_oeq
                         .oeq_group()
                         .iter()
                         .filter_map(|ordering| {
                             child_oeq.get_meet_ordering(ordering, meet_vec)
                         })
-                        .collect::<Vec<_>>();
-                    if let Some(new_meet) = res.first() {
-                        meet = Some(new_meet.to_vec());
+                        .next();
+                    if let Some(new_meet) = result {
+                        meet.replace(new_meet);
                     } else {
-                        // If none of the child doesn't have a meet
-                        // There is no meet.
+                        // If none of the children has a meet, there is no meet.
                         meet = None;
                     }
                 }
-            });
+            }
             // All of the children have a common meet ordering.
             // This ordering can be propagated in Union.
             if let Some(meet) = meet {
@@ -637,9 +636,9 @@ fn stats_union(mut left: Statistics, right: Statistics) -> Statistics {
 mod tests {
     use super::*;
     use crate::collect;
+    use crate::memory::MemoryExec;
     use crate::test;
 
-    use crate::memory::MemoryExec;
     use arrow::record_batch::RecordBatch;
     use arrow_schema::{DataType, SortOptions};
     use datafusion_common::ScalarValue;

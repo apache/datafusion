@@ -42,13 +42,12 @@ use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::BinaryExpr;
+use datafusion_physical_expr::intervals::utils::check_support;
+use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{
     analyze, split_conjunction, AnalysisContext, ExprBoundaries, PhysicalExpr,
     SchemaProperties,
 };
-
-use datafusion_physical_expr::intervals::utils::check_support;
-use datafusion_physical_expr::utils::collect_columns;
 
 use futures::stream::{Stream, StreamExt};
 use log::trace;
@@ -149,7 +148,7 @@ impl ExecutionPlan for FilterExec {
         let stats = self.statistics().unwrap();
         // Combine the equal predicates with the input equivalence properties
         let mut filter_oeq = self.input.schema_properties();
-        let (equal_pairs, _ne_pairs) = collect_columns_from_predicate(&self.predicate);
+        let (equal_pairs, _) = collect_columns_from_predicate(&self.predicate);
         for (lhs, rhs) in equal_pairs {
             let lhs_expr = Arc::new(lhs.clone()) as _;
             let rhs_expr = Arc::new(rhs.clone()) as _;
@@ -159,8 +158,8 @@ impl ExecutionPlan for FilterExec {
         let constants = collect_columns(self.predicate())
             .into_iter()
             .filter(|column| stats.column_statistics[column.index()].is_singleton())
-            .map(|column| Arc::new(column) as Arc<dyn PhysicalExpr>)
-            .collect::<Vec<_>>();
+            .map(|column| Arc::new(column) as _)
+            .collect();
         filter_oeq.with_constants(constants)
     }
 
@@ -168,10 +167,8 @@ impl ExecutionPlan for FilterExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(FilterExec::try_new(
-            self.predicate.clone(),
-            children[0].clone(),
-        )?))
+        FilterExec::try_new(self.predicate.clone(), children[0].clone())
+            .map(|e| Arc::new(e) as _)
     }
 
     fn execute(
@@ -350,17 +347,16 @@ impl RecordBatchStream for FilterExecStream {
 
 /// Return the equals Column-Pairs and Non-equals Column-Pairs
 fn collect_columns_from_predicate(predicate: &Arc<dyn PhysicalExpr>) -> EqualAndNonEqual {
-    let mut eq_predicate_columns: Vec<(&Column, &Column)> = Vec::new();
-    let mut ne_predicate_columns: Vec<(&Column, &Column)> = Vec::new();
+    let mut eq_predicate_columns = Vec::<(&Column, &Column)>::new();
+    let mut ne_predicate_columns = Vec::<(&Column, &Column)>::new();
 
     let predicates = split_conjunction(predicate);
     predicates.into_iter().for_each(|p| {
         if let Some(binary) = p.as_any().downcast_ref::<BinaryExpr>() {
-            let left = binary.left();
-            let right = binary.right();
-            if left.as_any().is::<Column>() && right.as_any().is::<Column>() {
-                let left_column = left.as_any().downcast_ref::<Column>().unwrap();
-                let right_column = right.as_any().downcast_ref::<Column>().unwrap();
+            if let (Some(left_column), Some(right_column)) = (
+                binary.left().as_any().downcast_ref::<Column>(),
+                binary.right().as_any().downcast_ref::<Column>(),
+            ) {
                 match binary.op() {
                     Operator::Eq => {
                         eq_predicate_columns.push((left_column, right_column))

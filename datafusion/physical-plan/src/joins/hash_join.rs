@@ -56,6 +56,7 @@ use arrow::array::{
     Array, ArrayRef, BooleanArray, BooleanBufferBuilder, PrimitiveArray, UInt32Array,
     UInt32BufferBuilder, UInt64Array, UInt64BufferBuilder,
 };
+use arrow::compute::kernels::cmp::{eq, not_distinct};
 use arrow::compute::{and, take, FilterBuilder};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
@@ -67,11 +68,10 @@ use datafusion_common::{
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::equivalence::join_schema_properties;
 use datafusion_physical_expr::SchemaProperties;
 
 use ahash::RandomState;
-use arrow::compute::kernels::cmp::{eq, not_distinct};
-use datafusion_physical_expr::equivalence::join_schema_properties;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 
 type JoinLeftData = (JoinHashMap, RecordBatch, MemoryReservation);
@@ -377,7 +377,6 @@ impl ExecutionPlan for HashJoinExec {
             Some(Self::probe_side()),
             self.on(),
         )
-        .unwrap()
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -511,16 +510,10 @@ async fn collect_left_input(
 
     let (left_input, left_input_partition) = if let Some(partition) = partition {
         (left, partition)
+    } else if left.output_partitioning().partition_count() != 1 {
+        (Arc::new(CoalescePartitionsExec::new(left)) as _, 0)
     } else {
-        let merge = {
-            if left.output_partitioning().partition_count() != 1 {
-                Arc::new(CoalescePartitionsExec::new(left))
-            } else {
-                left
-            }
-        };
-
-        (merge, 0)
+        (left, 0)
     };
 
     // Depending on partition argument load single partition or whole left side in memory
@@ -1051,24 +1044,22 @@ impl Stream for HashJoinStream {
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::{ArrayRef, Date32Array, Int32Array, UInt32Builder, UInt64Builder};
-    use arrow::datatypes::{DataType, Field, Schema};
-
-    use datafusion_common::{assert_batches_sorted_eq, assert_contains, ScalarValue};
-    use datafusion_expr::Operator;
-    use datafusion_physical_expr::expressions::Literal;
-    use hashbrown::raw::RawTable;
-
+    use super::*;
     use crate::{
         common, expressions::Column, hash_utils::create_hashes,
         joins::hash_join::build_equal_condition_join_indices, memory::MemoryExec,
         repartition::RepartitionExec, test::build_table_i32, test::exec::MockExec,
     };
+
+    use arrow::array::{ArrayRef, Date32Array, Int32Array, UInt32Builder, UInt64Builder};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::{assert_batches_sorted_eq, assert_contains, ScalarValue};
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
-    use datafusion_physical_expr::expressions::BinaryExpr;
+    use datafusion_expr::Operator;
+    use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
 
-    use super::*;
+    use hashbrown::raw::RawTable;
 
     fn build_table(
         a: (&str, &Vec<i32>),

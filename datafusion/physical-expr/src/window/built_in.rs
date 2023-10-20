@@ -21,20 +21,19 @@ use std::any::Any;
 use std::ops::Range;
 use std::sync::Arc;
 
-use super::BuiltInWindowFunctionExpr;
-use super::WindowExpr;
+use super::{BuiltInWindowFunctionExpr, WindowExpr};
 use crate::expressions::PhysicalSortExpr;
 use crate::window::window_expr::{get_orderby_values, WindowFn};
 use crate::window::{PartitionBatches, PartitionWindowAggStates, WindowState};
 use crate::{reverse_order_bys, PhysicalExpr, SchemaProperties};
+
 use arrow::array::{new_empty_array, ArrayRef};
 use arrow::compute::SortOptions;
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::evaluate_partition_ranges;
 use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::window_state::WindowAggState;
-use datafusion_expr::window_state::WindowFrameContext;
+use datafusion_expr::window_state::{WindowAggState, WindowFrameContext};
 use datafusion_expr::WindowFrame;
 
 /// A window expr that takes the form of a [`BuiltInWindowFunctionExpr`].
@@ -75,7 +74,7 @@ impl BuiltInWindowExpr {
     /// by the ordering of `self.expr`.
     pub fn add_equal_orderings(&self, schema_properties: &mut SchemaProperties) {
         let schema = schema_properties.schema();
-        if let Some(fn_res_ordering) = self.expr.get_result_ordering(&schema) {
+        if let Some(fn_res_ordering) = self.expr.get_result_ordering(schema) {
             if self.partition_by.is_empty() {
                 // In the absence of a PARTITION BY, ordering of `self.expr` is global:
                 schema_properties.add_new_orderings(&[vec![fn_res_ordering]]);

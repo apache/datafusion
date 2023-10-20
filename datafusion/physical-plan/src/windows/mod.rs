@@ -37,6 +37,7 @@ use datafusion_expr::{
     window_function::{BuiltInWindowFunction, WindowFunction},
     PartitionEvaluator, WindowFrame, WindowUDF,
 };
+use datafusion_physical_expr::equivalence::collapse_lex_req;
 use datafusion_physical_expr::{
     reverse_order_bys,
     window::{BuiltInWindowFunctionExpr, SlidingAggregateWindowExpr},
@@ -47,7 +48,6 @@ mod bounded_window_agg_exec;
 mod window_agg_exec;
 
 pub use bounded_window_agg_exec::BoundedWindowAggExec;
-use datafusion_physical_expr::equivalence::collapse_lex_req;
 pub use window_agg_exec::WindowAggExec;
 
 pub use datafusion_physical_expr::window::{
@@ -343,15 +343,14 @@ pub(crate) fn get_partition_by_sort_exprs(
         .collect::<Vec<_>>();
     // Make sure ordered section doesn't move over the partition by expression
     assert!(ordered_partition_by_indices.len() <= partition_by_exprs.len());
-    let partition_by_sort_exprs = input
+    input
         .schema_properties()
         .get_lex_ordering(&ordered_partition_exprs)
         .ok_or_else(|| {
             DataFusionError::Execution(
                 "Expects partition by expression to be ordered".to_string(),
             )
-        })?;
-    Ok(partition_by_sort_exprs)
+        })
 }
 
 pub(crate) fn window_ordering_equivalence(
@@ -472,14 +471,14 @@ pub fn get_window_mode(
     if partitionby_exprs.is_empty() {
         partition_search_mode = PartitionSearchMode::Sorted;
     } else if let Some(indices) = input_oeq.set_satisfy(partitionby_exprs) {
-        let elem = indices
+        let item = indices
             .iter()
             .map(|&idx| PhysicalSortRequirement {
                 expr: partitionby_exprs[idx].clone(),
                 options: None,
             })
             .collect::<Vec<_>>();
-        partition_by_reqs.extend(elem);
+        partition_by_reqs.extend(item);
         if indices.len() == partitionby_exprs.len() {
             partition_search_mode = PartitionSearchMode::Sorted;
         } else if !indices.is_empty() {
@@ -498,8 +497,7 @@ pub fn get_window_mode(
         let req = [partition_by_reqs.clone(), order_by_reqs].concat();
         let req = collapse_lex_req(req);
         if req.is_empty() {
-            // When requirement is empty,
-            // prefer None. Instead of Linear.
+            // When requirement is empty, prefer None instead of Linear.
             return Ok(None);
         } else if partition_by_oeq.ordering_satisfy_requirement_concrete(&req) {
             // Window can be run with existing ordering
@@ -524,6 +522,7 @@ mod tests {
     use datafusion_execution::TaskContext;
 
     use futures::FutureExt;
+
     use PartitionSearchMode::{Linear, PartiallySorted, Sorted};
 
     fn create_test_schema() -> Result<SchemaRef> {
@@ -1020,10 +1019,6 @@ mod tests {
             // ORDER BY b, a ASC NULLS FIRST
             (vec![], vec![("b", false, true), ("a", false, true)], None),
         ];
-        // let test_cases = vec![
-        //     // PARTITION BY a, ORDER BY b ASC NULLS LAST
-        //     (vec!["a"], vec![("b", false, false)], Some((false, Sorted))),
-        // ];
         for (case_idx, test_case) in test_cases.iter().enumerate() {
             let (partition_by_columns, order_by_params, expected) = &test_case;
             let mut partition_by_exprs = vec![];
