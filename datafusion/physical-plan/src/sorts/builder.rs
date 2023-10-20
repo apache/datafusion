@@ -22,11 +22,11 @@ use datafusion_common::Result;
 use datafusion_execution::memory_pool::MemoryReservation;
 
 use super::batches::BatchCursor;
-use super::cursor::Cursor;
+use super::cursor::{Cursor, CursorValues};
 
 /// Provides an API to incrementally build a [`RecordBatch`] from partitioned [`RecordBatch`]
 #[derive(Debug)]
-pub struct SortOrderBuilder<C> {
+pub struct SortOrderBuilder<C: CursorValues> {
     /// The schema of the RecordBatches yielded by this stream
     schema: SchemaRef,
 
@@ -44,7 +44,7 @@ pub struct SortOrderBuilder<C> {
     indices: Vec<(usize, usize)>,
 }
 
-impl<C: Cursor> SortOrderBuilder<C> {
+impl<C: CursorValues> SortOrderBuilder<C> {
     /// Create a new [`SortOrderBuilder`] with the provided `stream_count` and `batch_size`
     pub fn new(
         schema: SchemaRef,
@@ -65,7 +65,7 @@ impl<C: Cursor> SortOrderBuilder<C> {
     pub fn push_batch(
         &mut self,
         stream_idx: usize,
-        cursor: C,
+        cursor_values: C,
         batch: RecordBatch,
     ) -> Result<()> {
         self.reservation.try_grow(batch.get_array_memory_size())?;
@@ -73,7 +73,7 @@ impl<C: Cursor> SortOrderBuilder<C> {
         self.batches.push((stream_idx, batch));
         self.cursors[stream_idx] = Some(BatchCursor {
             batch_idx,
-            cursor,
+            cursor: Cursor::new(cursor_values),
             row_idx: 0,
         });
         Ok(())

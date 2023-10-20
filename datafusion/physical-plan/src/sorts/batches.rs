@@ -15,8 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#[derive(Debug, Copy, Clone, Default)]
-pub(crate) struct BatchCursor<C> {
+use super::cursor::{Cursor, CursorValues};
+
+#[derive(Debug)]
+pub(crate) struct BatchCursor<C: CursorValues> {
     /// The index into SortOrderBuilder::batches
     /// TODO: this will become a BatchId, for record batch collected (and not passed across streams)
     pub batch_idx: usize,
@@ -25,5 +27,5 @@ pub(crate) struct BatchCursor<C> {
     pub row_idx: usize,
 
     /// The cursor for the given batch.
-    pub cursor: C,
+    pub cursor: Cursor<C>,
 }

@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::metrics::BaselineMetrics;
-use crate::sorts::cursor::Cursor;
+use crate::sorts::cursor::CursorValues;
 use crate::RecordBatchStream;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -46,7 +46,7 @@ pub(crate) struct SortPreservingCascadeStream {
 }
 
 impl SortPreservingCascadeStream {
-    pub(crate) fn new<C: Cursor + Send + Unpin + 'static>(
+    pub(crate) fn new<C: CursorValues + Send + Unpin + 'static>(
         streams: CursorStream<C>,
         schema: SchemaRef,
         metrics: BaselineMetrics,

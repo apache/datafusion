@@ -20,7 +20,7 @@
 
 use crate::metrics::BaselineMetrics;
 use crate::sorts::builder::SortOrderBuilder;
-use crate::sorts::cursor::{Cursor, CursorValues};
+use crate::sorts::cursor::CursorValues;
 use crate::RecordBatchStream;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -138,9 +138,8 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         match futures::ready!(self.streams.poll_next(cx, idx)) {
             None => Poll::Ready(Ok(())),
             Some(Err(e)) => Poll::Ready(Err(e)),
-            Some(Ok((cursor, batch))) => {
-                self.cursors[idx] = Some(Cursor::new(cursor));
-                Poll::Ready(self.in_progress.push_batch(idx, cursor, batch))
+            Some(Ok((cursor_values, batch))) => {
+                Poll::Ready(self.in_progress.push_batch(idx, cursor_values, batch))
             }
         }
     }
