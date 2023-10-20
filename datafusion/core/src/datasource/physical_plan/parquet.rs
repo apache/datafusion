@@ -1624,10 +1624,10 @@ mod tests {
                 projection: Some(vec![0, 1, 2, 12, 13]),
                 limit: None,
                 table_partition_cols: vec![
-                    Field::new("year".to_owned(), DataType::Utf8, false),
-                    Field::new("month".to_owned(), DataType::UInt8, false),
+                    Field::new("year", DataType::Utf8, false),
+                    Field::new("month", DataType::UInt8, false),
                     Field::new(
-                        "day".to_owned(),
+                        "day",
                         DataType::Dictionary(
                             Box::new(DataType::UInt16),
                             Box::new(DataType::Utf8),
