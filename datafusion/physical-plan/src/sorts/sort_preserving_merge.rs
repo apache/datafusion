@@ -265,6 +265,8 @@ impl ExecutionPlan for SortPreservingMergeExec {
 
 #[cfg(test)]
 mod tests {
+    use std::iter::FromIterator;
+
     use super::*;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::expressions::col;
@@ -275,8 +277,8 @@ mod tests {
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::{self, assert_is_pending, make_partition};
     use crate::{collect, common};
-    use arrow::array::ArrayRef;
-    use arrow::array::{Int32Array, StringArray, TimestampNanosecondArray};
+
+    use arrow::array::{ArrayRef, Int32Array, StringArray, TimestampNanosecondArray};
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
@@ -284,7 +286,6 @@ mod tests {
     use datafusion_execution::config::SessionConfig;
 
     use futures::{FutureExt, StreamExt};
-    use std::iter::FromIterator;
 
     #[tokio::test]
     async fn test_merge_interleave() {

@@ -45,15 +45,16 @@ impl GroupOrdering {
         mode: &PartitionSearchMode,
         ordering: &[PhysicalSortExpr],
     ) -> Result<Self> {
-        Ok(match mode {
-            PartitionSearchMode::Linear => GroupOrdering::None,
+        match mode {
+            PartitionSearchMode::Linear => Ok(GroupOrdering::None),
             PartitionSearchMode::PartiallySorted(order_indices) => {
-                let partial =
-                    GroupOrderingPartial::try_new(input_schema, order_indices, ordering)?;
-                GroupOrdering::Partial(partial)
+                GroupOrderingPartial::try_new(input_schema, order_indices, ordering)
+                    .map(GroupOrdering::Partial)
             }
-            PartitionSearchMode::Sorted => GroupOrdering::Full(GroupOrderingFull::new()),
-        })
+            PartitionSearchMode::Sorted => {
+                Ok(GroupOrdering::Full(GroupOrderingFull::new()))
+            }
+        }
     }
 
     // How many groups be emitted, or None if no data can be emitted

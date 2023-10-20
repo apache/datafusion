@@ -40,8 +40,8 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
 use datafusion_common::{exec_err, internal_err, DFSchemaRef, DataFusionError, Result};
 use datafusion_execution::TaskContext;
-
 use datafusion_physical_expr::SchemaProperties;
+
 use futures::Stream;
 use itertools::Itertools;
 use log::{debug, trace, warn};
@@ -225,7 +225,7 @@ impl ExecutionPlan for UnionExec {
 
     fn schema_properties(&self) -> SchemaProperties {
         // TODO: In some cases equivalent groups and constants
-        //  can be preserved in union. Add support for these.
+        //       can be preserved in union. Add support for these.
         let child_oeqs = self
             .inputs
             .iter()
@@ -632,9 +632,9 @@ fn stats_union(mut left: Statistics, right: Statistics) -> Statistics {
 mod tests {
     use super::*;
     use crate::collect;
+    use crate::memory::MemoryExec;
     use crate::test;
 
-    use crate::memory::MemoryExec;
     use arrow::record_batch::RecordBatch;
     use arrow_schema::{DataType, SortOptions};
     use datafusion_common::ScalarValue;

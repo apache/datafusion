@@ -25,7 +25,11 @@ use crate::aggregates::{
     no_grouping::AggregateStream, row_hash::GroupedHashAggregateStream,
     topk_stream::GroupedTopKAggregateStream,
 };
+use crate::common::calculate_projection_mapping;
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use crate::windows::{
+    get_ordered_partition_by_indices, get_window_mode, PartitionSearchMode,
+};
 use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
     SendableRecordBatchStream, Statistics,
@@ -40,6 +44,7 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::Accumulator;
 use datafusion_physical_expr::{
     aggregate::is_order_sensitive,
+    equivalence::collapse_lex_req,
     expressions::{Column, Max, Min},
     physical_exprs_contains, project_out_expr, reverse_order_bys, AggregateExpr,
     LexOrdering, LexOrderingReq, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
@@ -55,12 +60,7 @@ mod row_hash;
 mod topk;
 mod topk_stream;
 
-use crate::common::calculate_projection_mapping;
-use crate::windows::{
-    get_ordered_partition_by_indices, get_window_mode, PartitionSearchMode,
-};
 pub use datafusion_expr::AggregateFunction;
-use datafusion_physical_expr::equivalence::collapse_lex_req;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
 
 /// Hash aggregate modes
@@ -217,18 +217,16 @@ impl PhysicalGroupBy {
         self.null_expr.is_empty()
     }
 
-    /// Calculate group by expressions according to input schema.
+    /// Calculate GROUP BY expressions according to input schema.
     pub fn input_exprs(&self) -> Vec<Arc<dyn PhysicalExpr>> {
         self.expr
             .iter()
             .map(|(expr, _alias)| expr.clone())
-            .collect::<Vec<_>>()
+            .collect()
     }
 
-    /// This function returns grouping expressions as they occur in the output schema.
+    /// Return grouping expressions as they occur in the output schema.
     fn output_exprs(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        // Update column indices. Since the group by columns come first in the output schema, their
-        // indices are simply 0..self.group_expr(len).
         self.expr
             .iter()
             .enumerate()
@@ -296,10 +294,11 @@ pub struct AggregateExec {
     /// We need the input schema of partial aggregate to be able to deserialize aggregate
     /// expressions from protobuf for final aggregate.
     pub input_schema: SchemaRef,
-    /// The source_to_target_mapping used to normalize out expressions like Partitioning and PhysicalSortExpr
-    /// The key is the expression from the input schema and the value is the expression from the output schema.
+    /// The mapping used to normalize expressions like Partitioning and
+    /// PhysicalSortExpr. The key is the expression from the input schema
+    /// and the value is the expression from the output schema.
     source_to_target_mapping: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>,
-    /// Execution Metrics
+    /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     required_input_ordering: Option<LexOrderingReq>,
     partition_search_mode: PartitionSearchMode,
@@ -337,8 +336,8 @@ fn get_finest_requirement(
     order_by_expr: &mut [Option<LexOrdering>],
     schema_properties: &SchemaProperties,
 ) -> Result<Option<LexOrdering>> {
-    // Check at the beginning if all the requirements are satisfied by existing ordering
-    // If so return None, to indicate all of the requirements are already satisfied.
+    // First, we check if all the requirements are satisfied by the existing
+    // ordering. If so, we return `None` to indicate this.
     let mut all_satisfied = true;
     for (aggr_expr, fn_req) in aggr_expr.iter_mut().zip(order_by_expr.iter_mut()) {
         if schema_properties.ordering_satisfy(fn_req.as_deref()) {
@@ -347,14 +346,14 @@ fn get_finest_requirement(
         if let Some(reverse) = aggr_expr.reverse_expr() {
             let reverse_req = fn_req.as_ref().map(|item| reverse_order_bys(item));
             if schema_properties.ordering_satisfy(reverse_req.as_deref()) {
-                // We need to update `aggr_expr` with its reverse, since only its
-                // reverse requirement is compatible with existing requirements:
+                // We need to update `aggr_expr` with its reverse since only its
+                // reverse requirement is compatible with the existing requirements:
                 *aggr_expr = reverse;
                 *fn_req = reverse_req;
                 continue;
             }
         }
-        // requirement is not satisfied
+        // Requirement is not satisfied:
         all_satisfied = false;
     }
     if all_satisfied {
@@ -363,9 +362,7 @@ fn get_finest_requirement(
     }
     let mut finest_req = get_init_req(aggr_expr, order_by_expr);
     for (aggr_expr, fn_req) in aggr_expr.iter_mut().zip(order_by_expr.iter_mut()) {
-        let fn_req = if let Some(fn_req) = fn_req {
-            fn_req
-        } else {
+        let Some(fn_req) = fn_req else {
             continue;
         };
 
@@ -520,10 +517,11 @@ impl AggregateExec {
             &mut ordering_req,
         )?;
 
-        // get group by exprs
+        // Get GROUP BY expressions:
         let groupby_exprs = group_by.input_exprs();
-        // If existing ordering satisfies a prefix of groupby expression, prefix requirement
-        // with this section. In this case, group by will work more efficient
+        // If existing ordering satisfies a prefix of the GROUP BY expressions,
+        // prefix requirements with this section. In this case, aggregation will
+        // work more efficiently.
         let indices = get_ordered_partition_by_indices(&groupby_exprs, &input);
         let mut new_requirement = indices
             .into_iter()
@@ -541,11 +539,8 @@ impl AggregateExec {
         let source_to_target_mapping =
             calculate_projection_mapping(&group_by.expr, &input.schema())?;
 
-        let required_input_ordering = if new_requirement.is_empty() {
-            None
-        } else {
-            Some(new_requirement)
-        };
+        let required_input_ordering =
+            (!new_requirement.is_empty()).then_some(new_requirement);
 
         let aggregate_oeq = input
             .schema_properties()
@@ -1137,6 +1132,10 @@ pub(crate) fn evaluate_group_by(
 
 #[cfg(test)]
 mod tests {
+    use std::any::Any;
+    use std::sync::Arc;
+    use std::task::{Context, Poll};
+
     use super::*;
     use crate::aggregates::{
         get_finest_requirement, AggregateExec, AggregateMode, PhysicalGroupBy,
@@ -1161,6 +1160,7 @@ mod tests {
         assert_batches_eq, assert_batches_sorted_eq, internal_err, DataFusionError,
         Result, ScalarValue,
     };
+    use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion_physical_expr::expressions::{
         lit, ApproxDistinct, Count, FirstValue, LastValue, Median,
@@ -1169,11 +1169,6 @@ mod tests {
         AggregateExpr, PhysicalExpr, PhysicalSortExpr, SchemaProperties,
     };
 
-    use std::any::Any;
-    use std::sync::Arc;
-    use std::task::{Context, Poll};
-
-    use datafusion_execution::config::SessionConfig;
     use futures::{FutureExt, Stream};
 
     // Generate a schema which consists of 5 columns (a, b, c, d, e)

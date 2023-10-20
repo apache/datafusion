@@ -41,8 +41,7 @@ use datafusion_physical_expr::equivalence::join_schema_properties;
 use datafusion_physical_expr::SchemaProperties;
 
 use async_trait::async_trait;
-use futures::{ready, StreamExt};
-use futures::{Stream, TryStreamExt};
+use futures::{ready, Stream, StreamExt, TryStreamExt};
 
 /// Data of the left side
 type JoinLeftData = (RecordBatch, MemoryReservation);
@@ -105,12 +104,11 @@ async fn load_left_input(
     reservation: MemoryReservation,
 ) -> Result<JoinLeftData> {
     // merge all left parts into a single stream
-    let merge = {
-        if left.output_partitioning().partition_count() != 1 {
-            Arc::new(CoalescePartitionsExec::new(left.clone()))
-        } else {
-            left.clone()
-        }
+    let left_schema = left.schema();
+    let merge = if left.output_partitioning().partition_count() != 1 {
+        Arc::new(CoalescePartitionsExec::new(left))
+    } else {
+        left
     };
     let stream = merge.execute(0, context)?;
 
@@ -135,7 +133,7 @@ async fn load_left_input(
         )
         .await?;
 
-    let merged_batch = concat_batches(&left.schema(), &batches, num_rows)?;
+    let merged_batch = concat_batches(&left_schema, &batches, num_rows)?;
 
     Ok((merged_batch, reservation))
 }
@@ -227,7 +225,6 @@ impl ExecutionPlan for CrossJoinExec {
             None,
             &[],
         )
-        .unwrap()
     }
 
     fn execute(

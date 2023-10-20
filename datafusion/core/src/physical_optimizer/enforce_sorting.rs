@@ -17,8 +17,8 @@
 
 //! EnforceSorting optimizer rule inspects the physical plan with respect
 //! to local sorting requirements and does the following:
-//! - Adds a [SortExec] when a requirement is not met,
-//! - Removes an already-existing [SortExec] if it is possible to prove
+//! - Adds a [`SortExec`] when a requirement is not met,
+//! - Removes an already-existing [`SortExec`] if it is possible to prove
 //!   that this sort is unnecessary
 //! The rule can work on valid *and* invalid physical plans with respect to
 //! sorting requirements, but always produces a valid physical plan in this sense.
@@ -401,7 +401,7 @@ fn parallelize_sorts(
             &mut prev_layer,
             &PhysicalSortRequirement::from_sort_exprs(sort_exprs),
             fetch,
-        )?;
+        );
         let spm = SortPreservingMergeExec::new(sort_exprs.to_vec(), prev_layer)
             .with_fetch(fetch);
         return Ok(Transformed::Yes(PlanWithCorrespondingCoalescePartitions {
@@ -456,7 +456,7 @@ fn ensure_sorting(
                 {
                     // Make sure we preserve the ordering requirements:
                     update_child_to_remove_unnecessary_sort(child, sort_onwards, &plan)?;
-                    add_sort_above(child, &required_ordering, None)?;
+                    add_sort_above(child, &required_ordering, None);
                     if is_sort(child) {
                         *sort_onwards = Some(ExecTree::new(child.clone(), idx, vec![]));
                     } else {
@@ -466,7 +466,7 @@ fn ensure_sorting(
             }
             (Some(required), None) => {
                 // Ordering requirement is not met, we should add a `SortExec` to the plan.
-                add_sort_above(child, &required, None)?;
+                add_sort_above(child, &required, None);
                 *sort_onwards = Some(ExecTree::new(child.clone(), idx, vec![]));
             }
             (None, Some(_)) => {
@@ -492,9 +492,10 @@ fn ensure_sorting(
     {
         // This SortPreservingMergeExec is unnecessary, input already has a
         // single partition.
+        sort_onwards.truncate(1);
         return Ok(Transformed::Yes(PlanWithCorrespondingSort {
-            plan: children[0].clone(),
-            sort_onwards: vec![sort_onwards[0].clone()],
+            plan: children.swap_remove(0),
+            sort_onwards,
         }));
     }
     Ok(Transformed::Yes(PlanWithCorrespondingSort {
@@ -600,7 +601,7 @@ fn analyze_window_sort_removal(
             .swap_remove(0)
             .unwrap_or_default();
         // Satisfy the ordering requirement so that the window can run:
-        add_sort_above(&mut window_child, &reqs, None)?;
+        add_sort_above(&mut window_child, &reqs, None);
 
         let uses_bounded_memory = window_expr.iter().all(|e| e.uses_bounded_memory());
         let new_window = if uses_bounded_memory {
@@ -644,7 +645,7 @@ fn remove_corresponding_coalesce_in_sub_plan(
             && is_repartition(&new_plan)
             && is_repartition(parent)
         {
-            new_plan = new_plan.children()[0].clone()
+            new_plan = new_plan.children().swap_remove(0)
         }
         new_plan
     } else {
@@ -684,7 +685,7 @@ fn remove_corresponding_sort_from_sub_plan(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     // A `SortExec` is always at the bottom of the tree.
     let mut updated_plan = if is_sort(&sort_onwards.plan) {
-        sort_onwards.plan.children()[0].clone()
+        sort_onwards.plan.children().swap_remove(0)
     } else {
         let plan = &sort_onwards.plan;
         let mut children = plan.children();
@@ -698,12 +699,12 @@ fn remove_corresponding_sort_from_sub_plan(
         }
         // Replace with variants that do not preserve order.
         if is_sort_preserving_merge(plan) {
-            children[0].clone()
+            children.swap_remove(0)
         } else if let Some(repartition) = plan.as_any().downcast_ref::<RepartitionExec>()
         {
             Arc::new(
                 RepartitionExec::try_new(
-                    children[0].clone(),
+                    children.swap_remove(0),
                     repartition.partitioning().clone(),
                 )?
                 .with_preserve_order(false),
@@ -725,7 +726,7 @@ fn remove_corresponding_sort_from_sub_plan(
                 updated_plan,
             ));
         } else {
-            updated_plan = Arc::new(CoalescePartitionsExec::new(updated_plan.clone()));
+            updated_plan = Arc::new(CoalescePartitionsExec::new(updated_plan));
         }
     }
     Ok(updated_plan)
@@ -772,8 +773,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::Result;
     use datafusion_expr::JoinType;
-    use datafusion_physical_expr::expressions::Column;
-    use datafusion_physical_expr::expressions::{col, NotExpr};
+    use datafusion_physical_expr::expressions::{col, Column, NotExpr};
 
     fn create_test_schema() -> Result<SchemaRef> {
         let nullable_column = Field::new("nullable_col", DataType::Int32, true);

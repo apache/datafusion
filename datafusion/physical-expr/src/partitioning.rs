@@ -93,16 +93,13 @@ impl Partitioning {
                                     .iter()
                                     .map(|e| eq_groups.normalize_expr(e.clone()))
                                     .collect::<Vec<_>>();
-                                expr_list_eq_strict_order(
+                                return expr_list_eq_strict_order(
                                     &normalized_required_exprs,
                                     &normalized_partition_exprs,
-                                )
-                            } else {
-                                fast_match
+                                );
                             }
-                        } else {
-                            fast_match
                         }
+                        fast_match
                     }
                     _ => false,
                 }
@@ -158,15 +155,13 @@ impl Distribution {
 
 #[cfg(test)]
 mod tests {
-    use crate::expressions::Column;
+    use std::sync::Arc;
 
     use super::*;
-    use arrow::datatypes::DataType;
-    use arrow::datatypes::Field;
-    use arrow::datatypes::Schema;
-    use datafusion_common::Result;
+    use crate::expressions::Column;
 
-    use std::sync::Arc;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::Result;
 
     #[test]
     fn partitioning_satisfy_distribution() -> Result<()> {

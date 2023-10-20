@@ -27,7 +27,7 @@ use crate::physical_expr::{deduplicate_physical_exprs, have_common_entries};
 use crate::sort_properties::{ExprOrdering, SortProperties};
 use arrow_schema::SortOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{DataFusionError, JoinSide, JoinType, Result};
+use datafusion_common::{JoinSide, JoinType, Result};
 use itertools::izip;
 use std::hash::Hash;
 use std::sync::Arc;
@@ -186,7 +186,7 @@ impl EquivalentGroups {
         exprs
             .iter()
             .map(|expr| self.normalize_expr(expr.clone()))
-            .collect::<Vec<_>>()
+            .collect()
     }
 
     /// This function normalizes `sort_requirement` according to `EquivalenceClasses` in the `self`.
@@ -381,25 +381,25 @@ impl EquivalentGroups {
         right_eq_classes: &EquivalentGroups,
         left_columns_len: usize,
         on: &[(Column, Column)],
-    ) -> Result<EquivalentGroups> {
-        let mut res = EquivalentGroups::empty();
+    ) -> EquivalentGroups {
+        let mut result = EquivalentGroups::empty();
         match join_type {
             JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
-                res.extend(self.clone());
+                result.extend(self.clone());
                 let updated_eq_classes = right_eq_classes
                     .iter()
                     .map(|eq_class| {
                         add_offset_to_exprs(eq_class.to_vec(), left_columns_len)
                     })
-                    .collect::<Result<Vec<_>>>()?;
+                    .collect();
 
-                res.extend(EquivalentGroups::new(updated_eq_classes));
+                result.extend(EquivalentGroups::new(updated_eq_classes));
             }
             JoinType::LeftSemi | JoinType::LeftAnti => {
-                res.extend(self.clone());
+                result.extend(self.clone());
             }
             JoinType::RightSemi | JoinType::RightAnti => {
-                res.extend(right_eq_classes.clone());
+                result.extend(right_eq_classes.clone());
             }
         }
         // In the inner join, expressions in the on are equal at the resulting table.
@@ -409,10 +409,10 @@ impl EquivalentGroups {
                 let new_rhs =
                     Arc::new(Column::new(rhs.name(), rhs.index() + left_columns_len))
                         as _;
-                res.add_equal_conditions((&new_lhs, &new_rhs));
+                result.add_equal_conditions((&new_lhs, &new_rhs));
             });
         }
-        Ok(res)
+        result
     }
 }
 
@@ -549,13 +549,13 @@ impl OrderingEquivalentGroup {
     }
 
     /// Adds `offset` value to the index of each expression inside `OrderingEquivalentGroup`.
-    pub fn add_offset(&self, offset: usize) -> Result<OrderingEquivalentGroup> {
-        let res = self
-            .inner
-            .iter()
-            .map(|ordering| add_offset_to_lex_ordering(ordering, offset))
-            .collect::<Result<Vec<_>>>()?;
-        Ok(OrderingEquivalentGroup::new(res))
+    pub fn add_offset(&self, offset: usize) -> OrderingEquivalentGroup {
+        OrderingEquivalentGroup::new(
+            self.inner
+                .iter()
+                .map(|ordering| add_offset_to_lex_ordering(ordering, offset))
+                .collect(),
+        )
     }
 
     /// Return finer ordering between lhs and rhs.
@@ -643,8 +643,8 @@ impl SchemaProperties {
     }
 
     /// Get schema.
-    pub fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+    pub fn schema(&self) -> &SchemaRef {
+        &self.schema
     }
 
     /// Return a reference to the ordering equivalent group
@@ -1161,13 +1161,13 @@ pub fn join_schema_properties(
     maintains_input_order: &[bool],
     probe_side: Option<JoinSide>,
     on: &[(Column, Column)],
-) -> Result<SchemaProperties> {
+) -> SchemaProperties {
     let left_columns_len = left.schema.fields.len();
     let mut new_properties = SchemaProperties::new(join_schema);
 
     let join_eq_groups =
         left.eq_groups()
-            .join(join_type, right.eq_groups(), left_columns_len, on)?;
+            .join(join_type, right.eq_groups(), left_columns_len, on);
     new_properties.add_equivalent_groups(join_eq_groups);
 
     // All joins have 2 children
@@ -1178,9 +1178,7 @@ pub fn join_schema_properties(
     let right_oeq_class = right.oeq_group();
     match (left_maintains, right_maintains) {
         (true, true) => {
-            return Err(DataFusionError::Plan(
-                "Cannot maintain ordering of both sides".to_string(),
-            ))
+            unreachable!("Cannot maintain ordering of both sides");
         }
         (true, false) => {
             // In this special case, right side ordering can be prefixed with left side ordering.
@@ -1189,7 +1187,7 @@ pub fn join_schema_properties(
                     join_type,
                     right_oeq_class,
                     left_columns_len,
-                )?;
+                );
 
                 // Right side ordering equivalence properties should be prepended with
                 // those of the left side while constructing output ordering equivalence
@@ -1210,7 +1208,7 @@ pub fn join_schema_properties(
                 join_type,
                 right.oeq_group(),
                 left_columns_len,
-            )?;
+            );
             // In this special case, left side ordering can be prefixed with right side ordering.
             if let (Some(JoinSide::Right), JoinType::Inner) = (probe_side, join_type) {
                 // Left side ordering equivalence properties should be prepended with
@@ -1229,7 +1227,7 @@ pub fn join_schema_properties(
         }
         (false, false) => {}
     }
-    Ok(new_properties)
+    new_properties
 }
 
 /// Constructs a `SchemaProperties` struct from the given `orderings`.
@@ -1238,15 +1236,11 @@ pub fn schema_properties_helper(
     orderings: &[LexOrdering],
 ) -> SchemaProperties {
     let mut oep = SchemaProperties::new(schema);
-    if orderings.is_empty() {
-        // Return an empty `SchemaProperties`:
-        oep
-    } else {
-        oep.add_ordering_equivalent_group(OrderingEquivalentGroup::new(
-            orderings.to_vec(),
-        ));
-        oep
+    if !orderings.is_empty() {
+        let group = OrderingEquivalentGroup::new(orderings.to_vec());
+        oep.add_ordering_equivalent_group(group);
     }
+    oep
 }
 
 /// This function constructs a duplicate-free `LexOrderingReq` by filtering out duplicate
@@ -1283,19 +1277,19 @@ fn prune_sort_reqs_with_constants(
 fn add_offset_to_exprs(
     exprs: Vec<Arc<dyn PhysicalExpr>>,
     offset: usize,
-) -> Result<Vec<Arc<dyn PhysicalExpr>>> {
+) -> Vec<Arc<dyn PhysicalExpr>> {
     exprs
         .into_iter()
         .map(|item| add_offset_to_expr(item, offset))
-        .collect::<Result<Vec<_>>>()
+        .collect()
 }
 
 /// Adds the `offset` value to `Column` indices inside `expr`. This function is
 /// generally used during the update of the right table schema in join operations.
-fn add_offset_to_expr(
+pub fn add_offset_to_expr(
     expr: Arc<dyn PhysicalExpr>,
     offset: usize,
-) -> Result<Arc<dyn PhysicalExpr>> {
+) -> Arc<dyn PhysicalExpr> {
     expr.transform_down(&|e| match e.as_any().downcast_ref::<Column>() {
         Some(col) => Ok(Transformed::Yes(Arc::new(Column::new(
             col.name(),
@@ -1303,17 +1297,20 @@ fn add_offset_to_expr(
         )))),
         None => Ok(Transformed::No(e)),
     })
+    .unwrap()
+    // Note that we can safely unwrap here since our transform always returns
+    // an `Ok` value.
 }
 
 /// Adds the `offset` value to `Column` indices inside `sort_expr.expr`.
 fn add_offset_to_sort_expr(
     sort_expr: &PhysicalSortExpr,
     offset: usize,
-) -> Result<PhysicalSortExpr> {
-    Ok(PhysicalSortExpr {
-        expr: add_offset_to_expr(sort_expr.expr.clone(), offset)?,
+) -> PhysicalSortExpr {
+    PhysicalSortExpr {
+        expr: add_offset_to_expr(sort_expr.expr.clone(), offset),
         options: sort_expr.options,
-    })
+    }
 }
 
 /// Adds the `offset` value to `Column` indices for each `sort_expr.expr`
@@ -1321,7 +1318,7 @@ fn add_offset_to_sort_expr(
 pub fn add_offset_to_lex_ordering(
     sort_exprs: LexOrderingRef,
     offset: usize,
-) -> Result<LexOrdering> {
+) -> LexOrdering {
     sort_exprs
         .iter()
         .map(|sort_expr| add_offset_to_sort_expr(sort_expr, offset))
@@ -1386,16 +1383,14 @@ fn get_updated_right_ordering_equivalent_group(
     join_type: &JoinType,
     right_oeq_group: &OrderingEquivalentGroup,
     left_columns_len: usize,
-) -> Result<OrderingEquivalentGroup> {
-    match join_type {
-        // In these modes, indices of the right schema should be offset by
-        // the left table size.
-        JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
-            return right_oeq_group.add_offset(left_columns_len)
-        }
-        _ => {}
-    };
-    Ok(right_oeq_group.clone())
+) -> OrderingEquivalentGroup {
+    if matches!(
+        join_type,
+        JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right
+    ) {
+        return right_oeq_group.add_offset(left_columns_len);
+    }
+    right_oeq_group.clone()
 }
 
 #[cfg(test)]
@@ -2134,7 +2129,7 @@ mod tests {
             &join_type,
             &right_oeq_class,
             left_columns_len,
-        )?;
+        );
         join_schema_properties.add_ordering_equivalent_group(result);
         let result = join_schema_properties.oeq_group().clone();
 

@@ -15,6 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
+use std::fmt::{Debug, Display};
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+
 use crate::intervals::Interval;
 use crate::sort_properties::SortProperties;
 use crate::utils::scatter;
@@ -28,10 +33,6 @@ use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
 use itertools::izip;
-use std::any::Any;
-use std::fmt::{Debug, Display};
-use std::hash::{Hash, Hasher};
-use std::sync::Arc;
 
 /// Expression that can be evaluated against a RecordBatch
 /// A Physical expression knows its type, nullability and how to evaluate itself.
@@ -55,13 +56,12 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
         let tmp_batch = filter_record_batch(batch, selection)?;
 
         let tmp_result = self.evaluate(&tmp_batch)?;
-        // All values from the `selection` filter are true.
+
         if batch.num_rows() == tmp_batch.num_rows() {
-            return Ok(tmp_result);
-        }
-        if let ColumnarValue::Array(a) = tmp_result {
-            let result = scatter(selection, a.as_ref())?;
-            Ok(ColumnarValue::Array(result))
+            // All values from the `selection` filter are true.
+            Ok(tmp_result)
+        } else if let ColumnarValue::Array(a) = tmp_result {
+            scatter(selection, a.as_ref()).map(ColumnarValue::Array)
         } else {
             Ok(tmp_result)
         }
@@ -242,7 +242,7 @@ pub fn deduplicate_physical_exprs(
     unique_physical_exprs
 }
 
-/// Check whether vectors in the arguments have common entries
+/// Checks whether the given slices have any common entries.
 pub fn have_common_entries(
     lhs: &[Arc<dyn PhysicalExpr>],
     rhs: &[Arc<dyn PhysicalExpr>],
@@ -250,7 +250,7 @@ pub fn have_common_entries(
     lhs.iter().any(|expr| physical_exprs_contains(rhs, expr))
 }
 
-/// Check whether physical exprs vectors are equal.
+/// Checks whether the given physical expression slices are equal.
 #[allow(dead_code)]
 pub fn physical_exprs_equal(
     lhs: &[Arc<dyn PhysicalExpr>],
@@ -261,13 +261,15 @@ pub fn physical_exprs_equal(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use crate::expressions::{Column, Literal};
     use crate::physical_expr::{
         deduplicate_physical_exprs, have_common_entries, physical_exprs_equal,
     };
     use crate::{physical_exprs_contains, PhysicalExpr};
+
     use datafusion_common::{Result, ScalarValue};
-    use std::sync::Arc;
 
     #[test]
     fn test_physical_exprs_contains() -> Result<()> {

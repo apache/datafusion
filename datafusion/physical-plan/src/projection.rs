@@ -29,6 +29,7 @@ use std::task::{Context, Poll};
 use super::expressions::{Column, PhysicalSortExpr};
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream, Statistics};
+use crate::common::calculate_projection_mapping;
 use crate::{
     ColumnStatistics, DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr,
 };
@@ -39,9 +40,8 @@ use datafusion_common::stats::Precision;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::expressions::Literal;
-
-use crate::common::calculate_projection_mapping;
 use datafusion_physical_expr::{project_out_expr, SchemaProperties};
+
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -56,8 +56,9 @@ pub struct ProjectionExec {
     input: Arc<dyn ExecutionPlan>,
     /// The output ordering
     output_ordering: Option<Vec<PhysicalSortExpr>>,
-    /// The source_to_target_mapping used to normalize out expressions like Partitioning and PhysicalSortExpr
-    /// The key is the expression from the input schema and the value is the expression from the output schema
+    /// The mapping used to normalize expressions like Partitioning and
+    /// PhysicalSortExpr. The key is the expression from the input schema
+    /// and the value is the expression from the output schema.
     source_to_target_mapping: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
@@ -175,16 +176,14 @@ impl ExecutionPlan for ProjectionExec {
     fn output_partitioning(&self) -> Partitioning {
         // Output partition need to respect the alias
         let input_partition = self.input.output_partitioning();
-        match input_partition {
-            Partitioning::Hash(exprs, part) => {
-                let normalized_exprs = exprs
-                    .into_iter()
-                    .map(|expr| project_out_expr(expr, &self.source_to_target_mapping))
-                    .collect::<Vec<_>>();
-
-                Partitioning::Hash(normalized_exprs, part)
-            }
-            _ => input_partition,
+        if let Partitioning::Hash(exprs, part) = input_partition {
+            let normalized_exprs = exprs
+                .into_iter()
+                .map(|expr| project_out_expr(expr, &self.source_to_target_mapping))
+                .collect();
+            Partitioning::Hash(normalized_exprs, part)
+        } else {
+            input_partition
         }
     }
 
@@ -205,12 +204,10 @@ impl ExecutionPlan for ProjectionExec {
 
     fn with_new_children(
         self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(ProjectionExec::try_new(
-            self.expr.clone(),
-            children[0].clone(),
-        )?))
+        ProjectionExec::try_new(self.expr.clone(), children.swap_remove(0))
+            .map(|p| Arc::new(p) as _)
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
@@ -366,6 +363,7 @@ mod tests {
     use crate::common::collect;
     use crate::expressions;
     use crate::test;
+
     use arrow_schema::DataType;
     use datafusion_common::ScalarValue;
 

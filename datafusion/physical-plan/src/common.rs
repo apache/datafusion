@@ -31,13 +31,13 @@ use arrow::datatypes::Schema;
 use arrow::ipc::writer::{FileWriter, IpcWriteOptions};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
+use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 
-use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_physical_expr::equivalence::ProjectionMapping;
 use futures::{Future, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
 use pin_project_lite::pin_project;
@@ -375,15 +375,15 @@ pub fn batch_byte_size(batch: &RecordBatch) -> usize {
     batch.get_array_memory_size()
 }
 
-/// Constructs projection mapping between input and output
+/// Constructs the mapping between a projection's input and output
 pub fn calculate_projection_mapping(
     expr: &[(Arc<dyn PhysicalExpr>, String)],
     input_schema: &Arc<Schema>,
 ) -> Result<ProjectionMapping> {
-    // construct a map from the input expressions to the output expression of the Projection
+    // Construct a map from the input expressions to the output expression of the projection:
     let mut source_to_target_mapping = vec![];
     for (expr_idx, (expression, name)) in expr.iter().enumerate() {
-        let target_expr = Arc::new(Column::new(name, expr_idx)) as Arc<dyn PhysicalExpr>;
+        let target_expr = Arc::new(Column::new(name, expr_idx)) as _;
 
         let source_expr = expression.clone().transform_down(&|e| match e
             .as_any()

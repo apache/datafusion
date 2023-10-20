@@ -44,9 +44,9 @@ use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_expr::{AggregateFunction, WindowFrame, WindowFunction};
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+use datafusion_physical_plan::windows::PartitionSearchMode;
 
 use async_trait::async_trait;
-use datafusion_physical_plan::windows::PartitionSearchMode;
 
 async fn register_current_csv(
     ctx: &SessionContext,

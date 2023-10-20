@@ -26,8 +26,7 @@ use crate::PhysicalExpr;
 use arrow::compute::kernels::sort::{SortColumn, SortOptions};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::Schema;
-use datafusion_common::plan_err;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
 /// Represents Sort operation for a column in a RecordBatch

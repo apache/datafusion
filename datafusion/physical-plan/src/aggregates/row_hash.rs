@@ -17,16 +17,9 @@
 
 //! Hash aggregation
 
-use datafusion_physical_expr::{
-    AggregateExpr, EmitTo, GroupsAccumulator, GroupsAccumulatorAdapter, PhysicalSortExpr,
-};
-use log::debug;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::vec;
-
-use futures::ready;
-use futures::stream::{Stream, StreamExt};
 
 use crate::aggregates::group_values::{new_group_values, GroupValues};
 use crate::aggregates::order::GroupOrderingFull;
@@ -41,6 +34,7 @@ use crate::sorts::streaming_merge;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{aggregates, ExecutionPlan, PhysicalExpr};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
+
 use arrow::array::*;
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use arrow_schema::SortOptions;
@@ -50,7 +44,14 @@ use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::expressions::col;
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::{
+    AggregateExpr, EmitTo, GroupsAccumulator, GroupsAccumulatorAdapter, PhysicalSortExpr,
+};
+
+use futures::ready;
+use futures::stream::{Stream, StreamExt};
+use log::debug;
 
 #[derive(Debug, Clone)]
 /// This object tracks the aggregation phase (input/output)
@@ -321,8 +322,9 @@ impl GroupedHashAggregateStream {
         let spill_expr = group_schema
             .fields
             .into_iter()
-            .map(|field| PhysicalSortExpr {
-                expr: col(field.name(), &group_schema).unwrap(),
+            .enumerate()
+            .map(|(idx, field)| PhysicalSortExpr {
+                expr: Arc::new(Column::new(field.name().as_str(), idx)) as _,
                 options: SortOptions::default(),
             })
             .collect();
@@ -415,8 +417,7 @@ impl Stream for GroupedHashAggregateStream {
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
 
         loop {
-            let exec_state = self.exec_state.clone();
-            match exec_state {
+            match &self.exec_state {
                 ExecutionState::ReadingInput => {
                     match ready!(self.input.poll_next_unpin(cx)) {
                         // new batch to aggregate
@@ -450,14 +451,14 @@ impl Stream for GroupedHashAggregateStream {
                             self.input_done = true;
                             self.group_ordering.input_done();
                             let timer = elapsed_compute.timer();
-                            if self.spill_state.spills.is_empty() {
+                            self.exec_state = if self.spill_state.spills.is_empty() {
                                 let batch = extract_ok!(self.emit(EmitTo::All, false));
-                                self.exec_state = ExecutionState::ProducingOutput(batch);
+                                ExecutionState::ProducingOutput(batch)
                             } else {
                                 // If spill files exist, stream-merge them.
                                 extract_ok!(self.update_merged_stream());
-                                self.exec_state = ExecutionState::ReadingInput;
-                            }
+                                ExecutionState::ReadingInput
+                            };
                             timer.done();
                         }
                     }
@@ -465,19 +466,24 @@ impl Stream for GroupedHashAggregateStream {
 
                 ExecutionState::ProducingOutput(batch) => {
                     // slice off a part of the batch, if needed
-                    let output_batch = if batch.num_rows() <= self.batch_size {
-                        if self.input_done {
-                            self.exec_state = ExecutionState::Done;
-                        } else {
-                            self.exec_state = ExecutionState::ReadingInput
-                        }
-                        batch
+                    let output_batch;
+                    let size = self.batch_size;
+                    (self.exec_state, output_batch) = if batch.num_rows() <= size {
+                        (
+                            if self.input_done {
+                                ExecutionState::Done
+                            } else {
+                                ExecutionState::ReadingInput
+                            },
+                            batch.clone(),
+                        )
                     } else {
                         // output first batch_size rows
-                        let num_remaining = batch.num_rows() - self.batch_size;
-                        let remaining = batch.slice(self.batch_size, num_remaining);
-                        self.exec_state = ExecutionState::ProducingOutput(remaining);
-                        batch.slice(0, self.batch_size)
+                        let size = self.batch_size;
+                        let num_remaining = batch.num_rows() - size;
+                        let remaining = batch.slice(size, num_remaining);
+                        let output = batch.slice(0, size);
+                        (ExecutionState::ProducingOutput(remaining), output)
                     };
                     return Poll::Ready(Some(Ok(
                         output_batch.record_output(&self.baseline_metrics)
