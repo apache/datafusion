@@ -27,7 +27,6 @@ use crate::datasource::listing::ListingTableUrl;
 use crate::error::Result;
 use crate::physical_plan::SendableRecordBatchStream;
 
-use arrow::compute::kernels::partition;
 use arrow_array::builder::UInt64Builder;
 use arrow_array::cast::AsArray;
 use arrow_array::{RecordBatch, StructArray};
@@ -349,7 +348,7 @@ fn remove_partition_by_columns(
     let end_idx = parted_batch.num_columns() - partition_by.len();
     let non_part_cols = &parted_batch.columns()[..end_idx];
 
-    let partition_names: Vec<_> = partition_by.iter().map(|(s, d)| s).collect();
+    let partition_names: Vec<_> = partition_by.iter().map(|(s, _)| s).collect();
     let non_part_schema = Schema::new(
         parted_batch
             .schema()
