@@ -1221,21 +1221,29 @@ mod tests {
 
     #[test]
     fn and_test() -> Result<()> {
+        // check that (lhs AND rhs) is equal to result
+        // ((lhs_lower, lhs_upper), (rhs_lower, rhs_upper), lower_result, upper_result))
         let cases = vec![
-            (false, true, false, false, false, false),
-            (false, false, false, true, false, false),
-            (false, true, false, true, false, true),
-            (false, true, true, true, false, true),
-            (false, false, false, false, false, false),
-            (true, true, true, true, true, true),
+            // Note there are only three valid boolean intervals: [false, false], [false, true] and [true, true],
+            ((false, false), (false, false), (false, false)),
+            ((false, false), (false, true), (false, false)),
+            ((false, false), (true, true), (false, false)),
+            ((false, true), (false, false), (false, false)),
+            ((false, true), (false, true), (false, true)),
+            ((false, true), (true, true), (false, true)),
+            ((true, true), (false, false), (false, false)),
+            ((true, true), (false, true), (false, true)),
+            ((true, true), (true, true), (true, true)),
         ];
 
         for case in cases {
-            assert_eq!(
-                open_open(Some(case.0), Some(case.1))
-                    .and(open_open(Some(case.2), Some(case.3)))?,
-                open_open(Some(case.4), Some(case.5))
-            );
+            let (lhs, rhs, expected) = case;
+            println!("case: {:?}", case);
+            let lhs = closed_closed(Some(lhs.0), Some(lhs.1));
+            let rhs = closed_closed(Some(rhs.0), Some(rhs.1));
+            let expected = closed_closed(Some(expected.0), Some(expected.1));
+            println!("lhs: {:?}, rhs: {:?}, expected: {:?}", lhs, rhs, expected);
+            assert_eq!(lhs.and(rhs)?, expected,);
         }
         Ok(())
     }
