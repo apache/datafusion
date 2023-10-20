@@ -266,8 +266,12 @@ fn collect_new_statistics(
                         Some(nc) => Precision::Inexact(*nc),
                         None => Precision::Absent,
                     },
-                    max_value: Precision::Inexact(closed_interval.upper.value),
-                    min_value: Precision::Inexact(closed_interval.lower.value),
+                    max_value: Precision::Inexact(
+                        closed_interval.upper().value().clone(),
+                    ),
+                    min_value: Precision::Inexact(
+                        closed_interval.lower().value().clone(),
+                    ),
                     distinct_count: match distinct_count.get_value() {
                         Some(dc) => Precision::Inexact(*dc),
                         None => Precision::Absent,

@@ -606,9 +606,9 @@ pub fn update_filter_expr_interval(
     let unbounded = IntervalBound::make_unbounded(value.data_type())?;
     // Update the interval with lower and upper bounds based on the sort option:
     let interval = if sorted_expr.origin_sorted_expr().options.descending {
-        Interval::new(unbounded, IntervalBound::new(value, false))
+        Interval::try_new(unbounded, IntervalBound::new(value, false))?
     } else {
-        Interval::new(IntervalBound::new(value, false), unbounded)
+        Interval::try_new(IntervalBound::new(value, false), unbounded)?
     };
     // Set the calculated interval for the sorted filter expression:
     sorted_expr.set_interval(interval);

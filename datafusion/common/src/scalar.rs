@@ -1071,6 +1071,45 @@ impl ScalarValue {
         Self::try_from_array(r.as_ref(), 0)
     }
 
+    /// Wrapping multiplication of `ScalarValue`
+    ///
+    /// NB: operating on `ScalarValue` directly is not efficient, performance sensitive code
+    /// should operate on Arrays directly, using vectorized array kernels
+    pub fn mul<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
+        let r = mul_wrapping(&self.to_scalar(), &other.borrow().to_scalar())?;
+        Self::try_from_array(r.as_ref(), 0)
+    }
+
+    /// Checked multiplication of `ScalarValue`
+    ///
+    /// NB: operating on `ScalarValue` directly is not efficient, performance sensitive code
+    /// should operate on Arrays directly, using vectorized array kernels
+    pub fn mul_checked<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
+        let r = mul(&self.to_scalar(), &other.borrow().to_scalar())?;
+        Self::try_from_array(r.as_ref(), 0)
+    }
+
+    /// Perform `lhs / rhs`
+    ///
+    /// Overflow or division by zero will result in an error, with exception to
+    /// floating point numbers, which instead follow the IEEE 754 rules
+    ///
+    /// NB: operating on `ScalarValue` directly is not efficient, performance sensitive code
+    /// should operate on Arrays directly, using vectorized array kernels
+    pub fn div<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
+        let r = div(&self.to_scalar(), &other.borrow().to_scalar())?;
+        Self::try_from_array(r.as_ref(), 0)
+    }
+
+    /// Perform `lhs % rhs`
+    ///
+    /// Overflow or division by zero will result in an error, with exception to
+    /// floating point numbers, which instead follow the IEEE 754 rules.
+    pub fn rem<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
+        let r = rem(&self.to_scalar(), &other.borrow().to_scalar())?;
+        Self::try_from_array(r.as_ref(), 0)
+    }
+
     pub fn is_unsigned(&self) -> bool {
         matches!(
             self,

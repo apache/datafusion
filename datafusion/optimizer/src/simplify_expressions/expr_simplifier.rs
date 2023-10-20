@@ -3281,7 +3281,8 @@ mod tests {
             (
                 col("c3"),
                 NullableInterval::NotNull {
-                    values: Interval::make(Some(0_i64), Some(2_i64), (false, false)),
+                    values: Interval::make(Some(0_i64), Some(2_i64), (false, false))
+                        .unwrap(),
                 },
             ),
             (
@@ -3301,19 +3302,21 @@ mod tests {
             (
                 col("c3"),
                 NullableInterval::MaybeNull {
-                    values: Interval::make(Some(0_i64), Some(2_i64), (false, false)),
+                    values: Interval::make(Some(0_i64), Some(2_i64), (false, false))
+                        .unwrap(),
                 },
             ),
             (
                 col("c4"),
                 NullableInterval::MaybeNull {
-                    values: Interval::make(Some(9_u32), Some(9_u32), (false, false)),
+                    values: Interval::make(Some(9_u32), Some(9_u32), (false, false))
+                        .unwrap(),
                 },
             ),
             (
                 col("c1"),
                 NullableInterval::NotNull {
-                    values: Interval::make(Some("d"), Some("f"), (false, false)),
+                    values: Interval::make(Some("d"), Some("f"), (false, false)).unwrap(),
                 },
             ),
         ];

@@ -66,11 +66,16 @@ pub fn check_support(expr: &Arc<dyn PhysicalExpr>, schema: &SchemaRef) -> bool {
 }
 
 // This function returns the inverse operator of the given operator.
-pub fn get_inverse_op(op: Operator) -> Operator {
+pub fn get_inverse_op(op: Operator) -> Result<Operator> {
     match op {
-        Operator::Plus => Operator::Minus,
-        Operator::Minus => Operator::Plus,
-        _ => unreachable!(),
+        Operator::Plus => Ok(Operator::Minus),
+        Operator::Minus => Ok(Operator::Plus),
+        Operator::Multiply => Ok(Operator::Divide),
+        Operator::Divide => Ok(Operator::Multiply),
+        _ => Err(DataFusionError::Internal(format!(
+            "Interval arithmetic does not support the operator {}",
+            op
+        ))),
     }
 }
 
@@ -86,6 +91,8 @@ pub fn is_operator_supported(op: &Operator) -> bool {
             | &Operator::Lt
             | &Operator::LtEq
             | &Operator::Eq
+            | &Operator::Multiply
+            | &Operator::Divide
     )
 }
 
@@ -109,10 +116,10 @@ pub fn is_datatype_supported(data_type: &DataType) -> bool {
 /// Converts an [`Interval`] of time intervals to one of `Duration`s, if applicable. Otherwise, returns [`None`].
 pub fn convert_interval_type_to_duration(interval: &Interval) -> Option<Interval> {
     if let (Some(lower), Some(upper)) = (
-        convert_interval_bound_to_duration(&interval.lower),
-        convert_interval_bound_to_duration(&interval.upper),
+        convert_interval_bound_to_duration(interval.lower()),
+        convert_interval_bound_to_duration(interval.upper()),
     ) {
-        Some(Interval::new(lower, upper))
+        Interval::try_new(lower, upper).ok()
     } else {
         None
     }
@@ -122,20 +129,20 @@ pub fn convert_interval_type_to_duration(interval: &Interval) -> Option<Interval
 fn convert_interval_bound_to_duration(
     interval_bound: &IntervalBound,
 ) -> Option<IntervalBound> {
-    match interval_bound.value {
+    match interval_bound.value() {
         ScalarValue::IntervalMonthDayNano(Some(mdn)) => {
-            interval_mdn_to_duration_ns(&mdn).ok().map(|duration| {
+            interval_mdn_to_duration_ns(mdn).ok().map(|duration| {
                 IntervalBound::new(
                     ScalarValue::DurationNanosecond(Some(duration)),
-                    interval_bound.open,
+                    *interval_bound.is_open(),
                 )
             })
         }
         ScalarValue::IntervalDayTime(Some(dt)) => {
-            interval_dt_to_duration_ms(&dt).ok().map(|duration| {
+            interval_dt_to_duration_ms(dt).ok().map(|duration| {
                 IntervalBound::new(
                     ScalarValue::DurationMillisecond(Some(duration)),
-                    interval_bound.open,
+                    *interval_bound.is_open(),
                 )
             })
         }
@@ -146,10 +153,10 @@ fn convert_interval_bound_to_duration(
 /// Converts an [`Interval`] of `Duration`s to one of time intervals, if applicable. Otherwise, returns [`None`].
 pub fn convert_duration_type_to_interval(interval: &Interval) -> Option<Interval> {
     if let (Some(lower), Some(upper)) = (
-        convert_duration_bound_to_interval(&interval.lower),
-        convert_duration_bound_to_interval(&interval.upper),
+        convert_duration_bound_to_interval(interval.lower()),
+        convert_duration_bound_to_interval(interval.upper()),
     ) {
-        Some(Interval::new(lower, upper))
+        Interval::try_new(lower, upper).ok()
     } else {
         None
     }
@@ -159,14 +166,14 @@ pub fn convert_duration_type_to_interval(interval: &Interval) -> Option<Interval
 fn convert_duration_bound_to_interval(
     interval_bound: &IntervalBound,
 ) -> Option<IntervalBound> {
-    match interval_bound.value {
+    match interval_bound.value() {
         ScalarValue::DurationNanosecond(Some(duration)) => Some(IntervalBound::new(
-            ScalarValue::new_interval_mdn(0, 0, duration),
-            interval_bound.open,
+            ScalarValue::new_interval_mdn(0, 0, *duration),
+            *interval_bound.is_open(),
         )),
         ScalarValue::DurationMillisecond(Some(duration)) => Some(IntervalBound::new(
-            ScalarValue::new_interval_dt(0, duration as i32),
-            interval_bound.open,
+            ScalarValue::new_interval_dt(0, *duration as i32),
+            *interval_bound.is_open(),
         )),
         _ => None,
     }

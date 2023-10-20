@@ -901,10 +901,11 @@ fn max_distinct_count(
             Some(stats.distinct_count.clone())
         }
         (_, Some(max), Some(min)) => {
-            let numeric_range = Interval::new(
+            let numeric_range = Interval::try_new(
                 IntervalBound::new(min.clone(), false),
                 IntervalBound::new(max.clone(), false),
             )
+            .ok()?
             .cardinality()
             .ok()
             .flatten()? as usize;

@@ -84,10 +84,10 @@ impl<'a> TreeNodeRewriter for GuaranteeRewriter<'a> {
                     high.as_ref(),
                 ) {
                     let expr_interval = NullableInterval::NotNull {
-                        values: Interval::new(
+                        values: Interval::try_new(
                             IntervalBound::new(low.clone(), false),
                             IntervalBound::new(high.clone(), false),
-                        ),
+                        )?,
                     };
 
                     let contains = expr_interval.contains(*interval)?;
@@ -261,7 +261,8 @@ mod tests {
             (
                 col("x"),
                 NullableInterval::NotNull {
-                    values: Interval::make(Some(1_i32), Some(3_i32), (true, false)),
+                    values: Interval::make(Some(1_i32), Some(3_i32), (true, false))
+                        .unwrap(),
                 },
             ),
         ];
@@ -321,10 +322,11 @@ mod tests {
             (
                 col("x"),
                 NullableInterval::NotNull {
-                    values: Interval::new(
+                    values: Interval::try_new(
                         IntervalBound::new(ScalarValue::Date32(Some(18628)), false),
                         IntervalBound::make_unbounded(DataType::Date32).unwrap(),
-                    ),
+                    )
+                    .unwrap(),
                 },
             ),
         ];
@@ -399,7 +401,8 @@ mod tests {
             (
                 col("x"),
                 NullableInterval::MaybeNull {
-                    values: Interval::make(Some("abc"), Some("def"), (true, false)),
+                    values: Interval::make(Some("abc"), Some("def"), (true, false))
+                        .unwrap(),
                 },
             ),
         ];
@@ -476,7 +479,8 @@ mod tests {
             (
                 col("x"),
                 NullableInterval::NotNull {
-                    values: Interval::make(Some(1_i32), Some(10_i32), (false, true)),
+                    values: Interval::make(Some(1_i32), Some(10_i32), (false, true))
+                        .unwrap(),
                 },
             ),
         ];

@@ -108,10 +108,7 @@ impl PhysicalExpr for NegativeExpr {
     /// It replaces the upper and lower bounds after multiplying them with -1.
     /// Ex: `(a, b]` => `[-b, -a)`
     fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
-        Ok(Interval::new(
-            children[0].upper.negate()?,
-            children[0].lower.negate()?,
-        ))
+        Interval::try_new(children[0].upper().negate()?, children[0].lower().negate()?)
     }
 
     /// Returns a new [`Interval`] of a NegativeExpr  that has the existing `interval` given that
@@ -123,7 +120,7 @@ impl PhysicalExpr for NegativeExpr {
     ) -> Result<Option<Vec<Interval>>> {
         let child_interval = children[0];
         let negated_interval =
-            Interval::new(interval.upper.negate()?, interval.lower.negate()?);
+            Interval::try_new(interval.upper().negate()?, interval.lower().negate()?)?;
 
         Ok(child_interval
             .intersect(negated_interval)?
@@ -218,8 +215,8 @@ mod tests {
         let negative_expr = NegativeExpr {
             arg: Arc::new(Column::new("a", 0)),
         };
-        let child_interval = Interval::make(Some(-2), Some(1), (true, false));
-        let negative_expr_interval = Interval::make(Some(-1), Some(2), (false, true));
+        let child_interval = Interval::make(Some(-2), Some(1), (true, false))?;
+        let negative_expr_interval = Interval::make(Some(-1), Some(2), (false, true))?;
         assert_eq!(
             negative_expr.evaluate_bounds(&[&child_interval])?,
             negative_expr_interval
@@ -232,10 +229,10 @@ mod tests {
         let negative_expr = NegativeExpr {
             arg: Arc::new(Column::new("a", 0)),
         };
-        let original_child_interval = Interval::make(Some(-2), Some(3), (false, false));
-        let negative_expr_interval = Interval::make(Some(0), Some(4), (true, false));
+        let original_child_interval = Interval::make(Some(-2), Some(3), (false, false))?;
+        let negative_expr_interval = Interval::make(Some(0), Some(4), (true, false))?;
         let after_propagation =
-            Some(vec![Interval::make(Some(-2), Some(0), (false, true))]);
+            Some(vec![Interval::make(Some(-2), Some(0), (false, true))?]);
         assert_eq!(
             negative_expr.propagate_constraints(
                 &negative_expr_interval,

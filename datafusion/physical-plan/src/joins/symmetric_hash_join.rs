@@ -633,9 +633,9 @@ fn determine_prune_length(
 
     // Get the lower or upper interval based on the sort direction
     let target = if origin_sorted_expr.options.descending {
-        interval.upper.value.clone()
+        interval.upper().value().clone()
     } else {
-        interval.lower.value.clone()
+        interval.lower().value().clone()
     };
 
     // Perform binary search on the array to determine the length of the record batch to be pruned
