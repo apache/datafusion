@@ -102,25 +102,25 @@ insert_mode 'append_new_files',
 
 #note that partitioned cols are moved to the end so value tuples are (c, a, b)
 query ITT
-INSERT INTO partitioned_insert_test values (1, 1, 1), (1, 1, 2), (1, 2, 1), (1, 2, 2), (2, 2, 1), (2, 2, 2);
+INSERT INTO partitioned_insert_test values (1, 10, 100), (1, 10, 200), (1, 20, 100), (1, 20, 200), (2, 20, 100), (2, 20, 200);
 ----
 6
 
 query ITT
 select * from partitioned_insert_test order by a,b,c
 ----
-1 1 1
-1 1 2
-1 2 1
-2 2 1
-1 2 2
-2 2 2
+1 10 100
+1 10 200
+1 20 100
+2 20 100
+1 20 200
+2 20 200
 
 statement ok
 CREATE EXTERNAL TABLE
 partitioned_insert_test_verify(c bigint)
 STORED AS csv
-LOCATION 'test_files/scratch/insert_to_external/insert_to_partitioned/a=2/b=1/'
+LOCATION 'test_files/scratch/insert_to_external/insert_to_partitioned/a=20/b=100/'
 OPTIONS(
 insert_mode 'append_new_files',
 );
