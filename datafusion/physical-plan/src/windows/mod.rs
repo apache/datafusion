@@ -496,10 +496,7 @@ pub fn get_window_mode(
     {
         let req = [partition_by_reqs.clone(), order_by_reqs].concat();
         let req = collapse_lex_req(req);
-        if req.is_empty() {
-            // When requirement is empty, prefer None instead of Linear.
-            return Ok(None);
-        } else if partition_by_oeq.ordering_satisfy_requirement_concrete(&req) {
+        if partition_by_oeq.ordering_satisfy_requirement_concrete(&req) {
             // Window can be run with existing ordering
             return Ok(Some((should_swap, partition_search_mode)));
         }
