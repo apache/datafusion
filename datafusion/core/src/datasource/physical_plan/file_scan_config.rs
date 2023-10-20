@@ -500,10 +500,10 @@ mod tests {
             Arc::clone(&file_schema),
             None,
             Statistics::new_unknown(&file_schema),
-            vec![(
+            to_partition_cols(vec![(
                 "date".to_owned(),
                 wrap_partition_type_in_dict(DataType::Utf8),
-            )],
+            )]),
         );
 
         let (proj_schema, proj_statistics, _) = conf.project();
@@ -531,17 +531,14 @@ mod tests {
         let file_schema = aggr_test_schema();
 
         // make a table_partition_col as a field
-        let table_partition_col = Field::new(
-            "date",
-            wrap_partition_type_in_dict(DataType::Utf8),
-            true,
-        )
-        .with_metadata(HashMap::from_iter(vec![(
-            "key_whatever".to_owned(),
-            "value_whatever".to_owned(),
-        )]));
+        let table_partition_col =
+            Field::new("date", wrap_partition_type_in_dict(DataType::Utf8), true)
+                .with_metadata(HashMap::from_iter(vec![(
+                    "key_whatever".to_owned(),
+                    "value_whatever".to_owned(),
+                )]));
 
-        let conf = config_for_proj_with_field_tab_part(
+        let conf = config_for_projection(
             Arc::clone(&file_schema),
             None,
             Statistics::new_unknown(&file_schema),
@@ -576,10 +573,10 @@ mod tests {
                     .collect(),
                 total_byte_size: Precision::Absent,
             },
-            vec![(
+            to_partition_cols(vec![(
                 "date".to_owned(),
                 wrap_partition_type_in_dict(DataType::Utf8),
-            )],
+            )]),
         );
 
         let (proj_schema, proj_statistics, _) = conf.project();
@@ -633,7 +630,7 @@ mod tests {
                 file_batch.schema().fields().len() + 2,
             ]),
             Statistics::new_unknown(&file_batch.schema()),
-            partition_cols.clone(),
+            to_partition_cols(partition_cols.clone()),
         );
         let (proj_schema, ..) = conf.project();
         // created a projector for that projected schema
@@ -778,25 +775,6 @@ mod tests {
         file_schema: SchemaRef,
         projection: Option<Vec<usize>>,
         statistics: Statistics,
-        table_partition_cols: Vec<(String, DataType)>,
-    ) -> FileScanConfig {
-        let table_partition_cols = table_partition_cols
-            .iter()
-            .map(|(name, dtype)| Field::new(name, dtype.clone(), false))
-            .collect::<Vec<_>>();
-
-        config_for_proj_with_field_tab_part(
-            file_schema,
-            projection,
-            statistics,
-            table_partition_cols,
-        )
-    }
-
-    fn config_for_proj_with_field_tab_part(
-        file_schema: SchemaRef,
-        projection: Option<Vec<usize>>,
-        statistics: Statistics,
         table_partition_cols: Vec<Field>,
     ) -> FileScanConfig {
         FileScanConfig {
@@ -810,6 +788,14 @@ mod tests {
             output_ordering: vec![],
             infinite_source: false,
         }
+    }
+
+    /// Convert partition columns from Vec<String DataType> to Vec<Field>
+    fn to_partition_cols(table_partition_cols: Vec<(String, DataType)>) -> Vec<Field> {
+        table_partition_cols
+            .iter()
+            .map(|(name, dtype)| Field::new(name, dtype.clone(), false))
+            .collect::<Vec<_>>()
     }
 
     /// returns record batch with 3 columns of i32 in memory
