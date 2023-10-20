@@ -531,10 +531,9 @@ impl LogicalPlan {
         // so we don't need to recompute Schema.
         match &self {
             LogicalPlan::Projection(projection) => {
-                Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
+                Ok(LogicalPlan::Projection(Projection::try_new(
                     projection.expr.to_vec(),
                     Arc::new(inputs[0].clone()),
-                    projection.schema.clone(),
                 )?))
             }
             LogicalPlan::Window(Window {
@@ -588,13 +587,9 @@ impl LogicalPlan {
         inputs: &[LogicalPlan],
     ) -> Result<LogicalPlan> {
         match self {
-            LogicalPlan::Projection(Projection { schema, .. }) => {
-                Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
-                    expr,
-                    Arc::new(inputs[0].clone()),
-                    schema.clone(),
-                )?))
-            }
+            LogicalPlan::Projection(Projection { .. }) => Ok(LogicalPlan::Projection(
+                Projection::try_new(expr, Arc::new(inputs[0].clone()))?,
+            )),
             LogicalPlan::Dml(DmlStatement {
                 table_name,
                 table_schema,
