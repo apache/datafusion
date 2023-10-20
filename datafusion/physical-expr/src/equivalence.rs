@@ -479,7 +479,7 @@ impl OrderingEquivalentGroup {
     }
 
     /// Get length of the entries in the ordering equivalent group
-    fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.inner.len()
     }
 

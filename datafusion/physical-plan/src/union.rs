@@ -232,34 +232,29 @@ impl ExecutionPlan for UnionExec {
             .map(|child| child.schema_properties())
             .collect::<Vec<_>>();
         let mut union_oeq = SchemaProperties::new(self.schema());
+        let mut existing_meets = child_oeqs[0]
+            .oeq_group()
+            .iter()
+            .map(|elem| elem.to_vec())
+            .collect::<Vec<_>>();
         // Iterate ordering equivalent group of first child
-        for elem in child_oeqs[0].oeq_group().iter() {
-            // Seed for the meet.
-            let mut meet = Some(elem.clone());
-            child_oeqs.iter().for_each(|child_oeq| {
-                if let Some(meet_vec) = &meet {
-                    let res = child_oeq
-                        .oeq_group()
-                        .iter()
-                        .filter_map(|ordering| {
-                            child_oeq.get_meet_ordering(ordering, meet_vec)
-                        })
-                        .collect::<Vec<_>>();
-                    if let Some(new_meet) = res.first() {
-                        meet = Some(new_meet.to_vec());
-                    } else {
-                        // If none of the child doesn't have a meet
-                        // There is no meet.
-                        meet = None;
-                    }
-                }
-            });
-            // All of the children have a common meet ordering.
-            // This ordering can be propagated in Union.
-            if let Some(meet) = meet {
-                union_oeq.add_new_orderings(&[meet])
+        for next_child_oeq in child_oeqs.iter().skip(1) {
+            let mut next_meets = vec![];
+            for existing_meet in &existing_meets {
+                let new_meets = next_child_oeq
+                    .oeq_group()
+                    .iter()
+                    .filter_map(|ordering| {
+                        next_child_oeq.get_meet_ordering(ordering, existing_meet)
+                    })
+                    .collect::<Vec<_>>();
+                next_meets.extend(new_meets);
             }
+            existing_meets = next_meets;
         }
+        // existing_meets contains the all of the valid orderings after union
+        union_oeq.add_new_orderings(&existing_meets);
+
         union_oeq
     }
 
@@ -644,6 +639,7 @@ mod tests {
     use arrow_schema::{DataType, SortOptions};
     use datafusion_common::ScalarValue;
     use datafusion_physical_expr::expressions::col;
+    use datafusion_physical_expr::PhysicalExpr;
 
     // Generate a schema which consists of 7 columns (a, b, c, d, e, f, g)
     fn create_test_schema() -> Result<SchemaRef> {
@@ -657,6 +653,19 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![a, b, c, d, e, f, g]));
 
         Ok(schema)
+    }
+
+    // Convert each tuple to PhysicalSortExpr
+    fn convert_to_sort_exprs(
+        in_data: &[(&Arc<dyn PhysicalExpr>, SortOptions)],
+    ) -> Vec<PhysicalSortExpr> {
+        in_data
+            .iter()
+            .map(|(expr, options)| PhysicalSortExpr {
+                expr: (*expr).clone(),
+                options: *options,
+            })
+            .collect::<Vec<_>>()
     }
 
     #[tokio::test]
@@ -781,72 +790,95 @@ mod tests {
         let col_e = &col("e", &schema)?;
         let col_f = &col("f", &schema)?;
         let options = SortOptions::default();
-        // [a ASC, b ASC, f ASC], [d ASC]
-        let orderings = vec![
-            vec![
-                PhysicalSortExpr {
-                    expr: col_a.clone(),
-                    options,
-                },
-                PhysicalSortExpr {
-                    expr: col_b.clone(),
-                    options,
-                },
-                PhysicalSortExpr {
-                    expr: col_f.clone(),
-                    options,
-                },
-            ],
-            vec![PhysicalSortExpr {
-                expr: col_d.clone(),
-                options,
-            }],
+        let test_cases = vec![
+            //-----------TEST CASE 1----------//
+            (
+                // First child orderings
+                vec![
+                    // [a ASC, b ASC, f ASC]
+                    vec![(col_a, options), (col_b, options), (col_f, options)],
+                ],
+                // Second child orderings
+                vec![
+                    // [a ASC, b ASC, c ASC]
+                    vec![(col_a, options), (col_b, options), (col_c, options)],
+                    // [a ASC, b ASC, f ASC]
+                    vec![(col_a, options), (col_b, options), (col_f, options)],
+                ],
+                // Union output orderings
+                vec![
+                    // [a ASC, b ASC, f ASC]
+                    vec![(col_a, options), (col_b, options), (col_f, options)],
+                ],
+            ),
+            //-----------TEST CASE 2----------//
+            (
+                // First child orderings
+                vec![
+                    // [a ASC, b ASC, f ASC]
+                    vec![(col_a, options), (col_b, options), (col_f, options)],
+                    // d ASC
+                    vec![(col_d, options)],
+                ],
+                // Second child orderings
+                vec![
+                    // [a ASC, b ASC, c ASC]
+                    vec![(col_a, options), (col_b, options), (col_c, options)],
+                    // [e ASC]
+                    vec![(col_e, options)],
+                ],
+                // Union output orderings
+                vec![
+                    // [a ASC, b ASC]
+                    vec![(col_a, options), (col_b, options)],
+                ],
+            ),
         ];
-        let child1 = Arc::new(
-            MemoryExec::try_new(&[], schema.clone(), None)?
-                .with_sort_information(orderings),
-        );
 
-        // [a ASC, b ASC, c ASC], [e ASC]
-        let orderings = vec![
-            vec![
-                PhysicalSortExpr {
-                    expr: col_a.clone(),
-                    options,
-                },
-                PhysicalSortExpr {
-                    expr: col_b.clone(),
-                    options,
-                },
-                PhysicalSortExpr {
-                    expr: col_c.clone(),
-                    options,
-                },
-            ],
-            vec![PhysicalSortExpr {
-                expr: col_e.clone(),
-                options,
-            }],
-        ];
-        let child2 = Arc::new(
-            MemoryExec::try_new(&[], schema, None)?.with_sort_information(orderings),
-        );
+        for (
+            test_idx,
+            (first_child_orderings, second_child_orderings, union_orderings),
+        ) in test_cases.iter().enumerate()
+        {
+            let first_orderings = first_child_orderings
+                .iter()
+                .map(|ordering| convert_to_sort_exprs(ordering))
+                .collect::<Vec<_>>();
+            let second_orderings = second_child_orderings
+                .iter()
+                .map(|ordering| convert_to_sort_exprs(ordering))
+                .collect::<Vec<_>>();
+            let union_expected_orderings = union_orderings
+                .iter()
+                .map(|ordering| convert_to_sort_exprs(ordering))
+                .collect::<Vec<_>>();
+            let child1 = Arc::new(
+                MemoryExec::try_new(&[], schema.clone(), None)?
+                    .with_sort_information(first_orderings),
+            );
+            let child2 = Arc::new(
+                MemoryExec::try_new(&[], schema.clone(), None)?
+                    .with_sort_information(second_orderings),
+            );
 
-        let union = UnionExec::new(vec![child1, child2]);
-        // Expects union to have [a ASC, b ASC] (e.g meet of inout orderings)
-        let union_schema_properties = union.schema_properties();
-        let union_orderings = union_schema_properties.oeq_group();
-        println!("union_orderings:{:?}", union_orderings);
-        assert!(union_orderings.contains(&vec![
-            PhysicalSortExpr {
-                expr: col_a.clone(),
-                options
-            },
-            PhysicalSortExpr {
-                expr: col_b.clone(),
-                options
+            let union = UnionExec::new(vec![child1, child2]);
+            let union_schema_properties = union.schema_properties();
+            let union_actual_orderings = union_schema_properties.oeq_group();
+            println!("union_orderings:{:?}", union_actual_orderings);
+            let err_msg = format!(
+                "Error in test id: {:?}, test case: {:?}",
+                test_idx, test_cases[test_idx]
+            );
+            assert_eq!(
+                union_actual_orderings.len(),
+                union_expected_orderings.len(),
+                "{}",
+                err_msg
+            );
+            for expected in &union_expected_orderings {
+                assert!(union_actual_orderings.contains(expected), "{}", err_msg);
             }
-        ]));
+        }
         Ok(())
     }
 }
