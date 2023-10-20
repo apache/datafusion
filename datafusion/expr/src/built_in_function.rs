@@ -379,10 +379,12 @@ fn get_wider_type(lhs: &DataType, rhs: &DataType) -> Result<DataType> {
             let nullable = lhs_field.is_nullable() | rhs_field.is_nullable();
             DataType::List(Arc::new(Field::new(field_name, field_type, nullable)))
         }
-        (_, _) => return Err(DataFusionError::Execution(format!(
+        (_, _) => {
+            return Err(DataFusionError::Execution(format!(
             "There is no wider type (that can represent other) among lhs: {:?}, rhs:{:?}",
             lhs, rhs
-        ))),
+        )))
+        }
     })
 }
 
