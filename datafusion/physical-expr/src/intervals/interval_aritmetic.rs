@@ -435,27 +435,21 @@ impl Interval {
     /// Compute the logical disjunction of this (boolean) interval with the given boolean interval.
     pub(crate) fn or<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
         let rhs = other.borrow();
-        match (
-            &self.lower.value,
-            &self.upper.value,
-            &rhs.lower.value,
-            &rhs.upper.value,
-        ) {
-            (
-                ScalarValue::Boolean(Some(self_lower)),
-                ScalarValue::Boolean(Some(self_upper)),
-                ScalarValue::Boolean(Some(other_lower)),
-                ScalarValue::Boolean(Some(other_upper)),
-            ) => {
-                let lower = *self_lower || *other_lower;
-                let upper = *self_upper || *other_upper;
+        if self.get_datatype()? != DataType::Boolean
+            && rhs.get_datatype()? != DataType::Boolean
+        {
+            return internal_err!(
+                "Incompatible types for logical disjunction: {self:?}, {rhs:?}"
+            );
+        }
 
-                Ok(Interval {
-                    lower: IntervalBound::new(ScalarValue::Boolean(Some(lower)), false),
-                    upper: IntervalBound::new(ScalarValue::Boolean(Some(upper)), false),
-                })
-            }
-            _ => internal_err!("Incompatible types for logical disjunction"),
+        // if either bound is always true, the result is always true.
+        if self.is_certainly_true() || rhs.is_certainly_true() {
+            Ok(Interval::CERTAINLY_TRUE)
+        } else if self.is_certainly_false() && rhs.is_certainly_false() {
+            Ok(Interval::CERTAINLY_FALSE)
+        } else {
+            Ok(Interval::UNCERTAIN)
         }
     }
 
@@ -546,6 +540,20 @@ impl Interval {
         ))
     }
 
+    /// return true if this is a Boolean interval that is known to be `true`
+    pub fn is_certainly_true(&self) -> bool {
+        self == &Self::CERTAINLY_TRUE
+    }
+
+    /// return true if this is a Boolean interval that may be either `true` or `false`
+    pub fn is_uncertain(&self) -> bool {
+        self == &Self::UNCERTAIN
+    }
+
+    /// return true if this is a Boolean interval that is known to be `false`
+    pub fn is_certainly_false(&self) -> bool {
+        self == &Self::CERTAINLY_FALSE
+    }
     pub const CERTAINLY_FALSE: Interval = Interval {
         lower: IntervalBound::new_closed(ScalarValue::Boolean(Some(false))),
         upper: IntervalBound::new_closed(ScalarValue::Boolean(Some(false))),
@@ -1273,24 +1281,26 @@ mod tests {
     #[test]
     fn or_test() -> Result<()> {
         // check that (lhs OR rhs) is equal to result
-        // (lhs_lower, lhs_upper, rhs_lower, rhs_upper, lower_result, upper_result)
+        // ((lhs_lower, lhs_upper), (rhs_lower, rhs_upper), (lower_result, upper_result))
         let cases = vec![
-            (false, true, false, false, true, false),
-            (false, false, false, true, false, false),
-            (false, true, false, true, false, true),
-            (false, true, true, true, false, true),
-            (false, false, false, false, false, false),
-            (true, true, true, true, true, true),
+            // Note there are only three valid boolean intervals: [false, false], [false, true] and [true, true],
+            ((false, false), (false, false), (false, false)),
+            ((false, false), (false, true), (false, true)),
+            ((false, false), (true, true), (true, true)),
+            ((false, true), (false, false), (false, true)),
+            ((false, true), (false, true), (false, true)),
+            ((false, true), (true, true), (true, true)),
+            ((true, true), (false, false), (true, true)),
+            ((true, true), (false, true), (true, true)),
+            ((true, true), (true, true), (true, true)),
         ];
 
-        // Something is not right here -- lhs, rhs and expected are always the
-        // same Interval (so the test is useless as it always passes)
-        // Interval { lower: IntervalBound { value: Boolean(true), open: false }, upper: IntervalBound { value: Boolean(false), open: false } }
         for case in cases {
+            let (lhs, rhs, expected) = case;
             println!("case: {:?}", case);
-            let lhs = open_open(Some(case.0), Some(case.1));
-            let rhs = open_open(Some(case.2), Some(case.3));
-            let expected = open_open(Some(case.4), Some(case.5));
+            let lhs = closed_closed(Some(lhs.0), Some(lhs.1));
+            let rhs = closed_closed(Some(rhs.0), Some(rhs.1));
+            let expected = closed_closed(Some(expected.0), Some(expected.1));
             println!("lhs: {:?}, rhs: {:?}, expected: {:?}", lhs, rhs, expected);
             assert_eq!(lhs.or(rhs)?, expected,);
         }
