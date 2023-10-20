@@ -27,7 +27,7 @@ use arrow::datatypes::DataType;
 use arrow::error::Result as ArrowResult;
 use datafusion_common::ScalarValue::UInt8;
 use datafusion_common::{
-    plan_err, Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ToDFSchema,
+    plan_err, Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result,
 };
 use datafusion_expr::expr::{AggregateFunction, Alias};
 use datafusion_expr::utils::exprlist_to_fields;
@@ -598,15 +598,7 @@ fn push_down_scan(
         projection.into_iter().collect::<Vec<_>>()
     };
 
-    // create the projected schema
-    let projected_fields: Vec<DFField> = projection
-        .iter()
-        .map(|i| {
-            DFField::from_qualified(scan.table_name.clone(), schema.fields()[*i].clone())
-        })
-        .collect();
-
-    let projected_schema = projected_fields.to_dfschema_ref()?;
+    let projected_schema = scan.project_schema(&projection)?;
 
     Ok(LogicalPlan::TableScan(TableScan {
         table_name: scan.table_name.clone(),

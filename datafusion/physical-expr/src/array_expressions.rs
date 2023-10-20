@@ -423,9 +423,13 @@ fn array(values: &[ColumnarValue]) -> Result<ArrayRef> {
         }
         // all nulls, set default data type as int32
         Some(DataType::Null) => {
-            let null_arr = vec![ScalarValue::Int32(None); arrays.len()];
-            let list_arr = ScalarValue::new_list(null_arr.as_slice(), &DataType::Int32);
-            Ok(Arc::new(list_arr))
+            let nulls = arrays.len();
+            let null_arr = NullArray::new(nulls);
+            let field = Arc::new(Field::new("item", DataType::Null, true));
+            let offsets = OffsetBuffer::from_lengths([nulls]);
+            let values = Arc::new(null_arr) as ArrayRef;
+            let nulls = None;
+            Ok(Arc::new(ListArray::new(field, offsets, values, nulls)))
         }
         Some(data_type) => Ok(array_array(arrays.as_slice(), data_type)?),
     }
@@ -988,7 +992,8 @@ macro_rules! general_repeat_list {
 /// Array_empty SQL function
 pub fn array_empty(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args[0].as_any().downcast_ref::<NullArray>().is_some() {
-        return Ok(args[0].clone());
+        // Make sure to return Boolean type.
+        return Ok(Arc::new(BooleanArray::new_null(args[0].len())));
     }
 
     let array = as_list_array(&args[0])?;

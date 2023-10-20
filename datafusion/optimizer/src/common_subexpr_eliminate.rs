@@ -111,12 +111,7 @@ impl CommonSubexprEliminate {
         projection: &Projection,
         config: &dyn OptimizerConfig,
     ) -> Result<LogicalPlan> {
-        let Projection {
-            expr,
-            input,
-            schema,
-            ..
-        } = projection;
+        let Projection { expr, input, .. } = projection;
         let input_schema = Arc::clone(input.schema());
         let mut expr_set = ExprSet::new();
         let arrays = to_arrays(expr, input_schema, &mut expr_set, ExprMask::Normal)?;
@@ -124,10 +119,9 @@ impl CommonSubexprEliminate {
         let (mut new_expr, new_input) =
             self.rewrite_expr(&[expr], &[&arrays], input, &expr_set, config)?;
 
-        Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
+        Ok(LogicalPlan::Projection(Projection::try_new(
             pop_expr(&mut new_expr)?,
             Arc::new(new_input),
-            schema.clone(),
         )?))
     }
 
@@ -201,7 +195,6 @@ impl CommonSubexprEliminate {
             group_expr,
             aggr_expr,
             input,
-            schema,
             ..
         } = aggregate;
         let mut expr_set = ExprSet::new();
@@ -247,11 +240,10 @@ impl CommonSubexprEliminate {
         let rewritten = pop_expr(&mut rewritten)?;
 
         if affected_id.is_empty() {
-            Ok(LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
+            Ok(LogicalPlan::Aggregate(Aggregate::try_new(
                 Arc::new(new_input),
                 new_group_expr,
                 new_aggr_expr,
-                schema.clone(),
             )?))
         } else {
             let mut agg_exprs = vec![];

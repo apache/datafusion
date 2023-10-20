@@ -45,7 +45,7 @@ use datafusion_common::tree_node::{
 use datafusion_common::{
     aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
     DFField, DFSchema, DFSchemaRef, DataFusionError, FunctionalDependencies,
-    OwnedTableReference, Result, ScalarValue, UnnestOptions,
+    OwnedTableReference, Result, ScalarValue, ToDFSchema, UnnestOptions,
 };
 // backwards compatibility
 pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
@@ -1950,6 +1950,48 @@ impl Hash for TableScan {
         self.projected_schema.hash(state);
         self.filters.hash(state);
         self.fetch.hash(state);
+    }
+}
+
+impl TableScan {
+    /// Create projection schema using entries at the projection indices
+    pub fn project_schema(&self, projection: &[usize]) -> Result<Arc<DFSchema>> {
+        let schema = self.source.schema();
+        let projected_fields: Vec<DFField> = projection
+            .iter()
+            .map(|i| {
+                DFField::from_qualified(
+                    self.table_name.clone(),
+                    schema.fields()[*i].clone(),
+                )
+            })
+            .collect();
+
+        // Find indices among previous schema
+        let old_indices = self
+            .projection
+            .clone()
+            .unwrap_or((0..self.projected_schema.fields().len()).collect());
+        let new_proj = projection
+            .iter()
+            .map(|idx| {
+                old_indices
+                    .iter()
+                    .position(|old_idx| old_idx == idx)
+                    // TODO: Remove this unwrap
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let func_dependencies = self.projected_schema.functional_dependencies();
+        let new_func_dependencies = func_dependencies
+            .project_functional_dependencies(&new_proj, projection.len());
+
+        let projected_schema = Arc::new(
+            projected_fields
+                .to_dfschema()?
+                .with_functional_dependencies(new_func_dependencies),
+        );
+        Ok(projected_schema)
     }
 }
 

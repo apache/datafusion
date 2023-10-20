@@ -120,7 +120,7 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
         }
         Operator::AtArrow
         | Operator::ArrowAt => {
-            array_coercion(lhs, rhs).map(Signature::uniform).ok_or_else(|| {
+            array_coercion(lhs, rhs).map(Signature::comparison).ok_or_else(|| {
                 plan_datafusion_err!(
                     "Cannot infer common array type for arrow operation {lhs} {op} {rhs}"
                 )
