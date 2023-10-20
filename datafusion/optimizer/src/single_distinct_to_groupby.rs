@@ -115,6 +115,21 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                 } else {
                                     // For complex expression write is as alias, to be able to refer
                                     // if from parent operators successfully.
+                                    // Consider plan below.
+                                    //
+                                    // Aggregate: groupBy=[[group_alias_0]], aggr=[[COUNT(alias1)]] [group_alias_0:Int32, COUNT(alias1):Int64;N]\
+                                    // --Aggregate: groupBy=[[test.a + Int32(1) AS group_alias_0, test.c AS alias1]], aggr=[[]] [group_alias_0:Int32, alias1:UInt32]\
+                                    // ----TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+                                    //
+                                    // First aggregate(from bottom) refers to `test.a` column.
+                                    // Second aggregate refers to the `group_alias_0` column, Which is a valid field in the first aggregate.
+                                    // If we were to write plan above as below without alias
+                                    //
+                                    // Aggregate: groupBy=[[test.a + Int32(1)]], aggr=[[COUNT(alias1)]] [group_alias_0:Int32, COUNT(alias1):Int64;N]\
+                                    // --Aggregate: groupBy=[[test.a + Int32(1), test.c AS alias1]], aggr=[[]] [group_alias_0:Int32, alias1:UInt32]\
+                                    // ----TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+                                    //
+                                    // Second aggregate refers to the `test.a + Int32(1)` expression However, its input do not have `test.a` expression in it.
                                     let alias_str = format!("group_alias_{i}");
                                     let alias_expr = group_expr.clone().alias(&alias_str);
                                     (

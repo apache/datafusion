@@ -26,7 +26,8 @@ use crate::{
 };
 use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
 use datafusion_common::{
-    internal_err, plan_datafusion_err, plan_err, DataFusionError, Result,
+    exec_datafusion_err, internal_err, plan_datafusion_err, plan_err, DataFusionError,
+    Result,
 };
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -360,16 +361,20 @@ fn get_wider_type(lhs: &DataType, rhs: &DataType) -> Result<DataType> {
         (DataType::List(lhs_field), DataType::List(rhs_field)) => {
             let field_type =
                 get_wider_type(lhs_field.data_type(), rhs_field.data_type())?;
+            if lhs_field.name() != rhs_field.name() {
+                return Err(exec_datafusion_err!(
+            "There is no wider type (that can represent other) among lhs: {:?}, rhs:{:?}",
+            lhs, rhs));
+            }
             assert_eq!(lhs_field.name(), rhs_field.name());
             let field_name = lhs_field.name();
             let nullable = lhs_field.is_nullable() | rhs_field.is_nullable();
             DataType::List(Arc::new(Field::new(field_name, field_type, nullable)))
         }
         (_, _) => {
-            return Err(DataFusionError::Execution(format!(
+            return Err(exec_datafusion_err!(
             "There is no wider type (that can represent other) among lhs: {:?}, rhs:{:?}",
-            lhs, rhs
-        )))
+            lhs, rhs));
         }
     })
 }

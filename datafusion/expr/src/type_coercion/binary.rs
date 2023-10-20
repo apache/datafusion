@@ -120,6 +120,9 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
         }
         Operator::AtArrow
         | Operator::ArrowAt => {
+            // ArrowAt and AtArrow check for whether one array ic contained in another.
+            // The result type is boolean. Signature::comparison defines this signature.
+            // Operation has nothing to do with comparison
             array_coercion(lhs, rhs).map(Signature::comparison).ok_or_else(|| {
                 plan_datafusion_err!(
                     "Cannot infer common array type for arrow operation {lhs} {op} {rhs}"
