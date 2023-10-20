@@ -194,6 +194,18 @@ impl Display for IntervalBound {
 /// called *unbounded* endpoint and represented using a `NULL` and written using
 /// `∞`.
 ///
+/// # Boolean Handling
+///
+/// Boolean values require special handling.
+///
+/// Given there are only two  boolean values, and they are ordered such that
+/// `false` is less than `true`, there are only three possible valid intervals
+/// for a boolean `[false, false]`, `[false, true]` or `[true, true]`, all with
+/// closed bounds.
+///
+/// [`Interval::new`] takes this into account and adjusts any arguments as
+/// needed.
+///
 /// # Examples
 ///
 /// A `Int64` `Interval` of `[10, 20)` represents the values `10, 11, ... 18,
@@ -235,18 +247,16 @@ impl Display for Interval {
 impl Interval {
     /// Creates a new interval object using the given bounds.
     ///
-    /// # Boolean intervals need special handling
+    /// As explained in [`Interval]` boolean `Interval`s are special and this
+    /// function ensures they are one of the three valid values:
     ///
-    /// For boolean intervals, having an open false lower bound is equivalent to
-    /// having a true closed lower bound. Similarly, open true upper bound is
-    /// equivalent to having a false closed upper bound. Also for boolean
-    /// intervals, having an unbounded left endpoint is equivalent to having a
-    /// false closed lower bound, while having an unbounded right endpoint is
-    /// equivalent to having a true closed upper bound. Therefore; input
-    /// parameters to construct an Interval can have different types, but they
-    /// all result in `[false, false]`, `[false, true]` or `[true, true]`.
+    /// 1. An open `false` lower bound is mapped to a `true` closed lower bound.
+    /// 2. an open `true` upper bound is mapped to  `false` closed
+    /// upper bound.
+    /// 3. An unbounded lower endpoints is mapped to a `false` closed lower
+    /// bound
+    /// 4. An unbounded lower endpoint is mapped to a `true` closed upper bound.
     pub fn new(lower: IntervalBound, upper: IntervalBound) -> Interval {
-        // Boolean intervals need a special handling.
         if let ScalarValue::Boolean(_) = lower.value {
             let standardized_lower = match lower.value {
                 ScalarValue::Boolean(None) if lower.open => {
@@ -1077,6 +1087,117 @@ mod tests {
         ScalarValue: From<Option<T>>,
     {
         Interval::make(lower, upper, (false, false))
+    }
+
+    #[test]
+    fn boolean_interval_test() -> Result<()> {
+        // Demonstrate / document how boolean Intervals work
+        #[derive(Debug)]
+        struct TestCase {
+            lower: bool,
+            upper: bool,
+            /// expected bounds when lower is open, upper is open
+            expected_open_open: (bool, bool),
+            /// expected bounds when lower is open, upper is closed
+            expected_open_closed: (bool, bool),
+            /// expected bounds when lower is closes, upper is open
+            expected_closed_open: (bool, bool),
+            // Not: closed/closed is the same as lower/upper
+        }
+
+        let cases = vec![
+            TestCase {
+                lower: false,
+                upper: false,
+                expected_open_open: (true, false), // whole range
+                expected_open_closed: (true, false),
+                expected_closed_open: (false, false),
+            },
+            TestCase {
+                lower: false,
+                upper: true,
+                expected_open_open: (true, false), // whole range
+                expected_open_closed: (true, true),
+                expected_closed_open: (false, false),
+            },
+            TestCase {
+                lower: true,
+                upper: false,
+                expected_open_open: (true, false), // whole range
+                expected_open_closed: (true, false),
+                expected_closed_open: (true, false),
+            },
+            TestCase {
+                lower: true,
+                upper: true,
+                expected_open_open: (true, false), // whole range
+                expected_open_closed: (true, true),
+                expected_closed_open: (true, false),
+            },
+        ];
+
+        // Asserts that the given interval has the expected (closed) bounds
+        fn assert_bool_interval(
+            name: &str,
+            interval: Interval,
+            expected_lower: bool,
+            expected_upper: bool,
+        ) {
+            let open = false;
+            let expected_interval = Interval {
+                // boolean bounds are always closed
+                lower: IntervalBound {
+                    value: ScalarValue::Boolean(Some(expected_lower)),
+                    open,
+                },
+                upper: IntervalBound {
+                    value: ScalarValue::Boolean(Some(expected_upper)),
+                    open,
+                },
+            };
+            assert_eq!(
+                interval, expected_interval,
+                "{name} failure\n\nActual: {interval:#?}\n\nExpected: {expected_interval:#?}"
+            );
+        }
+
+        for case in cases {
+            println!("Case: {case:?}");
+            let TestCase {
+                lower,
+                upper,
+                expected_open_open,
+                expected_open_closed,
+                expected_closed_open,
+            } = case;
+
+            assert_bool_interval(
+                "open_open",
+                open_open(Some(lower), Some(upper)),
+                expected_open_open.0,
+                expected_open_open.1,
+            );
+            assert_bool_interval(
+                "open_closed",
+                open_closed(Some(lower), Some(upper)),
+                expected_open_closed.0,
+                expected_open_closed.1,
+            );
+            assert_bool_interval(
+                "closed_open",
+                closed_open(Some(lower), Some(upper)),
+                expected_closed_open.0,
+                expected_closed_open.1,
+            );
+            assert_bool_interval(
+                "closed_closed",
+                closed_closed(Some(lower), Some(upper)),
+                lower,
+                upper,
+            );
+        }
+
+        Ok(())
     }
 
     #[test]
