@@ -197,10 +197,10 @@ impl Display for IntervalBound {
 /// # Boolean Handling
 ///
 /// Boolean values require special handling. Boolean Intervals NEVER have open
-/// bounds. If you try to and construct one one with open bounds,
+/// bounds. If you try to and construct one with open bounds,
 /// [`Interval::new`] will remap them to one of the three valid values.
 ///
-/// Given there are only two  boolean values, and they are ordered such that
+/// Given there are only two boolean values, and they are ordered such that
 /// `false` is less than `true`, there are only three possible valid intervals
 /// for a boolean:
 ///
