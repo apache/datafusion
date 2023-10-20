@@ -1283,8 +1283,9 @@ mod tests {
             (true, true, true, true, true, true),
         ];
 
-        // Something is not right here -- lhs, rhs and expected are always the same Interval
-        //
+        // Something is not right here -- lhs, rhs and expected are always the
+        // same Interval (so the test is useless as it always passes)
+        // Interval { lower: IntervalBound { value: Boolean(true), open: false }, upper: IntervalBound { value: Boolean(false), open: false } }
         for case in cases {
             println!("case: {:?}", case);
             let lhs = open_open(Some(case.0), Some(case.1));
