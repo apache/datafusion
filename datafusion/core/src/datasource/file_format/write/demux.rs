@@ -58,7 +58,9 @@ type DemuxedStreamReceiver = UnboundedReceiver<(Path, RecordBatchReceiver)>;
 /// the demux task for errors and abort accordingly. The single_file_ouput parameter
 /// overrides all other settings to force only a single file to be written.
 /// partition_by parameter will additionally split the input based on the unique
-/// values of a specific column `<https://github.com/apache/arrow-datafusion/issues/7744>``
+/// values of a specific column `<https://github.com/apache/arrow-datafusion/issues/7744>
+///
+/// ```text
 ///                                                                              ┌───────────┐               ┌────────────┐    ┌─────────────┐
 ///                                                                     ┌──────▶ │  batch 1  ├────▶...──────▶│   Batch a  │    │ Output File1│
 ///                                                                     │        └───────────┘               └────────────┘    └─────────────┘
@@ -112,7 +114,7 @@ pub(crate) fn start_demuxer_task(
     (task, rx)
 }
 
-/// Dynamically partitions input stream to acheive desired maximum rows per file
+/// Dynamically partitions input stream to achieve desired maximum rows per file
 async fn row_count_demuxer(
     mut tx: UnboundedSender<(Path, Receiver<RecordBatch>)>,
     mut input: SendableRecordBatchStream,
@@ -234,7 +236,7 @@ async fn hive_style_partitions_demuxer(
         // Divide up the batch into distinct partition key batches and send each batch
         for (part_key, mut builder) in take_map.into_iter() {
             // Take method adapted from https://github.com/lancedb/lance/pull/1337/files
-            // TODO: upstream RecordBatch::take to arrow-rs
+            // TODO: use RecordBatch::take in arrow-rs https://github.com/apache/arrow-rs/issues/4958
             let take_indices = builder.finish();
             let struct_array: StructArray = rb.clone().into();
             let parted_batch = RecordBatch::try_from(
@@ -313,7 +315,7 @@ fn compute_partition_keys_by_row<'a>(
             }
             _ => {
                 return Err(DataFusionError::NotImplemented(format!(
-                "it is not yet supported to write to hive partitions with datatype {}",
+                "it is not yet supported to write to hive partitions with datatype {} while writing column {col}",
                 dtype
             )))
             }
