@@ -420,6 +420,17 @@ impl DFSchema {
                 Self::datatype_is_semantically_equal(k1.as_ref(), k2.as_ref())
                     && Self::datatype_is_semantically_equal(v1.as_ref(), v2.as_ref())
             }
+            // The next two cases allow for the possibility that one schema has a dictionary encoded array
+            // and the other has an equivalent non dictionary encoded array of the same type
+            // E.g. Dictionary(_, Utf8) is semantically equivalent to Utf8 since both represent an array of strings
+            (DataType::Dictionary(_, v1), othertype) => {
+                println!("Comparting {} to {}", v1, othertype);
+                v1.as_ref() == othertype
+            }
+            (othertype, DataType::Dictionary(_, v1)) => {
+                println!("Comparting {} to {}", v1, othertype);
+                v1.as_ref() == othertype
+            }
             (DataType::List(f1), DataType::List(f2))
             | (DataType::LargeList(f1), DataType::LargeList(f2))
             | (DataType::FixedSizeList(f1, _), DataType::FixedSizeList(f2, _))
