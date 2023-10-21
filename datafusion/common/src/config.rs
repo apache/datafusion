@@ -255,6 +255,12 @@ config_namespace! {
         /// Number of files to read in parallel when inferring schema and statistics
         pub meta_fetch_concurrency: usize, default = 32
 
+        /// Guarantees a minimum level of output files running in parallel.
+        /// RecordBatches will be distributed in round robin fashion to each
+        /// parallel writer. Each writer is closed and a new file opened once
+        /// soft_max_rows_per_output_file is reached.
+        pub minimum_parallel_output_files: usize, default = 4
+
         /// Target number of rows in output files when writing multiple.
         /// This is a soft max, so it can be exceeded slightly. There also
         /// will be one file smaller than the limit if the total
