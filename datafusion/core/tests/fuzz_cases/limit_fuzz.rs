@@ -17,6 +17,7 @@
 
 //! Fuzz Test for Sort + Fetch/Limit (TopK!)
 
+use arrow::compute::concat_batches;
 use arrow::util::pretty::pretty_format_batches;
 use arrow::{array::Int32Array, record_batch::RecordBatch};
 use arrow_array::{Float64Array, Int64Array, StringArray};
@@ -54,12 +55,11 @@ async fn run_limit_fuzz_test<F>(make_data: F)
 where
     F: Fn(usize) -> SortedData,
 {
-    //let mut rng = thread_rng();
+    let mut rng = thread_rng();
     for size in [10, 1_0000, 10_000, 100_000] {
         let data = make_data(size);
-        // test various limits
-        // TODO add back in large limits
-        for limit in [1, 3, 7, 17 /*10000,  rng.gen_range(1..size)*/] {
+        // test various limits including some random ones
+        for limit in [1, 3, 7, 17, 10000, rng.gen_range(1..size * 2)] {
             //  limit can be larger than the number of rows in the input
             run_limit_test(limit, &data).await;
         }
@@ -310,18 +310,30 @@ async fn run_limit_test(fetch: usize, data: &SortedData) {
     }
 
     let results = df.collect().await.unwrap();
-    let expected = vec![data.topk_values(fetch)];
+    let expected = data.topk_values(fetch);
 
-    assert_eq!(expected, results, "TopK mismatch fetch {fetch} {} expected rows, {} actual rows.\n\nExpected:\n{}\n\nActual:\n{}",
-               row_count(&expected),
-               row_count(&results),
-               pretty_format_batches(&expected).unwrap(),
-               pretty_format_batches(&results).unwrap(),
+    // Verify that all output batches conform to the specified batch size
+    let max_batch_size = ctx.copied_config().batch_size();
+    for batch in &results {
+        assert!(batch.num_rows() <= max_batch_size);
+    }
+
+    let results = concat_batches(&results[0].schema(), &results).unwrap();
+
+    let results = [results];
+    let expected = [expected];
+
+    assert_eq!(
+        &expected,
+        &results,
+        "TopK mismatch fetch {fetch} \n\
+                expected rows {}, actual rows {}.\
+                \n\nExpected:\n{}\n\nActual:\n{}",
+        expected[0].num_rows(),
+        results[0].num_rows(),
+        pretty_format_batches(&expected).unwrap(),
+        pretty_format_batches(&results).unwrap(),
     );
-}
-
-fn row_count(batches: &[RecordBatch]) -> usize {
-    batches.iter().map(|b| b.num_rows()).sum()
 }
 
 /// Return random ASCII String with len
