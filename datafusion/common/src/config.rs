@@ -254,6 +254,19 @@ config_namespace! {
 
         /// Number of files to read in parallel when inferring schema and statistics
         pub meta_fetch_concurrency: usize, default = 32
+
+        /// Target number of rows in output files when writing multiple.
+        /// This is a soft max, so it can be exceeded slightly. There also
+        /// will be one file smaller than the limit if the total
+        /// number of rows written is not roughly divisible by the soft max
+        pub soft_max_rows_per_output_file: usize, default = 50000000
+
+        /// This is the maximum number of RecordBatches buffered
+        /// for each output file being worked. Higher values can potentially
+        /// give faster write performance at the cost of higher peak
+        /// memory consumption
+        pub max_buffered_batches_per_output_file: usize, default = 2
+
     }
 }
 
@@ -332,7 +345,7 @@ config_namespace! {
         /// Sets "created by" property
         pub created_by: String, default = concat!("datafusion version ", env!("CARGO_PKG_VERSION")).into()
 
-        /// Sets column index trucate length
+        /// Sets column index truncate length
         pub column_index_truncate_length: Option<usize>, default = None
 
         /// Sets best effort maximum number of rows in data page

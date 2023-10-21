@@ -119,10 +119,10 @@ impl ExecutionPlan for CustomPlan {
         )))
     }
 
-    fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Result<Statistics> {
         // here we could provide more accurate statistics
         // but we want to test the filter pushdown not the CBOs
-        Statistics::default()
+        Ok(Statistics::new_unknown(&self.schema()))
     }
 }
 

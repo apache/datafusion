@@ -201,7 +201,7 @@ fn cast_to_invalid_decimal_type_precision_0() {
         let sql = "SELECT CAST(10 AS DECIMAL(0))";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "Error during planning: Decimal(precision = 0, scale = 0) should satisfy `0 < precision <= 38`, and `scale <= precision`.",
+            "Error during planning: Decimal(precision = 0, scale = 0) should satisfy `0 < precision <= 76`, and `scale <= precision`.",
             err.strip_backtrace()
         );
     }
@@ -212,9 +212,19 @@ fn cast_to_invalid_decimal_type_precision_gt_38() {
     // precision > 38
     {
         let sql = "SELECT CAST(10 AS DECIMAL(39))";
+        let plan = "Projection: CAST(Int64(10) AS Decimal256(39, 0))\n  EmptyRelation";
+        quick_test(sql, plan);
+    }
+}
+
+#[test]
+fn cast_to_invalid_decimal_type_precision_gt_76() {
+    // precision > 76
+    {
+        let sql = "SELECT CAST(10 AS DECIMAL(79))";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "Error during planning: Decimal(precision = 39, scale = 0) should satisfy `0 < precision <= 38`, and `scale <= precision`.",
+            "Error during planning: Decimal(precision = 79, scale = 0) should satisfy `0 < precision <= 76`, and `scale <= precision`.",
             err.strip_backtrace()
         );
     }
@@ -227,7 +237,7 @@ fn cast_to_invalid_decimal_type_precision_lt_scale() {
         let sql = "SELECT CAST(10 AS DECIMAL(5, 10))";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "Error during planning: Decimal(precision = 5, scale = 10) should satisfy `0 < precision <= 38`, and `scale <= precision`.",
+            "Error during planning: Decimal(precision = 5, scale = 10) should satisfy `0 < precision <= 76`, and `scale <= precision`.",
             err.strip_backtrace()
         );
     }
@@ -1687,20 +1697,24 @@ fn select_order_by_multiple_index() {
 #[test]
 fn select_order_by_index_of_0() {
     let sql = "SELECT id FROM person ORDER BY 0";
-    let err = logical_plan(sql).expect_err("query should have failed");
+    let err = logical_plan(sql)
+        .expect_err("query should have failed")
+        .strip_backtrace();
     assert_eq!(
-        "Plan(\"Order by index starts at 1 for column indexes\")",
-        format!("{err:?}")
+        "Error during planning: Order by index starts at 1 for column indexes",
+        err
     );
 }
 
 #[test]
 fn select_order_by_index_oob() {
     let sql = "SELECT id FROM person ORDER BY 2";
-    let err = logical_plan(sql).expect_err("query should have failed");
+    let err = logical_plan(sql)
+        .expect_err("query should have failed")
+        .strip_backtrace();
     assert_eq!(
-        "Plan(\"Order by column out of bounds, specified: 2, max: 1\")",
-        format!("{err:?}")
+        "Error during planning: Order by column out of bounds, specified: 2, max: 1",
+        err
     );
 }
 
@@ -2086,13 +2100,12 @@ fn union_values_with_no_alias() {
 #[test]
 fn union_with_incompatible_data_type() {
     let sql = "SELECT interval '1 year 1 day' UNION ALL SELECT 1";
-    let err = logical_plan(sql).expect_err("query should have failed");
+    let err = logical_plan(sql)
+        .expect_err("query should have failed")
+        .strip_backtrace();
     assert_eq!(
-        "Plan(\"UNION Column Int64(1) (type: Int64) is \
-            not compatible with column IntervalMonthDayNano\
-            (\\\"950737950189618795196236955648\\\") \
-            (type: Interval(MonthDayNano))\")",
-        format!("{err:?}")
+       "Error during planning: UNION Column Int64(1) (type: Int64) is not compatible with column IntervalMonthDayNano(\"950737950189618795196236955648\") (type: Interval(MonthDayNano))",
+       err
     );
 }
 
@@ -2195,10 +2208,12 @@ fn union_with_aliases() {
 #[test]
 fn union_with_incompatible_data_types() {
     let sql = "SELECT 'a' a UNION ALL SELECT true a";
-    let err = logical_plan(sql).expect_err("query should have failed");
+    let err = logical_plan(sql)
+        .expect_err("query should have failed")
+        .strip_backtrace();
     assert_eq!(
-        "Plan(\"UNION Column a (type: Boolean) is not compatible with column a (type: Utf8)\")",
-        format!("{err:?}")
+        "Error during planning: UNION Column a (type: Boolean) is not compatible with column a (type: Utf8)",
+        err
     );
 }
 
@@ -2691,7 +2706,7 @@ struct MockContextProvider {
 }
 
 impl ContextProvider for MockContextProvider {
-    fn get_table_provider(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
+    fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
         let schema = match name.table() {
             "test" => Ok(Schema::new(vec![
                 Field::new("t_date32", DataType::Date32, false),
@@ -3662,6 +3677,19 @@ fn test_prepare_statement_should_infer_types() {
     let expected_types = HashMap::from([
         ("$1".to_string(), Some(DataType::Int32)),
         ("$2".to_string(), Some(DataType::Int64)),
+    ]);
+    assert_eq!(actual_types, expected_types);
+}
+
+#[test]
+fn test_non_prepare_statement_should_infer_types() {
+    // Non prepared statements (like SELECT) should also have their parameter types inferred
+    let sql = "SELECT 1 + $1";
+    let plan = logical_plan(sql).unwrap();
+    let actual_types = plan.get_parameter_types().unwrap();
+    let expected_types = HashMap::from([
+        // constant 1 is inferred to be int64
+        ("$1".to_string(), Some(DataType::Int64)),
     ]);
     assert_eq!(actual_types, expected_types);
 }

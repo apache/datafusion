@@ -18,6 +18,7 @@
 //! Defines BitAnd, BitOr, and BitXor Aggregate accumulators
 
 use ahash::RandomState;
+use datafusion_common::cast::as_list_array;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -194,7 +195,7 @@ where
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
-        Ok(ScalarValue::new_primitive::<T>(self.value, &T::DATA_TYPE))
+        ScalarValue::new_primitive::<T>(self.value, &T::DATA_TYPE)
     }
 
     fn size(&self) -> usize {
@@ -355,7 +356,7 @@ where
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
-        Ok(ScalarValue::new_primitive::<T>(self.value, &T::DATA_TYPE))
+        ScalarValue::new_primitive::<T>(self.value, &T::DATA_TYPE)
     }
 
     fn size(&self) -> usize {
@@ -516,7 +517,7 @@ where
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
-        Ok(ScalarValue::new_primitive::<T>(self.value, &T::DATA_TYPE))
+        ScalarValue::new_primitive::<T>(self.value, &T::DATA_TYPE)
     }
 
     fn size(&self) -> usize {
@@ -641,9 +642,10 @@ where
                 .values
                 .iter()
                 .map(|x| ScalarValue::new_primitive::<T>(Some(*x), &T::DATA_TYPE))
-                .collect();
+                .collect::<Result<Vec<_>>>()?;
 
-            vec![ScalarValue::new_list(Some(values), T::DATA_TYPE)]
+            let arr = ScalarValue::new_list(&values, &T::DATA_TYPE);
+            vec![ScalarValue::List(arr)]
         };
         Ok(state_out)
     }
@@ -668,12 +670,11 @@ where
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        if states.is_empty() {
-            return Ok(());
-        }
-
-        for x in states[0].as_list::<i32>().iter().flatten() {
-            self.update_batch(&[x])?
+        if let Some(state) = states.first() {
+            let list_arr = as_list_array(state)?;
+            for arr in list_arr.iter().flatten() {
+                self.update_batch(&[arr])?;
+            }
         }
         Ok(())
     }
@@ -684,7 +685,7 @@ where
             acc = acc ^ *distinct_value;
         }
         let v = (!self.values.is_empty()).then_some(acc);
-        Ok(ScalarValue::new_primitive::<T>(v, &T::DATA_TYPE))
+        ScalarValue::new_primitive::<T>(v, &T::DATA_TYPE)
     }
 
     fn size(&self) -> usize {

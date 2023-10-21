@@ -20,18 +20,17 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use datafusion_common::display::StringifiedPlan;
-
-use datafusion_common::{internal_err, DataFusionError, Result};
-
-use crate::{DisplayFormatType, ExecutionPlan, Partitioning, Statistics};
-use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
-use log::trace;
-
-use super::DisplayAs;
-use super::{expressions::PhysicalSortExpr, SendableRecordBatchStream};
+use super::expressions::PhysicalSortExpr;
+use super::{DisplayAs, SendableRecordBatchStream};
 use crate::stream::RecordBatchStreamAdapter;
+use crate::{DisplayFormatType, ExecutionPlan, Partitioning, Statistics};
+
+use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
+use datafusion_common::display::StringifiedPlan;
+use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
+
+use log::trace;
 
 /// Explain execution plan operator. This operator contains the string
 /// values of the various plans it has when it is created, and passes
@@ -169,9 +168,9 @@ impl ExecutionPlan for ExplainExec {
         )))
     }
 
-    fn statistics(&self) -> Statistics {
+    fn statistics(&self) -> Result<Statistics> {
         // Statistics an EXPLAIN plan are not relevant
-        Statistics::default()
+        Ok(Statistics::new_unknown(&self.schema()))
     }
 }
 

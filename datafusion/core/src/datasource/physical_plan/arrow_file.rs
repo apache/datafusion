@@ -16,6 +16,10 @@
 // under the License.
 
 //! Execution plan for reading Arrow files
+
+use std::any::Any;
+use std::sync::Arc;
+
 use crate::datasource::physical_plan::{
     FileMeta, FileOpenFuture, FileOpener, FileScanConfig,
 };
@@ -24,6 +28,7 @@ use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
 };
+
 use arrow_schema::SchemaRef;
 use datafusion_common::Statistics;
 use datafusion_execution::TaskContext;
@@ -31,10 +36,9 @@ use datafusion_physical_expr::{
     ordering_equivalence_properties_helper, LexOrdering, OrderingEquivalenceProperties,
     PhysicalSortExpr,
 };
+
 use futures::StreamExt;
 use object_store::{GetResultPayload, ObjectStore};
-use std::any::Any;
-use std::sync::Arc;
 
 /// Execution plan for scanning Arrow data source
 #[derive(Debug, Clone)]
@@ -143,8 +147,8 @@ impl ExecutionPlan for ArrowExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics(&self) -> Statistics {
-        self.projected_statistics.clone()
+    fn statistics(&self) -> Result<Statistics> {
+        Ok(self.projected_statistics.clone())
     }
 }
 

@@ -30,7 +30,10 @@ use arrow::{
     error::ArrowError,
     record_batch::RecordBatch,
 };
-use datafusion_common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter};
+use datafusion_common::{
+    cast::{as_large_list_array, as_list_array},
+    tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter},
+};
 use datafusion_common::{
     exec_err, internal_err, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
@@ -392,8 +395,11 @@ impl<'a> ConstEvaluator<'a> {
                         "Could not evaluate the expression, found a result of length {}",
                         a.len()
                     )
+                } else if as_list_array(&a).is_ok() || as_large_list_array(&a).is_ok() {
+                    Ok(ScalarValue::List(a))
                 } else {
-                    Ok(ScalarValue::try_from_array(&a, 0)?)
+                    // Non-ListArray
+                    ScalarValue::try_from_array(&a, 0)
                 }
             }
             ColumnarValue::Scalar(s) => Ok(s),

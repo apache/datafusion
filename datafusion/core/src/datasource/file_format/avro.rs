@@ -74,10 +74,10 @@ impl FileFormat for AvroFormat {
         &self,
         _state: &SessionState,
         _store: &Arc<dyn ObjectStore>,
-        _table_schema: SchemaRef,
+        table_schema: SchemaRef,
         _object: &ObjectMeta,
     ) -> Result<Statistics> {
-        Ok(Statistics::default())
+        Ok(Statistics::new_unknown(&table_schema))
     }
 
     async fn create_physical_plan(

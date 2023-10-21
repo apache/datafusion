@@ -49,7 +49,7 @@ code {
 }
 
 /* This is the bootstrap CSS style for "table-striped". Since the theme does
-not yet provide an easy way to configure this globaly, it easier to simply
+not yet provide an easy way to configure this globally, it easier to simply
 include this snippet here than updating each table in all rst files to
 add ":class: table-striped" */
 
@@ -59,7 +59,7 @@ add ":class: table-striped" */
 
 
 /* Limit the max height of the sidebar navigation section. Because in our
-custimized template, there is more content above the navigation, i.e.
+customized template, there is more content above the navigation, i.e.
 larger logo: if we don't decrease the max-height, it will overlap with
 the footer.
 Details: 8rem for search box etc*/

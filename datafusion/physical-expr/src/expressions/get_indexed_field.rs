@@ -18,16 +18,19 @@
 //! get field of a `ListArray`
 
 use crate::PhysicalExpr;
-use arrow::array::Array;
 use datafusion_common::exec_err;
 
 use crate::array_expressions::{array_element, array_slice};
 use crate::physical_expr::down_cast_any_ref;
 use arrow::{
+    array::{Array, Scalar, StringArray},
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-use datafusion_common::{cast::as_struct_array, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    cast::{as_map_array, as_struct_array},
+    DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::{field_util::GetFieldAccessSchema, ColumnarValue};
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
@@ -183,6 +186,14 @@ impl PhysicalExpr for GetIndexedFieldExpr {
         let array = self.arg.evaluate(batch)?.into_array(batch.num_rows());
         match &self.field {
             GetFieldAccessExpr::NamedStructField{name} => match (array.data_type(), name) {
+                (DataType::Map(_, _), ScalarValue::Utf8(Some(k))) => {
+                    let map_array = as_map_array(array.as_ref())?;
+                    let key_scalar = Scalar::new(StringArray::from(vec![k.clone()]));
+                    let keys = arrow::compute::kernels::cmp::eq(&key_scalar, map_array.keys())?;
+                    let entries = arrow::compute::filter(map_array.entries(), &keys)?;
+                    let entries_struct_array = as_struct_array(entries.as_ref())?;
+                    Ok(ColumnarValue::Array(entries_struct_array.column(1).clone()))
+                }
                 (DataType::Struct(_), ScalarValue::Utf8(Some(k))) => {
                     let as_struct_array = as_struct_array(&array)?;
                     match as_struct_array.column_by_name(k) {
