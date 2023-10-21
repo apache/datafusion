@@ -66,7 +66,10 @@ where
     }
 }
 
-/// The type of column(s) to use for  the sort test
+/// The data column(s) to use for the TopK test
+///
+/// Each variants stores the input batches and the expected sorted values
+/// compute the expected output for a given fetch (limit) value.
 #[derive(Debug)]
 enum SortedData {
     // single Int32 column
