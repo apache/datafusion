@@ -30,22 +30,22 @@ use test_utils::stagger_batch;
 
 #[tokio::test]
 async fn test_sort_topk_i32() {
-    run_limit_fuzz_test(|size| SortedData::new_i32(size)).await
+    run_limit_fuzz_test(SortedData::new_i32).await
 }
 
 #[tokio::test]
 async fn test_sort_topk_f64() {
-    run_limit_fuzz_test(|size| SortedData::new_f64(size)).await
+    run_limit_fuzz_test(SortedData::new_f64).await
 }
 
 #[tokio::test]
 async fn test_sort_topk_str() {
-    run_limit_fuzz_test(|size| SortedData::new_str(size)).await
+    run_limit_fuzz_test(SortedData::new_str).await
 }
 
 #[tokio::test]
 async fn test_sort_topk_i64str() {
-    run_limit_fuzz_test(|size| SortedData::new_i64str(size)).await
+    run_limit_fuzz_test(SortedData::new_i64str).await
 }
 
 /// Run TopK fuzz tests the specified input data with different
