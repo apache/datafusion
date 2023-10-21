@@ -424,11 +424,9 @@ impl DFSchema {
             // and the other has an equivalent non dictionary encoded array of the same type
             // E.g. Dictionary(_, Utf8) is semantically equivalent to Utf8 since both represent an array of strings
             (DataType::Dictionary(_, v1), othertype) => {
-                println!("Comparting {} to {}", v1, othertype);
                 v1.as_ref() == othertype
             }
             (othertype, DataType::Dictionary(_, v1)) => {
-                println!("Comparting {} to {}", v1, othertype);
                 v1.as_ref() == othertype
             }
             (DataType::List(f1), DataType::List(f2))
