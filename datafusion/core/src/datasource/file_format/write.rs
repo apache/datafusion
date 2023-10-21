@@ -525,6 +525,7 @@ async fn row_count_demuxer(
     };
 
     while let Some(rb) = input.next().await.transpose()? {
+        // ensure we have at least minimum_parallel_files open
         if open_file_streams.len() < minimum_parallel_files {
             open_file_streams.push(
                 create_new_file_stream(
