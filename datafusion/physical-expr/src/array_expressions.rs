@@ -1375,7 +1375,7 @@ pub fn array_union(args: &[ArrayRef]) -> Result<ArrayRef> {
             Ok(array1.clone())
         }
         (DataType::List(_), DataType::List(_)) => concat_internal(args),
-        _ => return exec_err!("can only concatenate lists")
+        _ => return exec_err!("array_union can only concatenate lists")
     }
 }
 
