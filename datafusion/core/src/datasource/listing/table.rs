@@ -837,12 +837,6 @@ impl TableProvider for ListingTable {
             );
         }
 
-        if self.table_paths().len() > 1 {
-            return plan_err!(
-                "Writing to a table backed by multiple partitions is not supported yet"
-            );
-        }
-
         let table_path = &self.table_paths()[0];
         // Get the object store for the table path.
         let store = state.runtime_env().object_store(table_path)?;
