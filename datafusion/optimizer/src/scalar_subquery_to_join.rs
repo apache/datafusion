@@ -89,7 +89,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                                 rewrite_expr.clone().transform_up(&|expr| {
                                     if let Expr::Column(col) = &expr {
                                         if let Some(map_expr) =
-                                            expr_check_map.get(&col.name)
+                                            expr_check_map.get(&col.unqualified_name())
                                         {
                                             Ok(Transformed::Yes(map_expr.clone()))
                                         } else {
@@ -143,8 +143,8 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                                     let new_expr =
                                         rewrite_expr.clone().transform_up(&|expr| {
                                             if let Expr::Column(col) = &expr {
-                                                if let Some(map_expr) =
-                                                    expr_check_map.get(&col.name)
+                                                if let Some(map_expr) = expr_check_map
+                                                    .get(&col.unqualified_name())
                                                 {
                                                     Ok(Transformed::Yes(map_expr.clone()))
                                                 } else {

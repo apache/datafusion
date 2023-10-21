@@ -684,7 +684,7 @@ impl ListingTable {
                 .map(|expr| {
                     if let Expr::Sort(Sort { expr, asc, nulls_first }) = expr {
                         if let Expr::Column(col) = expr.as_ref() {
-                            let expr = physical_plan::expressions::col(&col.name, self.table_schema.as_ref())?;
+                            let expr = physical_plan::expressions::col(&col.unqualified_name(), self.table_schema.as_ref())?;
                             Ok(PhysicalSortExpr {
                                 expr,
                                 options: SortOptions {

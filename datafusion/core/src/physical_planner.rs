@@ -125,7 +125,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
     match e {
         Expr::Column(c) => {
             if is_first_expr {
-                Ok(c.name.clone())
+                Ok(c.unqualified_name().clone())
             } else {
                 Ok(c.flat_name())
             }
@@ -1067,8 +1067,8 @@ impl DefaultPhysicalPlanner {
                             let l = l.try_into_col()?;
                             let r = r.try_into_col()?;
                             Ok((
-                                Column::new(&l.name, left_df_schema.index_of_column(&l)?),
-                                Column::new(&r.name, right_df_schema.index_of_column(&r)?),
+                                Column::new(&l.unqualified_name(), left_df_schema.index_of_column(&l)?),
+                                Column::new(&r.unqualified_name(), right_df_schema.index_of_column(&r)?),
                             ))
                         })
                         .collect::<Result<join_utils::JoinOn>>()?;
@@ -1228,7 +1228,7 @@ impl DefaultPhysicalPlanner {
                 LogicalPlan::Unnest(Unnest { input, column, schema, options }) => {
                     let input = self.create_initial_plan(input, session_state).await?;
                     let column_exec = schema.index_of_column(column)
-                        .map(|idx| Column::new(&column.name, idx))?;
+                        .map(|idx| Column::new(&column.unqualified_name(), idx))?;
                     let schema = SchemaRef::new(schema.as_ref().to_owned().into());
                     Ok(Arc::new(UnnestExec::new(input, column_exec, schema, options.clone())))
                 }

@@ -27,11 +27,14 @@ use std::sync::Arc;
 
 /// A named reference to a qualified field in a schema.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Column {
-    /// relation/table reference.
-    pub relation: Option<OwnedTableReference>,
-    /// field/column name.
-    pub name: String,
+pub enum Column {
+    Unqualified {
+        name: String,
+    },
+    Qualified {
+        relation: OwnedTableReference,
+        name: String,
+    },
 }
 
 impl Column {
@@ -45,26 +48,23 @@ impl Column {
         relation: Option<impl Into<OwnedTableReference>>,
         name: impl Into<String>,
     ) -> Self {
-        Self {
-            relation: relation.map(|r| r.into()),
-            name: name.into(),
+        match relation {
+            Some(relation) => Self::Qualified {
+                relation: relation.into(),
+                name: name.into(),
+            },
+            None => Self::Unqualified { name: name.into() },
         }
     }
 
     /// Convenience method for when there is no qualifier
     pub fn new_unqualified(name: impl Into<String>) -> Self {
-        Self {
-            relation: None,
-            name: name.into(),
-        }
+        Self::Unqualified { name: name.into() }
     }
 
     /// Create Column from unqualified name.
     pub fn from_name(name: impl Into<String>) -> Self {
-        Self {
-            relation: None,
-            name: name.into(),
-        }
+        Self::Unqualified { name: name.into() }
     }
 
     fn from_idents(idents: &mut Vec<String>) -> Option<Self> {
@@ -95,7 +95,10 @@ impl Column {
             // identifiers will be treated as an unqualified column name
             _ => return None,
         };
-        Some(Self { relation, name })
+        match relation {
+            Some(relation) => Some(Self::Qualified { relation, name }),
+            None => Some(Self::Unqualified { name }),
+        }
     }
 
     /// Deserialize a fully qualified name string into a column
@@ -103,44 +106,70 @@ impl Column {
     /// Treats the name as a SQL identifier. For example
     /// `foo.BAR` would be parsed to a reference to relation `foo`, column name `bar` (lower case)
     /// where `"foo.BAR"` would be parsed to a reference to column named `foo.BAR`
-    pub fn from_qualified_name(flat_name: impl Into<String>) -> Self {
-        let flat_name: &str = &flat_name.into();
-        Self::from_idents(&mut parse_identifiers_normalized(flat_name, false))
-            .unwrap_or_else(|| Self {
-                relation: None,
-                name: flat_name.to_owned(),
-            })
+    pub fn from_qualified_name(qualified_name: impl Into<String>) -> Self {
+        let qualified_name: &str = &qualified_name.into();
+        Self::from_idents(&mut parse_identifiers_normalized(qualified_name, false))
+            .unwrap_or_else(|| Self::new_unqualified(qualified_name.to_owned()))
     }
 
     /// Deserialize a fully qualified name string into a column preserving column text case
-    pub fn from_qualified_name_ignore_case(flat_name: impl Into<String>) -> Self {
-        let flat_name: &str = &flat_name.into();
-        Self::from_idents(&mut parse_identifiers_normalized(flat_name, true))
-            .unwrap_or_else(|| Self {
-                relation: None,
-                name: flat_name.to_owned(),
-            })
+    pub fn from_qualified_name_ignore_case(qualified_name: impl Into<String>) -> Self {
+        let qualified_name: &str = &qualified_name.into();
+        Self::from_idents(&mut parse_identifiers_normalized(qualified_name, true))
+            .unwrap_or_else(|| Self::new_unqualified(qualified_name.to_owned()))
+    }
+
+    pub fn relation(&self) -> Option<&OwnedTableReference> {
+        match self {
+            Self::Unqualified { .. } => None,
+            Self::Qualified { relation, .. } => Some(relation),
+        }
+    }
+
+    pub fn unqualified_column(&self) -> Self {
+        Self::Unqualified {
+            name: self.unqualified_name(),
+        }
+    }
+
+    pub fn with_new_qualifier(
+        &self,
+        qualifier: Option<impl Into<OwnedTableReference>>,
+    ) -> Self {
+        match self {
+            Self::Unqualified { name } | Self::Qualified { name, .. } => {
+                Self::new(qualifier, name)
+            }
+        }
+    }
+
+    /// Unqualified name string
+    pub fn unqualified_name(&self) -> String {
+        match self {
+            Self::Unqualified { name } | Self::Qualified { name, .. } => name.clone(),
+        }
+    }
+
+    /// Serialize column into a qualified name string
+    pub fn qualified_name(&self) -> String {
+        match self {
+            Self::Unqualified { name } => name.clone(),
+            Self::Qualified { relation, name } => format!("{}.{}", relation, name),
+        }
     }
 
     /// Serialize column into a flat name string
     pub fn flat_name(&self) -> String {
-        match &self.relation {
-            Some(r) => format!("{}.{}", r, self.name),
-            None => self.name.clone(),
-        }
+        self.qualified_name()
     }
 
     /// Serialize column into a quoted flat name string
     pub fn quoted_flat_name(&self) -> String {
-        match &self.relation {
-            Some(r) => {
-                format!(
-                    "{}.{}",
-                    r.to_quoted_string(),
-                    quote_identifier(self.name.as_str())
-                )
+        match self {
+            Self::Unqualified { name } => quote_identifier(name).to_string(),
+            Self::Qualified { relation, name } => {
+                format!("{}.{}", relation.to_quoted_string(), quote_identifier(name))
             }
-            None => quote_identifier(&self.name).to_string(),
         }
     }
 
@@ -172,12 +201,12 @@ impl Column {
         schemas: &[&Arc<DFSchema>],
         using_columns: &[HashSet<Column>],
     ) -> Result<Self> {
-        if self.relation.is_some() {
+        if let Self::Qualified { .. } = self {
             return Ok(self);
         }
 
         for schema in schemas {
-            let fields = schema.fields_with_unqualified_name(&self.name);
+            let fields = schema.fields_with_unqualified_name(&self.unqualified_name());
             match fields.len() {
                 0 => continue,
                 1 => {
@@ -212,7 +241,7 @@ impl Column {
         }
 
         Err(DataFusionError::SchemaError(SchemaError::FieldNotFound {
-            field: Box::new(Column::new(self.relation.clone(), self.name)),
+            field: Box::new(self.clone()),
             valid_fields: schemas
                 .iter()
                 .flat_map(|s| s.fields().iter().map(|f| f.qualified_column()))
@@ -261,14 +290,14 @@ impl Column {
         schemas: &[&[&DFSchema]],
         using_columns: &[HashSet<Column>],
     ) -> Result<Self> {
-        if self.relation.is_some() {
+        if let Self::Qualified { .. } = self {
             return Ok(self);
         }
 
         for schema_level in schemas {
             let fields = schema_level
                 .iter()
-                .flat_map(|s| s.fields_with_unqualified_name(&self.name))
+                .flat_map(|schema| schema.fields_with_unqualified_name(&self.flat_name()))
                 .collect::<Vec<_>>();
             match fields.len() {
                 0 => continue,
@@ -301,7 +330,7 @@ impl Column {
                     // If not due to USING columns then due to ambiguous column name
                     return Err(DataFusionError::SchemaError(
                         SchemaError::AmbiguousReference {
-                            field: Column::new_unqualified(self.name),
+                            field: Column::new_unqualified(self.flat_name()),
                         },
                     ));
                 }

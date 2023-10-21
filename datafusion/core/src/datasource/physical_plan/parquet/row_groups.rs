@@ -177,7 +177,7 @@ macro_rules! get_statistic {
 macro_rules! get_min_max_values {
     ($self:expr, $column:expr, $func:ident, $bytes_func:ident) => {{
         let (_column_index, field) =
-            if let Some((v, f)) = $self.parquet_schema.column_with_name(&$column.name) {
+            if let Some((v, f)) = $self.parquet_schema.column_with_name(&$column.unqualified_name()) {
                 (v, f)
             } else {
                 // Named column was not present
@@ -191,7 +191,7 @@ macro_rules! get_min_max_values {
         $self.row_group_metadata
             .columns()
             .iter()
-            .find(|c| c.column_descr().name() == &$column.name)
+            .find(|c| c.column_descr().name() == &$column.unqualified_name())
             .and_then(|c| if c.statistics().is_some() {Some((c.statistics().unwrap(), c.column_descr()))} else {None})
             .map(|(stats, column_descr)|
                 {
@@ -213,7 +213,7 @@ macro_rules! get_null_count_values {
                 .row_group_metadata
                 .columns()
                 .iter()
-                .find(|c| c.column_descr().name() == &$column.name)
+                .find(|c| c.column_descr().name() == &$column.unqualified_name())
             {
                 col.statistics().map(|s| s.null_count())
             } else {

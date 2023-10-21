@@ -275,21 +275,31 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         find_column_exprs(exprs)
             .iter()
             .try_for_each(|col| match col {
-                Expr::Column(col) => match &col.relation {
+                Expr::Column(col) => match &col.relation() {
                     Some(r) => {
-                        schema.field_with_qualified_name(r, &col.name)?;
+                        schema.field_with_qualified_name(r, &col.unqualified_name())?;
                         Ok(())
                     }
                     None => {
-                        if !schema.fields_with_unqualified_name(&col.name).is_empty() {
+                        if !schema
+                            .fields_with_unqualified_name(&col.unqualified_name())
+                            .is_empty()
+                        {
                             Ok(())
                         } else {
-                            Err(unqualified_field_not_found(col.name.as_str(), schema))
+                            Err(unqualified_field_not_found(
+                                col.unqualified_name().as_str(),
+                                schema,
+                            ))
                         }
                     }
                 }
                 .map_err(|_: DataFusionError| {
-                    field_not_found(col.relation.clone(), col.name.as_str(), schema)
+                    field_not_found(
+                        col.relation().cloned(),
+                        col.unqualified_name().as_str(),
+                        schema,
+                    )
                 }),
                 _ => internal_err!("Not a column"),
             })

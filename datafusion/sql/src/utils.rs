@@ -169,8 +169,8 @@ pub(crate) fn resolve_aliases_to_exprs(
     aliases: &HashMap<String, Expr>,
 ) -> Result<Expr> {
     expr.clone().transform_up(&|nested_expr| match nested_expr {
-        Expr::Column(c) if c.relation.is_none() => {
-            if let Some(aliased_expr) = aliases.get(&c.name) {
+        Expr::Column(c) if c.relation().is_none() => {
+            if let Some(aliased_expr) = aliases.get(&c.unqualified_name()) {
                 Ok(Transformed::Yes(aliased_expr.clone()))
             } else {
                 Ok(Transformed::No(Expr::Column(c)))

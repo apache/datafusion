@@ -388,10 +388,10 @@ pub fn expand_wildcard(
             let mut out_column_names: HashSet<String> = HashSet::new();
             cols.into_iter()
                 .filter_map(|c| {
-                    if out_column_names.contains(&c.name) {
+                    if out_column_names.contains(&c.unqualified_name()) {
                         Some(c)
                     } else {
-                        out_column_names.insert(c.name);
+                        out_column_names.insert(c.unqualified_name());
                         None
                     }
                 })

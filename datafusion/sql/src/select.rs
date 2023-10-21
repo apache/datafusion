@@ -24,7 +24,6 @@ use crate::utils::{
     resolve_columns, resolve_positions_to_exprs,
 };
 
-use datafusion_common::Column;
 use datafusion_common::{
     get_target_functional_dependencies, not_impl_err, plan_err, DFSchemaRef,
     DataFusionError, Result,
@@ -456,11 +455,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         replace: ReplaceSelectItem,
     ) -> Result<Vec<Expr>> {
         for expr in exprs.iter_mut() {
-            if let Expr::Column(Column { name, .. }) = expr {
+            if let Expr::Column(column) = expr {
                 if let Some(item) = replace
                     .items
                     .iter()
-                    .find(|item| item.column_name.value == *name)
+                    .find(|item| item.column_name.value == column.unqualified_name())
                 {
                     let new_expr = self.sql_select_to_rex(
                         SelectItem::UnnamedExpr(item.expr.clone()),
@@ -471,7 +470,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         .clone();
                     *expr = Expr::Alias(Alias {
                         expr: Box::new(new_expr),
-                        name: name.clone(),
+                        name: column.unqualified_name().clone(),
                     });
                 }
             }

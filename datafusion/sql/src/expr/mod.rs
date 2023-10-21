@@ -128,22 +128,22 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// Rewrite aliases which are not-complete (e.g. ones that only include only table qualifier in a schema.table qualified relation)
     fn rewrite_partial_qualifier(&self, expr: Expr, schema: &DFSchema) -> Expr {
         match expr {
-            Expr::Column(col) => match &col.relation {
+            Expr::Column(col) => match &col.relation() {
                 Some(q) => {
                     match schema
                         .fields()
                         .iter()
                         .find(|field| match field.qualifier() {
                             Some(field_q) => {
-                                field.name() == &col.name
+                                field.name() == &col.unqualified_name()
                                     && field_q.to_string().ends_with(&format!(".{q}"))
                             }
                             _ => false,
                         }) {
-                        Some(df_field) => Expr::Column(Column {
-                            relation: df_field.qualifier().cloned(),
-                            name: df_field.name().clone(),
-                        }),
+                        Some(df_field) => Expr::Column(Column::new(
+                            df_field.qualifier().cloned(),
+                            df_field.name().clone(),
+                        )),
                         None => Expr::Column(col),
                     }
                 }

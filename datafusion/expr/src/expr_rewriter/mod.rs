@@ -124,12 +124,8 @@ pub fn replace_col(expr: Expr, replace_map: &HashMap<&Column, &Column>) -> Resul
 pub fn unnormalize_col(expr: Expr) -> Expr {
     expr.transform(&|expr| {
         Ok({
-            if let Expr::Column(c) = expr {
-                let col = Column {
-                    relation: None,
-                    name: c.name,
-                };
-                Transformed::Yes(Expr::Column(col))
+            if let Expr::Column(column) = expr {
+                Transformed::Yes(Expr::Column(column.unqualified_column()))
             } else {
                 Transformed::No(expr)
             }
@@ -145,9 +141,7 @@ pub fn create_col_from_scalar_expr(
 ) -> Result<Column> {
     match scalar_expr {
         Expr::Alias(Alias { name, .. }) => Ok(Column::new(Some(subqry_alias), name)),
-        Expr::Column(Column { relation: _, name }) => {
-            Ok(Column::new(Some(subqry_alias), name))
-        }
+        Expr::Column(column) => Ok(column.with_new_qualifier(Some(subqry_alias))),
         _ => {
             let scalar_column = scalar_expr.display_name()?;
             Ok(Column::new(Some(subqry_alias), scalar_column))

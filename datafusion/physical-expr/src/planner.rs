@@ -68,7 +68,7 @@ pub fn create_physical_expr(
         )?),
         Expr::Column(c) => {
             let idx = input_dfschema.index_of_column(c)?;
-            Ok(Arc::new(Column::new(&c.name, idx)))
+            Ok(Arc::new(Column::new(&c.unqualified_name(), idx)))
         }
         Expr::Literal(value) => Ok(Arc::new(Literal::new(value.clone()))),
         Expr::ScalarVariable(_, variable_names) => {

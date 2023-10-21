@@ -744,16 +744,22 @@ impl LogicalPlanBuilder {
                     let l = l.into();
                     let r = r.into();
 
-                    match (&l.relation, &r.relation) {
+                    match (&l.relation(), &r.relation()) {
                         (Some(lr), Some(rr)) => {
-                            let l_is_left =
-                                self.plan.schema().field_with_qualified_name(lr, &l.name);
-                            let l_is_right =
-                                right.schema().field_with_qualified_name(lr, &l.name);
-                            let r_is_left =
-                                self.plan.schema().field_with_qualified_name(rr, &r.name);
-                            let r_is_right =
-                                right.schema().field_with_qualified_name(rr, &r.name);
+                            let l_is_left = self
+                                .plan
+                                .schema()
+                                .field_with_qualified_name(lr, &l.unqualified_name());
+                            let l_is_right = right
+                                .schema()
+                                .field_with_qualified_name(lr, &l.unqualified_name());
+                            let r_is_left = self
+                                .plan
+                                .schema()
+                                .field_with_qualified_name(rr, &r.unqualified_name());
+                            let r_is_right = right
+                                .schema()
+                                .field_with_qualified_name(rr, &r.unqualified_name());
 
                             match (l_is_left, l_is_right, r_is_left, r_is_right) {
                                 (_, Ok(_), Ok(_), _) => (Ok(r), Ok(l)),
@@ -765,10 +771,13 @@ impl LogicalPlanBuilder {
                             }
                         }
                         (Some(lr), None) => {
-                            let l_is_left =
-                                self.plan.schema().field_with_qualified_name(lr, &l.name);
-                            let l_is_right =
-                                right.schema().field_with_qualified_name(lr, &l.name);
+                            let l_is_left = self
+                                .plan
+                                .schema()
+                                .field_with_qualified_name(lr, &l.unqualified_name());
+                            let l_is_right = right
+                                .schema()
+                                .field_with_qualified_name(lr, &l.unqualified_name());
 
                             match (l_is_left, l_is_right) {
                                 (Ok(_), _) => (Ok(l), Self::normalize(&right, r)),
@@ -780,10 +789,13 @@ impl LogicalPlanBuilder {
                             }
                         }
                         (None, Some(rr)) => {
-                            let r_is_left =
-                                self.plan.schema().field_with_qualified_name(rr, &r.name);
-                            let r_is_right =
-                                right.schema().field_with_qualified_name(rr, &r.name);
+                            let r_is_left = self
+                                .plan
+                                .schema()
+                                .field_with_qualified_name(rr, &r.unqualified_name());
+                            let r_is_right = right
+                                .schema()
+                                .field_with_qualified_name(rr, &r.unqualified_name());
 
                             match (r_is_left, r_is_right) {
                                 (Ok(_), _) => (Ok(r), Self::normalize(&right, l)),
@@ -1242,10 +1254,11 @@ pub fn project_with_column_index(
             Expr::Alias(Alias { ref name, .. }) if name != schema.field(i).name() => {
                 e.unalias().alias(schema.field(i).name())
             }
-            Expr::Column(Column {
-                relation: _,
-                ref name,
-            }) if name != schema.field(i).name() => e.alias(schema.field(i).name()),
+            Expr::Column(ref column)
+                if &column.unqualified_name() != schema.field(i).name() =>
+            {
+                e.alias(schema.field(i).name())
+            }
             Expr::Alias { .. } | Expr::Column { .. } => e,
             _ => e.alias(schema.field(i).name()),
         })
@@ -1850,8 +1863,8 @@ mod tests {
         match plan {
             Err(DataFusionError::SchemaError(SchemaError::AmbiguousReference {
                 field:
-                    Column {
-                        relation: Some(OwnedTableReference::Bare { table }),
+                    Column::Qualified {
+                        relation: OwnedTableReference::Bare { table },
                         name,
                     },
             })) => {
@@ -1877,8 +1890,8 @@ mod tests {
         match plan {
             Err(DataFusionError::SchemaError(SchemaError::AmbiguousReference {
                 field:
-                    Column {
-                        relation: Some(OwnedTableReference::Bare { table }),
+                    Column::Qualified {
+                        relation: OwnedTableReference::Bare { table },
                         name,
                     },
             })) => {

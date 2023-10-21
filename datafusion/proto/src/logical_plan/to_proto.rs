@@ -231,10 +231,10 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
 impl From<Column> for protobuf::Column {
     fn from(c: Column) -> Self {
         Self {
-            relation: c.relation.map(|relation| protobuf::ColumnRelation {
+            relation: c.relation().map(|relation| protobuf::ColumnRelation {
                 relation: relation.to_string(),
             }),
-            name: c.name,
+            name: c.unqualified_name(),
         }
     }
 }

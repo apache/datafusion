@@ -55,7 +55,8 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
     let mut is_applicable = true;
     expr.apply(&mut |expr| {
         Ok(match expr {
-            Expr::Column(Column { ref name, .. }) => {
+            Expr::Column(Column::Unqualified { ref name })
+            | Expr::Column(Column::Qualified { ref name, .. }) => {
                 is_applicable &= col_names.contains(name);
                 if is_applicable {
                     VisitRecursion::Skip

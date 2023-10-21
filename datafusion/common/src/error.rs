@@ -188,12 +188,12 @@ impl Display for SchemaError {
                 )
             }
             Self::AmbiguousReference { field } => {
-                if field.relation.is_some() {
+                if field.relation().is_some() {
                     write!(
                         f,
                         "Schema contains qualified field name {} and unqualified field name {} which would be ambiguous",
                         field.quoted_flat_name(),
-                        quote_identifier(&field.name)
+                        quote_identifier(&field.unqualified_name())
                     )
                 } else {
                     write!(

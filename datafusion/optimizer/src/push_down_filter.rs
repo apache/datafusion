@@ -819,7 +819,10 @@ impl OptimizerRule for PushDownFilter {
                 let mut push_predicates = vec![];
                 for expr in predicates {
                     let cols = expr.to_columns()?;
-                    if cols.iter().any(|c| prevent_cols.contains(&c.name)) {
+                    if cols
+                        .iter()
+                        .any(|c| prevent_cols.contains(&c.unqualified_name()))
+                    {
                         keep_predicates.push(expr);
                     } else {
                         push_predicates.push(expr);

@@ -725,10 +725,10 @@ pub async fn from_substrait_rex(
                     None => {
                         let column =
                             input_schema.field(x.field as usize).qualified_column();
-                        Ok(Arc::new(Expr::Column(Column {
-                            relation: column.relation,
-                            name: column.name,
-                        })))
+                        Ok(Arc::new(Expr::Column(Column::new(
+                            column.relation().cloned(),
+                            column.unqualified_name(),
+                        ))))
                     }
                 },
                 _ => not_impl_err!(

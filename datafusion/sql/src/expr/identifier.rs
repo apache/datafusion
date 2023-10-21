@@ -49,10 +49,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             match schema.field_with_unqualified_name(normalize_ident.as_str()) {
                 Ok(_) => {
                     // found a match without a qualified name, this is a inner table column
-                    Ok(Expr::Column(Column {
-                        relation: None,
-                        name: normalize_ident,
-                    }))
+                    Ok(Expr::Column(Column::new_unqualified(normalize_ident)))
                 }
                 Err(_) => {
                     // check the outer_query_schema and try to find a match
@@ -66,16 +63,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                     field.qualified_column(),
                                 ))
                             }
-                            Err(_) => Ok(Expr::Column(Column {
-                                relation: None,
-                                name: normalize_ident,
-                            })),
+                            Err(_) => {
+                                Ok(Expr::Column(Column::new_unqualified(normalize_ident)))
+                            }
                         }
                     } else {
-                        Ok(Expr::Column(Column {
-                            relation: None,
-                            name: normalize_ident,
-                        }))
+                        Ok(Expr::Column(Column::new_unqualified(normalize_ident)))
                     }
                 }
             }

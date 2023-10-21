@@ -570,9 +570,9 @@ fn push_down_scan(
     let mut projection: BTreeSet<usize> = used_columns
         .iter()
         .filter(|c| {
-            c.relation.is_none() || c.relation.as_ref().unwrap() == &scan.table_name
+            c.relation().is_none() || c.relation().as_ref().unwrap() == &&scan.table_name
         })
-        .map(|c| schema.index_of(&c.name))
+        .map(|c| schema.index_of(&c.unqualified_name()))
         .filter_map(ArrowResult::ok)
         .collect();
 

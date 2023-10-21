@@ -253,8 +253,10 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 );
                 let mut new_correlated_cols = BTreeSet::new();
                 for col in local_correlated_cols.iter() {
-                    new_correlated_cols
-                        .insert(Column::new(Some(alias.alias.clone()), col.name.clone()));
+                    new_correlated_cols.insert(Column::new(
+                        Some(alias.alias.clone()),
+                        col.unqualified_name().clone(),
+                    ));
                 }
                 self.correlated_subquery_cols_map
                     .insert(plan.clone(), new_correlated_cols);
@@ -409,8 +411,10 @@ fn proj_exprs_evaluation_result_on_empty_batch(
 ) -> Result<()> {
     for expr in proj_expr.iter() {
         let result_expr = expr.clone().transform_up(&|expr| {
-            if let Expr::Column(Column { name, .. }) = &expr {
-                if let Some(result_expr) = input_expr_result_map_for_count_bug.get(name) {
+            if let Expr::Column(column) = &expr {
+                if let Some(result_expr) =
+                    input_expr_result_map_for_count_bug.get(&column.unqualified_name())
+                {
                     Ok(Transformed::Yes(result_expr.clone()))
                 } else {
                     Ok(Transformed::No(expr))
@@ -426,7 +430,7 @@ fn proj_exprs_evaluation_result_on_empty_batch(
             let result_expr = simplifier.simplify(result_expr)?;
             let expr_name = match expr {
                 Expr::Alias(Alias { name, .. }) => name.to_string(),
-                Expr::Column(Column { relation: _, name }) => name.to_string(),
+                Expr::Column(column) => column.unqualified_name().to_string(),
                 _ => expr.display_name()?,
             };
             expr_result_map_for_count_bug.insert(expr_name, result_expr);
@@ -442,8 +446,10 @@ fn filter_exprs_evaluation_result_on_empty_batch(
     expr_result_map_for_count_bug: &mut ExprResultMap,
 ) -> Result<Option<Expr>> {
     let result_expr = filter_expr.clone().transform_up(&|expr| {
-        if let Expr::Column(Column { name, .. }) = &expr {
-            if let Some(result_expr) = input_expr_result_map_for_count_bug.get(name) {
+        if let Expr::Column(column) = &expr {
+            if let Some(result_expr) =
+                input_expr_result_map_for_count_bug.get(&column.unqualified_name())
+            {
                 Ok(Transformed::Yes(result_expr.clone()))
             } else {
                 Ok(Transformed::No(expr))
