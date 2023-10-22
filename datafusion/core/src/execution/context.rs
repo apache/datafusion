@@ -16,6 +16,10 @@
 // under the License.
 
 //! [`SessionContext`] contains methods for registering data sources and executing queries
+
+#[cfg(feature = "parquet")]
+mod parquet;
+
 use crate::{
     catalog::{CatalogList, MemoryCatalogList},
     datasource::{
@@ -77,8 +81,6 @@ use datafusion_sql::{
 use sqlparser::dialect::dialect_from_str;
 
 use crate::config::ConfigOptions;
-#[cfg(feature = "parquet")]
-use crate::datasource::physical_plan::plan_to_parquet;
 use crate::datasource::physical_plan::{plan_to_csv, plan_to_json};
 use crate::execution::{runtime_env::RuntimeEnv, FunctionRegistry};
 use crate::physical_plan::udaf::AggregateUDF;
@@ -94,8 +96,6 @@ use datafusion_sql::{
     parser::DFParser,
     planner::{ContextProvider, SqlToRel},
 };
-#[cfg(feature = "parquet")]
-use parquet::file::properties::WriterProperties;
 use url::Url;
 
 use crate::catalog::information_schema::{InformationSchemaProvider, INFORMATION_SCHEMA};
@@ -113,8 +113,6 @@ use crate::execution::options::ArrowReadOptions;
 pub use datafusion_execution::config::SessionConfig;
 pub use datafusion_execution::TaskContext;
 
-#[cfg(feature = "parquet")]
-use super::options::ParquetReadOptions;
 use super::options::{AvroReadOptions, CsvReadOptions, NdJsonReadOptions, ReadOptions};
 
 /// DataFilePaths adds a method to convert strings and vector of strings to vector of [`ListingTableUrl`] URLs.
@@ -937,21 +935,6 @@ impl SessionContext {
         self._read_type(table_paths, options).await
     }
 
-    /// Creates a [`DataFrame`] for reading a Parquet data source.
-    ///
-    /// For more control such as reading multiple files, you can use
-    /// [`read_table`](Self::read_table) with a [`ListingTable`].
-    ///
-    /// For an example, see [`read_csv`](Self::read_csv)
-    #[cfg(feature = "parquet")]
-    pub async fn read_parquet<P: DataFilePaths>(
-        &self,
-        table_paths: P,
-        options: ParquetReadOptions<'_>,
-    ) -> Result<DataFrame> {
-        self._read_type(table_paths, options).await
-    }
-
     /// Creates a [`DataFrame`] for a [`TableProvider`] such as a
     /// [`ListingTable`] or a custom user defined provider.
     pub fn read_table(&self, provider: Arc<dyn TableProvider>) -> Result<DataFrame> {
@@ -1043,28 +1026,6 @@ impl SessionContext {
         options: NdJsonReadOptions<'_>,
     ) -> Result<()> {
         let listing_options = options.to_listing_options(&self.copied_config());
-
-        self.register_listing_table(
-            name,
-            table_path,
-            listing_options,
-            options.schema.map(|s| Arc::new(s.to_owned())),
-            None,
-        )
-        .await?;
-        Ok(())
-    }
-
-    /// Registers a Parquet file as a table that can be referenced from SQL
-    /// statements executed against this context.
-    #[cfg(feature = "parquet")]
-    pub async fn register_parquet(
-        &self,
-        name: &str,
-        table_path: &str,
-        options: ParquetReadOptions<'_>,
-    ) -> Result<()> {
-        let listing_options = options.to_listing_options(&self.state.read().config);
 
         self.register_listing_table(
             name,
@@ -1289,17 +1250,6 @@ impl SessionContext {
         path: impl AsRef<str>,
     ) -> Result<()> {
         plan_to_json(self.task_ctx(), plan, path).await
-    }
-
-    /// Executes a query and writes the results to a partitioned Parquet file.
-    #[cfg(feature = "parquet")]
-    pub async fn write_parquet(
-        &self,
-        plan: Arc<dyn ExecutionPlan>,
-        path: impl AsRef<str>,
-        writer_properties: Option<WriterProperties>,
-    ) -> Result<()> {
-        plan_to_parquet(self.task_ctx(), plan, path, writer_properties).await
     }
 
     /// Get a new TaskContext to run in this session
@@ -2251,8 +2201,6 @@ mod tests {
     use crate::execution::memory_pool::MemoryConsumer;
     use crate::execution::runtime_env::RuntimeConfig;
     use crate::test;
-    #[cfg(feature = "parquet")]
-    use crate::test_util::parquet_test_data;
     use crate::variable::VarType;
     use arrow::record_batch::RecordBatch;
     use arrow_schema::{Field, Schema};
@@ -2653,63 +2601,6 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    #[cfg(feature = "parquet")]
-    async fn read_with_glob_path() -> Result<()> {
-        let ctx = SessionContext::new();
-
-        let df = ctx
-            .read_parquet(
-                format!("{}/alltypes_plain*.parquet", parquet_test_data()),
-                ParquetReadOptions::default(),
-            )
-            .await?;
-        let results = df.collect().await?;
-        let total_rows: usize = results.iter().map(|rb| rb.num_rows()).sum();
-        // alltypes_plain.parquet = 8 rows, alltypes_plain.snappy.parquet = 2 rows, alltypes_dictionary.parquet = 2 rows
-        assert_eq!(total_rows, 10);
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[cfg(feature = "parquet")]
-    async fn read_with_glob_path_issue_2465() -> Result<()> {
-        let ctx = SessionContext::new();
-
-        let df = ctx
-            .read_parquet(
-                // it was reported that when a path contains // (two consecutive separator) no files were found
-                // in this test, regardless of parquet_test_data() value, our path now contains a //
-                format!("{}/..//*/alltypes_plain*.parquet", parquet_test_data()),
-                ParquetReadOptions::default(),
-            )
-            .await?;
-        let results = df.collect().await?;
-        let total_rows: usize = results.iter().map(|rb| rb.num_rows()).sum();
-        // alltypes_plain.parquet = 8 rows, alltypes_plain.snappy.parquet = 2 rows, alltypes_dictionary.parquet = 2 rows
-        assert_eq!(total_rows, 10);
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[cfg(feature = "parquet")]
-    async fn read_from_registered_table_with_glob_path() -> Result<()> {
-        let ctx = SessionContext::new();
-
-        ctx.register_parquet(
-            "test",
-            &format!("{}/alltypes_plain*.parquet", parquet_test_data()),
-            ParquetReadOptions::default(),
-        )
-        .await?;
-        let df = ctx.sql("SELECT * FROM test").await?;
-        let results = df.collect().await?;
-        let total_rows: usize = results.iter().map(|rb| rb.num_rows()).sum();
-        // alltypes_plain.parquet = 8 rows, alltypes_plain.snappy.parquet = 2 rows, alltypes_dictionary.parquet = 2 rows
-        assert_eq!(total_rows, 10);
-        Ok(())
-    }
-
     struct MyPhysicalPlanner {}
 
     #[async_trait]
@@ -2814,8 +2705,6 @@ mod tests {
     trait CallReadTrait {
         async fn call_read_csv(&self) -> DataFrame;
         async fn call_read_avro(&self) -> DataFrame;
-        #[cfg(feature = "parquet")]
-        async fn call_read_parquet(&self) -> DataFrame;
     }
 
     struct CallRead {}
@@ -2830,14 +2719,6 @@ mod tests {
         async fn call_read_avro(&self) -> DataFrame {
             let ctx = SessionContext::new();
             ctx.read_avro("dummy", AvroReadOptions::default())
-                .await
-                .unwrap()
-        }
-
-        #[cfg(feature = "parquet")]
-        async fn call_read_parquet(&self) -> DataFrame {
-            let ctx = SessionContext::new();
-            ctx.read_parquet("dummy", ParquetReadOptions::default())
                 .await
                 .unwrap()
         }
