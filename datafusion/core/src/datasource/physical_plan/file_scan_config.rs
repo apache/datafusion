@@ -101,7 +101,7 @@ pub struct FileScanConfig {
     /// all records after filtering are returned.
     pub limit: Option<usize>,
     /// The partitioning columns
-    pub table_partition_cols: Vec<(String, DataType)>,
+    pub table_partition_cols: Vec<Field>,
     /// All equivalent lexicographical orderings that describe the schema.
     pub output_ordering: Vec<LexOrdering>,
     /// Indicates whether this plan may produce an infinite stream of records.
@@ -135,8 +135,7 @@ impl FileScanConfig {
                 table_cols_stats.push(self.statistics.column_statistics[idx].clone())
             } else {
                 let partition_idx = idx - self.file_schema.fields().len();
-                let (name, dtype) = &self.table_partition_cols[partition_idx];
-                table_fields.push(Field::new(name, dtype.to_owned(), false));
+                table_fields.push(self.table_partition_cols[partition_idx].to_owned());
                 // TODO provide accurate stat for partition column (#1186)
                 table_cols_stats.push(ColumnStatistics::new_unknown())
             }
@@ -501,10 +500,10 @@ mod tests {
             Arc::clone(&file_schema),
             None,
             Statistics::new_unknown(&file_schema),
-            vec![(
+            to_partition_cols(vec![(
                 "date".to_owned(),
                 wrap_partition_type_in_dict(DataType::Utf8),
-            )],
+            )]),
         );
 
         let (proj_schema, proj_statistics, _) = conf.project();
@@ -528,6 +527,35 @@ mod tests {
     }
 
     #[test]
+    fn physical_plan_config_no_projection_tab_cols_as_field() {
+        let file_schema = aggr_test_schema();
+
+        // make a table_partition_col as a field
+        let table_partition_col =
+            Field::new("date", wrap_partition_type_in_dict(DataType::Utf8), true)
+                .with_metadata(HashMap::from_iter(vec![(
+                    "key_whatever".to_owned(),
+                    "value_whatever".to_owned(),
+                )]));
+
+        let conf = config_for_projection(
+            Arc::clone(&file_schema),
+            None,
+            Statistics::new_unknown(&file_schema),
+            vec![table_partition_col.clone()],
+        );
+
+        // verify the proj_schema inlcudes the last column and exactly the same the field it is defined
+        let (proj_schema, _proj_statistics, _) = conf.project();
+        assert_eq!(proj_schema.fields().len(), file_schema.fields().len() + 1);
+        assert_eq!(
+            *proj_schema.field(file_schema.fields().len()),
+            table_partition_col,
+            "partition columns are the last columns and ust have all values defined in created field"
+        );
+    }
+
+    #[test]
     fn physical_plan_config_with_projection() {
         let file_schema = aggr_test_schema();
         let conf = config_for_projection(
@@ -545,10 +573,10 @@ mod tests {
                     .collect(),
                 total_byte_size: Precision::Absent,
             },
-            vec![(
+            to_partition_cols(vec![(
                 "date".to_owned(),
                 wrap_partition_type_in_dict(DataType::Utf8),
-            )],
+            )]),
         );
 
         let (proj_schema, proj_statistics, _) = conf.project();
@@ -602,7 +630,7 @@ mod tests {
                 file_batch.schema().fields().len() + 2,
             ]),
             Statistics::new_unknown(&file_batch.schema()),
-            partition_cols.clone(),
+            to_partition_cols(partition_cols.clone()),
         );
         let (proj_schema, ..) = conf.project();
         // created a projector for that projected schema
@@ -747,7 +775,7 @@ mod tests {
         file_schema: SchemaRef,
         projection: Option<Vec<usize>>,
         statistics: Statistics,
-        table_partition_cols: Vec<(String, DataType)>,
+        table_partition_cols: Vec<Field>,
     ) -> FileScanConfig {
         FileScanConfig {
             file_schema,
@@ -760,6 +788,14 @@ mod tests {
             output_ordering: vec![],
             infinite_source: false,
         }
+    }
+
+    /// Convert partition columns from Vec<String DataType> to Vec<Field>
+    fn to_partition_cols(table_partition_cols: Vec<(String, DataType)>) -> Vec<Field> {
+        table_partition_cols
+            .iter()
+            .map(|(name, dtype)| Field::new(name, dtype.clone(), false))
+            .collect::<Vec<_>>()
     }
 
     /// returns record batch with 3 columns of i32 in memory
