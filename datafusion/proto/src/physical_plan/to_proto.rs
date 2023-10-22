@@ -729,7 +729,7 @@ impl TryFrom<&FileScanConfig> for protobuf::FileScanExecConf {
             table_partition_cols: conf
                 .table_partition_cols
                 .iter()
-                .map(|x| x.0.clone())
+                .map(|x| x.name().clone())
                 .collect::<Vec<_>>(),
             object_store_url: conf.object_store_url.to_string(),
             output_ordering: output_orderings

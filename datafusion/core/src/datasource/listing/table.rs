@@ -746,15 +746,7 @@ impl TableProvider for ListingTable {
             .options
             .table_partition_cols
             .iter()
-            .map(|col| {
-                Ok((
-                    col.0.to_owned(),
-                    self.table_schema
-                        .field_with_name(&col.0)?
-                        .data_type()
-                        .clone(),
-                ))
-            })
+            .map(|col| Ok(self.table_schema.field_with_name(&col.0)?.clone()))
             .collect::<Result<Vec<_>>>()?;
 
         let filters = if let Some(expr) = conjunction(filters.to_vec()) {
