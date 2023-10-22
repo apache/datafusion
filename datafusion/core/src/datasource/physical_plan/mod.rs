@@ -28,7 +28,6 @@ pub mod parquet;
 
 pub(crate) use self::csv::plan_to_csv;
 pub use self::csv::{CsvConfig, CsvExec, CsvOpener};
-pub(crate) use self::file_scan_config::PartitionColumnProjector;
 pub(crate) use self::json::plan_to_json;
 #[cfg(feature = "parquet")]
 pub(crate) use self::parquet::plan_to_parquet;
@@ -37,6 +36,7 @@ pub use self::parquet::{ParquetExec, ParquetFileMetrics, ParquetFileReaderFactor
 
 pub use arrow_file::ArrowExec;
 pub use avro::AvroExec;
+use file_scan_config::PartitionColumnProjector;
 pub use file_scan_config::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
 };

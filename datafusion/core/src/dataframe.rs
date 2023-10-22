@@ -17,6 +17,9 @@
 
 //! [`DataFrame`] API for building and executing query plans.
 
+#[cfg(feature = "parquet")]
+mod parquet;
+
 use std::any::Any;
 use std::sync::Arc;
 
@@ -27,17 +30,11 @@ use arrow::datatypes::{DataType, Field};
 use async_trait::async_trait;
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
-#[cfg(feature = "parquet")]
-use datafusion_common::file_options::parquet_writer::{
-    default_builder, ParquetWriterOptions,
-};
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     DataFusionError, FileType, FileTypeWriterOptions, SchemaError, UnnestOptions,
 };
 use datafusion_expr::dml::CopyOptions;
-#[cfg(feature = "parquet")]
-use parquet::file::properties::WriterProperties;
 
 use datafusion_common::{Column, DFSchema, ScalarValue};
 use datafusion_expr::{
@@ -1069,41 +1066,6 @@ impl DataFrame {
         DataFrame::new(self.session_state, plan).collect().await
     }
 
-    /// Write a `DataFrame` to a Parquet file.
-    #[cfg(feature = "parquet")]
-    pub async fn write_parquet(
-        self,
-        path: &str,
-        options: DataFrameWriteOptions,
-        writer_properties: Option<WriterProperties>,
-    ) -> Result<Vec<RecordBatch>, DataFusionError> {
-        if options.overwrite {
-            return Err(DataFusionError::NotImplemented(
-                "Overwrites are not implemented for DataFrame::write_parquet.".to_owned(),
-            ));
-        }
-        match options.compression{
-            CompressionTypeVariant::UNCOMPRESSED => (),
-            _ => return Err(DataFusionError::Configuration("DataFrame::write_parquet method does not support compression set via DataFrameWriteOptions. Set parquet compression via writer_properties instead.".to_owned()))
-        }
-        let props = match writer_properties {
-            Some(props) => props,
-            None => default_builder(self.session_state.config_options())?.build(),
-        };
-        let file_type_writer_options =
-            FileTypeWriterOptions::Parquet(ParquetWriterOptions::new(props));
-        let copy_options = CopyOptions::WriterOptions(Box::new(file_type_writer_options));
-        let plan = LogicalPlanBuilder::copy_to(
-            self.plan,
-            path.into(),
-            FileType::PARQUET,
-            options.single_file_output,
-            copy_options,
-        )?
-        .build()?;
-        DataFrame::new(self.session_state, plan).collect().await
-    }
-
     /// Executes a query and writes the results to a partitioned JSON file.
     pub async fn write_json(
         self,
@@ -1368,21 +1330,12 @@ mod tests {
         WindowFunction,
     };
     use datafusion_physical_expr::expressions::Column;
-    use object_store::local::LocalFileSystem;
-    #[cfg(feature = "parquet")]
-    use parquet::basic::{BrotliLevel, GzipLevel, ZstdLevel};
-    #[cfg(feature = "parquet")]
-    use parquet::file::reader::FileReader;
-    use tempfile::TempDir;
-    use url::Url;
 
     use crate::execution::context::SessionConfig;
-    use crate::execution::options::{CsvReadOptions, ParquetReadOptions};
     use crate::physical_plan::ColumnarValue;
     use crate::physical_plan::Partitioning;
     use crate::physical_plan::PhysicalExpr;
-    use crate::test_util;
-    use crate::test_util::parquet_test_data;
+    use crate::test_util::{register_aggregate_csv, test_table, test_table_with_name};
     use crate::{assert_batches_sorted_eq, execution::context::SessionContext};
 
     use super::*;
@@ -1803,31 +1756,6 @@ mod tests {
         Ok(ctx.sql(sql).await?.into_unoptimized_plan())
     }
 
-    async fn test_table_with_name(name: &str) -> Result<DataFrame> {
-        let mut ctx = SessionContext::new();
-        register_aggregate_csv(&mut ctx, name).await?;
-        ctx.table(name).await
-    }
-
-    async fn test_table() -> Result<DataFrame> {
-        test_table_with_name("aggregate_test_100").await
-    }
-
-    async fn register_aggregate_csv(
-        ctx: &mut SessionContext,
-        table_name: &str,
-    ) -> Result<()> {
-        let schema = test_util::aggr_test_schema();
-        let testdata = test_util::arrow_test_data();
-        ctx.register_csv(
-            table_name,
-            &format!("{testdata}/csv/aggregate_test_100.csv"),
-            CsvReadOptions::new().schema(schema.as_ref()),
-        )
-        .await?;
-        Ok(())
-    }
-
     #[tokio::test]
     async fn with_column() -> Result<()> {
         let df = test_table().await?.select_columns(&["c1", "c2", "c3"])?;
@@ -2233,33 +2161,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn filter_pushdown_dataframe() -> Result<()> {
-        let ctx = SessionContext::new();
-
-        ctx.register_parquet(
-            "test",
-            &format!("{}/alltypes_plain.snappy.parquet", parquet_test_data()),
-            ParquetReadOptions::default(),
-        )
-        .await?;
-
-        ctx.register_table("t1", ctx.table("test").await?.into_view())?;
-
-        let df = ctx
-            .table("t1")
-            .await?
-            .filter(col("id").eq(lit(1)))?
-            .select_columns(&["bool_col", "int_col"])?;
-
-        let plan = df.explain(false, false)?.collect().await?;
-        // Filters all the way to Parquet
-        let formatted = pretty::pretty_format_batches(&plan)?.to_string();
-        assert!(formatted.contains("FilterExec: id@0 = 1"));
-
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn cast_expr_test() -> Result<()> {
         let df = test_table()
             .await?
@@ -2539,56 +2440,6 @@ mod tests {
                     Partitioning::UnknownPartitioning(partition_count) if partition_count == default_partition_count));
                 }
             }
-        }
-
-        Ok(())
-    }
-
-    #[cfg(feature = "parquet")]
-    #[tokio::test]
-    async fn write_parquet_with_compression() -> Result<()> {
-        let test_df = test_table().await?;
-
-        let output_path = "file://local/test.parquet";
-        let test_compressions = vec![
-            parquet::basic::Compression::SNAPPY,
-            parquet::basic::Compression::LZ4,
-            parquet::basic::Compression::LZ4_RAW,
-            parquet::basic::Compression::GZIP(GzipLevel::default()),
-            parquet::basic::Compression::BROTLI(BrotliLevel::default()),
-            parquet::basic::Compression::ZSTD(ZstdLevel::default()),
-        ];
-        for compression in test_compressions.into_iter() {
-            let df = test_df.clone();
-            let tmp_dir = TempDir::new()?;
-            let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
-            let local_url = Url::parse("file://local").unwrap();
-            let ctx = &test_df.session_state;
-            ctx.runtime_env().register_object_store(&local_url, local);
-            df.write_parquet(
-                output_path,
-                DataFrameWriteOptions::new().with_single_file_output(true),
-                Some(
-                    WriterProperties::builder()
-                        .set_compression(compression)
-                        .build(),
-                ),
-            )
-            .await?;
-
-            // Check that file actually used the specified compression
-            let file = std::fs::File::open(tmp_dir.into_path().join("test.parquet"))?;
-
-            let reader =
-                parquet::file::serialized_reader::SerializedFileReader::new(file)
-                    .unwrap();
-
-            let parquet_metadata = reader.metadata();
-
-            let written_compression =
-                parquet_metadata.row_group(0).column(0).compression();
-
-            assert_eq!(written_compression, compression);
         }
 
         Ok(())

@@ -27,6 +27,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use crate::dataframe::DataFrame;
 use crate::datasource::provider::TableProviderFactory;
 use crate::datasource::{empty::EmptyTable, provider_as_source, TableProvider};
 use crate::error::Result;
@@ -101,6 +102,34 @@ pub fn aggr_test_schema() -> SchemaRef {
     ]);
 
     Arc::new(schema)
+}
+
+/// Register session context for the aggregate_test_100.csv file
+pub async fn register_aggregate_csv(
+    ctx: &mut SessionContext,
+    table_name: &str,
+) -> Result<()> {
+    let schema = aggr_test_schema();
+    let testdata = arrow_test_data();
+    ctx.register_csv(
+        table_name,
+        &format!("{testdata}/csv/aggregate_test_100.csv"),
+        CsvReadOptions::new().schema(schema.as_ref()),
+    )
+    .await?;
+    Ok(())
+}
+
+/// Create a table from the aggregate_test_100.csv file with the specified name
+pub async fn test_table_with_name(name: &str) -> Result<DataFrame> {
+    let mut ctx = SessionContext::new();
+    register_aggregate_csv(&mut ctx, name).await?;
+    ctx.table(name).await
+}
+
+/// Create a table from the aggregate_test_100.csv file with the name "aggregate_test_100"
+pub async fn test_table() -> Result<DataFrame> {
+    test_table_with_name("aggregate_test_100").await
 }
 
 /// TableFactory for tests
