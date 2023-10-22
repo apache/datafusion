@@ -28,9 +28,8 @@ use crate::error::Result;
 use crate::physical_plan::SendableRecordBatchStream;
 
 use arrow_array::builder::UInt64Builder;
-use arrow_array::cast::{as_dictionary_array, AsArray};
-use arrow_array::types::{Int32Type, UInt16Type};
-use arrow_array::{RecordBatch, StringArray, StructArray};
+use arrow_array::cast::AsArray;
+use arrow_array::{downcast_dictionary_array, RecordBatch, StringArray, StructArray};
 use arrow_schema::{DataType, Schema};
 use datafusion_common::cast::as_string_array;
 use datafusion_common::DataFusionError;
@@ -311,37 +310,23 @@ fn compute_partition_keys_by_row<'a>(
                 for i in 0..rb.num_rows() {
                     partition_values.push(array.value(i));
                 }
-            },
-            DataType::Dictionary(key_type, _) => {
-                match **key_type{
-                    DataType::UInt16 => {
-                        let dict_array = as_dictionary_array::<UInt16Type>(col_array);
-                        let array = dict_array.downcast_dict::<StringArray>()
-                            .ok_or(DataFusionError::NotImplemented(format!("It is not yet supported to write to hive partitioned with datatype {}", dtype)))?;
-                        for val in array.into_iter() {
+            }
+            DataType::Dictionary(_, _) => {
+                downcast_dictionary_array!(
+                    col_array =>  {
+                        let array = col_array.downcast_dict::<StringArray>()
+                            .ok_or(DataFusionError::Execution(format!("it is not yet supported to write to hive partitions with datatype {}",
+                            dtype)))?;
+
+                        for val in array.values() {
                             partition_values.push(
-                                val.ok_or(DataFusionError::Execution("Partition values cannot be null!".into()))?
+                                val.ok_or(DataFusionError::Execution(format!("Cannot partition by null value for column {}", col)))?
                             );
                         }
                     },
-                    DataType::Int32 => {
-                        let dict_array = as_dictionary_array::<Int32Type>(col_array);
-                        let array = dict_array.downcast_dict::<StringArray>()
-                            .ok_or(DataFusionError::NotImplemented(format!("It is not yet supported to write to hive partitioned with datatype {}", dtype)))?;
-                        for val in array.into_iter() {
-                            partition_values.push(
-                                val.ok_or(DataFusionError::Execution("Partition values cannot be null!".into()))?
-                            );
-                        }
-                    },
-                    _ => {
-                        return Err(DataFusionError::NotImplemented(format!(
-                            "It is not yet supported to write to hive partitions with datatype {}",
-                            dtype
-                        )))
-                    }
-                }
-            },
+                    _ => unreachable!(),
+                )
+            }
             _ => {
                 return Err(DataFusionError::NotImplemented(format!(
                 "it is not yet supported to write to hive partitions with datatype {}",

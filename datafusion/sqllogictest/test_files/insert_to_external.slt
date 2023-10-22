@@ -40,8 +40,73 @@ STORED AS CSV
 WITH HEADER ROW
 LOCATION '../../testing/data/csv/aggregate_test_100.csv'
 
-# test_insert_into
 
+statement ok
+CREATE EXTERNAL TABLE dictionary_encoded_parquet
+STORED AS parquet
+LOCATION '../../parquet-testing/data/alltypes_dictionary.parquet';
+
+query TTT
+describe dictionary_encoded_parquet;
+----
+id Int32 YES
+bool_col Boolean YES
+tinyint_col Int32 YES
+smallint_col Int32 YES
+int_col Int32 YES
+bigint_col Int64 YES
+float_col Float32 YES
+double_col Float64 YES
+date_string_col Binary YES
+string_col Binary YES
+timestamp_col Timestamp(Nanosecond, None) YES
+
+statement ok
+CREATE EXTERNAL TABLE dictionary_encoded_parquet_partitioned(
+  id int,
+  bool_col bool,
+  tinyint_col int,
+  smallint_col int,
+  int_col int,
+  bigint_col bigint,
+  float_col float,
+  double_col double,
+  date_string_col varchar,
+  string_col varchar,
+  timestamp_col varchar
+) 
+STORED AS parquet
+LOCATION 'test_files/scratch/insert_to_external/parquet_types_partitioned'
+PARTITIONED BY (date_string_col, string_col, timestamp_col)
+OPTIONS(
+create_local_path 'true',
+insert_mode 'append_new_files',
+);
+
+query IBIIIIRRTTT
+insert into dictionary_encoded_parquet_partitioned 
+select 
+  id, 
+  bool_col, 
+  tinyint_col,
+  smallint_col,
+  int_col,
+  bigint_col,
+  float_col,
+  double_col,
+  date_string_col,
+  string_col,
+  timestamp_col::TEXT from dictionary_encoded_parquet;
+----
+2
+
+query IBIIIIRRTTT
+select * from dictionary_encoded_parquet_partitioned order by (id);
+----
+0 true 0 0 0 0 0 0 01%2F01%2F09 0 2009-01-01T00:00:00
+1 false 1 1 1 10 1.1 10.1 01%2F01%2F09 1 2009-01-01T00:01:00
+
+# test_insert_into
 statement ok
 set datafusion.execution.target_partitions = 8;
 
