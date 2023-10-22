@@ -201,7 +201,10 @@ mod test {
             )?;
 
             // compute
-            let result = expression.evaluate(&batch)?.into_array(batch.num_rows());
+            let result = expression
+                .evaluate(&batch)?
+                .into_array(batch.num_rows())
+                .expect("Failed to convert to array");
             let result =
                 as_boolean_array(&result).expect("failed to downcast to BooleanArray");
             let expected = &BooleanArray::from($VEC);

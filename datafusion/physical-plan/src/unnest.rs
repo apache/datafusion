@@ -242,7 +242,7 @@ fn build_batch(
     column: &Column,
     options: &UnnestOptions,
 ) -> Result<RecordBatch> {
-    let list_array = column.evaluate(batch)?.into_array(batch.num_rows());
+    let list_array = column.evaluate(batch)?.into_array(batch.num_rows())?;
     match list_array.data_type() {
         DataType::List(_) => {
             let list_array = list_array.as_any().downcast_ref::<ListArray>().unwrap();
