@@ -17,6 +17,7 @@
 
 //! Utility functions to make testing DataFusion based crates easier
 
+#[cfg(feature = "parquet")]
 pub mod parquet;
 
 use std::any::Any;
@@ -48,9 +49,9 @@ use async_trait::async_trait;
 use futures::Stream;
 
 // backwards compatibility
-pub use datafusion_common::test_util::{
-    arrow_test_data, get_data_dir, parquet_test_data,
-};
+#[cfg(feature = "parquet")]
+pub use datafusion_common::test_util::parquet_test_data;
+pub use datafusion_common::test_util::{arrow_test_data, get_data_dir};
 
 pub use datafusion_common::{assert_batches_eq, assert_batches_sorted_eq};
 

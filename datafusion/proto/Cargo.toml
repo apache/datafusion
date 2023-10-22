@@ -36,8 +36,9 @@ name = "datafusion_proto"
 path = "src/lib.rs"
 
 [features]
-default = []
+default = ["parquet"]
 json = ["pbjson", "serde", "serde_json"]
+parquet = ["datafusion/parquet", "datafusion-common/parquet"]
 
 [dependencies]
 arrow = { workspace = true }

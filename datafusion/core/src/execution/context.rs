@@ -77,7 +77,9 @@ use datafusion_sql::{
 use sqlparser::dialect::dialect_from_str;
 
 use crate::config::ConfigOptions;
-use crate::datasource::physical_plan::{plan_to_csv, plan_to_json, plan_to_parquet};
+#[cfg(feature = "parquet")]
+use crate::datasource::physical_plan::plan_to_parquet;
+use crate::datasource::physical_plan::{plan_to_csv, plan_to_json};
 use crate::execution::{runtime_env::RuntimeEnv, FunctionRegistry};
 use crate::physical_plan::udaf::AggregateUDF;
 use crate::physical_plan::udf::ScalarUDF;
@@ -92,6 +94,7 @@ use datafusion_sql::{
     parser::DFParser,
     planner::{ContextProvider, SqlToRel},
 };
+#[cfg(feature = "parquet")]
 use parquet::file::properties::WriterProperties;
 use url::Url;
 
@@ -110,9 +113,9 @@ use crate::execution::options::ArrowReadOptions;
 pub use datafusion_execution::config::SessionConfig;
 pub use datafusion_execution::TaskContext;
 
-use super::options::{
-    AvroReadOptions, CsvReadOptions, NdJsonReadOptions, ParquetReadOptions, ReadOptions,
-};
+#[cfg(feature = "parquet")]
+use super::options::ParquetReadOptions;
+use super::options::{AvroReadOptions, CsvReadOptions, NdJsonReadOptions, ReadOptions};
 
 /// DataFilePaths adds a method to convert strings and vector of strings to vector of [`ListingTableUrl`] URLs.
 /// This allows methods such [`SessionContext::read_csv`] and [`SessionContext::read_avro`]
@@ -940,6 +943,7 @@ impl SessionContext {
     /// [`read_table`](Self::read_table) with a [`ListingTable`].
     ///
     /// For an example, see [`read_csv`](Self::read_csv)
+    #[cfg(feature = "parquet")]
     pub async fn read_parquet<P: DataFilePaths>(
         &self,
         table_paths: P,
@@ -1053,6 +1057,7 @@ impl SessionContext {
 
     /// Registers a Parquet file as a table that can be referenced from SQL
     /// statements executed against this context.
+    #[cfg(feature = "parquet")]
     pub async fn register_parquet(
         &self,
         name: &str,
@@ -1287,6 +1292,7 @@ impl SessionContext {
     }
 
     /// Executes a query and writes the results to a partitioned Parquet file.
+    #[cfg(feature = "parquet")]
     pub async fn write_parquet(
         &self,
         plan: Arc<dyn ExecutionPlan>,
@@ -1447,6 +1453,7 @@ impl SessionState {
         // Create table_factories for all default formats
         let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
             HashMap::new();
+        #[cfg(feature = "parquet")]
         table_factories.insert("PARQUET".into(), Arc::new(ListingTableFactory::new()));
         table_factories.insert("CSV".into(), Arc::new(ListingTableFactory::new()));
         table_factories.insert("JSON".into(), Arc::new(ListingTableFactory::new()));
@@ -2244,6 +2251,7 @@ mod tests {
     use crate::execution::memory_pool::MemoryConsumer;
     use crate::execution::runtime_env::RuntimeConfig;
     use crate::test;
+    #[cfg(feature = "parquet")]
     use crate::test_util::parquet_test_data;
     use crate::variable::VarType;
     use arrow::record_batch::RecordBatch;
@@ -2646,6 +2654,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "parquet")]
     async fn read_with_glob_path() -> Result<()> {
         let ctx = SessionContext::new();
 
@@ -2663,6 +2672,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "parquet")]
     async fn read_with_glob_path_issue_2465() -> Result<()> {
         let ctx = SessionContext::new();
 
@@ -2682,6 +2692,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "parquet")]
     async fn read_from_registered_table_with_glob_path() -> Result<()> {
         let ctx = SessionContext::new();
 
@@ -2803,6 +2814,7 @@ mod tests {
     trait CallReadTrait {
         async fn call_read_csv(&self) -> DataFrame;
         async fn call_read_avro(&self) -> DataFrame;
+        #[cfg(feature = "parquet")]
         async fn call_read_parquet(&self) -> DataFrame;
     }
 
@@ -2822,6 +2834,7 @@ mod tests {
                 .unwrap()
         }
 
+        #[cfg(feature = "parquet")]
         async fn call_read_parquet(&self) -> DataFrame {
             let ctx = SessionContext::new();
             ctx.read_parquet("dummy", ParquetReadOptions::default())

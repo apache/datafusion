@@ -27,6 +27,7 @@ use arrow::datatypes::{DataType, Field};
 use async_trait::async_trait;
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
+#[cfg(feature = "parquet")]
 use datafusion_common::file_options::parquet_writer::{
     default_builder, ParquetWriterOptions,
 };
@@ -35,6 +36,7 @@ use datafusion_common::{
     DataFusionError, FileType, FileTypeWriterOptions, SchemaError, UnnestOptions,
 };
 use datafusion_expr::dml::CopyOptions;
+#[cfg(feature = "parquet")]
 use parquet::file::properties::WriterProperties;
 
 use datafusion_common::{Column, DFSchema, ScalarValue};
@@ -1068,6 +1070,7 @@ impl DataFrame {
     }
 
     /// Write a `DataFrame` to a Parquet file.
+    #[cfg(feature = "parquet")]
     pub async fn write_parquet(
         self,
         path: &str,
@@ -1366,7 +1369,9 @@ mod tests {
     };
     use datafusion_physical_expr::expressions::Column;
     use object_store::local::LocalFileSystem;
+    #[cfg(feature = "parquet")]
     use parquet::basic::{BrotliLevel, GzipLevel, ZstdLevel};
+    #[cfg(feature = "parquet")]
     use parquet::file::reader::FileReader;
     use tempfile::TempDir;
     use url::Url;
@@ -2539,6 +2544,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "parquet")]
     #[tokio::test]
     async fn write_parquet_with_compression() -> Result<()> {
         let test_df = test_table().await?;
