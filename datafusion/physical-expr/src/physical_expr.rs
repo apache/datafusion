@@ -217,8 +217,8 @@ pub fn down_cast_any_ref(any: &dyn Any) -> &dyn Any {
     }
 }
 
-/// It is similar to contains method of vector.
-/// Finds whether `expr` is among `physical_exprs`.
+/// This function is similar to the `contains` method of `Vec`. It finds
+/// whether `expr` is among `physical_exprs`.
 pub fn physical_exprs_contains(
     physical_exprs: &[Arc<dyn PhysicalExpr>],
     expr: &Arc<dyn PhysicalExpr>,
@@ -228,18 +228,24 @@ pub fn physical_exprs_contains(
         .any(|physical_expr| physical_expr.eq(expr))
 }
 
-/// This util removes duplicates from the `physical_exprs` vector in its argument.
-/// Once we can use `HashSet` with `Arc<dyn PhysicalExpr>` use it instead.
-pub fn deduplicate_physical_exprs(
-    physical_exprs: &[Arc<dyn PhysicalExpr>],
-) -> Vec<Arc<dyn PhysicalExpr>> {
-    let mut unique_physical_exprs = vec![];
-    for expr in physical_exprs {
-        if !physical_exprs_contains(&unique_physical_exprs, expr) {
-            unique_physical_exprs.push(expr.clone());
+/// This utility function removes duplicates from the given `physical_exprs`
+/// vector. Once we can use `HashSet`s with `Arc<dyn PhysicalExpr>`, this
+/// function should use a `HashSet` to reduce computational complexity.
+///
+/// Note that this function does not necessarily preserve its input ordering.
+pub fn deduplicate_physical_exprs(physical_exprs: &mut Vec<Arc<dyn PhysicalExpr>>) {
+    let mut i = 0;
+    while i < physical_exprs.len() {
+        let mut j = i + 1;
+        while j < physical_exprs.len() {
+            if physical_exprs[i].eq(&physical_exprs[j]) {
+                physical_exprs.swap_remove(j);
+            } else {
+                j += 1;
+            }
         }
+        i += 1;
     }
-    unique_physical_exprs
 }
 
 /// Checks whether the given slices have any common entries.
@@ -320,7 +326,7 @@ mod tests {
         let col_b_expr = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
 
         // lit(true), lit(false), lit(4), lit(2), Col(a), Col(b)
-        let physical_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
+        let mut physical_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
             lit_true.clone(),
             lit_false.clone(),
             lit4.clone(),
@@ -341,8 +347,8 @@ mod tests {
             col_b_expr.clone(),
         ];
         // expected contains unique versions of the physical_exprs
-        let result = deduplicate_physical_exprs(&physical_exprs);
-        physical_exprs_equal(&result, &expected);
+        deduplicate_physical_exprs(&mut physical_exprs);
+        physical_exprs_equal(&physical_exprs, &expected);
         Ok(())
     }
 
