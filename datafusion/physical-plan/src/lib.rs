@@ -232,7 +232,8 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     }
 
     /// Returns statistics for this `ExecutionPlan` node. If statistics are not
-    /// available, should return [`Statistics::new_unknown`], not an error.
+    /// available, should return [`Statistics::new_unknown`] (the default), not
+    /// an error.
     fn statistics(&self) -> Result<Statistics> {
         Ok(Statistics::new_unknown(&self.schema()))
     }
