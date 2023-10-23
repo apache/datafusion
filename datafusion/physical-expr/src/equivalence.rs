@@ -39,6 +39,10 @@ use itertools::izip;
 /// in filters.
 pub type EquivalenceClass = Vec<Arc<dyn PhysicalExpr>>;
 
+/// Stores the mapping between source expressions and target expressions for a
+/// projection. Indices in the vector corresponds to the indices after projection.
+pub type ProjectionMapping = Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>;
+
 /// An `EquivalenceGroups` is a collection of `EquivalenceClass`es where each
 /// class represents a distinct equivalence class in a relation.
 #[derive(Debug, Clone)]
@@ -322,9 +326,9 @@ impl EquivalenceGroup {
             if new_classes.is_empty() {
                 new_classes.push((source, vec![target.clone()]));
             }
-            if let Some(idx) = new_classes.iter_mut().position(|(key, _)| key.eq(source))
+            if let Some((_, values)) =
+                new_classes.iter_mut().find(|(key, _)| key.eq(source))
             {
-                let (_, values) = &mut new_classes[idx];
                 if !physical_exprs_contains(values, target) {
                     values.push(target.clone());
                 }
@@ -361,47 +365,42 @@ impl EquivalenceGroup {
     pub fn join(
         &self,
         join_type: &JoinType,
-        right_eq_classes: &EquivalenceGroup,
-        left_columns_len: usize,
+        right_equivalences: &EquivalenceGroup,
+        left_column_count: usize,
         on: &[(Column, Column)],
     ) -> EquivalenceGroup {
         let mut result = EquivalenceGroup::empty();
         match join_type {
             JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
                 result.extend(self.clone());
-                let updated_eq_classes = right_eq_classes
+                let updated_eq_classes = right_equivalences
                     .iter()
                     .map(|eq_class| {
-                        add_offset_to_exprs(eq_class.to_vec(), left_columns_len)
+                        add_offset_to_exprs(eq_class.to_vec(), left_column_count)
                     })
                     .collect();
-
                 result.extend(EquivalenceGroup::new(updated_eq_classes));
             }
             JoinType::LeftSemi | JoinType::LeftAnti => {
                 result.extend(self.clone());
             }
             JoinType::RightSemi | JoinType::RightAnti => {
-                result.extend(right_eq_classes.clone());
+                result.extend(right_equivalences.clone());
             }
         }
-        // In the inner join, expressions in the on are equal at the resulting table.
+        // In we have an inner join, expressions in the "on" condition are equal
+        // at the resulting table.
         if *join_type == JoinType::Inner {
-            on.iter().for_each(|(lhs, rhs)| {
+            for (lhs, rhs) in on.iter() {
+                let index = rhs.index() + left_column_count;
                 let new_lhs = Arc::new(lhs.clone()) as _;
-                let new_rhs =
-                    Arc::new(Column::new(rhs.name(), rhs.index() + left_columns_len))
-                        as _;
+                let new_rhs = Arc::new(Column::new(rhs.name(), index)) as _;
                 result.add_equal_conditions(&new_lhs, &new_rhs);
-            });
+            }
         }
         result
     }
 }
-
-/// Stores the mapping between source expression and target expression during projection
-/// Indices in the vector corresponds to index after projection.
-pub type ProjectionMapping = Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>;
 
 /// `LexOrdering` stores the lexicographical ordering for a schema.
 /// OrderingEquivalentClass keeps track of different alternative orderings than can
