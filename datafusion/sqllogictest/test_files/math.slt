@@ -395,7 +395,7 @@ NaN NaN
 
 # abs: return type
 query TT rowsort
-SELECT arrow_typeof(c1), arrow_typeof(c2) FROM test_nullable_float limit 1
+SELECT arrow_typeof(abs(c1)), arrow_typeof(abs(c2)) FROM test_nullable_float limit 1
 ----
 Float32 Float64
 
@@ -466,34 +466,48 @@ drop table test_non_nullable_float
 
 statement ok
 CREATE TABLE test_nullable_decimal(
-    c1 DECIMAL(10, 2),
-    c2 DECIMAL(38, 10)
- ) AS VALUES (0, 0), (NULL, NULL);
+    c1 DECIMAL(10, 2),    /* Decimal128 */
+    c2 DECIMAL(38, 10),   /* Decimal128 with max precision */ 
+    c3 DECIMAL(40, 2),    /* Decimal256 */
+    c4 DECIMAL(76, 10)    /* Decimal256 with max precision */ 
+ ) AS VALUES 
+    (0, 0, 0, 0), 
+    (NULL, NULL, NULL, NULL);
 
-query RR 
+query RRRR
 INSERT into test_nullable_decimal values
-    (-99999999.99, '-9999999999999999999999999999.9999999999'), 
-    (99999999.99, '9999999999999999999999999999.9999999999');
+    (
+        -99999999.99, 
+        '-9999999999999999999999999999.9999999999', 
+        '-99999999999999999999999999999999999999.99', 
+        '-999999999999999999999999999999999999999999999999999999999999999999.9999999999'
+    ), 
+    (
+        99999999.99, 
+        '9999999999999999999999999999.9999999999', 
+        '99999999999999999999999999999999999999.99', 
+        '999999999999999999999999999999999999999999999999999999999999999999.9999999999'
+    ) 
 ----
 2
 
 
-query R rowsort
+query R
 SELECT c1*0 FROM test_nullable_decimal WHERE c1 IS NULL;
 ----
 NULL
 
-query R rowsort
+query R
 SELECT c1/0 FROM test_nullable_decimal WHERE c1 IS NULL;
 ----
 NULL
 
-query R rowsort
+query R
 SELECT c1%0 FROM test_nullable_decimal WHERE c1 IS NULL;
 ----
 NULL
 
-query R rowsort
+query R
 SELECT c1*0 FROM test_nullable_decimal WHERE c1 IS NOT NULL;
 ----
 0
@@ -507,19 +521,24 @@ query error DataFusion error: Arrow error: Divide by zero error
 SELECT c1%0 FROM test_nullable_decimal WHERE c1 IS NOT NULL;
 
 # abs: return type
-query TT rowsort
-SELECT arrow_typeof(c1), arrow_typeof(c2) FROM test_nullable_decimal limit 1
+query TTTT
+SELECT 
+    arrow_typeof(abs(c1)), 
+    arrow_typeof(abs(c2)), 
+    arrow_typeof(abs(c3)),
+    arrow_typeof(abs(c4))
+FROM test_nullable_decimal limit 1
 ----
-Decimal128(10, 2) Decimal128(38, 10)
+Decimal128(10, 2) Decimal128(38, 10) Decimal256(40, 2) Decimal256(76, 10)
 
-# abs: Decimal128
-query RR rowsort
-SELECT abs(c1), abs(c2) FROM test_nullable_decimal
+# abs: decimals
+query RRRR rowsort
+SELECT abs(c1), abs(c2), abs(c3), abs(c4) FROM test_nullable_decimal
 ----
-0 0
-99999999.99 9999999999999999999999999999.9999999999
-99999999.99 9999999999999999999999999999.9999999999
-NULL NULL
+0 0 0 0
+99999999.99 9999999999999999999999999999.9999999999 99999999999999999999999999999999999999.99 999999999999999999999999999999999999999999999999999999999999999999.9999999999
+99999999.99 9999999999999999999999999999.9999999999 99999999999999999999999999999999999999.99 999999999999999999999999999999999999999999999999999999999999999999.9999999999
+NULL NULL NULL NULL
 
 statement ok
 drop table test_nullable_decimal  
