@@ -46,8 +46,8 @@ use datafusion_physical_expr::{
     aggregate::is_order_sensitive,
     equivalence::collapse_lex_req,
     expressions::{Column, Max, Min},
-    physical_exprs_contains, project_out_expr, reverse_order_bys, AggregateExpr,
-    LexOrdering, LexOrderingReq, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
+    physical_exprs_contains, reverse_order_bys, AggregateExpr, LexOrdering,
+    LexOrderingReq, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
     SchemaProperties,
 };
 
@@ -62,6 +62,7 @@ mod topk_stream;
 
 pub use datafusion_expr::AggregateFunction;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
+use datafusion_physical_expr::expressions::UnKnownColumn;
 
 /// Hash aggregate modes
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -745,12 +746,17 @@ impl ExecutionPlan for AggregateExec {
             AggregateMode::Partial | AggregateMode::Single => {
                 // Partial and Single Aggregation will not change the output partitioning but need to respect the Alias
                 let input_partition = self.input.output_partitioning();
+                let input_schema_properties = self.input.schema_properties();
                 match input_partition {
                     Partitioning::Hash(exprs, part) => {
                         let normalized_exprs = exprs
                             .into_iter()
                             .map(|expr| {
-                                project_out_expr(expr, &self.source_to_target_mapping)
+                                input_schema_properties
+                                    .project_expr(&self.source_to_target_mapping, &expr)
+                                    .unwrap_or(Arc::new(UnKnownColumn::new(
+                                        &expr.to_string(),
+                                    )))
                             })
                             .collect::<Vec<_>>();
                         Partitioning::Hash(normalized_exprs, part)

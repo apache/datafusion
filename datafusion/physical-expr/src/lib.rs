@@ -66,6 +66,6 @@ pub use sort_expr::{
     PhysicalSortRequirement,
 };
 pub use utils::{
-    expr_list_eq_any_order, expr_list_eq_strict_order, project_out_expr,
-    reverse_order_bys, split_conjunction,
+    expr_list_eq_any_order, expr_list_eq_strict_order, reverse_order_bys,
+    split_conjunction,
 };

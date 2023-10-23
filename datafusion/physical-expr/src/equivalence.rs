@@ -958,6 +958,24 @@ impl SchemaProperties {
         self.ordering_satisfy_requirement(&[leading_requirement.clone()])
     }
 
+    /// Projects argument `expr` according to mapping inside `source_to_target_mapping`.
+    /// While doing so consider equalities also.
+    /// As an example assume `source_to_target_mapping` contains following mapping
+    /// a -> a1
+    /// b -> b1
+    /// Also assume that we know that a=c (they are equal)
+    /// This function projects
+    /// a+b to Some(a1+b1)
+    /// c+b to Some(a1+b1)
+    /// d to None. (meaning cannot be projected)
+    pub fn project_expr(
+        &self,
+        source_to_target_mapping: &ProjectionMapping,
+        expr: &Arc<dyn PhysicalExpr>,
+    ) -> Option<Arc<dyn PhysicalExpr>> {
+        self.eq_groups.project_expr(source_to_target_mapping, expr)
+    }
+
     /// Projects `SchemaProperties` according to mapping given in `source_to_target_mapping`.
     pub fn project(
         &self,

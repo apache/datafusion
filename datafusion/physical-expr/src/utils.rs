@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::expressions::{BinaryExpr, Column, UnKnownColumn};
+use crate::expressions::{BinaryExpr, Column};
 use crate::{PhysicalExpr, PhysicalSortExpr};
 
 use arrow::array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData};
@@ -27,7 +27,6 @@ use datafusion_common::tree_node::{
 use datafusion_common::Result;
 use datafusion_expr::Operator;
 
-use crate::equivalence::ProjectionMapping;
 use itertools::Itertools;
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::StableGraph;
@@ -97,31 +96,6 @@ fn split_conjunction_impl<'a>(
             exprs
         }
     }
-}
-
-/// Normalize the output expressions based on projection_map.
-///
-/// If there is a mapping in projection_map, replace the expression
-/// in the output expressions with the expression after mapping.
-/// Otherwise, replace the expression with a place holder of [UnKnownColumn]
-///
-pub fn project_out_expr(
-    expr: Arc<dyn PhysicalExpr>,
-    projection_map: &ProjectionMapping,
-) -> Arc<dyn PhysicalExpr> {
-    expr.clone()
-        .transform(&|expr| {
-            // If expression is not valid after projection. Treat it is as UnknownColumn.
-            let mut normalized_form =
-                Arc::new(UnKnownColumn::new(&expr.to_string())) as _;
-            for (source, target) in projection_map {
-                if source.eq(&expr) {
-                    normalized_form = target.clone()
-                }
-            }
-            Ok(Transformed::Yes(normalized_form))
-        })
-        .unwrap_or(expr)
 }
 
 /// This function maps back requirement after ProjectionExec

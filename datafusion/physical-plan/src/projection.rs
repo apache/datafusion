@@ -39,8 +39,8 @@ use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::stats::Precision;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::expressions::Literal;
-use datafusion_physical_expr::{project_out_expr, SchemaProperties};
+use datafusion_physical_expr::expressions::{Literal, UnKnownColumn};
+use datafusion_physical_expr::SchemaProperties;
 
 use futures::stream::{Stream, StreamExt};
 use log::trace;
@@ -176,10 +176,15 @@ impl ExecutionPlan for ProjectionExec {
     fn output_partitioning(&self) -> Partitioning {
         // Output partition need to respect the alias
         let input_partition = self.input.output_partitioning();
+        let input_schema_properties = self.input.schema_properties();
         if let Partitioning::Hash(exprs, part) = input_partition {
             let normalized_exprs = exprs
                 .into_iter()
-                .map(|expr| project_out_expr(expr, &self.source_to_target_mapping))
+                .map(|expr| {
+                    input_schema_properties
+                        .project_expr(&self.source_to_target_mapping, &expr)
+                        .unwrap_or(Arc::new(UnKnownColumn::new(&expr.to_string())))
+                })
                 .collect();
             Partitioning::Hash(normalized_exprs, part)
         } else {
