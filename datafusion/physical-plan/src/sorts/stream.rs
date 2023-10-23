@@ -127,7 +127,7 @@ impl RowCursorStream {
         // track the memory in the newly created Rows.
         let mut rows_reservation = self.reservation.new_empty();
         rows_reservation.try_grow(rows.size())?;
-        Ok(RowValues::new(rows, rows_reservation))
+        Ok(RowValues::new(Arc::new(rows)))
     }
 }
 

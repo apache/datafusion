@@ -16,17 +16,17 @@
 // under the License.
 
 use std::cmp::Ordering;
+use std::sync::Arc;
 
 use arrow::buffer::ScalarBuffer;
 use arrow::compute::SortOptions;
 use arrow::datatypes::ArrowNativeTypeOp;
-use arrow::row::Rows;
+use arrow::row::{Row, Rows};
 use arrow_array::types::ByteArrayType;
 use arrow_array::{
     Array, ArrowPrimitiveType, GenericByteArray, OffsetSizeTrait, PrimitiveArray,
 };
 use arrow_buffer::{Buffer, OffsetBuffer};
-use datafusion_execution::memory_pool::MemoryReservation;
 
 /// A comparable collection of values for use with [`Cursor`]
 ///
@@ -40,6 +40,13 @@ pub trait CursorValues {
 
     /// Returns comparison of `l[l_idx]` and `r[r_idx]`
     fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering;
+
+    /// Slice at a given row index, returning a new Self
+    ///
+    /// # Panics
+    ///
+    /// Panics if the slice is out of bounds, or memory is insufficient
+    fn slice(&self, offset: usize, length: usize) -> Self;
 }
 
 /// A comparable cursor, used by sort operations
@@ -95,6 +102,12 @@ impl<T: CursorValues> Cursor<T> {
         self.offset += 1;
         t
     }
+
+    /// Ref to underlying [`CursorValues`]
+    #[allow(dead_code)]
+    pub fn cursor_values(&self) -> &T {
+        &self.values
+    }
 }
 
 impl<T: CursorValues> PartialEq for Cursor<T> {
@@ -122,42 +135,61 @@ impl<T: CursorValues> Ord for Cursor<T> {
 /// Used for sorting when there are multiple columns in the sort key
 #[derive(Debug)]
 pub struct RowValues {
-    rows: Rows,
+    rows: Arc<Rows>,
 
-    /// Tracks for the memory used by in the `Rows` of this
-    /// cursor. Freed on drop
-    #[allow(dead_code)]
-    reservation: MemoryReservation,
+    /// Lower bound of windowed RowValues.
+    offset: usize,
+    /// Upper bound of windowed RowValues.
+    limit: usize,
 }
 
 impl RowValues {
-    /// Create a new [`RowValues`] from `rows` and a `reservation`
-    /// that tracks its memory. There must be at least one row
+    /// Create a new [`RowValues`] from `Arc<Rows>`.
     ///
-    /// Panics if the reservation is not for exactly `rows.size()`
-    /// bytes or if `rows` is empty.
-    pub fn new(rows: Rows, reservation: MemoryReservation) -> Self {
-        assert_eq!(
-            rows.size(),
-            reservation.size(),
-            "memory reservation mismatch"
-        );
+    /// Panics if `rows` is empty.
+    pub fn new(rows: Arc<Rows>) -> Self {
         assert!(rows.num_rows() > 0);
-        Self { rows, reservation }
+        Self {
+            offset: 0,
+            limit: rows.num_rows(),
+            rows,
+        }
+    }
+
+    /// Return value for idx.
+    fn get(&self, idx: usize) -> Row<'_> {
+        self.rows.row(idx + self.offset)
     }
 }
 
 impl CursorValues for RowValues {
     fn len(&self) -> usize {
-        self.rows.num_rows()
+        self.limit - self.offset
     }
 
     fn eq(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> bool {
-        l.rows.row(l_idx) == r.rows.row(r_idx)
+        l.get(l_idx) == r.get(r_idx)
     }
 
     fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering {
-        l.rows.row(l_idx).cmp(&r.rows.row(r_idx))
+        l.get(l_idx).cmp(&r.get(r_idx))
+    }
+
+    fn slice(&self, offset: usize, length: usize) -> Self {
+        assert!(
+            offset >= self.offset && self.offset + offset <= self.limit,
+            "slice offset is out of bounds"
+        );
+        assert!(
+            self.offset + offset + length <= self.limit,
+            "slice length is out of bounds"
+        );
+
+        Self {
+            rows: self.rows.clone(),
+            offset: self.offset + offset,
+            limit: self.offset + offset + length,
+        }
     }
 }
 
@@ -191,6 +223,16 @@ impl<T: ArrowNativeTypeOp> CursorValues for PrimitiveValues<T> {
     fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering {
         l.0[l_idx].compare(r.0[r_idx])
     }
+
+    fn slice(&self, offset: usize, length: usize) -> Self {
+        assert!(offset < self.0.len(), "slice offset is out of bounds");
+        assert!(
+            offset + length - 1 < self.0.len(),
+            "slice length is out of bounds"
+        );
+
+        Self(self.0.slice(offset, length))
+    }
 }
 
 pub struct ByteArrayValues<T: OffsetSizeTrait> {
@@ -221,6 +263,31 @@ impl<T: OffsetSizeTrait> CursorValues for ByteArrayValues<T> {
 
     fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering {
         l.value(l_idx).cmp(r.value(r_idx))
+    }
+
+    fn slice(&self, offset: usize, length: usize) -> Self {
+        let start = self
+            .offsets
+            .get(offset)
+            .expect("slice offset is out of bounds")
+            .as_usize();
+        let end = self
+            .offsets
+            .get(offset + length)
+            .expect("slice length is out of bounds")
+            .as_usize();
+
+        let offsets = self
+            .offsets
+            .slice(offset, length)
+            .iter()
+            .map(|o| T::usize_as(o.as_usize().wrapping_sub(start)))
+            .collect::<Vec<T>>();
+
+        Self {
+            offsets: OffsetBuffer::new(ScalarBuffer::from(offsets)),
+            values: self.values.slice_with_length(start, end - start),
+        }
     }
 }
 
@@ -301,13 +368,31 @@ impl<T: CursorValues> CursorValues for ArrayValues<T> {
             },
         }
     }
+
+    fn slice(&self, offset: usize, length: usize) -> Self {
+        assert!(offset < self.values.len(), "slice offset is out of bounds");
+        assert!(
+            offset + length - 1 < self.values.len(),
+            "slice length is out of bounds"
+        );
+
+        Self {
+            values: self.values.slice(offset, length),
+            null_threshold: self.null_threshold.saturating_sub(offset),
+            options: self.options,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use arrow::row::{RowConverter, SortField};
+    use arrow_array::{ArrayRef, Float32Array, Int16Array};
+    use arrow_schema::DataType;
+
     use super::*;
 
-    fn new_primitive(
+    fn new_primitive_cursor(
         options: SortOptions,
         values: ScalarBuffer<i32>,
         null_count: usize,
@@ -334,9 +419,9 @@ mod tests {
         };
 
         let buffer = ScalarBuffer::from(vec![i32::MAX, 1, 2, 3]);
-        let mut a = new_primitive(options, buffer, 1);
+        let mut a = new_primitive_cursor(options, buffer, 1);
         let buffer = ScalarBuffer::from(vec![1, 2, -2, -1, 1, 9]);
-        let mut b = new_primitive(options, buffer, 2);
+        let mut b = new_primitive_cursor(options, buffer, 2);
 
         // NULL == NULL
         assert_eq!(a.cmp(&b), Ordering::Equal);
@@ -378,9 +463,9 @@ mod tests {
         };
 
         let buffer = ScalarBuffer::from(vec![0, 1, i32::MIN, i32::MAX]);
-        let mut a = new_primitive(options, buffer, 2);
+        let mut a = new_primitive_cursor(options, buffer, 2);
         let buffer = ScalarBuffer::from(vec![-1, i32::MAX, i32::MIN]);
-        let mut b = new_primitive(options, buffer, 2);
+        let mut b = new_primitive_cursor(options, buffer, 2);
 
         // 0 > -1
         assert_eq!(a.cmp(&b), Ordering::Greater);
@@ -404,9 +489,9 @@ mod tests {
         };
 
         let buffer = ScalarBuffer::from(vec![6, 1, i32::MIN, i32::MAX]);
-        let mut a = new_primitive(options, buffer, 3);
+        let mut a = new_primitive_cursor(options, buffer, 3);
         let buffer = ScalarBuffer::from(vec![67, -3, i32::MAX, i32::MIN]);
-        let mut b = new_primitive(options, buffer, 2);
+        let mut b = new_primitive_cursor(options, buffer, 2);
 
         // 6 > 67
         assert_eq!(a.cmp(&b), Ordering::Greater);
@@ -434,9 +519,9 @@ mod tests {
         };
 
         let buffer = ScalarBuffer::from(vec![i32::MIN, i32::MAX, 6, 3]);
-        let mut a = new_primitive(options, buffer, 2);
+        let mut a = new_primitive_cursor(options, buffer, 2);
         let buffer = ScalarBuffer::from(vec![i32::MAX, 4546, -3]);
-        let mut b = new_primitive(options, buffer, 1);
+        let mut b = new_primitive_cursor(options, buffer, 1);
 
         // NULL == NULL
         assert_eq!(a.cmp(&b), Ordering::Equal);
@@ -458,5 +543,250 @@ mod tests {
         // 6 < -3
         b.advance();
         assert_eq!(a.cmp(&b), Ordering::Less);
+    }
+
+    #[test]
+    fn test_slice_primitive() {
+        let options = SortOptions {
+            descending: false,
+            nulls_first: true,
+        };
+
+        let buffer = ScalarBuffer::from(vec![0, 1, 2]);
+        let mut cursor = new_primitive_cursor(options, buffer, 0);
+
+        // from start
+        let sliced = Cursor::new(cursor.cursor_values().slice(0, 1));
+        let expected = new_primitive_cursor(options, ScalarBuffer::from(vec![0]), 0);
+        assert_eq!(
+            sliced.cmp(&expected),
+            Ordering::Equal,
+            "should slice from start"
+        );
+
+        // with offset
+        let sliced = Cursor::new(cursor.cursor_values().slice(1, 2));
+        let expected = new_primitive_cursor(options, ScalarBuffer::from(vec![1]), 0);
+        assert_eq!(
+            sliced.cmp(&expected),
+            Ordering::Equal,
+            "should slice with offset"
+        );
+
+        // cursor current position != start
+        cursor.advance();
+        let sliced = Cursor::new(cursor.cursor_values().slice(0, 1));
+        let expected = new_primitive_cursor(options, ScalarBuffer::from(vec![0]), 0);
+        assert_eq!(
+            sliced.cmp(&expected),
+            Ordering::Equal,
+            "should ignore current cursor position when sliced"
+        );
+    }
+
+    #[test]
+    fn test_slice_primitive_nulls_first() {
+        let options = SortOptions {
+            descending: false,
+            nulls_first: true,
+        };
+
+        let is_min = new_primitive_cursor(options, ScalarBuffer::from(vec![i32::MIN]), 0);
+        let is_null =
+            new_primitive_cursor(options, ScalarBuffer::from(vec![i32::MIN]), 1);
+
+        let buffer = ScalarBuffer::from(vec![i32::MIN, 79, 2, i32::MIN]);
+        let mut a = new_primitive_cursor(options, buffer, 2);
+        let buffer = ScalarBuffer::from(vec![i32::MIN, -284, 3, i32::MIN, 2]);
+        let mut b = new_primitive_cursor(options, buffer, 2);
+
+        // NULL == NULL
+        assert_eq!(a, is_null);
+        assert_eq!(a.cmp(&b), Ordering::Equal);
+
+        // i32::MIN > NULL
+        a = Cursor::new(a.cursor_values().slice(3, 1));
+        assert_eq!(a, is_min);
+        assert_eq!(a.cmp(&b), Ordering::Greater);
+
+        // i32::MIN == i32::MIN
+        b = Cursor::new(b.cursor_values().slice(3, 2));
+        assert_eq!(b, is_min);
+        assert_eq!(a.cmp(&b), Ordering::Equal);
+
+        // i32::MIN < 2
+        b = Cursor::new(b.cursor_values().slice(1, 1));
+        assert_eq!(a.cmp(&b), Ordering::Less);
+    }
+
+    #[test]
+    fn test_slice_primitive_nulls_last() {
+        let options = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+
+        let is_min = new_primitive_cursor(options, ScalarBuffer::from(vec![i32::MIN]), 0);
+        let is_null =
+            new_primitive_cursor(options, ScalarBuffer::from(vec![i32::MIN]), 1);
+
+        let buffer = ScalarBuffer::from(vec![i32::MIN, 79, 2, i32::MIN]);
+        let mut a = new_primitive_cursor(options, buffer, 2);
+        let buffer = ScalarBuffer::from(vec![i32::MIN, -284, 3, i32::MIN, 2]);
+        let mut b = new_primitive_cursor(options, buffer, 2);
+
+        // i32::MIN == i32::MIN
+        assert_eq!(a, is_min);
+        assert_eq!(a.cmp(&b), Ordering::Equal);
+
+        // i32::MIN < -284
+        b = Cursor::new(b.cursor_values().slice(1, 3)); // slice to full length
+        assert_eq!(a.cmp(&b), Ordering::Less);
+
+        // 79 > -284
+        a = Cursor::new(a.cursor_values().slice(1, 2)); // slice to shorter than full length
+        assert_ne!(a, is_null);
+        assert_eq!(a.cmp(&b), Ordering::Greater);
+
+        // NULL == NULL
+        a = Cursor::new(a.cursor_values().slice(1, 1));
+        b = Cursor::new(b.cursor_values().slice(2, 1));
+        assert_eq!(a, is_null);
+        assert_eq!(b, is_null);
+        assert_eq!(a.cmp(&b), Ordering::Equal);
+    }
+
+    #[test]
+    #[should_panic(expected = "slice offset is out of bounds")]
+    fn test_slice_primitive_can_panic() {
+        let options = SortOptions {
+            descending: false,
+            nulls_first: true,
+        };
+
+        let buffer = ScalarBuffer::from(vec![0, 1, 2]);
+        let cursor = new_primitive_cursor(options, buffer, 0);
+
+        cursor.cursor_values().slice(42, 1);
+    }
+
+    #[test]
+    fn test_slice_rows() {
+        // rows
+        let cols = [
+            Arc::new(Int16Array::from_iter([Some(1), Some(2), Some(3)])) as ArrayRef,
+            Arc::new(Float32Array::from_iter([Some(1.3), Some(2.5), Some(4.)]))
+                as ArrayRef,
+        ];
+        let converter = RowConverter::new(vec![
+            SortField::new(DataType::Int16),
+            SortField::new(DataType::Float32),
+        ])
+        .unwrap();
+
+        let mut a = Cursor::new(RowValues::new(Arc::new(
+            converter.convert_columns(&cols).unwrap(),
+        )));
+        let mut b = Cursor::new(RowValues::new(Arc::new(
+            converter.convert_columns(&cols).unwrap(),
+        )));
+        assert_eq!(a.cursor_values().len(), 3);
+
+        // 1,1.3 == 1,1.3
+        assert_eq!(a.cmp(&b), Ordering::Equal);
+
+        // advance A. slice B full length.
+        // 2,2.5 > 1,1.3
+        a.advance();
+        b = Cursor::new(b.cursor_values().slice(0, 3));
+        assert_eq!(a.cmp(&b), Ordering::Greater);
+
+        // slice B ahead by 2.
+        // 2,2.5 < 3,4.0
+        b = Cursor::new(b.cursor_values().slice(2, 1));
+        assert_eq!(a.cmp(&b), Ordering::Less);
+
+        // advanced cursor vs sliced cursor
+        assert_eq!(a.cursor_values().len(), 3);
+        assert_eq!(b.cursor_values().len(), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "slice offset is out of bounds")]
+    fn test_slice_rows_can_panic() {
+        let cols = [
+            Arc::new(Int16Array::from_iter([Some(1)])) as ArrayRef,
+            Arc::new(Float32Array::from_iter([Some(1.3)])) as ArrayRef,
+        ];
+        let converter = RowConverter::new(vec![
+            SortField::new(DataType::Int16),
+            SortField::new(DataType::Float32),
+        ])
+        .unwrap();
+
+        let rows = Arc::new(converter.convert_columns(&cols).unwrap());
+        let cursor = Cursor::new(RowValues::new(rows));
+
+        cursor.cursor_values().slice(42, 1);
+    }
+
+    fn new_bytearray_cursor(
+        values_str: &str,
+        offsets: Vec<i32>,
+    ) -> Cursor<ArrayValues<ByteArrayValues<i32>>> {
+        let values = Buffer::from_slice_ref(values_str);
+        let offsets = OffsetBuffer::new(offsets.into());
+
+        let options = SortOptions {
+            descending: false,
+            nulls_first: true,
+        };
+
+        Cursor::new(ArrayValues {
+            values: ByteArrayValues {
+                offsets: offsets.clone(),
+                values: values.clone(),
+            },
+            null_threshold: 0,
+            options,
+        })
+    }
+
+    #[test]
+    fn test_slice_bytes() {
+        let mut a = new_bytearray_cursor("hellorainbowworld", vec![0, 5, 12, 17]);
+        let mut b = new_bytearray_cursor("hellorainbowworld", vec![0, 5, 12, 17]);
+
+        let is_hello = new_bytearray_cursor("hello", vec![0, 5]);
+        let is_rainbow = new_bytearray_cursor("rainbow", vec![0, 7]);
+        let is_world = new_bytearray_cursor("world", vec![0, 5]);
+
+        // hello == hello
+        assert_eq!(a.cmp(&b), Ordering::Equal);
+
+        // advance A. slice B full length.
+        // rainbow > hello
+        a.advance();
+        b = Cursor::new(b.cursor_values().slice(0, 3));
+        assert_eq!(a.cmp(&is_rainbow), Ordering::Equal);
+        assert_eq!(b.cmp(&is_hello), Ordering::Equal);
+        assert_eq!(a.cmp(&b), Ordering::Greater);
+
+        // slice B ahead by 2.
+        // rainbow < world
+        b = Cursor::new(b.cursor_values().slice(2, 1));
+        assert_eq!(b.cmp(&is_world), Ordering::Equal);
+        assert_eq!(a.cmp(&b), Ordering::Less);
+
+        // advanced cursor vs sliced cursor
+        assert_eq!(a.cursor_values().len(), 3);
+        assert_eq!(b.cursor_values().len(), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "slice offset is out of bounds")]
+    fn test_slice_bytes_should_panic() {
+        let cursor = new_bytearray_cursor("hellorainbowworld", vec![0, 5, 12, 17]);
+        cursor.cursor_values().slice(42, 1);
     }
 }
