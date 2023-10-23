@@ -35,13 +35,12 @@ use datafusion::physical_plan::expressions::{
     Literal, NegativeExpr, NotExpr, TryCastExpr,
 };
 use datafusion::physical_plan::expressions::{GetFieldAccessExpr, GetIndexedFieldExpr};
-use datafusion::physical_plan::joins::utils::JoinSide;
 use datafusion::physical_plan::windows::create_window_expr;
 use datafusion::physical_plan::{
     functions, ColumnStatistics, Partitioning, PhysicalExpr, Statistics, WindowExpr,
 };
 use datafusion_common::stats::Precision;
-use datafusion_common::{not_impl_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{not_impl_err, DataFusionError, JoinSide, Result, ScalarValue};
 
 use crate::common::proto_error;
 use crate::convert_required;

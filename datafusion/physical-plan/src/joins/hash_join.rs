@@ -27,7 +27,7 @@ use std::{any::Any, usize, vec};
 use crate::joins::utils::{
     adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
     calculate_join_output_ordering, combine_join_ordering_equivalence_properties,
-    get_final_indices_from_bit_map, need_produce_result_in_final, JoinSide,
+    get_final_indices_from_bit_map, need_produce_result_in_final,
 };
 use crate::DisplayAs;
 use crate::{
@@ -64,7 +64,7 @@ use arrow::util::bit_util;
 use arrow_array::cast::downcast_array;
 use arrow_schema::ArrowError;
 use datafusion_common::{
-    exec_err, internal_err, plan_err, DataFusionError, JoinType, Result,
+    exec_err, internal_err, plan_err, DataFusionError, JoinSide, JoinType, Result,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
@@ -1069,14 +1069,9 @@ mod tests {
     use hashbrown::raw::RawTable;
 
     use crate::{
-        common,
-        expressions::Column,
-        hash_utils::create_hashes,
-        joins::{hash_join::build_equal_condition_join_indices, utils::JoinSide},
-        memory::MemoryExec,
-        repartition::RepartitionExec,
-        test::build_table_i32,
-        test::exec::MockExec,
+        common, expressions::Column, hash_utils::create_hashes,
+        joins::hash_join::build_equal_condition_join_indices, memory::MemoryExec,
+        repartition::RepartitionExec, test::build_table_i32, test::exec::MockExec,
     };
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
