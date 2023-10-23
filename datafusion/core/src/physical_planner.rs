@@ -2057,9 +2057,7 @@ mod tests {
     use super::*;
     use crate::datasource::file_format::options::CsvReadOptions;
     use crate::datasource::MemTable;
-    use crate::physical_plan::{
-        expressions, DisplayFormatType, Partitioning, Statistics,
-    };
+    use crate::physical_plan::{expressions, DisplayFormatType, Partitioning};
     use crate::physical_plan::{DisplayAs, SendableRecordBatchStream};
     use crate::physical_planner::PhysicalPlanner;
     use crate::prelude::{SessionConfig, SessionContext};
@@ -2669,10 +2667,6 @@ mod tests {
             _context: Arc<TaskContext>,
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!("NoOpExecutionPlan::execute");
-        }
-
-        fn statistics(&self) -> Result<Statistics> {
-            unimplemented!("NoOpExecutionPlan::statistics");
         }
     }
 
