@@ -21,8 +21,11 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::MemoryReservation;
 
-use super::batches::BatchCursor;
+use super::batches::{BatchCursor, BatchId};
 use super::cursor::{Cursor, CursorValues};
+
+type YieldedSortOrder<C> = (Vec<SortOrder>, Vec<BatchCursor<C>>);
+type SortOrder = (BatchId, usize); // (batch_id, row_idx)
 
 /// Provides an API to incrementally build a [`RecordBatch`] from partitioned [`RecordBatch`]
 #[derive(Debug)]
@@ -148,6 +151,30 @@ impl<C: CursorValues> SortOrderBuilder<C> {
     /// Returns the schema of this [`SortOrderBuilder`]
     pub fn schema(&self) -> &SchemaRef {
         &self.schema
+    }
+
+    /// Yields a sort_order and the sliced [`BatchCursor`]s
+    /// representing (in total) up to N batch size.
+    ///
+    ///         BatchCursors
+    /// ┌────────────────────────┐
+    /// │    Cursor     BatchId  │
+    /// │ ┌──────────┐ ┌───────┐ │
+    /// │ │  1..7    │ │   A   │ |  (sliced to partial batches)
+    /// │ ├──────────┤ ├───────┤ │
+    /// │ │  11..14  │ │   B   │ |
+    /// │ └──────────┘ └───────┘ │
+    /// └────────────────────────┘
+    ///
+    ///
+    ///         SortOrder
+    /// ┌─────────────────────────────┐
+    /// | (B,11) (A,1) (A,2) (B,12)...|  (up to N rows)
+    /// └─────────────────────────────┘
+    ///
+    #[allow(dead_code)]
+    pub fn yield_sort_order(&mut self) -> Result<Option<YieldedSortOrder<C>>> {
+        unimplemented!("to implement in future PR");
     }
 
     /// Drains the in_progress row indexes, and builds a new RecordBatch from them
