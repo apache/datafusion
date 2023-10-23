@@ -567,8 +567,8 @@
 </section>
 <section id="using-the-custom-table-provider">
 <h2>Using the Custom Table Provider<a class="headerlink" href="#using-the-custom-table-provider" title="Link to this heading">¶</a></h2>
-<p>In order to use the custom table provider, we need to register it with DataFusion. This is done by creating a <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code> and registering it with the <code class="docutils literal notranslate"><span class="pre">ExecutionContext</span></code>.</p>
-<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ExecutionContext</span>::<span class="n">new</span><span class="p">();</span>
+<p>In order to use the custom table provider, we need to register it with DataFusion. This is done by creating a <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code> and registering it with the <code class="docutils literal notranslate"><span class="pre">SessionContext</span></code>.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionContext</span>::<span class="n">new</span><span class="p">();</span>
 
 <span class="kd">let</span><span class="w"> </span><span class="n">custom_table_provider</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CustomDataSource</span>::<span class="n">new</span><span class="p">();</span>
 <span class="n">ctx</span><span class="p">.</span><span class="n">register_table</span><span class="p">(</span><span class="s">&quot;custom_table&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">Arc</span>::<span class="n">new</span><span class="p">(</span><span class="n">custom_table_provider</span><span class="p">));</span>
@@ -585,7 +585,7 @@
 <ol class="arabic simple">
 <li><p>Implement the <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code> trait</p></li>
 <li><p>Implement the <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code> trait</p></li>
-<li><p>Register the <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code> with the <code class="docutils literal notranslate"><span class="pre">ExecutionContext</span></code></p></li>
+<li><p>Register the <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code> with the <code class="docutils literal notranslate"><span class="pre">SessionContext</span></code></p></li>
 </ol>
 </section>
 <section id="next-steps">
