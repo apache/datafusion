@@ -119,6 +119,7 @@ impl CommonSubexprEliminate {
         let (mut new_expr, new_input) =
             self.rewrite_expr(&[expr], &[&arrays], input, &expr_set, config)?;
 
+        // Since projection expr changes, schema changes also. Use try_new method.
         Ok(LogicalPlan::Projection(Projection::try_new(
             pop_expr(&mut new_expr)?,
             Arc::new(new_input),
@@ -240,6 +241,7 @@ impl CommonSubexprEliminate {
         let rewritten = pop_expr(&mut rewritten)?;
 
         if affected_id.is_empty() {
+            // Since group_epxr changes, schema changes also. Use try_new method.
             Ok(LogicalPlan::Aggregate(Aggregate::try_new(
                 Arc::new(new_input),
                 new_group_expr,

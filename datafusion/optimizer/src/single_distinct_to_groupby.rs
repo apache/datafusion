@@ -103,8 +103,10 @@ impl OptimizerRule for SingleDistinctToGroupBy {
             }) => {
                 if is_single_distinct_agg(plan)? && !contains_grouping_set(group_expr) {
                     // alias all original group_by exprs
-                    let mut group_expr_alias = Vec::with_capacity(group_expr.len());
-                    let mut inner_group_exprs = group_expr
+                    let (mut inner_group_exprs, out_group_expr_with_alias): (
+                        Vec<Expr>,
+                        Vec<(Expr, Option<String>)>,
+                    ) = group_expr
                         .iter()
                         .enumerate()
                         .map(|(i, group_expr)| {
@@ -138,13 +140,12 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                         Some(schema.fields()[i].qualified_name()),
                                     )
                                 };
-                            group_expr_alias.push((out_group_expr, original_name));
-                            alias_expr
+                            (alias_expr, (out_group_expr, original_name))
                         })
-                        .collect::<Vec<_>>();
+                        .unzip();
 
                     // and they can be referenced by the alias in the outer aggr plan
-                    let outer_group_exprs = group_expr_alias
+                    let outer_group_exprs = out_group_expr_with_alias
                         .iter()
                         .map(|(out_group_expr, _)| out_group_expr.clone())
                         .collect::<Vec<_>>();
@@ -209,7 +210,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                     // - group_by aggr
                     // - aggr expr
                     let mut alias_expr: Vec<Expr> = Vec::new();
-                    for (group_expr, original_field) in group_expr_alias {
+                    for (group_expr, original_field) in out_group_expr_with_alias {
                         let expr = if let Some(name) = original_field {
                             group_expr.alias(name)
                         } else {

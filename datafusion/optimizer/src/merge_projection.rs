@@ -84,6 +84,7 @@ pub(super) fn merge_projection(
             Err(e) => Err(e),
         })
         .collect::<Result<Vec<_>>>()?;
+    // Use try_new, since schema changes with changing expressions.
     let new_plan = LogicalPlan::Projection(Projection::try_new(
         new_exprs,
         child_projection.input.clone(),

@@ -531,6 +531,9 @@ impl LogicalPlan {
         // so we don't need to recompute Schema.
         match &self {
             LogicalPlan::Projection(projection) => {
+                // Schema of the projection may change
+                // when its input changes. Hence we should use
+                // `try_new` method instead of `try_new_with_schema`.
                 Ok(LogicalPlan::Projection(Projection::try_new(
                     projection.expr.to_vec(),
                     Arc::new(inputs[0].clone()),
@@ -550,6 +553,9 @@ impl LogicalPlan {
                 aggr_expr,
                 ..
             }) => Ok(LogicalPlan::Aggregate(Aggregate::try_new(
+                // Schema of the aggregate may change
+                // when its input changes. Hence we should use
+                // `try_new` method instead of `try_new_with_schema`.
                 Arc::new(inputs[0].clone()),
                 group_expr.to_vec(),
                 aggr_expr.to_vec(),
@@ -587,6 +593,8 @@ impl LogicalPlan {
         inputs: &[LogicalPlan],
     ) -> Result<LogicalPlan> {
         match self {
+            // Since expr may be different than the previous expr, schema of the projection
+            // may change. We need to use try_new method instead of try_new_with_schema method.
             LogicalPlan::Projection(Projection { .. }) => Ok(LogicalPlan::Projection(
                 Projection::try_new(expr, Arc::new(inputs[0].clone()))?,
             )),
@@ -2178,7 +2186,7 @@ impl Aggregate {
     ///
     /// This method should only be called when you are absolutely sure that the schema being
     /// provided is correct for the aggregate. If in doubt, call [try_new](Self::try_new) instead.
-    fn try_new_with_schema(
+    pub fn try_new_with_schema(
         input: Arc<LogicalPlan>,
         group_expr: Vec<Expr>,
         aggr_expr: Vec<Expr>,
