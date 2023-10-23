@@ -742,30 +742,27 @@ impl ExecutionPlan for AggregateExec {
 
     /// Get the output partitioning of this plan
     fn output_partitioning(&self) -> Partitioning {
-        match &self.mode {
-            AggregateMode::Partial | AggregateMode::Single => {
-                // Partial and Single Aggregation will not change the output partitioning but need to respect the Alias
-                let input_partition = self.input.output_partitioning();
-                let input_schema_properties = self.input.schema_properties();
-                match input_partition {
-                    Partitioning::Hash(exprs, part) => {
-                        let normalized_exprs = exprs
-                            .into_iter()
-                            .map(|expr| {
-                                input_schema_properties
-                                    .project_expr(&self.source_to_target_mapping, &expr)
-                                    .unwrap_or(Arc::new(UnKnownColumn::new(
-                                        &expr.to_string(),
-                                    )))
-                            })
-                            .collect::<Vec<_>>();
-                        Partitioning::Hash(normalized_exprs, part)
-                    }
-                    _ => input_partition,
-                }
+        let input_partition = self.input.output_partitioning();
+        if self.mode.is_first_stage() {
+            // First stage Aggregation will not change the output partitioning but need to respect the Alias
+            // (e.g mapping in the group by expression)
+            let input_schema_properties = self.input.schema_properties();
+            if let Partitioning::Hash(exprs, part) = input_partition {
+                let normalized_exprs = exprs
+                    .into_iter()
+                    .map(|expr| {
+                        input_schema_properties
+                            .project_expr(&self.source_to_target_mapping, &expr)
+                            .unwrap_or(Arc::new(UnKnownColumn::new(&expr.to_string())))
+                    })
+                    .collect();
+                Partitioning::Hash(normalized_exprs, part)
+            } else {
+                input_partition
             }
+        } else {
             // Final Aggregation's output partitioning is the same as its real input
-            _ => self.input.output_partitioning(),
+            input_partition
         }
     }
 
