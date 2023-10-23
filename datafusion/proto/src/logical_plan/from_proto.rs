@@ -1411,7 +1411,7 @@ pub fn parse_expr(
                 }
                 ScalarFunction::ArrayNdims => {
                     Ok(array_ndims(parse_expr(&args[0], registry)?))
-                },
+                }
                 ScalarFunction::ArrayUnion => Ok(array(
                     args.to_owned()
                         .iter()

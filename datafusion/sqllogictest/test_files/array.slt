@@ -1756,24 +1756,22 @@ select array_to_string(make_array(), ',')
 ## array_union (aliases: `list_union`)
 
 # array_union scalar function #1
-query TTT
+query ?
 select array_union([1, 2, 3, 4], [5, 6, 3, 4]);
 ----
 [1, 2, 3, 4, 5, 6]
 
 # array_union scalar function #2
-query TTT
+query ?
 select array_union([1, 2, 3, 4], [5, 6, 7, 8]);
 ----
 [1, 2, 3, 4, 5, 6, 7, 8]
 
 # array_union scalar function #3
-query T
-select array_union([], [])
+query ?
+select array_union([1,2,3], []);
 ----
-[]
-
-
+[1, 2, 3]
 
 
 # list_to_string scalar function #4 (function alias `array_to_string`)
