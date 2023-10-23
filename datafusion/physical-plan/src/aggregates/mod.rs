@@ -45,7 +45,7 @@ use datafusion_expr::Accumulator;
 use datafusion_physical_expr::{
     aggregate::is_order_sensitive,
     equivalence::collapse_lex_req,
-    expressions::{Column, Max, Min},
+    expressions::{Column, Max, Min, UnKnownColumn},
     physical_exprs_contains, reverse_order_bys, AggregateExpr, LexOrdering,
     LexOrderingReq, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
     SchemaProperties,
@@ -62,7 +62,6 @@ mod topk_stream;
 
 pub use datafusion_expr::AggregateFunction;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
-use datafusion_physical_expr::expressions::UnKnownColumn;
 
 /// Hash aggregate modes
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -744,8 +743,9 @@ impl ExecutionPlan for AggregateExec {
     fn output_partitioning(&self) -> Partitioning {
         let input_partition = self.input.output_partitioning();
         if self.mode.is_first_stage() {
-            // First stage Aggregation will not change the output partitioning but need to respect the Alias
-            // (e.g mapping in the group by expression)
+            // First stage aggregation will not change the output partitioning,
+            // but needs to respect aliases (e.g. mapping in the GROUP BY
+            // expression).
             let input_schema_properties = self.input.schema_properties();
             if let Partitioning::Hash(exprs, part) = input_partition {
                 let normalized_exprs = exprs
@@ -753,17 +753,16 @@ impl ExecutionPlan for AggregateExec {
                     .map(|expr| {
                         input_schema_properties
                             .project_expr(&self.source_to_target_mapping, &expr)
-                            .unwrap_or(Arc::new(UnKnownColumn::new(&expr.to_string())))
+                            .unwrap_or_else(|| {
+                                Arc::new(UnKnownColumn::new(&expr.to_string()))
+                            })
                     })
                     .collect();
-                Partitioning::Hash(normalized_exprs, part)
-            } else {
-                input_partition
+                return Partitioning::Hash(normalized_exprs, part);
             }
-        } else {
-            // Final Aggregation's output partitioning is the same as its real input
-            input_partition
         }
+        // Final Aggregation's output partitioning is the same as its real input
+        input_partition
     }
 
     /// Specifies whether this plan generates an infinite stream of records.

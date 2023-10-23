@@ -29,24 +29,23 @@
 //! This module also has a set of coercion rules to improve user experience: if an argument i32 is passed
 //! to a function that supports f64, it is coerced to f64.
 
+use std::any::Any;
+use std::fmt::{self, Debug, Formatter};
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+
 use crate::functions::out_ordering;
-use crate::physical_expr::down_cast_any_ref;
+use crate::physical_expr::{down_cast_any_ref, physical_exprs_equal};
 use crate::sort_properties::SortProperties;
-use crate::utils::expr_list_eq_strict_order;
 use crate::PhysicalExpr;
+
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
-use datafusion_expr::expr_vec_fmt;
-use datafusion_expr::BuiltinScalarFunction;
-use datafusion_expr::ColumnarValue;
-use datafusion_expr::FuncMonotonicity;
-use datafusion_expr::ScalarFunctionImplementation;
-use std::any::Any;
-use std::fmt::Debug;
-use std::fmt::{self, Formatter};
-use std::hash::{Hash, Hasher};
-use std::sync::Arc;
+use datafusion_expr::{
+    expr_vec_fmt, BuiltinScalarFunction, ColumnarValue, FuncMonotonicity,
+    ScalarFunctionImplementation,
+};
 
 /// Physical expression of a scalar function
 pub struct ScalarFunctionExpr {
@@ -194,7 +193,7 @@ impl PartialEq<dyn Any> for ScalarFunctionExpr {
             .downcast_ref::<Self>()
             .map(|x| {
                 self.name == x.name
-                    && expr_list_eq_strict_order(&self.args, &x.args)
+                    && physical_exprs_equal(&self.args, &x.args)
                     && self.return_type == x.return_type
             })
             .unwrap_or(false)

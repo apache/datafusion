@@ -15,6 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::borrow::Borrow;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+
 use crate::expressions::{BinaryExpr, Column};
 use crate::{PhysicalExpr, PhysicalSortExpr};
 
@@ -30,10 +34,6 @@ use datafusion_expr::Operator;
 use itertools::Itertools;
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::StableGraph;
-use std::borrow::Borrow;
-use std::collections::HashMap;
-use std::collections::HashSet;
-use std::sync::Arc;
 
 /// Compare the two expr lists are equal no matter the order.
 /// For example two InListExpr can be considered to be equals no matter the order:
@@ -57,14 +57,6 @@ pub fn expr_list_eq_any_order(
     } else {
         false
     }
-}
-
-/// Strictly compare the two expr lists are equal in the given order.
-pub fn expr_list_eq_strict_order(
-    list1: &[Arc<dyn PhysicalExpr>],
-    list2: &[Arc<dyn PhysicalExpr>],
-) -> bool {
-    list1.len() == list2.len() && list1.iter().zip(list2.iter()).all(|(e1, e2)| e1.eq(e2))
 }
 
 /// Assume the predicate is in the form of CNF, split the predicate to a Vec of PhysicalExprs.
@@ -400,7 +392,7 @@ mod tests {
     use super::*;
     use crate::equivalence::SchemaProperties;
     use crate::expressions::{binary, cast, col, in_list, lit, Column, Literal};
-    use crate::PhysicalSortExpr;
+    use crate::{physical_exprs_equal, PhysicalSortExpr};
 
     use arrow::compute::SortOptions;
     use arrow_array::Int32Array;
@@ -558,14 +550,8 @@ mod tests {
         assert!(!expr_list_eq_any_order(list1.as_slice(), list2.as_slice()));
         assert!(!expr_list_eq_any_order(list2.as_slice(), list1.as_slice()));
 
-        assert!(!expr_list_eq_strict_order(
-            list1.as_slice(),
-            list2.as_slice()
-        ));
-        assert!(!expr_list_eq_strict_order(
-            list2.as_slice(),
-            list1.as_slice()
-        ));
+        assert!(!physical_exprs_equal(list1.as_slice(), list2.as_slice()));
+        assert!(!physical_exprs_equal(list2.as_slice(), list1.as_slice()));
 
         let list3: Vec<Arc<dyn PhysicalExpr>> = vec![
             Arc::new(Column::new("a", 0)),
@@ -586,14 +572,8 @@ mod tests {
         assert!(expr_list_eq_any_order(list3.as_slice(), list3.as_slice()));
         assert!(expr_list_eq_any_order(list4.as_slice(), list4.as_slice()));
 
-        assert!(!expr_list_eq_strict_order(
-            list3.as_slice(),
-            list4.as_slice()
-        ));
-        assert!(!expr_list_eq_strict_order(
-            list4.as_slice(),
-            list3.as_slice()
-        ));
+        assert!(!physical_exprs_equal(list3.as_slice(), list4.as_slice()));
+        assert!(!physical_exprs_equal(list4.as_slice(), list3.as_slice()));
         assert!(expr_list_eq_any_order(list3.as_slice(), list3.as_slice()));
         assert!(expr_list_eq_any_order(list4.as_slice(), list4.as_slice()));
 

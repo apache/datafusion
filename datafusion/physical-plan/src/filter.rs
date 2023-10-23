@@ -165,9 +165,9 @@ impl ExecutionPlan for FilterExec {
 
     fn with_new_children(
         self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        FilterExec::try_new(self.predicate.clone(), children[0].clone())
+        FilterExec::try_new(self.predicate.clone(), children.swap_remove(0))
             .map(|e| Arc::new(e) as _)
     }
 

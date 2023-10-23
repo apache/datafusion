@@ -239,24 +239,18 @@ impl ExecutionPlan for UnionExec {
             .map(|elem| elem.to_vec())
             .collect::<Vec<_>>();
         // Iterate ordering equivalent group of other childs
-        for next_child_oeq in child_oeqs.iter().skip(1) {
+        for next_child_oeq in &child_oeqs[1..] {
             // Find the valid meet orderings of existing meet and new group.
             let mut next_meets = vec![];
             for existing_meet in &existing_meets {
-                let new_meets = next_child_oeq
-                    .oeq_group()
-                    .iter()
-                    .filter_map(|ordering| {
-                        next_child_oeq.get_meet_ordering(ordering, existing_meet)
-                    })
-                    .collect::<Vec<_>>();
-                next_meets.extend(new_meets);
+                next_meets.extend(next_child_oeq.oeq_group().iter().filter_map(
+                    |ordering| next_child_oeq.get_meet_ordering(ordering, existing_meet),
+                ));
             }
             existing_meets = next_meets;
         }
         // existing_meets contains the all of the valid orderings after union
         union_oeq.add_new_orderings(&existing_meets);
-
         union_oeq
     }
 

@@ -20,7 +20,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use crate::{expr_list_eq_strict_order, PhysicalExpr, SchemaProperties};
+use crate::{physical_exprs_equal, PhysicalExpr, SchemaProperties};
 
 /// Partitioning schemes supported by operators.
 #[derive(Debug, Clone)]
@@ -78,7 +78,7 @@ impl Partitioning {
                     // then we need to have the partition count and hash functions validation.
                     Partitioning::Hash(partition_exprs, _) => {
                         let fast_match =
-                            expr_list_eq_strict_order(&required_exprs, partition_exprs);
+                            physical_exprs_equal(&required_exprs, partition_exprs);
                         // If the required exprs do not match, need to leverage the schema_properties provided by the child
                         // and normalize both exprs based on the equivalent groups.
                         if !fast_match {
@@ -93,7 +93,7 @@ impl Partitioning {
                                     .iter()
                                     .map(|e| eq_groups.normalize_expr(e.clone()))
                                     .collect::<Vec<_>>();
-                                return expr_list_eq_strict_order(
+                                return physical_exprs_equal(
                                     &normalized_required_exprs,
                                     &normalized_partition_exprs,
                                 );
@@ -117,7 +117,7 @@ impl PartialEq for Partitioning {
                 Partitioning::RoundRobinBatch(count2),
             ) if count1 == count2 => true,
             (Partitioning::Hash(exprs1, count1), Partitioning::Hash(exprs2, count2))
-                if expr_list_eq_strict_order(exprs1, exprs2) && (count1 == count2) =>
+                if physical_exprs_equal(exprs1, exprs2) && (count1 == count2) =>
             {
                 true
             }

@@ -251,7 +251,6 @@ pub fn have_common_entries(
 }
 
 /// Checks whether the given physical expression slices are equal.
-#[allow(dead_code)]
 pub fn physical_exprs_equal(
     lhs: &[Arc<dyn PhysicalExpr>],
     rhs: &[Arc<dyn PhysicalExpr>],

@@ -193,7 +193,11 @@ fn pushdown_requirement_to_children(
         let child_plan = plan.children().swap_remove(0);
         match determine_children_requirement(parent_required, request_child, child_plan) {
             RequirementsCompatibility::Satisfy => {
-                let req = (!request_child.is_empty()).then_some(request_child.to_vec());
+                let req = if request_child.is_empty() {
+                    None
+                } else {
+                    Some(request_child.to_vec())
+                };
                 Ok(Some(vec![req]))
             }
             RequirementsCompatibility::Compatible(adjusted) => Ok(Some(vec![adjusted])),
@@ -202,7 +206,11 @@ fn pushdown_requirement_to_children(
     } else if is_union(plan) {
         // UnionExec does not have real sort requirements for its input. Here we change the adjusted_request_ordering to UnionExec's output ordering and
         // propagate the sort requirements down to correct the unnecessary descendant SortExec under the UnionExec
-        let req = (!parent_required.is_empty()).then_some(parent_required.to_vec());
+        let req = if parent_required.is_empty() {
+            None
+        } else {
+            Some(parent_required.to_vec())
+        };
         Ok(Some(vec![req; plan.children().len()]))
     } else if let Some(smj) = plan.as_any().downcast_ref::<SortMergeJoinExec>() {
         // If the current plan is SortMergeJoinExec
@@ -263,7 +271,11 @@ fn pushdown_requirement_to_children(
         } else {
             // Can push-down through SortPreservingMergeExec, because parent requirement is finer
             // than SortPreservingMergeExec output ordering.
-            let req = (!parent_required.is_empty()).then_some(parent_required.to_vec());
+            let req = if parent_required.is_empty() {
+                None
+            } else {
+                Some(parent_required.to_vec())
+            };
             Ok(Some(vec![req]))
         }
     } else {
@@ -271,8 +283,8 @@ fn pushdown_requirement_to_children(
             maintains_input_order
                 .into_iter()
                 .map(|flag| {
-                    if flag {
-                        (!parent_required.is_empty()).then_some(parent_required.to_vec())
+                    if flag && !parent_required.is_empty() {
+                        Some(parent_required.to_vec())
                     } else {
                         None
                     }
@@ -303,7 +315,11 @@ fn determine_children_requirement(
         .requirements_compatible(parent_required, request_child)
     {
         // parent requirements are more specific, adjust the request child requirements and push down the new requirements
-        let adjusted = (!parent_required.is_empty()).then_some(parent_required.to_vec());
+        let adjusted = if parent_required.is_empty() {
+            None
+        } else {
+            Some(parent_required.to_vec())
+        };
         RequirementsCompatibility::Compatible(adjusted)
     } else {
         RequirementsCompatibility::NonCompatible

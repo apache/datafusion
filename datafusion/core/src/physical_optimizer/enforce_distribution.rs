@@ -52,9 +52,7 @@ use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_expr::logical_plan::JoinType;
 use datafusion_physical_expr::expressions::{Column, NoOp};
 use datafusion_physical_expr::utils::map_columns_before_projection;
-use datafusion_physical_expr::{
-    expr_list_eq_strict_order, PhysicalExpr, SchemaProperties,
-};
+use datafusion_physical_expr::{physical_exprs_equal, PhysicalExpr, SchemaProperties};
 use datafusion_physical_plan::unbounded_output;
 use datafusion_physical_plan::windows::{get_best_fitting_window, BoundedWindowAggExec};
 
@@ -498,7 +496,7 @@ fn reorder_aggregate_keys(
 
     if parent_required.len() != output_exprs.len()
         || !agg_exec.group_by().null_expr().is_empty()
-        || expr_list_eq_strict_order(&output_exprs, parent_required)
+        || physical_exprs_equal(&output_exprs, parent_required)
     {
         Ok(PlanWithKeyRequirements::new(agg_plan))
     } else {
@@ -761,8 +759,8 @@ fn try_reorder(
     if join_keys.left_keys.len() != expected.len() {
         return None;
     }
-    if expr_list_eq_strict_order(expected, &join_keys.left_keys)
-        || expr_list_eq_strict_order(expected, &join_keys.right_keys)
+    if physical_exprs_equal(expected, &join_keys.left_keys)
+        || physical_exprs_equal(expected, &join_keys.right_keys)
     {
         return Some((join_keys, vec![]));
     } else if !equivalence_properties.eq_groups().is_empty() {
@@ -786,8 +784,8 @@ fn try_reorder(
             .collect::<Vec<_>>();
         assert_eq!(join_keys.right_keys.len(), normalized_right_keys.len());
 
-        if expr_list_eq_strict_order(&normalized_expected, &normalized_left_keys)
-            || expr_list_eq_strict_order(&normalized_expected, &normalized_right_keys)
+        if physical_exprs_equal(&normalized_expected, &normalized_left_keys)
+            || physical_exprs_equal(&normalized_expected, &normalized_right_keys)
         {
             return Some((join_keys, vec![]));
         }

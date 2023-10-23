@@ -183,7 +183,9 @@ impl ExecutionPlan for ProjectionExec {
                 .map(|expr| {
                     input_schema_properties
                         .project_expr(&self.source_to_target_mapping, &expr)
-                        .unwrap_or(Arc::new(UnKnownColumn::new(&expr.to_string())))
+                        .unwrap_or_else(|| {
+                            Arc::new(UnKnownColumn::new(&expr.to_string()))
+                        })
                 })
                 .collect();
             Partitioning::Hash(normalized_exprs, part)
