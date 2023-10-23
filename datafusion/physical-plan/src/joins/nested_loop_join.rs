@@ -31,7 +31,7 @@ use crate::joins::utils::{
     estimate_join_statistics, get_anti_indices, get_anti_u64_indices,
     get_final_indices_from_bit_map, get_semi_indices, get_semi_u64_indices,
     partitioned_join_output_partitioning, BuildProbeJoinMetrics, ColumnIndex, JoinFilter,
-    JoinSide, OnceAsync, OnceFut,
+    OnceAsync, OnceFut,
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::{
@@ -45,7 +45,7 @@ use arrow::array::{
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
-use datafusion_common::{exec_err, DataFusionError, Result, Statistics};
+use datafusion_common::{exec_err, DataFusionError, JoinSide, Result, Statistics};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_expr::JoinType;
@@ -743,7 +743,6 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::joins::utils::JoinSide;
     use crate::{
         common, expressions::Column, memory::MemoryExec, repartition::RepartitionExec,
         test::build_table_i32,

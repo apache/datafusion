@@ -18,7 +18,6 @@
 //! Join related functionality used both on logical and physical plans
 
 use std::collections::HashSet;
-use std::fmt::{Display, Formatter};
 use std::future::Future;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -42,7 +41,7 @@ use datafusion_common::cast::as_boolean_array;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
-    exec_err, plan_datafusion_err, plan_err, DataFusionError, JoinType, Result,
+    exec_err, plan_datafusion_err, plan_err, DataFusionError, JoinSide, JoinType, Result,
     SharedResult,
 };
 use datafusion_physical_expr::expressions::Column;
@@ -454,34 +453,6 @@ pub fn combine_join_ordering_equivalence_properties(
         (false, false) => {}
     }
     Ok(new_properties)
-}
-
-impl Display for JoinSide {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            JoinSide::Left => write!(f, "left"),
-            JoinSide::Right => write!(f, "right"),
-        }
-    }
-}
-
-/// Used in ColumnIndex to distinguish which side the index is for
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum JoinSide {
-    /// Left side of the join
-    Left,
-    /// Right side of the join
-    Right,
-}
-
-impl JoinSide {
-    /// Inverse the join side
-    pub fn negate(&self) -> Self {
-        match self {
-            JoinSide::Left => JoinSide::Right,
-            JoinSide::Right => JoinSide::Left,
-        }
-    }
 }
 
 /// Information about the index and placement (left or right) of the columns
