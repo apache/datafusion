@@ -134,26 +134,25 @@ impl EquivalenceGroup {
 
     /// This utility function unifies/bridges classes that have common expressions.
     fn bridge_classes(&mut self) {
-        let mut i = 0;
-        while i < self.classes.len() {
-            let mut j = i + 1;
-            let start_size = self.classes[i].len();
-            while j < self.classes.len() {
-                if have_common_entries(&self.classes[i], &self.classes[j]) {
-                    let extension = self.classes.swap_remove(j);
-                    self.classes[i].extend(extension);
+        let mut idx = 0;
+        while idx < self.classes.len() {
+            let mut next_idx = idx + 1;
+            let start_size = self.classes[idx].len();
+            while next_idx < self.classes.len() {
+                if have_common_entries(&self.classes[idx], &self.classes[next_idx]) {
+                    let extension = self.classes.swap_remove(next_idx);
+                    self.classes[idx].extend(extension);
                 } else {
-                    j += 1;
+                    next_idx += 1;
                 }
             }
-
-            if self.classes[i].len() > start_size {
-                deduplicate_physical_exprs(&mut self.classes[i]);
-                if self.classes[i].len() > start_size {
+            if self.classes[idx].len() > start_size {
+                deduplicate_physical_exprs(&mut self.classes[idx]);
+                if self.classes[idx].len() > start_size {
                     continue;
                 }
             }
-            i += 1;
+            idx += 1;
         }
     }
 
@@ -165,7 +164,7 @@ impl EquivalenceGroup {
 
     /// Normalizes the given physical expression according to this group.
     /// The expression is replaced with the first expression in the equivalence
-    /// it matches with.
+    /// class it matches with (if any).
     pub fn normalize_expr(&self, expr: Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalExpr> {
         expr.clone()
             .transform(&|expr| {
@@ -191,9 +190,11 @@ impl EquivalenceGroup {
             .collect()
     }
 
-    /// This function normalizes `sort_requirement` according to `EquivalenceClasses` in the `self`.
-    /// If the given sort requirement doesn't belong to equivalence set inside
-    /// `self`, it returns `sort_requirement` as is.
+    /// Normalizes the given sort requirement according to this group.
+    /// The underlying physical expression is replaced with the first expression
+    /// in the equivalence class it matches with (if any). If the underlying
+    /// expression does not belong to any equivalence class in this group, returns
+    /// the given sort requirement as is.
     pub fn normalize_sort_requirement(
         &self,
         mut sort_requirement: PhysicalSortRequirement,
@@ -202,9 +203,11 @@ impl EquivalenceGroup {
         sort_requirement
     }
 
-    /// This function normalizes `sort_requirement` according to `EquivalenceClasses` in the `self`.
-    /// If the given sort requirement doesn't belong to equivalence set inside
-    /// `self`, it returns `sort_requirement` as is.
+    /// Normalizes the given sort expression according to this group.
+    /// The underlying physical expression is replaced with the first expression
+    /// in the equivalence class it matches with (if any). If the underlying
+    /// expression does not belong to any equivalence class in this group, returns
+    /// the sort expression as is.
     pub fn normalize_sort_expr(
         &self,
         mut sort_expr: PhysicalSortExpr,
@@ -213,9 +216,9 @@ impl EquivalenceGroup {
         sort_expr
     }
 
-    /// This function applies the \[`normalize_sort_requirement`]
-    /// function for all sort requirements in `sort_reqs` and returns a vector of
-    /// normalized sort expressions.
+    /// This function applies the `normalize_sort_requirement` function for all
+    /// requirements in `sort_reqs` and returns the corresponding normalized
+    /// sort requirements.
     pub fn normalize_sort_requirements(
         &self,
         sort_reqs: &[PhysicalSortRequirement],
@@ -227,24 +230,24 @@ impl EquivalenceGroup {
         collapse_lex_req(normalized_sort_reqs)
     }
 
-    /// Similar to the \[`normalize_sort_requirements`] this function normalizes
-    /// sort expressions in `sort_exprs` and returns a vector of
-    /// normalized sort expressions.
+    /// This function applies the `normalize_sort_expr` function for all sort
+    /// expressions in `sort_exprs` and returns the corresponding normalized
+    /// sort expressions.
     pub fn normalize_sort_exprs(
         &self,
         sort_exprs: &[PhysicalSortExpr],
     ) -> Vec<PhysicalSortExpr> {
-        // Convert `PhysicalSortExpr`s to `PhysicalSortRequirement`s
+        // Convert `PhysicalSortExpr`s to `PhysicalSortRequirement`s:
         let sort_requirements =
             PhysicalSortRequirement::from_sort_exprs(sort_exprs.iter());
         let normalized_sort_requirement =
             self.normalize_sort_requirements(&sort_requirements);
-        // Convert back `PhysicalSortRequirement`s to `PhysicalSortExpr`s
+        // Convert back `PhysicalSortRequirement`s to `PhysicalSortExpr`s:
         PhysicalSortRequirement::to_sort_exprs(normalized_sort_requirement)
     }
 
-    /// Projects given expression according to mapping in the `source_to_target_mapping`.
-    /// If expression is not valid after projection returns `None`.
+    /// Projects `expr` according to the mapping `source_to_target_mapping`.
+    /// If the resulting expression is invalid after projection, returns `None`.
     fn project_expr(
         &self,
         source_to_target_mapping: &ProjectionMapping,
@@ -253,33 +256,29 @@ impl EquivalenceGroup {
         let children = expr.children();
         if children.is_empty() {
             for (source, target) in source_to_target_mapping.iter() {
-                // if source matches expr, expr can be projected
-                if source.eq(expr) {
+                // If we match the source, or an equivalent expression to source,
+                // then we can project. For example, if we have the mapping
+                // (a as a1, a + c) and the equivalence class (a, b), expression
+                // b also projects to a1.
+                if source.eq(expr)
+                    || self
+                        .get_equivalent_group(source)
+                        .map_or(false, |group| physical_exprs_contains(&group, expr))
+                {
                     return Some(target.clone());
                 }
-                // if equivalent group of source contains expr, expr can be projected
-                // Assume that projection mapping is (a as a1, a+c)
-                // and input table is (a, b, c), where a=b
-                // Expression b is projected as a1 also.
-                else if let Some(group) = self.get_equivalent_group(source) {
-                    if physical_exprs_contains(&group, expr) {
-                        return Some(target.clone());
-                    }
-                }
             }
-            // After projection, expression is not valid.
-            None
         }
-        // All of the childrens can be projected
+        // Project a non-leaf expression by projecting its children.
         else if let Some(children) = children
             .into_iter()
             .map(|child| self.project_expr(source_to_target_mapping, &child))
             .collect::<Option<Vec<_>>>()
         {
-            Some(expr.clone().with_new_children(children).unwrap())
-        } else {
-            None
+            return Some(expr.clone().with_new_children(children).unwrap());
         }
+        // Arriving here implies the expression was invalid after projection.
+        None
     }
 
     /// Projects given ordering according to mapping in the `source_to_target_mapping`.
@@ -289,12 +288,12 @@ impl EquivalenceGroup {
         source_to_target_mapping: &ProjectionMapping,
         ordering: &[PhysicalSortExpr],
     ) -> Option<Vec<PhysicalSortExpr>> {
-        let mut res = vec![];
+        let mut result = vec![];
         for order in ordering {
             if let Some(new_expr) =
                 self.project_expr(source_to_target_mapping, &order.expr)
             {
-                res.push(PhysicalSortExpr {
+                result.push(PhysicalSortExpr {
                     expr: new_expr,
                     options: order.options,
                 })
@@ -307,11 +306,7 @@ impl EquivalenceGroup {
                 break;
             }
         }
-        if res.is_empty() {
-            None
-        } else {
-            Some(res)
-        }
+        (!result.is_empty()).then_some(result)
     }
 
     /// Projects EquivalenceGroups according to projection mapping described in `source_to_target_mapping`.
@@ -1231,16 +1226,15 @@ pub fn schema_properties_helper(
     oep
 }
 
-/// This function constructs a duplicate-free `LexOrderingReq` by filtering out duplicate
-/// entries that have same physical expression inside the given vector `input`.
-/// `vec![a Some(Asc), a Some(Desc)]` is collapsed to the `vec![a Some(Asc)]`. Since
-/// when same expression is already seen before, following expressions are redundant.
+/// This function constructs a duplicate-free `LexOrderingReq` by filtering out
+/// duplicate entries that have same physical expression inside. For example,
+/// `vec![a Some(Asc), a Some(Desc)]` collapses to `vec![a Some(Asc)]`.
 pub fn collapse_lex_req(input: LexOrderingReq) -> LexOrderingReq {
     let mut output = vec![];
     for item in input {
-        if output
+        if !output
             .iter()
-            .all(|elem: &PhysicalSortRequirement| !elem.expr.eq(&item.expr))
+            .any(|req: &PhysicalSortRequirement| req.expr.eq(&item.expr))
         {
             output.push(item);
         }
