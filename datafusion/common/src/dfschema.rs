@@ -392,10 +392,32 @@ impl DFSchema {
     }
 
     /// Returns true if the two schemas have the same qualified named
+    /// fields with logically equivalent data types. Returns false otherwise.
+    ///
+    /// Use [DFSchema]::equivalent_names_and_types for stricter semantic type
+    /// equivalence checking.
+    pub fn logically_equivalent_names_and_types(&self, other: &Self) -> bool {
+        if self.fields().len() != other.fields().len() {
+            return false;
+        }
+        let self_fields = self.fields().iter();
+        let other_fields = other.fields().iter();
+        self_fields.zip(other_fields).all(|(f1, f2)| {
+            f1.qualifier() == f2.qualifier()
+                && f1.name() == f2.name()
+                && Self::datatype_is_logically_equal(f1.data_type(), f2.data_type())
+        })
+    }
+
+    /// Returns true if the two schemas have the same qualified named
     /// fields with the same data types. Returns false otherwise.
     ///
     /// This is a specialized version of Eq that ignores differences
     /// in nullability and metadata.
+    ///
+    /// Use [DFSchema]::logically_equivalent_names_and_types for a weaker
+    /// logical type checking, which for example would consider a dictionary
+    /// encoded UTF8 array to be equivalent to a plain UTF8 array.
     pub fn equivalent_names_and_types(&self, other: &Self) -> bool {
         if self.fields().len() != other.fields().len() {
             return false;
@@ -409,6 +431,46 @@ impl DFSchema {
         })
     }
 
+    /// Checks if two [`DataType`]s are logically equal. This is a notably weaker constraint
+    /// than datatype_is_semantically_equal in that a Dictionary<K,V> type is logically
+    /// equal to a plain V type, but not semantically equal. Dictionary<K1, V1> is also
+    /// logically equal to Dictionary<K2, V1>.
+    fn datatype_is_logically_equal(dt1: &DataType, dt2: &DataType) -> bool {
+        // check nested fields
+        match (dt1, dt2) {
+            (DataType::Dictionary(_, v1), DataType::Dictionary(_, v2)) => {
+                v1.as_ref() == v2.as_ref()
+            }
+            (DataType::Dictionary(_, v1), othertype) => v1.as_ref() == othertype,
+            (othertype, DataType::Dictionary(_, v1)) => v1.as_ref() == othertype,
+            (DataType::List(f1), DataType::List(f2))
+            | (DataType::LargeList(f1), DataType::LargeList(f2))
+            | (DataType::FixedSizeList(f1, _), DataType::FixedSizeList(f2, _))
+            | (DataType::Map(f1, _), DataType::Map(f2, _)) => {
+                Self::field_is_logically_equal(f1, f2)
+            }
+            (DataType::Struct(fields1), DataType::Struct(fields2)) => {
+                let iter1 = fields1.iter();
+                let iter2 = fields2.iter();
+                fields1.len() == fields2.len() &&
+                        // all fields have to be the same
+                    iter1
+                    .zip(iter2)
+                        .all(|(f1, f2)| Self::field_is_logically_equal(f1, f2))
+            }
+            (DataType::Union(fields1, _), DataType::Union(fields2, _)) => {
+                let iter1 = fields1.iter();
+                let iter2 = fields2.iter();
+                fields1.len() == fields2.len() &&
+                    // all fields have to be the same
+                    iter1
+                        .zip(iter2)
+                        .all(|((t1, f1), (t2, f2))| t1 == t2 && Self::field_is_logically_equal(f1, f2))
+            }
+            _ => dt1 == dt2,
+        }
+    }
+
     /// Returns true of two [`DataType`]s are semantically equal (same
     /// name and type), ignoring both metadata and nullability.
     ///
@@ -420,11 +482,6 @@ impl DFSchema {
                 Self::datatype_is_semantically_equal(k1.as_ref(), k2.as_ref())
                     && Self::datatype_is_semantically_equal(v1.as_ref(), v2.as_ref())
             }
-            // The next two cases allow for the possibility that one schema has a dictionary encoded array
-            // and the other has an equivalent non dictionary encoded array of the same type
-            // E.g. Dictionary(_, Utf8) is semantically equivalent to Utf8 since both represent an array of strings
-            (DataType::Dictionary(_, v1), othertype) => v1.as_ref() == othertype,
-            (othertype, DataType::Dictionary(_, v1)) => v1.as_ref() == othertype,
             (DataType::List(f1), DataType::List(f2))
             | (DataType::LargeList(f1), DataType::LargeList(f2))
             | (DataType::FixedSizeList(f1, _), DataType::FixedSizeList(f2, _))
@@ -451,6 +508,11 @@ impl DFSchema {
             }
             _ => dt1 == dt2,
         }
+    }
+
+    fn field_is_logically_equal(f1: &Field, f2: &Field) -> bool {
+        f1.name() == f2.name()
+            && Self::datatype_is_logically_equal(f1.data_type(), f2.data_type())
     }
 
     fn field_is_semantically_equal(f1: &Field, f2: &Field) -> bool {
@@ -783,6 +845,13 @@ pub trait SchemaExt {
     ///
     /// It works the same as [`DFSchema::equivalent_names_and_types`].
     fn equivalent_names_and_types(&self, other: &Self) -> bool;
+
+    /// Returns true if the two schemas have the same qualified named
+    /// fields with logically equivalent data types. Returns false otherwise.
+    ///
+    /// Use [DFSchema]::equivalent_names_and_types for stricter semantic type
+    /// equivalence checking.
+    fn logically_equivalent_names_and_types(&self, other: &Self) -> bool;
 }
 
 impl SchemaExt for Schema {
@@ -797,6 +866,23 @@ impl SchemaExt for Schema {
             .all(|(f1, f2)| {
                 f1.name() == f2.name()
                     && DFSchema::datatype_is_semantically_equal(
+                        f1.data_type(),
+                        f2.data_type(),
+                    )
+            })
+    }
+
+    fn logically_equivalent_names_and_types(&self, other: &Self) -> bool {
+        if self.fields().len() != other.fields().len() {
+            return false;
+        }
+
+        self.fields()
+            .iter()
+            .zip(other.fields().iter())
+            .all(|(f1, f2)| {
+                f1.name() == f2.name()
+                    && DFSchema::datatype_is_logically_equal(
                         f1.data_type(),
                         f2.data_type(),
                     )
