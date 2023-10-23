@@ -271,7 +271,7 @@ config_namespace! {
         /// for each output file being worked. Higher values can potentially
         /// give faster write performance at the cost of higher peak
         /// memory consumption
-        pub max_buffered_batches_per_output_file: usize, default = 2
+        pub max_buffered_batches_per_output_file: usize, default = 10
 
     }
 }
@@ -377,12 +377,24 @@ config_namespace! {
         pub bloom_filter_ndv: Option<u64>, default = None
 
         /// Controls whether DataFusion will attempt to speed up writing
-        /// large parquet files by first writing multiple smaller files
-        /// and then stitching them together into a single large file.
-        /// This will result in faster write speeds, but higher memory usage.
-        /// Also currently unsupported are bloom filters and column indexes
-        /// when single_file_parallelism is enabled.
-        pub allow_single_file_parallelism: bool, default = false
+        /// parquet files by serializing them in parallel. Each column
+        /// in each row group in each output file are serialized in parallel
+        /// leveraging a maximum possible core count of n_files*n_row_groups*n_columns.
+        pub allow_single_file_parallelism: bool, default = true
+
+        /// If allow_single_file_parallelism=true, this setting allows
+        /// applying backpressure to prevent working on too many row groups in
+        /// parallel in case of limited memory or slow I/O speed causing
+        /// OOM errors. Lowering this number limits memory growth at the cost
+        /// of potentially slower write speeds.
+        pub maximum_parallel_row_group_writers: usize, default = 16
+
+        /// If allow_single_file_parallelism=true, this setting allows
+        /// applying backpressure to prevent too many RecordBatches building
+        /// up in memory in case the parallel writers cannot consume them fast
+        /// enough. Lowering this number limits memory growth at the cost
+        /// of potentially lower write speeds.
+        pub maximum_buffered_record_batches_per_stream: usize, default = 200
 
     }
 }
