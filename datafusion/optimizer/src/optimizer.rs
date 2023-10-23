@@ -35,7 +35,6 @@ use crate::plan_signature::LogicalPlanSignature;
 use crate::propagate_empty_relation::PropagateEmptyRelation;
 use crate::push_down_filter::PushDownFilter;
 use crate::push_down_limit::PushDownLimit;
-use crate::push_down_projection::PushDownProjection;
 use crate::remove_unused_columns::RemoveUnusedColumns;
 use crate::replace_distinct_aggregate::ReplaceDistinctWithAggregate;
 use crate::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
@@ -256,11 +255,10 @@ impl Optimizer {
             Arc::new(SimplifyExpressions::new()),
             Arc::new(UnwrapCastInComparison::new()),
             Arc::new(CommonSubexprEliminate::new()),
-            Arc::new(PushDownProjection::new()),
+            Arc::new(RemoveUnusedColumns::new()),
             Arc::new(EliminateProjection::new()),
             // PushDownProjection can pushdown Projections through Limits, do PushDownLimit again.
             Arc::new(PushDownLimit::new()),
-            Arc::new(RemoveUnusedColumns::new()),
         ];
 
         Self::with_rules(rules)

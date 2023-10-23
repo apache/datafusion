@@ -560,7 +560,7 @@ async fn csv_explain_verbose_plans() {
     // Since the plan contains path that are environmentally
     // dependant(e.g. full path of the test file), only verify
     // important content
-    assert_contains!(&actual, "logical_plan after push_down_projection");
+    assert_contains!(&actual, "logical_plan after RemoveUnusedColumns");
     assert_contains!(&actual, "physical_plan");
     assert_contains!(&actual, "FilterExec: c2@1 > 10");
     assert_contains!(actual, "ProjectionExec: expr=[c1@0 as c1]");
@@ -788,7 +788,7 @@ async fn explain_logical_plan_only() {
             "logical_plan",
             "Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]\
             \n  SubqueryAlias: t\
-            \n    Projection: column2\
+            \n    Projection: column1 AS c1\
             \n      Values: (Utf8(\"a\"), Int64(1), Int64(100)), (Utf8(\"a\"), Int64(2), Int64(150))"
         ]];
     assert_eq!(expected, actual);

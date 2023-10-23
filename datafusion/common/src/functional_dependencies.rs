@@ -592,9 +592,7 @@ pub fn get_required_group_by_exprs_indices(
             })
             .collect::<Option<Vec<_>>>()
         {
-            if !group_by_used_indices.is_empty() {
-                return Some(group_by_used_indices);
-            }
+            return Some(group_by_used_indices);
         }
     }
     None

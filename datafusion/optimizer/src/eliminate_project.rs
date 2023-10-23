@@ -41,25 +41,10 @@ impl OptimizerRule for EliminateProjection {
         match plan {
             LogicalPlan::Projection(projection) => {
                 let child_plan = projection.input.as_ref();
-                match child_plan {
-                    LogicalPlan::Union(_)
-                    | LogicalPlan::Filter(_)
-                    | LogicalPlan::TableScan(_)
-                    | LogicalPlan::SubqueryAlias(_)
-                    | LogicalPlan::Sort(_) => {
-                        if can_eliminate(projection, child_plan.schema()) {
-                            Ok(Some(child_plan.clone()))
-                        } else {
-                            Ok(None)
-                        }
-                    }
-                    _ => {
-                        if plan.schema() == child_plan.schema() {
-                            Ok(Some(child_plan.clone()))
-                        } else {
-                            Ok(None)
-                        }
-                    }
+                if plan.schema() == child_plan.schema() {
+                    Ok(Some(child_plan.clone()))
+                } else {
+                    Ok(None)
                 }
             }
             _ => Ok(None),

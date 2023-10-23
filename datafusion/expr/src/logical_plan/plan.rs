@@ -536,15 +536,9 @@ impl LogicalPlan {
                     Arc::new(inputs[0].clone()),
                 )?))
             }
-            LogicalPlan::Window(Window {
-                window_expr,
-                schema,
-                ..
-            }) => Ok(LogicalPlan::Window(Window {
-                input: Arc::new(inputs[0].clone()),
-                window_expr: window_expr.to_vec(),
-                schema: schema.clone(),
-            })),
+            LogicalPlan::Window(Window { window_expr, .. }) => Ok(LogicalPlan::Window(
+                Window::try_new(window_expr.to_vec(), Arc::new(inputs[0].clone()))?,
+            )),
             LogicalPlan::Aggregate(Aggregate {
                 group_expr,
                 aggr_expr,
@@ -821,10 +815,19 @@ impl LogicalPlan {
             LogicalPlan::Extension(e) => Ok(LogicalPlan::Extension(Extension {
                 node: e.node.from_template(&expr, inputs),
             })),
-            LogicalPlan::Union(Union { schema, .. }) => Ok(LogicalPlan::Union(Union {
-                inputs: inputs.iter().cloned().map(Arc::new).collect(),
-                schema: schema.clone(),
-            })),
+            LogicalPlan::Union(Union { schema, .. }) => {
+                let input_schema = inputs[0].schema();
+                // If inputs are not pruned do not change schema.
+                let schema = if schema.fields().len() == input_schema.fields().len() {
+                    schema
+                } else {
+                    input_schema
+                };
+                Ok(LogicalPlan::Union(Union {
+                    inputs: inputs.iter().cloned().map(Arc::new).collect(),
+                    schema: schema.clone(),
+                }))
+            }
             LogicalPlan::Distinct(Distinct { .. }) => {
                 Ok(LogicalPlan::Distinct(Distinct {
                     input: Arc::new(inputs[0].clone()),

@@ -630,6 +630,7 @@ mod tests {
     use super::*;
     use crate::eliminate_project::EliminateProjection;
     use crate::optimizer::Optimizer;
+    use crate::remove_unused_columns::RemoveUnusedColumns;
     use crate::test::*;
     use crate::OptimizerContext;
     use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
@@ -945,7 +946,7 @@ mod tests {
         // Build the LogicalPlan directly (don't use PlanBuilder), so
         // that the Column references are unqualified (e.g. their
         // relation is `None`). PlanBuilder resolves the expressions
-        let expr = vec![col("a"), col("b")];
+        let expr = vec![col("test.a"), col("test.b")];
         let plan =
             LogicalPlan::Projection(Projection::try_new(expr, Arc::new(table_scan))?);
 
@@ -1111,8 +1112,9 @@ mod tests {
 
         let expected = "Projection: test.c, test.a, MAX(test.b)\
         \n  Filter: test.c > Int32(1)\
-        \n    Aggregate: groupBy=[[test.a, test.c]], aggr=[[MAX(test.b)]]\
-        \n      TableScan: test projection=[a, b, c]";
+        \n    Projection: test.a, test.c, MAX(test.b)\
+        \n      Aggregate: groupBy=[[test.a, test.c]], aggr=[[MAX(test.b), MIN(test.b)]]\
+        \n        TableScan: test projection=[a, b, c]";
 
         assert_optimized_plan_eq(&plan, expected)
     }
@@ -1152,9 +1154,8 @@ mod tests {
             .project(vec![col("a")])?
             .build()?;
 
-        let expected = "Projection: test.a\
-        \n  Distinct:\
-        \n    TableScan: test projection=[a, b]";
+        let expected = "Distinct:\
+        \n  TableScan: test projection=[a]";
 
         assert_optimized_plan_eq(&plan, expected)
     }
@@ -1205,7 +1206,8 @@ mod tests {
 
     fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
         let optimizer = Optimizer::with_rules(vec![
-            Arc::new(PushDownProjection::new()),
+            // Arc::new(PushDownProjection::new()),
+            Arc::new(RemoveUnusedColumns::new()),
             Arc::new(EliminateProjection::new()),
         ]);
         let mut optimized_plan = optimizer
