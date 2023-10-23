@@ -44,14 +44,13 @@ use datafusion::physical_plan::expressions::{
     Regr, RegrType, RowNumber, Stddev, StddevPop, Sum, TryCastExpr, Variance,
     VariancePop, WindowShift,
 };
-use datafusion::physical_plan::joins::utils::JoinSide;
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion::physical_plan::windows::{BuiltInWindowExpr, PlainAggregateWindowExpr};
 use datafusion::physical_plan::{
     AggregateExpr, ColumnStatistics, PhysicalExpr, Statistics, WindowExpr,
 };
 use datafusion_common::{
-    internal_err, not_impl_err, stats::Precision, DataFusionError, Result,
+    internal_err, not_impl_err, stats::Precision, DataFusionError, JoinSide, Result,
 };
 
 impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {

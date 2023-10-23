@@ -24,14 +24,14 @@ use std::ops::IndexMut;
 use std::sync::Arc;
 use std::{fmt, usize};
 
-use crate::joins::utils::{JoinFilter, JoinSide};
+use crate::joins::utils::JoinFilter;
 
 use arrow::compute::concat_batches;
 use arrow::datatypes::{ArrowNativeType, SchemaRef};
 use arrow_array::builder::BooleanBufferBuilder;
 use arrow_array::{ArrowPrimitiveType, NativeAdapter, PrimitiveArray, RecordBatch};
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{DataFusionError, JoinSide, Result, ScalarValue};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::intervals::{Interval, IntervalBound};
 use datafusion_physical_expr::utils::collect_columns;
@@ -732,7 +732,7 @@ pub mod tests {
     use crate::{
         expressions::Column,
         expressions::PhysicalSortExpr,
-        joins::utils::{ColumnIndex, JoinFilter, JoinSide},
+        joins::utils::{ColumnIndex, JoinFilter},
     };
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
