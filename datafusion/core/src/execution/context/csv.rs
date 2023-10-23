@@ -86,7 +86,43 @@ impl SessionContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::assert_batches_eq;
+    use crate::test_util::{plan_and_collect, populate_csv_partitions};
     use async_trait::async_trait;
+    use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn query_csv_with_custom_partition_extension() -> Result<()> {
+        let tmp_dir = TempDir::new()?;
+
+        // The main stipulation of this test: use a file extension that isn't .csv.
+        let file_extension = ".tst";
+
+        let ctx = SessionContext::new();
+        let schema = populate_csv_partitions(&tmp_dir, 2, file_extension)?;
+        ctx.register_csv(
+            "test",
+            tmp_dir.path().to_str().unwrap(),
+            CsvReadOptions::new()
+                .schema(&schema)
+                .file_extension(file_extension),
+        )
+        .await?;
+        let results =
+            plan_and_collect(&ctx, "SELECT SUM(c1), SUM(c2), COUNT(*) FROM test").await?;
+
+        assert_eq!(results.len(), 1);
+        let expected = [
+            "+--------------+--------------+----------+",
+            "| SUM(test.c1) | SUM(test.c2) | COUNT(*) |",
+            "+--------------+--------------+----------+",
+            "| 10           | 110          | 20       |",
+            "+--------------+--------------+----------+",
+        ];
+        assert_batches_eq!(expected, &results);
+
+        Ok(())
+    }
 
     // Test for compilation error when calling read_* functions from an #[async_trait] function.
     // See https://github.com/apache/arrow-datafusion/issues/1154

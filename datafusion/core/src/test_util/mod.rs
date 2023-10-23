@@ -22,10 +22,14 @@ pub mod parquet;
 
 use std::any::Any;
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::Write;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+
+use tempfile::TempDir;
 
 use crate::dataframe::DataFrame;
 use crate::datasource::provider::TableProviderFactory;
@@ -130,6 +134,43 @@ pub async fn test_table_with_name(name: &str) -> Result<DataFrame> {
 /// Create a table from the aggregate_test_100.csv file with the name "aggregate_test_100"
 pub async fn test_table() -> Result<DataFrame> {
     test_table_with_name("aggregate_test_100").await
+}
+
+/// Execute SQL and return results
+pub async fn plan_and_collect(
+    ctx: &SessionContext,
+    sql: &str,
+) -> Result<Vec<RecordBatch>> {
+    ctx.sql(sql).await?.collect().await
+}
+
+/// Generate CSV partitions within the supplied directory
+pub fn populate_csv_partitions(
+    tmp_dir: &TempDir,
+    partition_count: usize,
+    file_extension: &str,
+) -> Result<SchemaRef> {
+    // define schema for data source (csv file)
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("c1", DataType::UInt32, false),
+        Field::new("c2", DataType::UInt64, false),
+        Field::new("c3", DataType::Boolean, false),
+    ]));
+
+    // generate a partitioned file
+    for partition in 0..partition_count {
+        let filename = format!("partition-{partition}.{file_extension}");
+        let file_path = tmp_dir.path().join(filename);
+        let mut file = File::create(file_path)?;
+
+        // generate some data
+        for i in 0..=10 {
+            let data = format!("{},{},{}\n", partition, i, i % 2 == 0);
+            file.write_all(data.as_bytes())?;
+        }
+    }
+
+    Ok(schema)
 }
 
 /// TableFactory for tests

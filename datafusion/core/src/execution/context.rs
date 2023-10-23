@@ -2066,15 +2066,14 @@ mod tests {
     use crate::execution::memory_pool::MemoryConsumer;
     use crate::execution::runtime_env::RuntimeConfig;
     use crate::test;
+    use crate::test_util::{plan_and_collect, populate_csv_partitions};
     use crate::variable::VarType;
-    use arrow::record_batch::RecordBatch;
-    use arrow_schema::{Field, Schema};
+    use arrow_schema::Schema;
     use async_trait::async_trait;
     use datafusion_expr::Expr;
-    use std::fs::File;
+    use std::env;
     use std::path::PathBuf;
     use std::sync::Weak;
-    use std::{env, io::prelude::*};
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -2165,39 +2164,6 @@ mod tests {
 
         assert!(ctx.deregister_table("dual")?.is_some());
         assert!(ctx.deregister_table("dual")?.is_none());
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn query_csv_with_custom_partition_extension() -> Result<()> {
-        let tmp_dir = TempDir::new()?;
-
-        // The main stipulation of this test: use a file extension that isn't .csv.
-        let file_extension = ".tst";
-
-        let ctx = SessionContext::new();
-        let schema = populate_csv_partitions(&tmp_dir, 2, file_extension)?;
-        ctx.register_csv(
-            "test",
-            tmp_dir.path().to_str().unwrap(),
-            CsvReadOptions::new()
-                .schema(&schema)
-                .file_extension(file_extension),
-        )
-        .await?;
-        let results =
-            plan_and_collect(&ctx, "SELECT SUM(c1), SUM(c2), COUNT(*) FROM test").await?;
-
-        assert_eq!(results.len(), 1);
-        let expected = [
-            "+--------------+--------------+----------+",
-            "| SUM(test.c1) | SUM(test.c2) | COUNT(*) |",
-            "+--------------+--------------+----------+",
-            "| 10           | 110          | 20       |",
-            "+--------------+--------------+----------+",
-        ];
-        assert_batches_eq!(expected, &results);
 
         Ok(())
     }
@@ -2503,43 +2469,6 @@ mod tests {
                 .create_physical_plan(logical_plan, session_state)
                 .await
         }
-    }
-
-    /// Execute SQL and return results
-    async fn plan_and_collect(
-        ctx: &SessionContext,
-        sql: &str,
-    ) -> Result<Vec<RecordBatch>> {
-        ctx.sql(sql).await?.collect().await
-    }
-
-    /// Generate CSV partitions within the supplied directory
-    fn populate_csv_partitions(
-        tmp_dir: &TempDir,
-        partition_count: usize,
-        file_extension: &str,
-    ) -> Result<SchemaRef> {
-        // define schema for data source (csv file)
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("c1", DataType::UInt32, false),
-            Field::new("c2", DataType::UInt64, false),
-            Field::new("c3", DataType::Boolean, false),
-        ]));
-
-        // generate a partitioned file
-        for partition in 0..partition_count {
-            let filename = format!("partition-{partition}.{file_extension}");
-            let file_path = tmp_dir.path().join(filename);
-            let mut file = File::create(file_path)?;
-
-            // generate some data
-            for i in 0..=10 {
-                let data = format!("{},{},{}\n", partition, i, i % 2 == 0);
-                file.write_all(data.as_bytes())?;
-            }
-        }
-
-        Ok(schema)
     }
 
     /// Generate a partitioned CSV file and register it with an execution context
