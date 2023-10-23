@@ -701,8 +701,6 @@ macro_rules! make_try_abs_function {
     }};
 }
 
-// Decimal types should keep the same precision and scale by using `with_data_type()`.
-// https://github.com/apache/arrow-rs/issues/4644
 macro_rules! make_decimal_abs_function {
     ($ARRAY_TYPE:ident) => {{
         |args: &[ArrayRef]| {
