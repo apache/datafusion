@@ -363,7 +363,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .collect::<Result<Vec<_>, _>>()?;
 
                 let options = ListingOptions::new(file_format)
-                    .with_file_extension(scan.file_extension.clone())
+                    .with_file_extension(&scan.file_extension)
                     .with_table_partition_cols(
                         scan.table_partition_cols
                             .iter()
@@ -458,7 +458,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let input: LogicalPlan =
                     into_logical_plan!(repartition.input, ctx, extension_codec)?;
                 use protobuf::repartition_node::PartitionMethod;
-                let pb_partition_method = repartition.partition_method.clone().ok_or_else(|| {
+                let pb_partition_method = repartition.partition_method.as_ref().ok_or_else(|| {
                     DataFusionError::Internal(String::from(
                         "Protobuf deserialization error, RepartitionNode was missing required field 'partition_method'",
                     ))
@@ -473,10 +473,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                             .iter()
                             .map(|expr| from_proto::parse_expr(expr, ctx))
                             .collect::<Result<Vec<_>, _>>()?,
-                        partition_count as usize,
+                        *partition_count as usize,
                     ),
                     PartitionMethod::RoundRobin(partition_count) => {
-                        Partitioning::RoundRobinBatch(partition_count as usize)
+                        Partitioning::RoundRobinBatch(*partition_count as usize)
                     }
                 };
 
