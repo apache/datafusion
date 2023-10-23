@@ -84,11 +84,11 @@ impl EquivalenceGroup {
     ) {
         let mut first_class = None;
         let mut second_class = None;
-        for (idx, eq_class) in self.classes.iter().enumerate() {
-            if physical_exprs_contains(eq_class, left) {
+        for (idx, cls) in self.classes.iter().enumerate() {
+            if physical_exprs_contains(cls, left) {
                 first_class = Some(idx);
             }
-            if physical_exprs_contains(eq_class, right) {
+            if physical_exprs_contains(cls, right) {
                 second_class = Some(idx);
             }
         }
@@ -123,10 +123,10 @@ impl EquivalenceGroup {
     /// Removes redundant entries from this group.
     fn remove_redundant_entries(&mut self) {
         // Remove duplicate entries from each equivalence class:
-        self.classes.retain_mut(|class| {
+        self.classes.retain_mut(|cls| {
             // Keep groups that have at least two entries:
-            deduplicate_physical_exprs(class);
-            class.len() > 1
+            deduplicate_physical_exprs(cls);
+            cls.len() > 1
         });
         // Unify/bridge groups that have common expressions:
         self.bridge_classes()
@@ -156,7 +156,7 @@ impl EquivalenceGroup {
         }
     }
 
-    /// Extends this equivalence group with the `other`` equivalence group.
+    /// Extends this equivalence group with the `other` equivalence group.
     fn extend(&mut self, other: EquivalenceGroup) {
         self.classes.extend(other.classes);
         self.remove_redundant_entries();
@@ -168,9 +168,9 @@ impl EquivalenceGroup {
     pub fn normalize_expr(&self, expr: Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalExpr> {
         expr.clone()
             .transform(&|expr| {
-                for class in self.iter() {
-                    if physical_exprs_contains(class, &expr) {
-                        return Ok(Transformed::Yes(class[0].clone()));
+                for cls in self.iter() {
+                    if physical_exprs_contains(cls, &expr) {
+                        return Ok(Transformed::Yes(cls[0].clone()));
                     }
                 }
                 Ok(Transformed::No(expr))
@@ -246,23 +246,23 @@ impl EquivalenceGroup {
         PhysicalSortRequirement::to_sort_exprs(normalized_sort_requirement)
     }
 
-    /// Projects `expr` according to the mapping `source_to_target_mapping`.
+    /// Projects `expr` according to the given projection mapping.
     /// If the resulting expression is invalid after projection, returns `None`.
     fn project_expr(
         &self,
-        source_to_target_mapping: &ProjectionMapping,
+        mapping: &ProjectionMapping,
         expr: &Arc<dyn PhysicalExpr>,
     ) -> Option<Arc<dyn PhysicalExpr>> {
         let children = expr.children();
         if children.is_empty() {
-            for (source, target) in source_to_target_mapping.iter() {
+            for (source, target) in mapping.iter() {
                 // If we match the source, or an equivalent expression to source,
                 // then we can project. For example, if we have the mapping
                 // (a as a1, a + c) and the equivalence class (a, b), expression
                 // b also projects to a1.
                 if source.eq(expr)
                     || self
-                        .get_equivalent_group(source)
+                        .get_equivalence_class(source)
                         .map_or(false, |group| physical_exprs_contains(&group, expr))
                 {
                     return Some(target.clone());
@@ -272,7 +272,7 @@ impl EquivalenceGroup {
         // Project a non-leaf expression by projecting its children.
         else if let Some(children) = children
             .into_iter()
-            .map(|child| self.project_expr(source_to_target_mapping, &child))
+            .map(|child| self.project_expr(mapping, &child))
             .collect::<Option<Vec<_>>>()
         {
             return Some(expr.clone().with_new_children(children).unwrap());
@@ -281,100 +281,83 @@ impl EquivalenceGroup {
         None
     }
 
-    /// Projects given ordering according to mapping in the `source_to_target_mapping`.
-    /// If ordering is not valid after projection returns `None`.
+    /// Projects `ordering` according to the given projection mapping.
+    /// If the resulting ordering is invalid after projection, returns `None`.
     fn project_ordering(
         &self,
-        source_to_target_mapping: &ProjectionMapping,
+        mapping: &ProjectionMapping,
         ordering: &[PhysicalSortExpr],
     ) -> Option<Vec<PhysicalSortExpr>> {
-        let mut result = vec![];
-        for order in ordering {
-            if let Some(new_expr) =
-                self.project_expr(source_to_target_mapping, &order.expr)
-            {
-                result.push(PhysicalSortExpr {
-                    expr: new_expr,
-                    options: order.options,
-                })
-            } else {
-                // Expression is not valid, rest of the ordering shouldn't be projected also.
-                // e.g if input ordering is [a ASC, b ASC, c ASC], and column b is not valid
-                // after projection
-                // we should return projected ordering as [a ASC] not as [a ASC, c ASC] even if
-                // column c is valid after projection.
-                break;
-            }
-        }
+        // If any sort expression is invalid after projection, rest of the
+        // ordering shouldn't be projected either. For example, if input ordering
+        // is [a ASC, b ASC, c ASC], and column b is not valid after projection,
+        // the result should be [a ASC], not [a ASC, c ASC], even if column c is
+        // valid after projection.
+        let result = ordering
+            .iter()
+            .map_while(|sort_expr| {
+                self.project_expr(mapping, &sort_expr.expr)
+                    .map(|expr| PhysicalSortExpr {
+                        expr,
+                        options: sort_expr.options,
+                    })
+            })
+            .collect::<Vec<_>>();
         (!result.is_empty()).then_some(result)
     }
 
-    /// Projects EquivalenceGroups according to projection mapping described in `source_to_target_mapping`.
-    pub fn project(
-        &self,
-        source_to_target_mapping: &ProjectionMapping,
-    ) -> EquivalenceGroup {
-        let mut projected_eq_groups = vec![];
-        for eq_class in self.iter() {
-            let new_eq_class = eq_class
+    /// Projects this equivalence group according to the given projection mapping.
+    pub fn project(&self, mapping: &ProjectionMapping) -> EquivalenceGroup {
+        let projected_classes = self.iter().filter_map(|cls| {
+            let new_class = cls
                 .iter()
-                .filter_map(|expr| self.project_expr(source_to_target_mapping, expr))
+                .filter_map(|expr| self.project_expr(mapping, expr))
                 .collect::<Vec<_>>();
-            if new_eq_class.len() > 1 {
-                projected_eq_groups.push(new_eq_class.clone());
-            }
-        }
-        let new_eq_groups =
-            Self::calculate_new_projection_equivalent_groups(source_to_target_mapping);
-        projected_eq_groups.extend(new_eq_groups);
-
-        // Return projected equivalent groups
-        EquivalenceGroup::new(projected_eq_groups)
-    }
-
-    /// Construct equivalent groups according to projection mapping.
-    /// In the result, each inner vector contains equivalents sets. Outer vector corresponds to
-    /// distinct equivalent groups
-    fn calculate_new_projection_equivalent_groups(
-        source_to_target_mapping: &ProjectionMapping,
-    ) -> Vec<Vec<Arc<dyn PhysicalExpr>>> {
+            (new_class.len() > 1).then_some(new_class)
+        });
         // TODO: Convert below algorithm to the version that use HashMap.
-        //  once `Arc<dyn PhysicalExpr>` can be stored in `HashMap`.
-        let mut res = vec![];
-        for (source, target) in source_to_target_mapping {
-            if res.is_empty() {
-                res.push((source, vec![target.clone()]));
+        //       once `Arc<dyn PhysicalExpr>` can be stored in `HashMap`.
+        let mut new_classes = vec![];
+        for (source, target) in mapping {
+            if new_classes.is_empty() {
+                new_classes.push((source, vec![target.clone()]));
             }
-            if let Some(idx) = res.iter_mut().position(|(key, _values)| key.eq(source)) {
-                let (_, values) = &mut res[idx];
+            if let Some(idx) = new_classes.iter_mut().position(|(key, _)| key.eq(source))
+            {
+                let (_, values) = &mut new_classes[idx];
                 if !physical_exprs_contains(values, target) {
                     values.push(target.clone());
                 }
             }
         }
-
-        // Filter out groups with single entry, there is nothing
-        // else equal to these expressions. Hence tracking them is meaningless
-        res.into_iter()
-            .filter_map(|(_key, values)| (values.len() > 1).then_some(values))
-            .collect()
+        // Only add equivalence classes with at least two members as singleton
+        // equivalence classes are meaningless.
+        EquivalenceGroup::new(
+            projected_classes
+                .chain(
+                    new_classes
+                        .into_iter()
+                        .filter_map(|(_, values)| (values.len() > 1).then_some(values)),
+                )
+                .collect(),
+        )
     }
 
-    /// Returns the equivalent group that contains `expr`
-    /// If none of the groups contains `expr`, returns None.
-    fn get_equivalent_group(
+    /// Returns the equivalence class that contains `expr`.
+    /// If none of the equivalence classes contains `expr`, returns `None`.
+    fn get_equivalence_class(
         &self,
         expr: &Arc<dyn PhysicalExpr>,
     ) -> Option<Vec<Arc<dyn PhysicalExpr>>> {
-        for eq_class in self.iter() {
-            if physical_exprs_contains(eq_class, expr) {
-                return Some(eq_class.to_vec());
+        for cls in self.iter() {
+            if physical_exprs_contains(cls, expr) {
+                return Some(cls.to_vec());
             }
         }
         None
     }
 
-    /// Combine EquivalenceGroups of the given join children.
+    /// Combine equivalence groups of the given join children.
     pub fn join(
         &self,
         join_type: &JoinType,
