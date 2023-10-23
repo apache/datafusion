@@ -706,16 +706,7 @@ macro_rules! make_decimal_abs_function {
         |args: &[ArrayRef]| {
             let array = downcast_arg!(&args[0], "abs arg", $ARRAY_TYPE);
             let res: $ARRAY_TYPE = array
-                .try_unary(|x| {
-                    // Valid Decimal values should never overflow
-                    x.checked_abs().ok_or_else(|| {
-                        ArrowError::InvalidArgumentError(format!(
-                            "Invalid {} value {} when calculating abs",
-                            stringify!($ARRAY_TYPE),
-                            x
-                        ))
-                    })
-                })?
+                .unary(|x| x.wrapping_abs())
                 .with_data_type(args[0].data_type().clone());
             Ok(Arc::new(res) as ArrayRef)
         }
