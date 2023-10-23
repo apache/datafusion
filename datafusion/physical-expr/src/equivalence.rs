@@ -375,9 +375,7 @@ impl EquivalenceGroup {
                 result.extend(self.clone());
                 let updated_eq_classes = right_equivalences
                     .iter()
-                    .map(|eq_class| {
-                        add_offset_to_exprs(eq_class.to_vec(), left_column_count)
-                    })
+                    .map(|cls| add_offset_to_exprs(cls.to_vec(), left_column_count))
                     .collect();
                 result.extend(EquivalenceGroup::new(updated_eq_classes));
             }
@@ -402,80 +400,82 @@ impl EquivalenceGroup {
     }
 }
 
-/// `LexOrdering` stores the lexicographical ordering for a schema.
-/// OrderingEquivalentClass keeps track of different alternative orderings than can
-/// describe the schema.
-/// For instance, for the table below
+/// An `OrderingEquivalenceGroup` object keeps track of different alternative
+/// orderings than can describe a schema. For example, consider the following table:
+///
+/// ```text
 /// |a|b|c|d|
 /// |1|4|3|1|
 /// |2|3|3|2|
 /// |3|1|2|2|
 /// |3|2|1|3|
-/// both `vec![a ASC, b ASC]` and `vec![c DESC, d ASC]` describe the ordering of the table.
-/// For this case, we say that `vec![a ASC, b ASC]`, and `vec![c DESC, d ASC]` are ordering equivalent.
+/// ```
+///
+/// Here, both `vec![a ASC, b ASC]` and `vec![c DESC, d ASC]` describe the table
+/// ordering. In this case, we say that these orderings are equivalent.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub struct OrderingEquivalentGroup {
-    inner: Vec<LexOrdering>,
+pub struct OrderingEquivalenceClass {
+    orderings: Vec<LexOrdering>,
 }
 
-impl OrderingEquivalentGroup {
-    /// Creates new empty ordering equivalent group
+impl OrderingEquivalenceClass {
+    /// Creates new empty ordering equivalent class.
     fn empty() -> Self {
-        OrderingEquivalentGroup { inner: vec![] }
+        OrderingEquivalenceClass { orderings: vec![] }
     }
 
-    /// Creates new ordering equivalent from given vector
-    pub fn new(entries: Vec<LexOrdering>) -> Self {
-        let mut res = OrderingEquivalentGroup { inner: entries };
-        // Make sure ordering equivalences doesn't contain something redundant
-        res.remove_redundant_entries();
-        res
+    /// Creates new ordering equivalence class from the given orderings.
+    pub fn new(orderings: Vec<LexOrdering>) -> Self {
+        let mut result = OrderingEquivalenceClass { orderings };
+        result.remove_redundant_entries();
+        result
     }
 
-    /// Check whether ordering is in the state.
-    pub fn contains(&self, other: &LexOrdering) -> bool {
-        self.inner.contains(other)
+    /// Checks whether `ordering` is a member of this equivalence class.
+    pub fn contains(&self, ordering: &LexOrdering) -> bool {
+        self.orderings.contains(ordering)
     }
 
-    /// Pushes new ordering to the state.
-    fn push(&mut self, other: LexOrdering) {
-        if !self.contains(&other) {
-            self.inner.push(other);
+    /// Adds `ordering` to this equivalence class.
+    fn push(&mut self, ordering: LexOrdering) {
+        if !self.contains(&ordering) {
+            self.orderings.push(ordering);
         }
-        // Make sure that after new entry there is no redundant
-        // entry in the state.
+        // Make sure that there are no redundant orderings:
         self.remove_redundant_entries();
     }
 
-    /// Check whether ordering equivalent group is empty
+    /// Checks whether this ordering equivalence class is empty.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
+    /// Returns an iterator over the equivalent orderings in this class.
     pub fn iter(&self) -> impl Iterator<Item = &LexOrdering> {
-        self.inner.iter()
+        self.orderings.iter()
     }
 
+    /// Returns an iterator over the equivalent orderings in this class.
     fn into_iter(self) -> impl Iterator<Item = LexOrdering> {
-        self.inner.into_iter()
+        self.orderings.into_iter()
     }
 
-    /// Get length of the entries in the ordering equivalent group
+    /// Returns how many equivalent orderings there are in this class.
     pub fn len(&self) -> usize {
-        self.inner.len()
+        self.orderings.len()
     }
 
-    /// Extend ordering equivalent group with other group
-    pub fn extend(&mut self, other: OrderingEquivalentGroup) {
+    /// Extend this ordering equivalence class with the `other` class.
+    pub fn extend(&mut self, other: OrderingEquivalenceClass) {
         for ordering in other.iter() {
             if !self.contains(ordering) {
-                self.inner.push(ordering.clone())
+                self.orderings.push(ordering.clone())
             }
         }
         self.remove_redundant_entries();
     }
 
-    /// Adds new ordering into the ordering equivalent group.
+    /// Adds new orderings into this ordering equivalence class.
     pub fn add_new_orderings(&mut self, orderings: &[LexOrdering]) {
         for ordering in orderings.iter() {
             self.push(ordering.clone());
@@ -502,22 +502,22 @@ impl OrderingEquivalentGroup {
                 res.push(ordering.clone());
             }
         }
-        self.inner = res;
+        self.orderings = res;
     }
 
     /// Get first ordering entry in the ordering equivalences
     /// This is one of the many valid orderings (if available)
     pub fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
-        self.inner.first().cloned()
+        self.orderings.first().cloned()
     }
 
     // Append other as postfix to existing ordering equivalences
     pub fn join_postfix(
         &self,
-        other: &OrderingEquivalentGroup,
-    ) -> OrderingEquivalentGroup {
+        other: &OrderingEquivalenceClass,
+    ) -> OrderingEquivalenceClass {
         if other.is_empty() {
-            return OrderingEquivalentGroup::new(self.inner.clone());
+            return OrderingEquivalenceClass::new(self.orderings.clone());
         }
         let mut res = vec![];
         for ordering in self.iter() {
@@ -527,13 +527,13 @@ impl OrderingEquivalentGroup {
                 res.push(new_ordering)
             }
         }
-        OrderingEquivalentGroup::new(res)
+        OrderingEquivalenceClass::new(res)
     }
 
     /// Adds `offset` value to the index of each expression inside `OrderingEquivalentGroup`.
-    pub fn add_offset(&self, offset: usize) -> OrderingEquivalentGroup {
-        OrderingEquivalentGroup::new(
-            self.inner
+    pub fn add_offset(&self, offset: usize) -> OrderingEquivalenceClass {
+        OrderingEquivalenceClass::new(
+            self.orderings
                 .iter()
                 .map(|ordering| add_offset_to_lex_ordering(ordering, offset))
                 .collect(),
@@ -605,7 +605,7 @@ pub struct SchemaProperties {
     /// Keeps track of expressions that have equivalent value.
     eq_groups: EquivalenceGroup,
     /// Keeps track of valid ordering that satisfied table.
-    oeq_group: OrderingEquivalentGroup,
+    oeq_group: OrderingEquivalenceClass,
     /// Keeps track of expressions that have constant value.
     /// TODO: We do not need to track constants separately, they can be tracked
     ///  inside `eq_groups` as `Literal` expressions.
@@ -618,7 +618,7 @@ impl SchemaProperties {
     pub fn new(schema: SchemaRef) -> Self {
         Self {
             eq_groups: EquivalenceGroup::empty(),
-            oeq_group: OrderingEquivalentGroup::empty(),
+            oeq_group: OrderingEquivalenceClass::empty(),
             constants: vec![],
             schema,
         }
@@ -630,7 +630,7 @@ impl SchemaProperties {
     }
 
     /// Return a reference to the ordering equivalent group
-    pub fn oeq_group(&self) -> &OrderingEquivalentGroup {
+    pub fn oeq_group(&self) -> &OrderingEquivalenceClass {
         &self.oeq_group
     }
 
@@ -642,7 +642,7 @@ impl SchemaProperties {
     /// Return the normalized version of the ordering equivalent group
     /// Where constants, duplicates are removed and expressions are normalized
     /// according to equivalent groups.
-    pub fn normalized_oeq_group(&self) -> OrderingEquivalentGroup {
+    pub fn normalized_oeq_group(&self) -> OrderingEquivalenceClass {
         // Construct a new ordering group that is normalized
         // With equivalences, and constants are removed
         let normalized_orderings = self
@@ -650,7 +650,7 @@ impl SchemaProperties {
             .iter()
             .map(|ordering| self.normalize_sort_exprs(ordering))
             .collect::<Vec<_>>();
-        OrderingEquivalentGroup::new(normalized_orderings)
+        OrderingEquivalenceClass::new(normalized_orderings)
     }
 
     /// Add SchemaProperties of the other to the state.
@@ -662,13 +662,13 @@ impl SchemaProperties {
 
     /// Empties the `oeq_group` inside self, When existing orderings are invalidated.
     pub fn with_empty_ordering_equivalence(mut self) -> Self {
-        self.oeq_group = OrderingEquivalentGroup::empty();
+        self.oeq_group = OrderingEquivalenceClass::empty();
         self
     }
 
     /// Extends `SchemaProperties` by adding ordering inside the `other`
     /// to the `self.oeq_class`.
-    pub fn add_ordering_equivalent_group(&mut self, other: OrderingEquivalentGroup) {
+    pub fn add_ordering_equivalent_group(&mut self, other: OrderingEquivalenceClass) {
         for ordering in other.into_iter() {
             if !self.oeq_group.contains(&ordering) {
                 self.oeq_group.push(ordering);
@@ -715,7 +715,7 @@ impl SchemaProperties {
         // Reset ordering equivalent group with the new ordering.
         // Constants, and equivalent groups are still valid after re-sort.
         // Hence only `oeq_group` is overwritten.
-        self.oeq_group = OrderingEquivalentGroup::new(vec![sort_expr]);
+        self.oeq_group = OrderingEquivalenceClass::new(vec![sort_expr]);
         self
     }
 
@@ -979,7 +979,7 @@ impl SchemaProperties {
         // if empty, no need to track projected_orderings.
         if !projected_orderings.is_empty() {
             projected_properties.oeq_group =
-                OrderingEquivalentGroup::new(projected_orderings);
+                OrderingEquivalenceClass::new(projected_orderings);
         }
 
         for (source, target) in source_to_target_mapping {
@@ -1202,7 +1202,7 @@ pub fn schema_properties_helper(
 ) -> SchemaProperties {
     let mut oep = SchemaProperties::new(schema);
     if !orderings.is_empty() {
-        let group = OrderingEquivalentGroup::new(orderings.to_vec());
+        let group = OrderingEquivalenceClass::new(orderings.to_vec());
         oep.add_ordering_equivalent_group(group);
     }
     oep
@@ -1345,9 +1345,9 @@ fn update_ordering(
 /// it can thereafter safely be used for ordering equivalence normalization.
 fn get_updated_right_ordering_equivalent_group(
     join_type: &JoinType,
-    right_oeq_group: &OrderingEquivalentGroup,
+    right_oeq_group: &OrderingEquivalenceClass,
     left_columns_len: usize,
-) -> OrderingEquivalentGroup {
+) -> OrderingEquivalenceClass {
     if matches!(
         join_type,
         JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right
@@ -2049,7 +2049,7 @@ mod tests {
         let join_type = JoinType::Inner;
 
         let options = SortOptions::default();
-        let right_oeq_class = OrderingEquivalentGroup::new(vec![
+        let right_oeq_class = OrderingEquivalenceClass::new(vec![
             vec![
                 PhysicalSortExpr {
                     expr: Arc::new(Column::new("x", 0)),
@@ -2099,7 +2099,7 @@ mod tests {
         join_schema_properties.add_ordering_equivalent_group(result);
         let result = join_schema_properties.oeq_group().clone();
 
-        let expected = OrderingEquivalentGroup::new(vec![
+        let expected = OrderingEquivalenceClass::new(vec![
             vec![
                 PhysicalSortExpr {
                     expr: col_x_expr,
