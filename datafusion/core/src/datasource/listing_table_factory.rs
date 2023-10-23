@@ -179,10 +179,9 @@ impl TableProviderFactory for ListingTableFactory {
             FileType::CSV => {
                 let mut csv_writer_options =
                     file_type_writer_options.try_into_csv()?.clone();
-                csv_writer_options.has_header = cmd.has_header;
                 csv_writer_options.writer_options = csv_writer_options
                     .writer_options
-                    .has_headers(cmd.has_header)
+                    .with_header(cmd.has_header)
                     .with_delimiter(cmd.delimiter.try_into().map_err(|_| {
                         DataFusionError::Internal(
                             "Unable to convert CSV delimiter into u8".into(),

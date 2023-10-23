@@ -289,7 +289,7 @@ impl CsvConfig {
         let mut builder = csv::ReaderBuilder::new(self.file_schema.clone())
             .with_delimiter(self.delimiter)
             .with_batch_size(self.batch_size)
-            .has_header(self.has_header)
+            .with_header(self.has_header)
             .with_quote(self.quote);
 
         if let Some(proj) = &self.file_projection {
@@ -538,7 +538,7 @@ pub async fn plan_to_csv(
             let mut write_headers = true;
             while let Some(batch) = stream.next().await.transpose()? {
                 let mut writer = csv::WriterBuilder::new()
-                    .has_headers(write_headers)
+                    .with_header(write_headers)
                     .build(buffer);
                 writer.write(&batch)?;
                 buffer = writer.into_inner();

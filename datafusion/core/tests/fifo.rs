@@ -377,7 +377,7 @@ mod unix_test {
             ]));
 
             let mut reader = ReaderBuilder::new(schema)
-                .has_header(true)
+                .with_header(true)
                 .with_batch_size(TEST_BATCH_SIZE)
                 .build(file)
                 .map_err(|e| DataFusionError::Internal(e.to_string()))
