@@ -19,12 +19,13 @@
 
 use crate::{AggregateExpr, PhysicalSortExpr};
 use arrow::array::ArrayRef;
-use arrow::datatypes::{MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PRECISION};
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    Decimal128Type, TimestampMicrosecondType, TimestampMillisecondType,
+    Decimal128Type, DecimalType, TimestampMicrosecondType, TimestampMillisecondType,
     TimestampNanosecondType, TimestampSecondType,
 };
+use arrow_array::ArrowNativeTypeOp;
+use arrow_buffer::ArrowNativeType;
 use arrow_schema::{DataType, Field};
 use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr::Accumulator;
@@ -42,27 +43,25 @@ pub fn get_accum_scalar_values_as_arrays(
         .collect::<Vec<_>>())
 }
 
-/// Computes averages for `Decimal128` values, checking for overflow
+/// Computes averages for `Decimal128`/`Decimal256` values, checking for overflow
 ///
-/// This is needed because different precisions for Decimal128 can
+/// This is needed because different precisions for Decimal128/Decimal256 can
 /// store different ranges of values and thus sum/count may not fit in
 /// the target type.
 ///
 /// For example, the precision is 3, the max of value is `999` and the min
 /// value is `-999`
-pub(crate) struct Decimal128Averager {
+pub(crate) struct DecimalAverager<T: DecimalType> {
     /// scale factor for sum values (10^sum_scale)
-    sum_mul: i128,
+    sum_mul: T::Native,
     /// scale factor for target (10^target_scale)
-    target_mul: i128,
-    /// The minimum output value possible to represent with the target precision
-    target_min: i128,
-    /// The maximum output value possible to represent with the target precision
-    target_max: i128,
+    target_mul: T::Native,
+    /// the output precision
+    target_precision: u8,
 }
 
-impl Decimal128Averager {
-    /// Create a new `Decimal128Averager`:
+impl<T: DecimalType> DecimalAverager<T> {
+    /// Create a new `DecimalAverager`:
     ///
     /// * sum_scale: the scale of `sum` values passed to [`Self::avg`]
     /// * target_precision: the output precision
@@ -74,17 +73,23 @@ impl Decimal128Averager {
         target_precision: u8,
         target_scale: i8,
     ) -> Result<Self> {
-        let sum_mul = 10_i128.pow(sum_scale as u32);
-        let target_mul = 10_i128.pow(target_scale as u32);
-        let target_min = MIN_DECIMAL_FOR_EACH_PRECISION[target_precision as usize - 1];
-        let target_max = MAX_DECIMAL_FOR_EACH_PRECISION[target_precision as usize - 1];
+        let sum_mul = T::Native::from_usize(10_usize)
+            .map(|b| b.pow_wrapping(sum_scale as u32))
+            .ok_or(DataFusionError::Internal(
+                "Failed to compute sum_mul in DecimalAverager".to_string(),
+            ))?;
+
+        let target_mul = T::Native::from_usize(10_usize)
+            .map(|b| b.pow_wrapping(target_scale as u32))
+            .ok_or(DataFusionError::Internal(
+                "Failed to compute target_mul in DecimalAverager".to_string(),
+            ))?;
 
         if target_mul >= sum_mul {
             Ok(Self {
                 sum_mul,
                 target_mul,
-                target_min,
-                target_max,
+                target_precision,
             })
         } else {
             // can't convert the lit decimal to the returned data type
@@ -92,17 +97,21 @@ impl Decimal128Averager {
         }
     }
 
-    /// Returns the `sum`/`count` as a i128 Decimal128 with
+    /// Returns the `sum`/`count` as a i128/i256 Decimal128/Decimal256 with
     /// target_scale and target_precision and reporting overflow.
     ///
     /// * sum: The total sum value stored as Decimal128 with sum_scale
     /// (passed to `Self::try_new`)
-    /// * count: total count, stored as a i128 (*NOT* a Decimal128 value)
+    /// * count: total count, stored as a i128/i256 (*NOT* a Decimal128/Decimal256 value)
     #[inline(always)]
-    pub fn avg(&self, sum: i128, count: i128) -> Result<i128> {
-        if let Some(value) = sum.checked_mul(self.target_mul / self.sum_mul) {
-            let new_value = value / count;
-            if new_value >= self.target_min && new_value <= self.target_max {
+    pub fn avg(&self, sum: T::Native, count: T::Native) -> Result<T::Native> {
+        if let Ok(value) = sum.mul_checked(self.target_mul.div_wrapping(self.sum_mul)) {
+            let new_value = value.div_wrapping(count);
+
+            let validate =
+                T::validate_decimal_precision(new_value, self.target_precision);
+
+            if validate.is_ok() {
                 Ok(new_value)
             } else {
                 exec_err!("Arithmetic Overflow in AvgAccumulator")

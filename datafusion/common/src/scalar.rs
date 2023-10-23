@@ -620,26 +620,30 @@ macro_rules! build_timestamp_list {
                         TimestampSecondBuilder,
                         TimestampSecond,
                         values,
-                        $SIZE
+                        $SIZE,
+                        $TIME_ZONE
                     )
                 }
                 TimeUnit::Millisecond => build_values_list_tz!(
                     TimestampMillisecondBuilder,
                     TimestampMillisecond,
                     values,
-                    $SIZE
+                    $SIZE,
+                    $TIME_ZONE
                 ),
                 TimeUnit::Microsecond => build_values_list_tz!(
                     TimestampMicrosecondBuilder,
                     TimestampMicrosecond,
                     values,
-                    $SIZE
+                    $SIZE,
+                    $TIME_ZONE
                 ),
                 TimeUnit::Nanosecond => build_values_list_tz!(
                     TimestampNanosecondBuilder,
                     TimestampNanosecond,
                     values,
-                    $SIZE
+                    $SIZE,
+                    $TIME_ZONE
                 ),
             },
         }
@@ -683,9 +687,10 @@ macro_rules! build_values_list {
 }
 
 macro_rules! build_values_list_tz {
-    ($VALUE_BUILDER_TY:ident, $SCALAR_TY:ident, $VALUES:expr, $SIZE:expr) => {{
-        let mut builder =
-            ListBuilder::new($VALUE_BUILDER_TY::with_capacity($VALUES.len()));
+    ($VALUE_BUILDER_TY:ident, $SCALAR_TY:ident, $VALUES:expr, $SIZE:expr, $TIME_ZONE:expr) => {{
+        let mut builder = ListBuilder::new(
+            $VALUE_BUILDER_TY::with_capacity($VALUES.len()).with_timezone_opt($TIME_ZONE),
+        );
 
         for _ in 0..$SIZE {
             for scalar_value in $VALUES {
@@ -744,7 +749,7 @@ macro_rules! eq_array_primitive {
 }
 
 impl ScalarValue {
-    /// Create a [`ScalarValue`] with the provided value and datatype
+    /// Create a [`Result<ScalarValue>`] with the provided value and datatype
     ///
     /// # Panics
     ///
@@ -752,13 +757,13 @@ impl ScalarValue {
     pub fn new_primitive<T: ArrowPrimitiveType>(
         a: Option<T::Native>,
         d: &DataType,
-    ) -> Self {
+    ) -> Result<Self> {
         match a {
-            None => d.try_into().unwrap(),
+            None => d.try_into(),
             Some(v) => {
                 let array = PrimitiveArray::<T>::new(vec![v].into(), None)
                     .with_data_type(d.clone());
-                Self::try_from_array(&array, 0).unwrap()
+                Self::try_from_array(&array, 0)
             }
         }
     }
@@ -5183,6 +5188,25 @@ mod tests {
             &DataType::Timestamp(TimeUnit::Millisecond, None),
         );
         assert_eq!(1, arr.len());
+    }
+
+    #[test]
+    fn test_newlist_timestamp_zone() {
+        let s: &'static str = "UTC";
+        let values = vec![ScalarValue::TimestampMillisecond(Some(1), Some(s.into()))];
+        let arr = ScalarValue::new_list(
+            &values,
+            &DataType::Timestamp(TimeUnit::Millisecond, Some(s.into())),
+        );
+        assert_eq!(1, arr.len());
+        assert_eq!(
+            arr.data_type(),
+            &DataType::List(Arc::new(Field::new(
+                "item",
+                DataType::Timestamp(TimeUnit::Millisecond, Some(s.into())),
+                true
+            )))
+        );
     }
 
     fn get_random_timestamps(sample_size: u64) -> Vec<ScalarValue> {

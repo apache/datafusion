@@ -22,7 +22,6 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use arrow::compute::SortOptions;
-use arrow::datatypes::DataType;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::datasource::listing::{FileRange, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
@@ -488,13 +487,8 @@ pub fn parse_protobuf_file_scan_config(
     let table_partition_cols = proto
         .table_partition_cols
         .iter()
-        .map(|col| {
-            Ok((
-                col.to_owned(),
-                schema.field_with_name(col)?.data_type().clone(),
-            ))
-        })
-        .collect::<Result<Vec<(String, DataType)>>>()?;
+        .map(|col| Ok(schema.field_with_name(col)?.clone()))
+        .collect::<Result<Vec<_>>>()?;
 
     let mut output_ordering = vec![];
     for node_collection in &proto.output_ordering {

@@ -236,7 +236,7 @@ impl BatchPartitioner {
 ///
 /// # Background
 ///
-/// DataFusion, like most other commercial systems, with the the
+/// DataFusion, like most other commercial systems, with the
 /// notable exception of DuckDB, uses the "Exchange Operator" based
 /// approach to parallelism which works well in practice given
 /// sufficient care in implementation.

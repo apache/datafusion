@@ -205,7 +205,7 @@ impl<T: ArrowNumericType> Accumulator for SumAccumulator<T> {
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
-        Ok(ScalarValue::new_primitive::<T>(self.sum, &self.data_type))
+        ScalarValue::new_primitive::<T>(self.sum, &self.data_type)
     }
 
     fn size(&self) -> usize {
@@ -265,7 +265,7 @@ impl<T: ArrowNumericType> Accumulator for SlidingSumAccumulator<T> {
 
     fn evaluate(&self) -> Result<ScalarValue> {
         let v = (self.count != 0).then_some(self.sum);
-        Ok(ScalarValue::new_primitive::<T>(v, &self.data_type))
+        ScalarValue::new_primitive::<T>(v, &self.data_type)
     }
 
     fn size(&self) -> usize {

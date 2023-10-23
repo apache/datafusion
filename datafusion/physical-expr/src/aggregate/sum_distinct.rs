@@ -159,13 +159,14 @@ impl<T: ArrowPrimitiveType> Accumulator for DistinctSumAccumulator<T> {
         // 1. Stores aggregate state in `ScalarValue::List`
         // 2. Constructs `ScalarValue::List` state from distinct numeric stored in hash set
         let state_out = {
-            let mut distinct_values = Vec::new();
-            self.values.iter().for_each(|distinct_value| {
-                distinct_values.push(ScalarValue::new_primitive::<T>(
-                    Some(distinct_value.0),
-                    &self.data_type,
-                ))
-            });
+            let distinct_values = self
+                .values
+                .iter()
+                .map(|value| {
+                    ScalarValue::new_primitive::<T>(Some(value.0), &self.data_type)
+                })
+                .collect::<Result<Vec<_>>>()?;
+
             vec![ScalarValue::List(ScalarValue::new_list(
                 &distinct_values,
                 &self.data_type,
@@ -206,7 +207,7 @@ impl<T: ArrowPrimitiveType> Accumulator for DistinctSumAccumulator<T> {
             acc = acc.add_wrapping(distinct_value.0)
         }
         let v = (!self.values.is_empty()).then_some(acc);
-        Ok(ScalarValue::new_primitive::<T>(v, &self.data_type))
+        ScalarValue::new_primitive::<T>(v, &self.data_type)
     }
 
     fn size(&self) -> usize {

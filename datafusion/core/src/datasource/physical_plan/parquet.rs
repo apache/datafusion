@@ -1621,14 +1621,15 @@ mod tests {
                 projection: Some(vec![0, 1, 2, 12, 13]),
                 limit: None,
                 table_partition_cols: vec![
-                    ("year".to_owned(), DataType::Utf8),
-                    ("month".to_owned(), DataType::UInt8),
-                    (
-                        "day".to_owned(),
+                    Field::new("year", DataType::Utf8, false),
+                    Field::new("month", DataType::UInt8, false),
+                    Field::new(
+                        "day",
                         DataType::Dictionary(
                             Box::new(DataType::UInt16),
                             Box::new(DataType::Utf8),
                         ),
+                        false,
                     ),
                 ],
                 output_ordering: vec![],
@@ -1973,24 +1974,7 @@ mod tests {
             ParquetReadOptions::default(),
         )
         .await?;
-        ctx.register_parquet(
-            "part1",
-            &format!("{out_dir}/{write_id}_1.parquet"),
-            ParquetReadOptions::default(),
-        )
-        .await?;
-        ctx.register_parquet(
-            "part2",
-            &format!("{out_dir}/{write_id}_2.parquet"),
-            ParquetReadOptions::default(),
-        )
-        .await?;
-        ctx.register_parquet(
-            "part3",
-            &format!("{out_dir}/{write_id}_3.parquet"),
-            ParquetReadOptions::default(),
-        )
-        .await?;
+
         ctx.register_parquet("allparts", &out_dir, ParquetReadOptions::default())
             .await?;
 
