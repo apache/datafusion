@@ -106,7 +106,7 @@ impl Display for JoinSide {
 }
 
 /// Join side.
-/// Used in `ColumnIndex` type to distinguish which side the index is for.
+/// Stores the referred table side during calculations
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum JoinSide {
     /// Left side of the join
