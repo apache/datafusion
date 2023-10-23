@@ -60,8 +60,6 @@ AggregateExec: mode=Final, gby=[], aggr=[COUNT(*)]
 
 query ?
 SELECT mycol FROM single_nan
-----
-NULL
 
 statement ok
 DROP TABLE json_test
