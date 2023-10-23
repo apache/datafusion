@@ -17,6 +17,9 @@
 
 //! [`SessionContext`] contains methods for registering data sources and executing queries
 
+mod avro;
+mod csv;
+mod json;
 #[cfg(feature = "parquet")]
 mod parquet;
 
@@ -81,7 +84,6 @@ use datafusion_sql::{
 use sqlparser::dialect::dialect_from_str;
 
 use crate::config::ConfigOptions;
-use crate::datasource::physical_plan::{plan_to_csv, plan_to_json};
 use crate::execution::{runtime_env::RuntimeEnv, FunctionRegistry};
 use crate::physical_plan::udaf::AggregateUDF;
 use crate::physical_plan::udf::ScalarUDF;
@@ -113,7 +115,7 @@ use crate::execution::options::ArrowReadOptions;
 pub use datafusion_execution::config::SessionConfig;
 pub use datafusion_execution::TaskContext;
 
-use super::options::{AvroReadOptions, CsvReadOptions, NdJsonReadOptions, ReadOptions};
+use super::options::ReadOptions;
 
 /// DataFilePaths adds a method to convert strings and vector of strings to vector of [`ListingTableUrl`] URLs.
 /// This allows methods such [`SessionContext::read_csv`] and [`SessionContext::read_avro`]
@@ -857,34 +859,6 @@ impl SessionContext {
         self.read_table(Arc::new(provider))
     }
 
-    /// Creates a [`DataFrame`] for reading an Avro data source.
-    ///
-    /// For more control such as reading multiple files, you can use
-    /// [`read_table`](Self::read_table) with a [`ListingTable`].
-    ///
-    /// For an example, see [`read_csv`](Self::read_csv)
-    pub async fn read_avro<P: DataFilePaths>(
-        &self,
-        table_paths: P,
-        options: AvroReadOptions<'_>,
-    ) -> Result<DataFrame> {
-        self._read_type(table_paths, options).await
-    }
-
-    /// Creates a [`DataFrame`] for reading an JSON data source.
-    ///
-    /// For more control such as reading multiple files, you can use
-    /// [`read_table`](Self::read_table) with a [`ListingTable`].
-    ///
-    /// For an example, see [`read_csv`](Self::read_csv)
-    pub async fn read_json<P: DataFilePaths>(
-        &self,
-        table_paths: P,
-        options: NdJsonReadOptions<'_>,
-    ) -> Result<DataFrame> {
-        self._read_type(table_paths, options).await
-    }
-
     /// Creates a [`DataFrame`] for reading an Arrow data source.
     ///
     /// For more control such as reading multiple files, you can use
@@ -905,34 +879,6 @@ impl SessionContext {
             self.state(),
             LogicalPlanBuilder::empty(true).build()?,
         ))
-    }
-
-    /// Creates a [`DataFrame`] for reading a CSV data source.
-    ///
-    /// For more control such as reading multiple files, you can use
-    /// [`read_table`](Self::read_table) with a [`ListingTable`].
-    ///
-    /// Example usage is given below:
-    ///
-    /// ```
-    /// use datafusion::prelude::*;
-    /// # use datafusion::error::Result;
-    /// # #[tokio::main]
-    /// # async fn main() -> Result<()> {
-    /// let ctx = SessionContext::new();
-    /// // You can read a single file using `read_csv`
-    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
-    /// // you can also read multiple files:
-    /// let df = ctx.read_csv(vec!["tests/data/example.csv", "tests/data/example.csv"], CsvReadOptions::new()).await?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub async fn read_csv<P: DataFilePaths>(
-        &self,
-        table_paths: P,
-        options: CsvReadOptions<'_>,
-    ) -> Result<DataFrame> {
-        self._read_type(table_paths, options).await
     }
 
     /// Creates a [`DataFrame`] for a [`TableProvider`] such as a
@@ -992,70 +938,6 @@ impl SessionContext {
             TableReference::Bare { table: name.into() },
             Arc::new(table),
         )?;
-        Ok(())
-    }
-
-    /// Registers a CSV file as a table which can referenced from SQL
-    /// statements executed against this context.
-    pub async fn register_csv(
-        &self,
-        name: &str,
-        table_path: &str,
-        options: CsvReadOptions<'_>,
-    ) -> Result<()> {
-        let listing_options = options.to_listing_options(&self.copied_config());
-
-        self.register_listing_table(
-            name,
-            table_path,
-            listing_options,
-            options.schema.map(|s| Arc::new(s.to_owned())),
-            None,
-        )
-        .await?;
-
-        Ok(())
-    }
-
-    /// Registers a JSON file as a table that it can be referenced
-    /// from SQL statements executed against this context.
-    pub async fn register_json(
-        &self,
-        name: &str,
-        table_path: &str,
-        options: NdJsonReadOptions<'_>,
-    ) -> Result<()> {
-        let listing_options = options.to_listing_options(&self.copied_config());
-
-        self.register_listing_table(
-            name,
-            table_path,
-            listing_options,
-            options.schema.map(|s| Arc::new(s.to_owned())),
-            None,
-        )
-        .await?;
-        Ok(())
-    }
-
-    /// Registers an Avro file as a table that can be referenced from
-    /// SQL statements executed against this context.
-    pub async fn register_avro(
-        &self,
-        name: &str,
-        table_path: &str,
-        options: AvroReadOptions<'_>,
-    ) -> Result<()> {
-        let listing_options = options.to_listing_options(&self.copied_config());
-
-        self.register_listing_table(
-            name,
-            table_path,
-            listing_options,
-            options.schema.map(|s| Arc::new(s.to_owned())),
-            None,
-        )
-        .await?;
         Ok(())
     }
 
@@ -1232,24 +1114,6 @@ impl SessionContext {
         logical_plan: &LogicalPlan,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         self.state().create_physical_plan(logical_plan).await
-    }
-
-    /// Executes a query and writes the results to a partitioned CSV file.
-    pub async fn write_csv(
-        &self,
-        plan: Arc<dyn ExecutionPlan>,
-        path: impl AsRef<str>,
-    ) -> Result<()> {
-        plan_to_csv(self.task_ctx(), plan, path).await
-    }
-
-    /// Executes a query and writes the results to a partitioned JSON file.
-    pub async fn write_json(
-        &self,
-        plan: Arc<dyn ExecutionPlan>,
-        path: impl AsRef<str>,
-    ) -> Result<()> {
-        plan_to_json(self.task_ctx(), plan, path).await
     }
 
     /// Get a new TaskContext to run in this session
@@ -2195,6 +2059,7 @@ impl<'a> TreeNodeVisitor for BadPlanVisitor<'a> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::options::CsvReadOptions;
     use super::*;
     use crate::assert_batches_eq;
     use crate::execution::context::QueryPlanner;
@@ -2697,30 +2562,5 @@ mod tests {
         .await?;
 
         Ok(ctx)
-    }
-
-    // Test for compilation error when calling read_* functions from an #[async_trait] function.
-    // See https://github.com/apache/arrow-datafusion/issues/1154
-    #[async_trait]
-    trait CallReadTrait {
-        async fn call_read_csv(&self) -> DataFrame;
-        async fn call_read_avro(&self) -> DataFrame;
-    }
-
-    struct CallRead {}
-
-    #[async_trait]
-    impl CallReadTrait for CallRead {
-        async fn call_read_csv(&self) -> DataFrame {
-            let ctx = SessionContext::new();
-            ctx.read_csv("dummy", CsvReadOptions::new()).await.unwrap()
-        }
-
-        async fn call_read_avro(&self) -> DataFrame {
-            let ctx = SessionContext::new();
-            ctx.read_avro("dummy", AvroReadOptions::default())
-                .await
-                .unwrap()
-        }
     }
 }
