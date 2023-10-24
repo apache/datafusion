@@ -139,23 +139,21 @@ pub(crate) fn pushdown_sorts(
             || plan.ordering_equivalence_properties(),
         ) {
             // If the current plan is a SortExec, modify it to satisfy parent requirements:
-            let parent_required_expr = PhysicalSortRequirement::to_sort_exprs(
-                parent_required.ok_or_else(err)?.iter().cloned(),
-            );
+            let parent_required_expr = parent_required.ok_or_else(err)?;
             new_plan = sort_exec.input().clone();
-            add_sort_above(&mut new_plan, parent_required_expr, sort_exec.fetch())?;
+            add_sort_above(&mut new_plan, parent_required_expr, sort_exec.fetch());
         };
         let required_ordering = new_plan
             .output_ordering()
             .map(PhysicalSortRequirement::from_sort_exprs);
         // Since new_plan is a SortExec, we can safely get the 0th index.
-        let child = &new_plan.children()[0];
+        let child = new_plan.children().swap_remove(0);
         if let Some(adjusted) =
-            pushdown_requirement_to_children(child, required_ordering.as_deref())?
+            pushdown_requirement_to_children(&child, required_ordering.as_deref())?
         {
             // Can push down requirements
             Ok(Transformed::Yes(SortPushDown {
-                plan: child.clone(),
+                plan: child,
                 required_ordering: None,
                 adjusted_request_ordering: adjusted,
             }))
@@ -180,17 +178,15 @@ pub(crate) fn pushdown_sorts(
         // Can not satisfy the parent requirements, check whether the requirements can be pushed down:
         if let Some(adjusted) = pushdown_requirement_to_children(plan, parent_required)? {
             Ok(Transformed::Yes(SortPushDown {
-                plan: plan.clone(),
+                plan: requirements.plan,
                 required_ordering: None,
                 adjusted_request_ordering: adjusted,
             }))
         } else {
             // Can not push down requirements, add new SortExec:
-            let parent_required_expr = PhysicalSortRequirement::to_sort_exprs(
-                parent_required.ok_or_else(err)?.iter().cloned(),
-            );
-            let mut new_plan = plan.clone();
-            add_sort_above(&mut new_plan, parent_required_expr, None)?;
+            let parent_required_expr = parent_required.ok_or_else(err)?;
+            let mut new_plan = requirements.plan;
+            add_sort_above(&mut new_plan, parent_required_expr, None);
             Ok(Transformed::Yes(SortPushDown::init(new_plan)))
         }
     }
@@ -206,7 +202,7 @@ fn pushdown_requirement_to_children(
     if is_window(plan) {
         let required_input_ordering = plan.required_input_ordering();
         let request_child = required_input_ordering[0].as_deref();
-        let child_plan = plan.children()[0].clone();
+        let child_plan = plan.children().swap_remove(0);
         match determine_children_requirement(parent_required, request_child, child_plan) {
             RequirementsCompatibility::Satisfy => {
                 Ok(Some(vec![request_child.map(|r| r.to_vec())]))
@@ -355,16 +351,17 @@ fn try_pushdown_requirements_to_join(
         || smj.ordering_equivalence_properties(),
     )
     .then(|| {
-        let required_input_ordering = smj.required_input_ordering();
+        let mut required_input_ordering = smj.required_input_ordering();
         let new_req = Some(PhysicalSortRequirement::from_sort_exprs(&sort_expr));
         match push_side {
             JoinSide::Left => {
-                vec![new_req, required_input_ordering[1].clone()]
+                required_input_ordering[0] = new_req;
             }
             JoinSide::Right => {
-                vec![required_input_ordering[0].clone(), new_req]
+                required_input_ordering[1] = new_req;
             }
         }
+        required_input_ordering
     }))
 }
 
