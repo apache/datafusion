@@ -140,7 +140,7 @@ pub struct RowValues {
 
     /// Lower bound of windowed RowValues.
     offset: usize,
-    /// Upper bound of windowed RowValues.
+    /// Upper bound of windowed RowValues (not inclusive).
     limit: usize,
 
     /// Tracks for the memory used by in the `Rows` of this
@@ -189,7 +189,7 @@ impl CursorValues for RowValues {
 
     fn slice(&self, offset: usize, length: usize) -> Self {
         assert!(
-            offset >= self.offset && self.offset + offset <= self.limit,
+            offset >= self.offset && self.offset + offset < self.limit,
             "slice offset is out of bounds"
         );
         assert!(
@@ -683,7 +683,9 @@ mod tests {
         let buffer = ScalarBuffer::from(vec![0, 1, 2]);
         let cursor = new_primitive_cursor(options, buffer, 0);
 
-        cursor.cursor_values().slice(42, 1);
+        cursor
+            .cursor_values()
+            .slice(cursor.cursor_values().len(), 1);
     }
 
     fn new_row_cursor(cols: &[Arc<dyn Array>; 2]) -> Cursor<RowValues> {
@@ -744,7 +746,9 @@ mod tests {
 
         let cursor = new_row_cursor(&cols);
 
-        cursor.cursor_values().slice(42, 1);
+        cursor
+            .cursor_values()
+            .slice(cursor.cursor_values().len(), 1);
     }
 
     fn new_bytearray_cursor(
@@ -770,7 +774,7 @@ mod tests {
     }
 
     #[test]
-    fn test_slice_bytes() {
+    fn test_slice_bytearray() {
         let mut a = new_bytearray_cursor("hellorainbowworld", vec![0, 5, 12, 17]);
         let mut b = new_bytearray_cursor("hellorainbowworld", vec![0, 5, 12, 17]);
 
@@ -802,8 +806,10 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "slice offset is out of bounds")]
-    fn test_slice_bytes_should_panic() {
+    fn test_slice_bytearray_should_panic() {
         let cursor = new_bytearray_cursor("hellorainbowworld", vec![0, 5, 12, 17]);
-        cursor.cursor_values().slice(42, 1);
+        cursor
+            .cursor_values()
+            .slice(cursor.cursor_values().len(), 1);
     }
 }
