@@ -50,8 +50,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 )
             }
             TableFactor::Derived {
-                subquery, alias, ..
+                lateral, subquery, alias, ..
             } => {
+                if lateral {
+                    return not_impl_err!("LATERAL is not supported");
+                }
                 let logical_plan = self.query_to_plan(*subquery, planner_context)?;
                 (logical_plan, alias)
             }
