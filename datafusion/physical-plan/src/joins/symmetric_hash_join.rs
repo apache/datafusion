@@ -42,8 +42,8 @@ use crate::joins::hash_join_utils::{
 };
 use crate::joins::utils::{
     build_batch_from_indices, build_join_schema, check_join_is_valid,
-    combine_join_equivalence_properties, partitioned_join_output_partitioning,
-    prepare_sorted_exprs, ColumnIndex, JoinFilter, JoinOn,
+    partitioned_join_output_partitioning, prepare_sorted_exprs, ColumnIndex, JoinFilter,
+    JoinOn,
 };
 use crate::{
     expressions::{Column, PhysicalSortExpr},
@@ -66,6 +66,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::intervals::ExprIntervalGraph;
 
 use ahash::RandomState;
+use datafusion_physical_expr::equivalence::combine_join_equivalence_properties;
 use futures::stream::{select, BoxStream};
 use futures::{Stream, StreamExt};
 use hashbrown::HashSet;
