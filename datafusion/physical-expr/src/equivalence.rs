@@ -43,7 +43,7 @@ pub type EquivalenceClass = Vec<Arc<dyn PhysicalExpr>>;
 /// projection. Indices in the vector corresponds to the indices after projection.
 pub type ProjectionMapping = Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>;
 
-/// An `EquivalenceGroups` is a collection of `EquivalenceClass`es where each
+/// An `EquivalenceGroup` is a collection of `EquivalenceClass`es where each
 /// class represents a distinct equivalence class in a relation.
 #[derive(Debug, Clone)]
 pub struct EquivalenceGroup {
@@ -400,7 +400,7 @@ impl EquivalenceGroup {
     }
 }
 
-/// An `OrderingEquivalenceGroup` object keeps track of different alternative
+/// An `OrderingEquivalenceClass` object keeps track of different alternative
 /// orderings than can describe a schema. For example, consider the following table:
 ///
 /// ```text
