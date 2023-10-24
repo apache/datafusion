@@ -22,7 +22,9 @@ use std::sync::Arc;
 
 use crate::aggregate::utils::{down_cast_any_ref, ordering_fields};
 use crate::expressions::format_state_name;
-use crate::{AggregateExpr, LexOrdering, PhysicalExpr, PhysicalSortExpr};
+use crate::{
+    reverse_order_bys, AggregateExpr, LexOrdering, PhysicalExpr, PhysicalSortExpr,
+};
 
 use arrow::array::ArrayRef;
 use arrow::compute;
@@ -126,7 +128,7 @@ impl AggregateExpr for FirstValue {
             self.expr.clone(),
             name,
             self.input_data_type.clone(),
-            self.ordering_req.clone(),
+            reverse_order_bys(&self.ordering_req),
             self.order_by_data_types.clone(),
         )))
     }
@@ -350,7 +352,7 @@ impl AggregateExpr for LastValue {
             self.expr.clone(),
             name,
             self.input_data_type.clone(),
-            self.ordering_req.clone(),
+            reverse_order_bys(&self.ordering_req),
             self.order_by_data_types.clone(),
         )))
     }
