@@ -15,13 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::optimizer::ApplyOrder;
-use datafusion_common::Result;
-use datafusion_expr::{Expr, LogicalPlan, Projection};
 use std::collections::HashMap;
 
+use crate::optimizer::ApplyOrder;
 use crate::push_down_filter::replace_cols_by_name;
 use crate::{OptimizerConfig, OptimizerRule};
+
+use datafusion_common::Result;
+use datafusion_expr::{Expr, LogicalPlan, Projection};
 
 /// Optimization rule that merge [LogicalPlan::Projection].
 #[derive(Default)]

@@ -15,13 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::optimizer::ApplyOrder;
+use crate::optimizer::{ApplyOrder, ApplyOrder::BottomUp};
 use crate::{OptimizerConfig, OptimizerRule};
+
 use datafusion_common::Result;
 use datafusion_expr::utils::expand_wildcard;
-use datafusion_expr::Distinct;
-use datafusion_expr::{Aggregate, LogicalPlan};
-use ApplyOrder::BottomUp;
+use datafusion_expr::{Aggregate, Distinct, LogicalPlan};
 
 /// Optimizer that replaces logical [[Distinct]] with a logical [[Aggregate]]
 ///

@@ -17,6 +17,8 @@
 
 //! Coercion rules for matching argument types for binary operators
 
+use crate::Operator;
+
 use arrow::array::{new_empty_array, Array};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{
@@ -24,10 +26,7 @@ use arrow::datatypes::{
     DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
 };
 
-use datafusion_common::{plan_datafusion_err, Result};
-use datafusion_common::{plan_err, DataFusionError};
-
-use crate::Operator;
+use datafusion_common::{plan_datafusion_err, plan_err, DataFusionError, Result};
 
 /// The type signature of an instantiation of binary operator expression such as
 /// `lhs + rhs`

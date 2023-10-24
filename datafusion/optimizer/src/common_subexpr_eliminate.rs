@@ -20,6 +20,8 @@
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
+use crate::{utils, OptimizerConfig, OptimizerRule};
+
 use arrow::datatypes::DataType;
 use datafusion_common::tree_node::{
     RewriteRecursion, TreeNode, TreeNodeRewriter, TreeNodeVisitor, VisitRecursion,
@@ -28,13 +30,10 @@ use datafusion_common::{
     internal_err, Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result,
 };
 use datafusion_expr::expr::Alias;
-use datafusion_expr::{
-    col,
-    logical_plan::{Aggregate, Filter, LogicalPlan, Projection, Sort, Window},
-    Expr, ExprSchemable,
+use datafusion_expr::logical_plan::{
+    Aggregate, Filter, LogicalPlan, Projection, Sort, Window,
 };
-
-use crate::{utils, OptimizerConfig, OptimizerRule};
+use datafusion_expr::{col, Expr, ExprSchemable};
 
 /// A map from expression's identifier to tuple including
 /// - the expression itself (cloned)
@@ -120,10 +119,8 @@ impl CommonSubexprEliminate {
             self.rewrite_expr(&[expr], &[&arrays], input, &expr_set, config)?;
 
         // Since projection expr changes, schema changes also. Use try_new method.
-        Ok(LogicalPlan::Projection(Projection::try_new(
-            pop_expr(&mut new_expr)?,
-            Arc::new(new_input),
-        )?))
+        Projection::try_new(pop_expr(&mut new_expr)?, Arc::new(new_input))
+            .map(LogicalPlan::Projection)
     }
 
     fn try_optimize_filter(
@@ -242,11 +239,8 @@ impl CommonSubexprEliminate {
 
         if affected_id.is_empty() {
             // Since group_epxr changes, schema changes also. Use try_new method.
-            Ok(LogicalPlan::Aggregate(Aggregate::try_new(
-                Arc::new(new_input),
-                new_group_expr,
-                new_aggr_expr,
-            )?))
+            Aggregate::try_new(Arc::new(new_input), new_group_expr, new_aggr_expr)
+                .map(LogicalPlan::Aggregate)
         } else {
             let mut agg_exprs = vec![];
 

@@ -23,8 +23,9 @@ use crate::expr::{
     ScalarUDF, Sort, TryCast, WindowFunction,
 };
 use crate::{Expr, GetFieldAccess};
-use datafusion_common::tree_node::VisitRecursion;
-use datafusion_common::{tree_node::TreeNode, Result};
+
+use datafusion_common::tree_node::{TreeNode, VisitRecursion};
+use datafusion_common::Result;
 
 impl TreeNode for Expr {
     fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
@@ -48,19 +49,18 @@ impl TreeNode for Expr {
             | Expr::Sort(Sort { expr, .. })
             | Expr::InSubquery(InSubquery{ expr, .. }) => vec![expr.as_ref().clone()],
             Expr::GetIndexedField(GetIndexedField { expr, field }) => {
-                let mut exprs = match field{
+                let expr = expr.as_ref().clone();
+                match field {
                     GetFieldAccess::ListIndex {key} => {
-                        vec![key.as_ref().clone()]
+                        vec![key.as_ref().clone(), expr]
                     },
                     GetFieldAccess::ListRange {start, stop} => {
-                        vec![start.as_ref().clone(), stop.as_ref().clone()]
+                        vec![start.as_ref().clone(), stop.as_ref().clone(), expr]
                     }
                     GetFieldAccess::NamedStructField {name: _name} => {
-                        vec![]
+                        vec![expr]
                     }
-                };
-                exprs.push(expr.as_ref().clone());
-                exprs
+                }
             }
             Expr::GroupingSet(GroupingSet::Rollup(exprs))
             | Expr::GroupingSet(GroupingSet::Cube(exprs)) => exprs.clone(),

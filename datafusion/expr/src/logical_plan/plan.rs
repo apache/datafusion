@@ -17,6 +17,13 @@
 
 //! Logical plan types
 
+use std::collections::{HashMap, HashSet};
+use std::fmt::{self, Debug, Display, Formatter};
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+
+use super::dml::CopyTo;
+use super::DdlStatement;
 use crate::dml::CopyOptions;
 use crate::expr::{Alias, Exists, InSubquery, Placeholder};
 use crate::expr_rewriter::create_col_from_scalar_expr;
@@ -28,14 +35,10 @@ use crate::utils::{
     grouping_set_expr_count, grouping_set_to_exprlist, inspect_expr_pre,
 };
 use crate::{
-    build_join_schema, Expr, ExprSchemable, TableProviderFilterPushDown, TableSource,
+    build_join_schema, expr_vec_fmt, BinaryExpr, CreateMemoryTable, CreateView, Expr,
+    ExprSchemable, LogicalPlanBuilder, Operator, TableProviderFilterPushDown,
+    TableSource,
 };
-use crate::{
-    expr_vec_fmt, BinaryExpr, CreateMemoryTable, CreateView, LogicalPlanBuilder, Operator,
-};
-
-use super::dml::CopyTo;
-use super::DdlStatement;
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::tree_node::{
@@ -50,11 +53,6 @@ use datafusion_common::{
 // backwards compatibility
 pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 pub use datafusion_common::{JoinConstraint, JoinType};
-
-use std::collections::{HashMap, HashSet};
-use std::fmt::{self, Debug, Display, Formatter};
-use std::hash::{Hash, Hasher};
-use std::sync::Arc;
 
 /// A LogicalPlan represents the different types of relational
 /// operators (such as Projection, Filter, etc) and can be created by
@@ -534,10 +532,8 @@ impl LogicalPlan {
                 // Schema of the projection may change
                 // when its input changes. Hence we should use
                 // `try_new` method instead of `try_new_with_schema`.
-                Ok(LogicalPlan::Projection(Projection::try_new(
-                    projection.expr.to_vec(),
-                    Arc::new(inputs[0].clone()),
-                )?))
+                Projection::try_new(projection.expr.to_vec(), Arc::new(inputs[0].clone()))
+                    .map(LogicalPlan::Projection)
             }
             LogicalPlan::Window(Window {
                 window_expr,
@@ -552,14 +548,15 @@ impl LogicalPlan {
                 group_expr,
                 aggr_expr,
                 ..
-            }) => Ok(LogicalPlan::Aggregate(Aggregate::try_new(
+            }) => Aggregate::try_new(
                 // Schema of the aggregate may change
                 // when its input changes. Hence we should use
                 // `try_new` method instead of `try_new_with_schema`.
                 Arc::new(inputs[0].clone()),
                 group_expr.to_vec(),
                 aggr_expr.to_vec(),
-            )?)),
+            )
+            .map(LogicalPlan::Aggregate),
             _ => self.with_new_exprs(self.expressions(), inputs),
         }
     }
@@ -595,9 +592,10 @@ impl LogicalPlan {
         match self {
             // Since expr may be different than the previous expr, schema of the projection
             // may change. We need to use try_new method instead of try_new_with_schema method.
-            LogicalPlan::Projection(Projection { .. }) => Ok(LogicalPlan::Projection(
-                Projection::try_new(expr, Arc::new(inputs[0].clone()))?,
-            )),
+            LogicalPlan::Projection(Projection { .. }) => {
+                Projection::try_new(expr, Arc::new(inputs[0].clone()))
+                    .map(LogicalPlan::Projection)
+            }
             LogicalPlan::Dml(DmlStatement {
                 table_name,
                 table_schema,
@@ -673,10 +671,8 @@ impl LogicalPlan {
                 let mut remove_aliases = RemoveAliases {};
                 let predicate = predicate.rewrite(&mut remove_aliases)?;
 
-                Ok(LogicalPlan::Filter(Filter::try_new(
-                    predicate,
-                    Arc::new(inputs[0].clone()),
-                )?))
+                Filter::try_new(predicate, Arc::new(inputs[0].clone()))
+                    .map(LogicalPlan::Filter)
             }
             LogicalPlan::Repartition(Repartition {
                 partitioning_scheme,
@@ -715,11 +711,8 @@ impl LogicalPlan {
                 // group exprs are the first expressions
                 let agg_expr = expr.split_off(group_expr.len());
 
-                Ok(LogicalPlan::Aggregate(Aggregate::try_new(
-                    Arc::new(inputs[0].clone()),
-                    expr,
-                    agg_expr,
-                )?))
+                Aggregate::try_new(Arc::new(inputs[0].clone()), expr, agg_expr)
+                    .map(LogicalPlan::Aggregate)
             }
             LogicalPlan::Sort(Sort { fetch, .. }) => Ok(LogicalPlan::Sort(Sort {
                 expr,
@@ -788,10 +781,8 @@ impl LogicalPlan {
                 }))
             }
             LogicalPlan::SubqueryAlias(SubqueryAlias { alias, .. }) => {
-                Ok(LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
-                    inputs[0].clone(),
-                    alias.clone(),
-                )?))
+                SubqueryAlias::try_new(inputs[0].clone(), alias.clone())
+                    .map(LogicalPlan::SubqueryAlias)
             }
             LogicalPlan::Limit(Limit { skip, fetch, .. }) => {
                 Ok(LogicalPlan::Limit(Limit {

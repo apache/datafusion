@@ -17,6 +17,13 @@
 
 //! This module provides a builder for creating LogicalPlans
 
+use std::any::Any;
+use std::cmp::Ordering;
+use std::collections::{HashMap, HashSet};
+use std::convert::TryFrom;
+use std::iter::zip;
+use std::sync::Arc;
+
 use crate::dml::{CopyOptions, CopyTo};
 use crate::expr::Alias;
 use crate::expr_rewriter::{
@@ -24,37 +31,29 @@ use crate::expr_rewriter::{
     normalize_col_with_schemas_and_ambiguity_check, normalize_cols,
     rewrite_sort_cols_by_aggs,
 };
+use crate::logical_plan::{
+    Aggregate, Analyze, CrossJoin, Distinct, EmptyRelation, Explain, Filter, Join,
+    JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Prepare,
+    Projection, Repartition, Sort, SubqueryAlias, TableScan, Union, Unnest, Values,
+    Window,
+};
 use crate::type_coercion::binary::comparison_coercion;
-use crate::utils::{columnize_expr, compare_sort_expr};
-use crate::{
-    and, binary_expr, DmlStatement, Operator, TableProviderFilterPushDown, WriteOp,
+use crate::utils::{
+    can_hash, columnize_expr, compare_sort_expr, expand_qualified_wildcard,
+    expand_wildcard, find_valid_equijoin_key_pair, group_window_expr_by_sort_keys,
 };
 use crate::{
-    logical_plan::{
-        Aggregate, Analyze, CrossJoin, Distinct, EmptyRelation, Explain, Filter, Join,
-        JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Prepare,
-        Projection, Repartition, Sort, SubqueryAlias, TableScan, Union, Unnest, Values,
-        Window,
-    },
-    utils::{
-        can_hash, expand_qualified_wildcard, expand_wildcard,
-        find_valid_equijoin_key_pair, group_window_expr_by_sort_keys,
-    },
-    Expr, ExprSchemable, TableSource,
+    and, binary_expr, DmlStatement, Expr, ExprSchemable, Operator,
+    TableProviderFilterPushDown, TableSource, WriteOp,
 };
+
 use arrow::datatypes::{DataType, Schema, SchemaRef};
-use datafusion_common::UnnestOptions;
+use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::{
-    display::ToStringifiedPlan, Column, DFField, DFSchema, DFSchemaRef, DataFusionError,
-    FileType, OwnedTableReference, Result, ScalarValue, TableReference, ToDFSchema,
+    plan_datafusion_err, plan_err, Column, DFField, DFSchema, DFSchemaRef,
+    DataFusionError, FileType, OwnedTableReference, Result, ScalarValue, TableReference,
+    ToDFSchema, UnnestOptions,
 };
-use datafusion_common::{plan_datafusion_err, plan_err};
-use std::any::Any;
-use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
-use std::convert::TryFrom;
-use std::iter::zip;
-use std::sync::Arc;
 
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
@@ -282,10 +281,9 @@ impl LogicalPlanBuilder {
         projection: Option<Vec<usize>>,
         filters: Vec<Expr>,
     ) -> Result<Self> {
-        let table_scan =
-            TableScan::try_new(table_name, table_source, projection, filters, None)?;
-        let table_scan = LogicalPlan::TableScan(table_scan);
-        Ok(Self::from(table_scan))
+        TableScan::try_new(table_name, table_source, projection, filters, None)
+            .map(LogicalPlan::TableScan)
+            .map(Self::from)
     }
 
     /// Wrap a plan in a window
@@ -330,7 +328,7 @@ impl LogicalPlanBuilder {
         self,
         expr: impl IntoIterator<Item = impl Into<Expr>>,
     ) -> Result<Self> {
-        Ok(Self::from(project(self.plan, expr)?))
+        project(self.plan, expr).map(Self::from)
     }
 
     /// Select the given column indices
@@ -346,10 +344,9 @@ impl LogicalPlanBuilder {
     /// Apply a filter
     pub fn filter(self, expr: impl Into<Expr>) -> Result<Self> {
         let expr = normalize_col(expr.into(), &self.plan)?;
-        Ok(Self::from(LogicalPlan::Filter(Filter::try_new(
-            expr,
-            Arc::new(self.plan),
-        )?)))
+        Filter::try_new(expr, Arc::new(self.plan))
+            .map(LogicalPlan::Filter)
+            .map(Self::from)
     }
 
     /// Make a builder for a prepare logical plan from the builder's plan
@@ -377,7 +374,7 @@ impl LogicalPlanBuilder {
 
     /// Apply an alias
     pub fn alias(self, alias: impl Into<OwnedTableReference>) -> Result<Self> {
-        Ok(Self::from(subquery_alias(self.plan, alias)?))
+        subquery_alias(self.plan, alias).map(Self::from)
     }
 
     /// Add missing sort columns to all downstream projection
@@ -432,7 +429,7 @@ impl LogicalPlanBuilder {
                     Self::ambiguous_distinct_check(&missing_exprs, missing_cols, &expr)?;
                 }
                 expr.extend(missing_exprs);
-                Ok(project((*input).clone(), expr)?)
+                project((*input).clone(), expr)
             }
             _ => {
                 let is_distinct =
@@ -539,15 +536,14 @@ impl LogicalPlanBuilder {
             fetch: None,
         });
 
-        Ok(Self::from(LogicalPlan::Projection(Projection::try_new(
-            new_expr,
-            Arc::new(sort_plan),
-        )?)))
+        Projection::try_new(new_expr, Arc::new(sort_plan))
+            .map(LogicalPlan::Projection)
+            .map(Self::from)
     }
 
     /// Apply a union, preserving duplicate rows
     pub fn union(self, plan: LogicalPlan) -> Result<Self> {
-        Ok(Self::from(union(self.plan, plan)?))
+        union(self.plan, plan).map(Self::from)
     }
 
     /// Apply a union, removing duplicate rows
@@ -897,11 +893,9 @@ impl LogicalPlanBuilder {
     ) -> Result<Self> {
         let group_expr = normalize_cols(group_expr, &self.plan)?;
         let aggr_expr = normalize_cols(aggr_expr, &self.plan)?;
-        Ok(Self::from(LogicalPlan::Aggregate(Aggregate::try_new(
-            Arc::new(self.plan),
-            group_expr,
-            aggr_expr,
-        )?)))
+        Aggregate::try_new(Arc::new(self.plan), group_expr, aggr_expr)
+            .map(LogicalPlan::Aggregate)
+            .map(Self::from)
     }
 
     /// Create an expression to represent the explanation of the plan
@@ -1159,8 +1153,8 @@ pub fn build_join_schema(
     );
     let mut metadata = left.metadata().clone();
     metadata.extend(right.metadata().clone());
-    Ok(DFSchema::new_with_metadata(fields, metadata)?
-        .with_functional_dependencies(func_dependencies))
+    DFSchema::new_with_metadata(fields, metadata)
+        .map(|schema| schema.with_functional_dependencies(func_dependencies))
 }
 
 /// Errors if one or more expressions have equal names.
@@ -1207,9 +1201,8 @@ pub fn project_with_column_index(
         })
         .collect::<Vec<_>>();
 
-    Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
-        alias_expr, input, schema,
-    )?))
+    Projection::try_new_with_schema(alias_expr, input, schema)
+        .map(LogicalPlan::Projection)
 }
 
 /// Union two logical plans.
@@ -1305,10 +1298,7 @@ pub fn project(
     }
     validate_unique_names("Projections", projected_expr.iter())?;
 
-    Ok(LogicalPlan::Projection(Projection::try_new(
-        projected_expr,
-        Arc::new(plan.clone()),
-    )?))
+    Projection::try_new(projected_expr, Arc::new(plan)).map(LogicalPlan::Projection)
 }
 
 /// Create a SubqueryAlias to wrap a LogicalPlan.
@@ -1316,9 +1306,7 @@ pub fn subquery_alias(
     plan: LogicalPlan,
     alias: impl Into<OwnedTableReference>,
 ) -> Result<LogicalPlan> {
-    Ok(LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
-        plan, alias,
-    )?))
+    SubqueryAlias::try_new(plan, alias).map(LogicalPlan::SubqueryAlias)
 }
 
 /// Create a LogicalPlanBuilder representing a scan of a table with the provided name and schema.
@@ -1481,11 +1469,11 @@ pub fn unnest_with_options(
         })
         .collect::<Vec<_>>();
 
-    let schema = Arc::new(
-        DFSchema::new_with_metadata(fields, input_schema.metadata().clone())?
-            // We can use the existing functional dependencies:
-            .with_functional_dependencies(input_schema.functional_dependencies().clone()),
-    );
+    let metadata = input_schema.metadata().clone();
+    let df_schema = DFSchema::new_with_metadata(fields, metadata)?;
+    // We can use the existing functional dependencies:
+    let deps = input_schema.functional_dependencies().clone();
+    let schema = Arc::new(df_schema.with_functional_dependencies(deps));
 
     Ok(LogicalPlan::Unnest(Unnest {
         input: Arc::new(input),
@@ -1497,11 +1485,9 @@ pub fn unnest_with_options(
 
 #[cfg(test)]
 mod tests {
-    use crate::logical_plan::StringifiedPlan;
-    use crate::{col, in_subquery, lit, scalar_subquery, sum};
-    use crate::{expr, expr_fn::exists};
-
     use super::*;
+    use crate::logical_plan::StringifiedPlan;
+    use crate::{col, expr, expr_fn::exists, in_subquery, lit, scalar_subquery, sum};
 
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::{OwnedTableReference, SchemaError, TableReference};

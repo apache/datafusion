@@ -17,6 +17,12 @@
 
 //! Built-in functions module contains all the built-in functions definitions.
 
+use std::cmp::Ordering;
+use std::collections::HashMap;
+use std::fmt;
+use std::str::FromStr;
+use std::sync::{Arc, OnceLock};
+
 use crate::nullif::SUPPORTED_NULLIF_TYPES;
 use crate::signature::TIMEZONE_WILDCARD;
 use crate::type_coercion::functions::data_types;
@@ -24,16 +30,13 @@ use crate::{
     conditional_expressions, struct_expressions, utils, FuncMonotonicity, Signature,
     TypeSignature, Volatility,
 };
+
 use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
 use datafusion_common::{
     exec_datafusion_err, internal_err, plan_datafusion_err, plan_err, DataFusionError,
     Result,
 };
-use std::cmp::Ordering;
-use std::collections::HashMap;
-use std::fmt;
-use std::str::FromStr;
-use std::sync::{Arc, OnceLock};
+
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 
@@ -363,8 +366,9 @@ fn get_wider_type(lhs: &DataType, rhs: &DataType) -> Result<DataType> {
                 get_wider_type(lhs_field.data_type(), rhs_field.data_type())?;
             if lhs_field.name() != rhs_field.name() {
                 return Err(exec_datafusion_err!(
-            "There is no wider type (that can represent other) among lhs: {:?}, rhs:{:?}",
-            lhs, rhs));
+                    "There is no wider type (that can represent other) among lhs: {:?}, rhs:{:?}",
+                    lhs, rhs
+                ));
             }
             assert_eq!(lhs_field.name(), rhs_field.name());
             let field_name = lhs_field.name();
@@ -373,8 +377,9 @@ fn get_wider_type(lhs: &DataType, rhs: &DataType) -> Result<DataType> {
         }
         (_, _) => {
             return Err(exec_datafusion_err!(
-            "There is no wider type (that can represent other) among lhs: {:?}, rhs:{:?}",
-            lhs, rhs));
+                "There is no wider type (that can represent other) among lhs: {:?}, rhs:{:?}",
+                lhs, rhs
+            ));
         }
     })
 }
@@ -532,18 +537,14 @@ impl BuiltinScalarFunction {
     /// * `List(Int64)` has dimension 2
     /// * `List(List(Int64))` has dimension 3
     /// * etc.
-    fn return_dimension(self, input_expr_type: DataType) -> u64 {
-        let mut res: u64 = 1;
+    fn return_dimension(self, input_expr_type: &DataType) -> u64 {
+        let mut result: u64 = 1;
         let mut current_data_type = input_expr_type;
-        loop {
-            match current_data_type {
-                DataType::List(field) => {
-                    current_data_type = field.data_type().clone();
-                    res += 1;
-                }
-                _ => return res,
-            }
+        while let DataType::List(field) = current_data_type {
+            current_data_type = field.data_type();
+            result += 1;
         }
+        result
     }
 
     /// Returns the output [`DataType`] of this function
@@ -602,7 +603,7 @@ impl BuiltinScalarFunction {
                     match input_expr_type {
                         List(field) => {
                             if !field.data_type().equals_datatype(&Null) {
-                                let dims = self.return_dimension(input_expr_type.clone());
+                                let dims = self.return_dimension(input_expr_type);
                                 expr_type = match max_dims.cmp(&dims) {
                                     Ordering::Greater => expr_type,
                                     Ordering::Equal => {
