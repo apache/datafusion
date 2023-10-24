@@ -692,12 +692,12 @@ impl OptimizerRule for PushDownFilter {
                             projection.input.clone(),
                         )?);
 
-                        if keep_predicates.is_empty() {
-                            child_plan.with_new_inputs(&[new_filter])?
-                        } else {
+                        match conjunction(keep_predicates) {
+                          None =>  child_plan.with_new_inputs(&[new_filter])?
+                          Some(keep_predicate) => {
                             let child_plan = child_plan.with_new_inputs(&[new_filter])?;
                             LogicalPlan::Filter(Filter::try_new(
-                                conjunction(keep_predicates).unwrap(),
+                                keep_predicate
                                 Arc::new(child_plan),
                             )?)
                         }
