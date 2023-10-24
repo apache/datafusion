@@ -386,7 +386,7 @@ config_namespace! {
         /// applying backpressure to prevent working on too many row groups in
         /// parallel in case of limited memory or slow I/O speed causing
         /// OOM errors. Lowering this number limits memory growth at the cost
-        /// of potentially slower write speeds. Boosting this number may 
+        /// of potentially slower write speeds. Boosting this number may
         /// help performance when batches can be produced very fast,
         /// such as from an in-memory table.
         pub maximum_parallel_row_group_writers: usize, default = 2

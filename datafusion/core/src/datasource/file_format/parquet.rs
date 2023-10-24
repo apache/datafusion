@@ -984,12 +984,14 @@ fn spawn_parquet_parallel_serialization_task(
 
         drop(col_array_channels);
         // Handle leftover rows as final rowgroup, which may be smaller than max_row_group_rows
-        if current_rg_rows > 0{
+        if current_rg_rows > 0 {
             let finalize_rg_task =
-            spawn_rg_join_and_finalize_task(column_writer_handles, current_rg_rows);
+                spawn_rg_join_and_finalize_task(column_writer_handles, current_rg_rows);
 
             serialize_tx.send(finalize_rg_task).await.map_err(|_| {
-                DataFusionError::Internal("Unable to send closed RG to concat task!".into())
+                DataFusionError::Internal(
+                    "Unable to send closed RG to concat task!".into(),
+                )
             })?;
         }
 
