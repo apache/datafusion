@@ -677,7 +677,7 @@ impl OptimizerRule for PushDownFilter {
                 let mut keep_predicates = vec![];
                 for expr in split_conjunction_owned(filter.predicate.clone()).into_iter()
                 {
-                    if contain(expr.clone(), &volatile_map) {
+                    if contain(&expr, &volatile_map) {
                         keep_predicates.push(expr);
                     } else {
                         push_predicates.push(expr);
