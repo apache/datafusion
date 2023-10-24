@@ -676,7 +676,7 @@ impl OptimizerRule for PushDownFilter {
                 let mut keep_predicates = vec![];
                 for expr in split_conjunction_owned(filter.predicate.clone()).into_iter()
                 {
-                    if contain(expr.clone(), volatile_map)? {
+                    if contain(expr.clone(), &volatile_map) {
                         keep_predicates.push(expr);
                     } else {
                         push_predicates.push(expr);
@@ -693,13 +693,15 @@ impl OptimizerRule for PushDownFilter {
                         )?);
 
                         match conjunction(keep_predicates) {
-                          None =>  child_plan.with_new_inputs(&[new_filter])?
-                          Some(keep_predicate) => {
-                            let child_plan = child_plan.with_new_inputs(&[new_filter])?;
-                            LogicalPlan::Filter(Filter::try_new(
-                                keep_predicate
-                                Arc::new(child_plan),
-                            )?)
+                            None => child_plan.with_new_inputs(&[new_filter])?,
+                            Some(keep_predicate) => {
+                                let child_plan =
+                                    child_plan.with_new_inputs(&[new_filter])?;
+                                LogicalPlan::Filter(Filter::try_new(
+                                    keep_predicate,
+                                    Arc::new(child_plan),
+                                )?)
+                            }
                         }
                     }
                     None => return Ok(None),
@@ -907,8 +909,24 @@ pub fn replace_cols_by_name(
     })
 }
 
+/// check whether the expression is volatile predicates
+pub fn is_volatile_expression(e: Expr) -> bool {
+    let mut is_volatile = false;
+    e.apply(&mut |expr| {
+        Ok(match expr {
+            Expr::ScalarFunction(f) if f.fun.volatility() == Volatility::Volatile => {
+                is_volatile = true;
+                VisitRecursion::Stop
+            }
+            _ => VisitRecursion::Continue,
+        })
+    })
+    .unwrap();
+    is_volatile
+}
+
 /// check whether the expression uses the columns in `check_map`.
-pub fn contain(e: Expr, check_map: &HashMap<String, Expr>) -> Result<bool> {
+pub fn contain(e: Expr, check_map: &HashMap<String, Expr>) -> bool {
     let mut is_contain = false;
     e.apply(&mut |expr| {
         Ok(if let Expr::Column(c) = &expr {
@@ -922,8 +940,9 @@ pub fn contain(e: Expr, check_map: &HashMap<String, Expr>) -> Result<bool> {
         } else {
             VisitRecursion::Continue
         })
-    })?;
-    Ok(is_contain)
+    })
+    .unwrap();
+    is_contain
 }
 
 #[cfg(test)]
@@ -2764,7 +2783,11 @@ Projection: a, b
         let table_scan = test_table_scan_with_name("test1")?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![col("a")], vec![sum(col("b"))])?
-            .project(vec![col("a"), sum(col("b")), random().add(lit(1)).alias("r")])?
+            .project(vec![
+                col("a"),
+                sum(col("b")),
+                add(random(), lit(1)).alias("r"),
+            ])?
             .alias("t")?
             .filter(col("t.a").gt(lit(5)).and(col("t.r").gt(lit(0.5))))?
             .project(vec![col("t.a"), col("t.r")])?
@@ -2773,17 +2796,16 @@ Projection: a, b
         let expected_before = "Projection: t.a, t.r\
         \n  Filter: t.a > Int32(5) AND t.r > Float64(0.5)\
         \n    SubqueryAlias: t\
-        \n      Projection: test1.a, SUM(test1.b), random() AS r\
+        \n      Projection: test1.a, SUM(test1.b), random() + Int32(1) AS r\
         \n        Aggregate: groupBy=[[test1.a]], aggr=[[SUM(test1.b)]]\
         \n          TableScan: test1";
         assert_eq!(format!("{plan:?}"), expected_before);
 
         let expected_after = "Projection: t.a, t.r\
         \n  SubqueryAlias: t\
-        \n    Filter: r > Float64(0.5)\
-        \n      Projection: test1.a, SUM(test1.b), random() AS r\
-        \n        Aggregate: groupBy=[[test1.a]], aggr=[[SUM(test1.b)]]\
-        \n          TableScan: test1, full_filters=[test1.a > Int32(5)]";
+        \n    Projection: test1.a, SUM(test1.b), random() + Int32(1) AS r\
+        \n      Aggregate: groupBy=[[test1.a]], aggr=[[SUM(test1.b)]]\
+        \n        TableScan: test1, full_filters=[test1.a > Int32(5), random() + Int32(1) > Float64(0.5)]";
         assert_optimized_plan_eq(&plan, expected_after)
     }
 
