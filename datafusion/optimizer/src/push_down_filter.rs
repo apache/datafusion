@@ -656,21 +656,22 @@ impl OptimizerRule for PushDownFilter {
                 // A projection is filter-commutable if it do not contain volatile predicates or contain volatile
                 // predicates that are not used in the filter. However, we should re-writes all predicate expressions.
                 // collect projection.
-                let (volatile_map, non_volatile_map): (HashMap<_,_>, HashMap<_,_>) = projection
-                    .schema
-                    .fields()
-                    .iter()
-                    .enumerate()
-                    .map(|(i, field)| {
-                        // strip alias, as they should not be part of filters
-                        let expr = match &projection.expr[i] {
-                            Expr::Alias(Alias { expr, .. }) => expr.as_ref().clone(),
-                            expr => expr.clone(),
-                        };
+                let (volatile_map, non_volatile_map): (HashMap<_, _>, HashMap<_, _>) =
+                    projection
+                        .schema
+                        .fields()
+                        .iter()
+                        .enumerate()
+                        .map(|(i, field)| {
+                            // strip alias, as they should not be part of filters
+                            let expr = match &projection.expr[i] {
+                                Expr::Alias(Alias { expr, .. }) => expr.as_ref().clone(),
+                                expr => expr.clone(),
+                            };
 
-                        (field.qualified_name(), expr)
-                    })
-                    .partition(|(_, value)| matches!(value, Expr::ScalarFunction(f) if f.fun.volatility() == Volatility::Volatile));
+                            (field.qualified_name(), expr)
+                        })
+                        .partition(|(_, value)| is_volatile_expression(value.clone()));
 
                 let mut push_predicates = vec![];
                 let mut keep_predicates = vec![];
@@ -2803,9 +2804,10 @@ Projection: a, b
 
         let expected_after = "Projection: t.a, t.r\
         \n  SubqueryAlias: t\
-        \n    Projection: test1.a, SUM(test1.b), random() + Int32(1) AS r\
-        \n      Aggregate: groupBy=[[test1.a]], aggr=[[SUM(test1.b)]]\
-        \n        TableScan: test1, full_filters=[test1.a > Int32(5), random() + Int32(1) > Float64(0.5)]";
+        \n    Filter: r > Float64(0.5)\
+        \n      Projection: test1.a, SUM(test1.b), random() + Int32(1) AS r\
+        \n        Aggregate: groupBy=[[test1.a]], aggr=[[SUM(test1.b)]]\
+        \n          TableScan: test1, full_filters=[test1.a > Int32(5)]";
         assert_optimized_plan_eq(&plan, expected_after)
     }
 
