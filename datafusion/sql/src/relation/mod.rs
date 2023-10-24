@@ -53,7 +53,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 lateral, subquery, alias, ..
             } => {
                 if lateral {
-                    return not_impl_err!("LATERAL is not supported");
+                    return not_impl_err!("LATERAL JOINs are not supported");
                 }
                 let logical_plan = self.query_to_plan(*subquery, planner_context)?;
                 (logical_plan, alias)
