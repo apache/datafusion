@@ -36,17 +36,16 @@ use arrow::datatypes::{Field, Schema, SchemaBuilder};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::stats::Precision;
-use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
-    exec_err, plan_datafusion_err, plan_err, DataFusionError, JoinSide, JoinType, Result,
+    plan_datafusion_err, plan_err, DataFusionError, JoinSide, JoinType, Result,
     SharedResult,
 };
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::intervals::{ExprIntervalGraph, Interval, IntervalBound};
 use datafusion_physical_expr::utils::merge_vectors;
 use datafusion_physical_expr::{
-    add_offset_to_lex_ordering, LexOrdering, LexOrderingRef, PhysicalExpr,
-    PhysicalSortExpr,
+    add_offset_to_expr, add_offset_to_lex_ordering, LexOrdering, LexOrderingRef,
+    PhysicalExpr, PhysicalSortExpr,
 };
 
 use futures::future::{BoxFuture, Shared};
@@ -133,16 +132,7 @@ pub fn adjust_right_output_partitioning(
         Partitioning::Hash(exprs, size) => {
             let new_exprs = exprs
                 .into_iter()
-                .map(|expr| {
-                    expr.transform_down(&|e| match e.as_any().downcast_ref::<Column>() {
-                        Some(col) => Ok(Transformed::Yes(Arc::new(Column::new(
-                            col.name(),
-                            left_columns_len + col.index(),
-                        )))),
-                        None => Ok(Transformed::No(e)),
-                    })
-                    .unwrap()
-                })
+                .map(|expr| add_offset_to_expr(expr, left_columns_len))
                 .collect::<Vec<_>>();
             Partitioning::Hash(new_exprs, size)
         }
@@ -178,7 +168,7 @@ pub fn calculate_join_output_ordering(
     left_columns_len: usize,
     maintains_input_order: &[bool],
     probe_side: Option<JoinSide>,
-) -> Result<Option<LexOrdering>> {
+) -> Option<LexOrdering> {
     // All joins have 2 children:
     assert_eq!(maintains_input_order.len(), 2);
     let left_maintains = maintains_input_order[0];
@@ -187,13 +177,13 @@ pub fn calculate_join_output_ordering(
         // In the case below, right ordering should be offseted with the left
         // side length, since we append the right table to the left table.
         JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
-            add_offset_to_lex_ordering(right_ordering, left_columns_len)?
+            add_offset_to_lex_ordering(right_ordering, left_columns_len)
         }
         _ => right_ordering.to_vec(),
     };
     let output_ordering = match (left_maintains, right_maintains) {
         (true, true) => {
-            return exec_err!("Cannot maintain ordering of both sides");
+            unreachable!("Cannot maintain ordering of both sides");
         }
         (true, false) => {
             // Special case, we can prefix ordering of right side with the ordering of left side.
@@ -222,9 +212,9 @@ pub fn calculate_join_output_ordering(
             }
         }
         // Doesn't maintain ordering, output ordering is None.
-        (false, false) => return Ok(None),
+        (false, false) => return None,
     };
-    Ok((!output_ordering.is_empty()).then_some(output_ordering))
+    (!output_ordering.is_empty()).then_some(output_ordering)
 }
 
 /// Information about the index and placement (left or right) of the columns
@@ -1794,7 +1784,7 @@ mod tests {
                     left_columns_len,
                     maintains_input_order,
                     probe_side
-                )?,
+                ),
                 expected[i]
             );
         }

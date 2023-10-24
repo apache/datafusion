@@ -347,7 +347,7 @@ fn try_pushdown_requirements_to_join(
         smj.left().schema().fields.len(),
         &smj.maintains_input_order(),
         Some(SortMergeJoinExec::probe_side(&smj.join_type())),
-    )?;
+    );
     Ok(ordering_satisfy_requirement(
         new_output_ordering.as_deref(),
         parent_required,

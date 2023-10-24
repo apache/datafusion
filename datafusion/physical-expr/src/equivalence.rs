@@ -26,7 +26,7 @@ use arrow::datatypes::SchemaRef;
 use arrow_schema::Fields;
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{plan_err, DataFusionError, JoinSide, JoinType, Result};
+use datafusion_common::{JoinSide, JoinType};
 use itertools::izip;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
@@ -463,14 +463,14 @@ impl OrderingEquivalentClass {
     }
 
     /// Adds `offset` value to the index of each expression inside `self.head` and `self.others`.
-    pub fn add_offset(&self, offset: usize) -> Result<OrderingEquivalentClass> {
-        let head = add_offset_to_lex_ordering(self.head(), offset)?;
+    pub fn add_offset(&self, offset: usize) -> OrderingEquivalentClass {
+        let head = add_offset_to_lex_ordering(self.head(), offset);
         let others = self
             .others()
             .iter()
             .map(|ordering| add_offset_to_lex_ordering(ordering, offset))
-            .collect::<Result<Vec<_>>>()?;
-        Ok(OrderingEquivalentClass::new(head, others))
+            .collect::<Vec<_>>();
+        OrderingEquivalentClass::new(head, others)
     }
 
     /// This function normalizes `OrderingEquivalenceProperties` according to `eq_properties`.
@@ -983,19 +983,18 @@ fn get_updated_right_ordering_equivalent_class(
     right_oeq_class: &OrderingEquivalentClass,
     left_columns_len: usize,
     join_eq_properties: &EquivalenceProperties,
-) -> Result<OrderingEquivalentClass> {
+) -> OrderingEquivalentClass {
     match join_type {
         // In these modes, indices of the right schema should be offset by
         // the left table size.
         JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
-            let right_oeq_class = right_oeq_class.add_offset(left_columns_len)?;
-            return Ok(
-                right_oeq_class.normalize_with_equivalence_properties(join_eq_properties)
-            );
+            let right_oeq_class = right_oeq_class.add_offset(left_columns_len);
+            return right_oeq_class
+                .normalize_with_equivalence_properties(join_eq_properties);
         }
         _ => {}
     };
-    Ok(right_oeq_class.normalize_with_equivalence_properties(join_eq_properties))
+    right_oeq_class.normalize_with_equivalence_properties(join_eq_properties)
 }
 
 /// Calculate ordering equivalence properties for the given join operation.
@@ -1007,7 +1006,7 @@ pub fn combine_join_ordering_equivalence_properties(
     maintains_input_order: &[bool],
     probe_side: Option<JoinSide>,
     join_eq_properties: EquivalenceProperties,
-) -> Result<OrderingEquivalenceProperties> {
+) -> OrderingEquivalenceProperties {
     let mut new_properties = OrderingEquivalenceProperties::new(schema);
     let left_columns_len = left_oeq_properties.schema().fields().len();
     // All joins have 2 children
@@ -1015,7 +1014,9 @@ pub fn combine_join_ordering_equivalence_properties(
     let left_maintains = maintains_input_order[0];
     let right_maintains = maintains_input_order[1];
     match (left_maintains, right_maintains) {
-        (true, true) => return plan_err!("Cannot maintain ordering of both sides"),
+        (true, true) => {
+            unreachable!("Cannot maintain ordering of both sides");
+        }
         (true, false) => {
             // In this special case, right side ordering can be prefixed with left side ordering.
             if let (
@@ -1034,7 +1035,7 @@ pub fn combine_join_ordering_equivalence_properties(
                     right_oeq_class,
                     left_columns_len,
                     &join_eq_properties,
-                )?;
+                );
 
                 // Right side ordering equivalence properties should be prepended with
                 // those of the left side while constructing output ordering equivalence
@@ -1064,17 +1065,15 @@ pub fn combine_join_ordering_equivalence_properties(
             }
         }
         (false, true) => {
-            let updated_right_oeq = right_oeq_properties
-                .oeq_class()
-                .map(|right_oeq_class| {
+            let updated_right_oeq =
+                right_oeq_properties.oeq_class().map(|right_oeq_class| {
                     get_updated_right_ordering_equivalent_class(
                         join_type,
                         right_oeq_class,
                         left_columns_len,
                         &join_eq_properties,
                     )
-                })
-                .transpose()?;
+                });
             // In this special case, left side ordering can be prefixed with right side ordering.
             if let (
                 Some(JoinSide::Right),
@@ -1116,7 +1115,7 @@ pub fn combine_join_ordering_equivalence_properties(
         }
         (false, false) => {}
     }
-    Ok(new_properties)
+    new_properties
 }
 
 /// This function searches for the slice `section` inside the slice `given`.
@@ -1169,10 +1168,10 @@ fn prune_sort_reqs_with_constants(
 
 /// Adds the `offset` value to `Column` indices inside `expr`. This function is
 /// generally used during the update of the right table schema in join operations.
-pub(crate) fn add_offset_to_expr(
+pub fn add_offset_to_expr(
     expr: Arc<dyn PhysicalExpr>,
     offset: usize,
-) -> Result<Arc<dyn PhysicalExpr>> {
+) -> Arc<dyn PhysicalExpr> {
     expr.transform_down(&|e| match e.as_any().downcast_ref::<Column>() {
         Some(col) => Ok(Transformed::Yes(Arc::new(Column::new(
             col.name(),
@@ -1180,17 +1179,20 @@ pub(crate) fn add_offset_to_expr(
         )))),
         None => Ok(Transformed::No(e)),
     })
+    .unwrap()
+    // Note that we can safely unwrap here since our transform always returns
+    // an `Ok` value.
 }
 
 /// Adds the `offset` value to `Column` indices inside `sort_expr.expr`.
 pub(crate) fn add_offset_to_sort_expr(
     sort_expr: &PhysicalSortExpr,
     offset: usize,
-) -> Result<PhysicalSortExpr> {
-    Ok(PhysicalSortExpr {
-        expr: add_offset_to_expr(sort_expr.expr.clone(), offset)?,
+) -> PhysicalSortExpr {
+    PhysicalSortExpr {
+        expr: add_offset_to_expr(sort_expr.expr.clone(), offset),
         options: sort_expr.options,
-    })
+    }
 }
 
 /// Adds the `offset` value to `Column` indices for each `sort_expr.expr`
@@ -1198,7 +1200,7 @@ pub(crate) fn add_offset_to_sort_expr(
 pub fn add_offset_to_lex_ordering(
     sort_exprs: LexOrderingRef,
     offset: usize,
-) -> Result<LexOrdering> {
+) -> LexOrdering {
     sort_exprs
         .iter()
         .map(|sort_expr| add_offset_to_sort_expr(sort_expr, offset))
@@ -1413,7 +1415,7 @@ mod tests {
             &right_oeq_class,
             left_columns_len,
             &join_eq_properties,
-        )?;
+        );
 
         let expected = OrderingEquivalentClass::new(
             vec![

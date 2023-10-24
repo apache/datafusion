@@ -148,7 +148,7 @@ impl HashJoinExec {
             left_schema.fields.len(),
             &Self::maintains_input_order(*join_type),
             Some(Self::probe_side()),
-        )?;
+        );
 
         Ok(HashJoinExec {
             left,
@@ -389,7 +389,6 @@ impl ExecutionPlan for HashJoinExec {
             Some(Self::probe_side()),
             self.equivalence_properties(),
         )
-        .unwrap()
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
