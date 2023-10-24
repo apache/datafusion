@@ -31,9 +31,9 @@ use arrow_schema::DataType;
 use datafusion_common::file_options::StatementOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    not_impl_err, plan_datafusion_err, plan_err, unqualified_field_not_found, Column,
-    Constraints, DFField, DFSchema, DFSchemaRef, DataFusionError, ExprSchema,
-    OwnedTableReference, Result, SchemaReference, TableReference, ToDFSchema,
+    not_impl_err, plan_datafusion_err, plan_err, unqualified_field_not_found,
+    Constraints, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
+    Result, SchemaReference, TableReference, ToDFSchema,
 };
 use datafusion_expr::dml::{CopyOptions, CopyTo};
 use datafusion_expr::expr::Placeholder;
@@ -969,12 +969,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             table_name.clone(),
             &arrow_schema,
         )?);
-        let values = table_schema.fields().iter().map(|f| {
-            (
-                f.name().clone(),
-                ast::Expr::Identifier(ast::Ident::from(f.name().as_str())),
-            )
-        });
 
         // Overwrite with assignment expressions
         let mut planner_context = PlannerContext::new();
@@ -992,11 +986,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             })
             .collect::<Result<HashMap<String, Expr>>>()?;
 
-        let values = values
-            .into_iter()
-            .map(|(k, v)| {
-                let val = assign_map.remove(&k).unwrap_or(v);
-                (k, val)
+        let values_and_types = table_schema
+            .fields()
+            .iter()
+            .map(|f| {
+                let col_name = f.name();
+                let val = assign_map.remove(col_name).unwrap_or_else(|| {
+                    ast::Expr::Identifier(ast::Ident::from(col_name.as_str()))
+                });
+                (col_name, val, f.data_type())
             })
             .collect::<Vec<_>>();
 
@@ -1026,25 +1024,22 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // Projection
         let mut exprs = vec![];
-        for (col_name, expr) in values.into_iter() {
+        for (col_name, expr, dt) in values_and_types.into_iter() {
             let expr = self.sql_to_expr(expr, &table_schema, &mut planner_context)?;
             let expr = match expr {
                 datafusion_expr::Expr::Placeholder(Placeholder {
                     ref id,
                     ref data_type,
                 }) => match data_type {
-                    None => {
-                        let dt = table_schema.data_type(&Column::from_name(&col_name))?;
-                        datafusion_expr::Expr::Placeholder(Placeholder::new(
-                            id.clone(),
-                            Some(dt.clone()),
-                        ))
-                    }
+                    None => datafusion_expr::Expr::Placeholder(Placeholder::new(
+                        id.clone(),
+                        Some(dt.clone()),
+                    )),
                     Some(_) => expr,
                 },
                 _ => expr,
             };
-            let expr = expr.alias(col_name);
+            let expr = expr.cast_to(dt, source.schema())?.alias(col_name);
             exprs.push(expr);
         }
         let source = project(source, exprs)?;
