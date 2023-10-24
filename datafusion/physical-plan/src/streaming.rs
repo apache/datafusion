@@ -26,7 +26,7 @@ use crate::stream::RecordBatchStreamAdapter;
 use crate::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
 
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{internal_err, plan_err, DataFusionError, Result, Statistics};
+use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr, SchemaProperties};
 
@@ -194,9 +194,5 @@ impl ExecutionPlan for StreamingTableExec {
             )),
             None => stream,
         })
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        Ok(Statistics::new_unknown(&self.schema()))
     }
 }

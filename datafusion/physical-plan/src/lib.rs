@@ -225,8 +225,12 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         None
     }
 
-    /// Returns the global output statistics for this `ExecutionPlan` node.
-    fn statistics(&self) -> Result<Statistics>;
+    /// Returns statistics for this `ExecutionPlan` node. If statistics are not
+    /// available, should return [`Statistics::new_unknown`] (the default), not
+    /// an error.
+    fn statistics(&self) -> Result<Statistics> {
+        Ok(Statistics::new_unknown(&self.schema()))
+    }
 }
 
 /// Indicate whether a data exchange is needed for the input of `plan`, which will be very helpful

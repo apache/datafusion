@@ -25,7 +25,6 @@ use super::DisplayAs;
 use crate::{
     expressions::Column, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
     PhysicalExpr, PhysicalSortExpr, RecordBatchStream, SendableRecordBatchStream,
-    Statistics,
 };
 
 use arrow::array::{
@@ -154,10 +153,6 @@ impl ExecutionPlan for UnnestExec {
             num_output_rows: 0,
             unnest_time: 0,
         }))
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        Ok(Statistics::new_unknown(&self.schema()))
     }
 }
 

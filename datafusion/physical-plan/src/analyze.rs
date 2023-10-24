@@ -25,7 +25,7 @@ use super::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
 use super::{DisplayAs, Distribution, SendableRecordBatchStream};
 
 use crate::display::DisplayableExecutionPlan;
-use crate::{DisplayFormatType, ExecutionPlan, Partitioning, Statistics};
+use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::{internal_err, DataFusionError, Result};
@@ -194,11 +194,6 @@ impl ExecutionPlan for AnalyzeExec {
             self.schema.clone(),
             futures::stream::once(output),
         )))
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        // Statistics an an ANALYZE plan are not relevant
-        Ok(Statistics::new_unknown(&self.schema()))
     }
 }
 
