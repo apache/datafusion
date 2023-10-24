@@ -911,7 +911,7 @@ pub fn replace_cols_by_name(
 }
 
 /// check whether the expression is volatile predicates
-pub fn is_volatile_expression(e: Expr) -> bool {
+fn is_volatile_expression(e: &Expr) -> bool {
     let mut is_volatile = false;
     e.apply(&mut |expr| {
         Ok(match expr {
