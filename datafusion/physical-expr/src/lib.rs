@@ -54,10 +54,10 @@ pub use aggregate::groups_accumulator::{
 pub use aggregate::AggregateExpr;
 pub use analysis::{analyze, AnalysisContext, ExprBoundaries};
 pub use equivalence::{
-    add_offset_to_lex_ordering, ordering_equivalence_properties_helper,
-    project_equivalence_properties, project_ordering_equivalence_properties,
-    EquivalenceProperties, EquivalentClass, OrderingEquivalenceProperties,
-    OrderingEquivalentClass,
+    add_offset_to_expr, add_offset_to_lex_ordering,
+    ordering_equivalence_properties_helper, project_equivalence_properties,
+    project_ordering_equivalence_properties, EquivalenceProperties, EquivalentClass,
+    OrderingEquivalenceProperties, OrderingEquivalentClass,
 };
 
 pub use partitioning::{Distribution, Partitioning};

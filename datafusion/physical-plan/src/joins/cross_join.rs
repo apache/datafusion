@@ -21,8 +21,7 @@
 use std::{any::Any, sync::Arc, task::Poll};
 
 use super::utils::{
-    adjust_right_output_partitioning, cross_join_equivalence_properties,
-    BuildProbeJoinMetrics, OnceAsync, OnceFut,
+    adjust_right_output_partitioning, BuildProbeJoinMetrics, OnceAsync, OnceFut,
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::DisplayAs;
@@ -41,6 +40,7 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 
 use async_trait::async_trait;
+use datafusion_physical_expr::equivalence::cross_join_equivalence_properties;
 use futures::{ready, StreamExt};
 use futures::{Stream, TryStreamExt};
 
