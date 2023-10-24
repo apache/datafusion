@@ -366,8 +366,9 @@ fn get_wider_type(lhs: &DataType, rhs: &DataType) -> Result<DataType> {
                 get_wider_type(lhs_field.data_type(), rhs_field.data_type())?;
             if lhs_field.name() != rhs_field.name() {
                 return Err(exec_datafusion_err!(
-                    "There is no wider type (that can represent other) among lhs: {:?}, rhs:{:?}",
-                    lhs, rhs
+                    "There is no wider type that can represent both lhs: {:?}, rhs:{:?}",
+                    lhs,
+                    rhs
                 ));
             }
             assert_eq!(lhs_field.name(), rhs_field.name());
@@ -377,8 +378,9 @@ fn get_wider_type(lhs: &DataType, rhs: &DataType) -> Result<DataType> {
         }
         (_, _) => {
             return Err(exec_datafusion_err!(
-                "There is no wider type (that can represent other) among lhs: {:?}, rhs:{:?}",
-                lhs, rhs
+                "There is no wider type that can represent both lhs: {:?}, rhs:{:?}",
+                lhs,
+                rhs
             ));
         }
     })
