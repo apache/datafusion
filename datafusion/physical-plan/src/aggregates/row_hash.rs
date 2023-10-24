@@ -333,8 +333,7 @@ impl GroupedHashAggregateStream {
         let reservation = MemoryConsumer::new(name).register(context.memory_pool());
         let ordered_section = agg
             .schema_properties()
-            .get_lex_ordering_section(&agg_group_by.output_exprs())
-            .unwrap_or_default();
+            .get_lex_ordering_section(&agg_group_by.output_exprs());
         let group_ordering = GroupOrdering::try_new(
             &group_schema,
             &agg.partition_search_mode,

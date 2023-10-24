@@ -314,41 +314,41 @@ mod tests {
 
     #[test]
     fn test_deduplicate_physical_exprs() -> Result<()> {
-        let lit_true = Arc::new(Literal::new(ScalarValue::Boolean(Some(true))))
-            as Arc<dyn PhysicalExpr>;
-        let lit_false = Arc::new(Literal::new(ScalarValue::Boolean(Some(false))))
-            as Arc<dyn PhysicalExpr>;
-        let lit4 =
-            Arc::new(Literal::new(ScalarValue::Int32(Some(4)))) as Arc<dyn PhysicalExpr>;
-        let lit2 =
-            Arc::new(Literal::new(ScalarValue::Int32(Some(2)))) as Arc<dyn PhysicalExpr>;
-        let col_a_expr = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
-        let col_b_expr = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
+        let lit_true = &(Arc::new(Literal::new(ScalarValue::Boolean(Some(true))))
+            as Arc<dyn PhysicalExpr>);
+        let lit_false = &(Arc::new(Literal::new(ScalarValue::Boolean(Some(false))))
+            as Arc<dyn PhysicalExpr>);
+        let lit4 = &(Arc::new(Literal::new(ScalarValue::Int32(Some(4))))
+            as Arc<dyn PhysicalExpr>);
+        let lit2 = &(Arc::new(Literal::new(ScalarValue::Int32(Some(2))))
+            as Arc<dyn PhysicalExpr>);
+        let col_a_expr = &(Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>);
+        let col_b_expr = &(Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>);
 
-        // lit(true), lit(false), lit(4), lit(2), Col(a), Col(b)
-        let mut physical_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
-            lit_true.clone(),
-            lit_false.clone(),
-            lit4.clone(),
-            lit2.clone(),
-            col_a_expr.clone(),
-            col_a_expr.clone(),
-            col_b_expr.clone(),
-            lit_true.clone(),
-            lit2.clone(),
+        // First vector in the tuple is arguments, second one is the expected value.
+        let test_cases = vec![
+            // ---------- TEST CASE 1----------//
+            (
+                vec![
+                    lit_true, lit_false, lit4, lit2, col_a_expr, col_a_expr, col_b_expr,
+                    lit_true, lit2,
+                ],
+                // lit(true), lit(false), lit(4), lit(2), Col(a), Col(b)
+                vec![lit_true, lit_false, lit4, lit2, col_a_expr, col_b_expr],
+            ),
+            // ---------- TEST CASE 2----------//
+            (
+                vec![lit_true, lit_true, lit_false, lit4],
+                vec![lit_true, lit4, lit_false],
+            ),
         ];
-
-        let expected = vec![
-            lit_true.clone(),
-            lit_false.clone(),
-            lit4.clone(),
-            lit2.clone(),
-            col_a_expr.clone(),
-            col_b_expr.clone(),
-        ];
-        // expected contains unique versions of the physical_exprs
-        deduplicate_physical_exprs(&mut physical_exprs);
-        physical_exprs_equal(&physical_exprs, &expected);
+        for (physical_exprs, expected) in test_cases {
+            let mut physical_exprs =
+                physical_exprs.into_iter().cloned().collect::<Vec<_>>();
+            let expected = expected.into_iter().cloned().collect::<Vec<_>>();
+            deduplicate_physical_exprs(&mut physical_exprs);
+            assert!(physical_exprs_equal(&physical_exprs, &expected));
+        }
         Ok(())
     }
 

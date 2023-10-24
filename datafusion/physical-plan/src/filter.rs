@@ -152,7 +152,7 @@ impl ExecutionPlan for FilterExec {
         for (lhs, rhs) in equal_pairs {
             let lhs_expr = Arc::new(lhs.clone()) as _;
             let rhs_expr = Arc::new(rhs.clone()) as _;
-            filter_oeq.add_equal_conditions((&lhs_expr, &rhs_expr))
+            filter_oeq.add_equal_conditions(&lhs_expr, &rhs_expr)
         }
         // Add the columns that have only one value (singleton) after filtering to constants.
         let constants = collect_columns(self.predicate())

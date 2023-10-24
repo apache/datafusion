@@ -837,7 +837,7 @@ mod tests {
         let col_c_expr = col("c", &schema)?;
         let mut schema_properties = SchemaProperties::new(Arc::new(schema.clone()));
 
-        schema_properties.add_equal_conditions((&col_a_expr, &col_c_expr));
+        schema_properties.add_equal_conditions(&col_a_expr, &col_c_expr);
         let others = vec![
             vec![PhysicalSortExpr {
                 expr: col_b_expr.clone(),
@@ -862,8 +862,8 @@ mod tests {
             }],
         ]);
 
-        let oeq_class = schema_properties.oeq_group().clone();
-        let expected = expected_oeq.oeq_group();
+        let oeq_class = schema_properties.oeq_class().clone();
+        let expected = expected_oeq.oeq_class();
         assert!(oeq_class.eq(expected));
 
         Ok(())
@@ -899,7 +899,7 @@ mod tests {
         let projected_oeq =
             schema_properties.project(&source_to_target_mapping, projection_schema);
         let orderings = projected_oeq
-            .oeq_group()
+            .oeq_class()
             .output_ordering()
             .unwrap_or_default();
 
@@ -934,7 +934,7 @@ mod tests {
         let projected_oeq =
             schema_properties.project(&source_to_target_mapping, projection_schema);
         // After projection there is no ordering.
-        assert!(projected_oeq.oeq_group().output_ordering().is_none());
+        assert!(projected_oeq.oeq_class().output_ordering().is_none());
 
         Ok(())
     }

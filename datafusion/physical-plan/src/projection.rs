@@ -99,7 +99,7 @@ impl ProjectionExec {
 
         let input_oeq = input.schema_properties();
         let project_oeq = input_oeq.project(&source_to_target_mapping, schema.clone());
-        let project_orderings = project_oeq.oeq_group();
+        let project_orderings = project_oeq.oeq_class();
         let output_ordering = project_orderings.output_ordering();
 
         Ok(Self {

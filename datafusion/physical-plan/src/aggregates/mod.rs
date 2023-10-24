@@ -545,7 +545,7 @@ impl AggregateExec {
         let aggregate_oeq = input
             .schema_properties()
             .project(&source_to_target_mapping, schema.clone());
-        let output_ordering = aggregate_oeq.oeq_group().output_ordering();
+        let output_ordering = aggregate_oeq.oeq_class().output_ordering();
 
         Ok(AggregateExec {
             mode,
@@ -2045,7 +2045,7 @@ mod tests {
         let col_c = &col("c", &test_schema)?;
         let mut schema_properties = SchemaProperties::new(test_schema);
         // Columns a and b are equal.
-        schema_properties.add_equal_conditions((col_a, col_b));
+        schema_properties.add_equal_conditions(col_a, col_b);
         // Aggregate requirements are
         // [None], [a ASC], [a ASC, b ASC, c ASC], [a ASC, b ASC] respectively
         let mut order_by_exprs = vec![

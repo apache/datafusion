@@ -301,7 +301,7 @@ mod tests {
 
         assert_eq!(mem_exec.output_ordering().unwrap(), expected_output_order);
         let order_eq = mem_exec.schema_properties();
-        assert!(order_eq.oeq_group().contains(&expected_order_eq));
+        assert!(order_eq.oeq_class().contains(&expected_order_eq));
         Ok(())
     }
 }

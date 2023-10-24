@@ -752,7 +752,7 @@ fn try_reorder(
     expected: &[Arc<dyn PhysicalExpr>],
     equivalence_properties: &SchemaProperties,
 ) -> Option<(JoinKeyPairs, Vec<usize>)> {
-    let eq_groups = equivalence_properties.eq_groups();
+    let eq_groups = equivalence_properties.eq_group();
     let mut normalized_expected = vec![];
     let mut normalized_left_keys = vec![];
     let mut normalized_right_keys = vec![];
@@ -763,7 +763,7 @@ fn try_reorder(
         || physical_exprs_equal(expected, &join_keys.right_keys)
     {
         return Some((join_keys, vec![]));
-    } else if !equivalence_properties.eq_groups().is_empty() {
+    } else if !equivalence_properties.eq_group().is_empty() {
         normalized_expected = expected
             .iter()
             .map(|e| eq_groups.normalize_expr(e.clone()))

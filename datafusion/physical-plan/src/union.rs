@@ -234,7 +234,7 @@ impl ExecutionPlan for UnionExec {
         let mut union_oeq = SchemaProperties::new(self.schema());
         // Get first ordering equivalent group as seed group.
         let mut existing_meets = child_oeqs[0]
-            .oeq_group()
+            .oeq_class()
             .iter()
             .map(|elem| elem.to_vec())
             .collect::<Vec<_>>();
@@ -243,7 +243,7 @@ impl ExecutionPlan for UnionExec {
             // Find the valid meet orderings of existing meet and new group.
             let mut next_meets = vec![];
             for existing_meet in &existing_meets {
-                next_meets.extend(next_child_oeq.oeq_group().iter().filter_map(
+                next_meets.extend(next_child_oeq.oeq_class().iter().filter_map(
                     |ordering| next_child_oeq.get_meet_ordering(ordering, existing_meet),
                 ));
             }
@@ -859,7 +859,7 @@ mod tests {
 
             let union = UnionExec::new(vec![child1, child2]);
             let union_schema_properties = union.schema_properties();
-            let union_actual_orderings = union_schema_properties.oeq_group();
+            let union_actual_orderings = union_schema_properties.oeq_class();
             println!("union_orderings:{:?}", union_actual_orderings);
             let err_msg = format!(
                 "Error in test id: {:?}, test case: {:?}",
