@@ -2764,7 +2764,7 @@ Projection: a, b
         let table_scan = test_table_scan_with_name("test1")?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![col("a")], vec![sum(col("b"))])?
-            .project(vec![col("a"), sum(col("b")), random().alias("r")])?
+            .project(vec![col("a"), sum(col("b")), random().add(lit(1)).alias("r")])?
             .alias("t")?
             .filter(col("t.a").gt(lit(5)).and(col("t.r").gt(lit(0.5))))?
             .project(vec![col("t.a"), col("t.r")])?
