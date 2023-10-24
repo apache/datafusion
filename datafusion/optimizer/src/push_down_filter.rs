@@ -671,7 +671,7 @@ impl OptimizerRule for PushDownFilter {
 
                             (field.qualified_name(), expr)
                         })
-                        .partition(|(_, value)| is_volatile_expression(value.clone()));
+                        .partition(|(_, value)| is_volatile_expression(value));
 
                 let mut push_predicates = vec![];
                 let mut keep_predicates = vec![];
