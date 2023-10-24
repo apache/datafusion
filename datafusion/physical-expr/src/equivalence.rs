@@ -1088,8 +1088,8 @@ impl SchemaProperties {
 
 /// Calculate ordering equivalence properties for the given join operation.
 pub fn join_schema_properties(
-    left: &SchemaProperties,
-    right: &SchemaProperties,
+    left: SchemaProperties,
+    right: SchemaProperties,
     join_type: &JoinType,
     join_schema: SchemaRef,
     maintains_input_order: &[bool],
@@ -1108,8 +1108,8 @@ pub fn join_schema_properties(
     assert_eq!(maintains_input_order.len(), 2);
     let left_maintains = maintains_input_order[0];
     let right_maintains = maintains_input_order[1];
-    let left_oeq_class = left.oeq_class();
-    let right_oeq_class = right.oeq_class();
+    let left_oeq_class = left.oeq_class;
+    let right_oeq_class = right.oeq_class;
     match (left_maintains, right_maintains) {
         (true, true) => {
             unreachable!("Cannot maintain ordering of both sides");
@@ -1134,13 +1134,13 @@ pub fn join_schema_properties(
                 let out_oeq_class = left_oeq_class.join_postfix(&updated_right_oeq);
                 new_properties.add_ordering_equivalent_group(out_oeq_class);
             } else {
-                new_properties.add_ordering_equivalent_group(left_oeq_class.clone());
+                new_properties.add_ordering_equivalent_group(left_oeq_class);
             }
         }
         (false, true) => {
             let updated_right_oeq = get_updated_right_ordering_equivalent_group(
                 join_type,
-                right.oeq_class(),
+                right_oeq_class,
                 left_columns_len,
             );
             // In this special case, left side ordering can be prefixed with right side ordering.
@@ -1153,7 +1153,7 @@ pub fn join_schema_properties(
                 // ordering of the left table is `a ASC`, then the ordering equivalence `b ASC`
                 // for the right table should be converted to `a ASC, b ASC` before it is added
                 // to the ordering equivalences of the join.
-                let out_oeq_class = updated_right_oeq.join_postfix(left_oeq_class);
+                let out_oeq_class = updated_right_oeq.join_postfix(&left_oeq_class);
                 new_properties.add_ordering_equivalent_group(out_oeq_class);
             } else {
                 new_properties.add_ordering_equivalent_group(updated_right_oeq);
@@ -1314,7 +1314,7 @@ fn update_ordering(
 /// it can thereafter safely be used for ordering equivalence normalization.
 fn get_updated_right_ordering_equivalent_group(
     join_type: &JoinType,
-    right_oeq_group: &OrderingEquivalenceClass,
+    right_oeq_group: OrderingEquivalenceClass,
     left_columns_len: usize,
 ) -> OrderingEquivalenceClass {
     if matches!(
@@ -1323,7 +1323,7 @@ fn get_updated_right_ordering_equivalent_group(
     ) {
         return right_oeq_group.add_offset(left_columns_len);
     }
-    right_oeq_group.clone()
+    right_oeq_group
 }
 
 #[cfg(test)]
@@ -2086,7 +2086,7 @@ mod tests {
 
         let result = get_updated_right_ordering_equivalent_group(
             &join_type,
-            &right_oeq_class,
+            right_oeq_class,
             left_columns_len,
         );
         join_schema_properties.add_ordering_equivalent_group(result);
@@ -2265,7 +2265,13 @@ mod tests {
         let res: Vec<_> = schema_vec
             .into_iter()
             .zip(schema.fields.iter())
-            .map(|(elem, field)| (field.name(), elem.unwrap()))
+            .map(|(elem, field)| {
+                (
+                    field.name(),
+                    // Generate random values for columns that do not occur in any of the groups (equivalence, ordering equivalence, constants)
+                    elem.unwrap_or_else(|| generate_random_array(n_elem, n_distinct)),
+                )
+            })
             .collect();
 
         Ok(RecordBatch::try_from_iter(res)?)

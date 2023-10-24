@@ -433,8 +433,8 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         let left = self.left.schema_properties();
         let right = self.right.schema_properties();
         join_schema_properties(
-            &left,
-            &right,
+            left,
+            right,
             &self.join_type,
             self.schema(),
             &self.maintains_input_order(),

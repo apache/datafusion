@@ -217,8 +217,8 @@ impl ExecutionPlan for CrossJoinExec {
         let left = self.left.schema_properties();
         let right = self.right.schema_properties();
         join_schema_properties(
-            &left,
-            &right,
+            left,
+            right,
             &JoinType::Full,
             self.schema(),
             &[false, false],
