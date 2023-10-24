@@ -18,15 +18,18 @@
 //! Coercion rules for matching argument types for binary operators
 
 use crate::Operator;
+use std::sync::Arc;
 
 use arrow::array::{new_empty_array, Array};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{
-    DataType, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
+    DataType, Field, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
     DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
 };
 
-use datafusion_common::{plan_datafusion_err, plan_err, DataFusionError, Result};
+use datafusion_common::{
+    exec_datafusion_err, plan_datafusion_err, plan_err, DataFusionError, Result,
+};
 
 /// The type signature of an instantiation of binary operator expression such as
 /// `lhs + rhs`
@@ -473,6 +476,72 @@ fn get_wider_decimal_type(
         }
         (_, _) => None,
     }
+}
+
+/// Returns the wider type among lhs and rhs.
+/// Wider type is the type that can safely represent the other type without information loss.
+/// Returns Error if types are incompatible.
+pub fn get_wider_type(lhs: &DataType, rhs: &DataType) -> Result<DataType> {
+    Ok(match (lhs, rhs) {
+        (lhs, rhs) if lhs == rhs => lhs.clone(),
+        (DataType::Null, _) => rhs.clone(),
+        (_, DataType::Null) => lhs.clone(),
+        // Right UInt is larger than left UInt
+        (DataType::UInt8, DataType::UInt16 | DataType::UInt32 | DataType::UInt64) => {
+            rhs.clone()
+        }
+        (DataType::UInt16, DataType::UInt32 | DataType::UInt64) => rhs.clone(),
+        (DataType::UInt32, DataType::UInt64) => rhs.clone(),
+        // Left UInt is larger than right UInt.
+        (DataType::UInt16 | DataType::UInt32 | DataType::UInt64, DataType::UInt8) => {
+            lhs.clone()
+        }
+        (DataType::UInt32 | DataType::UInt64, DataType::UInt16) => lhs.clone(),
+        (DataType::UInt64, DataType::UInt32) => lhs.clone(),
+        // Right Int is larger than left Int
+        (DataType::Int8, DataType::Int16 | DataType::Int32 | DataType::Int64) => {
+            rhs.clone()
+        }
+        (DataType::Int16, DataType::Int32 | DataType::Int64) => rhs.clone(),
+        (DataType::Int32, DataType::Int64) => rhs.clone(),
+        // Left Int is larger than right Int.
+        (DataType::Int16 | DataType::Int32 | DataType::Int64, DataType::Int8) => {
+            lhs.clone()
+        }
+        (DataType::Int32 | DataType::Int64, DataType::Int16) => lhs.clone(),
+        (DataType::Int64, DataType::Int32) => lhs.clone(),
+        // Right Float is larger than left Float
+        (DataType::Float16, DataType::Float32 | DataType::Float64) => rhs.clone(),
+        (DataType::Float32, DataType::Float64) => rhs.clone(),
+        // Left Float is larger than right Float.
+        (DataType::Float32 | DataType::Float64, DataType::Float16) => lhs.clone(),
+        (DataType::Float64, DataType::Float32) => lhs.clone(),
+        // String
+        (DataType::Utf8, DataType::LargeUtf8) => rhs.clone(),
+        (DataType::LargeUtf8, DataType::Utf8) => lhs.clone(),
+        (DataType::List(lhs_field), DataType::List(rhs_field)) => {
+            let field_type =
+                get_wider_type(lhs_field.data_type(), rhs_field.data_type())?;
+            if lhs_field.name() != rhs_field.name() {
+                return Err(exec_datafusion_err!(
+                    "There is no wider type that can represent both lhs: {:?}, rhs:{:?}",
+                    lhs,
+                    rhs
+                ));
+            }
+            assert_eq!(lhs_field.name(), rhs_field.name());
+            let field_name = lhs_field.name();
+            let nullable = lhs_field.is_nullable() | rhs_field.is_nullable();
+            DataType::List(Arc::new(Field::new(field_name, field_type, nullable)))
+        }
+        (_, _) => {
+            return Err(exec_datafusion_err!(
+                "There is no wider type that can represent both lhs: {:?}, rhs:{:?}",
+                lhs,
+                rhs
+            ));
+        }
+    })
 }
 
 /// Convert the numeric data type to the decimal data type.
