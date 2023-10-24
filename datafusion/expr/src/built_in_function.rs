@@ -25,6 +25,7 @@ use std::sync::{Arc, OnceLock};
 
 use crate::nullif::SUPPORTED_NULLIF_TYPES;
 use crate::signature::TIMEZONE_WILDCARD;
+use crate::type_coercion::binary::get_wider_type;
 use crate::type_coercion::functions::data_types;
 use crate::{
     conditional_expressions, struct_expressions, utils, FuncMonotonicity, Signature,
@@ -36,7 +37,6 @@ use datafusion_common::{
     internal_err, plan_datafusion_err, plan_err, DataFusionError, Result,
 };
 
-use crate::type_coercion::binary::get_wider_type;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 

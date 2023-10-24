@@ -17,8 +17,9 @@
 
 //! Coercion rules for matching argument types for binary operators
 
-use crate::Operator;
 use std::sync::Arc;
+
+use crate::Operator;
 
 use arrow::array::{new_empty_array, Array};
 use arrow::compute::can_cast_types;
@@ -67,61 +68,54 @@ impl Signature {
 
 /// Returns a [`Signature`] for applying `op` to arguments of type `lhs` and `rhs`
 fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature> {
+    use arrow::datatypes::DataType::*;
+    use Operator::*;
     match op {
-        Operator::Eq |
-        Operator::NotEq |
-        Operator::Lt |
-        Operator::LtEq |
-        Operator::Gt |
-        Operator::GtEq |
-        Operator::IsDistinctFrom |
-        Operator::IsNotDistinctFrom => {
+        Eq |
+        NotEq |
+        Lt |
+        LtEq |
+        Gt |
+        GtEq |
+        IsDistinctFrom |
+        IsNotDistinctFrom => {
             comparison_coercion(lhs, rhs).map(Signature::comparison).ok_or_else(|| {
                 plan_datafusion_err!(
                     "Cannot infer common argument type for comparison operation {lhs} {op} {rhs}"
                 )
             })
         }
-        Operator::And | Operator::Or => match (lhs, rhs) {
-            // logical binary boolean operators can only be evaluated in bools or nulls
-            (DataType::Boolean, DataType::Boolean)
-            | (DataType::Null, DataType::Null)
-            | (DataType::Boolean, DataType::Null)
-            | (DataType::Null, DataType::Boolean) => Ok(Signature::uniform(DataType::Boolean)),
-            _ => plan_err!(
+        And | Or => if matches!((lhs, rhs), (Boolean | Null, Boolean | Null)) {
+            // Logical binary boolean operators can only be evaluated for
+            // boolean or null arguments.                   
+            Ok(Signature::uniform(DataType::Boolean))
+        } else {
+            plan_err!(
                 "Cannot infer common argument type for logical boolean operation {lhs} {op} {rhs}"
-            ),
-        },
-        Operator::RegexMatch |
-        Operator::RegexIMatch |
-        Operator::RegexNotMatch |
-        Operator::RegexNotIMatch => {
+            )
+        }
+        RegexMatch | RegexIMatch | RegexNotMatch | RegexNotIMatch => {
             regex_coercion(lhs, rhs).map(Signature::comparison).ok_or_else(|| {
                 plan_datafusion_err!(
                     "Cannot infer common argument type for regex operation {lhs} {op} {rhs}"
                 )
             })
         }
-        Operator::BitwiseAnd
-        | Operator::BitwiseOr
-        | Operator::BitwiseXor
-        | Operator::BitwiseShiftRight
-        | Operator::BitwiseShiftLeft => {
+        BitwiseAnd | BitwiseOr | BitwiseXor | BitwiseShiftRight | BitwiseShiftLeft => {
             bitwise_coercion(lhs, rhs).map(Signature::uniform).ok_or_else(|| {
                 plan_datafusion_err!(
                     "Cannot infer common type for bitwise operation {lhs} {op} {rhs}"
                 )
             })
         }
-        Operator::StringConcat => {
+        StringConcat => {
             string_concat_coercion(lhs, rhs).map(Signature::uniform).ok_or_else(|| {
                 plan_datafusion_err!(
                     "Cannot infer common string type for string concat operation {lhs} {op} {rhs}"
                 )
             })
         }
-        Operator::AtArrow
-        | Operator::ArrowAt => {
+        AtArrow | ArrowAt => {
             // ArrowAt and AtArrow check for whether one array ic contained in another.
             // The result type is boolean. Signature::comparison defines this signature.
             // Operation has nothing to do with comparison
@@ -131,22 +125,18 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
                 )
             })
         }
-        Operator::Plus |
-        Operator::Minus |
-        Operator::Multiply |
-        Operator::Divide|
-        Operator::Modulo =>  {
+        Plus | Minus | Multiply | Divide | Modulo =>  {
             let get_result = |lhs, rhs| {
                 use arrow::compute::kernels::numeric::*;
                 let l = new_empty_array(lhs);
                 let r = new_empty_array(rhs);
 
                 let result = match op {
-                    Operator::Plus => add_wrapping(&l, &r),
-                    Operator::Minus => sub_wrapping(&l, &r),
-                    Operator::Multiply => mul_wrapping(&l, &r),
-                    Operator::Divide => div(&l, &r),
-                    Operator::Modulo => rem(&l, &r),
+                    Plus => add_wrapping(&l, &r),
+                    Minus => sub_wrapping(&l, &r),
+                    Multiply => mul_wrapping(&l, &r),
+                    Divide => div(&l, &r),
+                    Modulo => rem(&l, &r),
                     _ => unreachable!(),
                 };
                 result.map(|x| x.data_type().clone())
@@ -233,7 +223,7 @@ fn math_decimal_coercion(
         (Null, dec_type @ Decimal128(_, _)) | (dec_type @ Decimal128(_, _), Null) => {
             Some((dec_type.clone(), dec_type.clone()))
         }
-        (Decimal128(_, _), Decimal128(_, _)) => {
+        (Decimal128(_, _), Decimal128(_, _)) | (Decimal256(_, _), Decimal256(_, _)) => {
             Some((lhs_type.clone(), rhs_type.clone()))
         }
         // Unlike with comparison we don't coerce to a decimal in the case of floating point
@@ -243,9 +233,6 @@ fn math_decimal_coercion(
         }
         (Int8 | Int16 | Int32 | Int64, Decimal128(_, _)) => {
             Some((coerce_numeric_type_to_decimal(lhs_type)?, rhs_type.clone()))
-        }
-        (Decimal256(_, _), Decimal256(_, _)) => {
-            Some((lhs_type.clone(), rhs_type.clone()))
         }
         (Decimal256(_, _), Int8 | Int16 | Int32 | Int64) => Some((
             lhs_type.clone(),
@@ -478,67 +465,49 @@ fn get_wider_decimal_type(
     }
 }
 
-/// Returns the wider type among lhs and rhs.
-/// Wider type is the type that can safely represent the other type without information loss.
-/// Returns Error if types are incompatible.
+/// Returns the wider type among arguments `lhs` and `rhs`.
+/// The wider type is the type that can safely represent values from both types
+/// without information loss. Returns an Error if types are incompatible.
 pub fn get_wider_type(lhs: &DataType, rhs: &DataType) -> Result<DataType> {
+    use arrow::datatypes::DataType::*;
     Ok(match (lhs, rhs) {
         (lhs, rhs) if lhs == rhs => lhs.clone(),
-        (DataType::Null, _) => rhs.clone(),
-        (_, DataType::Null) => lhs.clone(),
-        // Right UInt is larger than left UInt
-        (DataType::UInt8, DataType::UInt16 | DataType::UInt32 | DataType::UInt64) => {
-            rhs.clone()
-        }
-        (DataType::UInt16, DataType::UInt32 | DataType::UInt64) => rhs.clone(),
-        (DataType::UInt32, DataType::UInt64) => rhs.clone(),
+        // Right UInt is larger than left UInt.
+        (UInt8, UInt16 | UInt32 | UInt64) | (UInt16, UInt32 | UInt64) | (UInt32, UInt64) |
+        // Right Int is larger than left Int.
+        (Int8, Int16 | Int32 | Int64) | (Int16, Int32 | Int64) | (Int32, Int64) |
+        // Right Float is larger than left Float.
+        (Float16, Float32 | Float64) | (Float32, Float64) |
+        // Right String is larger than left String.
+        (Utf8, LargeUtf8) |
+        // Any right type is wider than a left hand side Null.
+        (Null, _) => rhs.clone(),
         // Left UInt is larger than right UInt.
-        (DataType::UInt16 | DataType::UInt32 | DataType::UInt64, DataType::UInt8) => {
-            lhs.clone()
-        }
-        (DataType::UInt32 | DataType::UInt64, DataType::UInt16) => lhs.clone(),
-        (DataType::UInt64, DataType::UInt32) => lhs.clone(),
-        // Right Int is larger than left Int
-        (DataType::Int8, DataType::Int16 | DataType::Int32 | DataType::Int64) => {
-            rhs.clone()
-        }
-        (DataType::Int16, DataType::Int32 | DataType::Int64) => rhs.clone(),
-        (DataType::Int32, DataType::Int64) => rhs.clone(),
+        (UInt16 | UInt32 | UInt64, UInt8) | (UInt32 | UInt64, UInt16) | (UInt64, UInt32) |
         // Left Int is larger than right Int.
-        (DataType::Int16 | DataType::Int32 | DataType::Int64, DataType::Int8) => {
-            lhs.clone()
-        }
-        (DataType::Int32 | DataType::Int64, DataType::Int16) => lhs.clone(),
-        (DataType::Int64, DataType::Int32) => lhs.clone(),
-        // Right Float is larger than left Float
-        (DataType::Float16, DataType::Float32 | DataType::Float64) => rhs.clone(),
-        (DataType::Float32, DataType::Float64) => rhs.clone(),
+        (Int16 | Int32 | Int64, Int8) | (Int32 | Int64, Int16) | (Int64, Int32) |
         // Left Float is larger than right Float.
-        (DataType::Float32 | DataType::Float64, DataType::Float16) => lhs.clone(),
-        (DataType::Float64, DataType::Float32) => lhs.clone(),
-        // String
-        (DataType::Utf8, DataType::LargeUtf8) => rhs.clone(),
-        (DataType::LargeUtf8, DataType::Utf8) => lhs.clone(),
-        (DataType::List(lhs_field), DataType::List(rhs_field)) => {
+        (Float32 | Float64, Float16) | (Float64, Float32) |
+        // Left String is larget than right String.
+        (LargeUtf8, Utf8) |
+        // Any left type is wider than a right hand side Null.
+        (_, Null) => lhs.clone(),
+        (List(lhs_field), List(rhs_field)) => {
             let field_type =
                 get_wider_type(lhs_field.data_type(), rhs_field.data_type())?;
             if lhs_field.name() != rhs_field.name() {
                 return Err(exec_datafusion_err!(
-                    "There is no wider type that can represent both lhs: {:?}, rhs:{:?}",
-                    lhs,
-                    rhs
+                    "There is no wider type that can represent both {lhs} and {rhs}."
                 ));
             }
             assert_eq!(lhs_field.name(), rhs_field.name());
             let field_name = lhs_field.name();
             let nullable = lhs_field.is_nullable() | rhs_field.is_nullable();
-            DataType::List(Arc::new(Field::new(field_name, field_type, nullable)))
+            List(Arc::new(Field::new(field_name, field_type, nullable)))
         }
         (_, _) => {
             return Err(exec_datafusion_err!(
-                "There is no wider type that can represent both lhs: {:?}, rhs:{:?}",
-                lhs,
-                rhs
+                "There is no wider type that can represent both {lhs} and {rhs}."
             ));
         }
     })
@@ -879,14 +848,11 @@ fn null_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
 
 #[cfg(test)]
 mod tests {
-    use arrow::datatypes::DataType;
-
-    use datafusion_common::assert_contains;
-    use datafusion_common::Result;
-
+    use super::*;
     use crate::Operator;
 
-    use super::*;
+    use arrow::datatypes::DataType;
+    use datafusion_common::{assert_contains, Result};
 
     #[test]
     fn test_coercion_error() -> Result<()> {
