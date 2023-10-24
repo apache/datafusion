@@ -271,7 +271,7 @@ config_namespace! {
         /// for each output file being worked. Higher values can potentially
         /// give faster write performance at the cost of higher peak
         /// memory consumption
-        pub max_buffered_batches_per_output_file: usize, default = 10
+        pub max_buffered_batches_per_output_file: usize, default = 2
 
     }
 }
@@ -386,15 +386,19 @@ config_namespace! {
         /// applying backpressure to prevent working on too many row groups in
         /// parallel in case of limited memory or slow I/O speed causing
         /// OOM errors. Lowering this number limits memory growth at the cost
-        /// of potentially slower write speeds.
-        pub maximum_parallel_row_group_writers: usize, default = 16
+        /// of potentially slower write speeds. Boosting this number may 
+        /// help performance when batches can be produced very fast,
+        /// such as from an in-memory table.
+        pub maximum_parallel_row_group_writers: usize, default = 2
 
         /// If allow_single_file_parallelism=true, this setting allows
         /// applying backpressure to prevent too many RecordBatches building
         /// up in memory in case the parallel writers cannot consume them fast
         /// enough. Lowering this number limits memory growth at the cost
-        /// of potentially lower write speeds.
-        pub maximum_buffered_record_batches_per_stream: usize, default = 200
+        /// of potentially lower write speeds. Boosting this number may
+        /// help performance when batches can be produces very fast, such
+        /// as from an in-memory table.
+        pub maximum_buffered_record_batches_per_stream: usize, default = 128
 
     }
 }

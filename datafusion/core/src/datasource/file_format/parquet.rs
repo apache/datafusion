@@ -933,9 +933,7 @@ fn spawn_parquet_parallel_serialization_task(
     parallel_options: ParallelParquetWriterOptions,
 ) -> JoinHandle<Result<(), DataFusionError>> {
     tokio::spawn(async move {
-        // This is divided by 2 because we move RecordBatches between two channels so the effective
-        // buffer limit is the sum of the size of each buffer, i.e. when both buffers are full.
-        let max_buffer_rb = parallel_options.max_buffered_record_batches_per_stream / 2;
+        let max_buffer_rb = parallel_options.max_buffered_record_batches_per_stream;
         let max_row_group_rows = writer_props.max_row_group_size();
         let (mut column_writer_handles, mut col_array_channels) =
             spawn_column_parallel_row_group_writer(
@@ -984,14 +982,16 @@ fn spawn_parquet_parallel_serialization_task(
             }
         }
 
-        // Handle leftover rows as final rowgroup, which may be smaller than max_row_group_rows
         drop(col_array_channels);
-        let finalize_rg_task =
+        // Handle leftover rows as final rowgroup, which may be smaller than max_row_group_rows
+        if current_rg_rows > 0{
+            let finalize_rg_task =
             spawn_rg_join_and_finalize_task(column_writer_handles, current_rg_rows);
 
-        serialize_tx.send(finalize_rg_task).await.map_err(|_| {
-            DataFusionError::Internal("Unable to send closed RG to concat task!".into())
-        })?;
+            serialize_tx.send(finalize_rg_task).await.map_err(|_| {
+                DataFusionError::Internal("Unable to send closed RG to concat task!".into())
+            })?;
+        }
 
         Ok(())
     })
