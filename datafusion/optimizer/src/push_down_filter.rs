@@ -927,7 +927,7 @@ fn is_volatile_expression(e: &Expr) -> bool {
 }
 
 /// check whether the expression uses the columns in `check_map`.
-pub fn contain(e: Expr, check_map: &HashMap<String, Expr>) -> bool {
+fn contain(e: &Expr, check_map: &HashMap<String, Expr>) -> bool {
     let mut is_contain = false;
     e.apply(&mut |expr| {
         Ok(if let Expr::Column(c) = &expr {
