@@ -2780,7 +2780,7 @@ Projection: a, b
 
     #[test]
     fn test_push_down_volatile_function_in_aggregate() -> Result<()> {
-        // SELECT t.a, t.r FROM (SELECT a, SUM(b), random() AS r FROM test1 GROUP BY a) AS t WHERE t.a > 5 AND t.r > 0.5;
+        // SELECT t.a, t.r FROM (SELECT a, SUM(b), random()+1 AS r FROM test1 GROUP BY a) AS t WHERE t.a > 5 AND t.r > 0.5;
         let table_scan = test_table_scan_with_name("test1")?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![col("a")], vec![sum(col("b"))])?
