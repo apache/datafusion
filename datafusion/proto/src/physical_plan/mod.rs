@@ -394,17 +394,12 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     vec![]
                 };
 
-                let input_schema = hash_agg
-                    .input_schema
-                    .as_ref()
-                    .ok_or_else(|| {
-                        DataFusionError::Internal(
-                            "input_schema in AggregateNode is missing.".to_owned(),
-                        )
-                    })?
-                    .clone();
-                let physical_schema: SchemaRef =
-                    SchemaRef::new((&input_schema).try_into()?);
+                let input_schema = hash_agg.input_schema.as_ref().ok_or_else(|| {
+                    DataFusionError::Internal(
+                        "input_schema in AggregateNode is missing.".to_owned(),
+                    )
+                })?;
+                let physical_schema: SchemaRef = SchemaRef::new(input_schema.try_into()?);
 
                 let physical_filter_expr = hash_agg
                     .filter_expr
@@ -489,7 +484,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     physical_filter_expr,
                     physical_order_by_expr,
                     input,
-                    Arc::new((&input_schema).try_into()?),
+                    Arc::new(input_schema.try_into()?),
                 )?))
             }
             PhysicalPlanType::HashJoin(hashjoin) => {
