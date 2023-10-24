@@ -35,6 +35,7 @@ use crate::{
 
 use arrow::datatypes::{Fields, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use arrow_array::RecordBatchOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::{plan_err, DataFusionError, Result, ScalarValue};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
@@ -347,13 +348,14 @@ fn build_batch(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    RecordBatch::try_new(
+    RecordBatch::try_new_with_options(
         Arc::new(schema.clone()),
         arrays
             .iter()
             .chain(batch.columns().iter())
             .cloned()
             .collect(),
+        &RecordBatchOptions::new().with_row_count(Some(batch.num_rows())),
     )
     .map_err(Into::into)
 }

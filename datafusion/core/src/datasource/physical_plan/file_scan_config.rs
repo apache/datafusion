@@ -346,7 +346,6 @@ impl PartitionColumnProjector {
             &RecordBatchOptions::new().with_row_count(Some(file_batch.num_rows())),
         )
         .map_err(Into::into)
-        // RecordBatch::try_new(Arc::clone(&self.projected_schema), cols).map_err(Into::into)
     }
 }
 
