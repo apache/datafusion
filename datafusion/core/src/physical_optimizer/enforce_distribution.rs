@@ -55,9 +55,7 @@ use datafusion_physical_expr::expressions::{Column, NoOp};
 use datafusion_physical_expr::utils::{
     map_columns_before_projection, ordering_satisfy_requirement_concrete,
 };
-use datafusion_physical_expr::{
-    expr_list_eq_strict_order, PhysicalExpr, PhysicalSortRequirement,
-};
+use datafusion_physical_expr::{expr_list_eq_strict_order, PhysicalExpr};
 use datafusion_physical_plan::unbounded_output;
 use datafusion_physical_plan::windows::{get_best_fitting_window, BoundedWindowAggExec};
 
@@ -1374,10 +1372,7 @@ fn ensure_distribution(
                     // make sure ordering requirements are still satisfied after.
                     if ordering_satisfied {
                         // Make sure to satisfy ordering requirement:
-                        let sort_expr = PhysicalSortRequirement::to_sort_exprs(
-                            required_input_ordering.clone(),
-                        );
-                        add_sort_above(&mut child, sort_expr, None)?;
+                        add_sort_above(&mut child, required_input_ordering, None)?;
                     }
                 }
                 // Stop tracking distribution changing operators
@@ -1715,7 +1710,7 @@ mod tests {
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
     use datafusion_physical_expr::{
         expressions, expressions::binary, expressions::lit, expressions::Column,
-        LexOrdering, PhysicalExpr, PhysicalSortExpr,
+        LexOrdering, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
     };
 
     /// Models operators like BoundedWindowExec that require an input
