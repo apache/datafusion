@@ -40,7 +40,7 @@ use crate::prelude::{CsvReadOptions, SessionContext};
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{Statistics, TableReference};
+use datafusion_common::TableReference;
 use datafusion_expr::{CreateExternalTable, Expr, TableType};
 use datafusion_physical_expr::PhysicalSortExpr;
 
@@ -237,10 +237,6 @@ impl ExecutionPlan for UnboundedExec {
             count: 0,
             batch: self.batch.clone(),
         }))
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        Ok(Statistics::new_unknown(&self.schema()))
     }
 }
 
