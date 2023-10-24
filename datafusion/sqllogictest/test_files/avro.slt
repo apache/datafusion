@@ -253,7 +253,7 @@ EXPLAIN SELECT count(*) from alltypes_plain
 ----
 logical_plan
 Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
---TableScan: alltypes_plain
+--TableScan: alltypes_plain projection=[]
 physical_plan
 AggregateExec: mode=Final, gby=[], aggr=[COUNT(*)]
 --CoalescePartitionsExec
