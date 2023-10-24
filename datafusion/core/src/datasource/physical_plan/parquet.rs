@@ -514,15 +514,17 @@ impl FileOpener for ParquetOpener {
 
             // Bloom filter pruning: if bloom filters are enabled and then attempt to skip entire row_groups
             // using bloom filters on the row groups
-            if enable_bloom_filter && !row_groups.is_empty() && predicate.is_some() {
-                row_groups = row_groups::prune_row_groups_by_bloom_filters(
-                    &mut builder,
-                    &row_groups,
-                    file_metadata.row_groups(),
-                    predicate.unwrap(),
-                    &file_metrics,
-                )
-                .await;
+            if enable_bloom_filter && !row_groups.is_empty() {
+                if let Some(predicate) = predicate {
+                    row_groups = row_groups::prune_row_groups_by_bloom_filters(
+                        &mut builder,
+                        &row_groups,
+                        file_metadata.row_groups(),
+                        predicate,
+                        &file_metrics,
+                    )
+                    .await;
+                }
             }
 
             // page index pruning: if all data on individual pages can
