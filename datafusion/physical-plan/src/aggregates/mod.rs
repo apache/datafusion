@@ -747,6 +747,8 @@ impl ExecutionPlan for AggregateExec {
             // but needs to respect aliases (e.g. mapping in the GROUP BY
             // expression).
             let input_schema_properties = self.input.schema_properties();
+            // First stage Aggregation will not change the output partitioning but need to respect the Alias
+            let input_partition = self.input.output_partitioning();
             if let Partitioning::Hash(exprs, part) = input_partition {
                 let normalized_exprs = exprs
                     .into_iter()
