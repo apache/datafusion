@@ -1372,7 +1372,7 @@ fn ensure_distribution(
                     // make sure ordering requirements are still satisfied after.
                     if ordering_satisfied {
                         // Make sure to satisfy ordering requirement:
-                        add_sort_above(&mut child, required_input_ordering, None)?;
+                        add_sort_above(&mut child, required_input_ordering, None);
                     }
                 }
                 // Stop tracking distribution changing operators

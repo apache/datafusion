@@ -403,7 +403,7 @@ fn parallelize_sorts(
             &mut prev_layer,
             &PhysicalSortRequirement::from_sort_exprs(sort_exprs),
             fetch,
-        )?;
+        );
         let spm = SortPreservingMergeExec::new(sort_exprs.to_vec(), prev_layer)
             .with_fetch(fetch);
         return Ok(Transformed::Yes(PlanWithCorrespondingCoalescePartitions {
@@ -460,7 +460,7 @@ fn ensure_sorting(
                 ) {
                     // Make sure we preserve the ordering requirements:
                     update_child_to_remove_unnecessary_sort(child, sort_onwards, &plan)?;
-                    add_sort_above(child, &required_ordering, None)?;
+                    add_sort_above(child, &required_ordering, None);
                     if is_sort(child) {
                         *sort_onwards = Some(ExecTree::new(child.clone(), idx, vec![]));
                     } else {
@@ -470,7 +470,7 @@ fn ensure_sorting(
             }
             (Some(required), None) => {
                 // Ordering requirement is not met, we should add a `SortExec` to the plan.
-                add_sort_above(child, &required, None)?;
+                add_sort_above(child, &required, None);
                 *sort_onwards = Some(ExecTree::new(child.clone(), idx, vec![]));
             }
             (None, Some(_)) => {
@@ -605,7 +605,7 @@ fn analyze_window_sort_removal(
             .swap_remove(0)
             .unwrap_or_default();
         // Satisfy the ordering requirement so that the window can run:
-        add_sort_above(&mut window_child, &reqs, None)?;
+        add_sort_above(&mut window_child, &reqs, None);
 
         let uses_bounded_memory = window_expr.iter().all(|e| e.uses_bounded_memory());
         let new_window = if uses_bounded_memory {

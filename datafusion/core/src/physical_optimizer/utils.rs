@@ -21,7 +21,6 @@ use std::fmt;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
-use crate::error::Result;
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::repartition::RepartitionExec;
@@ -103,7 +102,7 @@ pub fn add_sort_above(
     node: &mut Arc<dyn ExecutionPlan>,
     sort_requirement: &[PhysicalSortRequirement],
     fetch: Option<usize>,
-) -> Result<()> {
+) {
     // If the ordering requirement is already satisfied, do not add a sort.
     if !ordering_satisfy_requirement(
         node.output_ordering(),
@@ -120,7 +119,6 @@ pub fn add_sort_above(
             new_sort
         }) as _
     }
-    Ok(())
 }
 
 /// Checks whether the given operator is a limit;

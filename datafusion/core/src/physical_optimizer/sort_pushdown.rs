@@ -141,7 +141,7 @@ pub(crate) fn pushdown_sorts(
             // If the current plan is a SortExec, modify it to satisfy parent requirements:
             let parent_required_expr = parent_required.ok_or_else(err)?;
             new_plan = sort_exec.input().clone();
-            add_sort_above(&mut new_plan, parent_required_expr, sort_exec.fetch())?;
+            add_sort_above(&mut new_plan, parent_required_expr, sort_exec.fetch());
         };
         let required_ordering = new_plan
             .output_ordering()
@@ -186,7 +186,7 @@ pub(crate) fn pushdown_sorts(
             // Can not push down requirements, add new SortExec:
             let parent_required_expr = parent_required.ok_or_else(err)?;
             let mut new_plan = requirements.plan;
-            add_sort_above(&mut new_plan, parent_required_expr, None)?;
+            add_sort_above(&mut new_plan, parent_required_expr, None);
             Ok(Transformed::Yes(SortPushDown::init(new_plan)))
         }
     }
