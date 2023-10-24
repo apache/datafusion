@@ -149,11 +149,6 @@ impl OptimizerRule for PushDownProjection {
             {
                 let mut used_columns: HashSet<Column> = HashSet::new();
                 if projection_is_empty {
-                    // let field = find_small_field(scan.projected_schema.fields()).ok_or(
-                    //     DataFusionError::Internal("Scan with empty schema".to_string()),
-                    // )?;
-                    // used_columns.insert(field.qualified_column());
-                    // push_down_scan(&used_columns, scan, true)?
                     push_down_scan(&used_columns, scan, true)?
                 } else {
                     for expr in projection.expr.iter() {
