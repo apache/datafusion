@@ -1252,7 +1252,7 @@ mod tests {
 
         let metrics = ExecutionPlanMetricsSet::new();
         let file_metrics =
-            ParquetFileMetrics::new(0, &object_meta.location.to_string(), &metrics);
+            ParquetFileMetrics::new(0, object_meta.location.as_ref(), &metrics);
         let reader = ParquetFileReader {
             inner: ParquetObjectReader::new(Arc::new(in_memory), object_meta),
             file_metrics: file_metrics.clone(),
@@ -1263,7 +1263,7 @@ mod tests {
         let pruned_row_group = prune_row_groups_by_bloom_filters(
             &mut builder,
             row_groups,
-            &metadata.row_groups(),
+            metadata.row_groups(),
             pruning_predicate,
             &file_metrics,
         )
