@@ -25,10 +25,7 @@ use std::usize;
 
 use crate::joins::hash_join_utils::{build_filter_input_order, SortedFilterExpr};
 use crate::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder};
-use crate::{
-    ColumnStatistics, EquivalenceProperties, ExecutionPlan, Partitioning, SchemaRef,
-    Statistics,
-};
+use crate::{ColumnStatistics, ExecutionPlan, Partitioning, Statistics};
 
 use arrow::array::{
     downcast_array, new_null_array, Array, BooleanBufferBuilder, UInt32Array,
@@ -48,8 +45,7 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::intervals::{ExprIntervalGraph, Interval, IntervalBound};
 use datafusion_physical_expr::utils::merge_vectors;
 use datafusion_physical_expr::{
-    add_offset_to_lex_ordering, EquivalentClass, LexOrdering, LexOrderingRef,
-    OrderingEquivalenceProperties, OrderingEquivalentClass, PhysicalExpr,
+    add_offset_to_lex_ordering, LexOrdering, LexOrderingRef, PhysicalExpr,
     PhysicalSortExpr,
 };
 

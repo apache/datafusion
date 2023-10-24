@@ -27,7 +27,6 @@ use arrow_schema::Fields;
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{plan_err, DataFusionError, JoinSide, JoinType, Result};
-use datafusion_expr::UserDefinedLogicalNode;
 use itertools::izip;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
@@ -390,10 +389,6 @@ impl<T: Eq + Hash + Clone> EquivalentClass<T> {
 
     pub fn iter(&self) -> impl Iterator<Item = &'_ T> {
         std::iter::once(&self.head).chain(self.others.iter())
-    }
-
-    pub fn into_iter(self) -> impl Iterator<Item = T> {
-        std::iter::once(self.head).chain(self.others.into_iter())
     }
 
     pub fn len(&self) -> usize {
