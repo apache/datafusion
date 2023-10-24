@@ -347,10 +347,10 @@ fn try_pushdown_requirements_to_join(
         smj.left().schema().fields.len(),
         &smj.maintains_input_order(),
         Some(probe_side),
-    )?;
+    );
     let mut smj_oeq = smj.schema_properties();
     // smj will have this ordering when its input changes.
-    smj_oeq = smj_oeq.with_reorder(new_output_ordering.unwrap_or(vec![]));
+    smj_oeq = smj_oeq.with_reorder(new_output_ordering.unwrap_or_default());
     let should_pushdown = smj_oeq.ordering_satisfy_requirement(parent_required);
     Ok(should_pushdown.then(|| {
         let mut required_input_ordering = smj.required_input_ordering();

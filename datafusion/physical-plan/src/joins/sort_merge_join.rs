@@ -139,7 +139,7 @@ impl SortMergeJoinExec {
             left_schema.fields.len(),
             &Self::maintains_input_order(join_type),
             Some(Self::probe_side(&join_type)),
-        )?;
+        );
 
         let schema =
             Arc::new(build_join_schema(&left_schema, &right_schema, &join_type).0);
