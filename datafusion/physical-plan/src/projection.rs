@@ -224,18 +224,14 @@ impl ExecutionPlan for ProjectionExec {
     fn output_partitioning(&self) -> Partitioning {
         // Output partition need to respect the alias
         let input_partition = self.input.output_partitioning();
-        match input_partition {
-            Partitioning::Hash(exprs, part) => {
-                let normalized_exprs = exprs
-                    .into_iter()
-                    .map(|expr| {
-                        normalize_out_expr_with_columns_map(expr, &self.columns_map)
-                    })
-                    .collect::<Vec<_>>();
-
-                Partitioning::Hash(normalized_exprs, part)
-            }
-            _ => input_partition,
+        if let Partitioning::Hash(exprs, part) = input_partition {
+            let normalized_exprs = exprs
+                .into_iter()
+                .map(|expr| normalize_out_expr_with_columns_map(expr, &self.columns_map))
+                .collect::<Vec<_>>();
+            Partitioning::Hash(normalized_exprs, part)
+        } else {
+            input_partition
         }
     }
 
