@@ -189,7 +189,7 @@ impl CursorValues for RowValues {
 
     fn slice(&self, offset: usize, length: usize) -> Self {
         assert!(
-            offset >= self.offset && self.offset + offset < self.limit,
+            self.offset + offset < self.limit,
             "slice offset is out of bounds"
         );
         assert!(
@@ -568,7 +568,7 @@ mod tests {
             nulls_first: true,
         };
 
-        let buffer = ScalarBuffer::from(vec![0, 1, 2]);
+        let buffer = ScalarBuffer::from(vec![0, 1, 2, 3]);
         let mut cursor = new_primitive_cursor(options, buffer, 0);
 
         // from start
@@ -597,6 +597,16 @@ mod tests {
             sliced.cmp(&expected),
             Ordering::Equal,
             "should ignore current cursor position when sliced"
+        );
+
+        // slicing on a slice (a.k.a. combining offsets)
+        let sliced = Cursor::new(cursor.cursor_values().slice(1, 3));
+        let sliced = Cursor::new(sliced.cursor_values().slice(2, 1));
+        let expected = new_primitive_cursor(options, ScalarBuffer::from(vec![3]), 0);
+        assert_eq!(
+            sliced.cmp(&expected),
+            Ordering::Equal,
+            "should respect previous slice/windowed boundaries, when re-slicing"
         );
     }
 
@@ -708,14 +718,19 @@ mod tests {
     fn test_slice_rows() {
         // rows
         let cols = [
-            Arc::new(Int16Array::from_iter([Some(1), Some(2), Some(3)])) as ArrayRef,
-            Arc::new(Float32Array::from_iter([Some(1.3), Some(2.5), Some(4.)]))
+            Arc::new(Int16Array::from_iter([Some(1), Some(2), Some(3), Some(4)]))
                 as ArrayRef,
+            Arc::new(Float32Array::from_iter([
+                Some(1.3),
+                Some(2.5),
+                Some(4.),
+                Some(4.2),
+            ])) as ArrayRef,
         ];
 
         let mut a = new_row_cursor(&cols);
         let mut b = new_row_cursor(&cols);
-        assert_eq!(a.cursor_values().len(), 3);
+        assert_eq!(a.cursor_values().len(), 4);
 
         // 1,1.3 == 1,1.3
         assert_eq!(a.cmp(&b), Ordering::Equal);
@@ -732,8 +747,22 @@ mod tests {
         assert_eq!(a.cmp(&b), Ordering::Less);
 
         // advanced cursor vs sliced cursor
-        assert_eq!(a.cursor_values().len(), 3);
+        assert_eq!(a.cursor_values().len(), 4);
         assert_eq!(b.cursor_values().len(), 1);
+
+        // slicing on a slice (a.k.a. combining offsets)
+        let cursor = new_row_cursor(&cols);
+        let sliced = Cursor::new(cursor.cursor_values().slice(1, 3));
+        let sliced = Cursor::new(sliced.cursor_values().slice(2, 1));
+        let mut expected = new_row_cursor(&cols);
+        expected.advance();
+        expected.advance();
+        expected.advance();
+        assert_eq!(
+            sliced.cmp(&expected),
+            Ordering::Equal,
+            "should respect previous slice/windowed boundaries, when re-slicing"
+        );
     }
 
     #[test]
@@ -775,12 +804,13 @@ mod tests {
 
     #[test]
     fn test_slice_bytearray() {
-        let mut a = new_bytearray_cursor("hellorainbowworld", vec![0, 5, 12, 17]);
-        let mut b = new_bytearray_cursor("hellorainbowworld", vec![0, 5, 12, 17]);
+        let mut a = new_bytearray_cursor("hellorainbowworldzoo", vec![0, 5, 12, 17, 20]);
+        let mut b = new_bytearray_cursor("hellorainbowworldzoo", vec![0, 5, 12, 17, 20]);
 
         let is_hello = new_bytearray_cursor("hello", vec![0, 5]);
         let is_rainbow = new_bytearray_cursor("rainbow", vec![0, 7]);
         let is_world = new_bytearray_cursor("world", vec![0, 5]);
+        let is_zoo = new_bytearray_cursor("zoo", vec![0, 3]);
 
         // hello == hello
         assert_eq!(a.cmp(&b), Ordering::Equal);
@@ -800,8 +830,18 @@ mod tests {
         assert_eq!(a.cmp(&b), Ordering::Less);
 
         // advanced cursor vs sliced cursor
-        assert_eq!(a.cursor_values().len(), 3);
+        assert_eq!(a.cursor_values().len(), 4);
         assert_eq!(b.cursor_values().len(), 1);
+
+        // slicing on a slice (a.k.a. combining offsets)
+        let cursor = new_bytearray_cursor("hellorainbowworldzoo", vec![0, 5, 12, 17, 20]);
+        let sliced = Cursor::new(cursor.cursor_values().slice(1, 3));
+        let sliced = Cursor::new(sliced.cursor_values().slice(2, 1));
+        assert_eq!(
+            sliced.cmp(&is_zoo),
+            Ordering::Equal,
+            "should respect previous slice/windowed boundaries, when re-slicing"
+        );
     }
 
     #[test]
