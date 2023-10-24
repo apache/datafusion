@@ -27,6 +27,7 @@ use arrow_array::{
     Array, ArrowPrimitiveType, GenericByteArray, OffsetSizeTrait, PrimitiveArray,
 };
 use arrow_buffer::{Buffer, OffsetBuffer};
+use datafusion_execution::memory_pool::MemoryReservation;
 
 /// A comparable collection of values for use with [`Cursor`]
 ///
@@ -141,18 +142,29 @@ pub struct RowValues {
     offset: usize,
     /// Upper bound of windowed RowValues.
     limit: usize,
+
+    /// Tracks for the memory used by in the `Rows` of this
+    /// cursor. Freed on drop
+    #[allow(dead_code)]
+    reservation: Arc<MemoryReservation>,
 }
 
 impl RowValues {
     /// Create a new [`RowValues`] from `Arc<Rows>`.
     ///
     /// Panics if `rows` is empty.
-    pub fn new(rows: Arc<Rows>) -> Self {
+    pub fn new(rows: Rows, reservation: MemoryReservation) -> Self {
+        assert_eq!(
+            rows.size(),
+            reservation.size(),
+            "memory reservation mismatch"
+        );
         assert!(rows.num_rows() > 0);
         Self {
             offset: 0,
             limit: rows.num_rows(),
-            rows,
+            rows: Arc::new(rows),
+            reservation: Arc::new(reservation),
         }
     }
 
@@ -189,6 +201,7 @@ impl CursorValues for RowValues {
             rows: self.rows.clone(),
             offset: self.offset + offset,
             limit: self.offset + offset + length,
+            reservation: self.reservation.clone(),
         }
     }
 }
@@ -389,6 +402,9 @@ mod tests {
     use arrow::row::{RowConverter, SortField};
     use arrow_array::{ArrayRef, Float32Array, Int16Array};
     use arrow_schema::DataType;
+    use datafusion_execution::memory_pool::{
+        GreedyMemoryPool, MemoryConsumer, MemoryPool,
+    };
 
     use super::*;
 
@@ -670,6 +686,22 @@ mod tests {
         cursor.cursor_values().slice(42, 1);
     }
 
+    fn new_row_cursor(cols: &[Arc<dyn Array>; 2]) -> Cursor<RowValues> {
+        let converter = RowConverter::new(vec![
+            SortField::new(DataType::Int16),
+            SortField::new(DataType::Float32),
+        ])
+        .unwrap();
+
+        let rows = converter.convert_columns(cols).unwrap();
+
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(rows.size()));
+        let mut reservation = MemoryConsumer::new("test").register(&pool);
+        reservation.try_grow(rows.size()).unwrap();
+
+        Cursor::new(RowValues::new(rows, reservation))
+    }
+
     #[test]
     fn test_slice_rows() {
         // rows
@@ -678,18 +710,9 @@ mod tests {
             Arc::new(Float32Array::from_iter([Some(1.3), Some(2.5), Some(4.)]))
                 as ArrayRef,
         ];
-        let converter = RowConverter::new(vec![
-            SortField::new(DataType::Int16),
-            SortField::new(DataType::Float32),
-        ])
-        .unwrap();
 
-        let mut a = Cursor::new(RowValues::new(Arc::new(
-            converter.convert_columns(&cols).unwrap(),
-        )));
-        let mut b = Cursor::new(RowValues::new(Arc::new(
-            converter.convert_columns(&cols).unwrap(),
-        )));
+        let mut a = new_row_cursor(&cols);
+        let mut b = new_row_cursor(&cols);
         assert_eq!(a.cursor_values().len(), 3);
 
         // 1,1.3 == 1,1.3
@@ -718,14 +741,8 @@ mod tests {
             Arc::new(Int16Array::from_iter([Some(1)])) as ArrayRef,
             Arc::new(Float32Array::from_iter([Some(1.3)])) as ArrayRef,
         ];
-        let converter = RowConverter::new(vec![
-            SortField::new(DataType::Int16),
-            SortField::new(DataType::Float32),
-        ])
-        .unwrap();
 
-        let rows = Arc::new(converter.convert_columns(&cols).unwrap());
-        let cursor = Cursor::new(RowValues::new(rows));
+        let cursor = new_row_cursor(&cols);
 
         cursor.cursor_values().slice(42, 1);
     }
