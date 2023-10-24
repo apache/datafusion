@@ -177,14 +177,10 @@ pub fn adjust_output_array(
 /// for [`AggregateExpr`] aggregation expressions and allows comparing the equality
 /// between the trait objects.
 pub fn down_cast_any_ref(any: &dyn Any) -> &dyn Any {
-    if any.is::<Arc<dyn AggregateExpr>>() {
-        any.downcast_ref::<Arc<dyn AggregateExpr>>()
-            .unwrap()
-            .as_any()
-    } else if any.is::<Box<dyn AggregateExpr>>() {
-        any.downcast_ref::<Box<dyn AggregateExpr>>()
-            .unwrap()
-            .as_any()
+    if let Some(obj) = any.downcast_ref::<Arc<dyn AggregateExpr>>() {
+        obj.as_any()
+    } else if let Some(obj) = any.downcast_ref::<Box<dyn AggregateExpr>>() {
+        obj.as_any()
     } else {
         any
     }
