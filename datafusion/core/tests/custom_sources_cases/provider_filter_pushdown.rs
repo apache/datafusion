@@ -183,7 +183,6 @@ impl TableProvider for CustomProvider {
                 };
 
                 Ok(Arc::new(CustomPlan {
-                    // schema: self.zero_batch.schema(),
                     schema: match projection.is_empty() {
                         true => Arc::new(Schema::empty()),
                         false => self.zero_batch.schema(),
