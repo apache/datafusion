@@ -486,17 +486,18 @@ impl OrderingEquivalenceClass {
         while idx < self.orderings.len() {
             let mut removal = false;
             for (ordering_idx, ordering) in self.orderings[0..idx].iter().enumerate() {
-                if is_finer(ordering, &self.orderings[idx]) {
-                    self.orderings.swap_remove(idx);
-                    removal = true;
-                    break;
-                } else if is_finer(&self.orderings[idx], ordering) {
-                    self.orderings.swap_remove(ordering_idx);
+                if let Some(left_finer) = finer_side(ordering, &self.orderings[idx]) {
+                    if !left_finer {
+                        // Right side is finer
+                        self.orderings.swap(ordering_idx, idx);
+                    }
                     removal = true;
                     break;
                 }
             }
-            if !removal {
+            if removal {
+                self.orderings.swap_remove(idx);
+            } else {
                 idx += 1;
             }
         }
@@ -551,8 +552,12 @@ impl OrderingEquivalenceClass {
 }
 
 /// Returns `true` if the ordering `lhs` is at least as fine as the ordering `rhs`.
-fn is_finer(lhs: &[PhysicalSortExpr], rhs: &[PhysicalSortExpr]) -> bool {
-    lhs.len() >= rhs.len() && lhs.iter().zip(rhs.iter()).all(|(lhs, rhs)| lhs.eq(rhs))
+/// Returns `false` if the ordering `rhs` is finer than the ordering `lhs`.
+/// Returns `None`, if sort_exprs are not compatible.
+fn finer_side(lhs: &[PhysicalSortExpr], rhs: &[PhysicalSortExpr]) -> Option<bool> {
+    let left_larger = lhs.len() >= rhs.len();
+    let all_equal = lhs.iter().zip(rhs.iter()).all(|(lhs, rhs)| lhs.eq(rhs));
+    all_equal.then_some(left_larger)
 }
 
 /// `SchemaProperties` keeps track of useful information related to schema.
@@ -2029,6 +2034,31 @@ mod tests {
                     vec![(col_a, option_asc), (col_b, option_desc)],
                     // [a ASC, c ASC]
                     vec![(col_a, option_asc), (col_c, option_asc)],
+                ],
+            ),
+            // ------- TEST CASE 4 ---------
+            (
+                // ORDERINGS GIVEN
+                vec![
+                    // [a ASC, b ASC]
+                    vec![(col_a, option_asc), (col_b, option_asc)],
+                    // [a ASC, b ASC, c ASC]
+                    vec![
+                        (col_a, option_asc),
+                        (col_b, option_asc),
+                        (col_c, option_asc),
+                    ],
+                    // [a ASC]
+                    vec![(col_a, option_asc)],
+                ],
+                // EXPECTED orderings that is succint.
+                vec![
+                    // [a ASC, b ASC, c ASC]
+                    vec![
+                        (col_a, option_asc),
+                        (col_b, option_asc),
+                        (col_c, option_asc),
+                    ],
                 ],
             ),
         ];
