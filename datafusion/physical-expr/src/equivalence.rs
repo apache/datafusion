@@ -230,11 +230,12 @@ impl EquivalenceGroup {
         &self,
         sort_reqs: &[PhysicalSortRequirement],
     ) -> Vec<PhysicalSortRequirement> {
-        let normalized_sort_reqs = sort_reqs
-            .iter()
-            .map(|sort_req| self.normalize_sort_requirement(sort_req.clone()))
-            .collect::<Vec<_>>();
-        collapse_lex_req(normalized_sort_reqs)
+        collapse_lex_req(
+            sort_reqs
+                .iter()
+                .map(|sort_req| self.normalize_sort_requirement(sort_req.clone()))
+                .collect(),
+        )
     }
 
     /// This function applies the `normalize_sort_expr` function for all sort
@@ -322,7 +323,7 @@ impl EquivalenceGroup {
                 .collect::<Vec<_>>();
             (new_class.len() > 1).then_some(new_class)
         });
-        // TODO: Convert below algorithm to the version that use HashMap.
+        // TODO: Convert the algorithm below to a version that uses `HashMap`.
         //       once `Arc<dyn PhysicalExpr>` can be stored in `HashMap`.
         let mut new_classes = vec![];
         for (source, target) in mapping {
@@ -388,7 +389,7 @@ impl EquivalenceGroup {
         }
         // In we have an inner join, expressions in the "on" condition are equal
         // at the resulting table.
-        if *join_type == JoinType::Inner {
+        if join_type == &JoinType::Inner {
             for (lhs, rhs) in on.iter() {
                 let index = rhs.index() + left_column_count;
                 let new_lhs = Arc::new(lhs.clone()) as _;
@@ -438,11 +439,9 @@ impl OrderingEquivalenceClass {
 
     /// Adds `ordering` to this equivalence class.
     fn push(&mut self, ordering: LexOrdering) {
-        if !self.contains(&ordering) {
-            self.orderings.push(ordering);
-            // Make sure that there are no redundant orderings:
-            self.remove_redundant_entries();
-        }
+        self.orderings.push(ordering);
+        // Make sure that there are no redundant orderings:
+        self.remove_redundant_entries();
     }
 
     /// Checks whether this ordering equivalence class is empty.
@@ -467,44 +466,40 @@ impl OrderingEquivalenceClass {
 
     /// Extend this ordering equivalence class with the `other` class.
     pub fn extend(&mut self, other: OrderingEquivalenceClass) {
-        for ordering in other.iter() {
-            if !self.contains(ordering) {
-                self.orderings.push(ordering.clone())
-            }
-        }
+        self.orderings.extend(other.orderings);
+        // Make sure that there are no redundant orderings:
+        self.remove_redundant_entries();
     }
 
     /// Adds new orderings into this ordering equivalence class.
     pub fn add_new_orderings(&mut self, orderings: &[LexOrdering]) {
-        for ordering in orderings.iter() {
-            self.push(ordering.clone());
-        }
+        self.orderings.extend(orderings.iter().cloned());
+        // Make sure that there are no redundant orderings:
+        self.remove_redundant_entries();
     }
 
     /// Removes redundant orderings from the state.
-    /// For instance, If we already know that
-    /// ordering: [a ASC, b ASC, c DESC] is valid for the schema.
-    /// There is no need to keep ordering [a ASC, b ASC] in the state.
+    /// For instance, If we already have the ordering [a ASC, b ASC, c DESC],
+    /// then there is no need to keep ordering [a ASC, b ASC] in the state.
     fn remove_redundant_entries(&mut self) {
-        // Make sure there is no redundant entry
-        let mut res: Vec<LexOrdering> = vec![];
-        for ordering in self.iter() {
-            let mut is_inside = false;
-            for item in &mut res {
-                if let Some(finer) = Self::get_finer_strict(item, ordering) {
-                    *item = finer.to_vec();
-                    is_inside = true;
+        let mut idx = 0;
+        while idx < self.orderings.len() {
+            let mut removal = false;
+            for ordering in self.orderings[0..idx].iter() {
+                if is_finer(ordering, &self.orderings[idx]) {
+                    self.orderings.swap_remove(idx);
+                    removal = true;
+                    break;
                 }
             }
-            if !is_inside {
-                res.push(ordering.clone());
+            if !removal {
+                idx += 1;
             }
         }
-        self.orderings = res;
     }
 
-    /// Get first ordering entry in the ordering equivalences
-    /// This is one of the many valid orderings (if available)
+    /// Gets the first ordering entry in this ordering equivalence class.
+    /// This is one of the many valid orderings (if there are multiple).
     pub fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
         self.orderings.first().cloned()
     }
@@ -538,21 +533,6 @@ impl OrderingEquivalenceClass {
         )
     }
 
-    /// Return finer ordering between lhs and rhs.
-    fn get_finer_strict<'a>(
-        lhs: &'a [PhysicalSortExpr],
-        rhs: &'a [PhysicalSortExpr],
-    ) -> Option<&'a [PhysicalSortExpr]> {
-        if izip!(lhs.iter(), rhs.iter()).all(|(lhs, rhs)| lhs.eq(rhs)) {
-            if lhs.len() > rhs.len() {
-                return Some(lhs);
-            } else {
-                return Some(rhs);
-            }
-        }
-        None
-    }
-
     /// Get leading ordering of the expression if it is ordered.
     /// `None` means expression is not ordered.
     fn get_ordering(&self, expr: &Arc<dyn PhysicalExpr>) -> Option<SortOptions> {
@@ -564,6 +544,11 @@ impl OrderingEquivalenceClass {
         }
         None
     }
+}
+
+/// Returns `true` if the ordering `lhs` is at least as fine as the ordering `rhs`.
+fn is_finer(lhs: &[PhysicalSortExpr], rhs: &[PhysicalSortExpr]) -> bool {
+    lhs.len() >= rhs.len() && lhs.iter().zip(rhs.iter()).all(|(lhs, rhs)| lhs.eq(rhs))
 }
 
 /// `SchemaProperties` keeps track of useful information related to schema.
@@ -666,7 +651,7 @@ impl SchemaProperties {
 
     /// Extends `SchemaProperties` by adding ordering inside the `other`
     /// to the `self.oeq_class`.
-    pub fn add_ordering_equivalent_group(&mut self, other: OrderingEquivalenceClass) {
+    pub fn add_ordering_equivalence_class(&mut self, other: OrderingEquivalenceClass) {
         for ordering in other.into_iter() {
             if !self.oeq_class.contains(&ordering) {
                 self.oeq_class.push(ordering);
@@ -674,18 +659,20 @@ impl SchemaProperties {
         }
     }
 
-    /// Adds new ordering into the ordering equivalent class.
+    /// Adds new orderings into the existing ordering equivalence class.
     pub fn add_new_orderings(&mut self, orderings: &[LexOrdering]) {
         self.oeq_class.add_new_orderings(orderings);
     }
 
-    /// Add new equivalence group to state.
-    pub fn add_equivalent_groups(&mut self, other_eq_group: EquivalenceGroup) {
+    /// Incorporates the given equivalence group to into the existing
+    /// equivalence group in this schema.
+    pub fn add_equivalence_group(&mut self, other_eq_group: EquivalenceGroup) {
         self.eq_group.extend(other_eq_group);
     }
 
-    /// Adds new equality group into the equivalent groups.
-    /// If equalities are new, otherwise extends corresponding group.
+    /// Adds a new equality condition into the existing equivalence group.
+    /// If the given equality defines a new equivalence class, adds this new
+    /// equivalence class to the equivalence group.
     pub fn add_equal_conditions(
         &mut self,
         left: &Arc<dyn PhysicalExpr>,
@@ -1097,7 +1084,7 @@ pub fn join_schema_properties(
     let join_eq_groups =
         left.eq_group()
             .join(join_type, right.eq_group(), left_columns_len, on);
-    new_properties.add_equivalent_groups(join_eq_groups);
+    new_properties.add_equivalence_group(join_eq_groups);
 
     // All joins have 2 children
     assert_eq!(maintains_input_order.len(), 2);
@@ -1112,7 +1099,7 @@ pub fn join_schema_properties(
         (true, false) => {
             // In this special case, right side ordering can be prefixed with left side ordering.
             if let (Some(JoinSide::Left), JoinType::Inner) = (probe_side, join_type) {
-                let updated_right_oeq = get_updated_right_ordering_equivalent_group(
+                let updated_right_oeq = get_updated_right_ordering_equivalence_class(
                     join_type,
                     right_oeq_class,
                     left_columns_len,
@@ -1127,13 +1114,13 @@ pub fn join_schema_properties(
                 // for the right table should be converted to `a ASC, b ASC` before it is added
                 // to the ordering equivalences of the join.
                 let out_oeq_class = left_oeq_class.join_postfix(&updated_right_oeq);
-                new_properties.add_ordering_equivalent_group(out_oeq_class);
+                new_properties.add_ordering_equivalence_class(out_oeq_class);
             } else {
-                new_properties.add_ordering_equivalent_group(left_oeq_class);
+                new_properties.add_ordering_equivalence_class(left_oeq_class);
             }
         }
         (false, true) => {
-            let updated_right_oeq = get_updated_right_ordering_equivalent_group(
+            let updated_right_oeq = get_updated_right_ordering_equivalence_class(
                 join_type,
                 right_oeq_class,
                 left_columns_len,
@@ -1149,9 +1136,9 @@ pub fn join_schema_properties(
                 // for the right table should be converted to `a ASC, b ASC` before it is added
                 // to the ordering equivalences of the join.
                 let out_oeq_class = updated_right_oeq.join_postfix(&left_oeq_class);
-                new_properties.add_ordering_equivalent_group(out_oeq_class);
+                new_properties.add_ordering_equivalence_class(out_oeq_class);
             } else {
-                new_properties.add_ordering_equivalent_group(updated_right_oeq);
+                new_properties.add_ordering_equivalence_class(updated_right_oeq);
             }
         }
         (false, false) => {}
@@ -1167,7 +1154,7 @@ pub fn schema_properties_helper(
     let mut oep = SchemaProperties::new(schema);
     if !orderings.is_empty() {
         let group = OrderingEquivalenceClass::new(orderings.to_vec());
-        oep.add_ordering_equivalent_group(group);
+        oep.add_ordering_equivalence_class(group);
     }
     oep
 }
@@ -1307,7 +1294,7 @@ fn update_ordering(
 ///
 /// This way; once we normalize an expression according to equivalence properties,
 /// it can thereafter safely be used for ordering equivalence normalization.
-fn get_updated_right_ordering_equivalent_group(
+fn get_updated_right_ordering_equivalence_class(
     join_type: &JoinType,
     right_oeq_group: OrderingEquivalenceClass,
     left_columns_len: usize,
@@ -1327,7 +1314,7 @@ mod tests {
 
     use super::*;
     use crate::expressions::{col, lit, Column};
-    use crate::physical_expr::physical_exprs_equal;
+    use crate::physical_expr::{physical_exprs_bag_equal, physical_exprs_equal};
 
     use arrow::compute::{lexsort_to_indices, SortColumn};
     use arrow::datatypes::{DataType, Field, Schema};
@@ -1457,20 +1444,6 @@ mod tests {
         }
 
         Ok((test_schema, schema_properties))
-    }
-
-    /// Checks whether the given physical expression slices are equal.
-    /// If any permutation is equal returns true.
-    pub fn physical_exprs_set_equal(
-        lhs: &[Arc<dyn PhysicalExpr>],
-        rhs: &[Arc<dyn PhysicalExpr>],
-    ) -> bool {
-        if lhs.len() != rhs.len() {
-            false
-        } else {
-            lhs.iter()
-                .all(|lhs_entry| physical_exprs_contains(rhs, lhs_entry))
-        }
     }
 
     // Convert each tuple to PhysicalSortRequirement
@@ -1949,7 +1922,7 @@ mod tests {
             assert_eq!(eq_groups.len(), expected.len(), "{}", err_msg);
             for idx in 0..eq_groups.len() {
                 assert!(
-                    physical_exprs_set_equal(&eq_groups[idx], &expected[idx]),
+                    physical_exprs_bag_equal(&eq_groups[idx], &expected[idx]),
                     "{}",
                     err_msg
                 );
@@ -2112,12 +2085,12 @@ mod tests {
         join_schema_properties.add_equal_conditions(col_a, col_x);
         join_schema_properties.add_equal_conditions(col_d, col_w);
 
-        let result = get_updated_right_ordering_equivalent_group(
+        let result = get_updated_right_ordering_equivalence_class(
             &join_type,
             right_oeq_class,
             left_columns_len,
         );
-        join_schema_properties.add_ordering_equivalent_group(result);
+        join_schema_properties.add_ordering_equivalence_class(result);
         let result = join_schema_properties.oeq_class().clone();
 
         let orderings = vec![

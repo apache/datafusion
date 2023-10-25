@@ -267,18 +267,17 @@ pub fn physical_exprs_bag_equal(
     }
 }
 
-/// This utility function removes duplicates from the given `physical_exprs`
-/// vector. Note that this function does not necessarily preserve its input
-/// ordering.
-pub fn deduplicate_physical_exprs(physical_exprs: &mut Vec<Arc<dyn PhysicalExpr>>) {
+/// This utility function removes duplicates from the given `exprs` vector.
+/// Note that this function does not necessarily preserve its input ordering.
+pub fn deduplicate_physical_exprs(exprs: &mut Vec<Arc<dyn PhysicalExpr>>) {
     // TODO: Once we can use `HashSet`s with `Arc<dyn PhysicalExpr>`, this
     //       function should use a `HashSet` to reduce computational complexity.
     let mut idx = 0;
-    while idx < physical_exprs.len() {
+    while idx < exprs.len() {
         let mut rest_idx = idx + 1;
-        while rest_idx < physical_exprs.len() {
-            if physical_exprs[idx].eq(&physical_exprs[rest_idx]) {
-                physical_exprs.swap_remove(rest_idx);
+        while rest_idx < exprs.len() {
+            if exprs[idx].eq(&exprs[rest_idx]) {
+                exprs.swap_remove(rest_idx);
             } else {
                 rest_idx += 1;
             }
@@ -463,12 +462,11 @@ mod tests {
                 vec![lit_true, lit4, lit_false],
             ),
         ];
-        for (physical_exprs, expected) in test_cases {
-            let mut physical_exprs =
-                physical_exprs.into_iter().cloned().collect::<Vec<_>>();
+        for (exprs, expected) in test_cases {
+            let mut exprs = exprs.into_iter().cloned().collect::<Vec<_>>();
             let expected = expected.into_iter().cloned().collect::<Vec<_>>();
-            deduplicate_physical_exprs(&mut physical_exprs);
-            assert!(physical_exprs_equal(&physical_exprs, &expected));
+            deduplicate_physical_exprs(&mut exprs);
+            assert!(physical_exprs_equal(&exprs, &expected));
         }
     }
 }
