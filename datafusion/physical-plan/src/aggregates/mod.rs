@@ -226,7 +226,7 @@ impl PhysicalGroupBy {
     }
 
     /// Return grouping expressions as they occur in the output schema.
-    fn output_exprs(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+    pub fn output_exprs(&self) -> Vec<Arc<dyn PhysicalExpr>> {
         self.expr
             .iter()
             .enumerate()

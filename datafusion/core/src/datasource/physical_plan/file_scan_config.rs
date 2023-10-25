@@ -36,7 +36,7 @@ use crate::{
 use arrow::array::{ArrayData, BufferBuilder};
 use arrow::buffer::Buffer;
 use arrow::datatypes::{ArrowNativeType, UInt16Type};
-use arrow_array::{ArrayRef, DictionaryArray, RecordBatch};
+use arrow_array::{ArrayRef, DictionaryArray, RecordBatch, RecordBatchOptions};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::stats::Precision;
 use datafusion_common::{exec_err, ColumnStatistics, Statistics};
@@ -339,7 +339,13 @@ impl PartitionColumnProjector {
                 ),
             )
         }
-        RecordBatch::try_new(Arc::clone(&self.projected_schema), cols).map_err(Into::into)
+
+        RecordBatch::try_new_with_options(
+            Arc::clone(&self.projected_schema),
+            cols,
+            &RecordBatchOptions::new().with_row_count(Some(file_batch.num_rows())),
+        )
+        .map_err(Into::into)
     }
 }
 

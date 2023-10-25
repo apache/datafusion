@@ -237,7 +237,14 @@ impl FileTypeExt for FileType {
 
         match self {
             FileType::JSON | FileType::CSV => Ok(format!("{}{}", ext, c.get_ext())),
-            FileType::PARQUET | FileType::AVRO | FileType::ARROW => match c.variant {
+            FileType::AVRO | FileType::ARROW => match c.variant {
+                UNCOMPRESSED => Ok(ext),
+                _ => Err(DataFusionError::Internal(
+                    "FileCompressionType can be specified for CSV/JSON FileType.".into(),
+                )),
+            },
+            #[cfg(feature = "parquet")]
+            FileType::PARQUET => match c.variant {
                 UNCOMPRESSED => Ok(ext),
                 _ => Err(DataFusionError::Internal(
                     "FileCompressionType can be specified for CSV/JSON FileType.".into(),
@@ -276,10 +283,13 @@ mod tests {
             );
         }
 
+        let mut ty_ext_tuple = vec![];
+        ty_ext_tuple.push((FileType::AVRO, ".avro"));
+        #[cfg(feature = "parquet")]
+        ty_ext_tuple.push((FileType::PARQUET, ".parquet"));
+
         // Cannot specify compression for these file types
-        for (file_type, extension) in
-            [(FileType::AVRO, ".avro"), (FileType::PARQUET, ".parquet")]
-        {
+        for (file_type, extension) in ty_ext_tuple {
             assert_eq!(
                 file_type
                     .get_ext_with_compression(FileCompressionType::UNCOMPRESSED)
