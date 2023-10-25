@@ -16,6 +16,13 @@
 // under the License.
 
 //! [`SessionContext`] contains methods for registering data sources and executing queries
+
+mod avro;
+mod csv;
+mod json;
+#[cfg(feature = "parquet")]
+mod parquet;
+
 use crate::{
     catalog::{CatalogList, MemoryCatalogList},
     datasource::{
@@ -77,7 +84,6 @@ use datafusion_sql::{
 use sqlparser::dialect::dialect_from_str;
 
 use crate::config::ConfigOptions;
-use crate::datasource::physical_plan::{plan_to_csv, plan_to_json, plan_to_parquet};
 use crate::execution::{runtime_env::RuntimeEnv, FunctionRegistry};
 use crate::physical_plan::udaf::AggregateUDF;
 use crate::physical_plan::udf::ScalarUDF;
@@ -92,7 +98,6 @@ use datafusion_sql::{
     parser::DFParser,
     planner::{ContextProvider, SqlToRel},
 };
-use parquet::file::properties::WriterProperties;
 use url::Url;
 
 use crate::catalog::information_schema::{InformationSchemaProvider, INFORMATION_SCHEMA};
@@ -110,9 +115,7 @@ use crate::execution::options::ArrowReadOptions;
 pub use datafusion_execution::config::SessionConfig;
 pub use datafusion_execution::TaskContext;
 
-use super::options::{
-    AvroReadOptions, CsvReadOptions, NdJsonReadOptions, ParquetReadOptions, ReadOptions,
-};
+use super::options::ReadOptions;
 
 /// DataFilePaths adds a method to convert strings and vector of strings to vector of [`ListingTableUrl`] URLs.
 /// This allows methods such [`SessionContext::read_csv`] and [`SessionContext::read_avro`]
@@ -856,34 +859,6 @@ impl SessionContext {
         self.read_table(Arc::new(provider))
     }
 
-    /// Creates a [`DataFrame`] for reading an Avro data source.
-    ///
-    /// For more control such as reading multiple files, you can use
-    /// [`read_table`](Self::read_table) with a [`ListingTable`].
-    ///
-    /// For an example, see [`read_csv`](Self::read_csv)
-    pub async fn read_avro<P: DataFilePaths>(
-        &self,
-        table_paths: P,
-        options: AvroReadOptions<'_>,
-    ) -> Result<DataFrame> {
-        self._read_type(table_paths, options).await
-    }
-
-    /// Creates a [`DataFrame`] for reading an JSON data source.
-    ///
-    /// For more control such as reading multiple files, you can use
-    /// [`read_table`](Self::read_table) with a [`ListingTable`].
-    ///
-    /// For an example, see [`read_csv`](Self::read_csv)
-    pub async fn read_json<P: DataFilePaths>(
-        &self,
-        table_paths: P,
-        options: NdJsonReadOptions<'_>,
-    ) -> Result<DataFrame> {
-        self._read_type(table_paths, options).await
-    }
-
     /// Creates a [`DataFrame`] for reading an Arrow data source.
     ///
     /// For more control such as reading multiple files, you can use
@@ -904,48 +879,6 @@ impl SessionContext {
             self.state(),
             LogicalPlanBuilder::empty(true).build()?,
         ))
-    }
-
-    /// Creates a [`DataFrame`] for reading a CSV data source.
-    ///
-    /// For more control such as reading multiple files, you can use
-    /// [`read_table`](Self::read_table) with a [`ListingTable`].
-    ///
-    /// Example usage is given below:
-    ///
-    /// ```
-    /// use datafusion::prelude::*;
-    /// # use datafusion::error::Result;
-    /// # #[tokio::main]
-    /// # async fn main() -> Result<()> {
-    /// let ctx = SessionContext::new();
-    /// // You can read a single file using `read_csv`
-    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
-    /// // you can also read multiple files:
-    /// let df = ctx.read_csv(vec!["tests/data/example.csv", "tests/data/example.csv"], CsvReadOptions::new()).await?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub async fn read_csv<P: DataFilePaths>(
-        &self,
-        table_paths: P,
-        options: CsvReadOptions<'_>,
-    ) -> Result<DataFrame> {
-        self._read_type(table_paths, options).await
-    }
-
-    /// Creates a [`DataFrame`] for reading a Parquet data source.
-    ///
-    /// For more control such as reading multiple files, you can use
-    /// [`read_table`](Self::read_table) with a [`ListingTable`].
-    ///
-    /// For an example, see [`read_csv`](Self::read_csv)
-    pub async fn read_parquet<P: DataFilePaths>(
-        &self,
-        table_paths: P,
-        options: ParquetReadOptions<'_>,
-    ) -> Result<DataFrame> {
-        self._read_type(table_paths, options).await
     }
 
     /// Creates a [`DataFrame`] for a [`TableProvider`] such as a
@@ -1005,91 +938,6 @@ impl SessionContext {
             TableReference::Bare { table: name.into() },
             Arc::new(table),
         )?;
-        Ok(())
-    }
-
-    /// Registers a CSV file as a table which can referenced from SQL
-    /// statements executed against this context.
-    pub async fn register_csv(
-        &self,
-        name: &str,
-        table_path: &str,
-        options: CsvReadOptions<'_>,
-    ) -> Result<()> {
-        let listing_options = options.to_listing_options(&self.copied_config());
-
-        self.register_listing_table(
-            name,
-            table_path,
-            listing_options,
-            options.schema.map(|s| Arc::new(s.to_owned())),
-            None,
-        )
-        .await?;
-
-        Ok(())
-    }
-
-    /// Registers a JSON file as a table that it can be referenced
-    /// from SQL statements executed against this context.
-    pub async fn register_json(
-        &self,
-        name: &str,
-        table_path: &str,
-        options: NdJsonReadOptions<'_>,
-    ) -> Result<()> {
-        let listing_options = options.to_listing_options(&self.copied_config());
-
-        self.register_listing_table(
-            name,
-            table_path,
-            listing_options,
-            options.schema.map(|s| Arc::new(s.to_owned())),
-            None,
-        )
-        .await?;
-        Ok(())
-    }
-
-    /// Registers a Parquet file as a table that can be referenced from SQL
-    /// statements executed against this context.
-    pub async fn register_parquet(
-        &self,
-        name: &str,
-        table_path: &str,
-        options: ParquetReadOptions<'_>,
-    ) -> Result<()> {
-        let listing_options = options.to_listing_options(&self.state.read().config);
-
-        self.register_listing_table(
-            name,
-            table_path,
-            listing_options,
-            options.schema.map(|s| Arc::new(s.to_owned())),
-            None,
-        )
-        .await?;
-        Ok(())
-    }
-
-    /// Registers an Avro file as a table that can be referenced from
-    /// SQL statements executed against this context.
-    pub async fn register_avro(
-        &self,
-        name: &str,
-        table_path: &str,
-        options: AvroReadOptions<'_>,
-    ) -> Result<()> {
-        let listing_options = options.to_listing_options(&self.copied_config());
-
-        self.register_listing_table(
-            name,
-            table_path,
-            listing_options,
-            options.schema.map(|s| Arc::new(s.to_owned())),
-            None,
-        )
-        .await?;
         Ok(())
     }
 
@@ -1268,34 +1116,6 @@ impl SessionContext {
         self.state().create_physical_plan(logical_plan).await
     }
 
-    /// Executes a query and writes the results to a partitioned CSV file.
-    pub async fn write_csv(
-        &self,
-        plan: Arc<dyn ExecutionPlan>,
-        path: impl AsRef<str>,
-    ) -> Result<()> {
-        plan_to_csv(self.task_ctx(), plan, path).await
-    }
-
-    /// Executes a query and writes the results to a partitioned JSON file.
-    pub async fn write_json(
-        &self,
-        plan: Arc<dyn ExecutionPlan>,
-        path: impl AsRef<str>,
-    ) -> Result<()> {
-        plan_to_json(self.task_ctx(), plan, path).await
-    }
-
-    /// Executes a query and writes the results to a partitioned Parquet file.
-    pub async fn write_parquet(
-        &self,
-        plan: Arc<dyn ExecutionPlan>,
-        path: impl AsRef<str>,
-        writer_properties: Option<WriterProperties>,
-    ) -> Result<()> {
-        plan_to_parquet(self.task_ctx(), plan, path, writer_properties).await
-    }
-
     /// Get a new TaskContext to run in this session
     pub fn task_ctx(&self) -> Arc<TaskContext> {
         Arc::new(TaskContext::from(self))
@@ -1447,6 +1267,7 @@ impl SessionState {
         // Create table_factories for all default formats
         let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
             HashMap::new();
+        #[cfg(feature = "parquet")]
         table_factories.insert("PARQUET".into(), Arc::new(ListingTableFactory::new()));
         table_factories.insert("CSV".into(), Arc::new(ListingTableFactory::new()));
         table_factories.insert("JSON".into(), Arc::new(ListingTableFactory::new()));
@@ -2238,22 +2059,21 @@ impl<'a> TreeNodeVisitor for BadPlanVisitor<'a> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::options::CsvReadOptions;
     use super::*;
     use crate::assert_batches_eq;
     use crate::execution::context::QueryPlanner;
     use crate::execution::memory_pool::MemoryConsumer;
     use crate::execution::runtime_env::RuntimeConfig;
     use crate::test;
-    use crate::test_util::parquet_test_data;
+    use crate::test_util::{plan_and_collect, populate_csv_partitions};
     use crate::variable::VarType;
-    use arrow::record_batch::RecordBatch;
-    use arrow_schema::{Field, Schema};
+    use arrow_schema::Schema;
     use async_trait::async_trait;
     use datafusion_expr::Expr;
-    use std::fs::File;
+    use std::env;
     use std::path::PathBuf;
     use std::sync::Weak;
-    use std::{env, io::prelude::*};
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -2344,39 +2164,6 @@ mod tests {
 
         assert!(ctx.deregister_table("dual")?.is_some());
         assert!(ctx.deregister_table("dual")?.is_none());
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn query_csv_with_custom_partition_extension() -> Result<()> {
-        let tmp_dir = TempDir::new()?;
-
-        // The main stipulation of this test: use a file extension that isn't .csv.
-        let file_extension = ".tst";
-
-        let ctx = SessionContext::new();
-        let schema = populate_csv_partitions(&tmp_dir, 2, file_extension)?;
-        ctx.register_csv(
-            "test",
-            tmp_dir.path().to_str().unwrap(),
-            CsvReadOptions::new()
-                .schema(&schema)
-                .file_extension(file_extension),
-        )
-        .await?;
-        let results =
-            plan_and_collect(&ctx, "SELECT SUM(c1), SUM(c2), COUNT(*) FROM test").await?;
-
-        assert_eq!(results.len(), 1);
-        let expected = [
-            "+--------------+--------------+----------+",
-            "| SUM(test.c1) | SUM(test.c2) | COUNT(*) |",
-            "+--------------+--------------+----------+",
-            "| 10           | 110          | 20       |",
-            "+--------------+--------------+----------+",
-        ];
-        assert_batches_eq!(expected, &results);
 
         Ok(())
     }
@@ -2645,60 +2432,6 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn read_with_glob_path() -> Result<()> {
-        let ctx = SessionContext::new();
-
-        let df = ctx
-            .read_parquet(
-                format!("{}/alltypes_plain*.parquet", parquet_test_data()),
-                ParquetReadOptions::default(),
-            )
-            .await?;
-        let results = df.collect().await?;
-        let total_rows: usize = results.iter().map(|rb| rb.num_rows()).sum();
-        // alltypes_plain.parquet = 8 rows, alltypes_plain.snappy.parquet = 2 rows, alltypes_dictionary.parquet = 2 rows
-        assert_eq!(total_rows, 10);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn read_with_glob_path_issue_2465() -> Result<()> {
-        let ctx = SessionContext::new();
-
-        let df = ctx
-            .read_parquet(
-                // it was reported that when a path contains // (two consecutive separator) no files were found
-                // in this test, regardless of parquet_test_data() value, our path now contains a //
-                format!("{}/..//*/alltypes_plain*.parquet", parquet_test_data()),
-                ParquetReadOptions::default(),
-            )
-            .await?;
-        let results = df.collect().await?;
-        let total_rows: usize = results.iter().map(|rb| rb.num_rows()).sum();
-        // alltypes_plain.parquet = 8 rows, alltypes_plain.snappy.parquet = 2 rows, alltypes_dictionary.parquet = 2 rows
-        assert_eq!(total_rows, 10);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn read_from_registered_table_with_glob_path() -> Result<()> {
-        let ctx = SessionContext::new();
-
-        ctx.register_parquet(
-            "test",
-            &format!("{}/alltypes_plain*.parquet", parquet_test_data()),
-            ParquetReadOptions::default(),
-        )
-        .await?;
-        let df = ctx.sql("SELECT * FROM test").await?;
-        let results = df.collect().await?;
-        let total_rows: usize = results.iter().map(|rb| rb.num_rows()).sum();
-        // alltypes_plain.parquet = 8 rows, alltypes_plain.snappy.parquet = 2 rows, alltypes_dictionary.parquet = 2 rows
-        assert_eq!(total_rows, 10);
-        Ok(())
-    }
-
     struct MyPhysicalPlanner {}
 
     #[async_trait]
@@ -2738,43 +2471,6 @@ mod tests {
         }
     }
 
-    /// Execute SQL and return results
-    async fn plan_and_collect(
-        ctx: &SessionContext,
-        sql: &str,
-    ) -> Result<Vec<RecordBatch>> {
-        ctx.sql(sql).await?.collect().await
-    }
-
-    /// Generate CSV partitions within the supplied directory
-    fn populate_csv_partitions(
-        tmp_dir: &TempDir,
-        partition_count: usize,
-        file_extension: &str,
-    ) -> Result<SchemaRef> {
-        // define schema for data source (csv file)
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("c1", DataType::UInt32, false),
-            Field::new("c2", DataType::UInt64, false),
-            Field::new("c3", DataType::Boolean, false),
-        ]));
-
-        // generate a partitioned file
-        for partition in 0..partition_count {
-            let filename = format!("partition-{partition}.{file_extension}");
-            let file_path = tmp_dir.path().join(filename);
-            let mut file = File::create(file_path)?;
-
-            // generate some data
-            for i in 0..=10 {
-                let data = format!("{},{},{}\n", partition, i, i % 2 == 0);
-                file.write_all(data.as_bytes())?;
-            }
-        }
-
-        Ok(schema)
-    }
-
     /// Generate a partitioned CSV file and register it with an execution context
     async fn create_ctx(
         tmp_dir: &TempDir,
@@ -2795,38 +2491,5 @@ mod tests {
         .await?;
 
         Ok(ctx)
-    }
-
-    // Test for compilation error when calling read_* functions from an #[async_trait] function.
-    // See https://github.com/apache/arrow-datafusion/issues/1154
-    #[async_trait]
-    trait CallReadTrait {
-        async fn call_read_csv(&self) -> DataFrame;
-        async fn call_read_avro(&self) -> DataFrame;
-        async fn call_read_parquet(&self) -> DataFrame;
-    }
-
-    struct CallRead {}
-
-    #[async_trait]
-    impl CallReadTrait for CallRead {
-        async fn call_read_csv(&self) -> DataFrame {
-            let ctx = SessionContext::new();
-            ctx.read_csv("dummy", CsvReadOptions::new()).await.unwrap()
-        }
-
-        async fn call_read_avro(&self) -> DataFrame {
-            let ctx = SessionContext::new();
-            ctx.read_avro("dummy", AvroReadOptions::default())
-                .await
-                .unwrap()
-        }
-
-        async fn call_read_parquet(&self) -> DataFrame {
-            let ctx = SessionContext::new();
-            ctx.read_parquet("dummy", ParquetReadOptions::default())
-                .await
-                .unwrap()
-        }
     }
 }

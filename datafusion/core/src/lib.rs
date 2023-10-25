@@ -437,6 +437,7 @@ pub mod variable;
 
 // re-export dependencies from arrow-rs to minimize version maintenance for crate users
 pub use arrow;
+#[cfg(feature = "parquet")]
 pub use parquet;
 
 // re-export DataFusion sub-crates at the top level. Use `pub use *`
