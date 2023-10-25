@@ -18,6 +18,9 @@
 //! Projection Push Down optimizer rule ensures that only referenced columns are
 //! loaded into memory
 
+use std::collections::{BTreeSet, HashMap, HashSet};
+use std::sync::Arc;
+
 use crate::eliminate_project::can_eliminate;
 use crate::merge_projection::merge_projection;
 use crate::optimizer::ApplyOrder;
@@ -26,19 +29,13 @@ use crate::{OptimizerConfig, OptimizerRule};
 use arrow::error::Result as ArrowResult;
 use datafusion_common::ScalarValue::UInt8;
 use datafusion_common::{
-    plan_err, Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ToDFSchema,
+    plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, Result,
 };
 use datafusion_expr::expr::{AggregateFunction, Alias};
-use datafusion_expr::utils::exprlist_to_fields;
 use datafusion_expr::{
     logical_plan::{Aggregate, LogicalPlan, Projection, TableScan, Union},
-    utils::{expr_to_columns, exprlist_to_columns},
+    utils::{expr_to_columns, exprlist_to_columns, exprlist_to_fields},
     Expr, LogicalPlanBuilder, SubqueryAlias,
-};
-use std::collections::HashMap;
-use std::{
-    collections::{BTreeSet, HashSet},
-    sync::Arc,
 };
 
 // if projection is empty return projection-new_plan, else return new_plan.
@@ -501,24 +498,14 @@ fn push_down_scan(
         projection.into_iter().collect::<Vec<_>>()
     };
 
-    // create the projected schema
-    let projected_fields: Vec<DFField> = projection
-        .iter()
-        .map(|i| {
-            DFField::from_qualified(scan.table_name.clone(), schema.fields()[*i].clone())
-        })
-        .collect();
-
-    let projected_schema = projected_fields.to_dfschema_ref()?;
-
-    Ok(LogicalPlan::TableScan(TableScan {
-        table_name: scan.table_name.clone(),
-        source: scan.source.clone(),
-        projection: Some(projection),
-        projected_schema,
-        filters: scan.filters.clone(),
-        fetch: scan.fetch,
-    }))
+    TableScan::try_new(
+        scan.table_name.clone(),
+        scan.source.clone(),
+        Some(projection),
+        scan.filters.clone(),
+        scan.fetch,
+    )
+    .map(LogicalPlan::TableScan)
 }
 
 fn restrict_outputs(
@@ -538,25 +525,24 @@ fn restrict_outputs(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::vec;
+
     use super::*;
     use crate::eliminate_project::EliminateProjection;
     use crate::optimizer::Optimizer;
     use crate::test::*;
     use crate::OptimizerContext;
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::DFSchema;
+    use datafusion_common::{DFField, DFSchema};
     use datafusion_expr::builder::table_scan_with_filters;
-    use datafusion_expr::expr;
-    use datafusion_expr::expr::Cast;
-    use datafusion_expr::WindowFrame;
-    use datafusion_expr::WindowFunction;
-    use datafusion_expr::{
-        col, count, lit,
-        logical_plan::{builder::LogicalPlanBuilder, table_scan, JoinType},
-        max, min, AggregateFunction, Expr,
+    use datafusion_expr::expr::{self, Cast};
+    use datafusion_expr::logical_plan::{
+        builder::LogicalPlanBuilder, table_scan, JoinType,
     };
-    use std::collections::HashMap;
-    use std::vec;
+    use datafusion_expr::{
+        col, count, lit, max, min, AggregateFunction, Expr, WindowFrame, WindowFunction,
+    };
 
     #[test]
     fn aggregate_no_group_by() -> Result<()> {
