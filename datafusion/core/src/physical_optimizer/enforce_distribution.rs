@@ -55,7 +55,7 @@ use datafusion_physical_expr::expressions::{Column, NoOp};
 use datafusion_physical_expr::utils::{
     map_columns_before_projection, ordering_satisfy_requirement_concrete,
 };
-use datafusion_physical_expr::{expr_list_eq_strict_order, PhysicalExpr};
+use datafusion_physical_expr::{expr_list_eq_strict_order, physical_exprs_equal, PhysicalExpr};
 use datafusion_physical_plan::unbounded_output;
 use datafusion_physical_plan::windows::{get_best_fitting_window, BoundedWindowAggExec};
 
@@ -484,7 +484,7 @@ fn reorder_aggregate_keys(
     parent_required: &[Arc<dyn PhysicalExpr>],
     agg_exec: &AggregateExec,
 ) -> Result<PlanWithKeyRequirements> {
-    let out_put_columns = agg_exec
+    let output_columns = agg_exec
         .group_by()
         .expr()
         .iter()
@@ -492,44 +492,32 @@ fn reorder_aggregate_keys(
         .map(|(index, (_col, name))| Column::new(name, index))
         .collect::<Vec<_>>();
 
-    let out_put_exprs = out_put_columns
+    let output_exprs = output_columns
         .iter()
-        .map(|c| Arc::new(c.clone()) as Arc<dyn PhysicalExpr>)
+        .map(|c| Arc::new(c.clone()) as _)
         .collect::<Vec<_>>();
 
-    if parent_required.len() != out_put_exprs.len()
+    if parent_required.len() != output_exprs.len()
         || !agg_exec.group_by().null_expr().is_empty()
-        || expr_list_eq_strict_order(&out_put_exprs, parent_required)
+        || physical_exprs_equal(&output_exprs, parent_required)
     {
         Ok(PlanWithKeyRequirements::new(agg_plan))
     } else {
-        let new_positions = expected_expr_positions(&out_put_exprs, parent_required);
+        let new_positions = expected_expr_positions(&output_exprs, parent_required);
         match new_positions {
             None => Ok(PlanWithKeyRequirements::new(agg_plan)),
             Some(positions) => {
                 let new_partial_agg = if let Some(agg_exec) =
                     agg_exec.input().as_any().downcast_ref::<AggregateExec>()
-                /*AggregateExec {
-                    mode,
-                    group_by,
-                    aggr_expr,
-                    filter_expr,
-                    order_by_expr,
-                    input,
-                    input_schema,
-                    ..
-                }) =
-                */
                 {
                     if matches!(agg_exec.mode(), &AggregateMode::Partial) {
-                        let mut new_group_exprs = vec![];
-                        for idx in positions.iter() {
-                            new_group_exprs
-                                .push(agg_exec.group_by().expr()[*idx].clone());
-                        }
+                        let group_exprs = agg_exec.group_by().expr();
+                        let new_group_exprs = positions
+                            .into_iter()
+                            .map(|idx| group_exprs[idx].clone())
+                            .collect();
                         let new_partial_group_by =
                             PhysicalGroupBy::new_single(new_group_exprs);
-                        // new Partial AggregateExec
                         Some(Arc::new(AggregateExec::try_new(
                             AggregateMode::Partial,
                             new_partial_group_by,
@@ -547,18 +535,13 @@ fn reorder_aggregate_keys(
                 };
                 if let Some(partial_agg) = new_partial_agg {
                     // Build new group expressions that correspond to the output of partial_agg
-                    let new_final_group: Vec<Arc<dyn PhysicalExpr>> =
-                        partial_agg.output_group_expr();
+                    let group_exprs = partial_agg.group_expr().expr();
+                    let new_final_group = partial_agg.output_group_expr();
                     let new_group_by = PhysicalGroupBy::new_single(
                         new_final_group
                             .iter()
                             .enumerate()
-                            .map(|(i, expr)| {
-                                (
-                                    expr.clone(),
-                                    partial_agg.group_expr().expr()[i].1.clone(),
-                                )
-                            })
+                            .map(|(idx, expr)| (expr.clone(), group_exprs[idx].1.clone()))
                             .collect(),
                     );
 
@@ -573,29 +556,29 @@ fn reorder_aggregate_keys(
                     )?);
 
                     // Need to create a new projection to change the expr ordering back
-                    let mut proj_exprs = out_put_columns
+                    let agg_schema = new_final_agg.schema();
+                    let mut proj_exprs = output_columns
                         .iter()
                         .map(|col| {
+                            let name = col.name();
                             (
                                 Arc::new(Column::new(
-                                    col.name(),
-                                    new_final_agg.schema().index_of(col.name()).unwrap(),
+                                    name,
+                                    agg_schema.index_of(name).unwrap(),
                                 ))
                                     as Arc<dyn PhysicalExpr>,
-                                col.name().to_owned(),
+                                name.to_owned(),
                             )
                         })
                         .collect::<Vec<_>>();
                     let agg_schema = new_final_agg.schema();
                     let agg_fields = agg_schema.fields();
                     for (idx, field) in
-                        agg_fields.iter().enumerate().skip(out_put_columns.len())
+                        agg_fields.iter().enumerate().skip(output_columns.len())
                     {
-                        proj_exprs.push((
-                            Arc::new(Column::new(field.name().as_str(), idx))
-                                as Arc<dyn PhysicalExpr>,
-                            field.name().clone(),
-                        ))
+                        let name = field.name();
+                        proj_exprs
+                            .push((Arc::new(Column::new(name, idx)) as _, name.clone()))
                     }
                     // TODO merge adjacent Projections if there are
                     Ok(PlanWithKeyRequirements::new(Arc::new(
@@ -613,15 +596,14 @@ fn shift_right_required(
     parent_required: &[Arc<dyn PhysicalExpr>],
     left_columns_len: usize,
 ) -> Option<Vec<Arc<dyn PhysicalExpr>>> {
-    let new_right_required: Vec<Arc<dyn PhysicalExpr>> = parent_required
+    let new_right_required = parent_required
         .iter()
         .filter_map(|r| {
             if let Some(col) = r.as_any().downcast_ref::<Column>() {
-                if col.index() >= left_columns_len {
-                    Some(
-                        Arc::new(Column::new(col.name(), col.index() - left_columns_len))
-                            as Arc<dyn PhysicalExpr>,
-                    )
+                let idx = col.index();
+                if idx >= left_columns_len {
+                    let result = Column::new(col.name(), idx - left_columns_len);
+                    Some(Arc::new(result) as _)
                 } else {
                     None
                 }
@@ -632,11 +614,7 @@ fn shift_right_required(
         .collect::<Vec<_>>();
 
     // if the parent required are all comming from the right side, the requirements can be pushdown
-    if new_right_required.len() != parent_required.len() {
-        None
-    } else {
-        Some(new_right_required)
-    }
+    (new_right_required.len() == parent_required.len()).then_some(new_right_required)
 }
 
 /// When the physical planner creates the Joins, the ordering of join keys is from the original query.
@@ -660,8 +638,8 @@ fn shift_right_required(
 /// In that case, the datasources/tables might be pre-partitioned and we can't adjust the key ordering of the datasources
 /// and then can't apply the Top-Down reordering process.
 pub(crate) fn reorder_join_keys_to_inputs(
-    plan: Arc<dyn crate::physical_plan::ExecutionPlan>,
-) -> Result<Arc<dyn crate::physical_plan::ExecutionPlan>> {
+    plan: Arc<dyn ExecutionPlan>,
+) -> Result<Arc<dyn ExecutionPlan>> {
     let plan_any = plan.as_any();
     if let Some(HashJoinExec {
         left,

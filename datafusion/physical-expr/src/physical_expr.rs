@@ -15,6 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
+use std::fmt::{Debug, Display};
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+
 use crate::intervals::Interval;
 use crate::sort_properties::SortProperties;
 use crate::utils::scatter;
@@ -27,10 +32,7 @@ use datafusion_common::utils::DataPtr;
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
-use std::any::Any;
-use std::fmt::{Debug, Display};
-use std::hash::{Hash, Hasher};
-use std::sync::Arc;
+use itertools::izip;
 
 /// Expression that can be evaluated against a RecordBatch
 /// A Physical expression knows its type, nullability and how to evaluate itself.
@@ -54,13 +56,12 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
         let tmp_batch = filter_record_batch(batch, selection)?;
 
         let tmp_result = self.evaluate(&tmp_batch)?;
-        // All values from the `selection` filter are true.
+
         if batch.num_rows() == tmp_batch.num_rows() {
-            return Ok(tmp_result);
-        }
-        if let ColumnarValue::Array(a) = tmp_result {
-            let result = scatter(selection, a.as_ref())?;
-            Ok(ColumnarValue::Array(result))
+            // All values from the `selection` filter are true.
+            Ok(tmp_result)
+        } else if let ColumnarValue::Array(a) = tmp_result {
+            scatter(selection, a.as_ref()).map(ColumnarValue::Array)
         } else {
             Ok(tmp_result)
         }
@@ -216,8 +217,8 @@ pub fn down_cast_any_ref(any: &dyn Any) -> &dyn Any {
     }
 }
 
-/// It is similar to contains method of vector.
-/// Finds whether `expr` is among `physical_exprs`.
+/// This function is similar to the `contains` method of `Vec`. It finds
+/// whether `expr` is among `physical_exprs`.
 pub fn physical_exprs_contains(
     physical_exprs: &[Arc<dyn PhysicalExpr>],
     expr: &Arc<dyn PhysicalExpr>,
@@ -225,4 +226,91 @@ pub fn physical_exprs_contains(
     physical_exprs
         .iter()
         .any(|physical_expr| physical_expr.eq(expr))
+}
+
+/// Checks whether the given physical expression slices are equal.
+pub fn physical_exprs_equal(
+    lhs: &[Arc<dyn PhysicalExpr>],
+    rhs: &[Arc<dyn PhysicalExpr>],
+) -> bool {
+    lhs.len() == rhs.len() && izip!(lhs, rhs).all(|(lhs, rhs)| lhs.eq(rhs))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use crate::expressions::{Column, Literal};
+    use crate::physical_expr::{
+        physical_exprs_contains, physical_exprs_equal, PhysicalExpr,
+    };
+
+    use datafusion_common::{Result, ScalarValue};
+
+    #[test]
+    fn test_physical_exprs_contains() -> Result<()> {
+        let lit_true = Arc::new(Literal::new(ScalarValue::Boolean(Some(true))))
+            as Arc<dyn PhysicalExpr>;
+        let lit_false = Arc::new(Literal::new(ScalarValue::Boolean(Some(false))))
+            as Arc<dyn PhysicalExpr>;
+        let lit4 =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(4)))) as Arc<dyn PhysicalExpr>;
+        let lit2 =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(2)))) as Arc<dyn PhysicalExpr>;
+        let lit1 =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))) as Arc<dyn PhysicalExpr>;
+        let col_a_expr = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+        let col_b_expr = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
+        let col_c_expr = Arc::new(Column::new("c", 2)) as Arc<dyn PhysicalExpr>;
+
+        // lit(true), lit(false), lit(4), lit(2), Col(a), Col(b)
+        let physical_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
+            lit_true.clone(),
+            lit_false.clone(),
+            lit4.clone(),
+            lit2.clone(),
+            col_a_expr.clone(),
+            col_b_expr.clone(),
+        ];
+        // below expressions are inside physical_exprs
+        assert!(physical_exprs_contains(&physical_exprs, &lit_true));
+        assert!(physical_exprs_contains(&physical_exprs, &lit2));
+        assert!(physical_exprs_contains(&physical_exprs, &col_b_expr));
+
+        // below expressions are not inside physical_exprs
+        assert!(!physical_exprs_contains(&physical_exprs, &col_c_expr));
+        assert!(!physical_exprs_contains(&physical_exprs, &lit1));
+        Ok(())
+    }
+
+    #[test]
+    fn test_physical_exprs_equal() -> Result<()> {
+        let lit_true = Arc::new(Literal::new(ScalarValue::Boolean(Some(true))))
+            as Arc<dyn PhysicalExpr>;
+        let lit_false = Arc::new(Literal::new(ScalarValue::Boolean(Some(false))))
+            as Arc<dyn PhysicalExpr>;
+        let lit2 =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(2)))) as Arc<dyn PhysicalExpr>;
+        let lit1 =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))) as Arc<dyn PhysicalExpr>;
+        let col_b_expr = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
+
+        let vec1: Vec<Arc<dyn PhysicalExpr>> = vec![lit_true.clone(), lit_false.clone()];
+
+        let vec2: Vec<Arc<dyn PhysicalExpr>> = vec![lit_true.clone(), col_b_expr.clone()];
+
+        let vec3: Vec<Arc<dyn PhysicalExpr>> = vec![lit2.clone(), lit1.clone()];
+
+        let vec4: Vec<Arc<dyn PhysicalExpr>> = vec![lit_true.clone(), lit_false.clone()];
+
+        // these vectors are same
+        assert!(physical_exprs_equal(&vec1, &vec1));
+        assert!(physical_exprs_equal(&vec1, &vec4));
+
+        // these vectors are different
+        assert!(!physical_exprs_equal(&vec1, &vec2));
+        assert!(!physical_exprs_equal(&vec1, &vec3));
+
+        Ok(())
+    }
 }
