@@ -340,15 +340,11 @@ impl EquivalenceGroup {
         }
         // Only add equivalence classes with at least two members as singleton
         // equivalence classes are meaningless.
-        EquivalenceGroup::new(
-            projected_classes
-                .chain(
-                    new_classes
-                        .into_iter()
-                        .filter_map(|(_, values)| (values.len() > 1).then_some(values)),
-                )
-                .collect(),
-        )
+        let new_classes = new_classes
+            .into_iter()
+            .filter_map(|(_, values)| (values.len() > 1).then_some(values));
+        let classes = projected_classes.chain(new_classes).collect();
+        EquivalenceGroup::new(classes)
     }
 
     /// Returns the equivalence class that contains `expr`.
@@ -376,7 +372,7 @@ impl EquivalenceGroup {
                 result.extend(self.clone());
                 let updated_eq_classes = right_equivalences
                     .iter()
-                    .map(|cls| add_offset_to_exprs(cls.to_vec(), left_column_count))
+                    .map(|cls| add_offset_to_exprs(cls, left_column_count))
                     .collect();
                 result.extend(EquivalenceGroup::new(updated_eq_classes));
             }
@@ -486,9 +482,8 @@ impl OrderingEquivalenceClass {
         while idx < self.orderings.len() {
             let mut removal = false;
             for (ordering_idx, ordering) in self.orderings[0..idx].iter().enumerate() {
-                if let Some(left_finer) = finer_side(ordering, &self.orderings[idx]) {
-                    if !left_finer {
-                        // Right side is finer
+                if let Some(right_finer) = finer_side(ordering, &self.orderings[idx]) {
+                    if right_finer {
                         self.orderings.swap(ordering_idx, idx);
                     }
                     removal = true;
@@ -528,22 +523,22 @@ impl OrderingEquivalenceClass {
         OrderingEquivalenceClass::new(res)
     }
 
-    /// Adds `offset` value to the index of each expression inside `OrderingEquivalentGroup`.
-    pub fn add_offset(&self, offset: usize) -> OrderingEquivalenceClass {
-        OrderingEquivalenceClass::new(
-            self.orderings
-                .iter()
-                .map(|ordering| add_offset_to_lex_ordering(ordering, offset))
-                .collect(),
-        )
+    /// Adds `offset` value to the index of each expression inside this
+    /// ordering equivalence class.
+    pub fn add_offset(&mut self, offset: usize) {
+        for ordering in self.orderings.iter_mut() {
+            for sort_expr in ordering {
+                sort_expr.expr = add_offset_to_expr(sort_expr.expr.clone(), offset);
+            }
+        }
     }
 
-    /// Get leading ordering of the expression if it is ordered.
-    /// `None` means expression is not ordered.
-    fn get_ordering(&self, expr: &Arc<dyn PhysicalExpr>) -> Option<SortOptions> {
+    /// Gets sort options associated with this expression if it is a leading
+    /// ordering expression. Otherwise, returns `None`.
+    fn get_options(&self, expr: &Arc<dyn PhysicalExpr>) -> Option<SortOptions> {
         for ordering in self.iter() {
             let leading_ordering = &ordering[0];
-            if expr.eq(&leading_ordering.expr) {
+            if leading_ordering.expr.eq(expr) {
                 return Some(leading_ordering.options);
             }
         }
@@ -551,13 +546,12 @@ impl OrderingEquivalenceClass {
     }
 }
 
-/// Returns `true` if the ordering `lhs` is at least as fine as the ordering `rhs`.
-/// Returns `false` if the ordering `rhs` is finer than the ordering `lhs`.
-/// Returns `None`, if sort_exprs are not compatible.
+/// Returns `true` if the ordering `rhs` is strictly finer than the ordering `rhs`,
+/// `false` if the ordering `lhs` is at least as fine as the ordering `lhs`, and
+/// `None` otherwise (i.e. when given orderings are incomparable).
 fn finer_side(lhs: &[PhysicalSortExpr], rhs: &[PhysicalSortExpr]) -> Option<bool> {
-    let left_larger = lhs.len() >= rhs.len();
     let all_equal = lhs.iter().zip(rhs.iter()).all(|(lhs, rhs)| lhs.eq(rhs));
-    all_equal.then_some(left_larger)
+    all_equal.then_some(lhs.len() < rhs.len())
 }
 
 /// `SchemaProperties` keeps track of useful information related to schema.
@@ -1198,18 +1192,6 @@ fn prune_sort_reqs_with_constants(
 
 /// Adds the `offset` value to `Column` indices inside `expr`. This function is
 /// generally used during the update of the right table schema in join operations.
-fn add_offset_to_exprs(
-    exprs: Vec<Arc<dyn PhysicalExpr>>,
-    offset: usize,
-) -> Vec<Arc<dyn PhysicalExpr>> {
-    exprs
-        .into_iter()
-        .map(|item| add_offset_to_expr(item, offset))
-        .collect()
-}
-
-/// Adds the `offset` value to `Column` indices inside `expr`. This function is
-/// generally used during the update of the right table schema in join operations.
 pub fn add_offset_to_expr(
     expr: Arc<dyn PhysicalExpr>,
     offset: usize,
@@ -1226,18 +1208,19 @@ pub fn add_offset_to_expr(
     // an `Ok` value.
 }
 
-/// Adds the `offset` value to `Column` indices inside `sort_expr.expr`.
-fn add_offset_to_sort_expr(
-    sort_expr: &PhysicalSortExpr,
+/// Adds the `offset` value to `Column` indices inside `exprs`.
+fn add_offset_to_exprs(
+    exprs: &[Arc<dyn PhysicalExpr>],
     offset: usize,
-) -> PhysicalSortExpr {
-    PhysicalSortExpr {
-        expr: add_offset_to_expr(sort_expr.expr.clone(), offset),
-        options: sort_expr.options,
-    }
+) -> Vec<Arc<dyn PhysicalExpr>> {
+    exprs
+        .iter()
+        .cloned()
+        .map(|item| add_offset_to_expr(item, offset))
+        .collect()
 }
 
-/// Adds the `offset` value to `Column` indices for each `sort_expr.expr`
+/// Adds the `offset` value to `Column` indices for each sort expression
 /// inside `sort_exprs`.
 pub fn add_offset_to_lex_ordering(
     sort_exprs: LexOrderingRef,
@@ -1245,7 +1228,10 @@ pub fn add_offset_to_lex_ordering(
 ) -> LexOrdering {
     sort_exprs
         .iter()
-        .map(|sort_expr| add_offset_to_sort_expr(sort_expr, offset))
+        .map(|sort_expr| PhysicalSortExpr {
+            expr: add_offset_to_expr(sort_expr.expr.clone(), offset),
+            options: sort_expr.options,
+        })
         .collect()
 }
 
@@ -1275,7 +1261,7 @@ fn update_ordering(
     } else if node.expr.as_any().is::<Column>() {
         // We have a Column, which is one of the two possible leaf node types:
         let normalized_expr = eq_groups.normalize_expr(node.expr.clone());
-        if let Some(options) = oeq_group.get_ordering(&normalized_expr) {
+        if let Some(options) = oeq_group.get_options(&normalized_expr) {
             node.state = Some(SortProperties::Ordered(options));
             Ok(Transformed::Yes(node))
         } else {
@@ -1305,14 +1291,14 @@ fn update_ordering(
 /// it can thereafter safely be used for ordering equivalence normalization.
 fn get_updated_right_ordering_equivalence_class(
     join_type: &JoinType,
-    right_oeq_group: OrderingEquivalenceClass,
+    mut right_oeq_group: OrderingEquivalenceClass,
     left_columns_len: usize,
 ) -> OrderingEquivalenceClass {
     if matches!(
         join_type,
         JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right
     ) {
-        return right_oeq_group.add_offset(left_columns_len);
+        right_oeq_group.add_offset(left_columns_len);
     }
     right_oeq_group
 }
