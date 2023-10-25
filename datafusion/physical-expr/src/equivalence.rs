@@ -1955,7 +1955,7 @@ mod tests {
     }
 
     #[test]
-    fn test_remove_redundant_entries() -> Result<()> {
+    fn test_remove_redundant_entries_eq_group() -> Result<()> {
         let entries = vec![
             vec![lit(1), lit(1), lit(2)],
             // This group is meaningless should be removed
@@ -1975,6 +1975,100 @@ mod tests {
 
         assert!(physical_exprs_equal(&eq_groups[0], &expected[0]));
         assert!(physical_exprs_equal(&eq_groups[1], &expected[1]));
+        Ok(())
+    }
+
+    #[test]
+    fn test_remove_redundant_entries_oeq_class() -> Result<()> {
+        let schema = create_test_schema()?;
+        let col_a = &col("a", &schema)?;
+        let col_b = &col("b", &schema)?;
+        let col_c = &col("c", &schema)?;
+
+        let option_asc = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        let option_desc = SortOptions {
+            descending: true,
+            nulls_first: true,
+        };
+
+        let test_cases = vec![
+            // ------- TEST CASE 1 ---------
+            (
+                // ORDERINGS GIVEN
+                vec![
+                    // [a ASC, b ASC]
+                    vec![(col_a, option_asc), (col_b, option_asc)],
+                ],
+                // EXPECTED orderings that is succint.
+                vec![
+                    // [a ASC, b ASC]
+                    vec![(col_a, option_asc), (col_b, option_asc)],
+                ],
+            ),
+            // ------- TEST CASE 2 ---------
+            (
+                // ORDERINGS GIVEN
+                vec![
+                    // [a ASC, b ASC]
+                    vec![(col_a, option_asc), (col_b, option_asc)],
+                    // [a ASC, b ASC, c ASC]
+                    vec![
+                        (col_a, option_asc),
+                        (col_b, option_asc),
+                        (col_c, option_asc),
+                    ],
+                ],
+                // EXPECTED orderings that is succint.
+                vec![
+                    // [a ASC, b ASC, c ASC]
+                    vec![
+                        (col_a, option_asc),
+                        (col_b, option_asc),
+                        (col_c, option_asc),
+                    ],
+                ],
+            ),
+            // ------- TEST CASE 3 ---------
+            (
+                // ORDERINGS GIVEN
+                vec![
+                    // [a ASC, b DESC]
+                    vec![(col_a, option_asc), (col_b, option_desc)],
+                    // [a ASC]
+                    vec![(col_a, option_asc)],
+                    // [a ASC, c ASC]
+                    vec![(col_a, option_asc), (col_c, option_asc)],
+                ],
+                // EXPECTED orderings that is succint.
+                vec![
+                    // [a ASC, b DESC]
+                    vec![(col_a, option_asc), (col_b, option_desc)],
+                    // [a ASC, c ASC]
+                    vec![(col_a, option_asc), (col_c, option_asc)],
+                ],
+            ),
+        ];
+        for (orderings, expected) in test_cases {
+            let orderings = orderings
+                .into_iter()
+                .map(|sort_exprs| convert_to_sort_exprs(&sort_exprs))
+                .collect::<Vec<_>>();
+            let expected: Vec<LexOrdering> = expected
+                .into_iter()
+                .map(|sort_exprs| convert_to_sort_exprs(&sort_exprs))
+                .collect::<Vec<_>>();
+            let actual = OrderingEquivalenceClass::new(orderings.clone());
+            let actual = actual.orderings;
+            let err_msg = format!("orderings: {:?}, expected: {:?}", orderings, expected);
+            assert_eq!(actual.len(), expected.len(), "{}", err_msg);
+            for elem in actual {
+                assert!(expected.contains(&elem), "{}", err_msg);
+            }
+        }
+
         Ok(())
     }
 

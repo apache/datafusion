@@ -860,7 +860,6 @@ mod tests {
             let union = UnionExec::new(vec![child1, child2]);
             let union_schema_properties = union.schema_properties();
             let union_actual_orderings = union_schema_properties.oeq_class();
-            println!("union_orderings:{:?}", union_actual_orderings);
             let err_msg = format!(
                 "Error in test id: {:?}, test case: {:?}",
                 test_idx, test_cases[test_idx]

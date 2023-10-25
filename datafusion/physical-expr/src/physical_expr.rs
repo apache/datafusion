@@ -293,8 +293,8 @@ mod tests {
 
     use crate::expressions::{Column, Literal};
     use crate::physical_expr::{
-        deduplicate_physical_exprs, have_common_entries, physical_exprs_contains,
-        physical_exprs_equal, physical_exprs_bag_equal, PhysicalExpr,
+        deduplicate_physical_exprs, have_common_entries, physical_exprs_bag_equal,
+        physical_exprs_contains, physical_exprs_equal, PhysicalExpr,
     };
 
     use datafusion_common::ScalarValue;
