@@ -36,7 +36,7 @@ use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::{JoinHandle, JoinSet};
 
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
-use crate::datasource::statistics::create_max_min_accs;
+use crate::datasource::statistics::{create_max_min_accs, get_col_stats};
 use arrow::datatypes::SchemaRef;
 use arrow::datatypes::{Fields, Schema};
 use bytes::{BufMut, BytesMut};
@@ -63,11 +63,9 @@ use crate::arrow::array::{
 use crate::arrow::datatypes::DataType;
 use crate::config::ConfigOptions;
 
-use crate::datasource::get_col_stats;
 use crate::datasource::physical_plan::{
     FileGroupDisplay, FileMeta, FileSinkConfig, ParquetExec, SchemaAdapter,
 };
-
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
