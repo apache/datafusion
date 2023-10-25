@@ -480,3 +480,43 @@ select * from t where (i & 3) = 1;
 ########
 statement ok
 DROP TABLE t;
+
+
+########
+# Test query with bloom filter
+# Refer to https://github.com/apache/arrow-datafusion/pull/7821#pullrequestreview-1688062599
+########
+
+statement ok
+CREATE EXTERNAL TABLE data_index_bloom_encoding_stats STORED AS PARQUET LOCATION '../../parquet-testing/data/data_index_bloom_encoding_stats.parquet';
+
+statement ok
+set datafusion.execution.parquet.bloom_filter_enabled=true;
+
+query T
+SELECT * FROM data_index_bloom_encoding_stats WHERE "String" = 'foo';
+
+query T
+SELECT * FROM data_index_bloom_encoding_stats WHERE "String" = 'test';
+----
+test
+
+query T
+SELECT * FROM data_index_bloom_encoding_stats WHERE "String" like '%e%';
+----
+Hello
+test
+are you
+the quick
+over
+the lazy
+
+statement ok
+set datafusion.execution.parquet.bloom_filter_enabled=false;
+
+
+########
+# Clean up after the test
+########
+statement ok
+DROP TABLE data_index_bloom_encoding_stats;
