@@ -547,8 +547,16 @@ Environment variables are read during <code class="docutils literal notranslate"
 <td><p>Sets bloom filter number of distinct values. If NULL, uses default parquet writer setting</p></td>
 </tr>
 <tr class="row-even"><td><p>datafusion.execution.parquet.allow_single_file_parallelism</p></td>
-<td><p>false</p></td>
-<td><p>Controls whether DataFusion will attempt to speed up writing large parquet files by first writing multiple smaller files and then stitching them together into a single large file. This will result in faster write speeds, but higher memory usage. Also currently unsupported are bloom filters and column indexes when single_file_parallelism is enabled.</p></td>
+<td><p>true</p></td>
+<td><p>Controls whether DataFusion will attempt to speed up writing parquet files by serializing them in parallel. Each column in each row group in each output file are serialized in parallel leveraging a maximum possible core count of n_files<em>n_row_groups</em>n_columns.</p></td>
+</tr>
+<tr class="row-odd"><td><p>datafusion.execution.parquet.maximum_parallel_row_group_writers</p></td>
+<td><p>1</p></td>
+<td><p>By default parallel parquet writer is tuned for minimum memory usage in a streaming execution plan. You may see a performance benefit when writing large parquet files by increasing maximum_parallel_row_group_writers and maximum_buffered_record_batches_per_stream if your system has idle cores and can tolerate additional memory usage. Boosting these values is likely worthwhile when writing out already in-memory data, such as from a cached data frame.</p></td>
+</tr>
+<tr class="row-even"><td><p>datafusion.execution.parquet.maximum_buffered_record_batches_per_stream</p></td>
+<td><p>2</p></td>
+<td><p>By default parallel parquet writer is tuned for minimum memory usage in a streaming execution plan. You may see a performance benefit when writing large parquet files by increasing maximum_parallel_row_group_writers and maximum_buffered_record_batches_per_stream if your system has idle cores and can tolerate additional memory usage. Boosting these values is likely worthwhile when writing out already in-memory data, such as from a cached data frame.</p></td>
 </tr>
 <tr class="row-odd"><td><p>datafusion.execution.aggregate.scalar_update_factor</p></td>
 <td><p>10</p></td>
