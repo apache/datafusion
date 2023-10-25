@@ -153,7 +153,7 @@ datafusion.execution.collect_statistics false
 datafusion.execution.max_buffered_batches_per_output_file 2
 datafusion.execution.meta_fetch_concurrency 32
 datafusion.execution.minimum_parallel_output_files 4
-datafusion.execution.parquet.allow_single_file_parallelism false
+datafusion.execution.parquet.allow_single_file_parallelism true
 datafusion.execution.parquet.bloom_filter_enabled false
 datafusion.execution.parquet.bloom_filter_fpp NULL
 datafusion.execution.parquet.bloom_filter_ndv NULL
@@ -168,6 +168,8 @@ datafusion.execution.parquet.enable_page_index true
 datafusion.execution.parquet.encoding NULL
 datafusion.execution.parquet.max_row_group_size 1048576
 datafusion.execution.parquet.max_statistics_size NULL
+datafusion.execution.parquet.maximum_buffered_record_batches_per_stream 2
+datafusion.execution.parquet.maximum_parallel_row_group_writers 1
 datafusion.execution.parquet.metadata_size_hint NULL
 datafusion.execution.parquet.pruning true
 datafusion.execution.parquet.pushdown_filters false
@@ -223,7 +225,7 @@ datafusion.execution.collect_statistics false Should DataFusion collect statisti
 datafusion.execution.max_buffered_batches_per_output_file 2 This is the maximum number of RecordBatches buffered for each output file being worked. Higher values can potentially give faster write performance at the cost of higher peak memory consumption
 datafusion.execution.meta_fetch_concurrency 32 Number of files to read in parallel when inferring schema and statistics
 datafusion.execution.minimum_parallel_output_files 4 Guarantees a minimum level of output files running in parallel. RecordBatches will be distributed in round robin fashion to each parallel writer. Each writer is closed and a new file opened once soft_max_rows_per_output_file is reached.
-datafusion.execution.parquet.allow_single_file_parallelism false Controls whether DataFusion will attempt to speed up writing large parquet files by first writing multiple smaller files and then stitching them together into a single large file. This will result in faster write speeds, but higher memory usage. Also currently unsupported are bloom filters and column indexes when single_file_parallelism is enabled.
+datafusion.execution.parquet.allow_single_file_parallelism true Controls whether DataFusion will attempt to speed up writing parquet files by serializing them in parallel. Each column in each row group in each output file are serialized in parallel leveraging a maximum possible core count of n_files*n_row_groups*n_columns.
 datafusion.execution.parquet.bloom_filter_enabled false Sets if bloom filter is enabled for any column
 datafusion.execution.parquet.bloom_filter_fpp NULL Sets bloom filter false positive probability. If NULL, uses default parquet writer setting
 datafusion.execution.parquet.bloom_filter_ndv NULL Sets bloom filter number of distinct values. If NULL, uses default parquet writer setting
@@ -238,6 +240,8 @@ datafusion.execution.parquet.enable_page_index true If true, reads the Parquet d
 datafusion.execution.parquet.encoding NULL Sets default encoding for any column Valid values are: plain, plain_dictionary, rle, bit_packed, delta_binary_packed, delta_length_byte_array, delta_byte_array, rle_dictionary, and byte_stream_split. These values are not case sensitive. If NULL, uses default parquet writer setting
 datafusion.execution.parquet.max_row_group_size 1048576 Sets maximum number of rows in a row group
 datafusion.execution.parquet.max_statistics_size NULL Sets max statistics size for any column. If NULL, uses default parquet writer setting
+datafusion.execution.parquet.maximum_buffered_record_batches_per_stream 2 By default parallel parquet writer is tuned for minimum memory usage in a streaming execution plan. You may see a performance benefit when writing large parquet files by increasing maximum_parallel_row_group_writers and maximum_buffered_record_batches_per_stream if your system has idle cores and can tolerate additional memory usage. Boosting these values is likely worthwhile when writing out already in-memory data, such as from a cached data frame.
+datafusion.execution.parquet.maximum_parallel_row_group_writers 1 By default parallel parquet writer is tuned for minimum memory usage in a streaming execution plan. You may see a performance benefit when writing large parquet files by increasing maximum_parallel_row_group_writers and maximum_buffered_record_batches_per_stream if your system has idle cores and can tolerate additional memory usage. Boosting these values is likely worthwhile when writing out already in-memory data, such as from a cached data frame.
 datafusion.execution.parquet.metadata_size_hint NULL If specified, the parquet reader will try and fetch the last `size_hint` bytes of the parquet file optimistically. If not specified, two reads are required: One read to fetch the 8-byte parquet footer and another to fetch the metadata length encoded in the footer
 datafusion.execution.parquet.pruning true If true, the parquet reader attempts to skip entire row groups based on the predicate in the query and the metadata (min/max values) stored in the parquet file
 datafusion.execution.parquet.pushdown_filters false If true, filter expressions are be applied during the parquet decoding operation to reduce the number of rows decoded

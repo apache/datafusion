@@ -377,12 +377,32 @@ config_namespace! {
         pub bloom_filter_ndv: Option<u64>, default = None
 
         /// Controls whether DataFusion will attempt to speed up writing
-        /// large parquet files by first writing multiple smaller files
-        /// and then stitching them together into a single large file.
-        /// This will result in faster write speeds, but higher memory usage.
-        /// Also currently unsupported are bloom filters and column indexes
-        /// when single_file_parallelism is enabled.
-        pub allow_single_file_parallelism: bool, default = false
+        /// parquet files by serializing them in parallel. Each column
+        /// in each row group in each output file are serialized in parallel
+        /// leveraging a maximum possible core count of n_files*n_row_groups*n_columns.
+        pub allow_single_file_parallelism: bool, default = true
+
+        /// By default parallel parquet writer is tuned for minimum
+        /// memory usage in a streaming execution plan. You may see
+        /// a performance benefit when writing large parquet files
+        /// by increasing maximum_parallel_row_group_writers and
+        /// maximum_buffered_record_batches_per_stream if your system
+        /// has idle cores and can tolerate additional memory usage.
+        /// Boosting these values is likely worthwhile when
+        /// writing out already in-memory data, such as from a cached
+        /// data frame.
+        pub maximum_parallel_row_group_writers: usize, default = 1
+
+        /// By default parallel parquet writer is tuned for minimum
+        /// memory usage in a streaming execution plan. You may see
+        /// a performance benefit when writing large parquet files
+        /// by increasing maximum_parallel_row_group_writers and
+        /// maximum_buffered_record_batches_per_stream if your system
+        /// has idle cores and can tolerate additional memory usage.
+        /// Boosting these values is likely worthwhile when
+        /// writing out already in-memory data, such as from a cached
+        /// data frame.
+        pub maximum_buffered_record_batches_per_stream: usize, default = 2
 
     }
 }
