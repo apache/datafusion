@@ -26,12 +26,9 @@ use crate::{
     reverse_order_bys, AggregateExpr, LexOrdering, PhysicalExpr, PhysicalSortExpr,
 };
 
-use arrow::array::ArrayRef;
-use arrow::compute;
-use arrow::compute::{lexsort_to_indices, SortColumn};
+use arrow::array::{Array, ArrayRef, AsArray, BooleanArray};
+use arrow::compute::{self, lexsort_to_indices, SortColumn};
 use arrow::datatypes::{DataType, Field};
-use arrow_array::cast::AsArray;
-use arrow_array::{Array, BooleanArray};
 use arrow_schema::SortOptions;
 use datafusion_common::utils::{compare_rows, get_arrayref_at_indices, get_row_at_idx};
 use datafusion_common::{DataFusionError, Result, ScalarValue};

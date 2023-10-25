@@ -32,8 +32,6 @@ use datafusion_common::utils::DataPtr;
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
-use itertools::izip;
-
 /// Expression that can be evaluated against a RecordBatch
 /// A Physical expression knows its type, nullability and how to evaluate itself.
 pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
@@ -228,22 +226,12 @@ pub fn physical_exprs_contains(
         .any(|physical_expr| physical_expr.eq(expr))
 }
 
-/// Checks whether the given physical expression slices are equal.
-pub fn physical_exprs_equal(
-    lhs: &[Arc<dyn PhysicalExpr>],
-    rhs: &[Arc<dyn PhysicalExpr>],
-) -> bool {
-    lhs.len() == rhs.len() && izip!(lhs, rhs).all(|(lhs, rhs)| lhs.eq(rhs))
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
     use crate::expressions::{Column, Literal};
-    use crate::physical_expr::{
-        physical_exprs_contains, physical_exprs_equal, PhysicalExpr,
-    };
+    use crate::physical_expr::{physical_exprs_contains, PhysicalExpr};
 
     use datafusion_common::{Result, ScalarValue};
 
@@ -280,37 +268,6 @@ mod tests {
         // below expressions are not inside physical_exprs
         assert!(!physical_exprs_contains(&physical_exprs, &col_c_expr));
         assert!(!physical_exprs_contains(&physical_exprs, &lit1));
-        Ok(())
-    }
-
-    #[test]
-    fn test_physical_exprs_equal() -> Result<()> {
-        let lit_true = Arc::new(Literal::new(ScalarValue::Boolean(Some(true))))
-            as Arc<dyn PhysicalExpr>;
-        let lit_false = Arc::new(Literal::new(ScalarValue::Boolean(Some(false))))
-            as Arc<dyn PhysicalExpr>;
-        let lit2 =
-            Arc::new(Literal::new(ScalarValue::Int32(Some(2)))) as Arc<dyn PhysicalExpr>;
-        let lit1 =
-            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))) as Arc<dyn PhysicalExpr>;
-        let col_b_expr = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
-
-        let vec1: Vec<Arc<dyn PhysicalExpr>> = vec![lit_true.clone(), lit_false.clone()];
-
-        let vec2: Vec<Arc<dyn PhysicalExpr>> = vec![lit_true.clone(), col_b_expr.clone()];
-
-        let vec3: Vec<Arc<dyn PhysicalExpr>> = vec![lit2.clone(), lit1.clone()];
-
-        let vec4: Vec<Arc<dyn PhysicalExpr>> = vec![lit_true.clone(), lit_false.clone()];
-
-        // these vectors are same
-        assert!(physical_exprs_equal(&vec1, &vec1));
-        assert!(physical_exprs_equal(&vec1, &vec4));
-
-        // these vectors are different
-        assert!(!physical_exprs_equal(&vec1, &vec2));
-        assert!(!physical_exprs_equal(&vec1, &vec3));
-
         Ok(())
     }
 }

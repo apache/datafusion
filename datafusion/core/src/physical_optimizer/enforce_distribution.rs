@@ -55,7 +55,7 @@ use datafusion_physical_expr::expressions::{Column, NoOp};
 use datafusion_physical_expr::utils::{
     map_columns_before_projection, ordering_satisfy_requirement_concrete,
 };
-use datafusion_physical_expr::{expr_list_eq_strict_order, physical_exprs_equal, PhysicalExpr};
+use datafusion_physical_expr::{expr_list_eq_strict_order, PhysicalExpr};
 use datafusion_physical_plan::unbounded_output;
 use datafusion_physical_plan::windows::{get_best_fitting_window, BoundedWindowAggExec};
 
@@ -499,7 +499,7 @@ fn reorder_aggregate_keys(
 
     if parent_required.len() != output_exprs.len()
         || !agg_exec.group_by().null_expr().is_empty()
-        || physical_exprs_equal(&output_exprs, parent_required)
+        || expr_list_eq_strict_order(&output_exprs, parent_required)
     {
         Ok(PlanWithKeyRequirements::new(agg_plan))
     } else {
@@ -652,41 +652,34 @@ pub(crate) fn reorder_join_keys_to_inputs(
         ..
     }) = plan_any.downcast_ref::<HashJoinExec>()
     {
-        match mode {
-            PartitionMode::Partitioned => {
-                let join_key_pairs = extract_join_keys(on);
-                if let Some((
-                    JoinKeyPairs {
-                        left_keys,
-                        right_keys,
-                    },
-                    new_positions,
-                )) = reorder_current_join_keys(
-                    join_key_pairs,
-                    Some(left.output_partitioning()),
-                    Some(right.output_partitioning()),
-                    &left.equivalence_properties(),
-                    &right.equivalence_properties(),
-                ) {
-                    if !new_positions.is_empty() {
-                        let new_join_on = new_join_conditions(&left_keys, &right_keys);
-                        Ok(Arc::new(HashJoinExec::try_new(
-                            left.clone(),
-                            right.clone(),
-                            new_join_on,
-                            filter.clone(),
-                            join_type,
-                            PartitionMode::Partitioned,
-                            *null_equals_null,
-                        )?))
-                    } else {
-                        Ok(plan)
-                    }
-                } else {
-                    Ok(plan)
+        if matches!(mode, PartitionMode::Partitioned) {
+            let join_key_pairs = extract_join_keys(on);
+            if let Some((
+                JoinKeyPairs {
+                    left_keys,
+                    right_keys,
+                },
+                new_positions,
+            )) = reorder_current_join_keys(
+                join_key_pairs,
+                Some(left.output_partitioning()),
+                Some(right.output_partitioning()),
+                &left.equivalence_properties(),
+                &right.equivalence_properties(),
+            ) {
+                if !new_positions.is_empty() {
+                    let new_join_on = new_join_conditions(&left_keys, &right_keys);
+                    return Ok(Arc::new(HashJoinExec::try_new(
+                        left.clone(),
+                        right.clone(),
+                        new_join_on,
+                        filter.clone(),
+                        join_type,
+                        PartitionMode::Partitioned,
+                        *null_equals_null,
+                    )?));
                 }
             }
-            _ => Ok(plan),
         }
     } else if let Some(SortMergeJoinExec {
         left,
@@ -718,23 +711,18 @@ pub(crate) fn reorder_join_keys_to_inputs(
                 for idx in 0..sort_options.len() {
                     new_sort_options.push(sort_options[new_positions[idx]])
                 }
-                Ok(Arc::new(SortMergeJoinExec::try_new(
+                return Ok(Arc::new(SortMergeJoinExec::try_new(
                     left.clone(),
                     right.clone(),
                     new_join_on,
                     *join_type,
                     new_sort_options,
                     *null_equals_null,
-                )?))
-            } else {
-                Ok(plan)
+                )?));
             }
-        } else {
-            Ok(plan)
         }
-    } else {
-        Ok(plan)
     }
+    Ok(plan)
 }
 
 /// Reorder the current join keys ordering based on either left partition or right partition
@@ -862,12 +850,7 @@ fn expected_expr_positions(
 fn extract_join_keys(on: &[(Column, Column)]) -> JoinKeyPairs {
     let (left_keys, right_keys) = on
         .iter()
-        .map(|(l, r)| {
-            (
-                Arc::new(l.clone()) as Arc<dyn PhysicalExpr>,
-                Arc::new(r.clone()) as Arc<dyn PhysicalExpr>,
-            )
-        })
+        .map(|(l, r)| (Arc::new(l.clone()) as _, Arc::new(r.clone()) as _))
         .unzip();
     JoinKeyPairs {
         left_keys,
@@ -879,7 +862,7 @@ fn new_join_conditions(
     new_left_keys: &[Arc<dyn PhysicalExpr>],
     new_right_keys: &[Arc<dyn PhysicalExpr>],
 ) -> Vec<(Column, Column)> {
-    let new_join_on = new_left_keys
+    new_left_keys
         .iter()
         .zip(new_right_keys.iter())
         .map(|(l_key, r_key)| {
@@ -888,8 +871,7 @@ fn new_join_conditions(
                 r_key.as_any().downcast_ref::<Column>().unwrap().clone(),
             )
         })
-        .collect::<Vec<_>>();
-    new_join_on
+        .collect::<Vec<_>>()
 }
 
 /// Updates `dist_onward` such that, to keep track of
@@ -953,10 +935,10 @@ fn add_roundrobin_on_top(
         // (determined by flag `config.optimizer.bounded_order_preserving_variants`)
         let should_preserve_ordering = input.output_ordering().is_some();
 
-        let new_plan = Arc::new(
-            RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(n_target))?
-                .with_preserve_order(should_preserve_ordering),
-        ) as Arc<dyn ExecutionPlan>;
+        let partitioning = Partitioning::RoundRobinBatch(n_target);
+        let repartition = RepartitionExec::try_new(input, partitioning)?
+            .with_preserve_order(should_preserve_ordering);
+        let new_plan = Arc::new(repartition) as Arc<dyn ExecutionPlan>;
 
         // update distribution onward with new operator
         update_distribution_onward(new_plan.clone(), dist_onward, input_idx);
@@ -985,7 +967,7 @@ fn add_roundrobin_on_top(
 ///
 /// # Returns
 ///
-/// A [Result] object that contains new execution plan, where desired distribution is
+/// A [`Result`] object that contains new execution plan, where desired distribution is
 /// satisfied by adding Hash Repartition.
 fn add_hash_on_top(
     input: Arc<dyn ExecutionPlan>,
@@ -1029,10 +1011,10 @@ fn add_hash_on_top(
         } else {
             input
         };
-        new_plan = Arc::new(
-            RepartitionExec::try_new(new_plan, Partitioning::Hash(hash_exprs, n_target))?
-                .with_preserve_order(should_preserve_ordering),
-        ) as _;
+        let partitioning = Partitioning::Hash(hash_exprs, n_target);
+        let repartition = RepartitionExec::try_new(new_plan, partitioning)?
+            .with_preserve_order(should_preserve_ordering);
+        new_plan = Arc::new(repartition) as _;
 
         // update distribution onward with new operator
         update_distribution_onward(new_plan.clone(), dist_onward, input_idx);
@@ -1122,7 +1104,7 @@ fn remove_dist_changing_operators(
     {
         // All of above operators have a single child. When we remove the top
         // operator, we take the first child.
-        plan = plan.children()[0].clone();
+        plan = plan.children().swap_remove(0);
         distribution_onwards =
             get_children_exectrees(plan.children().len(), &distribution_onwards[0]);
     }
@@ -1175,14 +1157,14 @@ fn replace_order_preserving_variants_helper(
     }
     if is_sort_preserving_merge(&exec_tree.plan) {
         return Ok(Arc::new(CoalescePartitionsExec::new(
-            updated_children[0].clone(),
+            updated_children.swap_remove(0),
         )));
     }
     if let Some(repartition) = exec_tree.plan.as_any().downcast_ref::<RepartitionExec>() {
         if repartition.preserve_order() {
             return Ok(Arc::new(
                 RepartitionExec::try_new(
-                    updated_children[0].clone(),
+                    updated_children.swap_remove(0),
                     repartition.partitioning().clone(),
                 )?
                 .with_preserve_order(false),
@@ -1403,7 +1385,7 @@ fn ensure_distribution(
             //           Data
             Arc::new(InterleaveExec::try_new(new_children)?)
         } else {
-            plan.clone().with_new_children(new_children)?
+            plan.with_new_children(new_children)?
         },
         distribution_onwards,
     };
@@ -1600,7 +1582,7 @@ impl PlanWithKeyRequirements {
                 let length = child.children().len();
                 PlanWithKeyRequirements {
                     plan: child,
-                    required_key_ordering: from_parent.clone(),
+                    required_key_ordering: from_parent,
                     request_key_ordering: vec![None; length],
                 }
             })

@@ -46,6 +46,7 @@ use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 
 use async_trait::async_trait;
+use datafusion_physical_plan::windows::PartitionSearchMode;
 
 async fn register_current_csv(
     ctx: &SessionContext,
@@ -239,7 +240,7 @@ pub fn bounded_window_exec(
             .unwrap()],
             input.clone(),
             vec![],
-            crate::physical_plan::windows::PartitionSearchMode::Sorted,
+            PartitionSearchMode::Sorted,
         )
         .unwrap(),
     )
