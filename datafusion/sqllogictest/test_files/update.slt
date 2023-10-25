@@ -27,7 +27,7 @@ statement ok
 set datafusion.optimizer.max_passes = 0;
 
 query TT
-explain update t1 set a=1, b=2, c=3.0;
+explain update t1 set a=1, b=2, c=3.0, d=NULL;
 ----
 logical_plan
 Dml: op=[Update] table=[t1]
