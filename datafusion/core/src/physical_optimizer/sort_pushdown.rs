@@ -32,7 +32,9 @@ use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_common::{plan_err, DataFusionError, JoinSide, Result};
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::{PhysicalSortExpr, PhysicalSortRequirement};
+use datafusion_physical_expr::{
+    LexRequirementRef, PhysicalSortExpr, PhysicalSortRequirement,
+};
 
 use itertools::izip;
 
@@ -184,7 +186,7 @@ pub(crate) fn pushdown_sorts(
 
 fn pushdown_requirement_to_children(
     plan: &Arc<dyn ExecutionPlan>,
-    parent_required: &[PhysicalSortRequirement],
+    parent_required: LexRequirementRef,
 ) -> Result<Option<Vec<Option<Vec<PhysicalSortRequirement>>>>> {
     let maintains_input_order = plan.maintains_input_order();
     if is_window(plan) {
@@ -300,8 +302,8 @@ fn pushdown_requirement_to_children(
 /// If the the parent requirements are more specific, push down the parent requirements
 /// If they are not compatible, need to add Sort.
 fn determine_children_requirement(
-    parent_required: &[PhysicalSortRequirement],
-    request_child: &[PhysicalSortRequirement],
+    parent_required: LexRequirementRef,
+    request_child: LexRequirementRef,
     child_plan: Arc<dyn ExecutionPlan>,
 ) -> RequirementsCompatibility {
     if child_plan
@@ -327,7 +329,7 @@ fn determine_children_requirement(
 }
 fn try_pushdown_requirements_to_join(
     smj: &SortMergeJoinExec,
-    parent_required: &[PhysicalSortRequirement],
+    parent_required: LexRequirementRef,
     sort_expr: Vec<PhysicalSortExpr>,
     push_side: JoinSide,
 ) -> Result<Option<Vec<Option<Vec<PhysicalSortRequirement>>>>> {
@@ -416,7 +418,7 @@ fn expr_source_sides(
 }
 
 fn shift_right_required(
-    parent_required: &[PhysicalSortRequirement],
+    parent_required: LexRequirementRef,
     left_columns_len: usize,
 ) -> Result<Vec<PhysicalSortRequirement>> {
     let new_right_required: Vec<PhysicalSortRequirement> = parent_required

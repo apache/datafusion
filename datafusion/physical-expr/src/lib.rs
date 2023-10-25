@@ -65,7 +65,7 @@ pub use physical_expr::{
 pub use planner::create_physical_expr;
 pub use scalar_function::ScalarFunctionExpr;
 pub use sort_expr::{
-    LexOrdering, LexOrderingRef, LexOrderingReq, PhysicalSortExpr,
+    LexOrdering, LexOrderingRef, LexRequirement, LexRequirementRef, PhysicalSortExpr,
     PhysicalSortRequirement,
 };
 pub use utils::{reverse_order_bys, split_conjunction};

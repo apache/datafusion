@@ -47,7 +47,7 @@ use datafusion_physical_expr::{
     equivalence::collapse_lex_req,
     expressions::{Column, Max, Min, UnKnownColumn},
     physical_exprs_contains, reverse_order_bys, AggregateExpr, LexOrdering,
-    LexOrderingReq, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
+    LexRequirement, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
     SchemaProperties,
 };
 
@@ -300,7 +300,7 @@ pub struct AggregateExec {
     source_to_target_mapping: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    required_input_ordering: Option<LexOrderingReq>,
+    required_input_ordering: Option<LexRequirement>,
     partition_search_mode: PartitionSearchMode,
     output_ordering: Option<LexOrdering>,
 }
@@ -803,7 +803,7 @@ impl ExecutionPlan for AggregateExec {
         }
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<LexOrderingReq>> {
+    fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
         vec![self.required_input_ordering.clone()]
     }
 

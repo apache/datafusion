@@ -272,11 +272,18 @@ fn to_str(options: &SortOptions) -> &str {
     }
 }
 
-///`LexOrdering` is a type alias for lexicographical ordering definition`Vec<PhysicalSortExpr>`
+///`LexOrdering` is an alias for the type `Vec<PhysicalSortExpr>`, which represents
+/// a lexicographical ordering.
 pub type LexOrdering = Vec<PhysicalSortExpr>;
 
-///`LexOrderingRef` is a type alias for lexicographical ordering reference &`[PhysicalSortExpr]`
+///`LexOrderingRef` is an alias for the type &`[PhysicalSortExpr]`, which represents
+/// a reference to a lexicographical ordering.
 pub type LexOrderingRef<'a> = &'a [PhysicalSortExpr];
 
-///`LexOrderingReq` is a type alias for lexicographical ordering requirement definition`Vec<PhysicalSortRequirement>`
-pub type LexOrderingReq = Vec<PhysicalSortRequirement>;
+///`LexRequirement` is an alias for the type `Vec<PhysicalSortRequirement>`, which
+/// represents a lexicographical ordering requirement.
+pub type LexRequirement = Vec<PhysicalSortRequirement>;
+
+///`LexRequirementRef` is an alias for the type &`[PhysicalSortRequirement]`, which
+/// represents a reference to a lexicographical ordering requirement.
+pub type LexRequirementRef<'a> = &'a [PhysicalSortRequirement];
