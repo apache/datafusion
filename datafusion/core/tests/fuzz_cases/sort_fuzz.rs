@@ -23,90 +23,55 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
-use datafusion::physical_plan::expressions::{col, PhysicalSortExpr};
+use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{collect, ExecutionPlan};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_execution::memory_pool::GreedyMemoryPool;
+use datafusion_physical_expr::expressions::col;
 use rand::Rng;
 use std::sync::Arc;
 use test_utils::{batches_to_vec, partitions_to_sorted_vec};
 
+const KB: usize = 1 << 10;
 #[tokio::test]
 #[cfg_attr(tarpaulin, ignore)]
 async fn test_sort_1k_mem() {
-    SortTest::new()
-        .with_int32_batches(5)
-        .with_pool_size(10240)
-        .with_should_spill(false)
-        .run()
-        .await;
-
-    SortTest::new()
-        .with_int32_batches(20000)
-        .with_pool_size(10240)
-        .with_should_spill(true)
-        .run()
-        .await;
-
-    SortTest::new()
-        .with_int32_batches(1000000)
-        .with_pool_size(10240)
-        .with_should_spill(true)
-        .run()
-        .await;
+    for (batch_size, should_spill) in [(5, false), (20000, true), (1000000, true)] {
+        SortTest::new()
+            .with_int32_batches(batch_size)
+            .with_pool_size(10 * KB)
+            .with_should_spill(should_spill)
+            .run()
+            .await;
+    }
 }
 
 #[tokio::test]
 #[cfg_attr(tarpaulin, ignore)]
 async fn test_sort_100k_mem() {
-    SortTest::new()
-        .with_int32_batches(5)
-        .with_pool_size(102400)
-        .with_should_spill(false)
-        .run()
-        .await;
-
-    SortTest::new()
-        .with_int32_batches(20000)
-        .with_pool_size(102400)
-        .with_should_spill(false)
-        .run()
-        .await;
-
-    SortTest::new()
-        .with_int32_batches(1000000)
-        .with_pool_size(102400)
-        .with_should_spill(true)
-        .run()
-        .await;
+    for (batch_size, should_spill) in [(5, false), (20000, false), (1000000, true)] {
+        SortTest::new()
+            .with_int32_batches(batch_size)
+            .with_pool_size(100 * KB)
+            .with_should_spill(should_spill)
+            .run()
+            .await;
+    }
 }
 
 #[tokio::test]
 async fn test_sort_unlimited_mem() {
-    SortTest::new()
-        .with_int32_batches(5)
-        .with_pool_size(usize::MAX)
-        .with_should_spill(false)
-        .run()
-        .await;
-
-    SortTest::new()
-        .with_int32_batches(20000)
-        .with_pool_size(usize::MAX)
-        .with_should_spill(false)
-        .run()
-        .await;
-
-    SortTest::new()
-        .with_int32_batches(1000000)
-        .with_pool_size(usize::MAX)
-        .with_should_spill(false)
-        .run()
-        .await;
+    for (batch_size, should_spill) in [(5, false), (20000, false), (1000000, false)] {
+        SortTest::new()
+            .with_int32_batches(batch_size)
+            .with_pool_size(usize::MAX)
+            .with_should_spill(should_spill)
+            .run()
+            .await;
+    }
 }
-
 #[derive(Debug, Default)]
 struct SortTest {
     input: Vec<Vec<RecordBatch>>,

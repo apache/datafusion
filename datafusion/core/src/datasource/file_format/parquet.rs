@@ -23,10 +23,15 @@ use std::fmt::Debug;
 use std::io::Write;
 use std::sync::Arc;
 
-use super::write::{create_writer, start_demuxer_task, AbortableWrite, FileWriterMode};
+use super::write::demux::start_demuxer_task;
+use super::write::{create_writer, AbortableWrite, FileWriterMode};
 use super::{FileFormat, FileScanConfig};
-
+use crate::arrow::array::{
+    BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array,
+};
+use crate::arrow::datatypes::DataType;
 use crate::config::ConfigOptions;
+
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::get_col_stats;
 use crate::datasource::physical_plan::{
@@ -42,8 +47,7 @@ use crate::physical_plan::{
     Statistics,
 };
 
-use arrow::array::{BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array};
-use arrow::datatypes::{DataType, Fields, Schema, SchemaRef};
+use arrow::datatypes::{Fields, Schema, SchemaRef};
 use datafusion_common::stats::Precision;
 use datafusion_common::{exec_err, not_impl_err, plan_err, DataFusionError, FileType};
 use datafusion_execution::TaskContext;
@@ -604,6 +608,31 @@ impl ParquetSink {
         Self { config }
     }
 
+    /// Converts table schema to writer schema, which may differ in the case
+    /// of hive style partitioning where some columns are removed from the
+    /// underlying files.
+    fn get_writer_schema(&self) -> Arc<Schema> {
+        if !self.config.table_partition_cols.is_empty() {
+            let schema = self.config.output_schema();
+            let partition_names: Vec<_> = self
+                .config
+                .table_partition_cols
+                .iter()
+                .map(|(s, _)| s)
+                .collect();
+            Arc::new(Schema::new(
+                schema
+                    .fields()
+                    .iter()
+                    .filter(|f| !partition_names.contains(&f.name()))
+                    .map(|f| (**f).clone())
+                    .collect::<Vec<_>>(),
+            ))
+        } else {
+            self.config.output_schema().clone()
+        }
+    }
+
     /// Creates an AsyncArrowWriter which serializes a parquet file to an ObjectStore
     /// AsyncArrowWriters are used when individual parquet file serialization is not parallelized
     async fn create_async_arrow_writer(
@@ -631,7 +660,7 @@ impl ParquetSink {
                     .map_err(DataFusionError::ObjectStore)?;
                 let writer = AsyncArrowWriter::try_new(
                     multipart_writer,
-                    self.config.output_schema.clone(),
+                    self.get_writer_schema(),
                     10485760,
                     Some(parquet_props),
                 )?;
@@ -721,10 +750,16 @@ impl DataSink for ParquetSink {
             .map(|r| r as u64);
         }
 
+        let part_col = if !self.config.table_partition_cols.is_empty() {
+            Some(self.config.table_partition_cols.clone())
+        } else {
+            None
+        };
+
         let (demux_task, mut file_stream_rx) = start_demuxer_task(
             data,
             context,
-            None,
+            part_col,
             self.config.table_paths[0].clone(),
             "parquet".into(),
             self.config.single_file_output,

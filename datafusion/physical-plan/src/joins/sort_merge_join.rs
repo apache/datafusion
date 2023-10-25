@@ -33,8 +33,7 @@ use std::task::{Context, Poll};
 use crate::expressions::{Column, PhysicalSortExpr};
 use crate::joins::utils::{
     build_join_schema, calculate_join_output_ordering, check_join_is_valid,
-    combine_join_equivalence_properties, combine_join_ordering_equivalence_properties,
-    estimate_join_statistics, partitioned_join_output_partitioning, JoinOn, JoinSide,
+    estimate_join_statistics, partitioned_join_output_partitioning, JoinOn,
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use crate::{
@@ -49,12 +48,15 @@ use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{
-    internal_err, not_impl_err, plan_err, DataFusionError, JoinType, Result,
+    internal_err, not_impl_err, plan_err, DataFusionError, JoinSide, JoinType, Result,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{OrderingEquivalenceProperties, PhysicalSortRequirement};
 
+use datafusion_physical_expr::equivalence::{
+    combine_join_equivalence_properties, combine_join_ordering_equivalence_properties,
+};
 use futures::{Stream, StreamExt};
 
 /// join execution plan executes partitions in parallel and combines them into a set of
@@ -140,7 +142,7 @@ impl SortMergeJoinExec {
             left_schema.fields.len(),
             &Self::maintains_input_order(join_type),
             Some(Self::probe_side(&join_type)),
-        )?;
+        );
 
         let schema =
             Arc::new(build_join_schema(&left_schema, &right_schema, &join_type).0);
@@ -297,14 +299,13 @@ impl ExecutionPlan for SortMergeJoinExec {
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
         combine_join_ordering_equivalence_properties(
             &self.join_type,
-            &self.left,
-            &self.right,
+            &self.left.ordering_equivalence_properties(),
+            &self.right.ordering_equivalence_properties(),
             self.schema(),
             &self.maintains_input_order(),
             Some(Self::probe_side(&self.join_type)),
             self.equivalence_properties(),
         )
-        .unwrap()
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

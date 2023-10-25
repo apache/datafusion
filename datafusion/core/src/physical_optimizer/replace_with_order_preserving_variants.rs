@@ -71,14 +71,15 @@ impl OrderPreservationContext {
                 // ordering, (or that can maintain ordering with the replacement of
                 // its variant)
                 let plan = item.plan;
+                let children = plan.children();
                 let ordering_onwards = item.ordering_onwards;
-                if plan.children().is_empty() {
+                if children.is_empty() {
                     // Plan has no children, there is nothing to propagate.
                     None
                 } else if ordering_onwards[0].is_none()
                     && ((is_repartition(&plan) && !plan.maintains_input_order()[0])
                         || (is_coalesce_partitions(&plan)
-                            && plan.children()[0].output_ordering().is_some()))
+                            && children[0].output_ordering().is_some()))
                 {
                     Some(ExecTree::new(plan, idx, vec![]))
                 } else {
@@ -175,19 +176,18 @@ fn get_updated_plan(
     // When a `RepartitionExec` doesn't preserve ordering, replace it with
     // a `SortPreservingRepartitionExec` if appropriate:
     if is_repartition(&plan) && !plan.maintains_input_order()[0] && is_spr_better {
-        let child = plan.children()[0].clone();
-        plan = Arc::new(
-            RepartitionExec::try_new(child, plan.output_partitioning())?
-                .with_preserve_order(true),
-        ) as _
+        let child = plan.children().swap_remove(0);
+        let repartition = RepartitionExec::try_new(child, plan.output_partitioning())?;
+        plan = Arc::new(repartition.with_preserve_order(true)) as _
     }
     // When the input of a `CoalescePartitionsExec` has an ordering, replace it
     // with a `SortPreservingMergeExec` if appropriate:
+    let mut children = plan.children();
     if is_coalesce_partitions(&plan)
-        && plan.children()[0].output_ordering().is_some()
+        && children[0].output_ordering().is_some()
         && is_spm_better
     {
-        let child = plan.children()[0].clone();
+        let child = children.swap_remove(0);
         plan = Arc::new(SortPreservingMergeExec::new(
             child.output_ordering().unwrap_or(&[]).to_vec(),
             child,

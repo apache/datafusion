@@ -259,7 +259,7 @@ impl<F: FileOpener> FileStream<F> {
             &config
                 .table_partition_cols
                 .iter()
-                .map(|x| x.0.clone())
+                .map(|x| x.name().clone())
                 .collect::<Vec<_>>(),
         );
 

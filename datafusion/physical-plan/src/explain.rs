@@ -23,7 +23,7 @@ use std::sync::Arc;
 use super::expressions::PhysicalSortExpr;
 use super::{DisplayAs, SendableRecordBatchStream};
 use crate::stream::RecordBatchStreamAdapter;
-use crate::{DisplayFormatType, ExecutionPlan, Partitioning, Statistics};
+use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::display::StringifiedPlan;
@@ -166,11 +166,6 @@ impl ExecutionPlan for ExplainExec {
             self.schema.clone(),
             futures::stream::iter(vec![Ok(record_batch)]),
         )))
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        // Statistics an EXPLAIN plan are not relevant
-        Ok(Statistics::new_unknown(&self.schema()))
     }
 }
 

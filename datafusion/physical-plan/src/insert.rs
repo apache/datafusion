@@ -25,7 +25,6 @@ use std::sync::Arc;
 use super::expressions::PhysicalSortExpr;
 use super::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
-    Statistics,
 };
 use crate::metrics::MetricsSet;
 use crate::stream::RecordBatchStreamAdapter;
@@ -275,10 +274,6 @@ impl ExecutionPlan for FileSinkExec {
             count_schema,
             stream,
         )))
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        Ok(Statistics::new_unknown(&self.schema()))
     }
 }
 

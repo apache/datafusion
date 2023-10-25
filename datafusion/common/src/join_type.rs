@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`JoinType`] and [`JoinConstraint`]
+//! Defines the [`JoinType`], [`JoinConstraint`] and [`JoinSide`] types.
 
 use std::{
     fmt::{self, Display, Formatter},
@@ -94,4 +94,33 @@ pub enum JoinConstraint {
     On,
     /// Join USING
     Using,
+}
+
+impl Display for JoinSide {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            JoinSide::Left => write!(f, "left"),
+            JoinSide::Right => write!(f, "right"),
+        }
+    }
+}
+
+/// Join side.
+/// Stores the referred table side during calculations
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum JoinSide {
+    /// Left side of the join
+    Left,
+    /// Right side of the join
+    Right,
+}
+
+impl JoinSide {
+    /// Inverse the join side
+    pub fn negate(&self) -> Self {
+        match self {
+            JoinSide::Left => JoinSide::Right,
+            JoinSide::Right => JoinSide::Left,
+        }
+    }
 }
