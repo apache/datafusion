@@ -20,7 +20,7 @@
 ##########
 
 statement ok
-create table t1(a int, b varchar, c double);
+create table t1(a int, b varchar, c double, d int);
 
 # Turn off the optimizer to make the logical plan closer to the initial one
 statement ok
