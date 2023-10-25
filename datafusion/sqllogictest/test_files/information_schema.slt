@@ -168,8 +168,8 @@ datafusion.execution.parquet.enable_page_index true
 datafusion.execution.parquet.encoding NULL
 datafusion.execution.parquet.max_row_group_size 1048576
 datafusion.execution.parquet.max_statistics_size NULL
-datafusion.execution.parquet.maximum_buffered_record_batches_per_stream 128
-datafusion.execution.parquet.maximum_parallel_row_group_writers 2
+datafusion.execution.parquet.maximum_buffered_record_batches_per_stream 2
+datafusion.execution.parquet.maximum_parallel_row_group_writers 1
 datafusion.execution.parquet.metadata_size_hint NULL
 datafusion.execution.parquet.pruning true
 datafusion.execution.parquet.pushdown_filters false
@@ -240,8 +240,8 @@ datafusion.execution.parquet.enable_page_index true If true, reads the Parquet d
 datafusion.execution.parquet.encoding NULL Sets default encoding for any column Valid values are: plain, plain_dictionary, rle, bit_packed, delta_binary_packed, delta_length_byte_array, delta_byte_array, rle_dictionary, and byte_stream_split. These values are not case sensitive. If NULL, uses default parquet writer setting
 datafusion.execution.parquet.max_row_group_size 1048576 Sets maximum number of rows in a row group
 datafusion.execution.parquet.max_statistics_size NULL Sets max statistics size for any column. If NULL, uses default parquet writer setting
-datafusion.execution.parquet.maximum_buffered_record_batches_per_stream 128 If allow_single_file_parallelism=true, this setting allows applying backpressure to prevent too many RecordBatches building up in memory in case the parallel writers cannot consume them fast enough. Lowering this number limits memory growth at the cost of potentially lower write speeds. Boosting this number may help performance when batches can be produces very fast, such as from an in-memory table.
-datafusion.execution.parquet.maximum_parallel_row_group_writers 2 If allow_single_file_parallelism=true, this setting allows applying backpressure to prevent working on too many row groups in parallel in case of limited memory or slow I/O speed causing OOM errors. Lowering this number limits memory growth at the cost of potentially slower write speeds. Boosting this number may  help performance when batches can be produced very fast, such as from an in-memory table.
+datafusion.execution.parquet.maximum_buffered_record_batches_per_stream 2 By default parallel parquet writer is tuned for minimum memory usage in a streaming execution plan. You may see a performance benefit when writing large parquet files by increasing maximum_parallel_row_group_writers and maximum_buffered_record_batches_per_stream if your system has idle cores and can tolerate additional memory usage. Boosting these values is likely worthwhile when writing out already in-memory data, such as from a cached data frame.
+datafusion.execution.parquet.maximum_parallel_row_group_writers 1 By default parallel parquet writer is tuned for minimum memory usage in a streaming execution plan. You may see a performance benefit when writing large parquet files by increasing maximum_parallel_row_group_writers and maximum_buffered_record_batches_per_stream if your system has idle cores and can tolerate additional memory usage. Boosting these values is likely worthwhile when writing out already in-memory data, such as from a cached data frame.
 datafusion.execution.parquet.metadata_size_hint NULL If specified, the parquet reader will try and fetch the last `size_hint` bytes of the parquet file optimistically. If not specified, two reads are required: One read to fetch the 8-byte parquet footer and another to fetch the metadata length encoded in the footer
 datafusion.execution.parquet.pruning true If true, the parquet reader attempts to skip entire row groups based on the predicate in the query and the metadata (min/max values) stored in the parquet file
 datafusion.execution.parquet.pushdown_filters false If true, filter expressions are be applied during the parquet decoding operation to reduce the number of rows decoded

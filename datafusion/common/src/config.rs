@@ -382,23 +382,27 @@ config_namespace! {
         /// leveraging a maximum possible core count of n_files*n_row_groups*n_columns.
         pub allow_single_file_parallelism: bool, default = true
 
-        /// If allow_single_file_parallelism=true, this setting allows
-        /// applying backpressure to prevent working on too many row groups in
-        /// parallel in case of limited memory or slow I/O speed causing
-        /// OOM errors. Lowering this number limits memory growth at the cost
-        /// of potentially slower write speeds. Boosting this number may
-        /// help performance when batches can be produced very fast,
-        /// such as from an in-memory table.
-        pub maximum_parallel_row_group_writers: usize, default = 2
+        /// By default parallel parquet writer is tuned for minimum
+        /// memory usage in a streaming execution plan. You may see
+        /// a performance benefit when writing large parquet files
+        /// by increasing maximum_parallel_row_group_writers and
+        /// maximum_buffered_record_batches_per_stream if your system
+        /// has idle cores and can tolerate additional memory usage.
+        /// Boosting these values is likely worthwhile when
+        /// writing out already in-memory data, such as from a cached
+        /// data frame.
+        pub maximum_parallel_row_group_writers: usize, default = 1
 
-        /// If allow_single_file_parallelism=true, this setting allows
-        /// applying backpressure to prevent too many RecordBatches building
-        /// up in memory in case the parallel writers cannot consume them fast
-        /// enough. Lowering this number limits memory growth at the cost
-        /// of potentially lower write speeds. Boosting this number may
-        /// help performance when batches can be produces very fast, such
-        /// as from an in-memory table.
-        pub maximum_buffered_record_batches_per_stream: usize, default = 128
+        /// By default parallel parquet writer is tuned for minimum
+        /// memory usage in a streaming execution plan. You may see
+        /// a performance benefit when writing large parquet files
+        /// by increasing maximum_parallel_row_group_writers and
+        /// maximum_buffered_record_batches_per_stream if your system
+        /// has idle cores and can tolerate additional memory usage.
+        /// Boosting these values is likely worthwhile when
+        /// writing out already in-memory data, such as from a cached
+        /// data frame.
+        pub maximum_buffered_record_batches_per_stream: usize, default = 2
 
     }
 }
