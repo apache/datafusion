@@ -31,7 +31,7 @@ explain update t1 set a=1, b=2, c=3.0, d=NULL;
 ----
 logical_plan
 Dml: op=[Update] table=[t1]
---Projection: CAST(Int64(1) AS Int32) AS a, CAST(Int64(2) AS Utf8) AS b, Float64(3) AS c
+--Projection: CAST(Int64(1) AS Int32) AS a, CAST(Int64(2) AS Utf8) AS b, Float64(3) AS c, CAST(NULL AS Int32) AS d
 ----TableScan: t1
 
 query TT
@@ -39,5 +39,5 @@ explain update t1 set a=c+1, b=a, c=c+1.0, d=b;
 ----
 logical_plan
 Dml: op=[Update] table=[t1]
---Projection: CAST(t1.c + CAST(Int64(1) AS Float64) AS Int32) AS a, CAST(t1.a AS Utf8) AS b, t1.c + Float64(1) AS c
+--Projection: CAST(t1.c + CAST(Int64(1) AS Float64) AS Int32) AS a, CAST(t1.a AS Utf8) AS b, t1.c + Float64(1) AS c,  CAST(t1.b AS Int32) AS d
 ----TableScan: t1
