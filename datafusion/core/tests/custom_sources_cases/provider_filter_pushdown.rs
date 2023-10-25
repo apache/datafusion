@@ -153,7 +153,8 @@ impl TableProvider for CustomProvider {
         filters: &[Expr],
         _: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let projection = projection.unwrap();
+        let empty = Vec::new();
+        let projection = projection.unwrap_or(&empty);
         match &filters[0] {
             Expr::BinaryExpr(BinaryExpr { right, .. }) => {
                 let int_value = match &**right {
