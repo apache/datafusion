@@ -35,7 +35,7 @@ Dml: op=[Update] table=[t1]
 ----TableScan: t1
 
 query TT
-explain update t1 set a=c+1, b=a, c=c+1.0;
+explain update t1 set a=c+1, b=a, c=c+1.0, d=b;
 ----
 logical_plan
 Dml: op=[Update] table=[t1]
