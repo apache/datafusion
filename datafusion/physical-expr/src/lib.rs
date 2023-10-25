@@ -59,7 +59,8 @@ pub use equivalence::{
 
 pub use partitioning::{Distribution, Partitioning};
 pub use physical_expr::{
-    physical_exprs_contains, physical_exprs_equal, PhysicalExpr, PhysicalExprRef,
+    physical_exprs_contains, physical_exprs_equal, physical_exprs_bag_equal,
+    PhysicalExpr, PhysicalExprRef,
 };
 pub use planner::create_physical_expr;
 pub use scalar_function::ScalarFunctionExpr;
@@ -67,4 +68,4 @@ pub use sort_expr::{
     LexOrdering, LexOrderingRef, LexOrderingReq, PhysicalSortExpr,
     PhysicalSortRequirement,
 };
-pub use utils::{expr_list_eq_any_order, reverse_order_bys, split_conjunction};
+pub use utils::{reverse_order_bys, split_conjunction};
