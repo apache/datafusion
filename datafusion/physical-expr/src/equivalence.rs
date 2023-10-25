@@ -1392,10 +1392,7 @@ mod tests {
                 (col_g, option_asc),
             ],
         ];
-        let orderings = orderings
-            .into_iter()
-            .map(|sort_exprs| convert_to_sort_exprs(&sort_exprs))
-            .collect::<Vec<_>>();
+        let orderings = convert_to_orderings(&orderings);
         schema_properties.add_new_orderings(&orderings);
         Ok((test_schema, schema_properties))
     }
@@ -1499,6 +1496,16 @@ mod tests {
                 options: *options,
             })
             .collect::<Vec<_>>()
+    }
+
+    // Convert each inner tuple to PhysicalSortExpr
+    fn convert_to_orderings(
+        orderings: &[Vec<(&Arc<dyn PhysicalExpr>, SortOptions)>],
+    ) -> Vec<Vec<PhysicalSortExpr>> {
+        orderings
+            .iter()
+            .map(|sort_exprs| convert_to_sort_exprs(sort_exprs))
+            .collect()
     }
 
     #[test]
@@ -1868,10 +1875,7 @@ mod tests {
             vec![(col_e, options)],
             vec![(col_d, options), (col_f, options)],
         ];
-        let orderings = orderings
-            .into_iter()
-            .map(|sort_exprs| convert_to_sort_exprs(&sort_exprs))
-            .collect::<Vec<_>>();
+        let orderings = convert_to_orderings(&orderings);
 
         // Column [a ASC], [e ASC], [d ASC, f ASC] are all valid orderings for the schema.
         schema_properties.add_new_orderings(&orderings);
@@ -2052,14 +2056,8 @@ mod tests {
             ),
         ];
         for (orderings, expected) in test_cases {
-            let orderings = orderings
-                .into_iter()
-                .map(|sort_exprs| convert_to_sort_exprs(&sort_exprs))
-                .collect::<Vec<_>>();
-            let expected: Vec<LexOrdering> = expected
-                .into_iter()
-                .map(|sort_exprs| convert_to_sort_exprs(&sort_exprs))
-                .collect::<Vec<_>>();
+            let orderings = convert_to_orderings(&orderings);
+            let expected = convert_to_orderings(&expected);
             let actual = OrderingEquivalenceClass::new(orderings.clone());
             let actual = actual.orderings;
             let err_msg = format!("orderings: {:?}, expected: {:?}", orderings, expected);
@@ -2090,10 +2088,7 @@ mod tests {
             vec![(col_x, options), (col_y, options)],
             vec![(col_z, options), (col_w, options)],
         ];
-        let orderings = orderings
-            .into_iter()
-            .map(|sort_exprs| convert_to_sort_exprs(&sort_exprs))
-            .collect::<Vec<_>>();
+        let orderings = convert_to_orderings(&orderings);
         // Right child ordering equivalences
         let right_oeq_class = OrderingEquivalenceClass::new(orderings);
 
@@ -2129,10 +2124,7 @@ mod tests {
             vec![(col_x, options), (col_y, options)],
             vec![(col_z, options), (col_w, options)],
         ];
-        let orderings = orderings
-            .into_iter()
-            .map(|sort_exprs| convert_to_sort_exprs(&sort_exprs))
-            .collect::<Vec<_>>();
+        let orderings = convert_to_orderings(&orderings);
         let expected = OrderingEquivalenceClass::new(orderings);
 
         assert_eq!(result, expected);
