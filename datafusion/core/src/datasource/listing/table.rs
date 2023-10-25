@@ -23,6 +23,8 @@ use std::{any::Any, sync::Arc};
 use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
 use super::PartitionedFile;
 
+#[cfg(feature = "parquet")]
+use crate::datasource::file_format::parquet::ParquetFormat;
 use crate::datasource::{
     file_format::{
         arrow::ArrowFormat,
@@ -30,7 +32,6 @@ use crate::datasource::{
         csv::CsvFormat,
         file_compression_type::{FileCompressionType, FileTypeExt},
         json::JsonFormat,
-        parquet::ParquetFormat,
         FileFormat,
     },
     get_statistics_with_limit,
@@ -150,6 +151,7 @@ impl ListingTableConfig {
             FileType::JSON => Arc::new(
                 JsonFormat::default().with_file_compression_type(file_compression_type),
             ),
+            #[cfg(feature = "parquet")]
             FileType::PARQUET => Arc::new(ParquetFormat::default()),
         };
 
@@ -1019,15 +1021,15 @@ mod tests {
     use std::fs::File;
 
     use super::*;
+    #[cfg(feature = "parquet")]
+    use crate::datasource::file_format::parquet::ParquetFormat;
     use crate::datasource::{provider_as_source, MemTable};
     use crate::execution::options::ArrowReadOptions;
     use crate::physical_plan::collect;
     use crate::prelude::*;
     use crate::{
         assert_batches_eq,
-        datasource::file_format::{
-            avro::AvroFormat, file_compression_type::FileTypeExt, parquet::ParquetFormat,
-        },
+        datasource::file_format::{avro::AvroFormat, file_compression_type::FileTypeExt},
         execution::options::ReadOptions,
         logical_expr::{col, lit},
         test::{columns, object_store::register_test_store},
@@ -1090,6 +1092,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "parquet")]
     #[tokio::test]
     async fn load_table_stats_by_default() -> Result<()> {
         let testdata = crate::test_util::parquet_test_data();
@@ -1113,6 +1116,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "parquet")]
     #[tokio::test]
     async fn load_table_stats_when_no_stats() -> Result<()> {
         let testdata = crate::test_util::parquet_test_data();
@@ -1137,6 +1141,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "parquet")]
     #[tokio::test]
     async fn test_try_create_output_ordering() {
         let testdata = crate::test_util::parquet_test_data();

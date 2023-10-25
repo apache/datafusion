@@ -25,12 +25,12 @@ use datafusion_common::{plan_err, DataFusionError};
 
 use crate::datasource::file_format::arrow::ArrowFormat;
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
+#[cfg(feature = "parquet")]
+use crate::datasource::file_format::parquet::ParquetFormat;
 use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
 use crate::datasource::listing::{ListingTableInsertMode, ListingTableUrl};
 use crate::datasource::{
-    file_format::{
-        avro::AvroFormat, csv::CsvFormat, json::JsonFormat, parquet::ParquetFormat,
-    },
+    file_format::{avro::AvroFormat, csv::CsvFormat, json::JsonFormat},
     listing::ListingOptions,
 };
 use crate::error::Result;
@@ -542,6 +542,7 @@ impl ReadOptions<'_> for CsvReadOptions<'_> {
     }
 }
 
+#[cfg(feature = "parquet")]
 #[async_trait]
 impl ReadOptions<'_> for ParquetReadOptions<'_> {
     fn to_listing_options(&self, config: &SessionConfig) -> ListingOptions {
