@@ -485,9 +485,13 @@ impl OrderingEquivalenceClass {
         let mut idx = 0;
         while idx < self.orderings.len() {
             let mut removal = false;
-            for ordering in self.orderings[0..idx].iter() {
+            for (ordering_idx, ordering) in self.orderings[0..idx].iter().enumerate() {
                 if is_finer(ordering, &self.orderings[idx]) {
                     self.orderings.swap_remove(idx);
+                    removal = true;
+                    break;
+                } else if is_finer(&self.orderings[idx], ordering) {
+                    self.orderings.swap_remove(ordering_idx);
                     removal = true;
                     break;
                 }
@@ -2033,7 +2037,10 @@ mod tests {
             let expected = convert_to_orderings(&expected);
             let actual = OrderingEquivalenceClass::new(orderings.clone());
             let actual = actual.orderings;
-            let err_msg = format!("orderings: {:?}, expected: {:?}", orderings, expected);
+            let err_msg = format!(
+                "orderings: {:?}, expected: {:?}, actual :{:?}",
+                orderings, expected, actual
+            );
             assert_eq!(actual.len(), expected.len(), "{}", err_msg);
             for elem in actual {
                 assert!(expected.contains(&elem), "{}", err_msg);
