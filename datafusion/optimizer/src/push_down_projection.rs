@@ -1102,7 +1102,6 @@ mod tests {
 
     fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
         let optimizer = Optimizer::with_rules(vec![
-            // Arc::new(PushDownProjection::new()),
             Arc::new(RemoveUnusedColumns::new()),
             Arc::new(EliminateProjection::new()),
         ]);

@@ -93,6 +93,7 @@ impl ExprSchemable for Expr {
                     .iter()
                     .map(|e| e.get_type(schema))
                     .collect::<Result<Vec<_>>>()?;
+
                 fun.return_type(&data_types)
             }
             Expr::WindowFunction(WindowFunction { fun, args, .. }) => {

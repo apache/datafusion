@@ -3423,6 +3423,7 @@ SortPreservingMergeExec: [sn@2 ASC NULLS LAST]
 --------------------CoalescePartitionsExec
 ----------------------MemoryExec: partitions=8, partition_sizes=[1, 0, 0, 0, 0, 0, 0, 0]
 
+
 query ITIPTRR
 SELECT *
   FROM(SELECT *, SUM(l.amount) OVER(ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) as sum_amount

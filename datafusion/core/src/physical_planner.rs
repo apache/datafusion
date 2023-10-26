@@ -675,6 +675,7 @@ impl DefaultPhysicalPlanner {
                             "Impossibly got empty window expression"
                         );
                     }
+
                     let input_exec = self.create_initial_plan(input, session_state).await?;
 
                     // at this moment we are guaranteed by the logical planner

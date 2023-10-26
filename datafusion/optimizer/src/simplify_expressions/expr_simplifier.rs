@@ -144,6 +144,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
             .rewrite(&mut simplifier)?
             .rewrite(&mut or_in_list_simplifier)?
             .rewrite(&mut guarantee_rewriter)?
+            // run both passes twice to try an minimize simplifications that we missed
             .rewrite(&mut const_evaluator)?
             .rewrite(&mut simplifier)
     }

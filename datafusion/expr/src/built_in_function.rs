@@ -36,6 +36,7 @@ use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
 use datafusion_common::{
     internal_err, plan_datafusion_err, plan_err, DataFusionError, Result,
 };
+
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 
