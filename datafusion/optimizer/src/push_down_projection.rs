@@ -1009,9 +1009,8 @@ mod tests {
 
         let expected = "Projection: test.c, test.a, MAX(test.b)\
         \n  Filter: test.c > Int32(1)\
-        \n    Projection: test.a, test.c, MAX(test.b)\
-        \n      Aggregate: groupBy=[[test.a, test.c]], aggr=[[MAX(test.b), MIN(test.b)]]\
-        \n        TableScan: test projection=[a, b, c]";
+        \n    Aggregate: groupBy=[[test.a, test.c]], aggr=[[MAX(test.b)]]\
+        \n      TableScan: test projection=[a, b, c]";
 
         assert_optimized_plan_eq(&plan, expected)
     }
