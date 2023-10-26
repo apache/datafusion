@@ -47,6 +47,7 @@ Default features:
 - `compression`: reading files compressed with `xz2`, `bzip2`, `flate2`, and `zstd`
 - `crypto_expressions`: cryptographic functions such as `md5` and `sha256`
 - `encoding_expressions`: `encode` and `decode` functions
+- `parquet`: support for reading the [Apache Parquet] format
 - `regex_expressions`: regular expression functions, such as `regexp_match`
 - `unicode_expressions`: Include unicode aware functions such as `character_length`
 
@@ -59,6 +60,7 @@ Optional features:
 - `simd`: enable arrow-rs's manual `SIMD` kernels (requires Rust `nightly`)
 
 [apache avro]: https://avro.apache.org/
+[apache parquet]: https://parquet.apache.org/
 
 ## Rust Version Compatibility
 
