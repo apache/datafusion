@@ -529,6 +529,7 @@ mod tests {
     };
     use arrow_schema::Field;
     use chrono::Utc;
+    use datafusion_common::config::ConfigOptions;
 
     use crate::physical_plan::{DefaultDisplay, VerboseDisplay};
 
@@ -831,7 +832,7 @@ mod tests {
             );
 
             let partitioned_file = parquet_exec
-                .get_repartitioned(4, 0)
+                .repartitioned(4, &config_with_size(0))
                 .base_config()
                 .file_groups
                 .clone();
@@ -897,7 +898,7 @@ mod tests {
 
                     let actual = file_groups_to_vec(
                         parquet_exec
-                            .get_repartitioned(n_partition, 10)
+                            .repartitioned(n_partition, &config_with_size(10))
                             .base_config()
                             .file_groups
                             .clone(),
@@ -931,7 +932,7 @@ mod tests {
 
             let actual = file_groups_to_vec(
                 parquet_exec
-                    .get_repartitioned(4, 10)
+                    .repartitioned(4, &config_with_size(10))
                     .base_config()
                     .file_groups
                     .clone(),
@@ -968,7 +969,7 @@ mod tests {
 
             let actual = file_groups_to_vec(
                 parquet_exec
-                    .get_repartitioned(96, 5)
+                    .repartitioned(96, &config_with_size(5))
                     .base_config()
                     .file_groups
                     .clone(),
@@ -1011,7 +1012,7 @@ mod tests {
 
             let actual = file_groups_to_vec(
                 parquet_exec
-                    .get_repartitioned(3, 10)
+                    .repartitioned(3, &config_with_size(10))
                     .base_config()
                     .file_groups
                     .clone(),
@@ -1050,7 +1051,7 @@ mod tests {
 
             let actual = file_groups_to_vec(
                 parquet_exec
-                    .get_repartitioned(2, 10)
+                    .repartitioned(2, &config_with_size(10))
                     .base_config()
                     .file_groups
                     .clone(),
@@ -1089,7 +1090,7 @@ mod tests {
             );
 
             let actual = parquet_exec
-                .get_repartitioned(65, 10)
+                .repartitioned(65, &config_with_size(10))
                 .base_config()
                 .file_groups
                 .clone();
@@ -1118,7 +1119,7 @@ mod tests {
             );
 
             let actual = parquet_exec
-                .get_repartitioned(65, 500)
+                .repartitioned(65, &config_with_size(500))
                 .base_config()
                 .file_groups
                 .clone();
@@ -1146,5 +1147,12 @@ mod tests {
                 })
                 .collect_vec()
         }
+    }
+
+    /// Returns a new ConfigOptions with the specified `repartition_file_min_size`
+    fn config_with_size(repartition_file_min_size: usize) -> ConfigOptions {
+        let mut config = ConfigOptions::new();
+        config.optimizer.repartition_file_min_size = repartition_file_min_size;
+        config
     }
 }

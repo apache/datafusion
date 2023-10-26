@@ -26,9 +26,6 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 
 use crate::config::ConfigOptions;
-use crate::datasource::physical_plan::CsvExec;
-#[cfg(feature = "parquet")]
-use crate::datasource::physical_plan::ParquetExec;
 use crate::error::Result;
 use crate::physical_optimizer::utils::{
     add_sort_above, get_children_exectrees, get_plan_string, is_coalesce_partitions,
@@ -1188,7 +1185,6 @@ fn ensure_distribution(
     // When `false`, round robin repartition will not be added to increase parallelism
     let enable_round_robin = config.optimizer.enable_round_robin_repartition;
     let repartition_file_scans = config.optimizer.repartition_file_scans;
-    let repartition_file_min_size = config.optimizer.repartition_file_min_size;
     let batch_size = config.execution.batch_size;
     let is_unbounded = unbounded_output(&dist_context.plan);
     // Use order preserving variants either of the conditions true
@@ -1630,9 +1626,9 @@ mod tests {
     use crate::datasource::file_format::file_compression_type::FileCompressionType;
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
-    use crate::datasource::physical_plan::FileScanConfig;
     #[cfg(feature = "parquet")]
     use crate::datasource::physical_plan::ParquetExec;
+    use crate::datasource::physical_plan::{CsvExec, FileScanConfig};
     use crate::physical_optimizer::enforce_sorting::EnforceSorting;
     use crate::physical_optimizer::output_requirements::OutputRequirements;
     use crate::physical_plan::aggregates::{
