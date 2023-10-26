@@ -43,7 +43,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "14"
+          node-version: "20"
       - name: Prettier check
         run: |
           # if you encounter error, rerun the command below and commit the changes
