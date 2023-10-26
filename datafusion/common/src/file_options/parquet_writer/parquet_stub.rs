@@ -15,32 +15,22 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! DataFusion data sources: [`TableProvider`] and [`ListingTable`]
-//!
-//! [`ListingTable`]: crate::datasource::listing::ListingTable
+use crate::config::ConfigOptions;
+use crate::error::_not_impl_err;
+use crate::file_options::StatementOptions;
+use crate::{DataFusionError, Result};
 
-pub mod avro_to_arrow;
-pub mod default_table_source;
-pub mod empty;
-pub mod file_format;
-pub mod listing;
-pub mod listing_table_factory;
-pub mod memory;
-pub mod physical_plan;
-pub mod provider;
-mod statistics;
-pub mod streaming;
-pub mod view;
+/// Stub implementation of `ParquetWriterOptions` that always returns a
+/// NotYetImplemented error used when parquet feature is not activated.
+#[derive(Clone, Debug)]
+pub struct ParquetWriterOptions {}
 
-// backwards compatibility
-pub use datafusion_execution::object_store;
+impl TryFrom<(&ConfigOptions, &StatementOptions)> for ParquetWriterOptions {
+    type Error = DataFusionError;
 
-pub use self::default_table_source::{
-    provider_as_source, source_as_provider, DefaultTableSource,
-};
-pub use self::memory::MemTable;
-pub use self::provider::TableProvider;
-pub use self::view::ViewTable;
-pub use crate::logical_expr::TableType;
-pub(crate) use statistics::get_col_stats;
-pub use statistics::get_statistics_with_limit;
+    fn try_from(_: (&ConfigOptions, &StatementOptions)) -> Result<Self> {
+        _not_impl_err!(
+            "Parquet support is not enabled. Hint enable the `parquet` feature flag"
+        )
+    }
+}

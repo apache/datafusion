@@ -15,32 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! DataFusion data sources: [`TableProvider`] and [`ListingTable`]
-//!
-//! [`ListingTable`]: crate::datasource::listing::ListingTable
+#[cfg(feature = "parquet")]
+mod parquet;
 
-pub mod avro_to_arrow;
-pub mod default_table_source;
-pub mod empty;
-pub mod file_format;
-pub mod listing;
-pub mod listing_table_factory;
-pub mod memory;
-pub mod physical_plan;
-pub mod provider;
-mod statistics;
-pub mod streaming;
-pub mod view;
+#[cfg(feature = "parquet")]
+pub use parquet::*;
 
-// backwards compatibility
-pub use datafusion_execution::object_store;
+#[cfg(not(feature = "parquet"))]
+mod parquet_stub;
 
-pub use self::default_table_source::{
-    provider_as_source, source_as_provider, DefaultTableSource,
-};
-pub use self::memory::MemTable;
-pub use self::provider::TableProvider;
-pub use self::view::ViewTable;
-pub use crate::logical_expr::TableType;
-pub(crate) use statistics::get_col_stats;
-pub use statistics::get_statistics_with_limit;
+#[cfg(not(feature = "parquet"))]
+pub use parquet_stub::*;
