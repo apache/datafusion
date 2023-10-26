@@ -22,9 +22,6 @@ use arrow::compute::{concat_batches, SortOptions};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
-use hashbrown::HashMap;
-use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
 
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
@@ -32,22 +29,26 @@ use datafusion::physical_plan::windows::{
     create_window_expr, BoundedWindowAggExec, PartitionSearchMode, WindowAggExec,
 };
 use datafusion::physical_plan::{collect, ExecutionPlan};
+use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::type_coercion::aggregates::coerce_types;
 use datafusion_expr::{
     AggregateFunction, BuiltInWindowFunction, WindowFrame, WindowFrameBound,
     WindowFrameUnits, WindowFunction,
 };
-
-use datafusion::prelude::{SessionConfig, SessionContext};
-use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::type_coercion::aggregates::coerce_types;
 use datafusion_physical_expr::expressions::{cast, col, lit};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 use test_utils::add_empty_batches;
 
+use hashbrown::HashMap;
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion::physical_plan::windows::PartitionSearchMode::{
+
+    use datafusion_physical_plan::windows::PartitionSearchMode::{
         Linear, PartiallySorted, Sorted,
     };
 

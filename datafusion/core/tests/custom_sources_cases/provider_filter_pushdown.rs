@@ -149,10 +149,12 @@ impl TableProvider for CustomProvider {
     async fn scan(
         &self,
         _state: &SessionState,
-        _: Option<&Vec<usize>>,
+        projection: Option<&Vec<usize>>,
         filters: &[Expr],
         _: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let empty = Vec::new();
+        let projection = projection.unwrap_or(&empty);
         match &filters[0] {
             Expr::BinaryExpr(BinaryExpr { right, .. }) => {
                 let int_value = match &**right {
@@ -182,7 +184,10 @@ impl TableProvider for CustomProvider {
                 };
 
                 Ok(Arc::new(CustomPlan {
-                    schema: self.zero_batch.schema(),
+                    schema: match projection.is_empty() {
+                        true => Arc::new(Schema::empty()),
+                        false => self.zero_batch.schema(),
+                    },
                     batches: match int_value {
                         0 => vec![self.zero_batch.clone()],
                         1 => vec![self.one_batch.clone()],
@@ -191,7 +196,10 @@ impl TableProvider for CustomProvider {
                 }))
             }
             _ => Ok(Arc::new(CustomPlan {
-                schema: self.zero_batch.schema(),
+                schema: match projection.is_empty() {
+                    true => Arc::new(Schema::empty()),
+                    false => self.zero_batch.schema(),
+                },
                 batches: vec![],
             })),
         }

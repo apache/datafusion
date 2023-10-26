@@ -31,11 +31,11 @@ use crate::{
 };
 
 use arrow::datatypes::{DataType, Schema, SchemaRef};
+#[cfg(feature = "parquet")]
+use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::{
     datasource::{
-        file_format::{
-            avro::AvroFormat, csv::CsvFormat, parquet::ParquetFormat, FileFormat,
-        },
+        file_format::{avro::AvroFormat, csv::CsvFormat, FileFormat},
         listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl},
         view::ViewTable,
         TableProvider,
@@ -336,6 +336,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             "logical_plan::from_proto() Unsupported file format '{self:?}'"
                         ))
                     })? {
+                        #[cfg(feature = "parquet")]
                         &FileFormatType::Parquet(protobuf::ParquetFormat {}) => {
                             Arc::new(ParquetFormat::default())
                         }
@@ -363,7 +364,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .collect::<Result<Vec<_>, _>>()?;
 
                 let options = ListingOptions::new(file_format)
-                    .with_file_extension(scan.file_extension.clone())
+                    .with_file_extension(&scan.file_extension)
                     .with_table_partition_cols(
                         scan.table_partition_cols
                             .iter()
@@ -458,7 +459,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let input: LogicalPlan =
                     into_logical_plan!(repartition.input, ctx, extension_codec)?;
                 use protobuf::repartition_node::PartitionMethod;
-                let pb_partition_method = repartition.partition_method.clone().ok_or_else(|| {
+                let pb_partition_method = repartition.partition_method.as_ref().ok_or_else(|| {
                     DataFusionError::Internal(String::from(
                         "Protobuf deserialization error, RepartitionNode was missing required field 'partition_method'",
                     ))
@@ -473,10 +474,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                             .iter()
                             .map(|expr| from_proto::parse_expr(expr, ctx))
                             .collect::<Result<Vec<_>, _>>()?,
-                        partition_count as usize,
+                        *partition_count as usize,
                     ),
                     PartitionMethod::RoundRobin(partition_count) => {
-                        Partitioning::RoundRobinBatch(partition_count as usize)
+                        Partitioning::RoundRobinBatch(*partition_count as usize)
                     }
                 };
 
@@ -849,28 +850,49 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                 if let Some(listing_table) = source.downcast_ref::<ListingTable>() {
                     let any = listing_table.options().format.as_any();
-                    let file_format_type = if any.is::<ParquetFormat>() {
-                        FileFormatType::Parquet(protobuf::ParquetFormat {})
-                    } else if let Some(csv) = any.downcast_ref::<CsvFormat>() {
-                        FileFormatType::Csv(protobuf::CsvFormat {
-                            delimiter: byte_to_string(csv.delimiter(), "delimiter")?,
-                            has_header: csv.has_header(),
-                            quote: byte_to_string(csv.quote(), "quote")?,
-                            optional_escape: if let Some(escape) = csv.escape() {
-                                Some(protobuf::csv_format::OptionalEscape::Escape(
-                                    byte_to_string(escape, "escape")?,
-                                ))
-                            } else {
-                                None
-                            },
-                        })
-                    } else if any.is::<AvroFormat>() {
-                        FileFormatType::Avro(protobuf::AvroFormat {})
-                    } else {
-                        return Err(proto_error(format!(
+                    let file_format_type = {
+                        let mut maybe_some_type = None;
+
+                        #[cfg(feature = "parquet")]
+                        if any.is::<ParquetFormat>() {
+                            maybe_some_type =
+                                Some(FileFormatType::Parquet(protobuf::ParquetFormat {}))
+                        };
+
+                        if let Some(csv) = any.downcast_ref::<CsvFormat>() {
+                            maybe_some_type =
+                                Some(FileFormatType::Csv(protobuf::CsvFormat {
+                                    delimiter: byte_to_string(
+                                        csv.delimiter(),
+                                        "delimiter",
+                                    )?,
+                                    has_header: csv.has_header(),
+                                    quote: byte_to_string(csv.quote(), "quote")?,
+                                    optional_escape: if let Some(escape) = csv.escape() {
+                                        Some(
+                                            protobuf::csv_format::OptionalEscape::Escape(
+                                                byte_to_string(escape, "escape")?,
+                                            ),
+                                        )
+                                    } else {
+                                        None
+                                    },
+                                }))
+                        }
+
+                        if any.is::<AvroFormat>() {
+                            maybe_some_type =
+                                Some(FileFormatType::Avro(protobuf::AvroFormat {}))
+                        }
+
+                        if let Some(file_format_type) = maybe_some_type {
+                            file_format_type
+                        } else {
+                            return Err(proto_error(format!(
                             "Error converting file format, {:?} is invalid as a datafusion format.",
                             listing_table.options().format
                         )));
+                        }
                     };
 
                     let options = listing_table.options();

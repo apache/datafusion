@@ -59,7 +59,7 @@ fn print_batches_with_sep(batches: &[RecordBatch], delimiter: u8) -> Result<Stri
     let mut bytes = vec![];
     {
         let builder = WriterBuilder::new()
-            .has_headers(true)
+            .with_header(true)
             .with_delimiter(delimiter);
         let mut writer = builder.build(&mut bytes);
         for batch in batches {

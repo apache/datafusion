@@ -26,8 +26,8 @@ use std::{any::Any, usize, vec};
 
 use crate::joins::utils::{
     adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
-    calculate_join_output_ordering, combine_join_ordering_equivalence_properties,
-    get_final_indices_from_bit_map, need_produce_result_in_final, JoinSide,
+    calculate_join_output_ordering, get_final_indices_from_bit_map,
+    need_produce_result_in_final,
 };
 use crate::DisplayAs;
 use crate::{
@@ -39,9 +39,8 @@ use crate::{
     joins::hash_join_utils::{JoinHashMap, JoinHashMapType},
     joins::utils::{
         adjust_right_output_partitioning, build_join_schema, check_join_is_valid,
-        combine_join_equivalence_properties, estimate_join_statistics,
-        partitioned_join_output_partitioning, BuildProbeJoinMetrics, ColumnIndex,
-        JoinFilter, JoinOn,
+        estimate_join_statistics, partitioned_join_output_partitioning,
+        BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinOn,
     },
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
     DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan, Partitioning,
@@ -64,7 +63,7 @@ use arrow::util::bit_util;
 use arrow_array::cast::downcast_array;
 use arrow_schema::ArrowError;
 use datafusion_common::{
-    exec_err, internal_err, plan_err, DataFusionError, JoinType, Result,
+    exec_err, internal_err, plan_err, DataFusionError, JoinSide, JoinType, Result,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
@@ -72,6 +71,9 @@ use datafusion_physical_expr::OrderingEquivalenceProperties;
 
 use ahash::RandomState;
 use arrow::compute::kernels::cmp::{eq, not_distinct};
+use datafusion_physical_expr::equivalence::{
+    combine_join_equivalence_properties, combine_join_ordering_equivalence_properties,
+};
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 
 type JoinLeftData = (JoinHashMap, RecordBatch, MemoryReservation);
@@ -146,7 +148,7 @@ impl HashJoinExec {
             left_schema.fields.len(),
             &Self::maintains_input_order(*join_type),
             Some(Self::probe_side()),
-        )?;
+        );
 
         Ok(HashJoinExec {
             left,
@@ -380,14 +382,13 @@ impl ExecutionPlan for HashJoinExec {
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
         combine_join_ordering_equivalence_properties(
             &self.join_type,
-            &self.left,
-            &self.right,
+            &self.left.ordering_equivalence_properties(),
+            &self.right.ordering_equivalence_properties(),
             self.schema(),
             &self.maintains_input_order(),
             Some(Self::probe_side()),
             self.equivalence_properties(),
         )
-        .unwrap()
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -1069,14 +1070,9 @@ mod tests {
     use hashbrown::raw::RawTable;
 
     use crate::{
-        common,
-        expressions::Column,
-        hash_utils::create_hashes,
-        joins::{hash_join::build_equal_condition_join_indices, utils::JoinSide},
-        memory::MemoryExec,
-        repartition::RepartitionExec,
-        test::build_table_i32,
-        test::exec::MockExec,
+        common, expressions::Column, hash_utils::create_hashes,
+        joins::hash_join::build_equal_condition_join_indices, memory::MemoryExec,
+        repartition::RepartitionExec, test::build_table_i32, test::exec::MockExec,
     };
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};

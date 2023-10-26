@@ -15,13 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::optimizer::ApplyOrder;
-use datafusion_common::Result;
-use datafusion_expr::{Expr, LogicalPlan, Projection};
 use std::collections::HashMap;
 
+use crate::optimizer::ApplyOrder;
 use crate::push_down_filter::replace_cols_by_name;
 use crate::{OptimizerConfig, OptimizerRule};
+
+use datafusion_common::Result;
+use datafusion_expr::{Expr, LogicalPlan, Projection};
 
 /// Optimization rule that merge [LogicalPlan::Projection].
 #[derive(Default)]
@@ -84,10 +85,10 @@ pub(super) fn merge_projection(
             Err(e) => Err(e),
         })
         .collect::<Result<Vec<_>>>()?;
-    let new_plan = LogicalPlan::Projection(Projection::try_new_with_schema(
+    // Use try_new, since schema changes with changing expressions.
+    let new_plan = LogicalPlan::Projection(Projection::try_new(
         new_exprs,
         child_projection.input.clone(),
-        parent_projection.schema.clone(),
     )?);
     Ok(new_plan)
 }

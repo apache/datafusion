@@ -523,9 +523,9 @@ mod tests {
 
         let csv_options = CsvWriterOptions::try_from((&config, &options))?;
         let builder = csv_options.writer_options;
+        assert!(builder.header());
         let buff = Vec::new();
         let _properties = builder.build(buff);
-        assert!(csv_options.has_header);
         assert_eq!(csv_options.compression, CompressionTypeVariant::GZIP);
         // TODO expand unit test if csv::WriterBuilder allows public read access to properties
 
