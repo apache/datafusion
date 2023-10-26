@@ -54,7 +54,8 @@ use datafusion_expr::{
     random, regexp_match, regexp_replace, repeat, replace, reverse, right, round, rpad,
     rtrim, sha224, sha256, sha384, sha512, signum, sin, sinh, split_part, sqrt,
     starts_with, strpos, substr, substring, tan, tanh, to_hex, to_timestamp_micros,
-    to_timestamp_millis, to_timestamp_seconds, translate, trim, trunc, upper, uuid,
+    to_timestamp_millis, to_timestamp_nanos, to_timestamp_seconds, translate, trim,
+    trunc, upper, uuid,
     window_frame::regularize,
     AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction,
     Case, Cast, Expr, GetFieldAccess, GetIndexedField, GroupingSet,
@@ -521,6 +522,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Substr => Self::Substr,
             ScalarFunction::ToHex => Self::ToHex,
             ScalarFunction::ToTimestampMicros => Self::ToTimestampMicros,
+            ScalarFunction::ToTimestampNanos => Self::ToTimestampNanos,
             ScalarFunction::ToTimestampSeconds => Self::ToTimestampSeconds,
             ScalarFunction::Now => Self::Now,
             ScalarFunction::CurrentDate => Self::CurrentDate,
@@ -1591,6 +1593,9 @@ pub fn parse_expr(
                 }
                 ScalarFunction::ToTimestampMicros => {
                     Ok(to_timestamp_micros(parse_expr(&args[0], registry)?))
+                }
+                ScalarFunction::ToTimestampNanos => {
+                    Ok(to_timestamp_nanos(parse_expr(&args[0], registry)?))
                 }
                 ScalarFunction::ToTimestampSeconds => {
                     Ok(to_timestamp_seconds(parse_expr(&args[0], registry)?))
