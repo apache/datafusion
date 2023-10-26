@@ -1252,20 +1252,12 @@ fn update_ordering(
     }
 }
 
-/// Update right table ordering equivalences so that:
-/// - They point to valid indices at the output of the join schema, and
-/// - They are normalized with respect to equivalence columns.
+/// Update right table ordering `OrderingEquivalenceClass`es so that:
+/// - They point to valid indices at the output of the join schema
 ///
 /// To do so, we increment column indices by the size of the left table when
 /// join schema consists of a combination of left and right schema (Inner,
-/// Left, Full, Right joins). Then, we normalize the sort expressions of
-/// ordering equivalences one by one. We make sure that each expression in the
-/// ordering equivalence is either:
-/// - The head of the one of the equivalent classes, or
-/// - Doesn't have an equivalent column.
-///
-/// This way; once we normalize an expression according to equivalence properties,
-/// it can thereafter safely be used for ordering equivalence normalization.
+/// Left, Full, Right joins). For other cases indices don't change.
 fn get_updated_right_ordering_equivalence_class(
     join_type: &JoinType,
     mut right_oeq_group: OrderingEquivalenceClass,
@@ -1376,26 +1368,25 @@ mod tests {
     /// Column e is constant.
     fn create_random_schema(seed: u64) -> Result<(SchemaRef, SchemaProperties)> {
         let test_schema = create_test_schema_2()?;
-
-        let col_exprs = vec![
-            col("a", &test_schema)?,
-            col("b", &test_schema)?,
-            col("c", &test_schema)?,
-            col("d", &test_schema)?,
-            col("e", &test_schema)?,
-            col("f", &test_schema)?,
-        ];
+        let col_a = &col("a", &test_schema)?;
+        let col_b = &col("b", &test_schema)?;
+        let col_c = &col("c", &test_schema)?;
+        let col_d = &col("d", &test_schema)?;
+        let col_e = &col("e", &test_schema)?;
+        let col_f = &col("f", &test_schema)?;
+        let col_exprs = [col_a, col_b, col_c, col_d, col_e, col_f];
 
         let mut schema_properties = SchemaProperties::new(test_schema.clone());
-        // Define equivalent columns and constant columns
-        schema_properties.add_equal_conditions(&col_exprs[0], &col_exprs[5]);
-        schema_properties = schema_properties.with_constants(vec![col_exprs[4].clone()]);
+        // Define a and f are aliases
+        schema_properties.add_equal_conditions(col_a, col_f);
+        // Column e has constant value.
+        schema_properties = schema_properties.with_constants(vec![col_e.clone()]);
 
         // Randomly order columns for sorting
         let mut rng = StdRng::seed_from_u64(seed);
         let mut remaining_exprs = col_exprs[0..4].to_vec(); // only a, b, c, d are sorted
 
-        let sort_options = SortOptions {
+        let options_asc = SortOptions {
             descending: false,
             nulls_first: false,
         };
@@ -1407,8 +1398,8 @@ mod tests {
             let orderings: Vec<_> = remaining_exprs
                 .drain(0..n_sort_expr)
                 .map(|expr| PhysicalSortExpr {
-                    expr,
-                    options: sort_options,
+                    expr: expr.clone(),
+                    options: options_asc,
                 })
                 .collect();
 
@@ -1470,9 +1461,11 @@ mod tests {
         let col_x_expr = Arc::new(Column::new("x", 3)) as Arc<dyn PhysicalExpr>;
         let col_y_expr = Arc::new(Column::new("y", 4)) as Arc<dyn PhysicalExpr>;
 
+        // a and b are aliases
         schema_properties.add_equal_conditions(&col_a_expr, &col_b_expr);
         assert_eq!(schema_properties.eq_group().len(), 1);
 
+        // This new entry is redundant, size shouldn't increase
         schema_properties.add_equal_conditions(&col_b_expr, &col_a_expr);
         assert_eq!(schema_properties.eq_group().len(), 1);
         let eq_groups = &schema_properties.eq_group().classes[0];
@@ -1480,6 +1473,8 @@ mod tests {
         assert!(physical_exprs_contains(eq_groups, &col_a_expr));
         assert!(physical_exprs_contains(eq_groups, &col_b_expr));
 
+        // b and c are aliases. Exising equivalence class should expand,
+        // however there shouldn't be any new equivalence class
         schema_properties.add_equal_conditions(&col_b_expr, &col_c_expr);
         assert_eq!(schema_properties.eq_group().len(), 1);
         let eq_groups = &schema_properties.eq_group().classes[0];
@@ -1515,13 +1510,8 @@ mod tests {
             Field::new("c", DataType::Int64, true),
         ]));
 
-        let mut input_properties = SchemaProperties::new(input_schema.clone());
+        let input_properties = SchemaProperties::new(input_schema.clone());
         let col_a = col("a", &input_schema)?;
-        let col_b = col("b", &input_schema)?;
-        let col_c = col("c", &input_schema)?;
-
-        input_properties.add_equal_conditions(&col_a, &col_b);
-        input_properties.add_equal_conditions(&col_b, &col_c);
 
         let out_schema = Arc::new(Schema::new(vec![
             Field::new("a1", DataType::Int64, true),
@@ -1530,6 +1520,7 @@ mod tests {
             Field::new("a4", DataType::Int64, true),
         ]));
 
+        // a as a1, a as a2, a as a3, a as a3
         let col_a1 = &col("a1", &out_schema)?;
         let col_a2 = &col("a2", &out_schema)?;
         let col_a3 = &col("a3", &out_schema)?;
@@ -1543,6 +1534,7 @@ mod tests {
         let out_properties =
             input_properties.project(&source_to_target_mapping, out_schema);
 
+        // At the output a1=a2=a3=a4
         assert_eq!(out_properties.eq_group().len(), 1);
         let eq_class = &out_properties.eq_group().classes[0];
         assert_eq!(eq_class.len(), 4);
@@ -1570,7 +1562,7 @@ mod tests {
                 options: SortOptions::default(),
             },
         ];
-        // finer ordering satisfies, crude ordering shoul return true
+        // finer ordering satisfies, crude ordering should return true
         let empty_schema = &Arc::new(Schema::empty());
         let mut schema_properties = SchemaProperties::new(empty_schema.clone());
         schema_properties.oeq_class.push(finer.clone());
@@ -1597,11 +1589,11 @@ mod tests {
         let col_e = &col("e", &test_schema)?;
         let col_f = &col("f", &test_schema)?;
         let col_g = &col("g", &test_schema)?;
-        let option1 = SortOptions {
+        let option_asc = SortOptions {
             descending: false,
             nulls_first: false,
         };
-        let option2 = SortOptions {
+        let option_desc = SortOptions {
             descending: true,
             nulls_first: true,
         };
@@ -1611,106 +1603,114 @@ mod tests {
         // First element in the tuple stores vector of requirement, second element is the expected return value for ordering_satisfy function
         let requirements = vec![
             // `a ASC NULLS LAST`, expects `ordering_satisfy` to be `true`, since existing ordering `a ASC NULLS LAST, b ASC NULLS LAST` satisfies it
-            (vec![(col_a, option1)], true),
-            (vec![(col_a, option2)], false),
+            (vec![(col_a, option_asc)], true),
+            (vec![(col_a, option_desc)], false),
             // Test whether equivalence works as expected
-            (vec![(col_c, option1)], true),
-            (vec![(col_c, option2)], false),
+            (vec![(col_c, option_asc)], true),
+            (vec![(col_c, option_desc)], false),
             // Test whether ordering equivalence works as expected
-            (vec![(col_d, option1)], true),
-            (vec![(col_d, option1), (col_b, option1)], true),
-            (vec![(col_d, option2), (col_b, option1)], false),
-            (
-                vec![(col_e, option2), (col_f, option1), (col_g, option1)],
-                true,
-            ),
-            (vec![(col_e, option2), (col_f, option1)], true),
-            (vec![(col_e, option1), (col_f, option1)], false),
-            (vec![(col_e, option2), (col_b, option1)], false),
-            (vec![(col_e, option1), (col_b, option1)], false),
+            (vec![(col_d, option_asc)], true),
+            (vec![(col_d, option_asc), (col_b, option_asc)], true),
+            (vec![(col_d, option_desc), (col_b, option_asc)], false),
             (
                 vec![
-                    (col_d, option1),
-                    (col_b, option1),
-                    (col_d, option1),
-                    (col_b, option1),
+                    (col_e, option_desc),
+                    (col_f, option_asc),
+                    (col_g, option_asc),
+                ],
+                true,
+            ),
+            (vec![(col_e, option_desc), (col_f, option_asc)], true),
+            (vec![(col_e, option_asc), (col_f, option_asc)], false),
+            (vec![(col_e, option_desc), (col_b, option_asc)], false),
+            (vec![(col_e, option_asc), (col_b, option_asc)], false),
+            (
+                vec![
+                    (col_d, option_asc),
+                    (col_b, option_asc),
+                    (col_d, option_asc),
+                    (col_b, option_asc),
                 ],
                 true,
             ),
             (
                 vec![
-                    (col_d, option1),
-                    (col_b, option1),
-                    (col_e, option2),
-                    (col_f, option1),
+                    (col_d, option_asc),
+                    (col_b, option_asc),
+                    (col_e, option_desc),
+                    (col_f, option_asc),
                 ],
                 true,
             ),
             (
                 vec![
-                    (col_d, option1),
-                    (col_b, option1),
-                    (col_e, option2),
-                    (col_b, option1),
+                    (col_d, option_asc),
+                    (col_b, option_asc),
+                    (col_e, option_desc),
+                    (col_b, option_asc),
                 ],
                 true,
             ),
             (
                 vec![
-                    (col_d, option1),
-                    (col_b, option1),
-                    (col_d, option2),
-                    (col_b, option1),
+                    (col_d, option_asc),
+                    (col_b, option_asc),
+                    (col_d, option_desc),
+                    (col_b, option_asc),
                 ],
                 true,
             ),
             (
                 vec![
-                    (col_d, option1),
-                    (col_b, option1),
-                    (col_e, option1),
-                    (col_f, option1),
-                ],
-                false,
-            ),
-            (
-                vec![
-                    (col_d, option1),
-                    (col_b, option1),
-                    (col_e, option1),
-                    (col_b, option1),
+                    (col_d, option_asc),
+                    (col_b, option_asc),
+                    (col_e, option_asc),
+                    (col_f, option_asc),
                 ],
                 false,
             ),
-            (vec![(col_d, option1), (col_e, option2)], true),
-            (
-                vec![(col_d, option1), (col_c, option1), (col_b, option1)],
-                true,
-            ),
             (
                 vec![
-                    (col_d, option1),
-                    (col_e, option2),
-                    (col_f, option1),
-                    (col_b, option1),
+                    (col_d, option_asc),
+                    (col_b, option_asc),
+                    (col_e, option_asc),
+                    (col_b, option_asc),
+                ],
+                false,
+            ),
+            (vec![(col_d, option_asc), (col_e, option_desc)], true),
+            (
+                vec![
+                    (col_d, option_asc),
+                    (col_c, option_asc),
+                    (col_b, option_asc),
                 ],
                 true,
             ),
             (
                 vec![
-                    (col_d, option1),
-                    (col_e, option2),
-                    (col_c, option1),
-                    (col_b, option1),
+                    (col_d, option_asc),
+                    (col_e, option_desc),
+                    (col_f, option_asc),
+                    (col_b, option_asc),
                 ],
                 true,
             ),
             (
                 vec![
-                    (col_d, option1),
-                    (col_e, option2),
-                    (col_b, option1),
-                    (col_f, option1),
+                    (col_d, option_asc),
+                    (col_e, option_desc),
+                    (col_c, option_asc),
+                    (col_b, option_asc),
+                ],
+                true,
+            ),
+            (
+                vec![
+                    (col_d, option_asc),
+                    (col_e, option_desc),
+                    (col_b, option_asc),
+                    (col_f, option_asc),
                 ],
                 true,
             ),
@@ -1726,6 +1726,7 @@ mod tests {
                 })
                 .collect::<Vec<_>>();
 
+            // Check expected result with experimental result.
             assert_eq!(
                 is_table_same_after_sort(
                     required.clone(),
@@ -1753,7 +1754,9 @@ mod tests {
         };
 
         for seed in 0..N_RANDOM_SCHEMA {
+            // Create a random schema with random properties
             let (test_schema, schema_properties) = create_random_schema(seed as u64)?;
+            // Generate a data that satisfies properties given
             let table_data_with_properties = generate_table_for_schema_properties(
                 &schema_properties,
                 N_ELEMENTS,
@@ -1785,6 +1788,8 @@ mod tests {
                         "Error in test case requirement:{:?}, expected: {:?}",
                         requirement, expected
                     );
+                    // Check whether ordering_satisfy API result and
+                    // experimental result matches.
                     assert_eq!(
                         schema_properties.ordering_satisfy(&requirement),
                         expected,
@@ -1811,7 +1816,7 @@ mod tests {
             descending: false,
             nulls_first: false,
         };
-        // Column a and c are aliases.
+        // a=c (e.g they are aliases).
         let mut schema_properties = SchemaProperties::new(test_schema);
         schema_properties.add_equal_conditions(col_a, col_c);
 
@@ -1825,9 +1830,9 @@ mod tests {
         // Column [a ASC], [e ASC], [d ASC, f ASC] are all valid orderings for the schema.
         schema_properties.add_new_orderings(&orderings);
 
-        // All of the orderings [a ASC], [e ASC], [d ASC, f ASC]]
-        // are valid for the table
-        // Also Columns a and c are equal
+        // First entry in the tuple is required ordering, second entry is the expected flag
+        // that indicates whether this required ordering is satisfied.
+        // ([a ASC], true) indicate a ASC requirement is already satisfied by existing orderings.
         let test_cases = vec![
             // [c ASC, a ASC, e ASC], expected represents this requirement is satisfied
             (
@@ -1911,9 +1916,8 @@ mod tests {
             vec![lit(3), lit(3)],
             vec![lit(4), lit(5), lit(6)],
         ];
-        // Expected is a bit weird. However, what we care is they expected contains distinct groups.
-        // where there is no common entry between any groups.
-        // Since we do check for vector equality, this version should be used during comparison in the test.
+        // Given equivalences classes are not in succinct form.
+        // Expected form is the most plain representation that is functionally same.
         let expected = vec![vec![lit(1), lit(2)], vec![lit(4), lit(5), lit(6)]];
         let mut eq_groups = EquivalenceGroup::new(entries);
         eq_groups.remove_redundant_entries();
@@ -1943,6 +1947,8 @@ mod tests {
             nulls_first: true,
         };
 
+        // First entry in the tuple is the given orderings for the table
+        // Second entry is the simplest version of the given orderings that is functionally equivalent.
         let test_cases = vec![
             // ------- TEST CASE 1 ---------
             (
@@ -1951,7 +1957,7 @@ mod tests {
                     // [a ASC, b ASC]
                     vec![(col_a, option_asc), (col_b, option_asc)],
                 ],
-                // EXPECTED orderings that is succint.
+                // EXPECTED orderings that is succinct.
                 vec![
                     // [a ASC, b ASC]
                     vec![(col_a, option_asc), (col_b, option_asc)],
@@ -1970,7 +1976,7 @@ mod tests {
                         (col_c, option_asc),
                     ],
                 ],
-                // EXPECTED orderings that is succint.
+                // EXPECTED orderings that is succinct.
                 vec![
                     // [a ASC, b ASC, c ASC]
                     vec![
@@ -1991,7 +1997,7 @@ mod tests {
                     // [a ASC, c ASC]
                     vec![(col_a, option_asc), (col_c, option_asc)],
                 ],
-                // EXPECTED orderings that is succint.
+                // EXPECTED orderings that is succinct.
                 vec![
                     // [a ASC, b DESC]
                     vec![(col_a, option_asc), (col_b, option_desc)],
@@ -2014,7 +2020,7 @@ mod tests {
                     // [a ASC]
                     vec![(col_a, option_asc)],
                 ],
-                // EXPECTED orderings that is succint.
+                // EXPECTED orderings that is succinct.
                 vec![
                     // [a ASC, b ASC, c ASC]
                     vec![
@@ -2056,10 +2062,14 @@ mod tests {
         let col_y = &col("y", &child_schema)?;
         let col_z = &col("z", &child_schema)?;
         let col_w = &col("w", &child_schema)?;
-        let options = SortOptions::default();
+        let option_asc = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        // [x ASC, y ASC], [z ASC, w ASC]
         let orderings = vec![
-            vec![(col_x, options), (col_y, options)],
-            vec![(col_z, options), (col_w, options)],
+            vec![(col_x, option_asc), (col_y, option_asc)],
+            vec![(col_z, option_asc), (col_w, option_asc)],
         ];
         let orderings = convert_to_orderings(&orderings);
         // Right child ordering equivalences
@@ -2082,6 +2092,7 @@ mod tests {
         let col_w = &col("w", &schema)?;
 
         let mut join_schema_properties = SchemaProperties::new(Arc::new(schema));
+        // a=x and d=w
         join_schema_properties.add_equal_conditions(col_a, col_x);
         join_schema_properties.add_equal_conditions(col_d, col_w);
 
@@ -2093,9 +2104,10 @@ mod tests {
         join_schema_properties.add_ordering_equivalence_class(result);
         let result = join_schema_properties.oeq_class().clone();
 
+        // [x ASC, y ASC], [z ASC, w ASC]
         let orderings = vec![
-            vec![(col_x, options), (col_y, options)],
-            vec![(col_z, options), (col_w, options)],
+            vec![(col_x, option_asc), (col_y, option_asc)],
+            vec![(col_z, option_asc), (col_w, option_asc)],
         ];
         let orderings = convert_to_orderings(&orderings);
         let expected = OrderingEquivalenceClass::new(orderings);
@@ -2167,6 +2179,9 @@ mod tests {
         Ok(sorted_indices == original_indices)
     }
 
+    // If we already generated a random result for one of the
+    // expressions in the equivalence classes. For other expressions in the same
+    // equivalence class use same result. This util gets already calculated result, when available.
     fn get_representative_arr(
         eq_group: &[Arc<dyn PhysicalExpr>],
         existing_vec: &[Option<ArrayRef>],
@@ -2182,7 +2197,8 @@ mod tests {
         None
     }
 
-    // Generate a table that satisfies schema properties, in terms of ordering equivalences.
+    // Generate a table that satisfies schema properties,
+    // in terms of ordering equivalences, equivalences, and constants.
     fn generate_table_for_schema_properties(
         schema_properties: &SchemaProperties,
         n_elem: usize,
@@ -2276,7 +2292,9 @@ mod tests {
         // Test cases for equivalence normalization,
         // First entry in the tuple is argument, second entry is expected result after normalization.
         let expressions = vec![
-            // Normalized version of the column a and c should go to a (since a is head)
+            // Normalized version of the column a and c should go to a
+            // (by convention all the expressions inside equivalence class are mapped to the first entry
+            // in this case a is the first entry in the equivalence class.)
             (&col_a_expr, &col_a_expr),
             (&col_c_expr, &col_a_expr),
             // Cannot normalize column b
@@ -2306,7 +2324,8 @@ mod tests {
         let col_d = &col("d", &test_schema)?;
 
         // Test cases for equivalence normalization
-        // First entry in the tuple is PhysicalExpr, second entry is its ordering, third entry is result after normalization.
+        // First entry in the tuple is PhysicalSortRequirement, second entry in the tuple is
+        // expected PhysicalSortRequirement after normalization.
         let test_cases = vec![
             (vec![(col_a, Some(option1))], vec![(col_a, Some(option1))]),
             // In the normalized version column c should be replace with column a
@@ -2341,39 +2360,48 @@ mod tests {
         let col_d = &col("d", &test_schema)?;
         let col_e = &col("e", &test_schema)?;
         let col_f = &col("f", &test_schema)?;
-        let option1 = SortOptions {
+        let option_asc = SortOptions {
             descending: false,
             nulls_first: false,
         };
-        let option2 = SortOptions {
+        let option_desc = SortOptions {
             descending: true,
             nulls_first: true,
         };
         // First element in the tuple stores vector of requirement, second element is the expected return value for ordering_satisfy function
         let requirements = vec![
-            (vec![(col_a, Some(option1))], vec![(col_a, Some(option1))]),
-            (vec![(col_a, Some(option2))], vec![(col_a, Some(option2))]),
+            (
+                vec![(col_a, Some(option_asc))],
+                vec![(col_a, Some(option_asc))],
+            ),
+            (
+                vec![(col_a, Some(option_desc))],
+                vec![(col_a, Some(option_desc))],
+            ),
             (vec![(col_a, None)], vec![(col_a, None)]),
             // Test whether equivalence works as expected
-            (vec![(col_c, Some(option1))], vec![(col_a, Some(option1))]),
+            (
+                vec![(col_c, Some(option_asc))],
+                vec![(col_a, Some(option_asc))],
+            ),
             (vec![(col_c, None)], vec![(col_a, None)]),
             // Test whether ordering equivalence works as expected
             (
-                vec![(col_d, Some(option1)), (col_b, Some(option1))],
-                vec![(col_d, Some(option1)), (col_b, Some(option1))],
+                vec![(col_d, Some(option_asc)), (col_b, Some(option_asc))],
+                vec![(col_d, Some(option_asc)), (col_b, Some(option_asc))],
             ),
             (
                 vec![(col_d, None), (col_b, None)],
                 vec![(col_d, None), (col_b, None)],
             ),
             (
-                vec![(col_e, Some(option2)), (col_f, Some(option1))],
-                vec![(col_e, Some(option2)), (col_f, Some(option1))],
+                vec![(col_e, Some(option_desc)), (col_f, Some(option_asc))],
+                vec![(col_e, Some(option_desc)), (col_f, Some(option_asc))],
             ),
             // We should be able to normalize in compatible requirements also (not exactly equal)
             (
-                vec![(col_e, Some(option2)), (col_f, None)],
-                vec![(col_e, Some(option2)), (col_f, None)],
+                vec![(col_e, Some(option_desc)), (col_f, None)],
+                vec![(col_e, Some(option_desc)), (col_f, None)],
             ),
             (
                 vec![(col_e, None), (col_f, None)],
@@ -2408,6 +2436,8 @@ mod tests {
             descending: true,
             nulls_first: true,
         };
+        // First entry, and second entry are the physical sort requirement that are argument for get_finer_requirement.
+        // Third entry is the expected result.
         let tests_cases = vec![
             // Get finer requirement between [a Some(ASC)] and [a None, b Some(ASC)]
             // result should be [a Some(ASC), b Some(ASC)]
@@ -2514,6 +2544,8 @@ mod tests {
             descending: true,
             nulls_first: true,
         };
+        // First entry is physical expression list
+        // Second entry is the ordered section that consists of given physical expressions.
         let test_cases = vec![
             // TEST CASE 1
             (vec![col_a], Some(vec![(col_a, option_asc)])),
@@ -2566,6 +2598,7 @@ mod tests {
             descending: true,
             nulls_first: true,
         };
+        // [d ASC, h ASC] also satisfies schema.
         schema_props.add_new_orderings(&[vec![
             PhysicalSortExpr {
                 expr: col_d.clone(),
