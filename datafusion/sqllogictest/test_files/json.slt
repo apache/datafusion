@@ -50,13 +50,13 @@ EXPLAIN SELECT count(*) from json_test
 ----
 logical_plan
 Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
---TableScan: json_test projection=[a]
+--TableScan: json_test projection=[]
 physical_plan
 AggregateExec: mode=Final, gby=[], aggr=[COUNT(*)]
 --CoalescePartitionsExec
 ----AggregateExec: mode=Partial, gby=[], aggr=[COUNT(*)]
 ------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
---------JsonExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/2.json]]}, projection=[a]
+--------JsonExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/2.json]]}
 
 query ?
 SELECT mycol FROM single_nan

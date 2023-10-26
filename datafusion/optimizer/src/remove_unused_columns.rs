@@ -264,18 +264,7 @@ fn try_optimize_internal(
                 .collect::<Vec<_>>();
             let mut all_exprs = group_bys_used.clone();
             all_exprs.extend(new_aggr_expr.clone());
-            let mut necessary_indices =
-                get_referred_indices(&aggregate.input, &all_exprs)?;
-            if necessary_indices.is_empty()
-                && !aggregate.input.schema().fields().is_empty()
-            {
-                // When aggregate doesn't require any column, require at least one column
-                // This can arise when group by Count(*)
-                necessary_indices.push(0);
-                let col =
-                    Expr::Column(aggregate.input.schema().fields()[0].qualified_column());
-                all_exprs.push(col);
-            }
+            let necessary_indices = get_referred_indices(&aggregate.input, &all_exprs)?;
 
             let aggregate_input = if let Some(input) =
                 try_optimize_internal(&aggregate.input, _config, necessary_indices)?

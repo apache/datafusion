@@ -695,7 +695,7 @@ logical_plan
 Projection: __scalar_sq_1.COUNT(*) AS b
 --SubqueryAlias: __scalar_sq_1
 ----Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
-------TableScan: t1 projection=[t1_id]
+------TableScan: t1 projection=[]
 
 #simple_uncorrelated_scalar_subquery2
 query TT
@@ -706,10 +706,10 @@ Projection: __scalar_sq_1.COUNT(*) AS b, __scalar_sq_2.COUNT(Int64(1)) AS COUNT(
 --Left Join:
 ----SubqueryAlias: __scalar_sq_1
 ------Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
---------TableScan: t1 projection=[t1_id]
+--------TableScan: t1 projection=[]
 ----SubqueryAlias: __scalar_sq_2
 ------Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1))]]
---------TableScan: t2 projection=[t2_id]
+--------TableScan: t2 projection=[]
 
 query II
 select (select count(*) from t1) as b, (select count(1) from t2)

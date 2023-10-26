@@ -1731,32 +1731,30 @@ logical_plan
 Projection: COUNT(*) AS global_count
 --Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
 ----SubqueryAlias: a
-------Projection: COUNT(*)
+------Projection:
 --------Sort: aggregate_test_100.c1 ASC NULLS LAST
-----------Projection: COUNT(*), aggregate_test_100.c1
-------------Aggregate: groupBy=[[aggregate_test_100.c1]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
---------------Projection: aggregate_test_100.c1
-----------------Filter: aggregate_test_100.c13 != Utf8("C2GT5KVyOPZpgKVl110TyZO0NcJ434")
-------------------TableScan: aggregate_test_100 projection=[c1, c13], partial_filters=[aggregate_test_100.c13 != Utf8("C2GT5KVyOPZpgKVl110TyZO0NcJ434")]
+----------Aggregate: groupBy=[[aggregate_test_100.c1]], aggr=[[]]
+------------Projection: aggregate_test_100.c1
+--------------Filter: aggregate_test_100.c13 != Utf8("C2GT5KVyOPZpgKVl110TyZO0NcJ434")
+----------------TableScan: aggregate_test_100 projection=[c1, c13], partial_filters=[aggregate_test_100.c13 != Utf8("C2GT5KVyOPZpgKVl110TyZO0NcJ434")]
 physical_plan
 ProjectionExec: expr=[COUNT(*)@0 as global_count]
 --AggregateExec: mode=Final, gby=[], aggr=[COUNT(*)]
 ----CoalescePartitionsExec
 ------AggregateExec: mode=Partial, gby=[], aggr=[COUNT(*)]
 --------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-----------ProjectionExec: expr=[COUNT(*)@0 as COUNT(*)]
-------------SortPreservingMergeExec: [c1@1 ASC NULLS LAST]
---------------SortExec: expr=[c1@1 ASC NULLS LAST]
-----------------ProjectionExec: expr=[COUNT(*)@1 as COUNT(*), c1@0 as c1]
-------------------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[COUNT(*)]
---------------------CoalesceBatchesExec: target_batch_size=4096
-----------------------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
-------------------------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[COUNT(*)]
---------------------------ProjectionExec: expr=[c1@0 as c1]
-----------------------------CoalesceBatchesExec: target_batch_size=4096
-------------------------------FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434
---------------------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-----------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c13], has_header=true
+----------ProjectionExec: expr=[]
+------------SortPreservingMergeExec: [c1@0 ASC NULLS LAST]
+--------------SortExec: expr=[c1@0 ASC NULLS LAST]
+----------------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[]
+------------------CoalesceBatchesExec: target_batch_size=4096
+--------------------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
+----------------------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[]
+------------------------ProjectionExec: expr=[c1@0 as c1]
+--------------------------CoalesceBatchesExec: target_batch_size=4096
+----------------------------FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434
+------------------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+--------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c13], has_header=true
 
 query I
 SELECT count(*) as global_count FROM
