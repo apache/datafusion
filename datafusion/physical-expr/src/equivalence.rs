@@ -412,9 +412,14 @@ pub struct OrderingEquivalenceClass {
 }
 
 impl OrderingEquivalenceClass {
-    /// Creates new empty ordering equivalent class.
+    /// Creates new empty ordering equivalence class.
     fn empty() -> Self {
         Self { orderings: vec![] }
+    }
+
+    /// Clears (empties) this ordering equivalence class.
+    pub fn clear(&mut self) {
+        self.orderings.clear();
     }
 
     /// Creates new ordering equivalence class from the given orderings.
@@ -542,11 +547,13 @@ fn finer_side(lhs: LexOrderingRef, rhs: LexOrderingRef) -> Option<bool> {
     all_equal.then_some(lhs.len() < rhs.len())
 }
 
-/// `SchemaProperties` keeps track of useful information related to schema.
-/// Currently, it keeps track of
+/// A `SchemaProperties` object stores useful information related to a schema.
+/// Currently, it keeps track of:
 /// - Equivalent columns, e.g columns that have same value.
-/// - Valid ordering sort expressions for the schema.
-///   Consider table below
+/// - Valid sort expressions (orderings) for the schema.
+///
+/// Consider table below:
+///
 /// ```text
 /// ┌-------┐
 /// | a | b |
@@ -557,10 +564,13 @@ fn finer_side(lhs: LexOrderingRef, rhs: LexOrderingRef) -> Option<bool> {
 /// | 5 | 5 |
 /// └---┴---┘
 /// ```
+///
 /// where both `a ASC` and `b DESC` can describe the table ordering. With
-/// `SchemaProperties`, we can keep track of these different valid ordering expressions
-/// and treat `a ASC` and `b DESC` as the same ordering requirement.
-/// Similarly, as in the table below if we know that Column a and b have always same value.
+/// `SchemaProperties`, we can keep track of these different valid sort
+/// expressions and treat `a ASC` and `b DESC` on an equal footing.
+///
+/// Similarly, consider the table below:
+///
 /// ```text
 /// ┌-------┐
 /// | a | b |
@@ -571,24 +581,28 @@ fn finer_side(lhs: LexOrderingRef, rhs: LexOrderingRef) -> Option<bool> {
 /// | 5 | 5 |
 /// └---┴---┘
 /// ```
-/// We keep track of their equivalence inside schema properties. With this information
-/// if partition requirement is Hash(a), and output partitioning is Hash(b). We can deduce that
-/// existing partitioning satisfies the requirement.
+/// where columns `a` and `b` always have the same value. We keep track of such
+/// equivalences inside this object. With this information, we can optimize
+/// things like partitioning. For example, if the partition requirement is
+/// `Hash(a)` and output partitioning is `Hash(b)`, then we can deduce that
+/// the existing partitioning satisfies the requirement.
 #[derive(Debug, Clone)]
 pub struct SchemaProperties {
-    /// Keeps track of expressions that have equivalent value.
+    /// Collection of equivalence classes that store expressions with the same
+    /// value.
     eq_group: EquivalenceGroup,
-    /// Keeps track of valid ordering that satisfied table.
+    /// Equivalent sort expressions for this table.
     oeq_class: OrderingEquivalenceClass,
-    /// Keeps track of expressions that have constant value.
+    /// Expressions whose values are constant throughout the table.
     /// TODO: We do not need to track constants separately, they can be tracked
-    ///  inside `eq_groups` as `Literal` expressions.
+    ///       inside `eq_groups` as `Literal` expressions.
     constants: Vec<Arc<dyn PhysicalExpr>>,
+    /// Schema associated with this object.
     schema: SchemaRef,
 }
 
 impl SchemaProperties {
-    /// Create an empty `SchemaProperties`
+    /// Creates an empty `SchemaProperties` object.
     pub fn new(schema: SchemaRef) -> Self {
         Self {
             eq_group: EquivalenceGroup::empty(),
@@ -598,24 +612,24 @@ impl SchemaProperties {
         }
     }
 
-    /// Get schema.
+    /// Returns the associated schema.
     pub fn schema(&self) -> &SchemaRef {
         &self.schema
     }
 
-    /// Return a reference to the ordering equivalence class
+    /// Returns a reference to the ordering equivalence class within.
     pub fn oeq_class(&self) -> &OrderingEquivalenceClass {
         &self.oeq_class
     }
 
-    /// Return a reference to the equivalent group
+    /// Returns a reference to the equivalence group within.
     pub fn eq_group(&self) -> &EquivalenceGroup {
         &self.eq_group
     }
 
-    /// Return the normalized version of the ordering equivalence class
-    /// Where constants, duplicates are removed and expressions are normalized
-    /// according to equivalent group.
+    /// Returns the normalized version of the ordering equivalence class within.
+    /// Normalization removes constants and duplicates as well as standardizing
+    /// expressions according to the equivalence group within.
     pub fn normalized_oeq_class(&self) -> OrderingEquivalenceClass {
         // Construct a new ordering group that is normalized
         // With equivalences, and constants are removed
@@ -627,21 +641,21 @@ impl SchemaProperties {
         OrderingEquivalenceClass::new(normalized_orderings)
     }
 
-    /// Add SchemaProperties of the other to the state.
+    /// Extends this `SchemaProperties` with the `other` object.
     pub fn extend(mut self, other: Self) -> Self {
         self.eq_group.extend(other.eq_group);
         self.oeq_class.extend(other.oeq_class);
         self.with_constants(other.constants)
     }
 
-    /// Empties the `oeq_class` inside self, When existing orderings are invalidated.
-    pub fn with_empty_ordering_equivalence(mut self) -> Self {
-        self.oeq_class = OrderingEquivalenceClass::empty();
-        self
+    /// Clears (empties) the ordering equivalence class within this object.
+    /// Call this method when existing orderings are invalidated.
+    pub fn clear(&mut self) {
+        self.oeq_class.clear();
     }
 
-    /// Extends `SchemaProperties` by adding ordering inside the `other`
-    /// to the `self.oeq_class`.
+    /// Extends this `SchemaProperties` by adding the orderings inside the
+    /// ordering equivalence class `other`.
     pub fn add_ordering_equivalence_class(&mut self, other: OrderingEquivalenceClass) {
         for ordering in other.into_iter() {
             if !self.oeq_class.contains(&ordering) {
@@ -656,7 +670,7 @@ impl SchemaProperties {
     }
 
     /// Incorporates the given equivalence group to into the existing
-    /// equivalence group in this schema.
+    /// equivalence group within.
     pub fn add_equivalence_group(&mut self, other_eq_group: EquivalenceGroup) {
         self.eq_group.extend(other_eq_group);
     }
@@ -672,84 +686,84 @@ impl SchemaProperties {
         self.eq_group.add_equal_conditions(left, right);
     }
 
-    /// Add physical expression that have constant value to the `self.constants`
+    /// Track/register physical expressions with constant values.
     pub fn with_constants(mut self, constants: Vec<Arc<dyn PhysicalExpr>>) -> Self {
-        let constants = self.eq_group.normalize_exprs(constants);
-        constants.into_iter().for_each(|constant| {
-            if !physical_exprs_contains(&self.constants, &constant) {
-                self.constants.push(constant);
+        for expr in self.eq_group.normalize_exprs(constants) {
+            if !physical_exprs_contains(&self.constants, &expr) {
+                self.constants.push(expr);
             }
-        });
+        }
         self
     }
 
-    /// Re-creates `SchemaProperties` given that
-    /// schema is re-ordered by `sort_expr` in the argument.
-    pub fn with_reorder(mut self, sort_expr: Vec<PhysicalSortExpr>) -> Self {
+    /// Updates the ordering equivalence group within assuming that the table
+    /// is re-sorted according to the argument `sort_exprs`. Note that constants
+    /// and equivalence classes are unchanged as they are unaffected by a re-sort.
+    pub fn with_reorder(mut self, sort_exprs: Vec<PhysicalSortExpr>) -> Self {
         // TODO: In some cases, existing ordering equivalences may still be valid add this analysis.
-
-        // Reset ordering equivalent group with the new ordering.
-        // Constants, and equivalent groups are still valid after re-sort.
-        // Hence only `oeq_group` is overwritten.
-        self.oeq_class = OrderingEquivalenceClass::new(vec![sort_expr]);
+        self.oeq_class = OrderingEquivalenceClass::new(vec![sort_exprs]);
         self
     }
 
-    /// Transform `sort_exprs` vector, to standardized version using `eq_groups` and `oeq_group`
-    /// Assume `eq_groups` states that `Column a` and `Column b` are aliases.
-    /// Also assume `oeq_group` states that ordering `vec![d ASC]` and `vec![a ASC, c ASC]` are
-    /// ordering equivalent (in the sense that both describe the ordering of the table).
-    /// If the `sort_exprs` input to this function were `vec![b ASC, c ASC]`,
-    /// This function converts `sort_exprs` `vec![b ASC, c ASC]` to first `vec![a ASC, c ASC]` after considering `eq_groups`
-    /// Then converts `vec![a ASC, c ASC]` to `vec![d ASC]` after considering `oeq_group`.
-    /// Standardized version `vec![d ASC]` is used in subsequent operations.
+    /// Normalizes the given sort expressions (i.e. `sort_exprs`) using the
+    /// equivalence group and the ordering equivalence class within.
+    ///
+    /// Assume that `self.eq_group` states column `a` and `b` are aliases.
+    /// Also assume that `self.oeq_class` states orderings `d ASC` and `a ASC, c ASC`
+    /// are equivalent (in the sense that both describe the ordering of the table).
+    /// If the `sort_exprs` argument were `vec![b ASC, c ASC]`, then this function
+    /// would return `vec![d ASC]`.
     fn normalize_sort_exprs(&self, sort_exprs: LexOrderingRef) -> LexOrdering {
-        // Convert `PhysicalSortExpr`s to `PhysicalSortRequirement`s
-        let sort_requirements =
-            PhysicalSortRequirement::from_sort_exprs(sort_exprs.iter());
-        let normalized_exprs = self.normalize_sort_requirements(&sort_requirements);
-        // Convert back `PhysicalSortRequirement`s to `PhysicalSortExpr`s
-        PhysicalSortRequirement::to_sort_exprs(normalized_exprs)
+        // Convert sort expressions to sort requirements:
+        let sort_reqs = PhysicalSortRequirement::from_sort_exprs(sort_exprs.iter());
+        // Normalize the requirements:
+        let normalized_sort_reqs = self.normalize_sort_requirements(&sort_reqs);
+        // Convert sort requirements back to sort expressions:
+        PhysicalSortRequirement::to_sort_exprs(normalized_sort_reqs)
     }
 
-    /// This function normalizes `sort_reqs` by
-    /// - removing expressions that have constant value from requirement
-    /// - replacing sections that are in the `self.oeq_group` with `oeq_group[0]` (e.g standard representative
-    ///   version of the group)
-    /// - removing sections that satisfies global ordering that are in the post fix of requirement
+    /// Normalizes the given sort requirements (i.e. `sort_reqs`) using the
+    /// equivalence group and the ordering equivalence class within. It works by:
+    /// - Removing expressions that have a constant value from the given requirement.
+    /// - Replacing sections that belong to some equivalence class in the equivalence
+    ///   group with the first entry in the matching equivalence class.
+    /// - Removing sections that satisfy global ordering that are in the post fix of requirement.
     ///
-    /// Transform `sort_reqs` vector, to standardized version using `eq_groups` and `oeq_group`
-    /// Assume `eq_groups` states that `Column a` and `Column b` are aliases.
-    /// Also assume `oeq_group` states that ordering `vec![d ASC]` and `vec![a ASC, c ASC]` are
-    /// ordering equivalent (in the sense that both describe the ordering of the table).
-    /// If the `sort_reqs` input to this function were `vec![b Some(ASC), c None]`,
-    /// This function converts `sort_exprs` `vec![b Some(ASC), c None]` to first `vec![a Some(ASC), c None]` after considering `eq_groups`
-    /// Then converts `vec![a Some(ASC), c None]` to `vec![d Some(ASC)]` after considering `oeq_group`.
-    /// Standardized version `vec![d Some(ASC)]` is used in subsequent operations.
+    /// Assume that `self.eq_group` states column `a` and `b` are aliases.
+    /// Also assume that `self.oeq_class` states orderings `d ASC` and `a ASC, c ASC`
+    /// are equivalent (in the sense that both describe the ordering of the table).
+    /// If the `sort_reqs` argument were `vec![b ASC, c ASC]`, then this function
+    /// would return `vec![d ASC]`.
     fn normalize_sort_requirements(
         &self,
         sort_reqs: LexRequirementRef,
     ) -> LexRequirement {
         let normalized_sort_reqs = self.eq_group.normalize_sort_requirements(sort_reqs);
         let constants_normalized = self.eq_group.normalize_exprs(self.constants.clone());
-        let normalized_sort_reqs =
-            prune_sort_reqs_with_constants(&normalized_sort_reqs, &constants_normalized);
-        // Prune redundant sections in the requirement.
-        collapse_lex_req(normalized_sort_reqs)
+        // Prune redundant sections in the requirement:
+        collapse_lex_req(
+            normalized_sort_reqs
+                .iter()
+                .filter(|&order| {
+                    !physical_exprs_contains(&constants_normalized, &order.expr)
+                })
+                .cloned()
+                .collect(),
+        )
     }
 
     /// Checks whether the given ordering is satisfied by any of the existing
     /// orderings.
-    pub fn ordering_satisfy(&self, required: LexOrderingRef) -> bool {
-        // Convert `PhysicalSortExpr`s to `PhysicalSortRequirement`s
-        let sort_requirements = PhysicalSortRequirement::from_sort_exprs(required.iter());
+    pub fn ordering_satisfy(&self, given: LexOrderingRef) -> bool {
+        // Convert the given sort expressions to sort requirements:
+        let sort_requirements = PhysicalSortRequirement::from_sort_exprs(given.iter());
         self.ordering_satisfy_requirement(&sort_requirements)
     }
 
-    /// Checks whether the given [`PhysicalSortRequirement`]s are satisfied by the
-    /// provided [`PhysicalSortExpr`]s.
-    pub fn ordering_satisfy_requirement(&self, required: LexRequirementRef) -> bool {
-        self.prune_lex_req(required).is_empty()
+    /// Checks whether the given sort requirements are satisfied by any of the
+    /// existing orderings.
+    pub fn ordering_satisfy_requirement(&self, reqs: LexRequirementRef) -> bool {
+        self.prune_lex_req(reqs).is_empty()
     }
 
     /// Checks whether the given [`PhysicalSortRequirement`]s are equal or more
@@ -1153,18 +1167,6 @@ pub fn collapse_lex_req(input: LexRequirement) -> LexRequirement {
         }
     }
     output
-}
-
-/// Remove ordering requirements that have constant value
-fn prune_sort_reqs_with_constants(
-    ordering: LexRequirementRef,
-    constants: &[Arc<dyn PhysicalExpr>],
-) -> LexRequirement {
-    ordering
-        .iter()
-        .filter(|&order| !physical_exprs_contains(constants, &order.expr))
-        .cloned()
-        .collect()
 }
 
 /// Adds the `offset` value to `Column` indices inside `expr`. This function is
