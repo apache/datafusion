@@ -19,7 +19,7 @@
 mod parquet;
 
 #[cfg(feature = "parquet")]
-pub use parquet::*;
+pub use self::parquet::*;
 
 #[cfg(not(feature = "parquet"))]
 mod parquet_stub;
