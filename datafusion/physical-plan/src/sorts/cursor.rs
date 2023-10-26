@@ -428,6 +428,47 @@ mod tests {
     }
 
     #[test]
+    fn test_ord_nulls() {
+        // nulls first
+        let options = SortOptions {
+            descending: false,
+            nulls_first: true,
+        };
+        let is_min = new_primitive_cursor(options, ScalarBuffer::from(vec![i32::MIN]), 0);
+        let is_null =
+            new_primitive_cursor(options, ScalarBuffer::from(vec![i32::MIN]), 1);
+        assert_eq!(
+            is_min.cmp(&is_null),
+            Ordering::Greater,
+            "should have MIN > NULL, when nulls first"
+        );
+        assert_eq!(
+            is_null.cmp(&is_min),
+            Ordering::Less,
+            "should have NULL < MIN, when nulls first"
+        );
+
+        // nulls last
+        let options = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        let is_min = new_primitive_cursor(options, ScalarBuffer::from(vec![i32::MIN]), 0);
+        let is_null =
+            new_primitive_cursor(options, ScalarBuffer::from(vec![i32::MIN]), 1);
+        assert_eq!(
+            is_min.cmp(&is_null),
+            Ordering::Less,
+            "should have MIN < NULL, when nulls last"
+        );
+        assert_eq!(
+            is_null.cmp(&is_min),
+            Ordering::Greater,
+            "should have NULL > MIN, when nulls last"
+        );
+    }
+
+    #[test]
     fn test_primitive_nulls_first() {
         let options = SortOptions {
             descending: false,
@@ -563,123 +604,142 @@ mod tests {
 
     #[test]
     fn test_slice_primitive() {
-        let options = SortOptions {
-            descending: false,
-            nulls_first: true,
-        };
+        fn run_test(options: SortOptions, num_nulls: usize, scenario: &str) {
+            let is_min = Arc::new(new_primitive_cursor(
+                options,
+                ScalarBuffer::from(vec![i32::MIN]),
+                0,
+            ));
+            let is_null = Arc::new(new_primitive_cursor(
+                options,
+                ScalarBuffer::from(vec![i32::MIN]),
+                1,
+            ));
 
-        let buffer = ScalarBuffer::from(vec![0, 1, 2, 3]);
-        let mut cursor = new_primitive_cursor(options, buffer, 0);
+            let buffer = ScalarBuffer::from(vec![i32::MIN, 79, 2, i32::MIN]);
+            let mut a = new_primitive_cursor(options, buffer, num_nulls);
+            let buffer = ScalarBuffer::from(vec![i32::MIN, -284, 3, i32::MIN, 2]);
+            let mut b = new_primitive_cursor(options, buffer.clone(), num_nulls);
 
-        // from start
-        let sliced = Cursor::new(cursor.cursor_values().slice(0, 1));
-        let expected = new_primitive_cursor(options, ScalarBuffer::from(vec![0]), 0);
-        assert_eq!(
-            sliced.cmp(&expected),
-            Ordering::Equal,
-            "should slice from start"
+            // start
+            // NULL == NULL, or i32::MIN == i32::MIN
+            assert_eq!(a.cmp(&b), Ordering::Equal);
+            let expected_val = match (options.nulls_first, num_nulls > 0) {
+                (true, true) => is_null.clone(), // nulls_first
+                (false, true) => is_min.clone(), // nulls_last
+                (_, false) => is_min.clone(),    // no_nulls
+            };
+            assert_eq!(
+                a.cmp(&expected_val),
+                Ordering::Equal,
+                "{scenario}: should have null mask applied properly, at start of values"
+            );
+
+            // start
+            // NULL == NULL, or i32::MIN == i32::MIN
+            a.advance();
+            a.advance();
+            a = Cursor::new(a.cursor_values().slice(0, 4));
+            assert_eq!(
+                a.cmp(&b),
+                Ordering::Equal,
+                "{scenario}: should ignore cursor position when sliced"
+            );
+            assert_eq!(
+                a.cursor_values().len(),
+                4,
+                "{scenario}: should be able to slice to the full length"
+            );
+
+            // slice a
+            // i32::MIN > NULL (nulls first), or NULL > i32::MIN (nulls last), or i32::MIN == i32::MIN (no nulls)
+            a = Cursor::new(a.cursor_values().slice(3, 1));
+            let (expected_val, expected_order) =
+                match (options.nulls_first, num_nulls > 0) {
+                    (true, true) => (is_min.clone(), Ordering::Greater), // nulls_first
+                    (false, true) => (is_null, Ordering::Greater), // nulls_last, so nulls are considered greater
+                    (_, false) => (is_min, Ordering::Equal),       // no_nulls
+                };
+            assert_eq!(
+                a.cmp(&expected_val),
+                Ordering::Equal,
+                "{scenario}: should have null mask applied properly, at end of values"
+            );
+            assert_eq!(
+                a.cmp(&b),
+                expected_order,
+                "{scenario}: should be able to slice with offset, with null mask"
+            );
+            assert_eq!(
+                a.cursor_values().len(),
+                1,
+                "{scenario}: should be able to slice to shorten length"
+            );
+
+            // slice b, compare sliced_a to sliced_b
+            // i32::MIN == i32::MIN, or NULL == NULL
+            b = Cursor::new(b.cursor_values().slice(3, 2));
+            assert_eq!(
+                a.cmp(&b),
+                Ordering::Equal,
+                "{scenario}: should be able to slice with offset"
+            );
+            assert_eq!(b.cursor_values().len(), 2, "{scenario}: should have a smaller apparent length for the underlying cursor values");
+
+            // re-slice b
+            // i32::MIN < 2 (nulls first), or NULL == NULL (nulls last), or i32::MIN < 2 (no nulls)
+            b = Cursor::new(b.cursor_values().slice(1, 1));
+            let expected_order = match (options.nulls_first, num_nulls > 0) {
+                (true, true) => Ordering::Less,   // nulls_first
+                (false, true) => Ordering::Equal, // nulls_last
+                (_, false) => Ordering::Less,     // no_nulls
+            };
+            assert_eq!(a.cmp(&b), expected_order, "{scenario}: should respect previous slice/windowed boundaries, when re-slicing");
+
+            // length change: on slice vs advance
+            let mut cursor = new_primitive_cursor(options, buffer, num_nulls);
+            assert_eq!(
+                cursor.cursor_values().len(),
+                5,
+                "{scenario}: expect initial length"
+            );
+            cursor.advance();
+            cursor.advance();
+            assert_eq!(cursor.cursor_values().len(), 5, "{scenario}: expect advancing cursor does not impact cursor_values length");
+            cursor = Cursor::new(cursor.cursor_values().slice(2, 2));
+            assert_eq!(
+                cursor.cursor_values().len(),
+                2,
+                "{scenario}: expect cursor_values slicing to impact length"
+            );
+        }
+
+        run_test(
+            SortOptions {
+                descending: false,
+                nulls_first: true,
+            },
+            2,
+            "nulls_first",
         );
 
-        // with offset
-        let sliced = Cursor::new(cursor.cursor_values().slice(1, 2));
-        let expected = new_primitive_cursor(options, ScalarBuffer::from(vec![1]), 0);
-        assert_eq!(
-            sliced.cmp(&expected),
-            Ordering::Equal,
-            "should slice with offset"
+        run_test(
+            SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+            2,
+            "nulls_last",
         );
 
-        // cursor current position != start
-        cursor.advance();
-        let sliced = Cursor::new(cursor.cursor_values().slice(0, 1));
-        let expected = new_primitive_cursor(options, ScalarBuffer::from(vec![0]), 0);
-        assert_eq!(
-            sliced.cmp(&expected),
-            Ordering::Equal,
-            "should ignore current cursor position when sliced"
+        run_test(
+            SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+            0,
+            "no_nulls",
         );
-
-        // slicing on a slice (a.k.a. combining offsets)
-        let sliced = Cursor::new(cursor.cursor_values().slice(1, 3));
-        let sliced = Cursor::new(sliced.cursor_values().slice(2, 1));
-        let expected = new_primitive_cursor(options, ScalarBuffer::from(vec![3]), 0);
-        assert_eq!(
-            sliced.cmp(&expected),
-            Ordering::Equal,
-            "should respect previous slice/windowed boundaries, when re-slicing"
-        );
-    }
-
-    #[test]
-    fn test_slice_primitive_nulls_first() {
-        let options = SortOptions {
-            descending: false,
-            nulls_first: true,
-        };
-
-        let is_min = new_primitive_cursor(options, ScalarBuffer::from(vec![i32::MIN]), 0);
-        let is_null =
-            new_primitive_cursor(options, ScalarBuffer::from(vec![i32::MIN]), 1);
-
-        let buffer = ScalarBuffer::from(vec![i32::MIN, 79, 2, i32::MIN]);
-        let mut a = new_primitive_cursor(options, buffer, 2);
-        let buffer = ScalarBuffer::from(vec![i32::MIN, -284, 3, i32::MIN, 2]);
-        let mut b = new_primitive_cursor(options, buffer, 2);
-
-        // NULL == NULL
-        assert_eq!(a, is_null);
-        assert_eq!(a.cmp(&b), Ordering::Equal);
-
-        // i32::MIN > NULL
-        a = Cursor::new(a.cursor_values().slice(3, 1));
-        assert_eq!(a, is_min);
-        assert_eq!(a.cmp(&b), Ordering::Greater);
-
-        // i32::MIN == i32::MIN
-        b = Cursor::new(b.cursor_values().slice(3, 2));
-        assert_eq!(b, is_min);
-        assert_eq!(a.cmp(&b), Ordering::Equal);
-
-        // i32::MIN < 2
-        b = Cursor::new(b.cursor_values().slice(1, 1));
-        assert_eq!(a.cmp(&b), Ordering::Less);
-    }
-
-    #[test]
-    fn test_slice_primitive_nulls_last() {
-        let options = SortOptions {
-            descending: false,
-            nulls_first: false,
-        };
-
-        let is_min = new_primitive_cursor(options, ScalarBuffer::from(vec![i32::MIN]), 0);
-        let is_null =
-            new_primitive_cursor(options, ScalarBuffer::from(vec![i32::MIN]), 1);
-
-        let buffer = ScalarBuffer::from(vec![i32::MIN, 79, 2, i32::MIN]);
-        let mut a = new_primitive_cursor(options, buffer, 2);
-        let buffer = ScalarBuffer::from(vec![i32::MIN, -284, 3, i32::MIN, 2]);
-        let mut b = new_primitive_cursor(options, buffer, 2);
-
-        // i32::MIN == i32::MIN
-        assert_eq!(a, is_min);
-        assert_eq!(a.cmp(&b), Ordering::Equal);
-
-        // i32::MIN < -284
-        b = Cursor::new(b.cursor_values().slice(1, 3)); // slice to full length
-        assert_eq!(a.cmp(&b), Ordering::Less);
-
-        // 79 > -284
-        a = Cursor::new(a.cursor_values().slice(1, 2)); // slice to shorter than full length
-        assert_ne!(a, is_null);
-        assert_eq!(a.cmp(&b), Ordering::Greater);
-
-        // NULL == NULL
-        a = Cursor::new(a.cursor_values().slice(1, 1));
-        b = Cursor::new(b.cursor_values().slice(2, 1));
-        assert_eq!(a, is_null);
-        assert_eq!(b, is_null);
-        assert_eq!(a.cmp(&b), Ordering::Equal);
     }
 
     #[test]
