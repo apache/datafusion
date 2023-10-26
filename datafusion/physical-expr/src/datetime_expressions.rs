@@ -154,6 +154,15 @@ pub fn to_timestamp_micros(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     )
 }
 
+/// to_timestamp_nanos SQL function
+pub fn to_timestamp_nanos(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    handle::<TimestampNanosecondType, _, TimestampNanosecondType>(
+        args,
+        string_to_timestamp_nanos_shim,
+        "to_timestamp_nanos",
+    )
+}
+
 /// to_timestamp_seconds SQL function
 pub fn to_timestamp_seconds(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     handle::<TimestampSecondType, _, TimestampSecondType>(
@@ -962,7 +971,7 @@ mod tests {
         let mut string_builder = StringBuilder::with_capacity(2, 1024);
         let mut ts_builder = TimestampNanosecondArray::builder(2);
 
-        string_builder.append_value("2020-09-08T13:42:29.190855Z");
+        string_builder.append_value("2020-09-08T13:42:29.190855");
         ts_builder.append_value(1599572549190855000);
 
         string_builder.append_null();

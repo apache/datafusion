@@ -30,8 +30,6 @@ pub(crate) use self::csv::plan_to_csv;
 pub use self::csv::{CsvConfig, CsvExec, CsvOpener};
 pub(crate) use self::json::plan_to_json;
 #[cfg(feature = "parquet")]
-pub(crate) use self::parquet::plan_to_parquet;
-#[cfg(feature = "parquet")]
 pub use self::parquet::{ParquetExec, ParquetFileMetrics, ParquetFileReaderFactory};
 
 pub use arrow_file::ArrowExec;

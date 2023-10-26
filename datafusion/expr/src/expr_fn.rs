@@ -835,6 +835,12 @@ scalar_expr!(
     "converts a string to a `Timestamp(Microseconds, None)`"
 );
 scalar_expr!(
+    ToTimestampNanos,
+    to_timestamp_nanos,
+    date,
+    "converts a string to a `Timestamp(Nanoseconds, None)`"
+);
+scalar_expr!(
     ToTimestampSeconds,
     to_timestamp_seconds,
     date,
