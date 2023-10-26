@@ -139,10 +139,10 @@ For filters that can be pushed down, they'll be passed to the `scan` method as t
 
 ## Using the Custom Table Provider
 
-In order to use the custom table provider, we need to register it with DataFusion. This is done by creating a `TableProvider` and registering it with the `ExecutionContext`.
+In order to use the custom table provider, we need to register it with DataFusion. This is done by creating a `TableProvider` and registering it with the `SessionContext`.
 
 ```rust
-let mut ctx = ExecutionContext::new();
+let mut ctx = SessionContext::new();
 
 let custom_table_provider = CustomDataSource::new();
 ctx.register_table("custom_table", Arc::new(custom_table_provider));
@@ -160,7 +160,7 @@ To recap, in order to implement a custom table provider, you need to:
 
 1. Implement the `TableProvider` trait
 2. Implement the `ExecutionPlan` trait
-3. Register the `TableProvider` with the `ExecutionContext`
+3. Register the `TableProvider` with the `SessionContext`
 
 ## Next Steps
 

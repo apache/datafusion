@@ -44,6 +44,7 @@ use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_expr::{AggregateFunction, WindowFrame, WindowFunction};
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+use datafusion_physical_plan::windows::PartitionSearchMode;
 
 use async_trait::async_trait;
 
@@ -239,7 +240,7 @@ pub fn bounded_window_exec(
             .unwrap()],
             input.clone(),
             vec![],
-            crate::physical_plan::windows::PartitionSearchMode::Sorted,
+            PartitionSearchMode::Sorted,
         )
         .unwrap(),
     )

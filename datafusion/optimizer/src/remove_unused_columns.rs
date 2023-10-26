@@ -449,20 +449,14 @@ fn try_optimize_internal(
                         .position(|field_source| field_proj.field() == field_source)
                 })
                 .collect::<Option<Vec<_>>>();
-            let projected_schema = if let Some(indices) = &projection {
-                table_scan.project_schema(indices)?
-            } else {
-                // Use existing projected schema.
-                table_scan.projected_schema.clone()
-            };
-            return Ok(Some(LogicalPlan::TableScan(TableScan {
-                table_name: table_scan.table_name.clone(),
-                source: table_scan.source.clone(),
+
+            return Ok(Some(LogicalPlan::TableScan(TableScan::try_new(
+                table_scan.table_name.clone(),
+                table_scan.source.clone(),
                 projection,
-                projected_schema,
-                filters: table_scan.filters.clone(),
-                fetch: table_scan.fetch,
-            })));
+                table_scan.filters.clone(),
+                table_scan.fetch,
+            )?)));
         }
         // SubqueryAlias alias can route requirement for its parent to its child
         LogicalPlan::SubqueryAlias(_sub_query_alias) => Some(vec![(indices, true)]),

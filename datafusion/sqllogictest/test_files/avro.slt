@@ -253,10 +253,10 @@ EXPLAIN SELECT count(*) from alltypes_plain
 ----
 logical_plan
 Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
---TableScan: alltypes_plain projection=[bool_col]
+--TableScan: alltypes_plain projection=[]
 physical_plan
 AggregateExec: mode=Final, gby=[], aggr=[COUNT(*)]
 --CoalescePartitionsExec
 ----AggregateExec: mode=Partial, gby=[], aggr=[COUNT(*)]
 ------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
---------AvroExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/avro/alltypes_plain.avro]]}, projection=[bool_col]
+--------AvroExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/avro/alltypes_plain.avro]]}

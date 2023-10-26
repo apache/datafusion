@@ -27,6 +27,7 @@ pub mod csv;
 pub mod file_compression_type;
 pub mod json;
 pub mod options;
+#[cfg(feature = "parquet")]
 pub mod parquet;
 pub mod write;
 

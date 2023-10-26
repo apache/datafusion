@@ -17,22 +17,25 @@
 
 //! Built-in functions module contains all the built-in functions definitions.
 
-use crate::nullif::SUPPORTED_NULLIF_TYPES;
-use crate::signature::TIMEZONE_WILDCARD;
-use crate::type_coercion::functions::data_types;
-use crate::{
-    conditional_expressions, struct_expressions, utils, FuncMonotonicity, Signature,
-    TypeSignature, Volatility,
-};
-use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
-use datafusion_common::{
-    internal_err, plan_datafusion_err, plan_err, DataFusionError, Result,
-};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
 use std::sync::{Arc, OnceLock};
+
+use crate::nullif::SUPPORTED_NULLIF_TYPES;
+use crate::signature::TIMEZONE_WILDCARD;
+use crate::type_coercion::binary::get_wider_type;
+use crate::type_coercion::functions::data_types;
+use crate::{
+    conditional_expressions, struct_expressions, utils, FuncMonotonicity, Signature,
+    TypeSignature, Volatility,
+};
+
+use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
+use datafusion_common::{
+    internal_err, plan_datafusion_err, plan_err, DataFusionError, Result,
+};
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 
@@ -316,56 +319,6 @@ fn function_to_name() -> &'static HashMap<BuiltinScalarFunction, &'static str> {
     })
 }
 
-// TODO: Enrich this implementation
-fn get_larger_type(lhs: &DataType, rhs: &DataType) -> Result<DataType> {
-    Ok(match (lhs, rhs) {
-        (DataType::Null, _) => rhs.clone(),
-        (_, DataType::Null) => lhs.clone(),
-        // Int
-        (
-            DataType::Int8,
-            DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64,
-        ) => rhs.clone(),
-        (DataType::Int16, DataType::Int16 | DataType::Int32 | DataType::Int64) => {
-            rhs.clone()
-        }
-        (DataType::Int32, DataType::Int32 | DataType::Int64) => rhs.clone(),
-        (DataType::Int16 | DataType::Int32 | DataType::Int64, DataType::Int8) => {
-            lhs.clone()
-        }
-        (DataType::Int32 | DataType::Int64, DataType::Int16) => lhs.clone(),
-        (DataType::Int64, DataType::Int32) => lhs.clone(),
-        (DataType::Int64, DataType::Int64) => DataType::Int64,
-        // Float
-        (
-            DataType::Float16,
-            DataType::Float16 | DataType::Float32 | DataType::Float64,
-        ) => rhs.clone(),
-        (DataType::Float32, DataType::Float32 | DataType::Float64) => rhs.clone(),
-        (DataType::Float32 | DataType::Float64, DataType::Float16) => lhs.clone(),
-        (DataType::Float64, DataType::Float32) => lhs.clone(),
-        (DataType::Float64, DataType::Float64) => DataType::Float64,
-        // String
-        (DataType::Utf8, DataType::Utf8 | DataType::LargeUtf8) => rhs.clone(),
-        (DataType::LargeUtf8, DataType::Utf8) => lhs.clone(),
-        (DataType::LargeUtf8, DataType::LargeUtf8) => DataType::LargeUtf8,
-        (DataType::List(lhs_field), DataType::List(rhs_field)) => {
-            let field_type =
-                get_larger_type(lhs_field.data_type(), rhs_field.data_type())?;
-            assert_eq!(lhs_field.name(), rhs_field.name());
-            let field_name = lhs_field.name();
-            let nullable = lhs_field.is_nullable() | rhs_field.is_nullable();
-            DataType::List(Arc::new(Field::new(field_name, field_type, nullable)))
-        }
-        (_, _) => {
-            return Err(DataFusionError::Execution(format!(
-                "Cannot concat types lhs: {:?}, rhs:{:?}",
-                lhs, rhs
-            )))
-        }
-    })
-}
-
 impl BuiltinScalarFunction {
     /// an allowlist of functions to take zero arguments, so that they will get special treatment
     /// while executing.
@@ -519,18 +472,14 @@ impl BuiltinScalarFunction {
     /// * `List(Int64)` has dimension 2
     /// * `List(List(Int64))` has dimension 3
     /// * etc.
-    fn return_dimension(self, input_expr_type: DataType) -> u64 {
-        let mut res: u64 = 1;
+    fn return_dimension(self, input_expr_type: &DataType) -> u64 {
+        let mut result: u64 = 1;
         let mut current_data_type = input_expr_type;
-        loop {
-            match current_data_type {
-                DataType::List(field) => {
-                    current_data_type = field.data_type().clone();
-                    res += 1;
-                }
-                _ => return res,
-            }
+        while let DataType::List(field) = current_data_type {
+            current_data_type = field.data_type();
+            result += 1;
         }
+        result
     }
 
     /// Returns the output [`DataType`] of this function
@@ -589,11 +538,11 @@ impl BuiltinScalarFunction {
                     match input_expr_type {
                         List(field) => {
                             if !field.data_type().equals_datatype(&Null) {
-                                let dims = self.return_dimension(input_expr_type.clone());
+                                let dims = self.return_dimension(input_expr_type);
                                 expr_type = match max_dims.cmp(&dims) {
                                     Ordering::Greater => expr_type,
                                     Ordering::Equal => {
-                                        get_larger_type(&expr_type, input_expr_type)?
+                                        get_wider_type(&expr_type, input_expr_type)?
                                     }
                                     Ordering::Less => {
                                         max_dims = dims;

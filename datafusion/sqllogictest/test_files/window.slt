@@ -3384,3 +3384,10 @@ SELECT
   window1 AS (ORDER BY C3)
   ORDER BY C3
   LIMIT 5
+
+
+# simple window query
+query II
+select sum(1) over() x, sum(1) over () y
+----
+1 1

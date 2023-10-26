@@ -17,18 +17,22 @@
 
 //! Array expressions
 
+use std::any::type_name;
+use std::sync::Arc;
+
 use arrow::array::*;
 use arrow::buffer::OffsetBuffer;
 use arrow::compute;
 use arrow::datatypes::{DataType, Field, UInt64Type};
 use arrow_buffer::NullBuffer;
-use core::any::type_name;
 use datafusion_common::cast::{as_generic_string_array, as_int64_array, as_list_array};
-use datafusion_common::{exec_err, internal_err, not_impl_err, plan_err, ScalarValue};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::utils::wrap_into_list_array;
+use datafusion_common::{
+    exec_err, internal_err, not_impl_err, plan_err, DataFusionError, Result,
+};
 use datafusion_expr::ColumnarValue;
+
 use itertools::Itertools;
-use std::sync::Arc;
 
 macro_rules! downcast_arg {
     ($ARG:expr, $ARRAY_TYPE:ident) => {{
@@ -400,38 +404,26 @@ fn array(values: &[ColumnarValue]) -> Result<ArrayRef> {
         .iter()
         .map(|x| match x {
             ColumnarValue::Array(array) => array.clone(),
-            ColumnarValue::Scalar(scalar) => scalar.to_array().clone(),
+            ColumnarValue::Scalar(scalar) => scalar.to_array(),
         })
         .collect();
 
-    let mut data_type = None;
+    let mut data_type = DataType::Null;
     for arg in &arrays {
         let arg_data_type = arg.data_type();
         if !arg_data_type.equals_datatype(&DataType::Null) {
-            data_type = Some(arg_data_type.clone());
+            data_type = arg_data_type.clone();
             break;
-        } else {
-            data_type = Some(DataType::Null);
         }
     }
 
     match data_type {
-        // empty array
-        None => {
-            let list_arr = ScalarValue::new_list(&[], &DataType::Null);
-            Ok(Arc::new(list_arr))
+        // Either an empty array or all nulls:
+        DataType::Null => {
+            let array = new_null_array(&DataType::Null, arrays.len());
+            Ok(Arc::new(wrap_into_list_array(array)))
         }
-        // all nulls, set default data type as int32
-        Some(DataType::Null) => {
-            let nulls = arrays.len();
-            let null_arr = NullArray::new(nulls);
-            let field = Arc::new(Field::new("item", DataType::Null, true));
-            let offsets = OffsetBuffer::from_lengths([nulls]);
-            let values = Arc::new(null_arr) as ArrayRef;
-            let nulls = None;
-            Ok(Arc::new(ListArray::new(field, offsets, values, nulls)))
-        }
-        Some(data_type) => Ok(array_array(arrays.as_slice(), data_type)?),
+        data_type => array_array(arrays.as_slice(), data_type),
     }
 }
 

@@ -53,6 +53,9 @@ use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
 use arrow::array::Array;
 use arrow::array::Decimal128Array;
+use arrow::array::Decimal256Array;
+use arrow::datatypes::i256;
+use arrow::datatypes::Decimal256Type;
 
 use super::moving_min_max;
 
@@ -183,6 +186,7 @@ impl AggregateExpr for Max {
                 | Float32
                 | Float64
                 | Decimal128(_, _)
+                | Decimal256(_, _)
                 | Date32
                 | Date64
                 | Time32(_)
@@ -238,6 +242,9 @@ impl AggregateExpr for Max {
             }
             Decimal128(_, _) => {
                 instantiate_max_accumulator!(self, i128, Decimal128Type)
+            }
+            Decimal256(_, _) => {
+                instantiate_max_accumulator!(self, i256, Decimal256Type)
             }
 
             // It would be nice to have a fast implementation for Strings as well
@@ -313,6 +320,16 @@ macro_rules! min_max_batch {
                     $VALUES,
                     Decimal128Array,
                     Decimal128,
+                    $OP,
+                    precision,
+                    scale
+                )
+            }
+            DataType::Decimal256(precision, scale) => {
+                typed_min_max_batch!(
+                    $VALUES,
+                    Decimal256Array,
+                    Decimal256,
                     $OP,
                     precision,
                     scale
@@ -515,6 +532,19 @@ macro_rules! min_max {
             ) => {
                 if lhsp.eq(rhsp) && lhss.eq(rhss) {
                     typed_min_max!(lhsv, rhsv, Decimal128, $OP, lhsp, lhss)
+                } else {
+                    return internal_err!(
+                    "MIN/MAX is not expected to receive scalars of incompatible types {:?}",
+                    (lhs, rhs)
+                );
+                }
+            }
+            (
+                lhs @ ScalarValue::Decimal256(lhsv, lhsp, lhss),
+                rhs @ ScalarValue::Decimal256(rhsv, rhsp, rhss)
+            ) => {
+                if lhsp.eq(rhsp) && lhss.eq(rhss) {
+                    typed_min_max!(lhsv, rhsv, Decimal256, $OP, lhsp, lhss)
                 } else {
                     return internal_err!(
                     "MIN/MAX is not expected to receive scalars of incompatible types {:?}",
@@ -880,6 +910,7 @@ impl AggregateExpr for Min {
                 | Float32
                 | Float64
                 | Decimal128(_, _)
+                | Decimal256(_, _)
                 | Date32
                 | Date64
                 | Time32(_)
@@ -934,6 +965,9 @@ impl AggregateExpr for Min {
             }
             Decimal128(_, _) => {
                 instantiate_min_accumulator!(self, i128, Decimal128Type)
+            }
+            Decimal256(_, _) => {
+                instantiate_min_accumulator!(self, i256, Decimal256Type)
             }
             // This is only reached if groups_accumulator_supported is out of sync
             _ => internal_err!(

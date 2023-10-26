@@ -44,14 +44,13 @@ use datafusion::physical_plan::expressions::{
     Regr, RegrType, RowNumber, Stddev, StddevPop, Sum, TryCastExpr, Variance,
     VariancePop, WindowShift,
 };
-use datafusion::physical_plan::joins::utils::JoinSide;
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion::physical_plan::windows::{BuiltInWindowExpr, PlainAggregateWindowExpr};
 use datafusion::physical_plan::{
     AggregateExpr, ColumnStatistics, PhysicalExpr, Statistics, WindowExpr,
 };
 use datafusion_common::{
-    internal_err, not_impl_err, stats::Precision, DataFusionError, Result,
+    internal_err, not_impl_err, stats::Precision, DataFusionError, JoinSide, Result,
 };
 
 impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
@@ -729,7 +728,7 @@ impl TryFrom<&FileScanConfig> for protobuf::FileScanExecConf {
             table_partition_cols: conf
                 .table_partition_cols
                 .iter()
-                .map(|x| x.0.clone())
+                .map(|x| x.name().clone())
                 .collect::<Vec<_>>(),
             object_store_url: conf.object_store_url.to_string(),
             output_ordering: output_orderings

@@ -2461,11 +2461,11 @@ select empty(make_array());
 ----
 true
 
-# # empty scalar function #3
-# query B
-# select empty(make_array(NULL));
-# ----
-# true
+# empty scalar function #3
+query B
+select empty(make_array(NULL));
+----
+false
 
 # empty scalar function #4
 query B

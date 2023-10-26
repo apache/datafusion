@@ -58,7 +58,7 @@ pub use functional_dependencies::{
     get_target_functional_dependencies, Constraint, Constraints, Dependency,
     FunctionalDependence, FunctionalDependencies,
 };
-pub use join_type::{JoinConstraint, JoinType};
+pub use join_type::{JoinConstraint, JoinSide, JoinType};
 pub use scalar::{ScalarType, ScalarValue};
 pub use schema_reference::{OwnedSchemaReference, SchemaReference};
 pub use stats::{ColumnStatistics, Statistics};
