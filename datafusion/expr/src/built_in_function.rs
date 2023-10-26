@@ -755,7 +755,10 @@ impl BuiltinScalarFunction {
                     return plan_err!("The to_hex function can only accept integers.");
                 }
             }),
-            BuiltinScalarFunction::ToTimestamp => Ok(Timestamp(Nanosecond, None)),
+            BuiltinScalarFunction::ToTimestamp => Ok(match &input_expr_types[0] {
+                dt if dt.is_integer() => Timestamp(Second, None),
+                _ => Timestamp(Nanosecond, None),
+            }),
             BuiltinScalarFunction::ToTimestampMillis => Ok(Timestamp(Millisecond, None)),
             BuiltinScalarFunction::ToTimestampMicros => Ok(Timestamp(Microsecond, None)),
             BuiltinScalarFunction::ToTimestampNanos => Ok(Timestamp(Nanosecond, None)),
