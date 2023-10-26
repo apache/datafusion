@@ -1522,6 +1522,7 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Substr => Self::Substr,
             BuiltinScalarFunction::ToHex => Self::ToHex,
             BuiltinScalarFunction::ToTimestampMicros => Self::ToTimestampMicros,
+            BuiltinScalarFunction::ToTimestampNanos => Self::ToTimestampNanos,
             BuiltinScalarFunction::ToTimestampSeconds => Self::ToTimestampSeconds,
             BuiltinScalarFunction::Now => Self::Now,
             BuiltinScalarFunction::CurrentDate => Self::CurrentDate,
