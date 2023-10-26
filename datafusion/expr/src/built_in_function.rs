@@ -756,7 +756,7 @@ impl BuiltinScalarFunction {
                 }
             }),
             BuiltinScalarFunction::ToTimestamp => Ok(match &input_expr_types[0] {
-                dt if dt.is_integer() => Timestamp(Second, None),
+                Int64 => Timestamp(Second, None),
                 _ => Timestamp(Nanosecond, None),
             }),
             BuiltinScalarFunction::ToTimestampMillis => Ok(Timestamp(Millisecond, None)),
