@@ -210,17 +210,23 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>>;
 
-    /// If supported, changes the partitioning of this `ExecutionPlan` to
+    /// If supported, attempt to increase the partitioning of this `ExecutionPlan` to
     /// produce `target_partitions` partitions.
     ///
     /// If the `ExecutionPlan` does not support changing its partitioning,
     /// returns `Ok(None)` (the default).
     ///
+    /// It is the `ExecutionPlan` can increase its partitioning, but not to the
+    /// `target_partitions`, it may return an ExecutionPlan with fewer
+    /// partitions. This might happen, for example, if each new partition would
+    /// be too small to be efficiently processed individually.
+    ///
     /// The DataFusion optimizer attempts to use as many threads as possible by
     /// repartitioning its inputs to match the target number of threads
     /// available (`target_partitions`). Some data sources, such as the built in
-    /// CSV and Parquet readers, are able to read from their input files in
-    /// parallel, regardless of how the source data is split amongst files.
+    /// CSV and Parquet readers, implement this method as they are able to read
+    /// from their input files in parallel, regardless of how the source data is
+    /// split amongst files.
     fn repartitioned(
         &self,
         _target_partitions: usize,
