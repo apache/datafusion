@@ -233,7 +233,7 @@ impl DFSchema {
         let (new_field_qualifiers, new_fields) = self
             .iter()
             .chain(other.qualified_field_iter())
-            .map(|qualifier, field| (qualifier.as_ref().clone(), field.clone()))
+            .map(|q, f| (q.as_ref().clone(), f.clone()))
             .unzip();
 
         for field in other.fields() {
