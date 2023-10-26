@@ -76,6 +76,7 @@ pub use crate::metrics::Metric;
 pub use crate::topk::TopK;
 pub use crate::visitor::{accept, visit_execution_plan, ExecutionPlanVisitor};
 
+use datafusion_common::config::ConfigOptions;
 pub use datafusion_common::hash_utils;
 pub use datafusion_common::utils::project_schema;
 pub use datafusion_common::{internal_err, ColumnStatistics, Statistics};
@@ -209,7 +210,26 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>>;
 
-    /// creates an iterator
+    /// If supported, changes the partitioning of this `ExecutionPlan` to
+    /// produce `target_partitions` partitions.
+    ///
+    /// If the `ExecutionPlan` does not support changing its partitioning,
+    /// returns `Ok(None)` (the default).
+    ///
+    /// The DataFusion optimizer attempts to use as many threads as possible by
+    /// repartitioning its inputs to match the target number of threads
+    /// available (`target_partitions`). Some data sources, such as the built in
+    /// CSV and Parquet readers, are able to read from their input files in
+    /// parallel, regardless of how the source data is split amongst files.
+    fn repartitioned(
+        &self,
+        _target_partitions: usize,
+        _config: &ConfigOptions,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        Ok(None)
+    }
+
+    /// Begin execution of `partition`, returning a stream of [`RecordBatch`]es.
     fn execute(
         &self,
         partition: usize,
@@ -217,7 +237,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ) -> Result<SendableRecordBatchStream>;
 
     /// Return a snapshot of the set of [`Metric`]s for this
-    /// [`ExecutionPlan`].
+    /// [`ExecutionPlan`]. If no `Metric`s are available, return None.
     ///
     /// While the values of the metrics in the returned
     /// [`MetricsSet`]s may change as execution progresses, the

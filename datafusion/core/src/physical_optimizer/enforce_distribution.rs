@@ -1265,25 +1265,13 @@ fn ensure_distribution(
                 // Unless partitioning doesn't increase the partition count, it is not beneficial:
                 && child.output_partitioning().partition_count() < target_partitions
             {
-                // When `repartition_file_scans` is set, leverage source operators
-                // (`ParquetExec`, `CsvExec` etc.) to increase parallelism at the source.
+                // When `repartition_file_scans` is set, attempt to increase
+                // parallelism at the source.
                 if repartition_file_scans {
-                    #[cfg(feature = "parquet")]
-                    if let Some(parquet_exec) =
-                        child.as_any().downcast_ref::<ParquetExec>()
+                    if let Some(new_child) =
+                        child.repartitioned(target_partitions, config)?
                     {
-                        child = Arc::new(parquet_exec.get_repartitioned(
-                            target_partitions,
-                            repartition_file_min_size,
-                        ));
-                    }
-                    if let Some(csv_exec) = child.as_any().downcast_ref::<CsvExec>() {
-                        if let Some(csv_exec) = csv_exec.get_repartitioned(
-                            target_partitions,
-                            repartition_file_min_size,
-                        ) {
-                            child = Arc::new(csv_exec);
-                        }
+                        child = new_child;
                     }
                 }
                 // Increase parallelism by adding round-robin repartitioning
