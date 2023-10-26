@@ -1693,6 +1693,15 @@
       </span>
      </code>
     </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#to-timestamp-nanos">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       to_timestamp_nanos
+      </span>
+     </code>
+    </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
       <a class="reference internal nav-link" href="#id77">
@@ -4185,6 +4194,7 @@ regular expression. The following flags are supported.</p>
 <li><p><a class="reference internal" href="#to-timestamp-millis">to_timestamp_millis</a></p></li>
 <li><p><a class="reference internal" href="#to-timestamp-micros">to_timestamp_micros</a></p></li>
 <li><p><a class="reference internal" href="#to-timestamp-seconds">to_timestamp_seconds</a></p></li>
+<li><p><a class="reference internal" href="#to-timestamp-nanos">to_timestamp_nanos</a></p></li>
 <li><p><a class="reference internal" href="#from-unixtime">from_unixtime</a></p></li>
 </ul>
 <section id="now">
@@ -4361,10 +4371,10 @@ Can be a constant, column, or function.</p></li>
 </section>
 <section id="to-timestamp">
 <h3><code class="docutils literal notranslate"><span class="pre">to_timestamp</span></code><a class="headerlink" href="#to-timestamp" title="Link to this heading">¶</a></h3>
-<p>Converts a value to RFC3339 nanosecond timestamp format (<code class="docutils literal notranslate"><span class="pre">YYYY-MM-DDT00:00:00.000000000Z</span></code>).
+<p>Converts a value to RFC3339 nanosecond timestamp format (<code class="docutils literal notranslate"><span class="pre">YYYY-MM-DDT00:00:00Z</span></code>).
 Supports timestamp, integer, and unsigned integer types as input.
-Integers and unsigned integers are parsed as Unix nanosecond timestamps and
-return the corresponding RFC3339 nanosecond timestamp.</p>
+Integers and unsigned integers are parsed as Unix second timestamps and
+return the corresponding RFC3339 timestamp.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">to_timestamp</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
@@ -4399,7 +4409,17 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 Supports timestamp, integer, and unsigned integer types as input.
 Integers and unsigned integers are parsed as Unix nanosecond timestamps and
 return the corresponding RFC3339 timestamp.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">to_timestamp_micros</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">to_timestamp_nanos</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="to-timestamp-nanos">
+<h3><code class="docutils literal notranslate"><span class="pre">to_timestamp_nanos</span></code><a class="headerlink" href="#to-timestamp-nanos" title="Link to this heading">¶</a></h3>
+<p>Converts a value to RFC3339 nanosecond timestamp format (<code class="docutils literal notranslate"><span class="pre">YYYY-MM-DDT00:00:00.000000000Z</span></code>).
+Supports timestamp, integer, and unsigned integer types as input.
+Integers and unsigned integers are parsed as Unix nanosecond timestamps and
+return the corresponding RFC3339 timestamp.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">to_timestamp_nanos</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id77">
