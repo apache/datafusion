@@ -19,9 +19,9 @@
 
 /// If parquet is enabled, use actual implementation
 #[cfg(feature = "parquet")]
-mod parquet;
+mod parquet_impl;
 #[cfg(feature = "parquet")]
-pub use parquet::*;
+pub use parquet_impl::*;
 
 /// If parquet is not enabled, use dummy implementation
 #[cfg(not(feature = "parquet"))]
