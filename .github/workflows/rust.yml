@@ -52,6 +52,9 @@ jobs:
         with:
           rust-version: stable
 
+      - name: Install jq
+        run: apt install -y jq
+
       - name: Cache Cargo
         uses: actions/cache@v3
         with:
@@ -65,8 +68,11 @@ jobs:
           # this key equals the ones on `linux-build-lib` for re-use
           key: cargo-cache-benchmark-${{ hashFiles('datafusion/**/Cargo.toml', 'benchmarks/Cargo.toml', 'datafusion-cli/Cargo.toml') }}
 
-      - name: Check workspace without default features
-        run: cargo check --no-default-features -p datafusion
+      - name: Check workspace without default features in each package tests
+        run:  |
+            for package in $(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name'); do
+              cargo check --no-default-features --tests --package "$package" || exit 1
+            done
 
       - name: Check workspace in debug mode
         run: cargo check
