@@ -42,11 +42,11 @@ pub trait CursorValues {
     /// Returns comparison of `l[l_idx]` and `r[r_idx]`
     fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering;
 
-    /// Slice at a given row index, returning a new Self
+    /// Returns a zero-copy slice of this [`CursorValues`] with the indicated offset and length.
     ///
     /// # Panics
     ///
-    /// Panics if the slice is out of bounds, or memory is insufficient
+    /// Panics if the slice is out of bounds
     fn slice(&self, offset: usize, length: usize) -> Self;
 }
 
@@ -138,9 +138,9 @@ impl<T: CursorValues> Ord for Cursor<T> {
 pub struct RowValues {
     rows: Arc<Rows>,
 
-    /// Lower bound of windowed RowValues.
+    /// Lower bound within `rows`.
     offset: usize,
-    /// Upper bound of windowed RowValues (not inclusive).
+    /// Upper bound within `rows` (not inclusive).
     limit: usize,
 
     /// Tracks for the memory used by in the `Rows` of this
@@ -150,7 +150,7 @@ pub struct RowValues {
 }
 
 impl RowValues {
-    /// Create a new [`RowValues`] from `Arc<Rows>`.
+    /// Create a new [`RowValues`] from [`Rows`].
     ///
     /// Panics if `rows` is empty.
     pub fn new(rows: Rows, reservation: MemoryReservation) -> Self {
