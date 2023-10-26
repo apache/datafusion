@@ -38,7 +38,7 @@ use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::stats::Precision;
-use datafusion_common::{plan_err, DataFusionError, Result};
+use datafusion_common::{plan_err, project_schema, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::BinaryExpr;
@@ -59,6 +59,10 @@ use log::trace;
 pub struct FilterExec {
     /// The expression to filter on. This expression must evaluate to a boolean value.
     predicate: Arc<dyn PhysicalExpr>,
+    /// Optional projection
+    projection: Option<Vec<usize>>,
+    /// Schema representing the data after the optional projection is applied
+    projected_schema: SchemaRef,
     /// The input plan
     input: Arc<dyn ExecutionPlan>,
     /// Execution metrics
@@ -69,11 +73,15 @@ impl FilterExec {
     /// Create a FilterExec on an input
     pub fn try_new(
         predicate: Arc<dyn PhysicalExpr>,
+        projection: Option<Vec<usize>>,
         input: Arc<dyn ExecutionPlan>,
     ) -> Result<Self> {
-        match predicate.data_type(input.schema().as_ref())? {
+        let projected_schema = project_schema(&input.schema(), projection.as_ref())?;
+        match predicate.data_type(projected_schema.as_ref())? {
             DataType::Boolean => Ok(Self {
                 predicate,
+                projection,
+                projected_schema,
                 input: input.clone(),
                 metrics: ExecutionPlanMetricsSet::new(),
             }),
@@ -117,7 +125,7 @@ impl ExecutionPlan for FilterExec {
     /// Get the schema for this execution plan
     fn schema(&self) -> SchemaRef {
         // The filter operator does not make any changes to the schema of its input
-        self.input.schema()
+        self.projected_schema.clone()
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -175,6 +183,7 @@ impl ExecutionPlan for FilterExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(FilterExec::try_new(
             self.predicate.clone(),
+            self.projection.clone(),
             children[0].clone(),
         )?))
     }
@@ -187,8 +196,9 @@ impl ExecutionPlan for FilterExec {
         trace!("Start FilterExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
         Ok(Box::pin(FilterExecStream {
-            schema: self.input.schema(),
+            schema: self.schema(),
             predicate: self.predicate.clone(),
+            projection: self.projection.clone(),
             input: self.input.execute(partition, context)?,
             baseline_metrics,
         }))
@@ -212,7 +222,7 @@ impl ExecutionPlan for FilterExec {
         let num_rows = input_stats.num_rows;
         let total_byte_size = input_stats.total_byte_size;
         let input_analysis_ctx = AnalysisContext::try_from_statistics(
-            &self.input.schema(),
+            &self.schema(),
             &input_stats.column_statistics,
         )?;
         let analysis_ctx = analyze(predicate, input_analysis_ctx)?;
@@ -285,6 +295,8 @@ struct FilterExecStream {
     schema: SchemaRef,
     /// The expression to filter on. This expression must evaluate to a boolean value.
     predicate: Arc<dyn PhysicalExpr>,
+    /// Optional projection
+    projection: Option<Vec<usize>>,
     /// The input partition to filter.
     input: SendableRecordBatchStream,
     /// runtime metrics recording
@@ -318,6 +330,11 @@ impl Stream for FilterExecStream {
                 Poll::Ready(value) => match value {
                     Some(Ok(batch)) => {
                         let timer = self.baseline_metrics.elapsed_compute().timer();
+                        // load just the columns requested
+                        let batch = match self.projection.as_ref() {
+                            Some(columns) => batch.project(columns)?,
+                            None => batch.clone(),
+                        };
                         let filtered_batch = batch_filter(&batch, &self.predicate)?;
                         // skip entirely filtered batches
                         if filtered_batch.num_rows() == 0 {
@@ -468,7 +485,7 @@ mod tests {
 
         // WHERE a <= 25
         let filter: Arc<dyn ExecutionPlan> =
-            Arc::new(FilterExec::try_new(predicate, input)?);
+            Arc::new(FilterExec::try_new(predicate, None, input)?);
 
         let statistics = filter.statistics()?;
         assert_eq!(statistics.num_rows, Precision::Inexact(25));
@@ -509,6 +526,7 @@ mod tests {
         // WHERE a <= 25
         let sub_filter: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(
             binary(col("a", &schema)?, Operator::LtEq, lit(25i32), &schema)?,
+            None,
             input,
         )?);
 
@@ -517,6 +535,7 @@ mod tests {
         // WHERE a <= 25
         let filter: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(
             binary(col("a", &schema)?, Operator::GtEq, lit(10i32), &schema)?,
+            None,
             sub_filter,
         )?);
 
@@ -566,18 +585,21 @@ mod tests {
         // WHERE a <= 25
         let a_lte_25: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(
             binary(col("a", &schema)?, Operator::LtEq, lit(25i32), &schema)?,
+            None,
             input,
         )?);
 
         // WHERE b > 45
         let b_gt_5: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(
             binary(col("b", &schema)?, Operator::Gt, lit(45i32), &schema)?,
+            None,
             a_lte_25,
         )?);
 
         // WHERE a >= 10
         let filter: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(
             binary(col("a", &schema)?, Operator::GtEq, lit(10i32), &schema)?,
+            None,
             b_gt_5,
         )?);
         let statistics = filter.statistics()?;
@@ -623,7 +645,7 @@ mod tests {
 
         // WHERE a <= 25
         let filter: Arc<dyn ExecutionPlan> =
-            Arc::new(FilterExec::try_new(predicate, input)?);
+            Arc::new(FilterExec::try_new(predicate, None, input)?);
 
         let statistics = filter.statistics()?;
         assert_eq!(statistics.num_rows, Precision::Absent);
@@ -697,7 +719,7 @@ mod tests {
             )),
         ));
         let filter: Arc<dyn ExecutionPlan> =
-            Arc::new(FilterExec::try_new(predicate, input)?);
+            Arc::new(FilterExec::try_new(predicate, None, input)?);
         let statistics = filter.statistics()?;
         // 0.5 (from a) * 0.333333... (from b) * 0.798387... (from c) ≈ 0.1330...
         // num_rows after ceil => 133.0... => 134
@@ -796,7 +818,7 @@ mod tests {
         // Since filter predicate passes all entries, statistics after filter shouldn't change.
         let expected = input.statistics()?.column_statistics;
         let filter: Arc<dyn ExecutionPlan> =
-            Arc::new(FilterExec::try_new(predicate, input)?);
+            Arc::new(FilterExec::try_new(predicate, None, input)?);
         let statistics = filter.statistics()?;
 
         assert_eq!(statistics.num_rows, Precision::Inexact(1000));
@@ -849,7 +871,7 @@ mod tests {
             )),
         ));
         let filter: Arc<dyn ExecutionPlan> =
-            Arc::new(FilterExec::try_new(predicate, input)?);
+            Arc::new(FilterExec::try_new(predicate, None, input)?);
         let statistics = filter.statistics()?;
 
         assert_eq!(statistics.num_rows, Precision::Inexact(0));
@@ -905,7 +927,7 @@ mod tests {
             Arc::new(Literal::new(ScalarValue::Int32(Some(50)))),
         ));
         let filter: Arc<dyn ExecutionPlan> =
-            Arc::new(FilterExec::try_new(predicate, input)?);
+            Arc::new(FilterExec::try_new(predicate, None, input)?);
         let statistics = filter.statistics()?;
 
         assert_eq!(statistics.num_rows, Precision::Inexact(490));
@@ -955,7 +977,7 @@ mod tests {
             )),
         ));
         let filter: Arc<dyn ExecutionPlan> =
-            Arc::new(FilterExec::try_new(predicate, input)?);
+            Arc::new(FilterExec::try_new(predicate, None, input)?);
         let filter_statistics = filter.statistics()?;
 
         let expected_filter_statistics = Statistics {
