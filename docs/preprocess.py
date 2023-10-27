@@ -19,8 +19,9 @@ import glob
 import os
 import re
 
+
 def copy_test_source(test_filename, test_method, output):
-    output.write("```rust\n")
+    lines = []
     with open(test_filename) as test:
         found = False
         for test_line in test.readlines():
@@ -30,8 +31,34 @@ def copy_test_source(test_filename, test_method, output):
             if found:
                 if test_line.strip() == "Ok(())":
                     break
-                # TODO strip leading indent
-                output.write(test_line)
+                lines.append(test_line)
+
+    # remove blank lines from the end of the list
+    while lines and lines[-1] == "":
+        lines.pop()
+
+    # remove leading indent when possible
+    consistent_indent = True
+    for line in lines:
+        if len(line.strip()) > 0 and not (
+            line.startswith("    ") or line.startswith("\t")
+        ):
+            print("not consistent", line)
+            consistent_indent = False
+            break
+    if consistent_indent:
+        old_lines = lines
+        lines = []
+        for line in old_lines:
+            if len(line) >= 4:
+                lines.append(line[4:])
+            else:
+                lines.append(line)
+
+    # write to output
+    output.write("```rust\n")
+    for line in lines:
+        output.write(line)
     output.write("```")
 
 
