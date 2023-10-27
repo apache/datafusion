@@ -29,4 +29,4 @@ authors = { workspace = true }
 rust-version = "1.70"
 
 [dependencies]
-datafusion = { path = "../datafusion/core" }
+datafusion = { path = "../datafusion/core", version = "32.0.0", default-features = false }

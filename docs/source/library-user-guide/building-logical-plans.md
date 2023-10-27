@@ -36,6 +36,7 @@ much easier to use the [LogicalPlanBuilder], which is described in the next sect
 Here is an example of building a logical plan directly:
 
 <!-- source for this example is in datafusion_docs::library_logical_plan::plan_1 -->
+
 ```rust
 // create a logical table source
 let schema = Schema::new(vec![
@@ -96,6 +97,7 @@ Here are some examples of transformation methods, but for a full list, refer to 
 The following example demonstrates building a simple query consisting of a table scan followed by a filter.
 
 <!-- source for this example is in datafusion_docs::library_logical_plan::plan_builder_1 -->
+
 ```rust
 // create a logical table source
 let schema = Schema::new(vec![
