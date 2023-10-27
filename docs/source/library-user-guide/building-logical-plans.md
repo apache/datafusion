@@ -96,8 +96,8 @@ pub struct DefaultTableSource {
 }
 ```
 
-[LogicalPlanBuilder]: https://docs.rs/datafusion-expr/latest/datafusion_expr/logical_plan/builder/struct.LogicalPlanBuilder.html
-[LogicalTableSource]: https://docs.rs/datafusion-expr/latest/datafusion_expr/logical_plan/builder/struct.LogicalTableSource.html
-[DefaultTableSource]: https://docs.rs/datafusion/latest/datafusion/datasource/default_table_source/struct.DefaultTableSource.html
-[TableProvider]: https://docs.rs/datafusion/latest/datafusion/datasource/provider/trait.TableProvider.html
-[TableSource]: https://docs.rs/datafusion-expr/latest/datafusion_expr/trait.TableSource.html
+[logicalplanbuilder]: https://docs.rs/datafusion-expr/latest/datafusion_expr/logical_plan/builder/struct.LogicalPlanBuilder.html
+[logicaltablesource]: https://docs.rs/datafusion-expr/latest/datafusion_expr/logical_plan/builder/struct.LogicalTableSource.html
+[defaulttablesource]: https://docs.rs/datafusion/latest/datafusion/datasource/default_table_source/struct.DefaultTableSource.html
+[tableprovider]: https://docs.rs/datafusion/latest/datafusion/datasource/provider/trait.TableProvider.html
+[tablesource]: https://docs.rs/datafusion-expr/latest/datafusion_expr/trait.TableSource.html
