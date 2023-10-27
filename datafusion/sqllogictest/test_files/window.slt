@@ -3467,3 +3467,9 @@ LIMIT 5;
 0
 0
 1
+
+# simple window query
+query II
+select sum(1) over() x, sum(1) over () y
+----
+1 1
