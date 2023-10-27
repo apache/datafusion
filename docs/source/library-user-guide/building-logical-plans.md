@@ -83,7 +83,7 @@ Filter: person.id > Int32(500) [id:Int32;N, name:Utf8;N]
 
 The previous example used a [LogicalTableSource], which is used for tests and documentation in DataFusion, and is also
 suitable if you are using DataFusion to build logical plans but do not use DataFusion's physical plan. However, if you
-want to use a TableSource that can be executed in DataFusion then you will need to [DefaultTableSource], which is a
+want to use a [TableSource] that can be executed in DataFusion then you will need to use [DefaultTableSource], which is a
 wrapper for a [TableProvider].
 
 Both [LogicalTableSource] and [DefaultTableSource] implement the [TableSource] trait. [DefaultTableSource] acts as a
