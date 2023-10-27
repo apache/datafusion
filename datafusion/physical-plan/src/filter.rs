@@ -160,7 +160,7 @@ impl ExecutionPlan for FilterExec {
             .filter(|column| stats.column_statistics[column.index()].is_singleton())
             .map(|column| Arc::new(column) as _)
             .collect();
-        filter_oeq.with_constants(constants)
+        filter_oeq.add_constants(constants)
     }
 
     fn with_new_children(

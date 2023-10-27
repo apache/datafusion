@@ -77,42 +77,26 @@ impl PhysicalSortExpr {
         })
     }
 
-    /// Check whether sort expression satisfies [`PhysicalSortRequirement`].
-    ///
-    /// If sort options is Some in `PhysicalSortRequirement`, `expr`
-    /// and `options` field are compared for equality.
-    ///
-    /// If sort options is None in `PhysicalSortRequirement`, only
-    /// `expr` is compared for equality.
-    pub fn satisfy(&self, requirement: &PhysicalSortRequirement) -> bool {
-        self.expr.eq(&requirement.expr)
-            && requirement
-                .options
-                .map_or(true, |opts| self.options == opts)
-    }
-
-    /// Check whether sort expression satisfies [`PhysicalSortRequirement`].
-    ///
-    /// If sort options is Some in `PhysicalSortRequirement`, `expr`
-    /// and `options` field are compared for equality.
-    ///
-    /// If sort options is None in `PhysicalSortRequirement`, only
-    /// `expr` is compared for equality.
-    pub fn satisfy_with_schema(
+    /// Checks whether this sort expression satisfies the given `requirement`.
+    /// If sort options are unspecified in `requirement`, only expressions are
+    /// compared for inequality.
+    pub fn satisfy(
         &self,
         requirement: &PhysicalSortRequirement,
         schema: &Schema,
     ) -> bool {
+        // If the column is not nullable, NULLS FIRST/LAST is not important.
         let nullable = self.expr.nullable(schema).unwrap_or(true);
-        if nullable {
-            self.satisfy(requirement)
-        } else {
-            self.expr.eq(&requirement.expr)
-                && requirement
+        self.expr.eq(&requirement.expr)
+            && if nullable {
+                requirement
                     .options
-                    // If the column is not nullable, NULLS FIRST/LAST is not important.
+                    .map_or(true, |opts| self.options == opts)
+            } else {
+                requirement
+                    .options
                     .map_or(true, |opts| self.options.descending == opts.descending)
-        }
+            }
     }
 
     /// Returns a [`Display`]able list of `PhysicalSortExpr`.

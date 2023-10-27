@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashSet;
 use std::hash::Hash;
 use std::sync::Arc;
 
@@ -507,7 +508,7 @@ impl OrderingEquivalenceClass {
 
     // Append orderings in `other` to all existing orderings in this equivalence
     // class.
-    pub fn join_postfix(mut self, other: &Self) -> Self {
+    pub fn join_suffix(mut self, other: &Self) -> Self {
         for postfix in other.iter() {
             for idx in 0..self.orderings.len() {
                 self.orderings[idx].extend(postfix.iter().cloned());
@@ -645,7 +646,7 @@ impl SchemaProperties {
     pub fn extend(mut self, other: Self) -> Self {
         self.eq_group.extend(other.eq_group);
         self.oeq_class.extend(other.oeq_class);
-        self.with_constants(other.constants)
+        self.add_constants(other.constants)
     }
 
     /// Clears (empties) the ordering equivalence class within this object.
@@ -687,7 +688,7 @@ impl SchemaProperties {
     }
 
     /// Track/register physical expressions with constant values.
-    pub fn with_constants(mut self, constants: Vec<Arc<dyn PhysicalExpr>>) -> Self {
+    pub fn add_constants(mut self, constants: Vec<Arc<dyn PhysicalExpr>>) -> Self {
         for expr in self.eq_group.normalize_exprs(constants) {
             if !physical_exprs_contains(&self.constants, &expr) {
                 self.constants.push(expr);
@@ -727,7 +728,6 @@ impl SchemaProperties {
     /// - Removing expressions that have a constant value from the given requirement.
     /// - Replacing sections that belong to some equivalence class in the equivalence
     ///   group with the first entry in the matching equivalence class.
-    /// - Removing sections that satisfy global ordering that are in the post fix of requirement.
     ///
     /// Assume that `self.eq_group` states column `a` and `b` are aliases.
     /// Also assume that `self.oeq_class` states orderings `d ASC` and `a ASC, c ASC`
@@ -763,7 +763,36 @@ impl SchemaProperties {
     /// Checks whether the given sort requirements are satisfied by any of the
     /// existing orderings.
     pub fn ordering_satisfy_requirement(&self, reqs: LexRequirementRef) -> bool {
-        self.prune_lex_req(reqs).is_empty()
+        // First, standardize the given requirement:
+        let normalized_reqs = self.normalize_sort_requirements(reqs);
+        if normalized_reqs.is_empty() {
+            // Requirements are tautologically satisfied if empty.
+            return true;
+        }
+        let mut indices = HashSet::new();
+        for ordering in self.normalized_oeq_class().iter() {
+            let match_indices = ordering
+                .iter()
+                .map(|sort_expr| {
+                    normalized_reqs
+                        .iter()
+                        .position(|sort_req| sort_expr.satisfy(sort_req, &self.schema))
+                })
+                .collect::<Vec<_>>();
+            // Find the largest contiguous increasing sequence starting from the first index:
+            if let Some(&Some(first)) = match_indices.first() {
+                indices.insert(first);
+                let mut iter = match_indices.windows(2);
+                while let Some([Some(current), Some(next)]) = iter.next() {
+                    if next > current {
+                        indices.insert(*next);
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+        indices.len() == normalized_reqs.len()
     }
 
     /// Checks whether the given [`PhysicalSortRequirement`]s are equal or more
@@ -776,13 +805,11 @@ impl SchemaProperties {
         let provided_normalized = self.normalize_sort_requirements(provided);
         let required_normalized = self.normalize_sort_requirements(required);
 
-        if required_normalized.len() > provided_normalized.len() {
-            return false;
-        }
-        required_normalized
-            .into_iter()
-            .zip(provided_normalized)
-            .all(|(req, given)| given.compatible(&req))
+        (required_normalized.len() <= provided_normalized.len())
+            && required_normalized
+                .into_iter()
+                .zip(provided_normalized)
+                .all(|(req, given)| given.compatible(&req))
     }
 
     /// Find the finer ordering among `req1` and `req2`
@@ -861,54 +888,6 @@ impl SchemaProperties {
             }
         }
         (!meet.is_empty()).then_some(meet)
-    }
-
-    /// This function prunes lexicographical ordering requirement
-    /// by removing sections inside `sort_req` that satisfies any of the existing ordering.
-    /// Please note that pruned version may not functionally equivalent to the argument.
-    /// Empty result means that requirement is already satisfied.
-    /// Non-empty result means that requirement is not satisfied.
-    /// This util shouldn't be used outside this context.
-    fn prune_lex_req(&self, sort_req: LexRequirementRef) -> LexRequirement {
-        // Make sure to use a standardized version of the requirement
-        let mut normalized_sort_req = self.normalize_sort_requirements(sort_req);
-
-        // If empty immediately return
-        if normalized_sort_req.is_empty() {
-            return normalized_sort_req;
-        }
-
-        for ordering in self.normalized_oeq_class().iter() {
-            let match_indices = ordering
-                .iter()
-                .map(|elem| {
-                    normalized_sort_req.iter().position(|sort_req| {
-                        elem.satisfy_with_schema(sort_req, &self.schema)
-                    })
-                })
-                .collect::<Vec<_>>();
-
-            // Find the largest contiguous increasing sequence starting from the first index
-            let mut to_remove = Vec::new();
-            if let Some(&Some(first)) = match_indices.first() {
-                to_remove.push(first);
-                for window in match_indices.windows(2) {
-                    if let (Some(current), Some(next)) = (window[0], window[1]) {
-                        if next > current {
-                            to_remove.push(next);
-                            continue;
-                        }
-                    }
-                    break;
-                }
-            }
-            // can remove entries at the match_prefix indices
-            // Remove with reverse iteration to not invalidate indices
-            for idx in to_remove.iter().rev() {
-                normalized_sort_req.remove(*idx);
-            }
-        }
-        normalized_sort_req
     }
 
     /// Projects argument `expr` according to mapping inside `source_to_target_mapping`.
@@ -1030,7 +1009,7 @@ impl SchemaProperties {
         for ordering in self.normalized_oeq_class().iter() {
             for sort_expr in ordering {
                 if let Some(idx) = normalized_exprs.iter().position(|normalized_expr| {
-                    sort_expr.satisfy_with_schema(
+                    sort_expr.satisfy(
                         &PhysicalSortRequirement {
                             expr: normalized_expr.clone(),
                             options: None,
@@ -1107,7 +1086,7 @@ pub fn join_schema_properties(
                 // ordering of the left table is `a ASC`, then the ordering equivalence `b ASC`
                 // for the right table should be converted to `a ASC, b ASC` before it is added
                 // to the ordering equivalences of the join.
-                let out_oeq_class = left_oeq_class.join_postfix(&updated_right_oeq);
+                let out_oeq_class = left_oeq_class.join_suffix(&updated_right_oeq);
                 new_properties.add_ordering_equivalence_class(out_oeq_class);
             } else {
                 new_properties.add_ordering_equivalence_class(left_oeq_class);
@@ -1129,7 +1108,7 @@ pub fn join_schema_properties(
                 // ordering of the left table is `a ASC`, then the ordering equivalence `b ASC`
                 // for the right table should be converted to `a ASC, b ASC` before it is added
                 // to the ordering equivalences of the join.
-                let out_oeq_class = updated_right_oeq.join_postfix(&left_oeq_class);
+                let out_oeq_class = updated_right_oeq.join_suffix(&left_oeq_class);
                 new_properties.add_ordering_equivalence_class(out_oeq_class);
             } else {
                 new_properties.add_ordering_equivalence_class(updated_right_oeq);
@@ -1382,7 +1361,7 @@ mod tests {
         // Define a and f are aliases
         schema_properties.add_equal_conditions(col_a, col_f);
         // Column e has constant value.
-        schema_properties = schema_properties.with_constants(vec![col_e.clone()]);
+        schema_properties = schema_properties.add_constants(vec![col_e.clone()]);
 
         // Randomly order columns for sorting
         let mut rng = StdRng::seed_from_u64(seed);

@@ -487,7 +487,7 @@ pub fn get_window_mode(
     }
 
     // Treat partition by exprs as constant. During analysis of requirements are satisfied.
-    let partition_by_oeq = input_oeq.with_constants(partitionby_exprs.to_vec());
+    let partition_by_oeq = input_oeq.add_constants(partitionby_exprs.to_vec());
     let order_by_reqs = PhysicalSortRequirement::from_sort_exprs(orderby_keys);
     let reverse_order_by_reqs =
         PhysicalSortRequirement::from_sort_exprs(&reverse_order_bys(orderby_keys));
@@ -713,8 +713,7 @@ mod tests {
                     nulls_first: req_nulls_first,
                 },
             };
-            let res =
-                physical_ordering.satisfy_with_schema(&required_ordering.into(), &schema);
+            let res = physical_ordering.satisfy(&required_ordering.into(), &schema);
             assert_eq!(res, expected);
         }
 
@@ -754,8 +753,7 @@ mod tests {
                     nulls_first: req_nulls_first,
                 },
             };
-            let res =
-                physical_ordering.satisfy_with_schema(&required_ordering.into(), &schema);
+            let res = physical_ordering.satisfy(&required_ordering.into(), &schema);
             assert_eq!(res, expected);
         }
 
