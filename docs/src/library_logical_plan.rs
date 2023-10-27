@@ -36,7 +36,7 @@ fn plan_1() -> Result<()> {
     let filters = vec![]; // optional filters to push down
     let fetch = None; // optional LIMIT
     let table_scan = LogicalPlan::TableScan(TableScan::try_new(
-        "my_table",
+        "person",
         Arc::new(table_source),
         projection,
         filters,
