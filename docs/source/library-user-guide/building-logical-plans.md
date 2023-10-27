@@ -19,22 +19,22 @@
 
 # Building Logical Plans
 
-A logical plan is a structured representation of a database query that describes the high-level operations and 
-transformations needed to retrieve data from a database or data source. It abstracts away specific implementation 
-details and focuses on the logical flow of the query, including operations like filtering, sorting, and joining tables. 
+A logical plan is a structured representation of a database query that describes the high-level operations and
+transformations needed to retrieve data from a database or data source. It abstracts away specific implementation
+details and focuses on the logical flow of the query, including operations like filtering, sorting, and joining tables.
 
 This logical plan serves as an intermediate step before generating an optimized physical execution plan.
 
-DataFusion logical plans are typically created using the [LogicalPlanBuilder] struct. The following associated functions can be 
-used to create a new builder: 
+DataFusion logical plans are typically created using the [LogicalPlanBuilder] struct. The following associated functions can be
+used to create a new builder:
 
 - `empty` - create an empty plan with no fields
 - `values` - create a plan from a set of literal values
 - `scan` - create a plan representing a table scan
 - `scan_with_filters` - create a plan representing a table scan with filters
 
-Once the builder is created, transformation methods can be called to declare that further operations should be 
-performed on the plan. Note that all we are doing at this stage is building up the logical plan structure. No query 
+Once the builder is created, transformation methods can be called to declare that further operations should be
+performed on the plan. Note that all we are doing at this stage is building up the logical plan structure. No query
 execution will be performed.
 
 Here are some examples of transformation methods, but for a full list, refer to the [LogicalPlanBuilder] API documentation.
@@ -45,9 +45,10 @@ Here are some examples of transformation methods, but for a full list, refer to 
 - `distinct`
 - `join`
 
-The following example demonstrates building a simple query consisting of a table scan followed by a filter. 
+The following example demonstrates building a simple query consisting of a table scan followed by a filter.
 
 <!-- source for this example is in datafusion_docs::library_logical_plan::plan_builder_1 -->
+
 ```rust
 // create a logical table source
 let schema = Schema::new(vec![
@@ -80,13 +81,13 @@ Filter: person.id > Int32(500) [id:Int32;N, name:Utf8;N]
 
 ## Table Sources
 
-The previous example used a [LogicalTableSource], which is used for tests and documentation in DataFusion, and is also 
-suitable if you are using DataFusion to build logical plans but do not use DataFusion's physical plan. However, if you 
-want to use a TableSource that can be executed in DataFusion then you will need to [DefaultTableSource], which is a 
+The previous example used a [LogicalTableSource], which is used for tests and documentation in DataFusion, and is also
+suitable if you are using DataFusion to build logical plans but do not use DataFusion's physical plan. However, if you
+want to use a TableSource that can be executed in DataFusion then you will need to [DefaultTableSource], which is a
 wrapper for a [TableProvider].
 
-Both [LogicalTableSource] and [DefaultTableSource] implement the [TableSource] trait. [DefaultTableSource] acts as a 
-bridge between DataFusion's logical and physical plans and is necessary because the logical plan is contained in 
+Both [LogicalTableSource] and [DefaultTableSource] implement the [TableSource] trait. [DefaultTableSource] acts as a
+bridge between DataFusion's logical and physical plans and is necessary because the logical plan is contained in
 the `datafusion_expr` crate, which does not know about DataFusion's physical plans.
 
 ```rust
