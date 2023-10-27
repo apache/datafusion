@@ -65,6 +65,7 @@ impl OptimizerRule for RemoveUnusedColumns {
     }
 }
 
+/// Check whether expression is (or contains) a subquery
 fn is_subquery(expr: &Expr) -> bool {
     match expr {
         Expr::ScalarSubquery(_) => true,
@@ -76,6 +77,7 @@ fn is_subquery(expr: &Expr) -> bool {
     }
 }
 
+/// Get Column expressions of the input_schema at indices.
 fn get_required_exprs(input_schema: &Arc<DFSchema>, indices: &[usize]) -> Vec<Expr> {
     let fields = input_schema.fields();
     indices
@@ -84,7 +86,10 @@ fn get_required_exprs(input_schema: &Arc<DFSchema>, indices: &[usize]) -> Vec<Ex
         .collect()
 }
 
+/// Get indices of the column necessary for the referred expressions among input LogicalPlan.
 fn get_referred_indices(input: &LogicalPlan, exprs: &[Expr]) -> Result<Vec<usize>> {
+    // If any of the expressions is sub-query require all of the fields of the input.
+    // Because currently we cannot calculate definitely what sub-query uses
     if exprs.iter().any(is_subquery) {
         Ok(require_all_indices(input))
     } else {
@@ -94,17 +99,17 @@ fn get_referred_indices(input: &LogicalPlan, exprs: &[Expr]) -> Result<Vec<usize
             for col in cols {
                 if input.schema().has_column(&col) {
                     let idx = input.schema().index_of_column(&col)?;
-                    if !new_indices.contains(&idx) {
-                        new_indices.push(idx);
-                    }
+                    new_indices.push(idx);
                 }
             }
         }
         new_indices.sort();
+        new_indices.dedup();
         Ok(new_indices)
     }
 }
 
+/// Get expressions at the indices among `exprs`.
 fn get_at_indices(exprs: &[Expr], indices: &[usize]) -> Vec<Expr> {
     indices
         .iter()
@@ -118,6 +123,9 @@ fn get_at_indices(exprs: &[Expr], indices: &[usize]) -> Vec<Expr> {
         .collect::<Vec<_>>()
 }
 
+/// Merge two vectors,
+/// Result is ordered and doesn't contain duplicate entries.
+/// As an example merge of [3, 2, 4] and [3, 6, 1] will produce [1, 2, 3, 6]
 fn merge_vectors(lhs: &[usize], rhs: &[usize]) -> Vec<usize> {
     let mut merged = lhs.to_vec();
     merged.extend(rhs);
@@ -129,6 +137,8 @@ fn merge_vectors(lhs: &[usize], rhs: &[usize]) -> Vec<usize> {
     merged
 }
 
+/// Find indices of columns referred by `on` and `filter` expressions
+/// in the child schema.
 fn join_child_requirement(
     child: &LogicalPlan,
     on: &[Expr],
@@ -139,17 +149,23 @@ fn join_child_requirement(
     Ok(merge_vectors(&on_indices, &filter_indices))
 }
 
+/// Calculate children requirement indices for the join for the given requirement `indices` for the join.
+/// Returns required indices for left and right children.
 fn split_join_requirement_indices_to_children(
     left_len: usize,
     indices: &[usize],
     join_type: &JoinType,
 ) -> (Vec<usize>, Vec<usize>) {
     match join_type {
-        // In these cases split
+        // In these cases requirements split to left and right child.
         JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {}
+        // All requirements can be re-routed to left child directly.
         JoinType::LeftAnti | JoinType::LeftSemi => return (indices.to_vec(), vec![]),
+        // All requirements can be re-routed to right side directly.
         JoinType::RightSemi | JoinType::RightAnti => return (vec![], indices.to_vec()),
     }
+    // Required indices that are smaller than `left_len` belongs to left side.
+    // Other belong to the right side.
     let left_requirements_from_parent = indices
         .iter()
         .filter_map(|&idx| if idx < left_len { Some(idx) } else { None })
@@ -158,6 +174,7 @@ fn split_join_requirement_indices_to_children(
         .iter()
         .filter_map(|&idx| {
             if idx >= left_len {
+                // Decrease index by `left_len` so that they point to valid positions in the right child.
                 Some(idx - left_len)
             } else {
                 None
@@ -192,21 +209,28 @@ fn get_expr(columns: &HashSet<Column>, schema: &DFSchemaRef) -> Result<Vec<Expr>
     }
 }
 
-// TODO: Add is_changed flag
+/// Adds projection to the top of the plan. If projection decreases the table column size
+/// and beneficial for the parent operator.
+/// Returns new LogicalPlan and flag
+/// flag `true` means that projection is added, `false` means that no projection is added.
 fn add_projection_on_top_if_helpful(
     plan: LogicalPlan,
     project_exprs: Vec<Expr>,
     projection_beneficial: bool,
-) -> Result<LogicalPlan> {
+) -> Result<(LogicalPlan, bool)> {
+    // If not beneficial return immediately without projection
     if !projection_beneficial {
-        return Ok(plan);
+        return Ok((plan, false));
     }
+    // Make sure projection decreases table column size, otherwise it is unnecessary.
     let projection_beneficial =
         projection_beneficial && project_exprs.len() < plan.schema().fields().len();
     if projection_beneficial {
-        Projection::try_new(project_exprs, Arc::new(plan)).map(LogicalPlan::Projection)
+        Projection::try_new(project_exprs, Arc::new(plan))
+            .map(LogicalPlan::Projection)
+            .map(|elem| (elem, true))
     } else {
-        Ok(plan)
+        Ok((plan, false))
     }
 }
 
@@ -215,11 +239,15 @@ fn require_all_indices(plan: &LogicalPlan) -> Vec<usize> {
     (0..plan.schema().fields().len()).collect()
 }
 
+/// This function to prunes `plan` according to requirement `indices` given.
 fn try_optimize_internal(
     plan: &LogicalPlan,
     _config: &dyn OptimizerConfig,
     indices: Vec<usize>,
 ) -> Result<Option<LogicalPlan>> {
+    // `child_required_indices` stores indices of the columns required for each child
+    // and a flag indicating whether putting a projection above children is beneficial for the parent.
+    // As an example filter benefits from small tables. Hence for filter child this flag would be `true`.
     let child_required_indices: Option<Vec<(Vec<usize>, bool)>> = match plan {
         LogicalPlan::Projection(proj) => {
             let exprs_used = get_at_indices(&proj.expr, &indices);
@@ -230,9 +258,16 @@ fn try_optimize_internal(
                 let new_proj = Projection::try_new(exprs_used, Arc::new(input))?;
                 let new_proj = LogicalPlan::Projection(new_proj);
                 return Ok(Some(new_proj));
+            } else if exprs_used.len() < proj.expr.len() {
+                // Projection expression used is different than the existing projection
+                // In this case, even if child doesn't change we should update projection to use less columns.
+                let new_proj = Projection::try_new(exprs_used, proj.input.clone())?;
+                let new_proj = LogicalPlan::Projection(new_proj);
+                return Ok(Some(new_proj));
             } else {
+                // Projection doesn't change.
                 return Ok(None);
-            };
+            }
         }
         LogicalPlan::Aggregate(aggregate) => {
             let group_by_expr_existing = aggregate
@@ -240,6 +275,8 @@ fn try_optimize_internal(
                 .iter()
                 .map(|group_by_expr| group_by_expr.display_name())
                 .collect::<Result<Vec<_>>>()?;
+            // Use the absolutely necessary group expressions according to functional dependencies and
+            // Expressions used after aggregation.
             let group_bys_used = if let Some(simplest_groupby_indices) =
                 get_required_group_by_exprs_indices(
                     aggregate.input.schema(),
@@ -250,6 +287,7 @@ fn try_optimize_internal(
             } else {
                 aggregate.group_expr.clone()
             };
+            // Only use absolutely necessary aggregate expressions required by parent.
             let new_aggr_expr = aggregate
                 .aggr_expr
                 .iter()
@@ -278,7 +316,9 @@ fn try_optimize_internal(
                 expr_to_columns(e, &mut required_columns)?
             }
             let new_expr = get_expr(&required_columns, aggregate.input.schema())?;
-            let aggregate_input =
+            // Simplify input of the aggregation by adding a projection so that its input only contains
+            // absolutely necessary columns for the aggregate expressions.
+            let (aggregate_input, _is_added) =
                 add_projection_on_top_if_helpful(aggregate_input, new_expr, true)?;
             // At the input of the aggregate project schema, so that we do not use unnecessary sections.
             let aggregate = Aggregate::try_new(
@@ -289,11 +329,15 @@ fn try_optimize_internal(
             return Ok(Some(LogicalPlan::Aggregate(aggregate)));
         }
         LogicalPlan::Sort(sort) => {
+            // Re-route required indices from the parent + column indices referred by sort expression
+            // to the sort child. Sort benefits from small column numbers. Hence projection_beneficial flag is `true`.
             let indices_referred_by_sort = get_referred_indices(&sort.input, &sort.expr)?;
             let required_indices = merge_vectors(&indices, &indices_referred_by_sort);
             Some(vec![(required_indices, true)])
         }
         LogicalPlan::Filter(filter) => {
+            // Re-route required indices from the parent + column indices referred by filter expression
+            // to the filter child. Filter benefits from small column numbers. Hence projection_beneficial flag is `true`.
             let indices_referred_by_filter =
                 get_referred_indices(&filter.input, &[filter.predicate.clone()])?;
             let required_indices = merge_vectors(&indices, &indices_referred_by_filter);
@@ -301,6 +345,7 @@ fn try_optimize_internal(
         }
         LogicalPlan::Window(window) => {
             let n_input_fields = window.input.schema().fields().len();
+            // Only use window expressions that are absolutely necessary by parent requirements.
             let new_window_expr = window
                 .window_expr
                 .iter()
@@ -313,9 +358,11 @@ fn try_optimize_internal(
                     }
                 })
                 .collect::<Vec<_>>();
+            // Find column indices window expressions refer at the window input.
             let indices_referred_by_window =
                 get_referred_indices(&window.input, &new_window_expr)?;
             let n_input_fields = window.input.schema().fields().len();
+            // Find necessary child indices according to parent requirements.
             let window_child_indices = indices
                 .iter()
                 .filter_map(|idx| {
@@ -326,7 +373,7 @@ fn try_optimize_internal(
                     }
                 })
                 .collect::<Vec<_>>();
-
+            // All of the required column indices at the input of the window by parent, and window expression requirements.
             let required_indices =
                 merge_vectors(&window_child_indices, &indices_referred_by_window);
             let window_child = if let Some(new_window_child) =
@@ -336,13 +383,14 @@ fn try_optimize_internal(
             } else {
                 window.input.as_ref().clone()
             };
+            // When no window expression is necessary, just use window input. (Remove window operator)
             if new_window_expr.is_empty() {
                 return Ok(Some(window_child));
             } else {
                 // Calculated required expression according to old child, otherwise indices are not valid.
                 let required_exprs =
                     get_required_exprs(window.input.schema(), &required_indices);
-                let window_child =
+                let (window_child, _is_added) =
                     add_projection_on_top_if_helpful(window_child, required_exprs, true)?;
                 let window = Window::try_new(new_window_expr, Arc::new(window_child))?;
                 return Ok(Some(LogicalPlan::Window(window)));
@@ -370,22 +418,20 @@ fn try_optimize_internal(
                 join_child_requirement(&join.right, &right_on, join_filter)?;
             let right_indices =
                 merge_vectors(&right_requirements_from_parent, &right_indices);
+            // Join benefits from small columns numbers at its input (decreases memory usage)
+            // Hence each child benefits from projection.
             Some(vec![(left_indices, true), (right_indices, true)])
         }
         LogicalPlan::CrossJoin(cross_join) => {
             let left_len = cross_join.left.schema().fields().len();
-            let (mut left_child_indices, mut right_child_indices) =
+            let (left_child_indices, right_child_indices) =
                 split_join_requirement_indices_to_children(
                     left_len,
                     &indices,
                     &JoinType::Inner,
                 );
-            if left_child_indices.is_empty() {
-                left_child_indices.push(0);
-            }
-            if right_child_indices.is_empty() {
-                right_child_indices.push(0);
-            }
+            // Join benefits from small columns numbers at its input (decreases memory usage)
+            // Hence each child benefits from projection.
             Some(vec![
                 (left_child_indices, true),
                 (right_child_indices, true),
@@ -406,23 +452,10 @@ fn try_optimize_internal(
         }
         LogicalPlan::Union(union) => {
             // Union directly re-routes requirements from its parents.
+            // Also if benefits from projection (decreases column number)
             Some(vec![(indices, true); union.inputs.len()])
         }
         LogicalPlan::TableScan(table_scan) => {
-            // let filter_referred_indices =
-            //     get_referred_indices(plan, &table_scan.filters)?;
-            // let indices = merge_vectors(&indices, &filter_referred_indices);
-            let indices = if indices.is_empty() {
-                // // Use at least 1 column if not empty
-                // if table_scan.projected_schema.fields().is_empty() {
-                //     vec![]
-                // } else {
-                //     vec![0]
-                // }
-                vec![]
-            } else {
-                indices
-            };
             let projection_fields = table_scan.projected_schema.fields();
             let schema = table_scan.source.schema();
             let fields_used = indices
@@ -453,7 +486,7 @@ fn try_optimize_internal(
             // Subquery may use additional fields other than requirement from above.
             // Additionally, it is not trivial how to find all indices that may be used by subquery
             // Hence, we stop iteration here to be in the safe side.
-            Some(vec![(indices, true)])
+            None
         }
         LogicalPlan::EmptyRelation(_empty_relation) => {
             // Empty Relation has no children
@@ -531,23 +564,17 @@ fn try_optimize_internal(
                 .collect::<Vec<_>>();
             Some(res)
         }
-        LogicalPlan::Copy(_copy_to) => {
-            // Direct plan to its child.
-            Some(vec![(indices, false)])
+        LogicalPlan::Copy(copy_to) => {
+            // Require all of the fields of the copy input.
+            let required_indices = require_all_indices(&copy_to.input);
+            Some(vec![(required_indices, false)])
         }
         LogicalPlan::DescribeTable(_desc_table) => {
             // Describe table has no children.
             None
         }
-        // TODO :Add an uneest test
-        LogicalPlan::Unnest(unnest) => {
-            let referred_indices = get_referred_indices(
-                &unnest.input,
-                &[Expr::Column(unnest.column.clone())],
-            )?;
-            let required_indices = merge_vectors(&indices, &referred_indices);
-            Some(vec![(required_indices, false)])
-        }
+        // TODO :Add support for unnest
+        LogicalPlan::Unnest(_unnest) => None,
     };
     if let Some(child_required_indices) = child_required_indices {
         let new_inputs = izip!(child_required_indices, plan.inputs().into_iter())
@@ -557,19 +584,22 @@ fn try_optimize_internal(
                 {
                     let project_exprs =
                         get_required_exprs(child.schema(), &required_indices);
-                    Some(add_projection_on_top_if_helpful(
+                    let (new_input, _is_added) = add_projection_on_top_if_helpful(
                         new_input,
                         project_exprs,
                         projection_beneficial,
-                    )?)
+                    )?;
+                    Some(new_input)
                 } else {
                     let project_exprs =
                         get_required_exprs(child.schema(), &required_indices);
-                    Some(add_projection_on_top_if_helpful(
-                        child.clone(),
+                    let child = child.clone();
+                    let (child, is_added) = add_projection_on_top_if_helpful(
+                        child,
                         project_exprs,
                         projection_beneficial,
-                    )?)
+                    )?;
+                    is_added.then_some(child)
                 };
                 Ok(input)
             })
@@ -587,14 +617,5 @@ fn try_optimize_internal(
         }
     } else {
         Ok(None)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use datafusion_common::Result;
-    #[test]
-    fn dummy() -> Result<()> {
-        Ok(())
     }
 }

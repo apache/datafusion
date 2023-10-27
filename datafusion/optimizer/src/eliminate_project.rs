@@ -17,9 +17,8 @@
 
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::{DFSchemaRef, Result};
+use datafusion_common::Result;
 use datafusion_expr::logical_plan::LogicalPlan;
-use datafusion_expr::{Expr, Projection};
 
 /// Optimization rule that eliminate unnecessary [LogicalPlan::Projection].
 #[derive(Default)]
@@ -58,22 +57,4 @@ impl OptimizerRule for EliminateProjection {
     fn apply_order(&self) -> Option<ApplyOrder> {
         Some(ApplyOrder::TopDown)
     }
-}
-
-pub(crate) fn can_eliminate(projection: &Projection, schema: &DFSchemaRef) -> bool {
-    if projection.expr.len() != schema.fields().len() {
-        return false;
-    }
-    for (i, e) in projection.expr.iter().enumerate() {
-        match e {
-            Expr::Column(c) => {
-                let d = schema.fields().get(i).unwrap();
-                if c != &d.qualified_column() && c != &d.unqualified_column() {
-                    return false;
-                }
-            }
-            _ => return false,
-        }
-    }
-    true
 }
