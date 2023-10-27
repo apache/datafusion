@@ -139,7 +139,7 @@ jobs:
           # test datafusion-sql examples
           cargo run --example sql
           # test datafusion-examples
-          cargo run --example avro_sql --features=datafusion/avro
+          cargo run --example avro_sql
           cargo run --example csv_sql
           cargo run --example custom_datasource
           cargo run --example dataframe
