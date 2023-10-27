@@ -848,6 +848,11 @@ statement error DataFusion error: Error during planning: EXCLUDE or EXCEPT conta
 SELECT * EXCLUDE(a, a)
 FROM table1
 
+# if EXCEPT all the columns, query should still succeed but return empty
+statement ok
+SELECT * EXCEPT(a, b, c, d)
+FROM table1
+
 # run below query in multi partitions
 statement ok
 set datafusion.execution.target_partitions = 2;
