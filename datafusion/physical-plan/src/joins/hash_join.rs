@@ -157,14 +157,14 @@ type JoinLeftData = (JoinHashMap, RecordBatch, MemoryReservation);
 ///
 /// ```
 ///
-/// # Exampe "Optimial" Plans
+/// # Example "Optimal" Plans
 ///
-/// The differences in the inputs means that for  classic "Star Schema Query",
+/// The differences in the inputs means that for classic "Star Schema Query",
 /// the optimal plan will be a **"Right Deep Tree"** . A Star Schema Query is
 /// one where there is one large table and several smaller "dimension" tables,
-/// joined on `Foreign Key = Primary Key` predicates. with predicates.
+/// joined on `Foreign Key = Primary Key` predicates.
 ///
-/// A "Right Deep Tree" looks like  this large table as the probe side on the
+/// A "Right Deep Tree" looks like this large table as the probe side on the
 /// lowest join:
 ///
 /// ```text
