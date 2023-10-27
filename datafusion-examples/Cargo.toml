@@ -36,7 +36,7 @@ arrow-schema = { workspace = true }
 async-trait = "0.1.41"
 bytes = "1.4"
 dashmap = "5.4"
-datafusion = { path = "../datafusion/core" }
+datafusion = { path = "../datafusion/core", features = ["avro"] }
 datafusion-common = { path = "../datafusion/common" }
 datafusion-expr = { path = "../datafusion/expr" }
 datafusion-optimizer = { path = "../datafusion/optimizer" }
