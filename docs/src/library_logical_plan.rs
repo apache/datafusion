@@ -15,16 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::prelude::*;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::error::Result;
 use datafusion::logical_expr::builder::LogicalTableSource;
 use datafusion::logical_expr::LogicalPlanBuilder;
+use datafusion::prelude::*;
 use std::sync::Arc;
 
 #[test]
 fn plan_builder_1() -> Result<()> {
-
     // create a logical table source
     let schema = Schema::new(vec![
         Field::new("id", DataType::Int32, true),
@@ -39,9 +38,7 @@ fn plan_builder_1() -> Result<()> {
     let builder = LogicalPlanBuilder::scan("person", Arc::new(table_source), projection)?;
 
     // perform a filter operation and build the plan
-    let plan = builder
-        .filter(col("id").gt(lit(500)))?
-        .build()?;
+    let plan = builder.filter(col("id").gt(lit(500)))?.build()?;
 
     // print the plan
     println!("{}", plan.display_indent_schema());
