@@ -3384,6 +3384,7 @@ mod tests {
         ];
         let arr5 = make_array(&args).expect("failed to initialize function array");
 
-        make_array(&[arr1, arr2, arr3, arr4, arr5]).expect("failed to initialize function array")
+        make_array(&[arr1, arr2, arr3, arr4, arr5])
+            .expect("failed to initialize function array")
     }
 }
