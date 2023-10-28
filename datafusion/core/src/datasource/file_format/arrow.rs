@@ -119,11 +119,6 @@ async fn infer_schema_from_file_stream(
     // So in first read we need at least all known sized sections,
     // which is 6 + 2 + 4 + 4 = 16 bytes.
     let bytes = collect_at_least_n_bytes(&mut stream, 16, None).await?;
-    if bytes.len() < 16 {
-        return Err(ArrowError::ParseError(
-            "Arrow IPC file stream shorter than expected".to_string(),
-        ))?;
-    }
 
     // Files should start with these magic bytes
     if bytes[0..6] != ARROW_MAGIC {
@@ -185,6 +180,11 @@ async fn collect_at_least_n_bytes(
             break;
         }
     }
+    if buf.len() < n {
+        return Err(ArrowError::ParseError(
+            "Unexpected end of byte stream for Arrow IPC file".to_string(),
+        ))?;
+    }
     Ok(buf)
 }
 
@@ -235,6 +235,43 @@ mod tests {
                 .collect::<Vec<_>>();
             assert_eq!(expected, actual_fields);
         }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_infer_schema_short_stream() -> Result<()> {
+        let mut bytes = std::fs::read("tests/data/example.arrow")?;
+        bytes.truncate(20); // should cause error that file shorter than expected
+        let location = Path::parse("example.arrow")?;
+        let in_memory_store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        in_memory_store.put(&location, bytes.into()).await?;
+
+        let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+        let object_meta = ObjectMeta {
+            location,
+            last_modified: DateTime::default(),
+            size: usize::MAX,
+            e_tag: None,
+        };
+
+        let arrow_format = ArrowFormat {};
+
+        let store = Arc::new(ChunkedStore::new(in_memory_store.clone(), 7));
+        let err = arrow_format
+            .infer_schema(
+                &state,
+                &(store.clone() as Arc<dyn ObjectStore>),
+                &[object_meta.clone()],
+            )
+            .await;
+
+        assert!(err.is_err());
+        assert_eq!(
+            "Arrow error: Parser error: Unexpected end of byte stream for Arrow IPC file",
+            err.unwrap_err().to_string()
+        );
 
         Ok(())
     }
