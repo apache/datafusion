@@ -42,7 +42,7 @@ pip install -r requirements.txt
 
 Run the provided script to build the HTML pages.
 
-```bash
+```shell
 ./build.sh
 ```
 
@@ -50,7 +50,7 @@ The HTML will be generated into a `build` directory.
 
 Preview the site on Linux by running this command.
 
-```bash
+```shell
 firefox build/html/index.html
 ```
 
@@ -72,7 +72,7 @@ let foo = 1 + 1;
 //end:my_example
 ```
 
-We can now include an include directive in the markdown file, specifying the name of the Rust file containing the test
+We can now put an `include` directive in the markdown file, specifying the name of the Rust file containing the test
 and the name of the example.
 
 ```md
