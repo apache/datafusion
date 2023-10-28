@@ -23,7 +23,8 @@ A logical plan is a structured representation of a database query that describes
 transformations needed to retrieve data from a database or data source. It abstracts away specific implementation
 details and focuses on the logical flow of the query, including operations like filtering, sorting, and joining tables.
 
-This logical plan serves as an intermediate step before generating an optimized physical execution plan.
+This logical plan serves as an intermediate step before generating an optimized physical execution plan. This is 
+explained in more detail in the [Query Planning and Execution Overview] section of the [Architecture Guide].
 
 ## Building Logical Plans Manually
 
@@ -145,6 +146,8 @@ pub struct DefaultTableSource {
 }
 ```
 
+[query planning and execution overview]: https://docs.rs/datafusion/latest/datafusion/index.html#query-planning-and-execution-overview
+[architecture guide]: https://docs.rs/datafusion/latest/datafusion/index.html#architecture
 [logicalplan]: https://docs.rs/datafusion-expr/latest/datafusion_expr/logical_plan/enum.LogicalPlan.html
 [logicalplanbuilder]: https://docs.rs/datafusion-expr/latest/datafusion_expr/logical_plan/builder/struct.LogicalPlanBuilder.html
 [logicaltablesource]: https://docs.rs/datafusion-expr/latest/datafusion_expr/logical_plan/builder/struct.LogicalTableSource.html

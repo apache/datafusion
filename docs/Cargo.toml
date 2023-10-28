@@ -16,8 +16,8 @@
 # under the License.
 
 [package]
-name = "datafusion-docs"
-description = "DataFusion Documentation"
+name = "datafusion-docs-tests"
+description = "DataFusion Documentation Tests"
 publish = false
 version = { workspace = true }
 edition = { workspace = true }
