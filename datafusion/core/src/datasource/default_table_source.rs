@@ -26,10 +26,12 @@ use arrow::datatypes::SchemaRef;
 use datafusion_common::{internal_err, Constraints, DataFusionError};
 use datafusion_expr::{Expr, TableProviderFilterPushDown, TableSource};
 
-/// DataFusion default table source, wrapping TableProvider
+/// DataFusion default table source, wrapping TableProvider.
 ///
 /// This structure adapts a `TableProvider` (physical plan trait) to the `TableSource`
-/// (logical plan trait)
+/// (logical plan trait) and is necessary because the logical plan is contained in
+/// the `datafusion_expr` crate, and is not aware of table providers, which exist in
+/// the core `datafusion` crate.
 pub struct DefaultTableSource {
     /// table provider
     pub table_provider: Arc<dyn TableProvider>,

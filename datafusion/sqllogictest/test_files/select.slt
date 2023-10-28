@@ -848,6 +848,26 @@ statement error DataFusion error: Error during planning: EXCLUDE or EXCEPT conta
 SELECT * EXCLUDE(a, a)
 FROM table1
 
+# if EXCEPT all the columns, query should still succeed but return empty
+statement ok
+SELECT * EXCEPT(a, b, c, d)
+FROM table1
+
+# EXCLUDE order shouldn't matter
+query II
+SELECT * EXCLUDE(b, a)
+FROM table1
+ORDER BY c
+LIMIT 5
+----
+100 1000
+200 2000
+
+# EXCLUDE with out of order but duplicate columns should error
+statement error DataFusion error: Error during planning: EXCLUDE or EXCEPT contains duplicate column names
+SELECT * EXCLUDE(d, b, c, a, a, b, c, d)
+FROM table1
+
 # run below query in multi partitions
 statement ok
 set datafusion.execution.target_partitions = 2;
