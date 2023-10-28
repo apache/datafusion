@@ -824,7 +824,10 @@ impl TableProvider for ListingTable {
         overwrite: bool,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Check that the schema of the plan matches the schema of this table.
-        if !self.schema().equivalent_names_and_types(&input.schema()) {
+        if !self
+            .schema()
+            .logically_equivalent_names_and_types(&input.schema())
+        {
             return plan_err!(
                 // Return an error if schema of the input query does not match with the table schema.
                 "Inserting query must have the same schema with the table."
