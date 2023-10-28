@@ -36,7 +36,7 @@ much easier to use the [LogicalPlanBuilder], which is described in the next sect
 
 Here is an example of building a logical plan directly:
 
-<!-- include: library_logical_plan::plan_1 -->
+<!-- include: library_logical_plan::create_plan -->
 
 This example produces the following plan:
 
@@ -71,7 +71,7 @@ Here are some examples of transformation methods, but for a full list, refer to 
 
 The following example demonstrates building the same simple query plan as the previous example, with a table scan followed by a filter.
 
-<!-- include: library_logical_plan::plan_builder_1 -->
+<!-- include: library_logical_plan::build_plan -->
 
 This example produces the following plan:
 

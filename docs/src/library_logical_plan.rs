@@ -23,7 +23,8 @@ use datafusion::prelude::*;
 use std::sync::Arc;
 
 #[test]
-fn plan_1() -> Result<()> {
+fn create_plan() -> Result<()> {
+    //begin:create_plan
     // create a logical table source
     let schema = Schema::new(vec![
         Field::new("id", DataType::Int32, true),
@@ -49,12 +50,18 @@ fn plan_1() -> Result<()> {
 
     // print the plan
     println!("{}", plan.display_indent_schema());
+    //end:create_plan
+
+    //TODO
+    // assert_eq!(plan.display_indent_schema().to_string(), "Filter: person.id > Int32(500) [id:Int32;N, name:Utf8;N]\n\
+    // TableScan: person [id:Int32;N, name:Utf8;N]");
 
     Ok(())
 }
 
 #[test]
-fn plan_builder_1() -> Result<()> {
+fn build_plan() -> Result<()> {
+    //begin:build_plan
     // create a logical table source
     let schema = Schema::new(vec![
         Field::new("id", DataType::Int32, true),
@@ -73,6 +80,11 @@ fn plan_builder_1() -> Result<()> {
 
     // print the plan
     println!("{}", plan.display_indent_schema());
+    //end:build_plan
+
+    //TODO
+    // assert_eq!(plan.display_indent_schema().to_string(), "Filter: person.id > Int32(500) [id:Int32;N, name:Utf8;N]\n\
+    // TableScan: person [id:Int32;N, name:Utf8;N]");
 
     Ok(())
 }

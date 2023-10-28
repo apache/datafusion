@@ -19,17 +19,24 @@
 
 # DataFusion Documentation
 
-This folder contains the source content of the [User Guide](./source/user-guide)
-and [Contributor Guide](./source/contributor-guide). These are both published to
-https://arrow.apache.org/datafusion/ as part of the release process.
+This folder contains the source content of the following guides:
+
+- [User Guide]
+- [Library Guide]
+- [Contributor Guide]
+
+These guides are published to https://arrow.apache.org/datafusion/ as part of the release process.
 
 ## Dependencies
 
 It's recommended to install build dependencies and build the documentation
 inside a Python virtualenv.
 
-- Python
-- `pip install -r requirements.txt`
+Install Python and then use pip to install dependencies:
+
+```shell
+pip install -r requirements.txt
+```
 
 ## Build & Preview
 
@@ -53,6 +60,25 @@ To make changes to the docs, simply make a Pull Request with your
 proposed changes as normal. When the PR is merged the docs will be
 automatically updated.
 
+## Including Source Code
+
+We want to make sure that all source code in the documentation is tested as part of the build and release process. We
+achieve this by writing the code in standard Rust tests in the `datafusion-docs-test` crate, and annotate the code with
+comments that mark the beginning and end of the code example.
+
+```rust
+//begin:my_example
+let foo = 1 + 1;
+//end:my_example
+```
+
+We can now include an include directive in the markdown file, specifying the name of the Rust file containing the test
+and the name of the example.
+
+```md
+<!-- include: my_rust_file::my_example -->
+```
+
 ## Release Process
 
 This documentation is hosted at https://arrow.apache.org/datafusion/
@@ -67,3 +93,7 @@ The Apache Software Foundation provides https://arrow.apache.org/,
 which serves content based on the configuration in
 [.asf.yaml](https://github.com/apache/arrow-datafusion/blob/main/.asf.yaml),
 which specifies the target as https://arrow.apache.org/datafusion/.
+
+[user guide]: ./source/user-guide
+[library guide]: ./source/library-user-guide
+[contributor guide]: ./source/contributor-guide

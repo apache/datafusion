@@ -23,14 +23,14 @@ import re
 def copy_test_source(test_filename, test_method, output):
     lines = []
     with open(test_filename) as test:
-        found = False
+        in_example_code = False
         for test_line in test.readlines():
-            if test_line.startswith("fn {}".format(test_method)):
-                found = True
+            if test_line.strip() == "//begin:{}".format(test_method):
+                in_example_code = True
                 continue
-            if found:
-                if test_line.strip() == "Ok(())":
-                    break
+            if test_line.strip() == "//end:{}".format(test_method):
+                break
+            if in_example_code:
                 lines.append(test_line)
 
     # remove blank lines from the end of the list
