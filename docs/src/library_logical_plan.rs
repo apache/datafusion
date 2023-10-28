@@ -43,7 +43,7 @@ fn plan_1() -> Result<()> {
         fetch,
     )?);
 
-    // create a Filter plan that wraps the TableScan
+    // create a Filter plan that evaluates `id > 500` and wraps the TableScan
     let filter_expr = col("id").gt(lit(500));
     let plan = LogicalPlan::Filter(Filter::try_new(filter_expr, Arc::new(table_scan))?);
 
@@ -68,7 +68,7 @@ fn plan_builder_1() -> Result<()> {
     // create a LogicalPlanBuilder for a table scan
     let builder = LogicalPlanBuilder::scan("person", Arc::new(table_source), projection)?;
 
-    // perform a filter operation and build the plan
+    // perform a filter that evaluates `id > 500`, and build the plan
     let plan = builder.filter(col("id").gt(lit(500)))?.build()?;
 
     // print the plan
