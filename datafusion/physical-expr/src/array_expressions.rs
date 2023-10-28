@@ -1921,7 +1921,7 @@ mod tests {
     use super::*;
     use arrow::datatypes::Int64Type;
     use datafusion_common::cast::{
-        as_generic_string_array, as_list_array, as_primitive_array, as_uint64_array,
+        as_list_array, as_uint64_array, as_string_array,
     };
 
     #[test]
@@ -1937,7 +1937,7 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(
             &[1, 2, 3],
-            as_primitive_array::<Int64Type>(&result.value(0))
+            as_int64_array(&result.value(0))
                 .expect("failed to cast to primitive array")
                 .values()
         )
@@ -1956,13 +1956,13 @@ mod tests {
         assert_eq!(result.len(), 2);
         assert_eq!(
             &[1, 3, 5],
-            as_primitive_array::<Int64Type>(&result.value(0))
+            as_int64_array(&result.value(0))
                 .expect("failed to cast to primitive array")
                 .values()
         );
         assert_eq!(
             &[2, 4, 6],
-            as_primitive_array::<Int64Type>(&result.value(1))
+            as_int64_array(&result.value(1))
                 .expect("failed to cast to primitive array")
                 .values()
         );
@@ -3040,7 +3040,7 @@ mod tests {
         let array =
             array_to_string(&[list_array, Arc::new(StringArray::from(vec![Some(",")]))])
                 .expect("failed to initialize function array_to_string");
-        let result = as_generic_string_array::<i32>(&array)
+        let result = as_string_array(&array)
             .expect("failed to initialize function array_to_string");
 
         assert_eq!(result.len(), 1);
