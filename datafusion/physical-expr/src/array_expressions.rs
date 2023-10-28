@@ -25,7 +25,10 @@ use arrow::buffer::OffsetBuffer;
 use arrow::compute;
 use arrow::datatypes::{DataType, Field, UInt64Type};
 use arrow_buffer::NullBuffer;
-use datafusion_common::cast::{as_generic_string_array, as_int64_array, as_list_array};
+
+use datafusion_common::cast::{
+    as_generic_string_array, as_int64_array, as_list_array, as_string_array,
+};
 use datafusion_common::utils::wrap_into_list_array;
 use datafusion_common::{
     exec_err, internal_err, not_impl_err, plan_err, DataFusionError, Result,
@@ -1458,15 +1461,13 @@ macro_rules! to_string {
 pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
     let arr = &args[0];
 
-    let delimiters = as_generic_string_array::<i32>(&args[1])?;
+    let delimiters = as_string_array(&args[1])?;
     let delimiters: Vec<Option<&str>> = delimiters.iter().collect();
 
     let mut null_string = String::from("");
     let mut with_null_string = false;
     if args.len() == 3 {
-        null_string = as_generic_string_array::<i32>(&args[2])?
-            .value(0)
-            .to_string();
+        null_string = as_string_array(&args[2])?.value(0).to_string();
         with_null_string = true;
     }
 
@@ -1920,7 +1921,7 @@ pub fn string_to_array<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef
 mod tests {
     use super::*;
     use arrow::datatypes::Int64Type;
-    use datafusion_common::cast::{as_list_array, as_string_array, as_uint64_array};
+    use datafusion_common::cast::as_uint64_array;
 
     #[test]
     fn test_array() {
@@ -3052,7 +3053,7 @@ mod tests {
             Arc::new(StringArray::from(vec![Some("*")])),
         ])
         .expect("failed to initialize function array_to_string");
-        let result = as_generic_string_array::<i32>(&array)
+        let result = as_string_array(&array)
             .expect("failed to initialize function array_to_string");
 
         assert_eq!(result.len(), 1);
@@ -3066,7 +3067,7 @@ mod tests {
         let array =
             array_to_string(&[list_array, Arc::new(StringArray::from(vec![Some("-")]))])
                 .expect("failed to initialize function array_to_string");
-        let result = as_generic_string_array::<i32>(&array)
+        let result = as_string_array(&array)
             .expect("failed to initialize function array_to_string");
 
         assert_eq!(result.len(), 1);
@@ -3080,7 +3081,7 @@ mod tests {
             Arc::new(StringArray::from(vec![Some("*")])),
         ])
         .expect("failed to initialize function array_to_string");
-        let result = as_generic_string_array::<i32>(&array)
+        let result = as_string_array(&array)
             .expect("failed to initialize function array_to_string");
 
         assert_eq!(result.len(), 1);
