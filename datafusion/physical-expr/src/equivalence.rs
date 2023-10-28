@@ -367,7 +367,12 @@ impl EquivalenceGroup {
                 result.extend(self.clone());
                 let updated_eq_classes = right_equivalences
                     .iter()
-                    .map(|cls| add_offset_to_exprs(cls, left_column_count))
+                    .map(|cls| {
+                        cls.iter()
+                            .cloned()
+                            .map(|item| add_offset_to_expr(item, left_column_count))
+                            .collect()
+                    })
                     .collect();
                 result.extend(Self::new(updated_eq_classes));
             }
@@ -536,6 +541,24 @@ impl OrderingEquivalenceClass {
         }
         None
     }
+}
+
+/// Adds the `offset` value to `Column` indices inside `expr`. This function is
+/// generally used during the update of the right table schema in join operations.
+pub fn add_offset_to_expr(
+    expr: Arc<dyn PhysicalExpr>,
+    offset: usize,
+) -> Arc<dyn PhysicalExpr> {
+    expr.transform_down(&|e| match e.as_any().downcast_ref::<Column>() {
+        Some(col) => Ok(Transformed::Yes(Arc::new(Column::new(
+            col.name(),
+            offset + col.index(),
+        )))),
+        None => Ok(Transformed::No(e)),
+    })
+    .unwrap()
+    // Note that we can safely unwrap here since our transform always returns
+    // an `Ok` value.
 }
 
 /// Returns `true` if the ordering `rhs` is strictly finer than the ordering `rhs`,
@@ -1147,51 +1170,6 @@ pub fn collapse_lex_req(input: LexRequirement) -> LexRequirement {
         }
     }
     output
-}
-
-/// Adds the `offset` value to `Column` indices inside `expr`. This function is
-/// generally used during the update of the right table schema in join operations.
-pub fn add_offset_to_expr(
-    expr: Arc<dyn PhysicalExpr>,
-    offset: usize,
-) -> Arc<dyn PhysicalExpr> {
-    expr.transform_down(&|e| match e.as_any().downcast_ref::<Column>() {
-        Some(col) => Ok(Transformed::Yes(Arc::new(Column::new(
-            col.name(),
-            offset + col.index(),
-        )))),
-        None => Ok(Transformed::No(e)),
-    })
-    .unwrap()
-    // Note that we can safely unwrap here since our transform always returns
-    // an `Ok` value.
-}
-
-/// Adds the `offset` value to `Column` indices inside `exprs`.
-fn add_offset_to_exprs(
-    exprs: &[Arc<dyn PhysicalExpr>],
-    offset: usize,
-) -> Vec<Arc<dyn PhysicalExpr>> {
-    exprs
-        .iter()
-        .cloned()
-        .map(|item| add_offset_to_expr(item, offset))
-        .collect()
-}
-
-/// Adds the `offset` value to `Column` indices for each sort expression
-/// inside `sort_exprs`.
-pub fn add_offset_to_lex_ordering(
-    sort_exprs: LexOrderingRef,
-    offset: usize,
-) -> LexOrdering {
-    sort_exprs
-        .iter()
-        .map(|sort_expr| PhysicalSortExpr {
-            expr: add_offset_to_expr(sort_expr.expr.clone(), offset),
-            options: sort_expr.options,
-        })
-        .collect()
 }
 
 /// Calculates the [`SortProperties`] of a given [`ExprOrdering`] node.

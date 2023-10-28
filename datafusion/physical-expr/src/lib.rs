@@ -53,10 +53,7 @@ pub use aggregate::groups_accumulator::{
 };
 pub use aggregate::AggregateExpr;
 pub use analysis::{analyze, AnalysisContext, ExprBoundaries};
-pub use equivalence::{
-    add_offset_to_lex_ordering, schema_properties_helper, SchemaProperties,
-};
-
+pub use equivalence::{schema_properties_helper, SchemaProperties};
 pub use partitioning::{Distribution, Partitioning};
 pub use physical_expr::{
     physical_exprs_bag_equal, physical_exprs_contains, physical_exprs_equal,

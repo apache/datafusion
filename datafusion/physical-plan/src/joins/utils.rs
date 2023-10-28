@@ -45,8 +45,7 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::intervals::{ExprIntervalGraph, Interval, IntervalBound};
 use datafusion_physical_expr::utils::merge_vectors;
 use datafusion_physical_expr::{
-    add_offset_to_lex_ordering, LexOrdering, LexOrderingRef, PhysicalExpr,
-    PhysicalSortExpr,
+    LexOrdering, LexOrderingRef, PhysicalExpr, PhysicalSortExpr,
 };
 
 use futures::future::{BoxFuture, Shared};
@@ -178,7 +177,13 @@ pub fn calculate_join_output_ordering(
         // In the case below, right ordering should be offseted with the left
         // side length, since we append the right table to the left table.
         JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
-            add_offset_to_lex_ordering(right_ordering, left_columns_len)
+            right_ordering
+                .iter()
+                .map(|sort_expr| PhysicalSortExpr {
+                    expr: add_offset_to_expr(sort_expr.expr.clone(), left_columns_len),
+                    options: sort_expr.options,
+                })
+                .collect()
         }
         _ => right_ordering.to_vec(),
     };
