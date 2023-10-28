@@ -726,28 +726,30 @@ pub fn array_prepend(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 fn align_array_dimensions(args: Vec<ArrayRef>) -> Result<Vec<ArrayRef>> {
     let mut args_ndim = vec![];
+    let mut max_ndim = None;
     for arg in args.iter() {
         let ndim = compute_array_ndims(Some(arg.to_owned()))?;
         if let Some(ndim) = ndim {
             args_ndim.push(ndim);
+            if max_ndim.is_none() || ndim > max_ndim.unwrap() {
+                max_ndim = Some(ndim);
+            }
         } else {
             return internal_err!("args should not be empty");
         }
     }
 
-    let max_ndim = args_ndim.iter().max();
-    let max_ndim = if let Some(max_ndim) = max_ndim {
-        max_ndim
-    } else {
-        return internal_err!("args_ndim should not be empty");
-    };
+    if max_ndim.is_none() {
+        return internal_err!("args should not be empty");
+    }
+    let max_ndim = max_ndim.unwrap();
 
     // Align the dimensions of the arrays
     let aligned_args: Result<Vec<ArrayRef>> = args
         .into_iter()
         .zip(args_ndim.iter())
         .map(|(array, ndim)| {
-            if ndim < max_ndim {
+            if ndim < &max_ndim {
                 let mut aligned_array = array.clone();
                 for _ in 0..(max_ndim - ndim) {
                     let data_type = aligned_array.data_type().to_owned();
@@ -1944,7 +1946,7 @@ mod tests {
 
         let res =
             align_array_dimensions(vec![array1d_1.to_owned(), array2d_2.to_owned()])
-                .expect("should not error");
+                .unwrap();
 
         let expected = as_list_array(&array2d_1).unwrap();
         let expected_dim = compute_array_ndims(Some(array2d_1.to_owned())).unwrap();
@@ -1956,8 +1958,8 @@ mod tests {
 
         let array3d_1 = Arc::new(wrap_into_list_array(array2d_1)) as ArrayRef;
         let array3d_2 = wrap_into_list_array(array2d_2.to_owned());
-        let res = align_array_dimensions(vec![array1d_1, Arc::new(array3d_2.clone())])
-            .expect("should not error");
+        let res =
+            align_array_dimensions(vec![array1d_1, Arc::new(array3d_2.clone())]).unwrap();
 
         let expected = as_list_array(&array3d_1).unwrap();
         let expected_dim = compute_array_ndims(Some(array3d_1.to_owned())).unwrap();
