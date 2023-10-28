@@ -43,7 +43,6 @@ def copy_test_source(test_filename, test_method, output):
         if len(line.strip()) > 0 and not (
             line.startswith("    ") or line.startswith("\t")
         ):
-            print("not consistent", line)
             consistent_indent = False
             break
     if consistent_indent:
