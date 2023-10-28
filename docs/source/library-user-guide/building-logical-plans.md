@@ -23,13 +23,8 @@ A logical plan is a structured representation of a database query that describes
 transformations needed to retrieve data from a database or data source. It abstracts away specific implementation
 details and focuses on the logical flow of the query, including operations like filtering, sorting, and joining tables.
 
-<<<<<<< HEAD
-This logical plan serves as an intermediate step before generating an optimized physical execution plan.
-=======
 This logical plan serves as an intermediate step before generating an optimized physical execution plan. This is
 explained in more detail in the [Query Planning and Execution Overview] section of the [Architecture Guide].
-
-> > > > > > > apache/main
 
 ## Building Logical Plans Manually
 
