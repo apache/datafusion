@@ -36,7 +36,6 @@ use datafusion_common::{
     Result, SchemaReference, TableReference, ToDFSchema,
 };
 use datafusion_expr::dml::{CopyOptions, CopyTo};
-use datafusion_expr::expr::Placeholder;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
 use datafusion_expr::logical_plan::builder::project;
 use datafusion_expr::logical_plan::DdlStatement;
@@ -1025,20 +1024,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // Projection
         let mut exprs = vec![];
         for (col_name, expr, dt) in values_and_types.into_iter() {
-            let expr = self.sql_to_expr(expr, &table_schema, &mut planner_context)?;
-            let expr = match expr {
-                datafusion_expr::Expr::Placeholder(Placeholder {
-                    ref id,
-                    ref data_type,
-                }) => match data_type {
-                    None => datafusion_expr::Expr::Placeholder(Placeholder::new(
-                        id.clone(),
-                        Some(dt.clone()),
-                    )),
-                    Some(_) => expr,
-                },
-                _ => expr,
-            };
+            let mut expr = self.sql_to_expr(expr, &table_schema, &mut planner_context)?;
+            // Update placeholder's datatype to the type of the target column
+            if let datafusion_expr::Expr::Placeholder(placeholder) = &mut expr {
+                placeholder.data_type =
+                    placeholder.data_type.take().or_else(|| Some(dt.clone()));
+            }
+            // Cast to target column type, if necessary
             let expr = expr.cast_to(dt, source.schema())?.alias(col_name);
             exprs.push(expr);
         }
