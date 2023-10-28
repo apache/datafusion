@@ -32,9 +32,7 @@ use crate::physical_plan::{
 use arrow_schema::SchemaRef;
 use datafusion_common::Statistics;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{
-    schema_properties_helper, LexOrdering, PhysicalSortExpr, SchemaProperties,
-};
+use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr, SchemaProperties};
 
 use futures::StreamExt;
 use object_store::{GetResultPayload, ObjectStore};
@@ -106,7 +104,10 @@ impl ExecutionPlan for ArrowExec {
     }
 
     fn schema_properties(&self) -> SchemaProperties {
-        schema_properties_helper(self.schema(), &self.projected_output_ordering)
+        SchemaProperties::new_with_orderings(
+            self.schema(),
+            &self.projected_output_ordering,
+        )
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

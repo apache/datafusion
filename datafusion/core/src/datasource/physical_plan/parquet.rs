@@ -45,8 +45,7 @@ use crate::{
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::error::ArrowError;
 use datafusion_physical_expr::{
-    schema_properties_helper, LexOrdering, PhysicalExpr, PhysicalSortExpr,
-    SchemaProperties,
+    LexOrdering, PhysicalExpr, PhysicalSortExpr, SchemaProperties,
 };
 
 use bytes::Bytes;
@@ -336,7 +335,10 @@ impl ExecutionPlan for ParquetExec {
     }
 
     fn schema_properties(&self) -> SchemaProperties {
-        schema_properties_helper(self.schema(), &self.projected_output_ordering)
+        SchemaProperties::new_with_orderings(
+            self.schema(),
+            &self.projected_output_ordering,
+        )
     }
 
     fn with_new_children(

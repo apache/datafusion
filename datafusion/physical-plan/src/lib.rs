@@ -81,8 +81,7 @@ pub use datafusion_common::{internal_err, ColumnStatistics, Statistics};
 pub use datafusion_expr::{Accumulator, ColumnarValue};
 pub use datafusion_physical_expr::window::WindowExpr;
 pub use datafusion_physical_expr::{
-    expressions, functions, schema_properties_helper, udf, AggregateExpr, Distribution,
-    Partitioning, PhysicalExpr,
+    expressions, functions, udf, AggregateExpr, Distribution, Partitioning, PhysicalExpr,
 };
 
 // Backwards compatibility

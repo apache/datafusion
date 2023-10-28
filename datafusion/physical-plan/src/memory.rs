@@ -32,7 +32,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{internal_err, project_schema, DataFusionError, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{schema_properties_helper, LexOrdering, SchemaProperties};
+use datafusion_physical_expr::{LexOrdering, SchemaProperties};
 
 use futures::Stream;
 
@@ -122,7 +122,7 @@ impl ExecutionPlan for MemoryExec {
     }
 
     fn schema_properties(&self) -> SchemaProperties {
-        schema_properties_helper(self.schema(), &self.sort_information)
+        SchemaProperties::new_with_orderings(self.schema(), &self.sort_information)
     }
 
     fn with_new_children(

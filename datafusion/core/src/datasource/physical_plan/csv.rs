@@ -41,7 +41,7 @@ use crate::physical_plan::{
 use arrow::csv;
 use arrow::datatypes::SchemaRef;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{schema_properties_helper, LexOrdering, SchemaProperties};
+use datafusion_physical_expr::{LexOrdering, SchemaProperties};
 
 use bytes::{Buf, Bytes};
 use futures::{ready, StreamExt, TryStreamExt};
@@ -185,7 +185,10 @@ impl ExecutionPlan for CsvExec {
     }
 
     fn schema_properties(&self) -> SchemaProperties {
-        schema_properties_helper(self.schema(), &self.projected_output_ordering)
+        SchemaProperties::new_with_orderings(
+            self.schema(),
+            &self.projected_output_ordering,
+        )
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

@@ -634,6 +634,19 @@ impl SchemaProperties {
         }
     }
 
+    /// Creates a new `SchemaProperties` object with the given orderings.
+    pub fn new_with_orderings(
+        schema: SchemaRef,
+        orderings: &[LexOrdering],
+    ) -> SchemaProperties {
+        Self {
+            eq_group: EquivalenceGroup::empty(),
+            oeq_class: OrderingEquivalenceClass::new(orderings.to_vec()),
+            constants: vec![],
+            schema,
+        }
+    }
+
     /// Returns the associated schema.
     pub fn schema(&self) -> &SchemaRef {
         &self.schema
@@ -1143,19 +1156,6 @@ pub fn join_schema_properties(
     new_properties
 }
 
-/// Constructs a `SchemaProperties` struct from the given `orderings`.
-pub fn schema_properties_helper(
-    schema: SchemaRef,
-    orderings: &[LexOrdering],
-) -> SchemaProperties {
-    let mut oep = SchemaProperties::new(schema);
-    if !orderings.is_empty() {
-        let group = OrderingEquivalenceClass::new(orderings.to_vec());
-        oep.add_ordering_equivalence_class(group);
-    }
-    oep
-}
-
 /// This function constructs a duplicate-free `LexOrderingReq` by filtering out
 /// duplicate entries that have same physical expression inside. For example,
 /// `vec![a Some(Asc), a Some(Desc)]` collapses to `vec![a Some(Asc)]`.
@@ -1189,16 +1189,16 @@ fn update_ordering(
     mut node: ExprOrdering,
     ordering_equal_properties: &SchemaProperties,
 ) -> Result<Transformed<ExprOrdering>> {
-    let eq_groups = &ordering_equal_properties.eq_group;
-    let oeq_group = &ordering_equal_properties.oeq_class;
     if let Some(children_sort_options) = &node.children_states {
         // We have an intermediate (non-leaf) node, account for its children:
         node.state = Some(node.expr.get_ordering(children_sort_options));
         Ok(Transformed::Yes(node))
     } else if node.expr.as_any().is::<Column>() {
         // We have a Column, which is one of the two possible leaf node types:
-        let normalized_expr = eq_groups.normalize_expr(node.expr.clone());
-        if let Some(options) = oeq_group.get_options(&normalized_expr) {
+        let eq_group = &ordering_equal_properties.eq_group;
+        let normalized_expr = eq_group.normalize_expr(node.expr.clone());
+        let oeq_class = &ordering_equal_properties.oeq_class;
+        if let Some(options) = oeq_class.get_options(&normalized_expr) {
             node.state = Some(SortProperties::Ordered(options));
             Ok(Transformed::Yes(node))
         } else {
