@@ -1920,9 +1920,7 @@ pub fn string_to_array<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef
 mod tests {
     use super::*;
     use arrow::datatypes::Int64Type;
-    use datafusion_common::cast::{
-        as_list_array, as_uint64_array, as_string_array,
-    };
+    use datafusion_common::cast::{as_list_array, as_string_array, as_uint64_array};
 
     #[test]
     fn test_array() {
