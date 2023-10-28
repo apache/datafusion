@@ -340,9 +340,29 @@
               
               <div class="toc-item">
                 
+<div class="tocsection onthispage pt-5 pb-3">
+    <i class="fas fa-list"></i> On this page
+</div>
 
 <nav id="bd-toc-nav">
-    
+    <ul class="visible nav section-nav flex-column">
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#building-logical-plans-manually">
+   Building Logical Plans Manually
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#building-logical-plans-with-logicalplanbuilder">
+   Building Logical Plans with LogicalPlanBuilder
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#table-sources">
+   Table Sources
+  </a>
+ </li>
+</ul>
+
 </nav>
               </div>
               
@@ -389,7 +409,111 @@
 -->
 <section id="building-logical-plans">
 <h1>Building Logical Plans<a class="headerlink" href="#building-logical-plans" title="Link to this heading">¶</a></h1>
-<p>Coming Soon</p>
+<p>A logical plan is a structured representation of a database query that describes the high-level operations and
+transformations needed to retrieve data from a database or data source. It abstracts away specific implementation
+details and focuses on the logical flow of the query, including operations like filtering, sorting, and joining tables.</p>
+<p>This logical plan serves as an intermediate step before generating an optimized physical execution plan. This is
+explained in more detail in the <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/index.html#query-planning-and-execution-overview">Query Planning and Execution Overview</a> section of the <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/index.html#architecture">Architecture Guide</a>.</p>
+<section id="building-logical-plans-manually">
+<h2>Building Logical Plans Manually<a class="headerlink" href="#building-logical-plans-manually" title="Link to this heading">¶</a></h2>
+<p>DataFusion’s <a class="reference external" href="https://docs.rs/datafusion-expr/latest/datafusion_expr/logical_plan/enum.LogicalPlan.html">LogicalPlan</a> is an enum containing variants representing all the supported operators, and also
+contains an <code class="docutils literal notranslate"><span class="pre">Extension</span></code> variant that allows projects building on DataFusion to add custom logical operators.</p>
+<p>It is possible to create logical plans by directly creating instances of the <a class="reference external" href="https://docs.rs/datafusion-expr/latest/datafusion_expr/logical_plan/enum.LogicalPlan.html">LogicalPlan</a> enum as follows, but is is
+much easier to use the <a class="reference external" href="https://docs.rs/datafusion-expr/latest/datafusion_expr/logical_plan/builder/struct.LogicalPlanBuilder.html">LogicalPlanBuilder</a>, which is described in the next section.</p>
+<p>Here is an example of building a logical plan directly:</p>
+<!-- source for this example is in datafusion_docs::library_logical_plan::plan_1 -->
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// create a logical table source</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">schema</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Schema</span>::<span class="n">new</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span>
+<span class="w">    </span><span class="n">Field</span>::<span class="n">new</span><span class="p">(</span><span class="s">&quot;id&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">DataType</span>::<span class="n">Int32</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">),</span>
+<span class="w">    </span><span class="n">Field</span>::<span class="n">new</span><span class="p">(</span><span class="s">&quot;name&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">DataType</span>::<span class="n">Utf8</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">),</span>
+<span class="p">]);</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">table_source</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">LogicalTableSource</span>::<span class="n">new</span><span class="p">(</span><span class="n">SchemaRef</span>::<span class="n">new</span><span class="p">(</span><span class="n">schema</span><span class="p">));</span>
+
+<span class="c1">// create a TableScan plan</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">projection</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">None</span><span class="p">;</span><span class="w"> </span><span class="c1">// optional projection</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">filters</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="fm">vec!</span><span class="p">[];</span><span class="w"> </span><span class="c1">// optional filters to push down</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">fetch</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">None</span><span class="p">;</span><span class="w"> </span><span class="c1">// optional LIMIT</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">table_scan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">LogicalPlan</span>::<span class="n">TableScan</span><span class="p">(</span><span class="n">TableScan</span>::<span class="n">try_new</span><span class="p">(</span>
+<span class="w">    </span><span class="s">&quot;person&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="n">Arc</span>::<span class="n">new</span><span class="p">(</span><span class="n">table_source</span><span class="p">),</span>
+<span class="w">    </span><span class="n">projection</span><span class="p">,</span>
+<span class="w">    </span><span class="n">filters</span><span class="p">,</span>
+<span class="w">    </span><span class="n">fetch</span><span class="p">,</span>
+<span class="p">)</span><span class="o">?</span><span class="p">);</span>
+
+<span class="c1">// create a Filter plan that evaluates `id &gt; 500` that wraps the TableScan</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">filter_expr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">col</span><span class="p">(</span><span class="s">&quot;id&quot;</span><span class="p">).</span><span class="n">gt</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="mi">500</span><span class="p">));</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">LogicalPlan</span>::<span class="n">Filter</span><span class="p">(</span><span class="n">Filter</span>::<span class="n">try_new</span><span class="p">(</span><span class="n">filter_expr</span><span class="p">,</span><span class="w"> </span><span class="n">Arc</span>::<span class="n">new</span><span class="p">(</span><span class="n">table_scan</span><span class="p">))</span><span class="o">?</span><span class="p">);</span>
+
+<span class="c1">// print the plan</span>
+<span class="fm">println!</span><span class="p">(</span><span class="s">&quot;{}&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">plan</span><span class="p">.</span><span class="n">display_indent_schema</span><span class="p">());</span>
+</pre></div>
+</div>
+<p>This example produces the following plan:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">Filter</span><span class="p">:</span> <span class="n">person</span><span class="o">.</span><span class="n">id</span> <span class="o">&gt;</span> <span class="n">Int32</span><span class="p">(</span><span class="mi">500</span><span class="p">)</span> <span class="p">[</span><span class="nb">id</span><span class="p">:</span><span class="n">Int32</span><span class="p">;</span><span class="n">N</span><span class="p">,</span> <span class="n">name</span><span class="p">:</span><span class="n">Utf8</span><span class="p">;</span><span class="n">N</span><span class="p">]</span>
+  <span class="n">TableScan</span><span class="p">:</span> <span class="n">person</span> <span class="p">[</span><span class="nb">id</span><span class="p">:</span><span class="n">Int32</span><span class="p">;</span><span class="n">N</span><span class="p">,</span> <span class="n">name</span><span class="p">:</span><span class="n">Utf8</span><span class="p">;</span><span class="n">N</span><span class="p">]</span>
+</pre></div>
+</div>
+</section>
+<section id="building-logical-plans-with-logicalplanbuilder">
+<h2>Building Logical Plans with LogicalPlanBuilder<a class="headerlink" href="#building-logical-plans-with-logicalplanbuilder" title="Link to this heading">¶</a></h2>
+<p>DataFusion logical plans can be created using the <a class="reference external" href="https://docs.rs/datafusion-expr/latest/datafusion_expr/logical_plan/builder/struct.LogicalPlanBuilder.html">LogicalPlanBuilder</a> struct. There is also a <a class="reference internal" href="using-the-dataframe-api.html"><span class="std std-doc">DataFrame</span></a> API which is
+a higher-level API that delegates to <a class="reference external" href="https://docs.rs/datafusion-expr/latest/datafusion_expr/logical_plan/builder/struct.LogicalPlanBuilder.html">LogicalPlanBuilder</a>.</p>
+<p>The following associated functions can be used to create a new builder:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">empty</span></code> - create an empty plan with no fields</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">values</span></code> - create a plan from a set of literal values</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">scan</span></code> - create a plan representing a table scan</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">scan_with_filters</span></code> - create a plan representing a table scan with filters</p></li>
+</ul>
+<p>Once the builder is created, transformation methods can be called to declare that further operations should be
+performed on the plan. Note that all we are doing at this stage is building up the logical plan structure. No query
+execution will be performed.</p>
+<p>Here are some examples of transformation methods, but for a full list, refer to the <a class="reference external" href="https://docs.rs/datafusion-expr/latest/datafusion_expr/logical_plan/builder/struct.LogicalPlanBuilder.html">LogicalPlanBuilder</a> API documentation.</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">filter</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">limit</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">sort</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">distinct</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">join</span></code></p></li>
+</ul>
+<p>The following example demonstrates building the same simple query plan as the previous example, with a table scan followed by a filter.</p>
+<!-- source for this example is in datafusion_docs::library_logical_plan::plan_builder_1 -->
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// create a logical table source</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">schema</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Schema</span>::<span class="n">new</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span>
+<span class="w">    </span><span class="n">Field</span>::<span class="n">new</span><span class="p">(</span><span class="s">&quot;id&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">DataType</span>::<span class="n">Int32</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">),</span>
+<span class="w">    </span><span class="n">Field</span>::<span class="n">new</span><span class="p">(</span><span class="s">&quot;name&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">DataType</span>::<span class="n">Utf8</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">),</span>
+<span class="p">]);</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">table_source</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">LogicalTableSource</span>::<span class="n">new</span><span class="p">(</span><span class="n">SchemaRef</span>::<span class="n">new</span><span class="p">(</span><span class="n">schema</span><span class="p">));</span>
+
+<span class="c1">// optional projection</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">projection</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">None</span><span class="p">;</span>
+
+<span class="c1">// create a LogicalPlanBuilder for a table scan</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">builder</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">LogicalPlanBuilder</span>::<span class="n">scan</span><span class="p">(</span><span class="s">&quot;person&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">Arc</span>::<span class="n">new</span><span class="p">(</span><span class="n">table_source</span><span class="p">),</span><span class="w"> </span><span class="n">projection</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+
+<span class="c1">// perform a filter operation and build the plan</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">builder</span>
+<span class="w">    </span><span class="p">.</span><span class="n">filter</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s">&quot;id&quot;</span><span class="p">).</span><span class="n">gt</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="mi">500</span><span class="p">)))</span><span class="o">?</span><span class="w"> </span><span class="c1">// WHERE id &gt; 500</span>
+<span class="w">    </span><span class="p">.</span><span class="n">build</span><span class="p">()</span><span class="o">?</span><span class="p">;</span>
+
+<span class="c1">// print the plan</span>
+<span class="fm">println!</span><span class="p">(</span><span class="s">&quot;{}&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">plan</span><span class="p">.</span><span class="n">display_indent_schema</span><span class="p">());</span>
+</pre></div>
+</div>
+<p>This example produces the following plan:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">Filter</span><span class="p">:</span> <span class="n">person</span><span class="o">.</span><span class="n">id</span> <span class="o">&gt;</span> <span class="n">Int32</span><span class="p">(</span><span class="mi">500</span><span class="p">)</span> <span class="p">[</span><span class="nb">id</span><span class="p">:</span><span class="n">Int32</span><span class="p">;</span><span class="n">N</span><span class="p">,</span> <span class="n">name</span><span class="p">:</span><span class="n">Utf8</span><span class="p">;</span><span class="n">N</span><span class="p">]</span>
+  <span class="n">TableScan</span><span class="p">:</span> <span class="n">person</span> <span class="p">[</span><span class="nb">id</span><span class="p">:</span><span class="n">Int32</span><span class="p">;</span><span class="n">N</span><span class="p">,</span> <span class="n">name</span><span class="p">:</span><span class="n">Utf8</span><span class="p">;</span><span class="n">N</span><span class="p">]</span>
+</pre></div>
+</div>
+</section>
+<section id="table-sources">
+<h2>Table Sources<a class="headerlink" href="#table-sources" title="Link to this heading">¶</a></h2>
+<p>The previous example used a <a class="reference external" href="https://docs.rs/datafusion-expr/latest/datafusion_expr/logical_plan/builder/struct.LogicalTableSource.html">LogicalTableSource</a>, which is used for tests and documentation in DataFusion, and is also
+suitable if you are using DataFusion to build logical plans but do not use DataFusion’s physical planner. However, if you
+want to use a <a class="reference external" href="https://docs.rs/datafusion-expr/latest/datafusion_expr/trait.TableSource.html">TableSource</a> that can be executed in DataFusion then you will need to use <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/datasource/default_table_source/struct.DefaultTableSource.html">DefaultTableSource</a>, which is a
+wrapper for a <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/datasource/provider/trait.TableProvider.html">TableProvider</a>.</p>
+</section>
 </section>
 
 
