@@ -52,9 +52,11 @@ fn create_plan() -> Result<()> {
     println!("{}", plan.display_indent_schema());
     //end:create_plan
 
-    //TODO
-    // assert_eq!(plan.display_indent_schema().to_string(), "Filter: person.id > Int32(500) [id:Int32;N, name:Utf8;N]\n\
-    // TableScan: person [id:Int32;N, name:Utf8;N]");
+    assert_eq!(
+        plan.display_indent_schema().to_string(),
+        r#"Filter: id > Int32(500) [id:Int32;N, name:Utf8;N]
+  TableScan: person [id:Int32;N, name:Utf8;N]"#
+    );
 
     Ok(())
 }
@@ -82,9 +84,11 @@ fn build_plan() -> Result<()> {
     println!("{}", plan.display_indent_schema());
     //end:build_plan
 
-    //TODO
-    // assert_eq!(plan.display_indent_schema().to_string(), "Filter: person.id > Int32(500) [id:Int32;N, name:Utf8;N]\n\
-    // TableScan: person [id:Int32;N, name:Utf8;N]");
+    assert_eq!(
+        plan.display_indent_schema().to_string(),
+        r#"Filter: person.id > Int32(500) [id:Int32;N, name:Utf8;N]
+  TableScan: person [id:Int32;N, name:Utf8;N]"#
+    );
 
     Ok(())
 }
