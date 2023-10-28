@@ -64,7 +64,7 @@ automatically updated.
 
 We want to make sure that all source code in the documentation is tested as part of the build and release process. We
 achieve this by writing the code in standard Rust tests in the `datafusion-docs-test` crate, and annotate the code with
-comments that mark the beginning and end of the code example.
+comments that mark the beginning and end of the portion of the code that we want to include in the documentation.
 
 ```rust
 //begin:my_example
