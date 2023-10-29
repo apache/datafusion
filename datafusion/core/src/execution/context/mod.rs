@@ -864,10 +864,10 @@ impl SessionContext {
             "".to_owned()
         };
         // some the file extension might be started with "." and some not
-        let extention_alternative = ".".to_string() + extension.as_str();
+        let extension_alternative = ".".to_string() + extension.as_str();
 
         if option_extention != extension
-            && option_extention != extention_alternative
+            && option_extention != extension_alternative
             && !extension.is_empty()
         {
             return exec_err!(
