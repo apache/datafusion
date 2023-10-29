@@ -1067,17 +1067,10 @@ pub fn join_schema_properties(
         on,
     ));
 
-    // All joins have 2 children
-    assert_eq!(maintains_input_order.len(), 2);
-    let left_maintains = maintains_input_order[0];
-    let right_maintains = maintains_input_order[1];
     let left_oeq_class = left.oeq_class;
     let right_oeq_class = right.oeq_class;
-    match (left_maintains, right_maintains) {
-        (true, true) => {
-            unreachable!("Cannot maintain ordering of both sides");
-        }
-        (true, false) => {
+    match maintains_input_order {
+        [true, false] => {
             // In this special case, right side ordering can be prefixed with left side ordering.
             if let (Some(JoinSide::Left), JoinType::Inner) = (probe_side, join_type) {
                 let updated_right_oeq = get_updated_right_ordering_equivalence_class(
@@ -1100,7 +1093,7 @@ pub fn join_schema_properties(
                 result.add_ordering_equivalence_class(left_oeq_class);
             }
         }
-        (false, true) => {
+        [false, true] => {
             let updated_right_oeq = get_updated_right_ordering_equivalence_class(
                 join_type,
                 right_oeq_class,
@@ -1122,7 +1115,9 @@ pub fn join_schema_properties(
                 result.add_ordering_equivalence_class(updated_right_oeq);
             }
         }
-        (false, false) => {}
+        [false, false] => {}
+        [true, true] => unreachable!("Cannot maintain ordering of both sides"),
+        _ => unreachable!("Join operators can not have more than two children"),
     }
     result
 }
