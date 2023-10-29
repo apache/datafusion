@@ -159,7 +159,7 @@ impl ExecutionPlan for StreamingTableExec {
     fn schema_properties(&self) -> SchemaProperties {
         let mut result = SchemaProperties::new(self.schema());
         if let Some(ordering) = &self.projected_output_ordering {
-            result.add_new_orderings(&[ordering.clone()])
+            result.add_new_orderings([ordering.clone()])
         }
         result
     }

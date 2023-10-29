@@ -217,7 +217,7 @@ impl EquivalenceGroup {
     /// in `exprs` and returns the corresponding normalized physical expressions.
     pub fn normalize_exprs(
         &self,
-        exprs: Vec<Arc<dyn PhysicalExpr>>,
+        exprs: impl IntoIterator<Item = Arc<dyn PhysicalExpr>>,
     ) -> Vec<Arc<dyn PhysicalExpr>> {
         exprs
             .into_iter()
@@ -476,8 +476,11 @@ impl OrderingEquivalenceClass {
     }
 
     /// Adds new orderings into this ordering equivalence class.
-    pub fn add_new_orderings(&mut self, orderings: &[LexOrdering]) {
-        self.orderings.extend(orderings.iter().cloned());
+    pub fn add_new_orderings(
+        &mut self,
+        orderings: impl IntoIterator<Item = LexOrdering>,
+    ) {
+        self.orderings.extend(orderings);
         // Make sure that there are no redundant orderings:
         self.remove_redundant_entries();
     }
@@ -699,7 +702,10 @@ impl SchemaProperties {
     }
 
     /// Adds new orderings into the existing ordering equivalence class.
-    pub fn add_new_orderings(&mut self, orderings: &[LexOrdering]) {
+    pub fn add_new_orderings(
+        &mut self,
+        orderings: impl IntoIterator<Item = LexOrdering>,
+    ) {
         self.oeq_class.add_new_orderings(orderings);
     }
 
@@ -721,7 +727,10 @@ impl SchemaProperties {
     }
 
     /// Track/register physical expressions with constant values.
-    pub fn add_constants(mut self, constants: Vec<Arc<dyn PhysicalExpr>>) -> Self {
+    pub fn add_constants(
+        mut self,
+        constants: impl IntoIterator<Item = Arc<dyn PhysicalExpr>>,
+    ) -> Self {
         for expr in self.eq_group.normalize_exprs(constants) {
             if !physical_exprs_contains(&self.constants, &expr) {
                 self.constants.push(expr);
@@ -1016,14 +1025,14 @@ impl SchemaProperties {
 
     /// Assuming that `exprs` contains order-defining expressions, pairs each
     /// of these expressions with its sort options according to the orderings
-    /// within. Expressions that do not define an ordering are filtered out
-    /// and they are not present in the return value.
+    /// within. Expressions that do not define a prefix of some ordering are
+    /// filtered out and they are not present in the return value.
     pub fn get_lex_ordering_section(
         &self,
         exprs: &[Arc<dyn PhysicalExpr>],
     ) -> LexOrdering {
         let normalized_exprs = self.eq_group.normalize_exprs(exprs.to_vec());
-        // Stores the index and SortOption of the ordered expression.
+        // Use a map to associate expression indices with sort options:
         let mut ordered_exprs = IndexMap::<usize, SortOptions>::new();
         for ordering in self.normalized_oeq_class().iter() {
             for sort_expr in ordering {
@@ -1036,12 +1045,12 @@ impl SchemaProperties {
                     }
                 } else {
                     // We only consider expressions that correspond to a prefix
-                    // of an ordering.
+                    // of one of the equivalent orderings we have.
                     break;
                 }
             }
         }
-        // Construct ordered section by getting entries at indices of ordered_exprs (first entry in the tuple)
+        // Construct the lexicographical ordering according to the fpermutation:
         ordered_exprs
             .into_iter()
             .map(|(idx, options)| PhysicalSortExpr {
@@ -1134,12 +1143,9 @@ pub fn join_schema_properties(
 /// duplicate entries that have same physical expression inside. For example,
 /// `vec![a Some(Asc), a Some(Desc)]` collapses to `vec![a Some(Asc)]`.
 pub fn collapse_lex_req(input: LexRequirement) -> LexRequirement {
-    let mut output = vec![];
+    let mut output = Vec::<PhysicalSortRequirement>::new();
     for item in input {
-        if !output
-            .iter()
-            .any(|req: &PhysicalSortRequirement| req.expr.eq(&item.expr))
-        {
+        if !output.iter().any(|req| req.expr.eq(&item.expr)) {
             output.push(item);
         }
     }
@@ -1254,8 +1260,8 @@ mod tests {
         let col_e = &col("e", &test_schema)?;
         let col_f = &col("f", &test_schema)?;
         let col_g = &col("g", &test_schema)?;
-        let mut schema_properties = SchemaProperties::new(test_schema.clone());
-        schema_properties.add_equal_conditions(col_a, col_c);
+        let mut eq_properties = SchemaProperties::new(test_schema.clone());
+        eq_properties.add_equal_conditions(col_a, col_c);
 
         let option_asc = SortOptions {
             descending: false,
@@ -1278,8 +1284,8 @@ mod tests {
             ],
         ];
         let orderings = convert_to_orderings(&orderings);
-        schema_properties.add_new_orderings(&orderings);
-        Ok((test_schema, schema_properties))
+        eq_properties.add_new_orderings(orderings);
+        Ok((test_schema, eq_properties))
     }
 
     // Generate a schema which consists of 6 columns (a, b, c, d, e, f)
@@ -1310,11 +1316,11 @@ mod tests {
         let col_f = &col("f", &test_schema)?;
         let col_exprs = [col_a, col_b, col_c, col_d, col_e, col_f];
 
-        let mut schema_properties = SchemaProperties::new(test_schema.clone());
+        let mut eq_properties = SchemaProperties::new(test_schema.clone());
         // Define a and f are aliases
-        schema_properties.add_equal_conditions(col_a, col_f);
+        eq_properties.add_equal_conditions(col_a, col_f);
         // Column e has constant value.
-        schema_properties = schema_properties.add_constants(vec![col_e.clone()]);
+        eq_properties = eq_properties.add_constants([col_e.clone()]);
 
         // Randomly order columns for sorting
         let mut rng = StdRng::seed_from_u64(seed);
@@ -1329,7 +1335,7 @@ mod tests {
             let n_sort_expr = rng.gen_range(0..remaining_exprs.len() + 1);
             remaining_exprs.shuffle(&mut rng);
 
-            let orderings: Vec<_> = remaining_exprs
+            let ordering = remaining_exprs
                 .drain(0..n_sort_expr)
                 .map(|expr| PhysicalSortExpr {
                     expr: expr.clone(),
@@ -1337,10 +1343,10 @@ mod tests {
                 })
                 .collect();
 
-            schema_properties.add_new_orderings(&[orderings]);
+            eq_properties.add_new_orderings([ordering]);
         }
 
-        Ok((test_schema, schema_properties))
+        Ok((test_schema, eq_properties))
     }
 
     // Convert each tuple to PhysicalSortRequirement
@@ -1750,8 +1756,8 @@ mod tests {
             nulls_first: false,
         };
         // a=c (e.g they are aliases).
-        let mut schema_properties = SchemaProperties::new(test_schema);
-        schema_properties.add_equal_conditions(col_a, col_c);
+        let mut eq_properties = SchemaProperties::new(test_schema);
+        eq_properties.add_equal_conditions(col_a, col_c);
 
         let orderings = vec![
             vec![(col_a, options)],
@@ -1761,7 +1767,7 @@ mod tests {
         let orderings = convert_to_orderings(&orderings);
 
         // Column [a ASC], [e ASC], [d ASC, f ASC] are all valid orderings for the schema.
-        schema_properties.add_new_orderings(&orderings);
+        eq_properties.add_new_orderings(orderings);
 
         // First entry in the tuple is required ordering, second entry is the expected flag
         // that indicates whether this required ordering is satisfied.
@@ -1786,7 +1792,7 @@ mod tests {
                 format!("error in test reqs: {:?}, expected: {:?}", reqs, expected,);
             let reqs = convert_to_sort_exprs(&reqs);
             assert_eq!(
-                schema_properties.ordering_satisfy(&reqs),
+                eq_properties.ordering_satisfy(&reqs),
                 expected,
                 "{}",
                 err_msg
@@ -2515,7 +2521,7 @@ mod tests {
         // and
         // Column [a=c] (e.g they are aliases).
         // At below we add [d ASC, h DESC] also, for test purposes
-        let (test_schema, mut schema_props) = create_test_params()?;
+        let (test_schema, mut eq_properties) = create_test_params()?;
         let col_a = &col("a", &test_schema)?;
         let col_b = &col("b", &test_schema)?;
         let col_c = &col("c", &test_schema)?;
@@ -2532,7 +2538,7 @@ mod tests {
             nulls_first: true,
         };
         // [d ASC, h ASC] also satisfies schema.
-        schema_props.add_new_orderings(&[vec![
+        eq_properties.add_new_orderings([vec![
             PhysicalSortExpr {
                 expr: col_d.clone(),
                 options: option_asc,
@@ -2564,7 +2570,7 @@ mod tests {
         for (exprs, expected) in test_cases {
             let exprs = exprs.into_iter().cloned().collect::<Vec<_>>();
             let expected = convert_to_sort_exprs(&expected);
-            let actual = schema_props.get_lex_ordering_section(&exprs);
+            let actual = eq_properties.get_lex_ordering_section(&exprs);
             assert_eq!(actual, expected);
         }
 

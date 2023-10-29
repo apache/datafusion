@@ -465,12 +465,12 @@ pub fn get_window_mode(
     orderby_keys: &[PhysicalSortExpr],
     input: &Arc<dyn ExecutionPlan>,
 ) -> Result<Option<(bool, PartitionSearchMode)>> {
-    let input_oeq = input.schema_properties();
+    let input_eqs = input.schema_properties();
     let mut partition_search_mode = PartitionSearchMode::Linear;
     let mut partition_by_reqs: Vec<PhysicalSortRequirement> = vec![];
     if partitionby_exprs.is_empty() {
         partition_search_mode = PartitionSearchMode::Sorted;
-    } else if let Some(indices) = input_oeq.set_satisfy(partitionby_exprs) {
+    } else if let Some(indices) = input_eqs.set_satisfy(partitionby_exprs) {
         let item = indices
             .iter()
             .map(|&idx| PhysicalSortRequirement {
@@ -487,7 +487,7 @@ pub fn get_window_mode(
     }
 
     // Treat partition by exprs as constant. During analysis of requirements are satisfied.
-    let partition_by_oeq = input_oeq.add_constants(partitionby_exprs.to_vec());
+    let partition_by_eqs = input_eqs.add_constants(partitionby_exprs.iter().cloned());
     let order_by_reqs = PhysicalSortRequirement::from_sort_exprs(orderby_keys);
     let reverse_order_by_reqs =
         PhysicalSortRequirement::from_sort_exprs(&reverse_order_bys(orderby_keys));
@@ -496,7 +496,7 @@ pub fn get_window_mode(
     {
         let req = [partition_by_reqs.clone(), order_by_reqs].concat();
         let req = collapse_lex_req(req);
-        if partition_by_oeq.ordering_satisfy_requirement(&req) {
+        if partition_by_eqs.ordering_satisfy_requirement(&req) {
             // Window can be run with existing ordering
             return Ok(Some((should_swap, partition_search_mode)));
         }

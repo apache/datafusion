@@ -252,7 +252,7 @@ impl ExecutionPlan for UnionExec {
         }
         // We know have all the valid orderings after union, remove redundant
         // entries (implicitly) and return:
-        result.add_new_orderings(&meets);
+        result.add_new_orderings(meets);
         result
     }
 

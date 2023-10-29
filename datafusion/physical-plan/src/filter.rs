@@ -158,8 +158,7 @@ impl ExecutionPlan for FilterExec {
         let constants = collect_columns(self.predicate())
             .into_iter()
             .filter(|column| stats.column_statistics[column.index()].is_singleton())
-            .map(|column| Arc::new(column) as _)
-            .collect();
+            .map(|column| Arc::new(column) as _);
         result.add_constants(constants)
     }
 

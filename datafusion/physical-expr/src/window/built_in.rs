@@ -77,7 +77,7 @@ impl BuiltInWindowExpr {
         if let Some(fn_res_ordering) = self.expr.get_result_ordering(schema) {
             if self.partition_by.is_empty() {
                 // In the absence of a PARTITION BY, ordering of `self.expr` is global:
-                eq_properties.add_new_orderings(&[vec![fn_res_ordering]]);
+                eq_properties.add_new_orderings([vec![fn_res_ordering]]);
             } else {
                 // If we have a PARTITION BY, built-in functions can not introduce
                 // a global ordering unless the existing ordering is compatible
@@ -96,7 +96,7 @@ impl BuiltInWindowExpr {
                         eq_properties.get_lex_ordering(&lex_partition_by)
                     {
                         ordering.push(fn_res_ordering);
-                        eq_properties.add_new_orderings(&[ordering]);
+                        eq_properties.add_new_orderings([ordering]);
                     }
                 }
             }
