@@ -1185,6 +1185,7 @@ dependencies = [
  "object_store",
  "parquet",
  "sqlparser",
+ "thiserror",
 ]
 
 [[package]]
