@@ -863,8 +863,13 @@ impl SessionContext {
         } else {
             "".to_owned()
         };
+        // some the file extension might be started with "." and some not
+        let extention_alternative = ".".to_string() + extention.as_str();
 
-        if option_extention != extention && !extention.is_empty() {
+        if option_extention != extention
+            && option_extention != extention_alternative
+            && !extention.is_empty()
+        {
             return Err(DataFusionError::Execution(format!(
                 "File extension '{}' does not match the expected extension '{}'",
                 extention, option_extention
