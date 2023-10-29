@@ -870,10 +870,11 @@ impl SessionContext {
             && option_extention != extention_alternative
             && !extension.is_empty()
         {
-            return Err(DataFusionError::Execution(format!(
+            return exec_err!(
                 "File extension '{}' does not match the expected extension '{}'",
-                extension, option_extention
-            )));
+                extension,
+                option_extention
+            );
         }
 
         let resolved_schema = options
