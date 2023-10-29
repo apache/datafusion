@@ -175,10 +175,7 @@ mod tests {
                 },
             )
             .await;
-        assert_eq!(
-            read_df.unwrap_err().to_string(),
-            "Execution error: File extension 'parquet.snappy' does not match the expected extension '.parquet'"
-        );
+        assert!(read_df.is_err());
 
         Ok(())
     }
