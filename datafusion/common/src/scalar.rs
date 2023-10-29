@@ -2944,8 +2944,14 @@ impl TryFrom<&DataType> for ScalarValue {
                 index_type.clone(),
                 Box::new(value_type.as_ref().try_into()?),
             ),
-            DataType::List(_) => ScalarValue::List(new_null_array(&DataType::Null, 0)),
-
+            DataType::List(field) => ScalarValue::List(new_null_array(
+                &DataType::List(Arc::new(Field::new(
+                    "item",
+                    field.data_type().clone(),
+                    true,
+                ))),
+                1,
+            )),
             DataType::Struct(fields) => ScalarValue::Struct(None, fields.clone()),
             DataType::Null => ScalarValue::Null,
             _ => {
@@ -3882,6 +3888,22 @@ mod tests {
         assert_eq!(
             ScalarValue::Int64(None),
             ScalarValue::try_from_array(&array, 1).unwrap()
+        );
+    }
+
+    #[test]
+    fn scalar_try_from_array_list_array_null() {
+        let list = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2)]),
+            None,
+        ]);
+
+        let non_null_list_scalar = ScalarValue::try_from_array(&list, 0).unwrap();
+        let null_list_scalar = ScalarValue::try_from_array(&list, 1).unwrap();
+
+        assert_eq!(
+            non_null_list_scalar.data_type(),
+            null_list_scalar.data_type()
         );
     }
 
