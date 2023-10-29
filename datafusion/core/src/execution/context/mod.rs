@@ -851,6 +851,11 @@ impl SessionContext {
         let listing_options = options.to_listing_options(&session_config);
 
         let option_extension = listing_options.file_extension.clone();
+
+        if table_paths.is_empty() {
+            return exec_err!("No table paths were provided");
+        }
+
         let extension = table_paths[0]
             .prefix()
             .filename()
