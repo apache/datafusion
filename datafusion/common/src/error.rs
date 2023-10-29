@@ -70,7 +70,7 @@ pub enum DataFusionError {
     IoError(#[from] io::Error),
 
     /// Error returned when SQL is syntactically incorrect.
-    #[error("SQL error: {0}")]
+    #[error("SQL error: {0:?}")]
     SQL(#[from] ParserError),
 
     /// Error returned on a branch that we know it is possible
