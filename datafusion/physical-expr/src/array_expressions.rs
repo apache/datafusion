@@ -729,9 +729,13 @@ fn align_array_dimensions(args: Vec<ArrayRef>) -> Result<Vec<ArrayRef>> {
     let mut max_ndim = None;
     for arg in args.iter() {
         let ndim = compute_array_ndims(Some(arg.to_owned()))?;
+
         if let Some(ndim) = ndim {
             args_ndim.push(ndim);
-            if max_ndim.is_none() || ndim > max_ndim.unwrap() {
+
+            if let Some(current_max) = max_ndim {
+                max_ndim = Some(std::cmp::max(current_max, ndim));
+            } else {
                 max_ndim = Some(ndim);
             }
         } else {
@@ -739,10 +743,11 @@ fn align_array_dimensions(args: Vec<ArrayRef>) -> Result<Vec<ArrayRef>> {
         }
     }
 
-    if max_ndim.is_none() {
+    let max_ndim = if let Some(max_ndim) = max_ndim {
+        max_ndim
+    } else {
         return internal_err!("args should not be empty");
-    }
-    let max_ndim = max_ndim.unwrap();
+    };
 
     // Align the dimensions of the arrays
     let aligned_args: Result<Vec<ArrayRef>> = args
