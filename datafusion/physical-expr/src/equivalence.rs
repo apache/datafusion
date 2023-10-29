@@ -364,39 +364,34 @@ impl EquivalenceGroup {
         left_column_count: usize,
         on: &[(Column, Column)],
     ) -> Self {
-        let mut result = Self::empty();
         match join_type {
             JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
-                result.extend(self.clone());
-                let updated_eq_classes = right_equivalences
-                    .iter()
-                    .map(|cls| {
-                        cls.iter()
-                            .cloned()
-                            .map(|item| add_offset_to_expr(item, left_column_count))
-                            .collect()
-                    })
-                    .collect();
-                result.extend(Self::new(updated_eq_classes));
+                let mut result = Self::new(
+                    self.iter()
+                        .cloned()
+                        .chain(right_equivalences.iter().map(|item| {
+                            item.iter()
+                                .cloned()
+                                .map(|expr| add_offset_to_expr(expr, left_column_count))
+                                .collect()
+                        }))
+                        .collect(),
+                );
+                // In we have an inner join, expressions in the "on" condition
+                // are equal in the resulting table.
+                if join_type == &JoinType::Inner {
+                    for (lhs, rhs) in on.iter() {
+                        let index = rhs.index() + left_column_count;
+                        let new_lhs = Arc::new(lhs.clone()) as _;
+                        let new_rhs = Arc::new(Column::new(rhs.name(), index)) as _;
+                        result.add_equal_conditions(&new_lhs, &new_rhs);
+                    }
+                }
+                result
             }
-            JoinType::LeftSemi | JoinType::LeftAnti => {
-                result.extend(self.clone());
-            }
-            JoinType::RightSemi | JoinType::RightAnti => {
-                result.extend(right_equivalences.clone());
-            }
+            JoinType::LeftSemi | JoinType::LeftAnti => self.clone(),
+            JoinType::RightSemi | JoinType::RightAnti => right_equivalences.clone(),
         }
-        // In we have an inner join, expressions in the "on" condition are equal
-        // at the resulting table.
-        if join_type == &JoinType::Inner {
-            for (lhs, rhs) in on.iter() {
-                let index = rhs.index() + left_column_count;
-                let new_lhs = Arc::new(lhs.clone()) as _;
-                let new_rhs = Arc::new(Column::new(rhs.name(), index)) as _;
-                result.add_equal_conditions(&new_lhs, &new_rhs);
-            }
-        }
-        result
     }
 }
 
@@ -442,6 +437,7 @@ impl OrderingEquivalenceClass {
     }
 
     /// Adds `ordering` to this equivalence class.
+    #[allow(dead_code)]
     fn push(&mut self, ordering: LexOrdering) {
         self.orderings.push(ordering);
         // Make sure that there are no redundant orderings:
@@ -456,11 +452,6 @@ impl OrderingEquivalenceClass {
     /// Returns an iterator over the equivalent orderings in this class.
     pub fn iter(&self) -> impl Iterator<Item = &LexOrdering> {
         self.orderings.iter()
-    }
-
-    /// Returns an iterator over the equivalent orderings in this class.
-    fn into_iter(self) -> impl Iterator<Item = LexOrdering> {
-        self.orderings.into_iter()
     }
 
     /// Returns how many equivalent orderings there are in this class.
@@ -694,11 +685,7 @@ impl SchemaProperties {
     /// Extends this `SchemaProperties` by adding the orderings inside the
     /// ordering equivalence class `other`.
     pub fn add_ordering_equivalence_class(&mut self, other: OrderingEquivalenceClass) {
-        for ordering in other.into_iter() {
-            if !self.oeq_class.contains(&ordering) {
-                self.oeq_class.push(ordering);
-            }
-        }
+        self.oeq_class.extend(other);
     }
 
     /// Adds new orderings into the existing ordering equivalence class.
@@ -1072,12 +1059,13 @@ pub fn join_schema_properties(
     on: &[(Column, Column)],
 ) -> SchemaProperties {
     let left_columns_len = left.schema.fields.len();
-    let mut new_properties = SchemaProperties::new(join_schema);
-
-    let join_eq_groups =
-        left.eq_group()
-            .join(join_type, right.eq_group(), left_columns_len, on);
-    new_properties.add_equivalence_group(join_eq_groups);
+    let mut result = SchemaProperties::new(join_schema);
+    result.add_equivalence_group(left.eq_group().join(
+        join_type,
+        right.eq_group(),
+        left_columns_len,
+        on,
+    ));
 
     // All joins have 2 children
     assert_eq!(maintains_input_order.len(), 2);
@@ -1107,9 +1095,9 @@ pub fn join_schema_properties(
                 // for the right table should be converted to `a ASC, b ASC` before it is added
                 // to the ordering equivalences of the join.
                 let out_oeq_class = left_oeq_class.join_suffix(&updated_right_oeq);
-                new_properties.add_ordering_equivalence_class(out_oeq_class);
+                result.add_ordering_equivalence_class(out_oeq_class);
             } else {
-                new_properties.add_ordering_equivalence_class(left_oeq_class);
+                result.add_ordering_equivalence_class(left_oeq_class);
             }
         }
         (false, true) => {
@@ -1129,14 +1117,14 @@ pub fn join_schema_properties(
                 // for the right table should be converted to `a ASC, b ASC` before it is added
                 // to the ordering equivalences of the join.
                 let out_oeq_class = updated_right_oeq.join_suffix(&left_oeq_class);
-                new_properties.add_ordering_equivalence_class(out_oeq_class);
+                result.add_ordering_equivalence_class(out_oeq_class);
             } else {
-                new_properties.add_ordering_equivalence_class(updated_right_oeq);
+                result.add_ordering_equivalence_class(updated_right_oeq);
             }
         }
         (false, false) => {}
     }
-    new_properties
+    result
 }
 
 /// This function constructs a duplicate-free `LexOrderingReq` by filtering out
