@@ -1637,7 +1637,7 @@ impl TreeNode for PlanWithKeyRequirements {
 /// Since almost all of these tests explicitly use `ParquetExec` they only run with the parquet  feature flag on
 #[cfg(feature = "parquet")]
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::ops::Deref;
 
     use super::*;
@@ -1774,7 +1774,7 @@ mod tests {
         }
     }
 
-    fn schema() -> SchemaRef {
+    pub(crate) fn schema() -> SchemaRef {
         Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int64, true),
             Field::new("b", DataType::Int64, true),
@@ -1788,7 +1788,7 @@ mod tests {
         parquet_exec_with_sort(vec![])
     }
 
-    fn parquet_exec_with_sort(
+    pub(crate) fn parquet_exec_with_sort(
         output_ordering: Vec<Vec<PhysicalSortExpr>>,
     ) -> Arc<ParquetExec> {
         Arc::new(ParquetExec::new(
@@ -2041,7 +2041,7 @@ mod tests {
         Arc::new(SortRequiredExec::new_with_requirement(input, sort_exprs))
     }
 
-    fn trim_plan_display(plan: &str) -> Vec<&str> {
+    pub(crate) fn trim_plan_display(plan: &str) -> Vec<&str> {
         plan.split('\n')
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())

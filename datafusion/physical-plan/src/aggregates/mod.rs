@@ -800,6 +800,39 @@ impl AggregateExec {
     pub fn group_by(&self) -> &PhysicalGroupBy {
         &self.group_by
     }
+
+    /// true, if this Aggregate has a group-by with no required or explicit ordering,
+    /// no filtering and no aggregate expressions
+    /// This method qualifies the use of the LimitedDistinctAggregation rewrite rule
+    /// on an AggregateExec.
+    pub fn is_unordered_unfiltered_group_by_distinct(&self) -> bool {
+        // ensure there is a group by
+        if self.group_by().is_empty() {
+            return false;
+        }
+        // ensure there are no aggregate expressions
+        if !self.aggr_expr().is_empty() {
+            return false;
+        }
+        // ensure there are no filters on aggregate expressions; the above check
+        // may preclude this case
+        if self.filter_expr().iter().any(|e| e.is_some()) {
+            return false;
+        }
+        // ensure there are no order by expressions
+        if self.order_by_expr().iter().any(|e| e.is_some()) {
+            return false;
+        }
+        // ensure there is no output ordering; can this rule be relaxed?
+        if self.output_ordering().is_some() {
+            return false;
+        }
+        // ensure no ordering is required on the input
+        if self.required_input_ordering()[0].is_some() {
+            return false;
+        }
+        true
+    }
 }
 
 impl DisplayAs for AggregateExec {
