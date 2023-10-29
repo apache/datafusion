@@ -82,8 +82,8 @@ impl Partitioning {
                         // If the required exprs do not match, need to leverage the schema_properties provided by the child
                         // and normalize both exprs based on the equivalent groups.
                         if !fast_match {
-                            let schema_properties = schema_properties();
-                            let eq_groups = schema_properties.eq_group();
+                            let eq_properties = schema_properties();
+                            let eq_groups = eq_properties.eq_group();
                             if !eq_groups.is_empty() {
                                 let normalized_required_exprs = required_exprs
                                     .iter()

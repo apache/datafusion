@@ -646,8 +646,8 @@ mod tests {
         let col_a = &col("a", &schema)?;
         let col_b = &col("b", &schema)?;
         let required_columns = [col_b.clone(), col_a.clone()];
-        let mut ordering_equal_properties = SchemaProperties::new(Arc::new(schema));
-        ordering_equal_properties.add_new_orderings(&[vec![
+        let mut eq_properties = SchemaProperties::new(Arc::new(schema));
+        eq_properties.add_new_orderings(&[vec![
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("b", 1)),
                 options: sort_options_not,
@@ -658,12 +658,12 @@ mod tests {
             },
         ]]);
         assert_eq!(
-            ordering_equal_properties.set_exactly_satisfy(&required_columns),
+            eq_properties.set_exactly_satisfy(&required_columns),
             Some(vec![0, 1])
         );
 
         assert_eq!(
-            ordering_equal_properties.get_lex_ordering(&required_columns),
+            eq_properties.get_lex_ordering(&required_columns),
             Some(vec![
                 PhysicalSortExpr {
                     expr: col_b.clone(),

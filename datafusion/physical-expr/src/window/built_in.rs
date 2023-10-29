@@ -72,12 +72,12 @@ impl BuiltInWindowExpr {
     /// If `self.expr` doesn't have an ordering, ordering equivalence properties
     /// are not updated. Otherwise, ordering equivalence properties are updated
     /// by the ordering of `self.expr`.
-    pub fn add_equal_orderings(&self, schema_properties: &mut SchemaProperties) {
-        let schema = schema_properties.schema();
+    pub fn add_equal_orderings(&self, eq_properties: &mut SchemaProperties) {
+        let schema = eq_properties.schema();
         if let Some(fn_res_ordering) = self.expr.get_result_ordering(schema) {
             if self.partition_by.is_empty() {
                 // In the absence of a PARTITION BY, ordering of `self.expr` is global:
-                schema_properties.add_new_orderings(&[vec![fn_res_ordering]]);
+                eq_properties.add_new_orderings(&[vec![fn_res_ordering]]);
             } else {
                 // If we have a PARTITION BY, built-in functions can not introduce
                 // a global ordering unless the existing ordering is compatible
@@ -86,17 +86,17 @@ impl BuiltInWindowExpr {
                 // set equality), we can prefix the ordering of `self.expr` with
                 // the existing ordering.
                 if let Some(indices) =
-                    schema_properties.set_exactly_satisfy(&self.partition_by)
+                    eq_properties.set_exactly_satisfy(&self.partition_by)
                 {
                     let lex_partition_by = indices
                         .into_iter()
                         .map(|idx| self.partition_by[idx].clone())
                         .collect::<Vec<_>>();
                     if let Some(mut ordering) =
-                        schema_properties.get_lex_ordering(&lex_partition_by)
+                        eq_properties.get_lex_ordering(&lex_partition_by)
                     {
                         ordering.push(fn_res_ordering);
-                        schema_properties.add_new_orderings(&[ordering]);
+                        eq_properties.add_new_orderings(&[ordering]);
                     }
                 }
             }
