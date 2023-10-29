@@ -74,6 +74,11 @@ impl SessionContext {
 mod tests {
     use async_trait::async_trait;
 
+    use crate::arrow::array::{Float32Array, Int32Array};
+    use crate::arrow::datatypes::{DataType, Field, Schema};
+    use crate::arrow::record_batch::RecordBatch;
+    use crate::dataframe::DataFrameWriteOptions;
+    use crate::parquet::basic::Compression;
     use crate::test_util::parquet_test_data;
 
     use super::*;
@@ -129,6 +134,52 @@ mod tests {
         let total_rows: usize = results.iter().map(|rb| rb.num_rows()).sum();
         // alltypes_plain.parquet = 8 rows, alltypes_plain.snappy.parquet = 2 rows, alltypes_dictionary.parquet = 2 rows
         assert_eq!(total_rows, 10);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_from_wrong_file_extentnion() -> Result<()> {
+        let ctx = SessionContext::new();
+
+        // Make up a new dataframe.
+        let write_df = ctx.read_batch(RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("purchase_id", DataType::Int32, false),
+                Field::new("price", DataType::Float32, false),
+                Field::new("quantity", DataType::Int32, false),
+            ])),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])),
+                Arc::new(Float32Array::from(vec![1.12, 3.40, 2.33, 9.10, 6.66])),
+                Arc::new(Int32Array::from(vec![1, 3, 2, 4, 3])),
+            ],
+        )?)?;
+
+        write_df
+            .write_parquet(
+                "output.parquet.snappy",
+                DataFrameWriteOptions::new().with_single_file_output(true),
+                Some(
+                    WriterProperties::builder()
+                        .set_compression(Compression::SNAPPY)
+                        .build(),
+                ),
+            )
+            .await?;
+
+        let read_df = ctx
+            .read_parquet(
+                "output.parquet.snappy",
+                ParquetReadOptions {
+                    ..Default::default()
+                },
+            )
+            .await;
+        assert_eq!(
+            read_df.unwrap_err().to_string(),
+            "Execution error: File extension 'parquet.snappy' does not match the expected extension '.parquet'"
+        );
+
         Ok(())
     }
 

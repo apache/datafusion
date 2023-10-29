@@ -849,6 +849,28 @@ impl SessionContext {
         let table_paths = table_paths.to_urls()?;
         let session_config = self.copied_config();
         let listing_options = options.to_listing_options(&session_config);
+
+        let option_extention = listing_options.file_extension.clone();
+        let filename = table_paths[0].prefix().filename();
+        let extention = if let Some(filename) = filename {
+            let parts: Vec<&str> = filename.split('.').collect();
+
+            if parts.len() > 1 {
+                parts[1..].join(".")
+            } else {
+                "".to_owned()
+            }
+        } else {
+            "".to_owned()
+        };
+
+        if option_extention != extention && !extention.is_empty() {
+            return Err(DataFusionError::Execution(format!(
+                "File extension '{}' does not match the expected extension '{}'",
+                extention, option_extention
+            )));
+        }
+
         let resolved_schema = options
             .get_resolved_schema(&session_config, self.state(), table_paths[0].clone())
             .await?;
