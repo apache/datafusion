@@ -554,7 +554,7 @@ fn reorder_aggregate_keys(
                         agg_exec.filter_expr().to_vec(),
                         agg_exec.order_by_expr().to_vec(),
                         partial_agg,
-                        agg_exec.input_schema().clone(),
+                        agg_exec.input_schema(),
                     )?);
 
                     // Need to create a new projection to change the expr ordering back

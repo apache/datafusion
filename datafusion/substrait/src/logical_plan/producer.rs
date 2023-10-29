@@ -326,7 +326,7 @@ pub fn to_substrait_rel(
                     left: Some(left),
                     right: Some(right),
                     r#type: join_type as i32,
-                    expression: join_expr.clone(),
+                    expression: join_expr,
                     post_join_filter: None,
                     advanced_extension: None,
                 }))),

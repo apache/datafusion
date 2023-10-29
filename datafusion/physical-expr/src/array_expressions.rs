@@ -811,7 +811,7 @@ fn concat_internal(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
     }
     // Assume all arrays have the same data type
-    let data_type = list_arrays[0].value_type().clone();
+    let data_type = list_arrays[0].value_type();
     let buffer = valid.finish();
 
     let elements = arrays
