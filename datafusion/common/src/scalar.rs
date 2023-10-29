@@ -3899,10 +3899,11 @@ mod tests {
         let non_null_list_scalar = ScalarValue::try_from_array(&list, 0).unwrap();
         let null_list_scalar = ScalarValue::try_from_array(&list, 1).unwrap();
 
-        assert_eq!(
-            non_null_list_scalar.data_type(),
-            null_list_scalar.data_type()
-        );
+        let data_type =
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+
+        assert_eq!(non_null_list_scalar.data_type(), data_type.clone());
+        assert_eq!(null_list_scalar.data_type(), data_type);
     }
 
     #[test]
