@@ -850,7 +850,7 @@ impl SessionContext {
         let session_config = self.copied_config();
         let listing_options = options.to_listing_options(&session_config);
 
-        let option_extention = listing_options.file_extension.clone();
+        let option_extension = listing_options.file_extension.clone();
         let filename = table_paths[0].prefix().filename();
         let extension = if let Some(filename) = filename {
             let parts: Vec<&str> = filename.split('.').collect();
@@ -866,14 +866,14 @@ impl SessionContext {
         // some the file extension might be started with "." and some not
         let extension_alternative = ".".to_string() + extension.as_str();
 
-        if option_extention != extension
-            && option_extention != extension_alternative
+        if option_extension != extension
+            && option_extension != extension_alternative
             && !extension.is_empty()
         {
             return exec_err!(
                 "File extension '{}' does not match the expected extension '{}'",
                 extension,
-                option_extention
+                option_extension
             );
         }
 
