@@ -21,13 +21,13 @@
 
 [DataFusion](df) is an extensible query execution framework, written in Rust, that uses Apache Arrow as its in-memory format.
 
-This crate is a submodule of DataFusion that contains an implementation of [sqllogictest](https://www.sqlite.org/sqllogictest/doc/trunk/about.wiki). 
+This crate is a submodule of DataFusion that contains an implementation of [sqllogictest](https://www.sqlite.org/sqllogictest/doc/trunk/about.wiki).
 
 [df]: https://crates.io/crates/datafusion
 
 ## Overview
 
-This crate uses [sqllogictest-rs](https://github.com/risinglightdb/sqllogictest-rs) to parse and run  `.slt` files in the
+This crate uses [sqllogictest-rs](https://github.com/risinglightdb/sqllogictest-rs) to parse and run `.slt` files in the
 [`test_files`](test_files) directory of this crate.
 
 ## Testing setup
