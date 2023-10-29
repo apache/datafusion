@@ -30,7 +30,7 @@ mod tests {
 
     #[tokio::test]
     async fn serialize_simple_select() -> Result<()> {
-        let mut ctx = create_context().await?;
+        let ctx = create_context().await?;
         let path = "tests/simple_select.bin";
         let sql = "SELECT a, b FROM data";
         // Test reference
@@ -42,7 +42,7 @@ mod tests {
         // Read substrait plan from file
         let proto = serializer::deserialize(path).await?;
         // Check plan equality
-        let plan = from_substrait_plan(&mut ctx, &proto).await?;
+        let plan = from_substrait_plan(&ctx, &proto).await?;
         let plan_str_ref = format!("{plan_ref:?}");
         let plan_str = format!("{plan:?}");
         assert_eq!(plan_str_ref, plan_str);
