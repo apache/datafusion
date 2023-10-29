@@ -851,18 +851,11 @@ impl SessionContext {
         let listing_options = options.to_listing_options(&session_config);
 
         let option_extension = listing_options.file_extension.clone();
-        let filename = table_paths[0].prefix().filename();
-        let extension = if let Some(filename) = filename {
-            let parts: Vec<&str> = filename.split('.').collect();
-
-            if parts.len() > 1 {
-                parts[1..].join(".")
-            } else {
-                "".to_owned()
-            }
-        } else {
-            "".to_owned()
-        };
+        let extension = table_paths[0]
+            .prefix()
+            .filename()
+            .map(|filename| filename.split('.').skip(1).collect::<Vec<&str>>().join("."))
+            .unwrap_or("".to_owned());
         // some the file extension might be started with "." and some not
         let extension_alternative = ".".to_string() + extension.as_str();
 
