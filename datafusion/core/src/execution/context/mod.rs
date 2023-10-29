@@ -852,7 +852,7 @@ impl SessionContext {
 
         let option_extention = listing_options.file_extension.clone();
         let filename = table_paths[0].prefix().filename();
-        let extention = if let Some(filename) = filename {
+        let extension = if let Some(filename) = filename {
             let parts: Vec<&str> = filename.split('.').collect();
 
             if parts.len() > 1 {
@@ -864,15 +864,15 @@ impl SessionContext {
             "".to_owned()
         };
         // some the file extension might be started with "." and some not
-        let extention_alternative = ".".to_string() + extention.as_str();
+        let extention_alternative = ".".to_string() + extension.as_str();
 
-        if option_extention != extention
+        if option_extention != extension
             && option_extention != extention_alternative
-            && !extention.is_empty()
+            && !extension.is_empty()
         {
             return Err(DataFusionError::Execution(format!(
                 "File extension '{}' does not match the expected extension '{}'",
-                extention, option_extention
+                extension, option_extention
             )));
         }
 
