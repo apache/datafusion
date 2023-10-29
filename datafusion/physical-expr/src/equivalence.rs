@@ -359,7 +359,7 @@ impl EquivalenceGroup {
     /// Combine equivalence groups of the given join children.
     pub fn join(
         &self,
-        right_equivalences: &Self,        
+        right_equivalences: &Self,
         join_type: &JoinType,
         left_size: usize,
         on: &[(Column, Column)],
@@ -997,7 +997,7 @@ impl SchemaProperties {
         self.get_lex_ordering_section(exprs)
             .into_iter()
             .map(|sort_expr| exprs.iter().position(|expr| sort_expr.expr.eq(expr)))
-            .collect::<Option<Vec<_>>>()
+            .collect()
     }
 
     /// Checks whether any permutation of `exprs` satisfies the existing
@@ -1074,7 +1074,7 @@ pub fn join_schema_properties(
     let left_size = left.schema.fields.len();
     let mut result = SchemaProperties::new(join_schema);
     result.add_equivalence_group(left.eq_group().join(
-        right.eq_group(),        
+        right.eq_group(),
         join_type,
         left_size,
         on,
@@ -1088,7 +1088,7 @@ pub fn join_schema_properties(
             // the left side ordering.
             if let (Some(JoinSide::Left), JoinType::Inner) = (probe_side, join_type) {
                 updated_right_ordering_equivalence_class(
-                    &mut right_oeq_class,                    
+                    &mut right_oeq_class,
                     join_type,
                     left_size,
                 );
@@ -1109,7 +1109,7 @@ pub fn join_schema_properties(
         }
         [false, true] => {
             updated_right_ordering_equivalence_class(
-                &mut right_oeq_class,                
+                &mut right_oeq_class,
                 join_type,
                 left_size,
             );
@@ -1145,7 +1145,7 @@ pub fn join_schema_properties(
 /// is the case for `Inner`, `Left`, `Full` and `Right` joins. For other cases,
 /// indices do not change.
 fn updated_right_ordering_equivalence_class(
-    right_oeq_class: &mut OrderingEquivalenceClass,    
+    right_oeq_class: &mut OrderingEquivalenceClass,
     join_type: &JoinType,
     left_size: usize,
 ) {
@@ -1158,7 +1158,7 @@ fn updated_right_ordering_equivalence_class(
 }
 
 /// Calculates the [`SortProperties`] of a given [`ExprOrdering`] node.
-/// The node is either a leaf node, or an intermediate node:
+/// The node can either be a leaf node, or an intermediate node:
 /// - If it is a leaf node, the children states are `None`. We directly find
 /// the order of the node by looking at the given sort expression and equivalence
 /// properties if it is a `Column` leaf, or we mark it as unordered. In the case
@@ -1172,7 +1172,7 @@ fn updated_right_ordering_equivalence_class(
 /// the order coming from the children.
 fn update_ordering(
     mut node: ExprOrdering,
-    ordering_equal_properties: &SchemaProperties,
+    eq_properties: &SchemaProperties,
 ) -> Result<Transformed<ExprOrdering>> {
     if let Some(children_sort_options) = &node.children_states {
         // We have an intermediate (non-leaf) node, account for its children:
@@ -1180,9 +1180,9 @@ fn update_ordering(
         Ok(Transformed::Yes(node))
     } else if node.expr.as_any().is::<Column>() {
         // We have a Column, which is one of the two possible leaf node types:
-        let eq_group = &ordering_equal_properties.eq_group;
+        let eq_group = &eq_properties.eq_group;
         let normalized_expr = eq_group.normalize_expr(node.expr.clone());
-        let oeq_class = &ordering_equal_properties.oeq_class;
+        let oeq_class = &eq_properties.oeq_class;
         if let Some(options) = oeq_class.get_options(&normalized_expr) {
             node.state = Some(SortProperties::Ordered(options));
             Ok(Transformed::Yes(node))
@@ -2021,7 +2021,7 @@ mod tests {
         join_schema_properties.add_equal_conditions(col_d, col_w);
 
         updated_right_ordering_equivalence_class(
-            &mut right_oeq_class,            
+            &mut right_oeq_class,
             &join_type,
             left_columns_len,
         );
