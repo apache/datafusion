@@ -20,9 +20,9 @@ name = "datafusion-examples"
 description = "DataFusion usage examples"
 keywords = ["arrow", "query", "sql"]
 publish = false
+readme = "README.md"
 version = { workspace = true }
 edition = { workspace = true }
-readme = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
