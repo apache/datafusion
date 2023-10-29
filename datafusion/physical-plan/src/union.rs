@@ -224,34 +224,36 @@ impl ExecutionPlan for UnionExec {
     }
 
     fn schema_properties(&self) -> SchemaProperties {
-        // TODO: In some cases equivalent groups and constants
-        //       can be preserved in union. Add support for these.
-        let child_oeqs = self
+        // TODO: In some cases, we should be able to preserve some equivalence
+        //       classes and constants. Add support for such cases.
+        let children_eqs = self
             .inputs
             .iter()
             .map(|child| child.schema_properties())
             .collect::<Vec<_>>();
-        let mut union_oeq = SchemaProperties::new(self.schema());
-        // Get first ordering equivalent group as seed group.
-        let mut existing_meets = child_oeqs[0]
+        let mut result = SchemaProperties::new(self.schema());
+        // Use the ordering equivalence class of the first child as the seed:
+        let mut meets = children_eqs[0]
             .oeq_class()
             .iter()
-            .map(|elem| elem.to_vec())
+            .map(|item| item.to_vec())
             .collect::<Vec<_>>();
-        // Iterate ordering equivalent group of other childs
-        for next_child_oeq in &child_oeqs[1..] {
-            // Find the valid meet orderings of existing meet and new group.
+        // Iterate over all the children:
+        for child_eqs in &children_eqs[1..] {
+            // Compute meet orderings of the current meets and the new ordering
+            // equivalence class.
             let mut next_meets = vec![];
-            for existing_meet in &existing_meets {
-                next_meets.extend(next_child_oeq.oeq_class().iter().filter_map(
-                    |ordering| next_child_oeq.get_meet_ordering(ordering, existing_meet),
-                ));
+            for current_meet in &meets {
+                next_meets.extend(child_eqs.oeq_class().iter().filter_map(|ordering| {
+                    child_eqs.get_meet_ordering(ordering, current_meet)
+                }));
             }
-            existing_meets = next_meets;
+            meets = next_meets;
         }
-        // existing_meets contains the all of the valid orderings after union
-        union_oeq.add_new_orderings(&existing_meets);
-        union_oeq
+        // We know have all the valid orderings after union, remove redundant
+        // entries (implicitly) and return:
+        result.add_new_orderings(&meets);
+        result
     }
 
     fn with_new_children(

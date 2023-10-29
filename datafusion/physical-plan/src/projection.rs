@@ -59,7 +59,7 @@ pub struct ProjectionExec {
     /// The mapping used to normalize expressions like Partitioning and
     /// PhysicalSortExpr. The key is the expression from the input schema
     /// and the value is the expression from the output schema.
-    source_to_target_mapping: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>,
+    projection_mapping: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
 }
@@ -94,20 +94,18 @@ impl ProjectionExec {
         ));
 
         // construct a map from the input expressions to the output expression of the Projection
-        let source_to_target_mapping =
-            calculate_projection_mapping(&expr, &input_schema)?;
+        let projection_mapping = calculate_projection_mapping(&expr, &input_schema)?;
 
-        let input_oeq = input.schema_properties();
-        let project_oeq = input_oeq.project(&source_to_target_mapping, schema.clone());
-        let project_orderings = project_oeq.oeq_class();
-        let output_ordering = project_orderings.output_ordering();
+        let input_eqs = input.schema_properties();
+        let project_eqs = input_eqs.project(&projection_mapping, schema.clone());
+        let output_ordering = project_eqs.oeq_class().output_ordering();
 
         Ok(Self {
             expr,
             schema,
             input,
             output_ordering,
-            source_to_target_mapping,
+            projection_mapping,
             metrics: ExecutionPlanMetricsSet::new(),
         })
     }
@@ -182,7 +180,7 @@ impl ExecutionPlan for ProjectionExec {
                 .into_iter()
                 .map(|expr| {
                     input_schema_properties
-                        .project_expr(&self.source_to_target_mapping, &expr)
+                        .project_expr(&expr, &self.projection_mapping)
                         .unwrap_or_else(|| {
                             Arc::new(UnKnownColumn::new(&expr.to_string()))
                         })
@@ -206,7 +204,7 @@ impl ExecutionPlan for ProjectionExec {
     fn schema_properties(&self) -> SchemaProperties {
         self.input
             .schema_properties()
-            .project(&self.source_to_target_mapping, self.schema())
+            .project(&self.projection_mapping, self.schema())
     }
 
     fn with_new_children(

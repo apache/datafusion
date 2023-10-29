@@ -829,9 +829,10 @@ impl ExecutionPlan for SortExec {
     }
 
     fn schema_properties(&self) -> SchemaProperties {
-        let input_oeq = self.input.schema_properties();
-        // reset ordering equivalent group with new ordering.
-        input_oeq.with_reorder(self.expr.to_vec())
+        // Reset the ordering equivalence class with the new ordering:
+        self.input
+            .schema_properties()
+            .with_reorder(self.expr.to_vec())
     }
 
     fn with_new_children(

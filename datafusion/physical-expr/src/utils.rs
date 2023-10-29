@@ -781,8 +781,8 @@ mod tests {
         ];
         schema_properties.add_new_orderings(&others);
 
-        let mut expected_oeq = SchemaProperties::new(Arc::new(schema));
-        expected_oeq.add_new_orderings(&[
+        let mut expected_eqs = SchemaProperties::new(Arc::new(schema));
+        expected_eqs.add_new_orderings(&[
             vec![PhysicalSortExpr {
                 expr: col_b_expr.clone(),
                 options: sort_options,
@@ -794,7 +794,7 @@ mod tests {
         ]);
 
         let oeq_class = schema_properties.oeq_class().clone();
-        let expected = expected_oeq.oeq_class();
+        let expected = expected_eqs.oeq_class();
         assert!(oeq_class.eq(expected));
 
         Ok(())
@@ -813,7 +813,7 @@ mod tests {
             options: SortOptions::default(),
         }];
         schema_properties.add_new_orderings(&[ordering]);
-        let source_to_target_mapping = vec![
+        let projection_mapping = vec![
             (
                 Arc::new(Column::new("b", 1)) as _,
                 Arc::new(Column::new("b_new", 0)) as _,
@@ -827,9 +827,8 @@ mod tests {
             Field::new("b_new", DataType::Int32, true),
             Field::new("a_new", DataType::Int32, true),
         ]));
-        let projected_oeq =
-            schema_properties.project(&source_to_target_mapping, projection_schema);
-        let orderings = projected_oeq
+        let orderings = schema_properties
+            .project(&projection_mapping, projection_schema)
             .oeq_class()
             .output_ordering()
             .unwrap_or_default();
@@ -847,8 +846,8 @@ mod tests {
             Field::new("b", DataType::Int32, true),
             Field::new("c", DataType::Int32, true),
         ]);
-        let schema_properties = SchemaProperties::new(Arc::new(schema.clone()));
-        let source_to_target_mapping = vec![
+        let schema_properties = SchemaProperties::new(Arc::new(schema));
+        let projection_mapping = vec![
             (
                 Arc::new(Column::new("c", 2)) as _,
                 Arc::new(Column::new("c_new", 0)) as _,
@@ -862,10 +861,9 @@ mod tests {
             Field::new("c_new", DataType::Int32, true),
             Field::new("b_new", DataType::Int32, true),
         ]));
-        let projected_oeq =
-            schema_properties.project(&source_to_target_mapping, projection_schema);
+        let projected = schema_properties.project(&projection_mapping, projection_schema);
         // After projection there is no ordering.
-        assert!(projected_oeq.oeq_class().output_ordering().is_none());
+        assert!(projected.oeq_class().output_ordering().is_none());
 
         Ok(())
     }

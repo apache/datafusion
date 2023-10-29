@@ -300,8 +300,8 @@ mod tests {
             .with_sort_information(sort_information);
 
         assert_eq!(mem_exec.output_ordering().unwrap(), expected_output_order);
-        let order_eq = mem_exec.schema_properties();
-        assert!(order_eq.oeq_class().contains(&expected_order_eq));
+        let eq_properties = mem_exec.schema_properties();
+        assert!(eq_properties.oeq_class().contains(&expected_order_eq));
         Ok(())
     }
 }

@@ -466,9 +466,9 @@ impl ExecutionPlan for RepartitionExec {
 
     fn schema_properties(&self) -> SchemaProperties {
         let mut result = self.input.schema_properties();
-        // If ordering is not preserved, reset ordering equivalence class.
+        // If the ordering is lost, reset the ordering equivalence class.
         if !self.maintains_input_order()[0] {
-            result.clear();
+            result.clear_orderings();
         }
         result
     }

@@ -381,7 +381,7 @@ pub fn calculate_projection_mapping(
     input_schema: &Arc<Schema>,
 ) -> Result<ProjectionMapping> {
     // Construct a map from the input expressions to the output expression of the projection:
-    let mut source_to_target_mapping = vec![];
+    let mut projection_mapping = vec![];
     for (expr_idx, (expression, name)) in expr.iter().enumerate() {
         let target_expr = Arc::new(Column::new(name, expr_idx)) as _;
 
@@ -402,9 +402,9 @@ pub fn calculate_projection_mapping(
             None => Ok(Transformed::No(e)),
         })?;
 
-        source_to_target_mapping.push((source_expr, target_expr));
+        projection_mapping.push((source_expr, target_expr));
     }
-    Ok(source_to_target_mapping)
+    Ok(projection_mapping)
 }
 
 #[cfg(test)]

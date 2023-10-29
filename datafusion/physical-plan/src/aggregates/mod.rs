@@ -297,7 +297,7 @@ pub struct AggregateExec {
     /// The mapping used to normalize expressions like Partitioning and
     /// PhysicalSortExpr. The key is the expression from the input schema
     /// and the value is the expression from the output schema.
-    source_to_target_mapping: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>,
+    projection_mapping: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     required_input_ordering: Option<LexRequirement>,
@@ -536,7 +536,7 @@ impl AggregateExec {
         new_requirement = collapse_lex_req(new_requirement);
 
         // construct a map from the input expression to the output expression of the Aggregation group by
-        let source_to_target_mapping =
+        let projection_mapping =
             calculate_projection_mapping(&group_by.expr, &input.schema())?;
 
         let required_input_ordering =
@@ -544,7 +544,7 @@ impl AggregateExec {
 
         let aggregate_oeq = input
             .schema_properties()
-            .project(&source_to_target_mapping, schema.clone());
+            .project(&projection_mapping, schema.clone());
         let output_ordering = aggregate_oeq.oeq_class().output_ordering();
 
         Ok(AggregateExec {
@@ -556,7 +556,7 @@ impl AggregateExec {
             input,
             schema,
             input_schema,
-            source_to_target_mapping,
+            projection_mapping,
             metrics: ExecutionPlanMetricsSet::new(),
             required_input_ordering,
             limit: None,
@@ -754,7 +754,7 @@ impl ExecutionPlan for AggregateExec {
                     .into_iter()
                     .map(|expr| {
                         input_schema_properties
-                            .project_expr(&self.source_to_target_mapping, &expr)
+                            .project_expr(&expr, &self.projection_mapping)
                             .unwrap_or_else(|| {
                                 Arc::new(UnKnownColumn::new(&expr.to_string()))
                             })
@@ -810,7 +810,7 @@ impl ExecutionPlan for AggregateExec {
     fn schema_properties(&self) -> SchemaProperties {
         self.input
             .schema_properties()
-            .project(&self.source_to_target_mapping, self.schema())
+            .project(&self.projection_mapping, self.schema())
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

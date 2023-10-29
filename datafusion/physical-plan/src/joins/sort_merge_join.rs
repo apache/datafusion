@@ -282,11 +282,9 @@ impl ExecutionPlan for SortMergeJoinExec {
     }
 
     fn schema_properties(&self) -> SchemaProperties {
-        let left = self.left.schema_properties();
-        let right = self.right.schema_properties();
         join_schema_properties(
-            left,
-            right,
+            self.left.schema_properties(),
+            self.right.schema_properties(),
             &self.join_type,
             self.schema(),
             &self.maintains_input_order(),

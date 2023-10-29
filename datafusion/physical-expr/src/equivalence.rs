@@ -603,6 +603,7 @@ fn finer_side(lhs: LexOrderingRef, rhs: LexOrderingRef) -> Option<bool> {
 /// | 5 | 5 |
 /// └---┴---┘
 /// ```
+///
 /// where columns `a` and `b` always have the same value. We keep track of such
 /// equivalences inside this object. With this information, we can optimize
 /// things like partitioning. For example, if the partition requirement is
@@ -683,7 +684,7 @@ impl SchemaProperties {
 
     /// Clears (empties) the ordering equivalence class within this object.
     /// Call this method when existing orderings are invalidated.
-    pub fn clear(&mut self) {
+    pub fn clear_orderings(&mut self) {
         self.oeq_class.clear();
     }
 
@@ -927,67 +928,59 @@ impl SchemaProperties {
         (!meet.is_empty()).then_some(meet)
     }
 
-    /// Projects argument `expr` according to mapping inside `source_to_target_mapping`.
-    /// While doing so consider equalities also.
-    /// As an example assume `source_to_target_mapping` contains following mapping
+    /// Projects argument `expr` according to `projection_mapping`, taking
+    /// equivalences into account.
+    ///
+    /// For example, assume that columns `a` and `c` are always equal, and that
+    /// `projection_mapping` encodes following mapping:
+    ///
+    /// ```text
     /// a -> a1
     /// b -> b1
-    /// Also assume that we know that a=c (they are equal)
-    /// This function projects
-    /// a+b to Some(a1+b1)
-    /// c+b to Some(a1+b1)
-    /// d to None. (meaning cannot be projected)
+    /// ```
+    ///
+    /// Then, this function projects `a + b` to `Some(a1 + b1)`, `c + b` to
+    /// `Some(a1 + b1)` and `d` to `None`, meaning that it  cannot be projected.
     pub fn project_expr(
         &self,
-        source_to_target_mapping: &ProjectionMapping,
         expr: &Arc<dyn PhysicalExpr>,
+        projection_mapping: &ProjectionMapping,
     ) -> Option<Arc<dyn PhysicalExpr>> {
-        self.eq_group.project_expr(source_to_target_mapping, expr)
+        self.eq_group.project_expr(projection_mapping, expr)
     }
 
-    /// Projects `SchemaProperties` according to mapping given in `source_to_target_mapping`.
+    /// Projects the equivalences within according to `projection_mapping`
+    /// and `output_schema`.
     pub fn project(
         &self,
-        source_to_target_mapping: &ProjectionMapping,
+        projection_mapping: &ProjectionMapping,
         output_schema: SchemaRef,
     ) -> SchemaProperties {
-        let mut projected_properties = SchemaProperties::new(output_schema);
-
-        let projected_eq_groups = self.eq_group.project(source_to_target_mapping);
-        projected_properties.eq_group = projected_eq_groups;
-
-        let projected_orderings = self
+        let mut projected_orderings = self
             .oeq_class
             .iter()
-            .filter_map(|order| {
-                self.eq_group
-                    .project_ordering(source_to_target_mapping, order)
-            })
+            .filter_map(|order| self.eq_group.project_ordering(projection_mapping, order))
             .collect::<Vec<_>>();
 
-        // if empty, no need to track projected_orderings.
-        if !projected_orderings.is_empty() {
-            projected_properties.oeq_class =
-                OrderingEquivalenceClass::new(projected_orderings);
-        }
-
-        for (source, target) in source_to_target_mapping {
+        for (source, target) in projection_mapping {
             let initial_expr = ExprOrdering::new(source.clone());
             let transformed = initial_expr
                 .transform_up(&|expr| update_ordering(expr, self))
                 .unwrap();
             if let Some(SortProperties::Ordered(sort_options)) = transformed.state {
-                let sort_expr = PhysicalSortExpr {
+                // Push new ordering to the state.
+                projected_orderings.push(vec![PhysicalSortExpr {
                     expr: target.clone(),
                     options: sort_options,
-                };
-                // Push new ordering to the state.
-                projected_properties.oeq_class.push(vec![sort_expr]);
+                }]);
             }
         }
-        // Remove redundant entries from ordering group if any.
-        // projected_properties.oeq_group.remove_redundant_entries();
-        projected_properties
+        Self {
+            eq_group: self.eq_group.project(projection_mapping),
+            oeq_class: OrderingEquivalenceClass::new(projected_orderings),
+            constants: vec![],
+            schema: output_schema,
+        }
     }
 
     /// Check whether any permutation of the argument has a prefix with existing ordering.
@@ -1485,14 +1478,13 @@ mod tests {
         let col_a2 = &col("a2", &out_schema)?;
         let col_a3 = &col("a3", &out_schema)?;
         let col_a4 = &col("a4", &out_schema)?;
-        let source_to_target_mapping = vec![
+        let projection_mapping = vec![
             (col_a.clone(), col_a1.clone()),
             (col_a.clone(), col_a2.clone()),
             (col_a.clone(), col_a3.clone()),
             (col_a.clone(), col_a4.clone()),
         ];
-        let out_properties =
-            input_properties.project(&source_to_target_mapping, out_schema);
+        let out_properties = input_properties.project(&projection_mapping, out_schema);
 
         // At the output a1=a2=a3=a4
         assert_eq!(out_properties.eq_group().len(), 1);

@@ -157,11 +157,11 @@ impl ExecutionPlan for StreamingTableExec {
     }
 
     fn schema_properties(&self) -> SchemaProperties {
-        let mut oeq = SchemaProperties::new(self.schema());
+        let mut result = SchemaProperties::new(self.schema());
         if let Some(ordering) = &self.projected_output_ordering {
-            oeq.add_new_orderings(&[ordering.clone()])
+            result.add_new_orderings(&[ordering.clone()])
         }
-        oeq
+        result
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

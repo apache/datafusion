@@ -147,12 +147,12 @@ impl ExecutionPlan for FilterExec {
     fn schema_properties(&self) -> SchemaProperties {
         let stats = self.statistics().unwrap();
         // Combine the equal predicates with the input equivalence properties
-        let mut filter_oeq = self.input.schema_properties();
+        let mut result = self.input.schema_properties();
         let (equal_pairs, _) = collect_columns_from_predicate(&self.predicate);
         for (lhs, rhs) in equal_pairs {
             let lhs_expr = Arc::new(lhs.clone()) as _;
             let rhs_expr = Arc::new(rhs.clone()) as _;
-            filter_oeq.add_equal_conditions(&lhs_expr, &rhs_expr)
+            result.add_equal_conditions(&lhs_expr, &rhs_expr)
         }
         // Add the columns that have only one value (singleton) after filtering to constants.
         let constants = collect_columns(self.predicate())
@@ -160,7 +160,7 @@ impl ExecutionPlan for FilterExec {
             .filter(|column| stats.column_statistics[column.index()].is_singleton())
             .map(|column| Arc::new(column) as _)
             .collect();
-        filter_oeq.add_constants(constants)
+        result.add_constants(constants)
     }
 
     fn with_new_children(
