@@ -51,6 +51,6 @@ log = { workspace = true }
 regex-syntax = "0.8.0"
 
 [dev-dependencies]
-ctor = "0.2.0"
+ctor = { workspace = true }
 datafusion-sql = { path = "../sql", version = "32.0.0" }
 env_logger = "0.10.0"

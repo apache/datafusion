@@ -45,7 +45,7 @@ log = { workspace = true }
 sqlparser = { workspace = true }
 
 [dev-dependencies]
-ctor = "0.2.0"
-env_logger = "0.10"
+ctor = { workspace = true }
+env_logger = { workspace = true }
 paste = "^1.0"
 rstest = "0.18"

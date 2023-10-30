@@ -35,22 +35,22 @@ arrow-flight = { workspace = true }
 arrow-schema = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
-dashmap = "5.4"
+dashmap = { workspace = true }
 datafusion = { path = "../datafusion/core", features = ["avro"] }
 datafusion-common = { path = "../datafusion/common" }
 datafusion-expr = { path = "../datafusion/expr" }
 datafusion-optimizer = { path = "../datafusion/optimizer" }
 datafusion-sql = { path = "../datafusion/sql" }
-env_logger = "0.10"
+env_logger = { workspace = true }
 futures = { workspace = true }
-log = "0.4"
+log = { workspace = true }
 mimalloc = { version = "0.1", default-features = false }
 num_cpus = { workspace = true }
 object_store = { version = "0.7.0", features = ["aws", "http"] }
 prost = { version = "0.12", default-features = false }
 prost-derive = { version = "0.11", default-features = false }
 serde = { version = "1.0.136", features = ["derive"] }
-serde_json = "1.0.82"
+serde_json = { workspace = true }
 tempfile = { workspace = true }
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot"] }
 tonic = "0.10"
