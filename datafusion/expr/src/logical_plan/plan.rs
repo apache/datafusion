@@ -17,6 +17,13 @@
 
 //! Logical plan types
 
+use std::collections::{HashMap, HashSet};
+use std::fmt::{self, Debug, Display, Formatter};
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+
+use super::dml::CopyTo;
+use super::DdlStatement;
 use crate::dml::CopyOptions;
 use crate::expr::{Alias, Exists, InSubquery, Placeholder, Sort as SortExpr};
 use crate::expr_rewriter::{create_col_from_scalar_expr, normalize_cols};
@@ -28,14 +35,10 @@ use crate::utils::{
     grouping_set_expr_count, grouping_set_to_exprlist, inspect_expr_pre,
 };
 use crate::{
-    build_join_schema, Expr, ExprSchemable, TableProviderFilterPushDown, TableSource,
+    build_join_schema, expr_vec_fmt, BinaryExpr, CreateMemoryTable, CreateView, Expr,
+    ExprSchemable, LogicalPlanBuilder, Operator, TableProviderFilterPushDown,
+    TableSource,
 };
-use crate::{
-    expr_vec_fmt, BinaryExpr, CreateMemoryTable, CreateView, LogicalPlanBuilder, Operator,
-};
-
-use super::dml::CopyTo;
-use super::DdlStatement;
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::tree_node::{
@@ -50,11 +53,6 @@ use datafusion_common::{
 // backwards compatibility
 pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 pub use datafusion_common::{JoinConstraint, JoinType};
-
-use std::collections::{HashMap, HashSet};
-use std::fmt::{self, Debug, Display, Formatter};
-use std::hash::{Hash, Hasher};
-use std::sync::Arc;
 
 /// A LogicalPlan represents the different types of relational
 /// operators (such as Projection, Filter, etc) and can be created by
@@ -547,11 +545,11 @@ impl LogicalPlan {
         // so we don't need to recompute Schema.
         match &self {
             LogicalPlan::Projection(projection) => {
-                Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
-                    projection.expr.to_vec(),
-                    Arc::new(inputs[0].clone()),
-                    projection.schema.clone(),
-                )?))
+                // Schema of the projection may change
+                // when its input changes. Hence we should use
+                // `try_new` method instead of `try_new_with_schema`.
+                Projection::try_new(projection.expr.to_vec(), Arc::new(inputs[0].clone()))
+                    .map(LogicalPlan::Projection)
             }
             LogicalPlan::Window(Window {
                 window_expr,
@@ -565,14 +563,16 @@ impl LogicalPlan {
             LogicalPlan::Aggregate(Aggregate {
                 group_expr,
                 aggr_expr,
-                schema,
                 ..
-            }) => Ok(LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
+            }) => Aggregate::try_new(
+                // Schema of the aggregate may change
+                // when its input changes. Hence we should use
+                // `try_new` method instead of `try_new_with_schema`.
                 Arc::new(inputs[0].clone()),
                 group_expr.to_vec(),
                 aggr_expr.to_vec(),
-                schema.clone(),
-            )?)),
+            )
+            .map(LogicalPlan::Aggregate),
             _ => self.with_new_exprs(self.expressions(), inputs),
         }
     }
@@ -606,12 +606,11 @@ impl LogicalPlan {
         inputs: &[LogicalPlan],
     ) -> Result<LogicalPlan> {
         match self {
-            LogicalPlan::Projection(Projection { schema, .. }) => {
-                Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
-                    expr,
-                    Arc::new(inputs[0].clone()),
-                    schema.clone(),
-                )?))
+            // Since expr may be different than the previous expr, schema of the projection
+            // may change. We need to use try_new method instead of try_new_with_schema method.
+            LogicalPlan::Projection(Projection { .. }) => {
+                Projection::try_new(expr, Arc::new(inputs[0].clone()))
+                    .map(LogicalPlan::Projection)
             }
             LogicalPlan::Dml(DmlStatement {
                 table_name,
@@ -688,10 +687,8 @@ impl LogicalPlan {
                 let mut remove_aliases = RemoveAliases {};
                 let predicate = predicate.rewrite(&mut remove_aliases)?;
 
-                Ok(LogicalPlan::Filter(Filter::try_new(
-                    predicate,
-                    Arc::new(inputs[0].clone()),
-                )?))
+                Filter::try_new(predicate, Arc::new(inputs[0].clone()))
+                    .map(LogicalPlan::Filter)
             }
             LogicalPlan::Repartition(Repartition {
                 partitioning_scheme,
@@ -726,18 +723,12 @@ impl LogicalPlan {
                     schema: schema.clone(),
                 }))
             }
-            LogicalPlan::Aggregate(Aggregate {
-                group_expr, schema, ..
-            }) => {
+            LogicalPlan::Aggregate(Aggregate { group_expr, .. }) => {
                 // group exprs are the first expressions
                 let agg_expr = expr.split_off(group_expr.len());
 
-                Ok(LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
-                    Arc::new(inputs[0].clone()),
-                    expr,
-                    agg_expr,
-                    schema.clone(),
-                )?))
+                Aggregate::try_new(Arc::new(inputs[0].clone()), expr, agg_expr)
+                    .map(LogicalPlan::Aggregate)
             }
             LogicalPlan::Sort(Sort { fetch, .. }) => Ok(LogicalPlan::Sort(Sort {
                 expr,
@@ -806,10 +797,8 @@ impl LogicalPlan {
                 }))
             }
             LogicalPlan::SubqueryAlias(SubqueryAlias { alias, .. }) => {
-                Ok(LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
-                    inputs[0].clone(),
-                    alias.clone(),
-                )?))
+                SubqueryAlias::try_new(inputs[0].clone(), alias.clone())
+                    .map(LogicalPlan::SubqueryAlias)
             }
             LogicalPlan::Limit(Limit { skip, fetch, .. }) => {
                 Ok(LogicalPlan::Limit(Limit {
@@ -1999,6 +1988,63 @@ impl Hash for TableScan {
         self.projected_schema.hash(state);
         self.filters.hash(state);
         self.fetch.hash(state);
+    }
+}
+
+impl TableScan {
+    /// Initialize TableScan with appropriate schema from the given
+    /// arguments.
+    pub fn try_new(
+        table_name: impl Into<OwnedTableReference>,
+        table_source: Arc<dyn TableSource>,
+        projection: Option<Vec<usize>>,
+        filters: Vec<Expr>,
+        fetch: Option<usize>,
+    ) -> Result<Self> {
+        let table_name = table_name.into();
+
+        if table_name.table().is_empty() {
+            return plan_err!("table_name cannot be empty");
+        }
+        let schema = table_source.schema();
+        let func_dependencies = FunctionalDependencies::new_from_constraints(
+            table_source.constraints(),
+            schema.fields.len(),
+        );
+        let projected_schema = projection
+            .as_ref()
+            .map(|p| {
+                let projected_func_dependencies =
+                    func_dependencies.project_functional_dependencies(p, p.len());
+                DFSchema::new_with_metadata(
+                    p.iter()
+                        .map(|i| {
+                            DFField::from_qualified(
+                                table_name.clone(),
+                                schema.field(*i).clone(),
+                            )
+                        })
+                        .collect(),
+                    schema.metadata().clone(),
+                )
+                .map(|df_schema| {
+                    df_schema.with_functional_dependencies(projected_func_dependencies)
+                })
+            })
+            .unwrap_or_else(|| {
+                DFSchema::try_from_qualified_schema(table_name.clone(), &schema).map(
+                    |df_schema| df_schema.with_functional_dependencies(func_dependencies),
+                )
+            })?;
+        let projected_schema = Arc::new(projected_schema);
+        Ok(Self {
+            table_name,
+            source: table_source,
+            projection,
+            projected_schema,
+            filters,
+            fetch,
+        })
     }
 }
 

@@ -39,11 +39,12 @@ avro = ["apache-avro", "num-traits", "datafusion-common/avro"]
 backtrace = ["datafusion-common/backtrace"]
 compression = ["xz2", "bzip2", "flate2", "zstd", "async-compression"]
 crypto_expressions = ["datafusion-physical-expr/crypto_expressions", "datafusion-optimizer/crypto_expressions"]
-default = ["crypto_expressions", "encoding_expressions", "regex_expressions", "unicode_expressions", "compression"]
+default = ["crypto_expressions", "encoding_expressions", "regex_expressions", "unicode_expressions", "compression", "parquet"]
 encoding_expressions = ["datafusion-physical-expr/encoding_expressions"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
 force_hash_collisions = []
-pyarrow = ["datafusion-common/pyarrow"]
+parquet = ["datafusion-common/parquet", "dep:parquet"]
+pyarrow = ["datafusion-common/pyarrow", "parquet"]
 regex_expressions = ["datafusion-physical-expr/regex_expressions", "datafusion-optimizer/regex_expressions"]
 serde = ["arrow-schema/serde"]
 simd = ["arrow/simd"]
@@ -61,7 +62,7 @@ bytes = "1.4"
 bzip2 = { version = "0.4.3", optional = true }
 chrono = { workspace = true }
 dashmap = "5.4.0"
-datafusion-common = { path = "../common", version = "32.0.0", features = ["parquet", "object_store"] }
+datafusion-common = { path = "../common", version = "32.0.0", features = ["object_store"], default-features = false }
 datafusion-execution = { path = "../execution", version = "32.0.0" }
 datafusion-expr = { path = "../expr", version = "32.0.0" }
 datafusion-optimizer = { path = "../optimizer", version = "32.0.0", default-features = false }
@@ -80,7 +81,7 @@ num-traits = { version = "0.2", optional = true }
 num_cpus = "1.13.0"
 object_store = "0.7.0"
 parking_lot = "0.12"
-parquet = { workspace = true }
+parquet = { workspace = true, optional = true }
 percent-encoding = "2.2.0"
 pin-project-lite = "^0.2.7"
 rand = "0.8"
@@ -92,7 +93,6 @@ url = "2.2"
 uuid = { version = "1.0", features = ["v4"] }
 xz2 = { version = "0.1", optional = true }
 zstd = { version = "0.13", optional = true, default-features = false }
-
 
 [dev-dependencies]
 async-trait = "0.1.53"

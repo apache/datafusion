@@ -23,17 +23,18 @@ mod csv;
 mod file_scan_config;
 mod file_stream;
 mod json;
+#[cfg(feature = "parquet")]
 pub mod parquet;
 
 pub(crate) use self::csv::plan_to_csv;
 pub use self::csv::{CsvConfig, CsvExec, CsvOpener};
-pub(crate) use self::file_scan_config::PartitionColumnProjector;
 pub(crate) use self::json::plan_to_json;
-pub(crate) use self::parquet::plan_to_parquet;
+#[cfg(feature = "parquet")]
 pub use self::parquet::{ParquetExec, ParquetFileMetrics, ParquetFileReaderFactory};
 
 pub use arrow_file::ArrowExec;
 pub use avro::AvroExec;
+use file_scan_config::PartitionColumnProjector;
 pub use file_scan_config::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
 };
@@ -798,6 +799,7 @@ mod tests {
     }
 
     /// Unit tests for `repartition_file_groups()`
+    #[cfg(feature = "parquet")]
     mod repartition_file_groups_test {
         use datafusion_common::Statistics;
         use itertools::Itertools;

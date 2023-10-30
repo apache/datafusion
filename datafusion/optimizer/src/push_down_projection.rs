@@ -18,28 +18,24 @@
 //! Projection Push Down optimizer rule ensures that only referenced columns are
 //! loaded into memory
 
+use std::collections::{BTreeSet, HashMap, HashSet};
+use std::sync::Arc;
+
 use crate::eliminate_project::can_eliminate;
 use crate::merge_projection::merge_projection;
 use crate::optimizer::ApplyOrder;
 use crate::push_down_filter::replace_cols_by_name;
 use crate::{OptimizerConfig, OptimizerRule};
-use arrow::datatypes::DataType;
 use arrow::error::Result as ArrowResult;
 use datafusion_common::ScalarValue::UInt8;
 use datafusion_common::{
-    plan_err, Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ToDFSchema,
+    plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, Result,
 };
 use datafusion_expr::expr::{AggregateFunction, Alias};
-use datafusion_expr::utils::exprlist_to_fields;
 use datafusion_expr::{
     logical_plan::{Aggregate, LogicalPlan, Projection, TableScan, Union},
-    utils::{expr_to_columns, exprlist_to_columns},
+    utils::{expr_to_columns, exprlist_to_columns, exprlist_to_fields},
     Expr, LogicalPlanBuilder, SubqueryAlias,
-};
-use std::collections::HashMap;
-use std::{
-    collections::{BTreeSet, HashSet},
-    sync::Arc,
 };
 
 // if projection is empty return projection-new_plan, else return new_plan.
@@ -149,10 +145,6 @@ impl OptimizerRule for PushDownProjection {
             {
                 let mut used_columns: HashSet<Column> = HashSet::new();
                 if projection_is_empty {
-                    let field = find_small_field(scan.projected_schema.fields()).ok_or(
-                        DataFusionError::Internal("Scan with empty schema".to_string()),
-                    )?;
-                    used_columns.insert(field.qualified_column());
                     push_down_scan(&used_columns, scan, true)?
                 } else {
                     for expr in projection.expr.iter() {
@@ -162,17 +154,6 @@ impl OptimizerRule for PushDownProjection {
 
                     plan.with_new_inputs(&[new_scan])?
                 }
-            }
-            LogicalPlan::Values(values) if projection_is_empty => {
-                let field = find_small_field(values.schema.fields()).ok_or(
-                    DataFusionError::Internal("Values with empty schema".to_string()),
-                )?;
-                let column = Expr::Column(field.qualified_column());
-
-                LogicalPlan::Projection(Projection::try_new(
-                    vec![column],
-                    Arc::new(child_plan.clone()),
-                )?)
             }
             LogicalPlan::Union(union) => {
                 let mut required_columns = HashSet::new();
@@ -429,87 +410,6 @@ pub fn collect_projection_expr(projection: &Projection) -> HashMap<String, Expr>
         .collect::<HashMap<_, _>>()
 }
 
-/// Accumulate the memory size of a data type measured in bits.
-///
-/// Types with a variable size get assigned with a fixed size which is greater than most
-/// primitive types.
-///
-/// While traversing nested types, `nesting` is incremented on every level.
-fn nested_size(data_type: &DataType, nesting: &mut usize) -> usize {
-    use DataType::*;
-    if data_type.is_primitive() {
-        return data_type.primitive_width().unwrap_or(1) * 8;
-    }
-
-    if data_type.is_nested() {
-        *nesting += 1;
-    }
-
-    match data_type {
-        Null => 0,
-        Boolean => 1,
-        Binary | Utf8 => 128,
-        LargeBinary | LargeUtf8 => 256,
-        FixedSizeBinary(bytes) => (*bytes * 8) as usize,
-        // primitive types
-        Int8
-        | Int16
-        | Int32
-        | Int64
-        | UInt8
-        | UInt16
-        | UInt32
-        | UInt64
-        | Float16
-        | Float32
-        | Float64
-        | Timestamp(_, _)
-        | Date32
-        | Date64
-        | Time32(_)
-        | Time64(_)
-        | Duration(_)
-        | Interval(_)
-        | Dictionary(_, _)
-        | Decimal128(_, _)
-        | Decimal256(_, _) => data_type.primitive_width().unwrap_or(1) * 8,
-        // nested types
-        List(f) => nested_size(f.data_type(), nesting),
-        FixedSizeList(_, s) => (s * 8) as usize,
-        LargeList(f) => nested_size(f.data_type(), nesting),
-        Struct(fields) => fields
-            .iter()
-            .map(|f| nested_size(f.data_type(), nesting))
-            .sum(),
-        Union(fields, _) => fields
-            .iter()
-            .map(|(_, f)| nested_size(f.data_type(), nesting))
-            .sum(),
-        Map(field, _) => nested_size(field.data_type(), nesting),
-        RunEndEncoded(run_ends, values) => {
-            nested_size(run_ends.data_type(), nesting)
-                + nested_size(values.data_type(), nesting)
-        }
-    }
-}
-
-/// Find a field with a presumable small memory footprint based on its data type's memory size
-/// and the level of nesting.
-fn find_small_field(fields: &[DFField]) -> Option<DFField> {
-    fields
-        .iter()
-        .map(|f| {
-            let nesting = &mut 0;
-            let size = nested_size(f.data_type(), nesting);
-            (*nesting, size)
-        })
-        .enumerate()
-        .min_by(|(_, (nesting_a, size_a)), (_, (nesting_b, size_b))| {
-            nesting_a.cmp(nesting_b).then(size_a.cmp(size_b))
-        })
-        .map(|(i, _)| fields[i].clone())
-}
-
 /// Get the projection exprs from columns in the order of the schema
 fn get_expr(columns: &HashSet<Column>, schema: &DFSchemaRef) -> Result<Vec<Expr>> {
     let expr = schema
@@ -598,24 +498,14 @@ fn push_down_scan(
         projection.into_iter().collect::<Vec<_>>()
     };
 
-    // create the projected schema
-    let projected_fields: Vec<DFField> = projection
-        .iter()
-        .map(|i| {
-            DFField::from_qualified(scan.table_name.clone(), schema.fields()[*i].clone())
-        })
-        .collect();
-
-    let projected_schema = projected_fields.to_dfschema_ref()?;
-
-    Ok(LogicalPlan::TableScan(TableScan {
-        table_name: scan.table_name.clone(),
-        source: scan.source.clone(),
-        projection: Some(projection),
-        projected_schema,
-        filters: scan.filters.clone(),
-        fetch: scan.fetch,
-    }))
+    TableScan::try_new(
+        scan.table_name.clone(),
+        scan.source.clone(),
+        Some(projection),
+        scan.filters.clone(),
+        scan.fetch,
+    )
+    .map(LogicalPlan::TableScan)
 }
 
 fn restrict_outputs(
@@ -635,25 +525,24 @@ fn restrict_outputs(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::vec;
+
     use super::*;
     use crate::eliminate_project::EliminateProjection;
     use crate::optimizer::Optimizer;
     use crate::test::*;
     use crate::OptimizerContext;
-    use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
-    use datafusion_common::DFSchema;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::{DFField, DFSchema};
     use datafusion_expr::builder::table_scan_with_filters;
-    use datafusion_expr::expr;
-    use datafusion_expr::expr::Cast;
-    use datafusion_expr::WindowFrame;
-    use datafusion_expr::WindowFunction;
-    use datafusion_expr::{
-        col, count, lit,
-        logical_plan::{builder::LogicalPlanBuilder, table_scan, JoinType},
-        max, min, AggregateFunction, Expr,
+    use datafusion_expr::expr::{self, Cast};
+    use datafusion_expr::logical_plan::{
+        builder::LogicalPlanBuilder, table_scan, JoinType,
     };
-    use std::collections::HashMap;
-    use std::vec;
+    use datafusion_expr::{
+        col, count, lit, max, min, AggregateFunction, Expr, WindowFrame, WindowFunction,
+    };
 
     #[test]
     fn aggregate_no_group_by() -> Result<()> {
@@ -1231,74 +1120,5 @@ mod tests {
             )?
             .unwrap_or(optimized_plan);
         Ok(optimized_plan)
-    }
-
-    #[test]
-    fn test_nested_size() {
-        use DataType::*;
-        let nesting = &mut 0;
-        assert_eq!(nested_size(&Null, nesting), 0);
-        assert_eq!(*nesting, 0);
-        assert_eq!(nested_size(&Boolean, nesting), 1);
-        assert_eq!(*nesting, 0);
-        assert_eq!(nested_size(&UInt8, nesting), 8);
-        assert_eq!(*nesting, 0);
-        assert_eq!(nested_size(&Int64, nesting), 64);
-        assert_eq!(*nesting, 0);
-        assert_eq!(nested_size(&Decimal256(5, 2), nesting), 256);
-        assert_eq!(*nesting, 0);
-        assert_eq!(
-            nested_size(&List(Arc::new(Field::new("A", Int64, true))), nesting),
-            64
-        );
-        assert_eq!(*nesting, 1);
-        *nesting = 0;
-        assert_eq!(
-            nested_size(
-                &List(Arc::new(Field::new(
-                    "A",
-                    List(Arc::new(Field::new("AA", Int64, true))),
-                    true
-                ))),
-                nesting
-            ),
-            64
-        );
-        assert_eq!(*nesting, 2);
-    }
-
-    #[test]
-    fn test_find_small_field() {
-        use DataType::*;
-        let int32 = DFField::from(Field::new("a", Int32, false));
-        let bin = DFField::from(Field::new("b", Binary, false));
-        let list_i64 = DFField::from(Field::new(
-            "c",
-            List(Arc::new(Field::new("c_1", Int64, true))),
-            false,
-        ));
-        let time_s = DFField::from(Field::new("d", Time32(TimeUnit::Second), false));
-
-        assert_eq!(
-            find_small_field(&[
-                int32.clone(),
-                bin.clone(),
-                list_i64.clone(),
-                time_s.clone()
-            ]),
-            Some(int32.clone())
-        );
-        assert_eq!(
-            find_small_field(&[bin.clone(), list_i64.clone(), time_s.clone()]),
-            Some(time_s.clone())
-        );
-        assert_eq!(
-            find_small_field(&[time_s.clone(), int32.clone()]),
-            Some(time_s.clone())
-        );
-        assert_eq!(
-            find_small_field(&[bin.clone(), list_i64.clone()]),
-            Some(bin.clone())
-        );
     }
 }

@@ -54,12 +54,22 @@ mod bounded_window_agg_exec;
 mod window_agg_exec;
 
 pub use bounded_window_agg_exec::BoundedWindowAggExec;
-pub use bounded_window_agg_exec::PartitionSearchMode;
 pub use window_agg_exec::WindowAggExec;
 
 pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
 };
+
+#[derive(Debug, Clone, PartialEq)]
+/// Specifies partition column properties in terms of input ordering
+pub enum PartitionSearchMode {
+    /// None of the columns among the partition columns is ordered.
+    Linear,
+    /// Some columns of the partition columns are ordered but not all
+    PartiallySorted(Vec<usize>),
+    /// All Partition columns are ordered (Also empty case)
+    Sorted,
+}
 
 /// Create a physical expression for window function
 pub fn create_window_expr(

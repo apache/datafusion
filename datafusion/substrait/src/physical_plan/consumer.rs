@@ -38,7 +38,7 @@ use substrait::proto::{
 /// Convert Substrait Rel to DataFusion ExecutionPlan
 #[async_recursion]
 pub async fn from_substrait_rel(
-    _ctx: &mut SessionContext,
+    _ctx: &SessionContext,
     rel: &Rel,
     _extensions: &HashMap<u32, &String>,
 ) -> Result<Arc<dyn ExecutionPlan>> {

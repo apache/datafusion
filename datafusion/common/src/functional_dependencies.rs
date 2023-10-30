@@ -558,4 +558,21 @@ mod tests {
         assert_eq!(iter.next(), Some(&Constraint::Unique(vec![20])));
         assert_eq!(iter.next(), None);
     }
+
+    #[test]
+    fn test_get_updated_id_keys() {
+        let fund_dependencies =
+            FunctionalDependencies::new(vec![FunctionalDependence::new(
+                vec![1],
+                vec![0, 1, 2],
+                true,
+            )]);
+        let res = fund_dependencies.project_functional_dependencies(&[1, 2], 2);
+        let expected = FunctionalDependencies::new(vec![FunctionalDependence::new(
+            vec![0],
+            vec![0, 1],
+            true,
+        )]);
+        assert_eq!(res, expected);
+    }
 }

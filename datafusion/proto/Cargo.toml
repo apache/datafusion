@@ -19,9 +19,9 @@
 name = "datafusion-proto"
 description = "Protobuf serialization of DataFusion logical plan expressions"
 keywords = ["arrow", "query", "sql"]
+readme = "README.md"
 version = { workspace = true }
 edition = { workspace = true }
-readme = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
@@ -36,8 +36,9 @@ name = "datafusion_proto"
 path = "src/lib.rs"
 
 [features]
-default = []
+default = ["parquet"]
 json = ["pbjson", "serde", "serde_json"]
+parquet = ["datafusion/parquet", "datafusion-common/parquet"]
 
 [dependencies]
 arrow = { workspace = true }
