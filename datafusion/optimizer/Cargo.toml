@@ -40,7 +40,7 @@ unicode_expressions = ["datafusion-physical-expr/unicode_expressions"]
 
 [dependencies]
 arrow = { workspace = true }
-async-trait = "0.1.41"
+async-trait = { workspace = true }
 chrono = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }

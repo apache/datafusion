@@ -32,7 +32,7 @@ path = "src/lib.rs"
 
 [dependencies]
 arrow = { workspace = true }
-async-trait = "0.1.41"
+async-trait = { workspace = true }
 bigdecimal = "0.4.1"
 bytes = { version = "1.4.0", optional = true }
 chrono = { workspace = true, optional = true }

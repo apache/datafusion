@@ -54,6 +54,7 @@ arrow-array = { version = "48.0.0", default-features = false, features = ["chron
 arrow-buffer = { version = "48.0.0", default-features = false }
 arrow-flight = { version = "48.0.0", features = ["flight-sql-experimental"] }
 arrow-schema = { version = "48.0.0", default-features = false }
+async-trait = "0.1.73"
 bytes = "1.4"
 datafusion = { path = "datafusion/core" }
 datafusion-common = { path = "datafusion/common" }

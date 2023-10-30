@@ -33,7 +33,7 @@ rust-version = { workspace = true }
 arrow = { workspace = true }
 arrow-flight = { workspace = true }
 arrow-schema = { workspace = true }
-async-trait = "0.1.41"
+async-trait = { workspace = true }
 bytes = { workspace = true }
 dashmap = "5.4"
 datafusion = { path = "../datafusion/core", features = ["avro"] }
