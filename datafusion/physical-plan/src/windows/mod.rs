@@ -325,10 +325,10 @@ pub(crate) fn get_ordered_partition_by_indices(
     partition_by_exprs: &[Arc<dyn PhysicalExpr>],
     input: &Arc<dyn ExecutionPlan>,
 ) -> Vec<usize> {
-    input
+    let (_, indices) = input
         .schema_properties()
-        .find_longest_permutation(partition_by_exprs)
-        .1
+        .find_longest_permutation(partition_by_exprs);
+    indices
 }
 
 pub(crate) fn get_partition_by_sort_exprs(
@@ -467,14 +467,10 @@ pub fn get_window_mode(
     let input_eqs = input.schema_properties();
     let mut partition_by_reqs: Vec<PhysicalSortRequirement> = vec![];
     let (_, indices) = input_eqs.find_longest_permutation(partitionby_exprs);
-    let item = indices
-        .iter()
-        .map(|&idx| PhysicalSortRequirement {
-            expr: partitionby_exprs[idx].clone(),
-            options: None,
-        })
-        .collect::<Vec<_>>();
-    partition_by_reqs.extend(item);
+    partition_by_reqs.extend(indices.iter().map(|&idx| PhysicalSortRequirement {
+        expr: partitionby_exprs[idx].clone(),
+        options: None,
+    }));
     // Treat partition by exprs as constant. During analysis of requirements are satisfied.
     let partition_by_eqs = input_eqs.add_constants(partitionby_exprs.iter().cloned());
     let order_by_reqs = PhysicalSortRequirement::from_sort_exprs(orderby_keys);

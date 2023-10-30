@@ -1076,7 +1076,7 @@ pub fn join_schema_properties(
                 // equivalence properties since stream side is the left side.
                 //
                 // For example, if the right side ordering equivalences contain
-                // `b ASC`, and the left table ordering equivalences contain `a ASC`,
+                // `b ASC`, and the left side ordering equivalences contain `a ASC`,
                 // then we should add `a ASC, b ASC` to the ordering equivalences
                 // of the join output.
                 let out_oeq_class = left_oeq_class.join_suffix(&right_oeq_class);
@@ -1099,7 +1099,7 @@ pub fn join_schema_properties(
                 // equivalence properties since stream side is the right side.
                 //
                 // For example, if the left side ordering equivalences contain
-                // `a ASC`, and the right table ordering equivalences contain `b ASC`,
+                // `a ASC`, and the right side ordering equivalences contain `b ASC`,
                 // then we should add `b ASC, a ASC` to the ordering equivalences
                 // of the join output.
                 let out_oeq_class = right_oeq_class.join_suffix(&left_oeq_class);
@@ -2483,7 +2483,7 @@ mod tests {
         for (exprs, expected) in test_cases {
             let exprs = exprs.into_iter().cloned().collect::<Vec<_>>();
             let expected = convert_to_sort_exprs(&expected);
-            let (actual, _indices) = eq_properties.find_longest_permutation(&exprs);
+            let (actual, _) = eq_properties.find_longest_permutation(&exprs);
             assert_eq!(actual, expected);
         }
 

@@ -542,10 +542,10 @@ impl AggregateExec {
         let required_input_ordering =
             (!new_requirement.is_empty()).then_some(new_requirement);
 
-        let aggregate_oeq = input
+        let aggregate_eqs = input
             .schema_properties()
             .project(&projection_mapping, schema.clone());
-        let output_ordering = aggregate_oeq.oeq_class().output_ordering();
+        let output_ordering = aggregate_eqs.oeq_class().output_ordering();
 
         Ok(AggregateExec {
             mode,
