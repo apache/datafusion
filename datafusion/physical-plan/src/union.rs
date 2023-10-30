@@ -244,9 +244,15 @@ impl ExecutionPlan for UnionExec {
             // equivalence class.
             let mut next_meets = vec![];
             for current_meet in &meets {
-                next_meets.extend(child_eqs.oeq_class().iter().filter_map(|ordering| {
+                // Find the all of the meets of `current_meet` with orderings inside `child_eqs`
+                let valid_meets = child_eqs.oeq_class().iter().filter_map(|ordering| {
                     child_eqs.get_meet_ordering(ordering, current_meet)
-                }));
+                });
+                // Use the longest meet among `valid_meets`, other meets are redundant
+                if let Some(next_meet) = valid_meets.max_by(|a, b| a.len().cmp(&b.len()))
+                {
+                    next_meets.push(next_meet);
+                }
             }
             meets = next_meets;
         }

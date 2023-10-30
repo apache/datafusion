@@ -32,12 +32,12 @@ use crate::{
 
 use arrow::datatypes::Schema;
 use arrow_schema::{DataType, Field, SchemaRef};
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
     window_function::{BuiltInWindowFunction, WindowFunction},
     PartitionEvaluator, WindowFrame, WindowUDF,
 };
-use datafusion_physical_expr::equivalence::collapse_lex_req;
+use datafusion_physical_expr::equivalence::{collapse_lex_req, SetOrderMode};
 use datafusion_physical_expr::{
     reverse_order_bys,
     window::{BuiltInWindowFunctionExpr, SlidingAggregateWindowExpr},
@@ -63,6 +63,18 @@ pub enum PartitionSearchMode {
     PartiallySorted(Vec<usize>),
     /// All Partition columns are ordered (Also empty case)
     Sorted,
+}
+
+impl From<SetOrderMode<usize>> for PartitionSearchMode {
+    fn from(value: SetOrderMode<usize>) -> Self {
+        match value {
+            SetOrderMode::FullySorted(_indices) => PartitionSearchMode::Sorted,
+            SetOrderMode::PartiallySorted(indices) => {
+                PartitionSearchMode::PartiallySorted(indices)
+            }
+            SetOrderMode::None => PartitionSearchMode::Linear,
+        }
+    }
 }
 
 /// Create a physical expression for window function
@@ -325,11 +337,10 @@ pub(crate) fn get_ordered_partition_by_indices(
     partition_by_exprs: &[Arc<dyn PhysicalExpr>],
     input: &Arc<dyn ExecutionPlan>,
 ) -> Vec<usize> {
-    if let Some(indices) = input.schema_properties().set_satisfy(partition_by_exprs) {
-        indices
-    } else {
-        vec![]
-    }
+    input
+        .schema_properties()
+        .set_ordered_indices(partition_by_exprs)
+        .entries()
 }
 
 pub(crate) fn get_partition_by_sort_exprs(
@@ -343,14 +354,14 @@ pub(crate) fn get_partition_by_sort_exprs(
         .collect::<Vec<_>>();
     // Make sure ordered section doesn't move over the partition by expression
     assert!(ordered_partition_by_indices.len() <= partition_by_exprs.len());
-    input
+    if let SetOrderMode::FullySorted(ordered_section) = input
         .schema_properties()
-        .get_lex_ordering(&ordered_partition_exprs)
-        .ok_or_else(|| {
-            DataFusionError::Execution(
-                "Expects partition by expression to be ordered".to_string(),
-            )
-        })
+        .set_ordered_section(&ordered_partition_exprs)
+    {
+        Ok(ordered_section)
+    } else {
+        exec_err!("Expects partition by expression to be ordered")
+    }
 }
 
 pub(crate) fn window_ordering_equivalence(
@@ -466,26 +477,17 @@ pub fn get_window_mode(
     input: &Arc<dyn ExecutionPlan>,
 ) -> Result<Option<(bool, PartitionSearchMode)>> {
     let input_eqs = input.schema_properties();
-    let mut partition_search_mode = PartitionSearchMode::Linear;
     let mut partition_by_reqs: Vec<PhysicalSortRequirement> = vec![];
-    if partitionby_exprs.is_empty() {
-        partition_search_mode = PartitionSearchMode::Sorted;
-    } else if let Some(indices) = input_eqs.set_satisfy(partitionby_exprs) {
-        let item = indices
-            .iter()
-            .map(|&idx| PhysicalSortRequirement {
-                expr: partitionby_exprs[idx].clone(),
-                options: None,
-            })
-            .collect::<Vec<_>>();
-        partition_by_reqs.extend(item);
-        if indices.len() == partitionby_exprs.len() {
-            partition_search_mode = PartitionSearchMode::Sorted;
-        } else if !indices.is_empty() {
-            partition_search_mode = PartitionSearchMode::PartiallySorted(indices);
-        }
-    }
-
+    let set_ordered_indices = input_eqs.set_ordered_indices(partitionby_exprs);
+    let indices = set_ordered_indices.entries_ref();
+    let item = indices
+        .iter()
+        .map(|&idx| PhysicalSortRequirement {
+            expr: partitionby_exprs[idx].clone(),
+            options: None,
+        })
+        .collect::<Vec<_>>();
+    partition_by_reqs.extend(item);
     // Treat partition by exprs as constant. During analysis of requirements are satisfied.
     let partition_by_eqs = input_eqs.add_constants(partitionby_exprs.iter().cloned());
     let order_by_reqs = PhysicalSortRequirement::from_sort_exprs(orderby_keys);
@@ -498,7 +500,7 @@ pub fn get_window_mode(
         let req = collapse_lex_req(req);
         if partition_by_eqs.ordering_satisfy_requirement(&req) {
             // Window can be run with existing ordering
-            return Ok(Some((should_swap, partition_search_mode)));
+            return Ok(Some((should_swap, set_ordered_indices.into())));
         }
     }
     Ok(None)

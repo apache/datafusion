@@ -658,13 +658,17 @@ mod tests {
             },
         ]]);
         assert_eq!(
-            eq_properties.set_exactly_satisfy(&required_columns),
-            Some(vec![0, 1])
+            eq_properties
+                .set_ordered_indices(&required_columns)
+                .entries(),
+            &[0, 1]
         );
 
         assert_eq!(
-            eq_properties.get_lex_ordering(&required_columns),
-            Some(vec![
+            eq_properties
+                .set_ordered_section(&required_columns)
+                .entries(),
+            vec![
                 PhysicalSortExpr {
                     expr: col_b.clone(),
                     options: sort_options_not
@@ -673,7 +677,7 @@ mod tests {
                     expr: col_a.clone(),
                     options: sort_options
                 }
-            ])
+            ]
         );
 
         let schema = Schema::new(vec![
@@ -702,13 +706,17 @@ mod tests {
             ],
         ]);
         assert_eq!(
-            eq_properties.set_exactly_satisfy(&required_columns),
-            Some(vec![0, 1])
+            eq_properties
+                .set_ordered_indices(&required_columns)
+                .entries(),
+            &[0, 1]
         );
 
         assert_eq!(
-            eq_properties.get_lex_ordering(&required_columns),
-            Some(vec![
+            eq_properties
+                .set_ordered_section(&required_columns)
+                .entries(),
+            vec![
                 PhysicalSortExpr {
                     expr: col_b.clone(),
                     options: sort_options_not
@@ -717,7 +725,7 @@ mod tests {
                     expr: col_a.clone(),
                     options: sort_options
                 }
-            ])
+            ]
         );
 
         let required_columns = [
@@ -746,7 +754,12 @@ mod tests {
                 options: sort_options,
             },
         ]]);
-        assert_eq!(eq_properties.set_exactly_satisfy(&required_columns), None);
+        assert_eq!(
+            eq_properties
+                .set_ordered_indices(&required_columns)
+                .entries(),
+            &[0]
+        );
 
         Ok(())
     }
