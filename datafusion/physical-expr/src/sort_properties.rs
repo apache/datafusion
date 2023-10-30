@@ -160,8 +160,8 @@ pub struct ExprOrdering {
 }
 
 impl ExprOrdering {
-    /// Creates a new [`ExprOrdering`] having [`SortProperties::Unordered`] order, and
-    /// [`SortProperties::Unordered`] orders for its child expressions.
+    /// Creates a new [`ExprOrdering`] with [`SortProperties::Unordered`] states
+    /// for `expr` and its children.
     pub fn new(expr: Arc<dyn PhysicalExpr>) -> Self {
         let size = expr.children().len();
         Self {
@@ -171,15 +171,14 @@ impl ExprOrdering {
         }
     }
 
-    /// Updates the [`ExprOrdering`]'s children order with the given orderings.
+    /// Updates this [`ExprOrdering`]'s children states with the given states.
     pub fn with_new_children(mut self, children_states: Vec<SortProperties>) -> Self {
-        assert_eq!(self.children_states.len(), children_states.len());
         self.children_states = children_states;
         self
     }
 
-    /// Creates new [`ExprOrdering`]'s for each child of an expression.
-    pub fn new_expr_orderings_for_children_exprs(&self) -> Vec<ExprOrdering> {
+    /// Creates new [`ExprOrdering`] objects for each child of the expression.
+    pub fn children_expr_orderings(&self) -> Vec<ExprOrdering> {
         self.expr
             .children()
             .into_iter()
@@ -193,7 +192,7 @@ impl TreeNode for ExprOrdering {
     where
         F: FnMut(&Self) -> Result<VisitRecursion>,
     {
-        for child in self.new_expr_orderings_for_children_exprs() {
+        for child in self.children_expr_orderings() {
             match op(&child)? {
                 VisitRecursion::Continue => {}
                 VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
@@ -210,19 +209,18 @@ impl TreeNode for ExprOrdering {
         if self.children_states.is_empty() {
             Ok(self)
         } else {
-            let child_expr_orderings = self.new_expr_orderings_for_children_exprs();
+            let child_expr_orderings = self.children_expr_orderings();
             Ok(self.with_new_children(
                 child_expr_orderings
                     .into_iter()
-                    // updates the children states after this transformation
+                    // Update children states after this transformation:
                     .map(transform)
-                    // extract the state (order) information of the children
+                    // Extract the state (i.e. sort properties) information:
                     .map_ok(|c| c.state)
                     .collect::<Result<Vec<_>>>()?,
             ))
-            // after the mapping of children, the children's states are set for
-            // the current node, and the last step of transform_up calculates
-            // the current node's state with update_ordering().
+            // After mapping over the children, the function `F` applies to the
+            // current object and updates its state.
         }
     }
 }
