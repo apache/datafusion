@@ -2214,6 +2214,8 @@ impl Aggregate {
     }
 
     /// Get the length of the group by expression in the output schema
+    /// This is not simply group by expression length. Expression may be
+    /// GroupingSet, etc. In these case we need to get inner expression lengths.
     pub fn group_expr_len(&self) -> Result<usize> {
         grouping_set_expr_count(&self.group_expr)
     }

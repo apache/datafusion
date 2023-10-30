@@ -440,7 +440,7 @@ Projection: t1.t1_id, (<subquery>) AS t2_int
 ------Projection: t2.t2_int
 --------Filter: t2.t2_int = outer_ref(t1.t1_int)
 ----------TableScan: t2
---TableScan: t1 projection=[t1_id, t1_name, t1_int]
+--TableScan: t1 projection=[t1_id, t1_int]
 
 query TT
 explain SELECT t1_id from t1 where t1_int = (SELECT t2_int FROM t2 WHERE t2.t2_int = t1.t1_int limit 1)
@@ -453,7 +453,7 @@ Projection: t1.t1_id
 --------Projection: t2.t2_int
 ----------Filter: t2.t2_int = outer_ref(t1.t1_int)
 ------------TableScan: t2
-----TableScan: t1 projection=[t1_id, t1_name, t1_int]
+----TableScan: t1 projection=[t1_id, t1_int]
 
 query TT
 explain SELECT t1_id, (SELECT a FROM (select 1 as a) WHERE a = t1.t1_int) as t2_int from t1
@@ -487,27 +487,29 @@ query TT
 explain SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT sum(t1.t1_int + t2.t2_id) FROM t2 WHERE t1.t1_name = t2.t2_name)
 ----
 logical_plan
-Filter: EXISTS (<subquery>)
---Subquery:
-----Projection: SUM(outer_ref(t1.t1_int) + t2.t2_id)
-------Aggregate: groupBy=[[]], aggr=[[SUM(CAST(outer_ref(t1.t1_int) + t2.t2_id AS Int64))]]
---------Filter: outer_ref(t1.t1_name) = t2.t2_name
-----------TableScan: t2
---TableScan: t1 projection=[t1_id, t1_name]
+Projection: t1.t1_id, t1.t1_name
+--Filter: EXISTS (<subquery>)
+----Subquery:
+------Projection: SUM(outer_ref(t1.t1_int) + t2.t2_id)
+--------Aggregate: groupBy=[[]], aggr=[[SUM(CAST(outer_ref(t1.t1_int) + t2.t2_id AS Int64))]]
+----------Filter: outer_ref(t1.t1_name) = t2.t2_name
+------------TableScan: t2
+----TableScan: t1 projection=[t1_id, t1_name, t1_int]
 
 #support_agg_correlated_columns2
 query TT
 explain SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT count(*) FROM t2 WHERE t1.t1_name = t2.t2_name having sum(t1_int + t2_id) >0)
 ----
 logical_plan
-Filter: EXISTS (<subquery>)
---Subquery:
-----Projection: COUNT(*)
-------Filter: SUM(outer_ref(t1.t1_int) + t2.t2_id) > Int64(0)
---------Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*), SUM(CAST(outer_ref(t1.t1_int) + t2.t2_id AS Int64))]]
-----------Filter: outer_ref(t1.t1_name) = t2.t2_name
-------------TableScan: t2
---TableScan: t1 projection=[t1_id, t1_name]
+Projection: t1.t1_id, t1.t1_name
+--Filter: EXISTS (<subquery>)
+----Subquery:
+------Projection: COUNT(*)
+--------Filter: SUM(outer_ref(t1.t1_int) + t2.t2_id) > Int64(0)
+----------Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*), SUM(CAST(outer_ref(t1.t1_int) + t2.t2_id AS Int64))]]
+------------Filter: outer_ref(t1.t1_name) = t2.t2_name
+--------------TableScan: t2
+----TableScan: t1 projection=[t1_id, t1_name, t1_int]
 
 #support_join_correlated_columns
 query TT
