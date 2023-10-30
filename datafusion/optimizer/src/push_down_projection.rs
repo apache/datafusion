@@ -24,7 +24,6 @@ mod tests {
     use std::sync::Arc;
     use std::vec;
 
-    use crate::eliminate_project::EliminateProjection;
     use crate::optimizer::Optimizer;
     use crate::remove_unused_columns::RemoveUnusedColumns;
     use crate::test::*;
@@ -597,24 +596,14 @@ mod tests {
     }
 
     fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
-        let optimizer = Optimizer::with_rules(vec![
-            Arc::new(RemoveUnusedColumns::new()),
-            Arc::new(EliminateProjection::new()),
-        ]);
-        let mut optimized_plan = optimizer
+        let optimizer = Optimizer::with_rules(vec![Arc::new(RemoveUnusedColumns::new())]);
+        let optimized_plan = optimizer
             .optimize_recursively(
                 optimizer.rules.get(0).unwrap(),
                 plan,
                 &OptimizerContext::new(),
             )?
             .unwrap_or_else(|| plan.clone());
-        optimized_plan = optimizer
-            .optimize_recursively(
-                optimizer.rules.get(1).unwrap(),
-                &optimized_plan,
-                &OptimizerContext::new(),
-            )?
-            .unwrap_or(optimized_plan);
         Ok(optimized_plan)
     }
 }

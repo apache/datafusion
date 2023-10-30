@@ -27,7 +27,6 @@ use crate::eliminate_limit::EliminateLimit;
 use crate::eliminate_nested_union::EliminateNestedUnion;
 use crate::eliminate_one_union::EliminateOneUnion;
 use crate::eliminate_outer_join::EliminateOuterJoin;
-use crate::eliminate_project::EliminateProjection;
 use crate::extract_equijoin_predicate::ExtractEquijoinPredicate;
 use crate::filter_null_join_keys::FilterNullJoinKeys;
 use crate::merge_projection::MergeProjection;
@@ -256,8 +255,7 @@ impl Optimizer {
             Arc::new(UnwrapCastInComparison::new()),
             Arc::new(CommonSubexprEliminate::new()),
             Arc::new(RemoveUnusedColumns::new()),
-            Arc::new(EliminateProjection::new()),
-            // PushDownProjection can pushdown Projections through Limits, do PushDownLimit again.
+            // RemoveUnusedColumns can pushdown Projections through Limits, do PushDownLimit again.
             Arc::new(PushDownLimit::new()),
         ];
 

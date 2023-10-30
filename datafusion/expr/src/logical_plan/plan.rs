@@ -2212,6 +2212,11 @@ impl Aggregate {
             schema,
         })
     }
+
+    /// Get the length of the group by expression in the output schema
+    pub fn group_expr_len(&self) -> Result<usize> {
+        grouping_set_expr_count(&self.group_expr)
+    }
 }
 
 /// Checks whether any expression in `group_expr` contains `Expr::GroupingSet`.

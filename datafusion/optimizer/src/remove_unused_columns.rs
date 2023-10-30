@@ -15,10 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Optimizer rule to replace `where false` on a plan with an empty relation.
-//! This saves time in planning and executing the query.
-//! Note that this rule should be applied after simplify expressions optimizer rule.
+//! Optimizer rule to prune unnecessary Columns from the intermediate schemas inside the [LogicalPlan].
+//! This rule
+//! - Removes unnecessary columns that are not showed at the output, and that are not used during computation.
+//! - Adds projection to decrease table column size before operators that benefits from less memory at its input.
+//! - Removes unnecessary [LogicalPlan::Projection] from the [LogicalPlan].
 use crate::optimizer::ApplyOrder;
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
     get_required_group_by_exprs_indices, plan_err, Column, DFSchema, DFSchemaRef,
     DataFusionError, JoinType, Result,
@@ -51,9 +54,14 @@ impl OptimizerRule for RemoveUnusedColumns {
         plan: &LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
+        // All of the fields at the output are necessary.
         let indices = require_all_indices(plan);
-        let res = try_optimize_internal(plan, config, indices)?;
-        Ok(res)
+        let unnecessary_columns_removed =
+            remove_unnecessary_columns(plan, config, indices)?;
+        let projections_eliminated = unnecessary_columns_removed
+            .map(|plan| plan.transform_up(&eliminate_projection))
+            .transpose()?;
+        Ok(projections_eliminated)
     }
 
     fn name(&self) -> &str {
@@ -89,7 +97,7 @@ fn get_required_exprs(input_schema: &Arc<DFSchema>, indices: &[usize]) -> Vec<Ex
 /// Get indices of the column necessary for the referred expressions among input LogicalPlan.
 fn get_referred_indices(input: &LogicalPlan, exprs: &[Expr]) -> Result<Vec<usize>> {
     // If any of the expressions is sub-query require all of the fields of the input.
-    // Because currently we cannot calculate definitely what sub-query uses
+    // Because currently we cannot calculate definitely which fields sub-query use
     if exprs.iter().any(is_subquery) {
         Ok(require_all_indices(input))
     } else {
@@ -113,14 +121,9 @@ fn get_referred_indices(input: &LogicalPlan, exprs: &[Expr]) -> Result<Vec<usize
 fn get_at_indices(exprs: &[Expr], indices: &[usize]) -> Vec<Expr> {
     indices
         .iter()
-        .filter_map(|&idx| {
-            if idx < exprs.len() {
-                Some(exprs[idx].clone())
-            } else {
-                None
-            }
-        })
-        .collect::<Vec<_>>()
+        // Indices may point to further places than `exprs` len.
+        .filter_map(|&idx| exprs.get(idx).cloned())
+        .collect()
 }
 
 /// Merge two vectors,
@@ -166,21 +169,30 @@ fn split_join_requirement_indices_to_children(
     }
     // Required indices that are smaller than `left_len` belongs to left side.
     // Other belong to the right side.
-    let left_requirements_from_parent = indices
+    let (left_requirements_from_parent, right_requirements_from_parent): (
+        Vec<_>,
+        Vec<_>,
+    ) = indices
         .iter()
-        .filter_map(|&idx| if idx < left_len { Some(idx) } else { None })
-        .collect::<Vec<_>>();
-    let right_requirements_from_parent = indices
-        .iter()
-        .filter_map(|&idx| {
-            if idx >= left_len {
-                // Decrease index by `left_len` so that they point to valid positions in the right child.
-                Some(idx - left_len)
+        .map(|&idx| {
+            if idx < left_len {
+                (Some(idx), None)
             } else {
-                None
+                // Decrease right side index by `left_len` so that they point to valid positions in the right child.
+                (None, Some(idx - left_len))
             }
         })
-        .collect::<Vec<_>>();
+        .unzip();
+
+    // Filter out the `None` values in both collections.
+    let left_requirements_from_parent: Vec<_> = left_requirements_from_parent
+        .into_iter()
+        .flatten()
+        .collect();
+    let right_requirements_from_parent: Vec<_> = right_requirements_from_parent
+        .into_iter()
+        .flatten()
+        .collect();
     (
         left_requirements_from_parent,
         right_requirements_from_parent,
@@ -240,7 +252,7 @@ fn require_all_indices(plan: &LogicalPlan) -> Vec<usize> {
 }
 
 /// This function to prunes `plan` according to requirement `indices` given.
-fn try_optimize_internal(
+fn remove_unnecessary_columns(
     plan: &LogicalPlan,
     _config: &dyn OptimizerConfig,
     indices: Vec<usize>,
@@ -253,7 +265,7 @@ fn try_optimize_internal(
             let exprs_used = get_at_indices(&proj.expr, &indices);
             let required_indices = get_referred_indices(&proj.input, &exprs_used)?;
             if let Some(input) =
-                try_optimize_internal(&proj.input, _config, required_indices)?
+                remove_unnecessary_columns(&proj.input, _config, required_indices)?
             {
                 let new_proj = Projection::try_new(exprs_used, Arc::new(input))?;
                 let new_proj = LogicalPlan::Projection(new_proj);
@@ -288,24 +300,19 @@ fn try_optimize_internal(
                 aggregate.group_expr.clone()
             };
             // Only use absolutely necessary aggregate expressions required by parent.
-            let new_aggr_expr = aggregate
-                .aggr_expr
-                .iter()
-                .enumerate()
-                .filter_map(|(idx, aggr_expr)| {
-                    if indices.contains(&(idx + aggregate.group_expr.len())) {
-                        Some(aggr_expr.clone())
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<_>>();
+            let mut new_aggr_expr = vec![];
+            for idx in indices {
+                let group_expr_len = aggregate.group_expr_len()?;
+                if let Some(aggr_expr_idx) = idx.checked_sub(group_expr_len) {
+                    new_aggr_expr.push(aggregate.aggr_expr[aggr_expr_idx].clone())
+                }
+            }
             let mut all_exprs = group_bys_used.clone();
             all_exprs.extend(new_aggr_expr.clone());
             let necessary_indices = get_referred_indices(&aggregate.input, &all_exprs)?;
 
             let aggregate_input = if let Some(input) =
-                try_optimize_internal(&aggregate.input, _config, necessary_indices)?
+                remove_unnecessary_columns(&aggregate.input, _config, necessary_indices)?
             {
                 input
             } else {
@@ -376,9 +383,11 @@ fn try_optimize_internal(
             // All of the required column indices at the input of the window by parent, and window expression requirements.
             let required_indices =
                 merge_vectors(&window_child_indices, &indices_referred_by_window);
-            let window_child = if let Some(new_window_child) =
-                try_optimize_internal(&window.input, _config, required_indices.clone())?
-            {
+            let window_child = if let Some(new_window_child) = remove_unnecessary_columns(
+                &window.input,
+                _config,
+                required_indices.clone(),
+            )? {
                 new_window_child
             } else {
                 window.input.as_ref().clone()
@@ -509,7 +518,7 @@ fn try_optimize_internal(
             ..
         }) => {
             let indices = require_all_indices(plan.as_ref());
-            if let Some(new_plan) = try_optimize_internal(plan, _config, indices)? {
+            if let Some(new_plan) = remove_unnecessary_columns(plan, _config, indices)? {
                 return Ok(Some(LogicalPlan::Explain(Explain {
                     verbose: *verbose,
                     plan: Arc::new(new_plan),
@@ -524,7 +533,8 @@ fn try_optimize_internal(
         LogicalPlan::Analyze(analyze) => {
             let input = &analyze.input;
             let indices = require_all_indices(input.as_ref());
-            if let Some(new_input) = try_optimize_internal(input, _config, indices)? {
+            if let Some(new_input) = remove_unnecessary_columns(input, _config, indices)?
+            {
                 return Ok(Some(LogicalPlan::Analyze(Analyze {
                     verbose: analyze.verbose,
                     input: Arc::new(new_input),
@@ -580,7 +590,7 @@ fn try_optimize_internal(
         let new_inputs = izip!(child_required_indices, plan.inputs().into_iter())
             .map(|((required_indices, projection_beneficial), child)| {
                 let input = if let Some(new_input) =
-                    try_optimize_internal(child, _config, required_indices.clone())?
+                    remove_unnecessary_columns(child, _config, required_indices.clone())?
                 {
                     let project_exprs =
                         get_required_exprs(child.schema(), &required_indices);
@@ -617,5 +627,22 @@ fn try_optimize_internal(
         }
     } else {
         Ok(None)
+    }
+}
+
+/// This function removes unnecessary [LogicalPlan::Projection] from the [LogicalPlan].
+fn eliminate_projection(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+    match plan {
+        LogicalPlan::Projection(ref projection) => {
+            let child_plan = projection.input.as_ref();
+            if plan.schema() == child_plan.schema() {
+                // If child schema and schema of the projection is same
+                // Projection can be removed.
+                Ok(Transformed::Yes(child_plan.clone()))
+            } else {
+                Ok(Transformed::No(plan))
+            }
+        }
+        _ => Ok(Transformed::No(plan)),
     }
 }
