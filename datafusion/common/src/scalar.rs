@@ -1711,15 +1711,14 @@ impl ScalarValue {
 
                     // Element is null
                     valid.append(false);
-                    continue;
+                } else {
+                    let arr = list_arr.values().to_owned();
+                    offsets.push(arr.len());
+                    elements.push(arr);
+
+                    // Element is valid
+                    valid.append(true);
                 }
-
-                let arr = list_arr.values().to_owned();
-                offsets.push(arr.len());
-                elements.push(arr);
-
-                // Element is valid
-                valid.append(true);
             } else {
                 return _internal_err!(
                     "Expected ScalarValue::List element. Received {scalar:?}"
