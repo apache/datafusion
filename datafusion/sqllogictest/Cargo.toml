@@ -40,15 +40,15 @@ datafusion = { path = "../core", version = "32.0.0" }
 datafusion-common = { workspace = true }
 futures = { version = "0.3.28" }
 half = "2.2.1"
-itertools = "0.11"
-log = "^0.4"
-object_store = "0.7.0"
+itertools = { workspace = true }
+log = { workspace = true }
+object_store = { workspace = true }
 postgres-protocol = { version = "0.6.4", optional = true }
 postgres-types = { version = "0.2.4", optional = true }
 rust_decimal = { version = "1.27.0" }
 sqllogictest = "0.17.0"
 sqlparser = { workspace = true }
-tempfile = "3"
+tempfile = { workspace = true }
 thiserror = "1.0.44"
 tokio = { version = "1.0" }
 tokio-postgres = { version = "0.7.7", optional = true }
@@ -59,7 +59,7 @@ postgres = ["bytes", "chrono", "tokio-postgres", "postgres-types", "postgres-pro
 
 [dev-dependencies]
 env_logger = "0.10"
-num_cpus = "1.13.0"
+num_cpus = { workspace = true }
 
 [[test]]
 harness = false

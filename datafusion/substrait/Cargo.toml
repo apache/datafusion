@@ -31,8 +31,8 @@ rust-version = "1.70"
 async-recursion = "1.0"
 chrono = { workspace = true }
 datafusion = { workspace = true }
-itertools = "0.11"
-object_store = "0.7.0"
+itertools = { workspace = true }
+object_store = { workspace = true }
 prost = "0.12"
 prost-types = "0.12"
 substrait = "0.18.0"
