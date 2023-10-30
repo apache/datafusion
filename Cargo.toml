@@ -54,6 +54,17 @@ arrow-array = { version = "48.0.0", default-features = false, features = ["chron
 arrow-buffer = { version = "48.0.0", default-features = false }
 arrow-flight = { version = "48.0.0", features = ["flight-sql-experimental"] }
 arrow-schema = { version = "48.0.0", default-features = false }
+datafusion = { path = "datafusion/core" }
+datafusion-common = { path = "datafusion/common" }
+datafusion-expr = { path = "datafusion/expr" }
+datafusion-sql = { path = "datafusion/sql" }
+datafusion-optimizer = { path = "datafusion/optimizer" }
+datafusion-physical-expr = { path = "datafusion/physical-expr" }
+datafusion-physical-plan = { path = "datafusion/physical-plan" }
+datafusion-execution = { path = "datafusion/execution" }
+datafusion-proto = { path = "datafusion/proto" }
+datafusion-sqllogictest = { path = "datafusion/sqllogictest" }
+datafusion-substrait = { path = "datafusion/substrait" }
 parquet = { version = "48.0.0", features = ["arrow", "async", "object_store"] }
 sqlparser = { version = "0.38.0", features = ["visitor"] }
 chrono = { version = "0.4.31", default-features = false }

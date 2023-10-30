@@ -38,7 +38,7 @@ path = "src/lib.rs"
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 arrow = { workspace = true }
 arrow-array = { workspace = true }
-datafusion-common = { path = "../common", version = "32.0.0", default-features = false }
+datafusion-common = { workspace = true }
 sqlparser = { workspace = true }
 strum = { version = "0.25.0", features = ["derive"] }
 strum_macros = "0.25.0"
