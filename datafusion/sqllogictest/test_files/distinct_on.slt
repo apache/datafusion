@@ -36,45 +36,7 @@ WITH HEADER ROW
 LOCATION '../../testing/data/csv/aggregate_test_100.csv'
 
 # Basic example: distinct on the first column project the second one, and
-# order by the two of them
-query TI
-SELECT DISTINCT ON (c1) c1, c2 FROM aggregate_test_100 ORDER BY c1, c2;
-----
-a 1
-b 1
-c 1
-d 1
-e 1
-
-# Basic example + reverse order of the selected column
-query TI
-SELECT DISTINCT ON (c1) c1, c2 FROM aggregate_test_100 ORDER BY c1, c2 DESC;
-----
-a 5
-b 5
-c 5
-d 5
-e 5
-
-# Basic example + reverse order of the ON column
-query TI
-SELECT DISTINCT ON (c1) c1, c2 FROM aggregate_test_100 ORDER BY c1 DESC, c2;
-----
-e 1
-d 1
-c 1
-b 1
-a 1
-
-# Basic example + reverse order of both columns + limit
-query TI
-SELECT DISTINCT ON (c1) c1, c2 FROM aggregate_test_100 ORDER BY c1 DESC, c2 DESC LIMIT 3;
-----
-e 5
-d 5
-c 5
-
-# Order by the third column but don't select it
+# order by the third
 # TODO: Note that the value for 'a' is actually degenerate, and while Postgres
 # returns the actual first match (4), DataFusion returns the last one, presumably
 # because `first_value` aggregation function doesn't have a dedicated `GroupsAccumulator`
@@ -88,6 +50,34 @@ c 2
 d 1
 e 3
 
+# Basic example + reverse order of the selected column
+query TI
+SELECT DISTINCT ON (c1) c1, c2 FROM aggregate_test_100 ORDER BY c1, c3 DESC;
+----
+a 1
+b 5
+c 4
+d 1
+e 1
+
+# Basic example + reverse order of the ON column
+query TI
+SELECT DISTINCT ON (c1) c1, c2 FROM aggregate_test_100 ORDER BY c1 DESC, c3;
+----
+e 3
+d 1
+c 2
+b 4
+a 4
+
+# Basic example + reverse order of both columns + limit
+query TI
+SELECT DISTINCT ON (c1) c1, c2 FROM aggregate_test_100 ORDER BY c1 DESC, c3 DESC LIMIT 3;
+----
+e 1
+d 1
+c 4
+
 # Use expressions in the ON and ORDER BY clauses, as well as the selection
 query II
 SELECT DISTINCT ON (c2 % 2 = 0) c2, c3 - 100 FROM aggregate_test_100 ORDER BY c2 % 2 = 0, c3 DESC;
@@ -98,3 +88,15 @@ SELECT DISTINCT ON (c2 % 2 = 0) c2, c3 - 100 FROM aggregate_test_100 ORDER BY c2
 # ON expressions are not a sub-set of the ORDER BY expressions
 query error SELECT DISTINCT ON expressions must match initial ORDER BY expressions
 SELECT DISTINCT ON (c2 % 2 = 0) c2, c3 - 100 FROM aggregate_test_100 ORDER BY c2, c3;
+
+# Multiple complex expressions
+query TIB
+SELECT DISTINCT ON (chr(ascii(c1) + 3), c2 % 2) chr(ascii(c1) + 3), c2 % 2, c3 > 80 AND c2 % 2 = 1
+FROM aggregate_test_100
+WHERE c1 IN ('a', 'b')
+ORDER BY chr(ascii(c1) + 3), c2 % 2, c3 DESC;
+----
+d 0 false
+d 1 true
+e 0 false
+e 1 false
