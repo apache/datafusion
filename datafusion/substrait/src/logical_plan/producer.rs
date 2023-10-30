@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::Arc;
 
-use datafusion::logical_expr::{Like, WindowFrameUnits};
+use datafusion::logical_expr::{Distinct, Like, WindowFrameUnits};
 use datafusion::{
     arrow::datatypes::{DataType, TimeUnit},
     error::{DataFusionError, Result},
@@ -244,11 +244,11 @@ pub fn to_substrait_rel(
                 }))),
             }))
         }
-        LogicalPlan::Distinct(distinct) => {
+        LogicalPlan::Distinct(Distinct::All(plan)) => {
             // Use Substrait's AggregateRel with empty measures to represent `select distinct`
-            let input = to_substrait_rel(distinct.input.as_ref(), ctx, extension_info)?;
+            let input = to_substrait_rel(plan.as_ref(), ctx, extension_info)?;
             // Get grouping keys from the input relation's number of output fields
-            let grouping = (0..distinct.input.schema().fields().len())
+            let grouping = (0..plan.schema().fields().len())
                 .map(substrait_field_ref)
                 .collect::<Result<Vec<_>>>()?;
 

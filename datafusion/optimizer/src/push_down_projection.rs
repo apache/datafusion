@@ -247,7 +247,7 @@ impl OptimizerRule for PushDownProjection {
                 // Gather all columns needed for expressions in this Aggregate
                 let mut new_aggr_expr = vec![];
                 for e in agg.aggr_expr.iter() {
-                    let column = Column::from_name(e.display_name()?);
+                    let column = Column::from(e.display_name()?);
                     if required_columns.contains(&column) {
                         new_aggr_expr.push(e.clone());
                     }

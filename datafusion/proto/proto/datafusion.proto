@@ -73,6 +73,7 @@ message LogicalPlanNode {
     CustomTableScanNode custom_scan = 25;
     PrepareNode prepare = 26;
     DropViewNode drop_view = 27;
+    DistinctOnNode distinct_on = 28;
   }
 }
 
@@ -306,6 +307,13 @@ message JoinNode {
 
 message DistinctNode {
   LogicalPlanNode input = 1;
+}
+
+message DistinctOnNode {
+  repeated LogicalExprNode on_expr = 1;
+  repeated LogicalExprNode select_expr = 2;
+  repeated LogicalExprNode sort_expr = 3;
+  LogicalPlanNode input = 4;
 }
 
 message UnionNode {

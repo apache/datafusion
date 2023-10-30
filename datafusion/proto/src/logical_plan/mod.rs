@@ -55,7 +55,7 @@ use datafusion_expr::{
         EmptyRelation, Extension, Join, JoinConstraint, Limit, Prepare, Projection,
         Repartition, Sort, SubqueryAlias, TableScan, Values, Window,
     },
-    DropView, Expr, LogicalPlan, LogicalPlanBuilder,
+    DistinctOn, DropView, Expr, LogicalPlan, LogicalPlanBuilder,
 };
 
 use prost::bytes::BufMut;
@@ -733,6 +733,33 @@ impl AsLogicalPlan for LogicalPlanNode {
                     into_logical_plan!(distinct.input, ctx, extension_codec)?;
                 LogicalPlanBuilder::from(input).distinct()?.build()
             }
+            LogicalPlanType::DistinctOn(distinct_on) => {
+                let input: LogicalPlan =
+                    into_logical_plan!(distinct_on.input, ctx, extension_codec)?;
+                let on_expr = distinct_on
+                    .on_expr
+                    .iter()
+                    .map(|expr| from_proto::parse_expr(expr, ctx))
+                    .collect::<Result<Vec<Expr>, _>>()?;
+                let select_expr = distinct_on
+                    .select_expr
+                    .iter()
+                    .map(|expr| from_proto::parse_expr(expr, ctx))
+                    .collect::<Result<Vec<Expr>, _>>()?;
+                let sort_expr = match distinct_on.sort_expr.len() {
+                    0 => None,
+                    _ => Some(
+                        distinct_on
+                            .sort_expr
+                            .iter()
+                            .map(|expr| from_proto::parse_expr(expr, ctx))
+                            .collect::<Result<Vec<Expr>, _>>()?,
+                    ),
+                };
+                LogicalPlanBuilder::from(input)
+                    .distinct_on(on_expr, select_expr, sort_expr)?
+                    .build()
+            }
             LogicalPlanType::ViewScan(scan) => {
                 let schema: Schema = convert_required!(scan.schema)?;
 
@@ -983,7 +1010,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
-            LogicalPlan::Distinct(Distinct { input }) => {
+            LogicalPlan::Distinct(Distinct::All(input)) => {
                 let input: protobuf::LogicalPlanNode =
                     protobuf::LogicalPlanNode::try_from_logical_plan(
                         input.as_ref(),
@@ -992,6 +1019,42 @@ impl AsLogicalPlan for LogicalPlanNode {
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Distinct(Box::new(
                         protobuf::DistinctNode {
+                            input: Some(Box::new(input)),
+                        },
+                    ))),
+                })
+            }
+            LogicalPlan::Distinct(Distinct::On(DistinctOn {
+                on_expr,
+                select_expr,
+                sort_expr,
+                input,
+                ..
+            })) => {
+                let input: protobuf::LogicalPlanNode =
+                    protobuf::LogicalPlanNode::try_from_logical_plan(
+                        input.as_ref(),
+                        extension_codec,
+                    )?;
+                let sort_expr = match sort_expr {
+                    None => vec![],
+                    Some(sort_expr) => sort_expr
+                        .iter()
+                        .map(|expr| expr.try_into())
+                        .collect::<Result<Vec<_>, _>>()?,
+                };
+                Ok(protobuf::LogicalPlanNode {
+                    logical_plan_type: Some(LogicalPlanType::DistinctOn(Box::new(
+                        protobuf::DistinctOnNode {
+                            on_expr: on_expr
+                                .iter()
+                                .map(|expr| expr.try_into())
+                                .collect::<Result<Vec<_>, _>>()?,
+                            select_expr: select_expr
+                                .iter()
+                                .map(|expr| expr.try_into())
+                                .collect::<Result<Vec<_>, _>>()?,
+                            sort_expr,
                             input: Some(Box::new(input)),
                         },
                     ))),

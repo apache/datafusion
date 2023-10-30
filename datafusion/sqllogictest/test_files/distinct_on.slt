@@ -1,0 +1,100 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+statement ok
+CREATE EXTERNAL TABLE aggregate_test_100 (
+  c1  VARCHAR NOT NULL,
+  c2  TINYINT NOT NULL,
+  c3  SMALLINT NOT NULL,
+  c4  SMALLINT,
+  c5  INT,
+  c6  BIGINT NOT NULL,
+  c7  SMALLINT NOT NULL,
+  c8  INT NOT NULL,
+  c9  BIGINT UNSIGNED NOT NULL,
+  c10 VARCHAR NOT NULL,
+  c11 FLOAT NOT NULL,
+  c12 DOUBLE NOT NULL,
+  c13 VARCHAR NOT NULL
+)
+STORED AS CSV
+WITH HEADER ROW
+LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+
+# Basic example: distinct on the first column project the second one, and
+# order by the two of them
+query TI
+SELECT DISTINCT ON (c1) c1, c2 FROM aggregate_test_100 ORDER BY c1, c2;
+----
+a 1
+b 1
+c 1
+d 1
+e 1
+
+# Basic example + reverse order of the selected column
+query TI
+SELECT DISTINCT ON (c1) c1, c2 FROM aggregate_test_100 ORDER BY c1, c2 DESC;
+----
+a 5
+b 5
+c 5
+d 5
+e 5
+
+# Basic example + reverse order of the ON column
+query TI
+SELECT DISTINCT ON (c1) c1, c2 FROM aggregate_test_100 ORDER BY c1 DESC, c2;
+----
+e 1
+d 1
+c 1
+b 1
+a 1
+
+# Basic example + reverse order of both columns + limit
+query TI
+SELECT DISTINCT ON (c1) c1, c2 FROM aggregate_test_100 ORDER BY c1 DESC, c2 DESC LIMIT 3;
+----
+e 5
+d 5
+c 5
+
+# Order by the third column but don't select it
+# TODO: Note that the value for 'a' is actually degenerate, and while Postgres
+# returns the actual first match (4), DataFusion returns the last one, presumably
+# because `first_value` aggregation function doesn't have a dedicated `GroupsAccumulator`
+# and instead uses `GroupsAccumulatorAdapter`.
+query TI
+SELECT DISTINCT ON (c1) c1, c2 FROM aggregate_test_100 ORDER BY c1, c3;
+----
+a 5
+b 4
+c 2
+d 1
+e 3
+
+# Use expressions in the ON and ORDER BY clauses, as well as the selection
+query II
+SELECT DISTINCT ON (c2 % 2 = 0) c2, c3 - 100 FROM aggregate_test_100 ORDER BY c2 % 2 = 0, c3 DESC;
+----
+1 25
+4 23
+
+# ON expressions are not a sub-set of the ORDER BY expressions
+query error SELECT DISTINCT ON expressions must match initial ORDER BY expressions
+SELECT DISTINCT ON (c2 % 2 = 0) c2, c3 - 100 FROM aggregate_test_100 ORDER BY c2, c3;

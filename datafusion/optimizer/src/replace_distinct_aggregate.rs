@@ -19,8 +19,12 @@ use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
 use datafusion_expr::utils::expand_wildcard;
-use datafusion_expr::Distinct;
-use datafusion_expr::{Aggregate, LogicalPlan};
+use datafusion_expr::{
+    aggregate_function::AggregateFunction as AggregateFunctionFunc, col,
+    expr::AggregateFunction, LogicalPlanBuilder,
+};
+use datafusion_expr::{Aggregate, Expr, LogicalPlan};
+use datafusion_expr::{Distinct, DistinctOn};
 use ApplyOrder::BottomUp;
 
 /// Optimizer that replaces logical [[Distinct]] with a logical [[Aggregate]]
@@ -52,7 +56,7 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
         _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         match plan {
-            LogicalPlan::Distinct(Distinct { input }) => {
+            LogicalPlan::Distinct(Distinct::All(input)) => {
                 let group_expr = expand_wildcard(input.schema(), input, None)?;
                 let aggregate = LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
                     input.clone(),
@@ -61,6 +65,59 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
                     input.schema().clone(), // input schema and aggregate schema are the same in this case
                 )?);
                 Ok(Some(aggregate))
+            }
+            LogicalPlan::Distinct(Distinct::On(DistinctOn {
+                select_expr,
+                on_expr,
+                sort_expr,
+                input,
+                ..
+            })) => {
+                let aggr_expr = select_expr
+                    .iter()
+                    .map(|e| {
+                        Ok(Expr::AggregateFunction(AggregateFunction::new(
+                            AggregateFunctionFunc::FirstValue,
+                            vec![e.clone()],
+                            false,
+                            None,
+                            sort_expr.clone(),
+                        ))
+                        .alias(e.display_name()?))
+                    })
+                    .collect::<Result<Vec<Expr>>>()?;
+
+                let on_expr = on_expr
+                    .iter()
+                    .enumerate()
+                    .map(|(i, e)| e.clone().alias(format!("_on_expr_{i}")))
+                    .collect::<Vec<Expr>>();
+
+                let plan = LogicalPlanBuilder::from(input.as_ref().clone())
+                    .aggregate(on_expr.clone(), aggr_expr.to_vec())?
+                    .build()?;
+
+                let project_exprs = plan
+                    .schema()
+                    .fields()
+                    .iter()
+                    .skip(on_expr.len())
+                    .map(|f| col(f.unqualified_column().name))
+                    .collect::<Vec<Expr>>();
+
+                let plan = LogicalPlanBuilder::from(plan)
+                    .project(project_exprs)?
+                    .build()?;
+
+                let plan = if let Some(sort_expr) = sort_expr {
+                    LogicalPlanBuilder::from(plan)
+                        .sort(sort_expr[..on_expr.len()].to_vec())?
+                        .build()?
+                } else {
+                    plan
+                };
+
+                Ok(Some(plan))
             }
             _ => Ok(None),
         }

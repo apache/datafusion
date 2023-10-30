@@ -24,6 +24,7 @@ use crate::expr_rewriter::{
     normalize_col_with_schemas_and_ambiguity_check, normalize_cols,
     rewrite_sort_cols_by_aggs,
 };
+use crate::logical_plan::plan::DistinctOn;
 use crate::type_coercion::binary::comparison_coercion;
 use crate::utils::{columnize_expr, compare_sort_expr};
 use crate::{
@@ -599,16 +600,29 @@ impl LogicalPlanBuilder {
         let left_plan: LogicalPlan = self.plan;
         let right_plan: LogicalPlan = plan;
 
-        Ok(Self::from(LogicalPlan::Distinct(Distinct {
-            input: Arc::new(union(left_plan, right_plan)?),
-        })))
+        Ok(Self::from(LogicalPlan::Distinct(Distinct::All(Arc::new(
+            union(left_plan, right_plan)?,
+        )))))
     }
 
     /// Apply deduplication: Only distinct (different) values are returned)
     pub fn distinct(self) -> Result<Self> {
-        Ok(Self::from(LogicalPlan::Distinct(Distinct {
-            input: Arc::new(self.plan),
-        })))
+        Ok(Self::from(LogicalPlan::Distinct(Distinct::All(Arc::new(
+            self.plan,
+        )))))
+    }
+
+    /// Project first values of the specified expression list according to the provided
+    /// sorting expressions grouped by the `DISTINCT ON` clause expressions.
+    pub fn distinct_on(
+        self,
+        on_expr: Vec<Expr>,
+        select_expr: Vec<Expr>,
+        sort_expr: Option<Vec<Expr>>,
+    ) -> Result<Self> {
+        Ok(Self::from(LogicalPlan::Distinct(Distinct::On(
+            DistinctOn::try_new(on_expr, select_expr, sort_expr, Arc::new(self.plan))?,
+        ))))
     }
 
     /// Apply a join to `right` using explicitly specified columns and an

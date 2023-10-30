@@ -18,8 +18,8 @@
 //! Logical plan types
 
 use crate::dml::CopyOptions;
-use crate::expr::{Alias, Exists, InSubquery, Placeholder};
-use crate::expr_rewriter::create_col_from_scalar_expr;
+use crate::expr::{Alias, Exists, InSubquery, Placeholder, Sort as SortExpr};
+use crate::expr_rewriter::{create_col_from_scalar_expr, normalize_cols};
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::{DmlStatement, Statement};
@@ -165,7 +165,8 @@ impl LogicalPlan {
             }) => projected_schema,
             LogicalPlan::Projection(Projection { schema, .. }) => schema,
             LogicalPlan::Filter(Filter { input, .. }) => input.schema(),
-            LogicalPlan::Distinct(Distinct { input }) => input.schema(),
+            LogicalPlan::Distinct(Distinct::All(input)) => input.schema(),
+            LogicalPlan::Distinct(Distinct::On(DistinctOn { schema, .. })) => schema,
             LogicalPlan::Window(Window { schema, .. }) => schema,
             LogicalPlan::Aggregate(Aggregate { schema, .. }) => schema,
             LogicalPlan::Sort(Sort { input, .. }) => input.schema(),
@@ -369,6 +370,16 @@ impl LogicalPlan {
             LogicalPlan::Unnest(Unnest { column, .. }) => {
                 f(&Expr::Column(column.clone()))
             }
+            LogicalPlan::Distinct(Distinct::On(DistinctOn {
+                on_expr,
+                select_expr,
+                sort_expr,
+                ..
+            })) => on_expr
+                .iter()
+                .chain(select_expr.iter())
+                .chain(sort_expr.clone().unwrap_or(vec![]).iter())
+                .try_for_each(f),
             // plans without expressions
             LogicalPlan::EmptyRelation(_)
             | LogicalPlan::Subquery(_)
@@ -379,7 +390,7 @@ impl LogicalPlan {
             | LogicalPlan::Analyze(_)
             | LogicalPlan::Explain(_)
             | LogicalPlan::Union(_)
-            | LogicalPlan::Distinct(_)
+            | LogicalPlan::Distinct(Distinct::All(_))
             | LogicalPlan::Dml(_)
             | LogicalPlan::Ddl(_)
             | LogicalPlan::Copy(_)
@@ -407,7 +418,9 @@ impl LogicalPlan {
             LogicalPlan::Union(Union { inputs, .. }) => {
                 inputs.iter().map(|arc| arc.as_ref()).collect()
             }
-            LogicalPlan::Distinct(Distinct { input }) => vec![input],
+            LogicalPlan::Distinct(
+                Distinct::All(input) | Distinct::On(DistinctOn { input, .. }),
+            ) => vec![input],
             LogicalPlan::Explain(explain) => vec![&explain.plan],
             LogicalPlan::Analyze(analyze) => vec![&analyze.input],
             LogicalPlan::Dml(write) => vec![&write.input],
@@ -463,8 +476,11 @@ impl LogicalPlan {
                     Ok(Some(agg.group_expr.as_slice()[0].clone()))
                 }
             }
+            LogicalPlan::Distinct(Distinct::On(DistinctOn { select_expr, .. })) => {
+                Ok(Some(select_expr[0].clone()))
+            }
             LogicalPlan::Filter(Filter { input, .. })
-            | LogicalPlan::Distinct(Distinct { input, .. })
+            | LogicalPlan::Distinct(Distinct::All(input))
             | LogicalPlan::Sort(Sort { input, .. })
             | LogicalPlan::Limit(Limit { input, .. })
             | LogicalPlan::Repartition(Repartition { input, .. })
@@ -834,10 +850,29 @@ impl LogicalPlan {
                 inputs: inputs.iter().cloned().map(Arc::new).collect(),
                 schema: schema.clone(),
             })),
-            LogicalPlan::Distinct(Distinct { .. }) => {
-                Ok(LogicalPlan::Distinct(Distinct {
-                    input: Arc::new(inputs[0].clone()),
-                }))
+            LogicalPlan::Distinct(distinct) => {
+                let distinct = match distinct {
+                    Distinct::All(_) => Distinct::All(Arc::new(inputs[0].clone())),
+                    Distinct::On(DistinctOn {
+                        on_expr,
+                        select_expr,
+                        ..
+                    }) => {
+                        let sort_expr = expr.split_off(on_expr.len() + select_expr.len());
+                        let select_expr = expr.split_off(on_expr.len());
+                        Distinct::On(DistinctOn::try_new(
+                            expr,
+                            select_expr,
+                            if !sort_expr.is_empty() {
+                                Some(sort_expr)
+                            } else {
+                                None
+                            },
+                            Arc::new(inputs[0].clone()),
+                        )?)
+                    }
+                };
+                Ok(LogicalPlan::Distinct(distinct))
             }
             LogicalPlan::Analyze(a) => {
                 assert!(expr.is_empty());
@@ -1075,7 +1110,9 @@ impl LogicalPlan {
             LogicalPlan::Subquery(_) => None,
             LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => input.max_rows(),
             LogicalPlan::Limit(Limit { fetch, .. }) => *fetch,
-            LogicalPlan::Distinct(Distinct { input }) => input.max_rows(),
+            LogicalPlan::Distinct(
+                Distinct::All(input) | Distinct::On(DistinctOn { input, .. }),
+            ) => input.max_rows(),
             LogicalPlan::Values(v) => Some(v.values.len()),
             LogicalPlan::Unnest(_) => None,
             LogicalPlan::Ddl(_)
@@ -1678,9 +1715,21 @@ impl LogicalPlan {
                     LogicalPlan::Statement(statement) => {
                         write!(f, "{}", statement.display())
                     }
-                    LogicalPlan::Distinct(Distinct { .. }) => {
-                        write!(f, "Distinct:")
-                    }
+                    LogicalPlan::Distinct(distinct) => match distinct {
+                        Distinct::All(_) => write!(f, "Distinct:"),
+                        Distinct::On(DistinctOn {
+                            on_expr,
+                            select_expr,
+                            sort_expr,
+                            ..
+                        }) => write!(
+                            f,
+                            "DistinctOn: on_expr=[[{}]], select_expr=[[{}]], sort_expr=[[{}]]",
+                            expr_vec_fmt!(on_expr),
+                            expr_vec_fmt!(select_expr),
+                            if let Some(sort_expr) = sort_expr { expr_vec_fmt!(sort_expr) } else { "".to_string() },
+                        ),
+                    },
                     LogicalPlan::Explain { .. } => write!(f, "Explain"),
                     LogicalPlan::Analyze { .. } => write!(f, "Analyze"),
                     LogicalPlan::Union(_) => write!(f, "Union"),
@@ -2086,9 +2135,87 @@ pub struct Limit {
 
 /// Removes duplicate rows from the input
 #[derive(Clone, PartialEq, Eq, Hash)]
-pub struct Distinct {
+pub enum Distinct {
+    /// Plain `DISTINCT` referencing all selection expressions
+    All(Arc<LogicalPlan>),
+    /// The `Postgres` addition, allowing separate control over DISTINCT'd and selected columns
+    On(DistinctOn),
+}
+
+/// Removes duplicate rows from the input
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct DistinctOn {
+    /// The `DISTINCT ON` clause expression list
+    pub on_expr: Vec<Expr>,
+    /// The selected projection expression list
+    pub select_expr: Vec<Expr>,
+    /// The `ORDER BY` clause, whose initial expressions must match those of the `ON` clause
+    pub sort_expr: Option<Vec<Expr>>,
     /// The logical plan that is being DISTINCT'd
     pub input: Arc<LogicalPlan>,
+    /// The schema description of the DISTINCT ON output
+    pub schema: DFSchemaRef,
+}
+
+impl DistinctOn {
+    /// Create a new `DistintOn` struct.
+    pub fn try_new(
+        on_expr: Vec<Expr>,
+        select_expr: Vec<Expr>,
+        sort_expr: Option<Vec<Expr>>,
+        input: Arc<LogicalPlan>,
+    ) -> Result<Self> {
+        let on_expr = normalize_cols(on_expr, input.as_ref())?;
+
+        let schema = DFSchema::new_with_metadata(
+            exprlist_to_fields(&select_expr, &input)?,
+            input.schema().metadata().clone(),
+        )?;
+
+        let mut distinct_on = DistinctOn {
+            on_expr,
+            select_expr,
+            sort_expr: None,
+            input,
+            schema: Arc::new(schema),
+        };
+
+        if let Some(sort_expr) = sort_expr {
+            distinct_on = distinct_on.with_sort_expr(sort_expr)?;
+        }
+
+        Ok(distinct_on)
+    }
+
+    /// Try to update `self` with a new sort expressions.
+    ///
+    /// Validates that the sort expressions are a super-set of the `ON` expressions.
+    pub fn with_sort_expr(mut self, sort_expr: Vec<Expr>) -> Result<Self> {
+        let sort_expr = normalize_cols(sort_expr, self.input.as_ref())?;
+
+        // Check that the left-most sort expressions are the same as the `ON` expressions.
+        let mut matched = true;
+        for (on, sort) in self.on_expr.iter().zip(sort_expr.iter()) {
+            match sort {
+                Expr::Sort(SortExpr { expr, .. }) => {
+                    if on != &**expr {
+                        matched = false;
+                        break;
+                    }
+                }
+                _ => return plan_err!("Not a sort expression: {sort}"),
+            }
+        }
+
+        if self.on_expr.len() > sort_expr.len() || !matched {
+            return plan_err!(
+                "SELECT DISTINCT ON expressions must match initial ORDER BY expressions"
+            );
+        }
+
+        self.sort_expr = Some(sort_expr);
+        Ok(self)
+    }
 }
 
 /// Aggregates its input based on a set of grouping and aggregate
