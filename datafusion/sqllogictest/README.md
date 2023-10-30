@@ -19,7 +19,7 @@
 
 # DataFusion sqllogictest
 
-[DataFusion](df) is an extensible query execution framework, written in Rust, that uses Apache Arrow as its in-memory format.
+[DataFusion][df] is an extensible query execution framework, written in Rust, that uses Apache Arrow as its in-memory format.
 
 This crate is a submodule of DataFusion that contains an implementation of [sqllogictest](https://www.sqlite.org/sqllogictest/doc/trunk/about.wiki).
 
@@ -106,7 +106,7 @@ Assuming it looks good, check it in!
 
 ## Running tests: Validation Mode
 
-In this model, `sqllogictests` runs the statements and queries in a `.slt` file, comparing the expected output in the
+In this mode, `sqllogictests` runs the statements and queries in a `.slt` file, comparing the expected output in the
 file to the output produced by that run.
 
 For example, to run all tests suites in validation mode
@@ -125,7 +125,7 @@ cargo test --test sqllogictests -- information
 ## Running tests: Postgres compatibility
 
 Test files that start with prefix `pg_compat_` verify compatibility
-with Postgres by running the same script files both with DataFusion and with Posgres
+with Postgres by running the same script files both with DataFusion and with Postgres
 
 In order to run the sqllogictests running against a previously running Postgres instance, do:
 
