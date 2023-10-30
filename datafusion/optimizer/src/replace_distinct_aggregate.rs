@@ -71,6 +71,9 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
                 input,
                 ..
             })) => {
+                // Construct the aggregation expression to be used to fetch the selected expressions.
+                // Alias them as a safe-guard from 'common_sub_expression_eliminate' mangling the
+                // output field name.
                 let aggr_expr = select_expr
                     .iter()
                     .map(|e| {
@@ -85,16 +88,20 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
                     })
                     .collect::<Result<Vec<Expr>>>()?;
 
+                // The `ON` expressions will serve as the grouping expressions
                 let on_expr = on_expr
                     .iter()
                     .enumerate()
                     .map(|(i, e)| e.clone().alias(format!("_on_expr_{i}")))
                     .collect::<Vec<Expr>>();
 
+                // Build the aggregation plan
                 let plan = LogicalPlanBuilder::from(input.as_ref().clone())
                     .aggregate(on_expr.clone(), aggr_expr.to_vec())?
                     .build()?;
 
+                // Whereas the aggregation plan by default outputs both the grouping and the aggregation
+                // expressions, for `DISTINCT ON` we only need to emit the original selection expressions.
                 let project_exprs = plan
                     .schema()
                     .fields()
@@ -108,6 +115,9 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
                     .build()?;
 
                 let plan = if let Some(sort_expr) = sort_expr {
+                    // While sort expressions were used in the `first_value` aggregation itself above,
+                    // this on it's own isn't enough to guarantee the proper output order of the grouping
+                    // (`ON`) expression, so we need to sort those as well.
                     LogicalPlanBuilder::from(plan)
                         .sort(sort_expr[..on_expr.len()].to_vec())?
                         .build()?
