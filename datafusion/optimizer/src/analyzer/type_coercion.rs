@@ -43,7 +43,7 @@ use datafusion_expr::type_coercion::other::{
 };
 use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_large_utf8};
 use datafusion_expr::{
-    is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown,
+    is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, lit,
     type_coercion, window_function, AggregateFunction, BuiltinScalarFunction, Expr,
     LogicalPlan, Operator, Projection, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
@@ -562,12 +562,16 @@ fn coerce_arguments_for_fun(
 
     let mut expressions: Vec<Expr> = expressions.to_vec();
 
+    if *fun == BuiltinScalarFunction::ArrayConcat {
+        println!("expressions: {:?}", expressions);
+    }
+
     // Cast Fixedsizelist to List for array functions
     if *fun == BuiltinScalarFunction::MakeArray {
         expressions = expressions
             .into_iter()
             .map(|expr| {
-                let data_type = expr.get_type(schema).unwrap();
+                let data_type = expr.get_type(schema)?;
                 if let DataType::FixedSizeList(field, _) = data_type {
                     let field = field.as_ref().clone();
                     let to_type = DataType::List(Arc::new(field));
@@ -579,12 +583,31 @@ fn coerce_arguments_for_fun(
             .collect::<Result<Vec<_>>>()?;
     }
 
+    // Converting `Null` to Int32(None) to avoid handling `Null` in array functions
+    if *fun == BuiltinScalarFunction::MakeArray {
+        expressions = expressions
+            .into_iter()
+            .map(|expr| {
+                let data_type = expr.get_type(schema)?;
+                if data_type.equals_datatype(&DataType::Null) {
+                    Ok(lit(ScalarValue::Int32(None)))
+                } else {
+                    Ok(expr)
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+        // println!("expressions: {:?}", expressions);
+    }
+
+    // Casting type to make data type consistent for array functions
     if *fun == BuiltinScalarFunction::MakeArray {
         // Find the final data type for the function arguments
         let current_types = expressions
             .iter()
             .map(|e| e.get_type(schema))
             .collect::<Result<Vec<_>>>()?;
+
+        // println!("current_types: {:?}", current_types);
 
         let new_type = current_types
             .iter()
@@ -599,6 +622,7 @@ fn coerce_arguments_for_fun(
             .map(|(expr, from_type)| cast_array_expr(expr, &from_type, &new_type, schema))
             .collect();
     }
+
     Ok(expressions)
 }
 

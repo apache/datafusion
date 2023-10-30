@@ -29,7 +29,6 @@ use arrow_buffer::NullBuffer;
 use datafusion_common::cast::{
     as_generic_string_array, as_int64_array, as_list_array, as_string_array,
 };
-use datafusion_common::utils::wrap_into_list_array;
 use datafusion_common::{
     exec_err, internal_err, not_impl_err, plan_err, DataFusionError, Result,
 };
@@ -399,20 +398,25 @@ fn array_array(args: &[ArrayRef], data_type: DataType) -> Result<ArrayRef> {
 
 /// `make_array` SQL function
 pub fn make_array(arrays: &[ArrayRef]) -> Result<ArrayRef> {
-    let mut data_type = DataType::Null;
-    for arg in arrays {
-        let arg_data_type = arg.data_type();
-        if !arg_data_type.equals_datatype(&DataType::Null) {
-            data_type = arg_data_type.clone();
-            break;
-        }
+    if arrays.is_empty() {
+        // a.k.a ListArray[ NullArray(0) ]
+        return Ok(Arc::new(ListArray::try_new(
+            Arc::new(Field::new("item", DataType::Null, true)),
+            OffsetBuffer::new(vec![0, 0].into()),
+            new_empty_array(&DataType::Null),
+            None,
+        )?));
     }
 
+    let args = arrays.iter().collect::<Vec<_>>();
+    check_datatypes("make_array", args.as_slice())?;
+
+    println!("args: {:?}", args);
+
+    let data_type = args[0].data_type().to_owned();
     match data_type {
-        // Either an empty array or all nulls:
         DataType::Null => {
-            let array = new_null_array(&DataType::Null, arrays.len());
-            Ok(Arc::new(wrap_into_list_array(array)))
+            return internal_err!("Null is not expected in make_array");
         }
         data_type => array_array(arrays, data_type),
     }
@@ -795,6 +799,13 @@ fn concat_internal(args: &[ArrayRef]) -> Result<ArrayRef> {
             // Get all the arrays on i-th row
             let values = list_arrays
                 .iter()
+                // .map(|arr| {
+                //     let res = arr.value(i);
+                //     let res2 = arr.value_length(i);
+                //     println!("res2: {:?}", res2);
+                //     res
+                // })
+                // .filter(|arr| arr.len() > 0)
                 .map(|arr| arr.value(i))
                 .collect::<Vec<_>>();
 
@@ -810,6 +821,9 @@ fn concat_internal(args: &[ArrayRef]) -> Result<ArrayRef> {
             valid.append(true);
         }
     }
+
+    println!("arrays: {:?}", arrays);
+
     // Assume all arrays have the same data type
     let data_type = list_arrays[0].value_type();
     let buffer = valid.finish();
@@ -965,6 +979,7 @@ macro_rules! general_repeat_list {
 
 /// Array_empty SQL function
 pub fn array_empty(args: &[ArrayRef]) -> Result<ArrayRef> {
+    println!("args: {:?}", args);
     if args[0].as_any().downcast_ref::<NullArray>().is_some() {
         // Make sure to return Boolean type.
         return Ok(Arc::new(BooleanArray::new_null(args[0].len())));
@@ -973,7 +988,7 @@ pub fn array_empty(args: &[ArrayRef]) -> Result<ArrayRef> {
     let array = as_list_array(&args[0])?;
     let builder = array
         .iter()
-        .map(|arr| arr.map(|arr| arr.len() == arr.null_count()))
+        .map(|arr| arr.map(|arr| arr.data_type() == &DataType::Null))
         .collect::<BooleanArray>();
     Ok(Arc::new(builder))
 }
@@ -1921,7 +1936,15 @@ pub fn string_to_array<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef
 mod tests {
     use super::*;
     use arrow::datatypes::Int64Type;
-    use datafusion_common::cast::as_uint64_array;
+    use datafusion_common::{cast::as_uint64_array, utils::wrap_into_list_array};
+
+    #[test]
+    fn testaa() {
+        let array = new_null_array(&DataType::Null, 1);
+        let p = Arc::new(wrap_into_list_array(array));
+        let res = array_empty(&[p]).unwrap();
+        println!("a: {:?}", res);
+    }
 
     #[test]
     fn test_array() {

@@ -751,7 +751,7 @@ select array_pop_back(make_array(make_array(1, 2, 3), make_array(2, 9, 1), make_
 query ?
 select array_pop_back(make_array(make_array(1, 2, 3), make_array(2, 9, 1), make_array(7, 8, 9), NULL, make_array(1, 7, 4)));
 ----
-[[1, 2, 3], [2, 9, 1], [7, 8, 9], ]
+[[1, 2, 3], [2, 9, 1], [7, 8, 9], []]
 
 # array_pop_back scalar function #8 (after array_pop_back, nested array is empty)
 query ?
@@ -935,20 +935,20 @@ select make_array(make_array('a','b'), null),
        make_array([1,2,3], null, make_array(4,5,6,7)),
        make_array(null, 1, null, 2, null, 3, null, null, 4, 5);
 ----
-[[a, b], ] [[a, b], , [c, d]] [, [a, b], ] [, [a, b], , , [c, d]] [[a, bc, def], , [rust]] [[1, 2, 3], , [4, 5, 6, 7]] [, 1, , 2, , 3, , , 4, 5]
+[[a, b], []] [[a, b], [], [c, d]] [[], [a, b], []] [[], [a, b], [], [], [c, d]] [[a, bc, def], [], [rust]] [[1, 2, 3], [], [4, 5, 6, 7]] [, 1, , 2, , 3, , , 4, 5]
 
 query ?
 select make_array(column5, null, column5) from arrays_values_without_nulls;
 ----
-[[2, 3], , [2, 3]]
-[[4, 5], , [4, 5]]
-[[6, 7], , [6, 7]]
-[[8, 9], , [8, 9]]
+[[2, 3], [], [2, 3]]
+[[4, 5], [], [4, 5]]
+[[6, 7], [], [6, 7]]
+[[8, 9], [], [8, 9]]
 
 query ?
 select make_array(['a','b'], null);
 ----
-[[a, b], ]
+[[a, b], []]
 
 ## array_append (aliases: `list_append`, `array_push_back`, `list_push_back`)
 
