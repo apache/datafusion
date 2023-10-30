@@ -527,6 +527,7 @@ mod tests {
     };
     use arrow_schema::Field;
     use chrono::Utc;
+    use datafusion_common::config::ConfigOptions;
 
     use crate::physical_plan::{DefaultDisplay, VerboseDisplay};
 
@@ -828,11 +829,7 @@ mod tests {
                 None,
             );
 
-            let partitioned_file = parquet_exec
-                .get_repartitioned(4, 0)
-                .base_config()
-                .file_groups
-                .clone();
+            let partitioned_file = repartition_with_size(&parquet_exec, 4, 0);
 
             assert!(partitioned_file[0][0].range.is_none());
         }
@@ -893,13 +890,8 @@ mod tests {
                         None,
                     );
 
-                    let actual = file_groups_to_vec(
-                        parquet_exec
-                            .get_repartitioned(n_partition, 10)
-                            .base_config()
-                            .file_groups
-                            .clone(),
-                    );
+                    let actual =
+                        repartition_with_size_to_vec(&parquet_exec, n_partition, 10);
 
                     assert_eq!(expected, &actual);
                 }
@@ -927,13 +919,7 @@ mod tests {
                 None,
             );
 
-            let actual = file_groups_to_vec(
-                parquet_exec
-                    .get_repartitioned(4, 10)
-                    .base_config()
-                    .file_groups
-                    .clone(),
-            );
+            let actual = repartition_with_size_to_vec(&parquet_exec, 4, 10);
             let expected = vec![
                 (0, "a".to_string(), 0, 31),
                 (1, "a".to_string(), 31, 62),
@@ -964,13 +950,7 @@ mod tests {
                 None,
             );
 
-            let actual = file_groups_to_vec(
-                parquet_exec
-                    .get_repartitioned(96, 5)
-                    .base_config()
-                    .file_groups
-                    .clone(),
-            );
+            let actual = repartition_with_size_to_vec(&parquet_exec, 96, 5);
             let expected = vec![
                 (0, "a".to_string(), 0, 1),
                 (1, "a".to_string(), 1, 2),
@@ -1007,13 +987,7 @@ mod tests {
                 None,
             );
 
-            let actual = file_groups_to_vec(
-                parquet_exec
-                    .get_repartitioned(3, 10)
-                    .base_config()
-                    .file_groups
-                    .clone(),
-            );
+            let actual = repartition_with_size_to_vec(&parquet_exec, 3, 10);
             let expected = vec![
                 (0, "a".to_string(), 0, 34),
                 (1, "a".to_string(), 34, 40),
@@ -1046,13 +1020,7 @@ mod tests {
                 None,
             );
 
-            let actual = file_groups_to_vec(
-                parquet_exec
-                    .get_repartitioned(2, 10)
-                    .base_config()
-                    .file_groups
-                    .clone(),
-            );
+            let actual = repartition_with_size_to_vec(&parquet_exec, 2, 10);
             let expected = vec![
                 (0, "a".to_string(), 0, 40),
                 (0, "b".to_string(), 0, 10),
@@ -1086,11 +1054,7 @@ mod tests {
                 None,
             );
 
-            let actual = parquet_exec
-                .get_repartitioned(65, 10)
-                .base_config()
-                .file_groups
-                .clone();
+            let actual = repartition_with_size(&parquet_exec, 65, 10);
             assert_eq!(2, actual.len());
         }
 
@@ -1115,17 +1079,47 @@ mod tests {
                 None,
             );
 
-            let actual = parquet_exec
-                .get_repartitioned(65, 500)
-                .base_config()
-                .file_groups
-                .clone();
+            let actual = repartition_with_size(&parquet_exec, 65, 500);
             assert_eq!(1, actual.len());
         }
 
-        fn file_groups_to_vec(
-            file_groups: Vec<Vec<PartitionedFile>>,
+        /// Calls `ParquetExec.repartitioned` with the  specified
+        /// `target_partitions` and `repartition_file_min_size`, returning the
+        /// resulting `PartitionedFile`s
+        fn repartition_with_size(
+            parquet_exec: &ParquetExec,
+            target_partitions: usize,
+            repartition_file_min_size: usize,
+        ) -> Vec<Vec<PartitionedFile>> {
+            let mut config = ConfigOptions::new();
+            config.optimizer.repartition_file_min_size = repartition_file_min_size;
+
+            parquet_exec
+                .repartitioned(target_partitions, &config)
+                .unwrap() // unwrap Result
+                .unwrap() // unwrap Option
+                .as_any()
+                .downcast_ref::<ParquetExec>()
+                .unwrap()
+                .base_config()
+                .file_groups
+                .clone()
+        }
+
+        /// Calls `repartition_with_size` and returns a tuple for each output `PartitionedFile`:
+        ///
+        /// `(partition index, file path, start, end)`
+        fn repartition_with_size_to_vec(
+            parquet_exec: &ParquetExec,
+            target_partitions: usize,
+            repartition_file_min_size: usize,
         ) -> Vec<(usize, String, i64, i64)> {
+            let file_groups = repartition_with_size(
+                parquet_exec,
+                target_partitions,
+                repartition_file_min_size,
+            );
+
             file_groups
                 .iter()
                 .enumerate()
