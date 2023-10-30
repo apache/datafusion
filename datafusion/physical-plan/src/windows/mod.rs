@@ -37,7 +37,7 @@ use datafusion_expr::{
     window_function::{BuiltInWindowFunction, WindowFunction},
     PartitionEvaluator, WindowFrame, WindowUDF,
 };
-use datafusion_physical_expr::equivalence::{collapse_lex_req, SetOrderMode};
+use datafusion_physical_expr::equivalence::collapse_lex_req;
 use datafusion_physical_expr::{
     reverse_order_bys,
     window::{BuiltInWindowFunctionExpr, SlidingAggregateWindowExpr},
@@ -63,18 +63,6 @@ pub enum PartitionSearchMode {
     PartiallySorted(Vec<usize>),
     /// All Partition columns are ordered (Also empty case)
     Sorted,
-}
-
-impl From<SetOrderMode<usize>> for PartitionSearchMode {
-    fn from(value: SetOrderMode<usize>) -> Self {
-        match value {
-            SetOrderMode::FullySorted(_indices) => PartitionSearchMode::Sorted,
-            SetOrderMode::PartiallySorted(indices) => {
-                PartitionSearchMode::PartiallySorted(indices)
-            }
-            SetOrderMode::None => PartitionSearchMode::Linear,
-        }
-    }
 }
 
 /// Create a physical expression for window function
@@ -339,8 +327,8 @@ pub(crate) fn get_ordered_partition_by_indices(
 ) -> Vec<usize> {
     input
         .schema_properties()
-        .set_ordered_indices(partition_by_exprs)
-        .entries()
+        .find_longest_permutation(partition_by_exprs)
+        .1
 }
 
 pub(crate) fn get_partition_by_sort_exprs(
@@ -354,13 +342,13 @@ pub(crate) fn get_partition_by_sort_exprs(
         .collect::<Vec<_>>();
     // Make sure ordered section doesn't move over the partition by expression
     assert!(ordered_partition_by_indices.len() <= partition_by_exprs.len());
-    if let SetOrderMode::FullySorted(ordered_section) = input
+    let (ordering, _) = input
         .schema_properties()
-        .set_ordered_section(&ordered_partition_exprs)
-    {
-        Ok(ordered_section)
+        .find_longest_permutation(&ordered_partition_exprs);
+    if ordering.len() == ordered_partition_exprs.len() {
+        Ok(ordering)
     } else {
-        exec_err!("Expects partition by expression to be ordered")
+        exec_err!("Expects PARTITION BY expression to be ordered")
     }
 }
 
@@ -478,8 +466,7 @@ pub fn get_window_mode(
 ) -> Result<Option<(bool, PartitionSearchMode)>> {
     let input_eqs = input.schema_properties();
     let mut partition_by_reqs: Vec<PhysicalSortRequirement> = vec![];
-    let set_ordered_indices = input_eqs.set_ordered_indices(partitionby_exprs);
-    let indices = set_ordered_indices.entries_ref();
+    let (_, indices) = input_eqs.find_longest_permutation(partitionby_exprs);
     let item = indices
         .iter()
         .map(|&idx| PhysicalSortRequirement {
@@ -500,7 +487,14 @@ pub fn get_window_mode(
         let req = collapse_lex_req(req);
         if partition_by_eqs.ordering_satisfy_requirement(&req) {
             // Window can be run with existing ordering
-            return Ok(Some((should_swap, set_ordered_indices.into())));
+            let mode = if indices.len() == partitionby_exprs.len() {
+                PartitionSearchMode::Sorted
+            } else if indices.is_empty() {
+                PartitionSearchMode::Linear
+            } else {
+                PartitionSearchMode::PartiallySorted(indices)
+            };
+            return Ok(Some((should_swap, mode)));
         }
     }
     Ok(None)

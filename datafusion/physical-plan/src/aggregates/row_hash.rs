@@ -331,13 +331,13 @@ impl GroupedHashAggregateStream {
 
         let name = format!("GroupedHashAggregateStream[{partition}]");
         let reservation = MemoryConsumer::new(name).register(context.memory_pool());
-        let ordered_section = agg
+        let (ordering, _) = agg
             .schema_properties()
-            .set_ordered_section(&agg_group_by.output_exprs());
+            .find_longest_permutation(&agg_group_by.output_exprs());
         let group_ordering = GroupOrdering::try_new(
             &group_schema,
             &agg.partition_search_mode,
-            &ordered_section.entries(),
+            ordering.as_slice(),
         )?;
 
         let group_values = new_group_values(group_schema)?;

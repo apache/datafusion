@@ -27,7 +27,6 @@ use crate::window::window_expr::{get_orderby_values, WindowFn};
 use crate::window::{PartitionBatches, PartitionWindowAggStates, WindowState};
 use crate::{reverse_order_bys, PhysicalExpr, SchemaProperties};
 
-use crate::equivalence::SetOrderMode;
 use arrow::array::{new_empty_array, ArrayRef};
 use arrow::compute::SortOptions;
 use arrow::datatypes::Field;
@@ -86,9 +85,9 @@ impl BuiltInWindowExpr {
                 // expressions and existing ordering expressions are equal (w.r.t.
                 // set equality), we can prefix the ordering of `self.expr` with
                 // the existing ordering.
-                if let SetOrderMode::FullySorted(mut ordering) =
-                    eq_properties.set_ordered_section(&self.partition_by)
-                {
+                let (mut ordering, _) =
+                    eq_properties.find_longest_permutation(&self.partition_by);
+                if ordering.len() == self.partition_by.len() {
                     ordering.push(fn_res_ordering);
                     eq_properties.add_new_orderings([ordering]);
                 }

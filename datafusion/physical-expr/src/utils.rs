@@ -657,17 +657,10 @@ mod tests {
                 options: sort_options,
             },
         ]]);
+        let (result, idxs) = eq_properties.find_longest_permutation(&required_columns);
+        assert_eq!(idxs, vec![0, 1]);
         assert_eq!(
-            eq_properties
-                .set_ordered_indices(&required_columns)
-                .entries(),
-            &[0, 1]
-        );
-
-        assert_eq!(
-            eq_properties
-                .set_ordered_section(&required_columns)
-                .entries(),
+            result,
             vec![
                 PhysicalSortExpr {
                     expr: col_b.clone(),
@@ -705,17 +698,10 @@ mod tests {
                 },
             ],
         ]);
+        let (result, idxs) = eq_properties.find_longest_permutation(&required_columns);
+        assert_eq!(idxs, vec![0, 1]);
         assert_eq!(
-            eq_properties
-                .set_ordered_indices(&required_columns)
-                .entries(),
-            &[0, 1]
-        );
-
-        assert_eq!(
-            eq_properties
-                .set_ordered_section(&required_columns)
-                .entries(),
+            result,
             vec![
                 PhysicalSortExpr {
                     expr: col_b.clone(),
@@ -754,12 +740,8 @@ mod tests {
                 options: sort_options,
             },
         ]]);
-        assert_eq!(
-            eq_properties
-                .set_ordered_indices(&required_columns)
-                .entries(),
-            &[0]
-        );
+        let (_, idxs) = eq_properties.find_longest_permutation(&required_columns);
+        assert_eq!(idxs, vec![0]);
 
         Ok(())
     }
