@@ -314,7 +314,7 @@ async fn roundtrip_logical_plan_distinct_on() -> Result<()> {
         "tests/testdata/test.csv",
         CsvReadOptions::default().schema(&schema),
     )
-        .await?;
+    .await?;
 
     let query = "SELECT DISTINCT ON (a % 2) a, b * 2 FROM t1 ORDER BY a % 2 DESC, b";
     let plan = ctx.sql(query).await?.into_optimized_plan()?;
