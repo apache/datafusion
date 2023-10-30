@@ -210,6 +210,8 @@ impl TreeNode for ExprOrdering {
             Ok(self)
         } else {
             let child_expr_orderings = self.children_expr_orderings();
+            // After mapping over the children, the function `F` applies to the
+            // current object and updates its state.
             Ok(self.with_new_children(
                 child_expr_orderings
                     .into_iter()
@@ -219,8 +221,6 @@ impl TreeNode for ExprOrdering {
                     .map_ok(|c| c.state)
                     .collect::<Result<Vec<_>>>()?,
             ))
-            // After mapping over the children, the function `F` applies to the
-            // current object and updates its state.
         }
     }
 }
