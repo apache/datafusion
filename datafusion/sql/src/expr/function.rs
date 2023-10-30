@@ -19,7 +19,7 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{
     not_impl_err, plan_datafusion_err, plan_err, DFSchema, DataFusionError, Result,
 };
-use datafusion_expr::expr::{ScalarFunction, ScalarUDF};
+use datafusion_expr::expr::{ScalarFunction, ScalarFunctionExpr, ScalarUDF};
 use datafusion_expr::function::suggest_valid_function;
 use datafusion_expr::window_frame::regularize;
 use datafusion_expr::{
@@ -30,6 +30,7 @@ use sqlparser::ast::{
     Expr as SQLExpr, Function as SQLFunction, FunctionArg, FunctionArgExpr, WindowType,
 };
 use std::str::FromStr;
+use std::sync::Arc;
 
 use super::arrow_cast::ARROW_CAST_NAME;
 
@@ -59,7 +60,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         if let Ok(fun) = BuiltinScalarFunction::from_str(&name) {
             let args =
                 self.function_args_to_expr(function.args, schema, planner_context)?;
-            return Ok(Expr::ScalarFunction(ScalarFunction::new(fun, args)));
+            return Ok(Expr::ScalarFunctionExpr(ScalarFunctionExpr::new(
+                Arc::new(fun),
+                args,
+            )));
         };
 
         // If function is a window function (it has an OVER clause),

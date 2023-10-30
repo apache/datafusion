@@ -34,7 +34,7 @@ use datafusion::common::{exec_err, internal_err, not_impl_err};
 use datafusion::logical_expr::aggregate_function;
 use datafusion::logical_expr::expr::{
     Alias, BinaryExpr, Case, Cast, GroupingSet, InList,
-    ScalarFunction as DFScalarFunction, Sort, WindowFunction,
+    ScalarFunction as DFScalarFunction, ScalarFunctionExpr, Sort, WindowFunction,
 };
 use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Operator};
 use datafusion::prelude::Expr;
@@ -808,6 +808,30 @@ pub fn to_substrait_rex(
                 });
             }
             let function_name = fun.to_string().to_lowercase();
+            let function_anchor = _register_function(function_name, extension_info);
+            Ok(Expression {
+                rex_type: Some(RexType::ScalarFunction(ScalarFunction {
+                    function_reference: function_anchor,
+                    arguments,
+                    output_type: None,
+                    args: vec![],
+                    options: vec![],
+                })),
+            })
+        }
+        Expr::ScalarFunctionExpr(ScalarFunctionExpr { fun, args }) => {
+            let mut arguments: Vec<FunctionArgument> = vec![];
+            for arg in args {
+                arguments.push(FunctionArgument {
+                    arg_type: Some(ArgType::Value(to_substrait_rex(
+                        arg,
+                        schema,
+                        col_ref_offset,
+                        extension_info,
+                    )?)),
+                });
+            }
+            let function_name = fun.name()[0].to_lowercase();
             let function_anchor = _register_function(function_name, extension_info);
             Ok(Expression {
                 rex_type: Some(RexType::ScalarFunction(ScalarFunction {

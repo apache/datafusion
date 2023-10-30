@@ -18,11 +18,12 @@
 use super::{Between, Expr, Like};
 use crate::expr::{
     AggregateFunction, AggregateUDF, Alias, BinaryExpr, Cast, GetFieldAccess,
-    GetIndexedField, InList, InSubquery, Placeholder, ScalarFunction, ScalarUDF, Sort,
-    TryCast, WindowFunction,
+    GetIndexedField, InList, InSubquery, Placeholder, ScalarFunction, ScalarFunctionExpr,
+    ScalarUDF, Sort, TryCast, WindowFunction,
 };
 use crate::field_util::GetFieldAccessSchema;
 use crate::type_coercion::binary::get_result_type;
+use crate::FunctionReturnType;
 use crate::{LogicalPlan, Projection, Subquery};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field};
@@ -95,6 +96,22 @@ impl ExprSchemable for Expr {
                     .collect::<Result<Vec<_>>>()?;
 
                 fun.return_type(&data_types)
+            }
+            Expr::ScalarFunctionExpr(ScalarFunctionExpr { fun, args }) => {
+                let data_types = args
+                    .iter()
+                    .map(|e| e.get_type(schema))
+                    .collect::<Result<Vec<_>>>()?;
+
+                match fun.return_type() {
+                    FunctionReturnType::LambdaReturnType(return_type_resolver) => {
+                        Ok((return_type_resolver)(&data_types)?.as_ref().clone())
+                    }
+                    FunctionReturnType::SameAsFirstArg
+                    | FunctionReturnType::FixedType(_) => {
+                        unimplemented!()
+                    }
+                }
             }
             Expr::WindowFunction(WindowFunction { fun, args, .. }) => {
                 let data_types = args
@@ -230,6 +247,7 @@ impl ExprSchemable for Expr {
             Expr::ScalarVariable(_, _)
             | Expr::TryCast { .. }
             | Expr::ScalarFunction(..)
+            | Expr::ScalarFunctionExpr(..)
             | Expr::ScalarUDF(..)
             | Expr::WindowFunction { .. }
             | Expr::AggregateFunction { .. }

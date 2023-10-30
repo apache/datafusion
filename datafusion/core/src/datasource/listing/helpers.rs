@@ -53,6 +53,21 @@ use object_store::{ObjectMeta, ObjectStore};
 /// was performed
 pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
     let mut is_applicable = true;
+
+    fn handle_func_volatility(
+        volatility: Volatility,
+        is_applicable: &mut bool,
+    ) -> VisitRecursion {
+        match volatility {
+            Volatility::Immutable => VisitRecursion::Continue,
+            // TODO: Stable functions could be `applicable`, but that would require access to the context
+            Volatility::Stable | Volatility::Volatile => {
+                *is_applicable = false;
+                VisitRecursion::Stop
+            }
+        }
+    }
+
     expr.apply(&mut |expr| {
         Ok(match expr {
             Expr::Column(Column { ref name, .. }) => {
@@ -90,28 +105,17 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
             | Expr::GetIndexedField { .. }
             | Expr::GroupingSet(_)
             | Expr::Case { .. } => VisitRecursion::Continue,
-
-            Expr::ScalarFunction(scalar_function) => {
-                match scalar_function.fun.volatility() {
-                    Volatility::Immutable => VisitRecursion::Continue,
-                    // TODO: Stable functions could be `applicable`, but that would require access to the context
-                    Volatility::Stable | Volatility::Volatile => {
-                        is_applicable = false;
-                        VisitRecursion::Stop
-                    }
-                }
-            }
+            Expr::ScalarFunction(scalar_function) => handle_func_volatility(
+                scalar_function.fun.volatility(),
+                &mut is_applicable,
+            ),
+            Expr::ScalarFunctionExpr(scalar_function) => handle_func_volatility(
+                scalar_function.fun.volatility(),
+                &mut is_applicable,
+            ),
             Expr::ScalarUDF(ScalarUDF { fun, .. }) => {
-                match fun.signature.volatility {
-                    Volatility::Immutable => VisitRecursion::Continue,
-                    // TODO: Stable functions could be `applicable`, but that would require access to the context
-                    Volatility::Stable | Volatility::Volatile => {
-                        is_applicable = false;
-                        VisitRecursion::Stop
-                    }
-                }
+                handle_func_volatility(fun.signature.volatility, &mut is_applicable)
             }
-
             // TODO other expressions are not handled yet:
             // - AGGREGATE, WINDOW and SORT should not end up in filter conditions, except maybe in some edge cases
             // - Can `Wildcard` be considered as a `Literal`?

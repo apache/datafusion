@@ -182,6 +182,7 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         | Expr::Cast(_)
         | Expr::TryCast(_)
         | Expr::ScalarFunction(..)
+        | Expr::ScalarFunctionExpr(..)
         | Expr::InList { .. } => Ok(VisitRecursion::Continue),
         Expr::Sort(_)
         | Expr::AggregateFunction(_)
@@ -916,6 +917,10 @@ fn is_volatile_expression(e: &Expr) -> bool {
     e.apply(&mut |expr| {
         Ok(match expr {
             Expr::ScalarFunction(f) if f.fun.volatility() == Volatility::Volatile => {
+                is_volatile = true;
+                VisitRecursion::Stop
+            }
+            Expr::ScalarFunctionExpr(f) if f.fun.volatility() == Volatility::Volatile => {
                 is_volatile = true;
                 VisitRecursion::Stop
             }

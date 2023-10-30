@@ -37,7 +37,7 @@ use datafusion_common::{
 use datafusion_common::{
     exec_err, internal_err, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::expr::{InList, InSubquery, ScalarFunction};
+use datafusion_expr::expr::{InList, InSubquery, ScalarFunction, ScalarFunctionExpr};
 use datafusion_expr::{
     and, expr, lit, or, BinaryExpr, BuiltinScalarFunction, Case, ColumnarValue, Expr,
     Like, Volatility,
@@ -347,6 +347,9 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::QualifiedWildcard { .. }
             | Expr::Placeholder(_) => false,
             Expr::ScalarFunction(ScalarFunction { fun, .. }) => {
+                Self::volatility_ok(fun.volatility())
+            }
+            Expr::ScalarFunctionExpr(ScalarFunctionExpr { fun, .. }) => {
                 Self::volatility_ok(fun.volatility())
             }
             Expr::ScalarUDF(expr::ScalarUDF { fun, .. }) => {
@@ -1206,17 +1209,35 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 args,
             }) => simpl_log(args, <&S>::clone(&info))?,
 
+            Expr::ScalarFunctionExpr(ScalarFunctionExpr { fun, args })
+                if fun.name()[0] == "log" =>
+            {
+                simpl_log(args, <&S>::clone(&info))?
+            }
+
             // power
             Expr::ScalarFunction(ScalarFunction {
                 fun: BuiltinScalarFunction::Power,
                 args,
             }) => simpl_power(args, <&S>::clone(&info))?,
 
+            Expr::ScalarFunctionExpr(ScalarFunctionExpr { fun, args })
+                if fun.name()[0] == "power" =>
+            {
+                simpl_power(args, <&S>::clone(&info))?
+            }
+
             // concat
             Expr::ScalarFunction(ScalarFunction {
                 fun: BuiltinScalarFunction::Concat,
                 args,
             }) => simpl_concat(args)?,
+
+            Expr::ScalarFunctionExpr(ScalarFunctionExpr { fun, args })
+                if fun.name()[0] == "concat" =>
+            {
+                simpl_concat(args)?
+            }
 
             // concat_ws
             Expr::ScalarFunction(ScalarFunction {
@@ -1229,6 +1250,15 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                     args,
                 )),
             },
+
+            Expr::ScalarFunctionExpr(ScalarFunctionExpr { fun, args })
+                if fun.name()[0] == "concat_ws" =>
+            {
+                match &args[..] {
+                    [delimiter, vals @ ..] => simpl_concat_ws(delimiter, vals)?,
+                    _ => Expr::ScalarFunctionExpr(ScalarFunctionExpr::new(fun, args)),
+                }
+            }
 
             //
             // Rules for Between

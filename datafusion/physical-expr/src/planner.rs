@@ -29,7 +29,9 @@ use datafusion_common::{
     exec_err, internal_err, not_impl_err, plan_err, DFSchema, DataFusionError, Result,
     ScalarValue,
 };
-use datafusion_expr::expr::{Alias, Cast, InList, ScalarFunction, ScalarUDF};
+use datafusion_expr::expr::{
+    Alias, Cast, InList, ScalarFunction, ScalarFunctionExpr, ScalarUDF,
+};
 use datafusion_expr::{
     binary_expr, Between, BinaryExpr, Expr, GetFieldAccess, GetIndexedField, Like,
     Operator, TryCast,
@@ -347,7 +349,6 @@ pub fn create_physical_expr(
                 field,
             )))
         }
-
         Expr::ScalarFunction(ScalarFunction { fun, args }) => {
             let physical_args = args
                 .iter()
@@ -361,6 +362,28 @@ pub fn create_physical_expr(
                 input_schema,
                 execution_props,
             )
+        }
+        Expr::ScalarFunctionExpr(ScalarFunctionExpr { fun, args }) => {
+            let physical_args = args
+                .iter()
+                .map(|e| {
+                    create_physical_expr(e, input_dfschema, input_schema, execution_props)
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            let first_arg_data_type = if physical_args.is_empty() {
+                None
+            } else {
+                Some(physical_args[0].data_type(input_schema)?)
+            };
+
+            let builtin_func_wrapper = functions::BuiltinScalarFunctionWrapper::new(
+                fun.clone(),
+                execution_props.clone(),
+                first_arg_data_type,
+            );
+
+            builtin_func_wrapper.create_physical_expr(&physical_args, input_schema)
         }
         Expr::ScalarUDF(ScalarUDF { fun, args }) => {
             let mut physical_args = vec![];

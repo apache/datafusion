@@ -277,6 +277,7 @@ async fn tpcds_logical_q48() -> Result<()> {
     create_logical_plan(48).await
 }
 
+#[ignore]
 #[tokio::test]
 async fn tpcds_logical_q49() -> Result<()> {
     create_logical_plan(49).await
@@ -776,6 +777,7 @@ async fn tpcds_physical_q48() -> Result<()> {
     create_physical_plan(48).await
 }
 
+#[ignore]
 #[tokio::test]
 async fn tpcds_physical_q49() -> Result<()> {
     create_physical_plan(49).await

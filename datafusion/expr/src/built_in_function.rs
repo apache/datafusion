@@ -17,6 +17,7 @@
 
 //! Built-in functions module contains all the built-in functions definitions.
 
+use std::any::Any;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt;
@@ -28,8 +29,8 @@ use crate::signature::TIMEZONE_WILDCARD;
 use crate::type_coercion::binary::get_wider_type;
 use crate::type_coercion::functions::data_types;
 use crate::{
-    conditional_expressions, struct_expressions, utils, FuncMonotonicity, Signature,
-    TypeSignature, Volatility,
+    conditional_expressions, struct_expressions, utils, FuncMonotonicity,
+    FunctionReturnType, ScalarFunctionDef, Signature, TypeSignature, Volatility,
 };
 
 use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
@@ -1548,6 +1549,46 @@ impl FromStr for BuiltinScalarFunction {
             plan_err!("There is no built-in function named {name}")
         }
     }
+}
+
+/// `ScalarFunctionDef` is the new interface for builtin scalar functions
+/// This is an adapter between the old and new interface, to use the new interface
+/// for internal execution. Functions are planned to move into new interface gradually
+/// The function body (`execute()` in `ScalarFunctionDef`) now are all defined in
+/// `physical-expr` crate, so the new interface implementation are defined separately
+/// in `BuiltinScalarFunctionWrapper`
+impl ScalarFunctionDef for BuiltinScalarFunction {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &[&str] {
+        aliases(self)
+    }
+
+    fn input_type(&self) -> TypeSignature {
+        self.signature().type_signature
+    }
+
+    fn return_type(&self) -> FunctionReturnType {
+        let self_cloned = *self;
+        let return_type_resolver = move |args: &[DataType]| -> Result<Arc<DataType>> {
+            let result = BuiltinScalarFunction::return_type(self_cloned, args)?;
+            Ok(Arc::new(result))
+        };
+
+        FunctionReturnType::LambdaReturnType(Arc::new(return_type_resolver))
+    }
+
+    fn volatility(&self) -> Volatility {
+        self.volatility()
+    }
+
+    fn monotonicity(&self) -> Option<FuncMonotonicity> {
+        self.monotonicity()
+    }
+
+    // execution functions are defined in `BuiltinScalarFunctionWrapper`
 }
 
 /// Creates a function that returns the return type of a string function given
