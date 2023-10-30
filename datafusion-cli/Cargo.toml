@@ -30,7 +30,7 @@ readme = "README.md"
 
 [dependencies]
 arrow = "48.0.0"
-async-trait = { workspace = true }
+async-trait = "0.1.41"
 aws-config = "0.55"
 aws-credential-types = "0.55"
 clap = { version = "3", features = ["derive", "cargo"] }
@@ -43,7 +43,7 @@ parking_lot = { version = "0.12" }
 regex = "1.8"
 rustyline = "11.0"
 tokio = { version = "1.24", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot"] }
-url = { workspace = true }
+url = "2.2"
 
 [dev-dependencies]
 assert_cmd = "2.0"
