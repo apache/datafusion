@@ -760,6 +760,11 @@ impl AggregateExec {
         self.input_schema.clone()
     }
 
+    /// number of rows soft limit of the AggregateExec
+    pub fn limit(&self) -> Option<usize> {
+        self.limit
+    }
+
     fn execute_typed(
         &self,
         partition: usize,
@@ -774,9 +779,11 @@ impl AggregateExec {
 
         // grouping by an expression that has a sort/limit upstream
         if let Some(limit) = self.limit {
-            return Ok(StreamType::GroupedPriorityQueue(
-                GroupedTopKAggregateStream::new(self, context, partition, limit)?,
-            ));
+            if !self.is_unordered_unfiltered_group_by_distinct() {
+                return Ok(StreamType::GroupedPriorityQueue(
+                    GroupedTopKAggregateStream::new(self, context, partition, limit)?,
+                ));
+            }
         }
 
         // grouping by something else and we need to just materialize all results
