@@ -21,7 +21,7 @@
 
 [DataFusion](df) is an extensible query execution framework, written in Rust, that uses Apache Arrow as its in-memory format.
 
-This crate is a submodule of DataFusion ised to verify that various DataFusion crates compile successfully to the
+This crate is a submodule of DataFusion used to verify that various DataFusion crates compile successfully to the
 `wasm32-unknown-unknown` target with wasm-pack.
 
 [df]: https://crates.io/crates/datafusion
