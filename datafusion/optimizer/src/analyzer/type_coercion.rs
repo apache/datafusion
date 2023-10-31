@@ -562,10 +562,6 @@ fn coerce_arguments_for_fun(
 
     let mut expressions: Vec<Expr> = expressions.to_vec();
 
-    if *fun == BuiltinScalarFunction::ArrayConcat {
-        println!("expressions: {:?}", expressions);
-    }
-
     // Cast Fixedsizelist to List for array functions
     if *fun == BuiltinScalarFunction::MakeArray {
         expressions = expressions
@@ -596,7 +592,6 @@ fn coerce_arguments_for_fun(
                 }
             })
             .collect::<Result<Vec<_>>>()?;
-        // println!("expressions: {:?}", expressions);
     }
 
     // Casting type to make data type consistent for array functions
@@ -606,8 +601,6 @@ fn coerce_arguments_for_fun(
             .iter()
             .map(|e| e.get_type(schema))
             .collect::<Result<Vec<_>>>()?;
-
-        // println!("current_types: {:?}", current_types);
 
         let new_type = current_types
             .iter()
