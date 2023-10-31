@@ -18,7 +18,10 @@
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::error::Result;
 use datafusion::prelude::*;
-use std::fs;
+use std::fs::File;
+use std::io::Write;
+use std::path::PathBuf;
+use tempfile::tempdir;
 
 /// This example demonstrates executing a simple query against an Arrow data source (Parquet) and
 /// fetching results, using the DataFrame trait
@@ -41,12 +44,19 @@ async fn main() -> Result<()> {
     // print the results
     df.show().await?;
 
+    // create a csv file waiting to be written
+    let path = "example.csv";
+    let dir = tempdir()?;
+    let file_path = PathBuf::from(dir.path()).join(path);
+    let file = File::create(&file_path)?;
+    write_csv_file(file);
+
     // Reading CSV file with inferred schema example
-    let csv_df = example_read_csv_file_with_inferred_schema().await;
+    let csv_df = example_read_csv_file_with_inferred_schema(file_path.to_str().unwrap()).await;
     csv_df.show().await?;
 
     // Reading CSV file with defined schema
-    let csv_df = example_read_csv_file_with_schema().await;
+    let csv_df = example_read_csv_file_with_schema(file_path.to_str().unwrap()).await;
     csv_df.show().await?;
 
     // Reading PARQUET file and print describe
@@ -59,31 +69,25 @@ async fn main() -> Result<()> {
 }
 
 // Function to create an test CSV file
-fn create_csv_file(path: String) {
+fn write_csv_file(mut file: File) {
     // Create the data to put into the csv file with headers
     let content = r#"id,time,vote,unixtime,rating
 a1,"10 6, 2013",3,1381017600,5.0
 a2,"08 9, 2013",2,1376006400,4.5"#;
     // write the data
-    fs::write(path, content).expect("Problem with writing file!");
+    file.write_all(content.as_ref()).expect("Problem with writing file!");
 }
 
 // Example to read data from a csv file with inferred schema
-async fn example_read_csv_file_with_inferred_schema() -> DataFrame {
-    let path = "example.csv";
-    // Create a csv file using the predefined function
-    create_csv_file(path.to_string());
+async fn example_read_csv_file_with_inferred_schema(file_path: &str) -> DataFrame {
     // Create a session context
     let ctx = SessionContext::new();
     // Register a lazy DataFrame using the context
-    ctx.read_csv(path, CsvReadOptions::default()).await.unwrap()
+    ctx.read_csv(file_path, CsvReadOptions::default()).await.unwrap()
 }
 
 // Example to read csv file with a defined schema for the csv file
-async fn example_read_csv_file_with_schema() -> DataFrame {
-    let path = "example.csv";
-    // Create a csv file using the predefined function
-    create_csv_file(path.to_string());
+async fn example_read_csv_file_with_schema(file_path: &str) -> DataFrame {
     // Create a session context
     let ctx = SessionContext::new();
     // Define the schema
@@ -101,5 +105,5 @@ async fn example_read_csv_file_with_schema() -> DataFrame {
         ..Default::default()
     };
     // Register a lazy DataFrame by using the context and option provider
-    ctx.read_csv(path, csv_read_option).await.unwrap()
+    ctx.read_csv(file_path, csv_read_option).await.unwrap()
 }
