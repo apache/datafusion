@@ -242,19 +242,20 @@ impl ExecutionPlan for UnionExec {
         for child_eqs in &children_eqs[1..] {
             // Compute meet orderings of the current meets and the new ordering
             // equivalence class.
-            let mut next_meets = vec![];
-            for current_meet in &meets {
-                // Find the all of the meets of `current_meet` with orderings inside `child_eqs`
+            let mut idx = 0;
+            while idx < meets.len() {
+                // Find all the meets of `current_meet` with this child's orderings:
                 let valid_meets = child_eqs.oeq_class().iter().filter_map(|ordering| {
-                    child_eqs.get_meet_ordering(ordering, current_meet)
+                    child_eqs.get_meet_ordering(ordering, &meets[idx])
                 });
-                // Use the longest meet among `valid_meets`, other meets are redundant
-                if let Some(next_meet) = valid_meets.max_by(|a, b| a.len().cmp(&b.len()))
-                {
-                    next_meets.push(next_meet);
+                // Use the longest of these meets as others are redundant:
+                if let Some(next_meet) = valid_meets.max_by_key(|m| m.len()) {
+                    meets[idx] = next_meet;
+                    idx += 1;
+                } else {
+                    meets.swap_remove(idx);
                 }
             }
-            meets = next_meets;
         }
         // We know have all the valid orderings after union, remove redundant
         // entries (implicitly) and return:

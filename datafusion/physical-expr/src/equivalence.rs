@@ -133,8 +133,8 @@ impl EquivalenceGroup {
     fn remove_redundant_entries(&mut self) {
         // Remove duplicate entries from each equivalence class:
         self.classes.retain_mut(|cls| {
-            // Keep groups that have at least two entries:
-            // Single entry inside an equivalence class is meaningless. It doesn't contain any information
+            // Keep groups that have at least two entries as singleton class is
+            // meaningless (i.e. it contains no non-trivial information):
             deduplicate_physical_exprs(cls);
             cls.len() > 1
         });
@@ -143,9 +143,9 @@ impl EquivalenceGroup {
     }
 
     /// This utility function unifies/bridges classes that have common expressions.
-    /// As an example if an ['EquivalenceClass'] in the state is \[a, b\] and another is \[b,c\]
-    /// Since, both classes contain b, this means that indeed \[a,b,c] are all equal to each other.
-    /// This utility converts \[a,b\], \[b,c\] to \[a,b,c\].
+    /// For example, assume that we have [`EquivalenceClass`]es `[a, b]` and `[b, c]`.
+    /// Since both classes contain `b`, columns `a`, `b` and `c` are actually all
+    /// equal and belong to one class. This utility converts merges such classes.
     fn bridge_classes(&mut self) {
         let mut idx = 0;
         while idx < self.classes.len() {
@@ -759,11 +759,10 @@ impl EquivalenceProperties {
     /// Assume that `self.eq_group` states column `a` and `b` are aliases.
     /// Also assume that `self.oeq_class` states orderings `d ASC` and `a ASC, c ASC`
     /// are equivalent (in the sense that both describe the ordering of the table).
-    /// If the `sort_exprs` argument were `vec![b ASC, c ASC, a ASC]`, then this function
-    /// would return `vec![a ASC, c ASC]`. (
-    /// `vec![a ASC, c ASC, a ASC]` after normalization
-    /// `vec![a ASC, c ASC]` after de-duplication
-    /// )
+    /// If the `sort_exprs` argument were `vec![b ASC, c ASC, a ASC]`, then this
+    /// function would return `vec![a ASC, c ASC]`. Internally, it would first
+    /// normalize to `vec![a ASC, c ASC, a ASC]` and end up with the final result
+    /// after deduplication.
     fn normalize_sort_exprs(&self, sort_exprs: LexOrderingRef) -> LexOrdering {
         // Convert sort expressions to sort requirements:
         let sort_reqs = PhysicalSortRequirement::from_sort_exprs(sort_exprs.iter());
@@ -782,11 +781,10 @@ impl EquivalenceProperties {
     /// Assume that `self.eq_group` states column `a` and `b` are aliases.
     /// Also assume that `self.oeq_class` states orderings `d ASC` and `a ASC, c ASC`
     /// are equivalent (in the sense that both describe the ordering of the table).
-    /// If the `sort_reqs` argument were `vec![b ASC, c ASC, a ASC]`, then this function
-    /// would return `vec![a ASC, c ASC]`. (
-    /// `vec![a ASC, c ASC, a ASC]` after normalization
-    /// `vec![a ASC, c ASC]` after de-duplication
-    /// )
+    /// If the `sort_reqs` argument were `vec![b ASC, c ASC, a ASC]`, then this
+    /// function would return `vec![a ASC, c ASC]`. Internally, it would first
+    /// normalize to `vec![a ASC, c ASC, a ASC]` and end up with the final result
+    /// after deduplication.
     fn normalize_sort_requirements(
         &self,
         sort_reqs: LexRequirementRef,
@@ -1148,17 +1146,16 @@ fn updated_right_ordering_equivalence_class(
 
 /// Calculates the [`SortProperties`] of a given [`ExprOrdering`] node.
 /// The node can either be a leaf node, or an intermediate node:
-/// - If it is a leaf node, the children states are empty vector. We directly find
-/// the order of the node by looking at the given sort expression and equivalence
-/// properties if it is a `Column` leaf, or we mark it as unordered. In the case
-/// of a `Literal` leaf, we mark it as singleton so that it can cooperate with
-/// some ordered columns at the upper steps.
+/// - If it is a leaf node, we directly find the order of the node by looking
+/// at the given sort expression and equivalence properties if it is a `Column`
+/// leaf, or we mark it as unordered. In the case of a `Literal` leaf, we mark
+/// it as singleton so that it can cooperate with all ordered columns.
 /// - If it is an intermediate node, the children states matter. Each `PhysicalExpr`
-/// and operator has its own rules about how to propagate the children orderings.
-/// However, before the children order propagation, it is checked that whether
-/// the intermediate node can be directly matched with the sort expression. If there
-/// is a match, the sort expression emerges at that node immediately, discarding
-/// the order coming from the children.
+/// and operator has its own rules on how to propagate the children orderings.
+/// However, before we engage in recursion, we check whether this intermediate
+/// node directly matches with the sort expression. If there is a match, the
+/// sort expression emerges at that node immediately, discarding the recursive
+/// result coming from its children.
 fn update_ordering(
     mut node: ExprOrdering,
     eq_properties: &EquivalenceProperties,
@@ -1198,8 +1195,8 @@ mod tests {
     use arrow_array::{ArrayRef, RecordBatch, UInt32Array, UInt64Array};
     use arrow_schema::{Fields, SortOptions};
     use datafusion_common::Result;
-
     use datafusion_expr::Operator;
+
     use itertools::{izip, Itertools};
     use rand::rngs::StdRng;
     use rand::seq::SliceRandom;
@@ -2107,8 +2104,8 @@ mod tests {
         None
     }
 
-    // Generate a table that satisfies schema properties,
-    // in terms of ordering equivalences, equivalences, and constants.
+    // Generate a table that satisfies the given equivalence properties; i.e.
+    // equivalences, ordering equivalences, and constants.
     fn generate_table_for_eq_properties(
         eq_properties: &EquivalenceProperties,
         n_elem: usize,
