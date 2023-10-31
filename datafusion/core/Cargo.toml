@@ -20,9 +20,9 @@ name = "datafusion"
 description = "DataFusion is an in-memory query engine that uses Apache Arrow as the memory model"
 keywords = ["arrow", "query", "sql"]
 include = ["benches/*.rs", "src/**/*.rs", "Cargo.toml"]
+readme = "README.md"
 version = { workspace = true }
 edition = { workspace = true }
-readme = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
