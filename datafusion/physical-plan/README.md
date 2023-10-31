@@ -19,7 +19,7 @@
 
 # DataFusion Common
 
-[DataFusion](df) is an extensible query execution framework, written in Rust, that uses Apache Arrow as its in-memory format.
+[DataFusion][df] is an extensible query execution framework, written in Rust, that uses Apache Arrow as its in-memory format.
 
 This crate is a submodule of DataFusion that contains the `ExecutionPlan` trait and the various implementations of that
 trait for built in operators such as filters, projections, joins, aggregations, etc.

@@ -20,7 +20,7 @@
 # DataFusion SQL Query Planner
 
 This crate provides a general purpose SQL query planner that can parse SQL and translate queries into logical
-plans. Although this crate is used by the [DataFusion](df) query engine, it was designed to be easily usable from any
+plans. Although this crate is used by the [DataFusion][df] query engine, it was designed to be easily usable from any
 project that requires a SQL query planner and does not make any assumptions about how the resulting logical plan
 will be translated to a physical plan. For example, there is no concept of row-based versus columnar execution in the
 logical plan.
