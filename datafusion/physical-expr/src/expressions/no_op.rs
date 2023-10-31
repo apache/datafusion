@@ -28,7 +28,7 @@ use arrow::{
 
 use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
-use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
 /// A place holder expression, can not be evaluated.
@@ -65,7 +65,7 @@ impl PhysicalExpr for NoOp {
     }
 
     fn evaluate(&self, _batch: &RecordBatch) -> Result<ColumnarValue> {
-        exec_err!("NoOp::evaluate() should not be called")
+        internal_err!("NoOp::evaluate() should not be called")
     }
 
     fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
