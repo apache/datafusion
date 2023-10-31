@@ -1288,6 +1288,17 @@ fn select_simple_aggregate_repeated_aggregate_with_unique_aliases() {
 }
 
 #[test]
+fn select_simple_aggregate_respect_nulls() {
+    let sql = "SELECT MIN(age) RESPECT NULLS FROM person";
+    let err = logical_plan(sql).expect_err("query should have failed");
+
+    // HashSet doesn't guarantee order
+    assert_contains!(
+        err.strip_backtrace(),
+        "This feature is not implemented: Null treatment in aggregate functions is not supported: RESPECT NULLS"
+    );
+}
+#[test]
 fn select_from_typed_string_values() {
     quick_test(
             "SELECT col1, col2 FROM (VALUES (TIMESTAMP '2021-06-10 17:01:00Z', DATE '2004-04-09')) as t (col1, col2)",
