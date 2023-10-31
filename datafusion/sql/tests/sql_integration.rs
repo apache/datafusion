@@ -1292,7 +1292,6 @@ fn select_simple_aggregate_respect_nulls() {
     let sql = "SELECT MIN(age) RESPECT NULLS FROM person";
     let err = logical_plan(sql).expect_err("query should have failed");
 
-    // HashSet doesn't guarantee order
     assert_contains!(
         err.strip_backtrace(),
         "This feature is not implemented: Null treatment in aggregate functions is not supported: RESPECT NULLS"
