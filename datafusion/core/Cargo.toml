@@ -82,7 +82,6 @@ num_cpus = "1.13.0"
 object_store = "0.7.0"
 parking_lot = "0.12"
 parquet = { workspace = true, optional = true }
-percent-encoding = "2.2.0"
 pin-project-lite = "^0.2.7"
 rand = "0.8"
 sqlparser = { workspace = true }
