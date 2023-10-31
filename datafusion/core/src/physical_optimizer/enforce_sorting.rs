@@ -451,7 +451,7 @@ fn ensure_sorting(
         match (required_ordering, physical_ordering) {
             (Some(required_ordering), Some(_)) => {
                 if !child
-                    .schema_properties()
+                    .equivalence_properties()
                     .ordering_satisfy_requirement(&required_ordering)
                 {
                     // Make sure we preserve the ordering requirements:
@@ -515,7 +515,7 @@ fn analyze_immediate_sort_removal(
 
         // If this sort is unnecessary, we should remove it:
         if sort_input
-            .schema_properties()
+            .equivalence_properties()
             .ordering_satisfy(sort_exec.output_ordering().unwrap_or(&[]))
         {
             // Since we know that a `SortExec` has exactly one child,

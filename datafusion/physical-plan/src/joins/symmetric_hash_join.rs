@@ -49,8 +49,8 @@ use crate::{
     expressions::{Column, PhysicalSortExpr},
     joins::StreamJoinPartitionMode,
     metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
-    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
-    RecordBatchStream, SchemaProperties, SendableRecordBatchStream, Statistics,
+    DisplayAs, DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan,
+    Partitioning, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
 use arrow::array::{ArrowPrimitiveType, NativeAdapter, PrimitiveArray, PrimitiveBuilder};
@@ -63,7 +63,7 @@ use datafusion_common::{
 };
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::equivalence::join_schema_properties;
+use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::intervals::ExprIntervalGraph;
 
 use ahash::RandomState;
@@ -429,10 +429,10 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         None
     }
 
-    fn schema_properties(&self) -> SchemaProperties {
-        join_schema_properties(
-            self.left.schema_properties(),
-            self.right.schema_properties(),
+    fn equivalence_properties(&self) -> EquivalenceProperties {
+        join_equivalence_properties(
+            self.left.equivalence_properties(),
+            self.right.equivalence_properties(),
             &self.join_type,
             self.schema(),
             &self.maintains_input_order(),

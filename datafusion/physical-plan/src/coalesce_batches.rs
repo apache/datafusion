@@ -36,7 +36,7 @@ use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::SchemaProperties;
+use datafusion_physical_expr::EquivalenceProperties;
 
 use futures::stream::{Stream, StreamExt};
 use log::trace;
@@ -134,8 +134,8 @@ impl ExecutionPlan for CoalesceBatchesExec {
         vec![false]
     }
 
-    fn schema_properties(&self) -> SchemaProperties {
-        self.input.schema_properties()
+    fn equivalence_properties(&self) -> EquivalenceProperties {
+        self.input.equivalence_properties()
     }
 
     fn with_new_children(

@@ -51,8 +51,8 @@ use datafusion_common::{
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::equivalence::join_schema_properties;
-use datafusion_physical_expr::{PhysicalSortRequirement, SchemaProperties};
+use datafusion_physical_expr::equivalence::join_equivalence_properties;
+use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortRequirement};
 
 use futures::{Stream, StreamExt};
 
@@ -281,10 +281,10 @@ impl ExecutionPlan for SortMergeJoinExec {
         Self::maintains_input_order(self.join_type)
     }
 
-    fn schema_properties(&self) -> SchemaProperties {
-        join_schema_properties(
-            self.left.schema_properties(),
-            self.right.schema_properties(),
+    fn equivalence_properties(&self) -> EquivalenceProperties {
+        join_equivalence_properties(
+            self.left.equivalence_properties(),
+            self.right.equivalence_properties(),
             &self.join_type,
             self.schema(),
             &self.maintains_input_order(),

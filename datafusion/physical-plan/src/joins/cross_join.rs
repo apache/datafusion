@@ -38,8 +38,8 @@ use datafusion_common::stats::Precision;
 use datafusion_common::{plan_err, DataFusionError, JoinType, Result, ScalarValue};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::equivalence::join_schema_properties;
-use datafusion_physical_expr::SchemaProperties;
+use datafusion_physical_expr::equivalence::join_equivalence_properties;
+use datafusion_physical_expr::EquivalenceProperties;
 
 use async_trait::async_trait;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
@@ -214,10 +214,10 @@ impl ExecutionPlan for CrossJoinExec {
         None
     }
 
-    fn schema_properties(&self) -> SchemaProperties {
-        join_schema_properties(
-            self.left.schema_properties(),
-            self.right.schema_properties(),
+    fn equivalence_properties(&self) -> EquivalenceProperties {
+        join_equivalence_properties(
+            self.left.equivalence_properties(),
+            self.right.equivalence_properties(),
             &JoinType::Full,
             self.schema(),
             &[false, false],

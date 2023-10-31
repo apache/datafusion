@@ -40,7 +40,7 @@ use datafusion_common::stats::Precision;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::expressions::{Literal, UnKnownColumn};
-use datafusion_physical_expr::SchemaProperties;
+use datafusion_physical_expr::EquivalenceProperties;
 
 use futures::stream::{Stream, StreamExt};
 use log::trace;
@@ -96,7 +96,7 @@ impl ProjectionExec {
         // construct a map from the input expressions to the output expression of the Projection
         let projection_mapping = calculate_projection_mapping(&expr, &input_schema)?;
 
-        let input_eqs = input.schema_properties();
+        let input_eqs = input.equivalence_properties();
         let project_eqs = input_eqs.project(&projection_mapping, schema.clone());
         let output_ordering = project_eqs.oeq_class().output_ordering();
 
@@ -174,12 +174,12 @@ impl ExecutionPlan for ProjectionExec {
     fn output_partitioning(&self) -> Partitioning {
         // Output partition need to respect the alias
         let input_partition = self.input.output_partitioning();
-        let input_schema_properties = self.input.schema_properties();
+        let input_eq_properties = self.input.equivalence_properties();
         if let Partitioning::Hash(exprs, part) = input_partition {
             let normalized_exprs = exprs
                 .into_iter()
                 .map(|expr| {
-                    input_schema_properties
+                    input_eq_properties
                         .project_expr(&expr, &self.projection_mapping)
                         .unwrap_or_else(|| {
                             Arc::new(UnKnownColumn::new(&expr.to_string()))
@@ -201,9 +201,9 @@ impl ExecutionPlan for ProjectionExec {
         vec![true]
     }
 
-    fn schema_properties(&self) -> SchemaProperties {
+    fn equivalence_properties(&self) -> EquivalenceProperties {
         self.input
-            .schema_properties()
+            .equivalence_properties()
             .project(&self.projection_mapping, self.schema())
     }
 

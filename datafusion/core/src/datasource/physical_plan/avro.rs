@@ -31,7 +31,7 @@ use crate::physical_plan::{
 
 use arrow::datatypes::SchemaRef;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{LexOrdering, SchemaProperties};
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
 /// Execution plan for scanning Avro data source
 #[derive(Debug, Clone)]
@@ -99,8 +99,8 @@ impl ExecutionPlan for AvroExec {
             .map(|ordering| ordering.as_slice())
     }
 
-    fn schema_properties(&self) -> SchemaProperties {
-        SchemaProperties::new_with_orderings(
+    fn equivalence_properties(&self) -> EquivalenceProperties {
+        EquivalenceProperties::new_with_orderings(
             self.schema(),
             &self.projected_output_ordering,
         )

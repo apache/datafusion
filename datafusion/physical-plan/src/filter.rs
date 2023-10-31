@@ -45,8 +45,8 @@ use datafusion_physical_expr::expressions::BinaryExpr;
 use datafusion_physical_expr::intervals::utils::check_support;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{
-    analyze, split_conjunction, AnalysisContext, ExprBoundaries, PhysicalExpr,
-    SchemaProperties,
+    analyze, split_conjunction, AnalysisContext, EquivalenceProperties, ExprBoundaries,
+    PhysicalExpr,
 };
 
 use futures::stream::{Stream, StreamExt};
@@ -144,10 +144,10 @@ impl ExecutionPlan for FilterExec {
         vec![true]
     }
 
-    fn schema_properties(&self) -> SchemaProperties {
+    fn equivalence_properties(&self) -> EquivalenceProperties {
         let stats = self.statistics().unwrap();
         // Combine the equal predicates with the input equivalence properties
-        let mut result = self.input.schema_properties();
+        let mut result = self.input.equivalence_properties();
         let (equal_pairs, _) = collect_columns_from_predicate(&self.predicate);
         for (lhs, rhs) in equal_pairs {
             let lhs_expr = Arc::new(lhs.clone()) as _;

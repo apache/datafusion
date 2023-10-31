@@ -44,7 +44,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{PhysicalExpr, SchemaProperties};
+use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 
 use futures::stream::Stream;
 use futures::{FutureExt, StreamExt};
@@ -464,8 +464,8 @@ impl ExecutionPlan for RepartitionExec {
         }
     }
 
-    fn schema_properties(&self) -> SchemaProperties {
-        let mut result = self.input.schema_properties();
+    fn equivalence_properties(&self) -> EquivalenceProperties {
+        let mut result = self.input.equivalence_properties();
         // If the ordering is lost, reset the ordering equivalence class.
         if !self.maintains_input_order()[0] {
             result.clear_orderings();

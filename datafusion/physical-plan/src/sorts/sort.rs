@@ -51,7 +51,7 @@ use datafusion_execution::memory_pool::{
 };
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::SchemaProperties;
+use datafusion_physical_expr::EquivalenceProperties;
 
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, error, trace};
@@ -828,10 +828,10 @@ impl ExecutionPlan for SortExec {
         Some(&self.expr)
     }
 
-    fn schema_properties(&self) -> SchemaProperties {
+    fn equivalence_properties(&self) -> EquivalenceProperties {
         // Reset the ordering equivalence class with the new ordering:
         self.input
-            .schema_properties()
+            .equivalence_properties()
             .with_reorder(self.expr.to_vec())
     }
 

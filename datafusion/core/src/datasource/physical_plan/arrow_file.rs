@@ -32,7 +32,7 @@ use crate::physical_plan::{
 use arrow_schema::SchemaRef;
 use datafusion_common::Statistics;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr, SchemaProperties};
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalSortExpr};
 
 use futures::StreamExt;
 use object_store::{GetResultPayload, ObjectStore};
@@ -103,8 +103,8 @@ impl ExecutionPlan for ArrowExec {
             .map(|ordering| ordering.as_slice())
     }
 
-    fn schema_properties(&self) -> SchemaProperties {
-        SchemaProperties::new_with_orderings(
+    fn equivalence_properties(&self) -> EquivalenceProperties {
+        EquivalenceProperties::new_with_orderings(
             self.schema(),
             &self.projected_output_ordering,
         )

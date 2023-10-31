@@ -27,7 +27,7 @@ use crate::expressions::PhysicalSortExpr;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::windows::{
     calc_requirements, get_ordered_partition_by_indices, get_partition_by_sort_exprs,
-    window_ordering_equivalence,
+    window_equivalence_properties,
 };
 use crate::{
     ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
@@ -47,7 +47,7 @@ use datafusion_common::stats::Precision;
 use datafusion_common::utils::evaluate_partition_ranges;
 use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{PhysicalSortRequirement, SchemaProperties};
+use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortRequirement};
 
 use futures::stream::Stream;
 use futures::{ready, StreamExt};
@@ -210,9 +210,9 @@ impl ExecutionPlan for WindowAggExec {
         }
     }
 
-    /// Get the `SchemaProperties` within the plan
-    fn schema_properties(&self) -> SchemaProperties {
-        window_ordering_equivalence(&self.schema, &self.input, &self.window_expr)
+    /// Get the [`EquivalenceProperties`] within the plan
+    fn equivalence_properties(&self) -> EquivalenceProperties {
+        window_equivalence_properties(&self.schema, &self.input, &self.window_expr)
     }
 
     fn with_new_children(

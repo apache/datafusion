@@ -41,7 +41,7 @@ use datafusion_physical_expr::equivalence::collapse_lex_req;
 use datafusion_physical_expr::{
     reverse_order_bys,
     window::{BuiltInWindowFunctionExpr, SlidingAggregateWindowExpr},
-    AggregateExpr, LexOrdering, PhysicalSortRequirement, SchemaProperties,
+    AggregateExpr, EquivalenceProperties, LexOrdering, PhysicalSortRequirement,
 };
 
 mod bounded_window_agg_exec;
@@ -326,7 +326,7 @@ pub(crate) fn get_ordered_partition_by_indices(
     input: &Arc<dyn ExecutionPlan>,
 ) -> Vec<usize> {
     let (_, indices) = input
-        .schema_properties()
+        .equivalence_properties()
         .find_longest_permutation(partition_by_exprs);
     indices
 }
@@ -343,7 +343,7 @@ pub(crate) fn get_partition_by_sort_exprs(
     // Make sure ordered section doesn't move over the partition by expression
     assert!(ordered_partition_by_indices.len() <= partition_by_exprs.len());
     let (ordering, _) = input
-        .schema_properties()
+        .equivalence_properties()
         .find_longest_permutation(&ordered_partition_exprs);
     if ordering.len() == ordered_partition_exprs.len() {
         Ok(ordering)
@@ -352,24 +352,24 @@ pub(crate) fn get_partition_by_sort_exprs(
     }
 }
 
-pub(crate) fn window_ordering_equivalence(
+pub(crate) fn window_equivalence_properties(
     schema: &SchemaRef,
     input: &Arc<dyn ExecutionPlan>,
     window_expr: &[Arc<dyn WindowExpr>],
-) -> SchemaProperties {
+) -> EquivalenceProperties {
     // We need to update the schema, so we can not directly use
-    // `input.schema_properties()`.
-    let mut window_schema_properties =
-        SchemaProperties::new(schema.clone()).extend(input.schema_properties());
+    // `input.equivalence_properties()`.
+    let mut window_eq_properties =
+        EquivalenceProperties::new(schema.clone()).extend(input.equivalence_properties());
 
     for expr in window_expr {
         if let Some(builtin_window_expr) =
             expr.as_any().downcast_ref::<BuiltInWindowExpr>()
         {
-            builtin_window_expr.add_equal_orderings(&mut window_schema_properties);
+            builtin_window_expr.add_equal_orderings(&mut window_eq_properties);
         }
     }
-    window_schema_properties
+    window_eq_properties
 }
 
 /// Constructs the best-fitting windowing operator (a `WindowAggExec` or a
@@ -464,7 +464,7 @@ pub fn get_window_mode(
     orderby_keys: &[PhysicalSortExpr],
     input: &Arc<dyn ExecutionPlan>,
 ) -> Result<Option<(bool, PartitionSearchMode)>> {
-    let input_eqs = input.schema_properties();
+    let input_eqs = input.equivalence_properties();
     let mut partition_by_reqs: Vec<PhysicalSortRequirement> = vec![];
     let (_, indices) = input_eqs.find_longest_permutation(partitionby_exprs);
     partition_by_reqs.extend(indices.iter().map(|&idx| PhysicalSortRequirement {

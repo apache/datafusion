@@ -46,9 +46,8 @@ use datafusion_physical_expr::{
     aggregate::is_order_sensitive,
     equivalence::collapse_lex_req,
     expressions::{Column, Max, Min, UnKnownColumn},
-    physical_exprs_contains, reverse_order_bys, AggregateExpr, LexOrdering,
-    LexRequirement, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
-    SchemaProperties,
+    physical_exprs_contains, reverse_order_bys, AggregateExpr, EquivalenceProperties,
+    LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
 };
 
 use itertools::{izip, Itertools};
@@ -334,18 +333,18 @@ fn get_init_req(
 fn get_finest_requirement(
     aggr_expr: &mut [Arc<dyn AggregateExpr>],
     order_by_expr: &mut [Option<LexOrdering>],
-    schema_properties: &SchemaProperties,
+    eq_properties: &EquivalenceProperties,
 ) -> Result<Option<LexOrdering>> {
     // First, we check if all the requirements are satisfied by the existing
     // ordering. If so, we return `None` to indicate this.
     let mut all_satisfied = true;
     for (aggr_expr, fn_req) in aggr_expr.iter_mut().zip(order_by_expr.iter_mut()) {
-        if schema_properties.ordering_satisfy(fn_req.as_deref().unwrap_or(&[])) {
+        if eq_properties.ordering_satisfy(fn_req.as_deref().unwrap_or(&[])) {
             continue;
         }
         if let Some(reverse) = aggr_expr.reverse_expr() {
             let reverse_req = fn_req.as_ref().map(|item| reverse_order_bys(item));
-            if schema_properties.ordering_satisfy(reverse_req.as_deref().unwrap_or(&[])) {
+            if eq_properties.ordering_satisfy(reverse_req.as_deref().unwrap_or(&[])) {
                 // We need to update `aggr_expr` with its reverse since only its
                 // reverse requirement is compatible with the existing requirements:
                 *aggr_expr = reverse;
@@ -367,8 +366,7 @@ fn get_finest_requirement(
         };
 
         if let Some(finest_req) = &mut finest_req {
-            if let Some(finer) = schema_properties.get_finer_ordering(finest_req, fn_req)
-            {
+            if let Some(finer) = eq_properties.get_finer_ordering(finest_req, fn_req) {
                 *finest_req = finer;
                 continue;
             }
@@ -377,7 +375,7 @@ fn get_finest_requirement(
             if let Some(reverse) = aggr_expr.reverse_expr() {
                 let fn_req_reverse = reverse_order_bys(fn_req);
                 if let Some(finer) =
-                    schema_properties.get_finer_ordering(finest_req, &fn_req_reverse)
+                    eq_properties.get_finer_ordering(finest_req, &fn_req_reverse)
                 {
                     // We need to update `aggr_expr` with its reverse, since only its
                     // reverse requirement is compatible with existing requirements:
@@ -506,7 +504,7 @@ impl AggregateExec {
         let requirement = get_finest_requirement(
             &mut aggr_expr,
             &mut order_by_expr,
-            &input.schema_properties(),
+            &input.equivalence_properties(),
         )?;
         let mut ordering_req = requirement.unwrap_or(vec![]);
         let partition_search_mode = get_aggregate_search_mode(
@@ -543,7 +541,7 @@ impl AggregateExec {
             (!new_requirement.is_empty()).then_some(new_requirement);
 
         let aggregate_eqs = input
-            .schema_properties()
+            .equivalence_properties()
             .project(&projection_mapping, schema.clone());
         let output_ordering = aggregate_eqs.oeq_class().output_ordering();
 
@@ -746,14 +744,14 @@ impl ExecutionPlan for AggregateExec {
             // First stage aggregation will not change the output partitioning,
             // but needs to respect aliases (e.g. mapping in the GROUP BY
             // expression).
-            let input_schema_properties = self.input.schema_properties();
+            let input_eq_properties = self.input.equivalence_properties();
             // First stage Aggregation will not change the output partitioning but need to respect the Alias
             let input_partition = self.input.output_partitioning();
             if let Partitioning::Hash(exprs, part) = input_partition {
                 let normalized_exprs = exprs
                     .into_iter()
                     .map(|expr| {
-                        input_schema_properties
+                        input_eq_properties
                             .project_expr(&expr, &self.projection_mapping)
                             .unwrap_or_else(|| {
                                 Arc::new(UnKnownColumn::new(&expr.to_string()))
@@ -807,9 +805,9 @@ impl ExecutionPlan for AggregateExec {
         vec![self.required_input_ordering.clone()]
     }
 
-    fn schema_properties(&self) -> SchemaProperties {
+    fn equivalence_properties(&self) -> EquivalenceProperties {
         self.input
-            .schema_properties()
+            .equivalence_properties()
             .project(&self.projection_mapping, self.schema())
     }
 
@@ -1170,7 +1168,7 @@ mod tests {
         lit, ApproxDistinct, Count, FirstValue, LastValue, Median,
     };
     use datafusion_physical_expr::{
-        AggregateExpr, PhysicalExpr, PhysicalSortExpr, SchemaProperties,
+        AggregateExpr, EquivalenceProperties, PhysicalExpr, PhysicalSortExpr,
     };
 
     use futures::{FutureExt, Stream};
@@ -2043,9 +2041,9 @@ mod tests {
         let col_a = &col("a", &test_schema)?;
         let col_b = &col("b", &test_schema)?;
         let col_c = &col("c", &test_schema)?;
-        let mut schema_properties = SchemaProperties::new(test_schema);
+        let mut eq_properties = EquivalenceProperties::new(test_schema);
         // Columns a and b are equal.
-        schema_properties.add_equal_conditions(col_a, col_b);
+        eq_properties.add_equal_conditions(col_a, col_b);
         // Aggregate requirements are
         // [None], [a ASC], [a ASC, b ASC, c ASC], [a ASC, b ASC] respectively
         let mut order_by_exprs = vec![
@@ -2103,11 +2101,8 @@ mod tests {
             vec![],
         )) as _;
         let mut aggr_exprs = vec![aggr_expr; order_by_exprs.len()];
-        let res = get_finest_requirement(
-            &mut aggr_exprs,
-            &mut order_by_exprs,
-            &schema_properties,
-        )?;
+        let res =
+            get_finest_requirement(&mut aggr_exprs, &mut order_by_exprs, &eq_properties)?;
         assert_eq!(res, common_requirement);
         Ok(())
     }

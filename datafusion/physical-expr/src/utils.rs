@@ -366,7 +366,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::equivalence::SchemaProperties;
+    use crate::equivalence::EquivalenceProperties;
     use crate::expressions::{binary, cast, col, in_list, lit, Column, Literal};
     use crate::PhysicalSortExpr;
 
@@ -646,7 +646,7 @@ mod tests {
         let col_a = &col("a", &schema)?;
         let col_b = &col("b", &schema)?;
         let required_columns = [col_b.clone(), col_a.clone()];
-        let mut eq_properties = SchemaProperties::new(Arc::new(schema));
+        let mut eq_properties = EquivalenceProperties::new(Arc::new(schema));
         eq_properties.add_new_orderings([vec![
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("b", 1)),
@@ -681,7 +681,7 @@ mod tests {
         let col_a = &col("a", &schema)?;
         let col_b = &col("b", &schema)?;
         let required_columns = [col_b.clone(), col_a.clone()];
-        let mut eq_properties = SchemaProperties::new(Arc::new(schema));
+        let mut eq_properties = EquivalenceProperties::new(Arc::new(schema));
         eq_properties.add_new_orderings([
             vec![PhysicalSortExpr {
                 expr: Arc::new(Column::new("c", 2)),
@@ -723,7 +723,7 @@ mod tests {
             Field::new("b", DataType::Int32, true),
             Field::new("c", DataType::Int32, true),
         ]);
-        let mut eq_properties = SchemaProperties::new(Arc::new(schema));
+        let mut eq_properties = EquivalenceProperties::new(Arc::new(schema));
 
         // not satisfied orders
         eq_properties.add_new_orderings([vec![
@@ -758,7 +758,7 @@ mod tests {
         let col_a_expr = col("a", &schema)?;
         let col_b_expr = col("b", &schema)?;
         let col_c_expr = col("c", &schema)?;
-        let mut eq_properties = SchemaProperties::new(Arc::new(schema.clone()));
+        let mut eq_properties = EquivalenceProperties::new(Arc::new(schema.clone()));
 
         eq_properties.add_equal_conditions(&col_a_expr, &col_c_expr);
         let others = vec![
@@ -773,7 +773,7 @@ mod tests {
         ];
         eq_properties.add_new_orderings(others);
 
-        let mut expected_eqs = SchemaProperties::new(Arc::new(schema));
+        let mut expected_eqs = EquivalenceProperties::new(Arc::new(schema));
         expected_eqs.add_new_orderings([
             vec![PhysicalSortExpr {
                 expr: col_b_expr.clone(),
@@ -799,7 +799,7 @@ mod tests {
             Field::new("b", DataType::Int32, true),
             Field::new("c", DataType::Int32, true),
         ]);
-        let mut eq_properties = SchemaProperties::new(Arc::new(schema.clone()));
+        let mut eq_properties = EquivalenceProperties::new(Arc::new(schema.clone()));
         let ordering = vec![PhysicalSortExpr {
             expr: Arc::new(Column::new("b", 1)),
             options: SortOptions::default(),
@@ -838,7 +838,7 @@ mod tests {
             Field::new("b", DataType::Int32, true),
             Field::new("c", DataType::Int32, true),
         ]);
-        let schema_properties = SchemaProperties::new(Arc::new(schema));
+        let eq_properties = EquivalenceProperties::new(Arc::new(schema));
         let projection_mapping = vec![
             (
                 Arc::new(Column::new("c", 2)) as _,
@@ -853,7 +853,7 @@ mod tests {
             Field::new("c_new", DataType::Int32, true),
             Field::new("b_new", DataType::Int32, true),
         ]));
-        let projected = schema_properties.project(&projection_mapping, projection_schema);
+        let projected = eq_properties.project(&projection_mapping, projection_schema);
         // After projection there is no ordering.
         assert!(projected.oeq_class().output_ordering().is_none());
 

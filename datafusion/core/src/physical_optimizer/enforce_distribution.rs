@@ -51,7 +51,9 @@ use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_expr::logical_plan::JoinType;
 use datafusion_physical_expr::expressions::{Column, NoOp};
 use datafusion_physical_expr::utils::map_columns_before_projection;
-use datafusion_physical_expr::{physical_exprs_equal, PhysicalExpr, SchemaProperties};
+use datafusion_physical_expr::{
+    physical_exprs_equal, EquivalenceProperties, PhysicalExpr,
+};
 use datafusion_physical_plan::unbounded_output;
 use datafusion_physical_plan::windows::{get_best_fitting_window, BoundedWindowAggExec};
 
@@ -442,7 +444,7 @@ where
     )) = try_reorder(
         join_key_pairs.clone(),
         parent_required,
-        &join_plan.schema_properties(),
+        &join_plan.equivalence_properties(),
     ) {
         if !new_positions.is_empty() {
             let new_join_on = new_join_conditions(&left_keys, &right_keys);
@@ -658,8 +660,8 @@ pub(crate) fn reorder_join_keys_to_inputs(
                 join_key_pairs,
                 Some(left.output_partitioning()),
                 Some(right.output_partitioning()),
-                &left.schema_properties(),
-                &right.schema_properties(),
+                &left.equivalence_properties(),
+                &right.equivalence_properties(),
             ) {
                 if !new_positions.is_empty() {
                     let new_join_on = new_join_conditions(&left_keys, &right_keys);
@@ -696,8 +698,8 @@ pub(crate) fn reorder_join_keys_to_inputs(
             join_key_pairs,
             Some(left.output_partitioning()),
             Some(right.output_partitioning()),
-            &left.schema_properties(),
-            &right.schema_properties(),
+            &left.equivalence_properties(),
+            &right.equivalence_properties(),
         ) {
             if !new_positions.is_empty() {
                 let new_join_on = new_join_conditions(&left_keys, &right_keys);
@@ -723,8 +725,8 @@ fn reorder_current_join_keys(
     join_keys: JoinKeyPairs,
     left_partition: Option<Partitioning>,
     right_partition: Option<Partitioning>,
-    left_equivalence_properties: &SchemaProperties,
-    right_equivalence_properties: &SchemaProperties,
+    left_equivalence_properties: &EquivalenceProperties,
+    right_equivalence_properties: &EquivalenceProperties,
 ) -> Option<(JoinKeyPairs, Vec<usize>)> {
     match (left_partition, right_partition.clone()) {
         (Some(Partitioning::Hash(left_exprs, _)), _) => {
@@ -749,7 +751,7 @@ fn reorder_current_join_keys(
 fn try_reorder(
     join_keys: JoinKeyPairs,
     expected: &[Arc<dyn PhysicalExpr>],
-    equivalence_properties: &SchemaProperties,
+    equivalence_properties: &EquivalenceProperties,
 ) -> Option<(JoinKeyPairs, Vec<usize>)> {
     let eq_groups = equivalence_properties.eq_group();
     let mut normalized_expected = vec![];
@@ -984,7 +986,7 @@ fn add_hash_on_top(
     let satisfied = input
         .output_partitioning()
         .satisfy(Distribution::HashPartitioned(hash_exprs.clone()), || {
-            input.schema_properties()
+            input.equivalence_properties()
         });
     // Add hash repartitioning when:
     // - The hash distribution requirement is not satisfied, or
@@ -1301,7 +1303,7 @@ fn ensure_distribution(
                 // - Ordering requirement cannot be satisfied by preserving ordering through repartitions, or
                 // - using order preserving variant is not desirable.
                 let ordering_satisfied = child
-                    .schema_properties()
+                    .equivalence_properties()
                     .ordering_satisfy_requirement(required_input_ordering);
                 if !ordering_satisfied || !order_preserving_variants_desirable {
                     replace_order_preserving_variants(&mut child, dist_onward)?;

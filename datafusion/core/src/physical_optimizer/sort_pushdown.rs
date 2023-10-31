@@ -127,7 +127,7 @@ pub(crate) fn pushdown_sorts(
     let parent_required = requirements.required_ordering.as_deref().unwrap_or(&[]);
     if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
         let new_plan = if !plan
-            .schema_properties()
+            .equivalence_properties()
             .ordering_satisfy_requirement(parent_required)
         {
             // If the current plan is a SortExec, modify it to satisfy parent requirements:
@@ -159,7 +159,7 @@ pub(crate) fn pushdown_sorts(
     } else {
         // Executors other than SortExec
         if plan
-            .schema_properties()
+            .equivalence_properties()
             .ordering_satisfy_requirement(parent_required)
         {
             // Satisfies parent requirements, immediately return.
@@ -263,7 +263,7 @@ fn pushdown_requirement_to_children(
     } else if is_sort_preserving_merge(plan) {
         let new_ordering =
             PhysicalSortRequirement::to_sort_exprs(parent_required.to_vec());
-        let mut spm_eqs = plan.schema_properties();
+        let mut spm_eqs = plan.equivalence_properties();
         // Sort preserving merge will have new ordering, one requirement above is pushed down to its below.
         spm_eqs = spm_eqs.with_reorder(new_ordering);
         // Do not push-down through SortPreservingMergeExec when
@@ -307,13 +307,13 @@ fn determine_children_requirement(
     child_plan: Arc<dyn ExecutionPlan>,
 ) -> RequirementsCompatibility {
     if child_plan
-        .schema_properties()
+        .equivalence_properties()
         .requirements_compatible(request_child, parent_required)
     {
         // request child requirements are more specific, no need to push down the parent requirements
         RequirementsCompatibility::Satisfy
     } else if child_plan
-        .schema_properties()
+        .equivalence_properties()
         .requirements_compatible(parent_required, request_child)
     {
         // parent requirements are more specific, adjust the request child requirements and push down the new requirements
@@ -350,7 +350,7 @@ fn try_pushdown_requirements_to_join(
         &smj.maintains_input_order(),
         Some(probe_side),
     );
-    let mut smj_eqs = smj.schema_properties();
+    let mut smj_eqs = smj.equivalence_properties();
     // smj will have this ordering when its input changes.
     smj_eqs = smj_eqs.with_reorder(new_output_ordering.unwrap_or_default());
     let should_pushdown = smj_eqs.ordering_satisfy_requirement(parent_required);

@@ -35,7 +35,7 @@ use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{
-    PhysicalSortExpr, PhysicalSortRequirement, SchemaProperties,
+    EquivalenceProperties, PhysicalSortExpr, PhysicalSortRequirement,
 };
 
 use futures::stream::TryStreamExt;
@@ -187,9 +187,9 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
             .collect()
     }
 
-    /// Get the `SchemaProperties` within the plan
-    fn schema_properties(&self) -> SchemaProperties {
-        SchemaProperties::new(self.schema())
+    /// Get the [`EquivalenceProperties`] within the plan
+    fn equivalence_properties(&self) -> EquivalenceProperties {
+        EquivalenceProperties::new(self.schema())
     }
 
     /// Get a list of child execution plans that provide the input for this plan. The returned list

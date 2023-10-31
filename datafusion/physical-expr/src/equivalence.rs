@@ -134,6 +134,7 @@ impl EquivalenceGroup {
         // Remove duplicate entries from each equivalence class:
         self.classes.retain_mut(|cls| {
             // Keep groups that have at least two entries:
+            // Single entry inside an equivalence class is meaningless. It doesn't contain any information
             deduplicate_physical_exprs(cls);
             cls.len() > 1
         });
@@ -142,6 +143,9 @@ impl EquivalenceGroup {
     }
 
     /// This utility function unifies/bridges classes that have common expressions.
+    /// As an example if an ['EquivalenceClass'] in the state is \[a, b\] and another is \[b,c\]
+    /// Since, both classes contain b, this means that indeed \[a,b,c] are all equal to each other.
+    /// This utility converts \[a,b\], \[b,c\] to \[a,b,c\].
     fn bridge_classes(&mut self) {
         let mut idx = 0;
         while idx < self.classes.len() {
@@ -579,10 +583,11 @@ fn finer_side(lhs: LexOrderingRef, rhs: LexOrderingRef) -> Option<bool> {
     all_equal.then_some(lhs.len() < rhs.len())
 }
 
-/// A `SchemaProperties` object stores useful information related to a schema.
+/// A `EquivalenceProperties` object stores useful information related to a schema.
 /// Currently, it keeps track of:
-/// - Equivalent columns, e.g columns that have same value.
+/// - Equivalent expressions, e.g expressions that have same value.
 /// - Valid sort expressions (orderings) for the schema.
+/// - Constants expressions (e.g expressions that are known to have constant values).
 ///
 /// Consider table below:
 ///
@@ -598,7 +603,7 @@ fn finer_side(lhs: LexOrderingRef, rhs: LexOrderingRef) -> Option<bool> {
 /// ```
 ///
 /// where both `a ASC` and `b DESC` can describe the table ordering. With
-/// `SchemaProperties`, we can keep track of these different valid sort
+/// `EquivalenceProperties`, we can keep track of these different valid sort
 /// expressions and treat `a ASC` and `b DESC` on an equal footing.
 ///
 /// Similarly, consider the table below:
@@ -620,7 +625,7 @@ fn finer_side(lhs: LexOrderingRef, rhs: LexOrderingRef) -> Option<bool> {
 /// `Hash(a)` and output partitioning is `Hash(b)`, then we can deduce that
 /// the existing partitioning satisfies the requirement.
 #[derive(Debug, Clone)]
-pub struct SchemaProperties {
+pub struct EquivalenceProperties {
     /// Collection of equivalence classes that store expressions with the same
     /// value.
     eq_group: EquivalenceGroup,
@@ -634,8 +639,8 @@ pub struct SchemaProperties {
     schema: SchemaRef,
 }
 
-impl SchemaProperties {
-    /// Creates an empty `SchemaProperties` object.
+impl EquivalenceProperties {
+    /// Creates an empty `EquivalenceProperties` object.
     pub fn new(schema: SchemaRef) -> Self {
         Self {
             eq_group: EquivalenceGroup::empty(),
@@ -645,7 +650,7 @@ impl SchemaProperties {
         }
     }
 
-    /// Creates a new `SchemaProperties` object with the given orderings.
+    /// Creates a new `EquivalenceProperties` object with the given orderings.
     pub fn new_with_orderings(schema: SchemaRef, orderings: &[LexOrdering]) -> Self {
         Self {
             eq_group: EquivalenceGroup::empty(),
@@ -682,7 +687,7 @@ impl SchemaProperties {
         )
     }
 
-    /// Extends this `SchemaProperties` with the `other` object.
+    /// Extends this `EquivalenceProperties` with the `other` object.
     pub fn extend(mut self, other: Self) -> Self {
         self.eq_group.extend(other.eq_group);
         self.oeq_class.extend(other.oeq_class);
@@ -695,7 +700,7 @@ impl SchemaProperties {
         self.oeq_class.clear();
     }
 
-    /// Extends this `SchemaProperties` by adding the orderings inside the
+    /// Extends this `EquivalenceProperties` by adding the orderings inside the
     /// ordering equivalence class `other`.
     pub fn add_ordering_equivalence_class(&mut self, other: OrderingEquivalenceClass) {
         self.oeq_class.extend(other);
@@ -754,8 +759,11 @@ impl SchemaProperties {
     /// Assume that `self.eq_group` states column `a` and `b` are aliases.
     /// Also assume that `self.oeq_class` states orderings `d ASC` and `a ASC, c ASC`
     /// are equivalent (in the sense that both describe the ordering of the table).
-    /// If the `sort_exprs` argument were `vec![b ASC, c ASC]`, then this function
-    /// would return `vec![d ASC]`.
+    /// If the `sort_exprs` argument were `vec![b ASC, c ASC, a ASC]`, then this function
+    /// would return `vec![a ASC, c ASC]`. (
+    /// `vec![a ASC, c ASC, a ASC]` after normalization
+    /// `vec![a ASC, c ASC]` after de-duplication
+    /// )
     fn normalize_sort_exprs(&self, sort_exprs: LexOrderingRef) -> LexOrdering {
         // Convert sort expressions to sort requirements:
         let sort_reqs = PhysicalSortRequirement::from_sort_exprs(sort_exprs.iter());
@@ -774,8 +782,11 @@ impl SchemaProperties {
     /// Assume that `self.eq_group` states column `a` and `b` are aliases.
     /// Also assume that `self.oeq_class` states orderings `d ASC` and `a ASC, c ASC`
     /// are equivalent (in the sense that both describe the ordering of the table).
-    /// If the `sort_reqs` argument were `vec![b ASC, c ASC]`, then this function
-    /// would return `vec![d ASC]`.
+    /// If the `sort_reqs` argument were `vec![b ASC, c ASC, a ASC]`, then this function
+    /// would return `vec![a ASC, c ASC]`. (
+    /// `vec![a ASC, c ASC, a ASC]` after normalization
+    /// `vec![a ASC, c ASC]` after de-duplication
+    /// )
     fn normalize_sort_requirements(
         &self,
         sort_reqs: LexRequirementRef,
@@ -1023,7 +1034,7 @@ impl SchemaProperties {
                 }
             }
         }
-        // Construct the lexicographical ordering according to the fpermutation:
+        // Construct the lexicographical ordering according to the permutation:
         ordered_exprs
             .into_iter()
             .map(|(idx, options)| {
@@ -1040,17 +1051,17 @@ impl SchemaProperties {
 }
 
 /// Calculate ordering equivalence properties for the given join operation.
-pub fn join_schema_properties(
-    left: SchemaProperties,
-    right: SchemaProperties,
+pub fn join_equivalence_properties(
+    left: EquivalenceProperties,
+    right: EquivalenceProperties,
     join_type: &JoinType,
     join_schema: SchemaRef,
     maintains_input_order: &[bool],
     probe_side: Option<JoinSide>,
     on: &[(Column, Column)],
-) -> SchemaProperties {
+) -> EquivalenceProperties {
     let left_size = left.schema.fields.len();
-    let mut result = SchemaProperties::new(join_schema);
+    let mut result = EquivalenceProperties::new(join_schema);
     result.add_equivalence_group(left.eq_group().join(
         right.eq_group(),
         join_type,
@@ -1137,7 +1148,7 @@ fn updated_right_ordering_equivalence_class(
 
 /// Calculates the [`SortProperties`] of a given [`ExprOrdering`] node.
 /// The node can either be a leaf node, or an intermediate node:
-/// - If it is a leaf node, the children states are `None`. We directly find
+/// - If it is a leaf node, the children states are empty vector. We directly find
 /// the order of the node by looking at the given sort expression and equivalence
 /// properties if it is a `Column` leaf, or we mark it as unordered. In the case
 /// of a `Literal` leaf, we mark it as singleton so that it can cooperate with
@@ -1150,7 +1161,7 @@ fn updated_right_ordering_equivalence_class(
 /// the order coming from the children.
 fn update_ordering(
     mut node: ExprOrdering,
-    eq_properties: &SchemaProperties,
+    eq_properties: &EquivalenceProperties,
 ) -> Result<Transformed<ExprOrdering>> {
     if !node.expr.children().is_empty() {
         // We have an intermediate (non-leaf) node, account for its children:
@@ -1214,7 +1225,7 @@ mod tests {
     /// [a ASC], [d ASC, b ASC], [e DESC, f ASC, g ASC]
     /// and
     /// Column [a=c] (e.g they are aliases).
-    fn create_test_params() -> Result<(SchemaRef, SchemaProperties)> {
+    fn create_test_params() -> Result<(SchemaRef, EquivalenceProperties)> {
         let test_schema = create_test_schema()?;
         let col_a = &col("a", &test_schema)?;
         let col_b = &col("b", &test_schema)?;
@@ -1223,7 +1234,7 @@ mod tests {
         let col_e = &col("e", &test_schema)?;
         let col_f = &col("f", &test_schema)?;
         let col_g = &col("g", &test_schema)?;
-        let mut eq_properties = SchemaProperties::new(test_schema.clone());
+        let mut eq_properties = EquivalenceProperties::new(test_schema.clone());
         eq_properties.add_equal_conditions(col_a, col_c);
 
         let option_asc = SortOptions {
@@ -1269,7 +1280,7 @@ mod tests {
     /// where
     /// Column [a=f] (e.g they are aliases).
     /// Column e is constant.
-    fn create_random_schema(seed: u64) -> Result<(SchemaRef, SchemaProperties)> {
+    fn create_random_schema(seed: u64) -> Result<(SchemaRef, EquivalenceProperties)> {
         let test_schema = create_test_schema_2()?;
         let col_a = &col("a", &test_schema)?;
         let col_b = &col("b", &test_schema)?;
@@ -1279,7 +1290,7 @@ mod tests {
         let col_f = &col("f", &test_schema)?;
         let col_exprs = [col_a, col_b, col_c, col_d, col_e, col_f];
 
-        let mut eq_properties = SchemaProperties::new(test_schema.clone());
+        let mut eq_properties = EquivalenceProperties::new(test_schema.clone());
         // Define a and f are aliases
         eq_properties.add_equal_conditions(col_a, col_f);
         // Column e has constant value.
@@ -1357,7 +1368,7 @@ mod tests {
             Field::new("y", DataType::Int64, true),
         ]));
 
-        let mut schema_properties = SchemaProperties::new(schema);
+        let mut eq_properties = EquivalenceProperties::new(schema);
         let col_a_expr = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
         let col_b_expr = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
         let col_c_expr = Arc::new(Column::new("c", 2)) as Arc<dyn PhysicalExpr>;
@@ -1365,36 +1376,36 @@ mod tests {
         let col_y_expr = Arc::new(Column::new("y", 4)) as Arc<dyn PhysicalExpr>;
 
         // a and b are aliases
-        schema_properties.add_equal_conditions(&col_a_expr, &col_b_expr);
-        assert_eq!(schema_properties.eq_group().len(), 1);
+        eq_properties.add_equal_conditions(&col_a_expr, &col_b_expr);
+        assert_eq!(eq_properties.eq_group().len(), 1);
 
         // This new entry is redundant, size shouldn't increase
-        schema_properties.add_equal_conditions(&col_b_expr, &col_a_expr);
-        assert_eq!(schema_properties.eq_group().len(), 1);
-        let eq_groups = &schema_properties.eq_group().classes[0];
+        eq_properties.add_equal_conditions(&col_b_expr, &col_a_expr);
+        assert_eq!(eq_properties.eq_group().len(), 1);
+        let eq_groups = &eq_properties.eq_group().classes[0];
         assert_eq!(eq_groups.len(), 2);
         assert!(physical_exprs_contains(eq_groups, &col_a_expr));
         assert!(physical_exprs_contains(eq_groups, &col_b_expr));
 
         // b and c are aliases. Exising equivalence class should expand,
         // however there shouldn't be any new equivalence class
-        schema_properties.add_equal_conditions(&col_b_expr, &col_c_expr);
-        assert_eq!(schema_properties.eq_group().len(), 1);
-        let eq_groups = &schema_properties.eq_group().classes[0];
+        eq_properties.add_equal_conditions(&col_b_expr, &col_c_expr);
+        assert_eq!(eq_properties.eq_group().len(), 1);
+        let eq_groups = &eq_properties.eq_group().classes[0];
         assert_eq!(eq_groups.len(), 3);
         assert!(physical_exprs_contains(eq_groups, &col_a_expr));
         assert!(physical_exprs_contains(eq_groups, &col_b_expr));
         assert!(physical_exprs_contains(eq_groups, &col_c_expr));
 
         // This is a new set of equality. Hence equivalent class count should be 2.
-        schema_properties.add_equal_conditions(&col_x_expr, &col_y_expr);
-        assert_eq!(schema_properties.eq_group().len(), 2);
+        eq_properties.add_equal_conditions(&col_x_expr, &col_y_expr);
+        assert_eq!(eq_properties.eq_group().len(), 2);
 
         // This equality bridges distinct equality sets.
         // Hence equivalent class count should decrease from 2 to 1.
-        schema_properties.add_equal_conditions(&col_x_expr, &col_a_expr);
-        assert_eq!(schema_properties.eq_group().len(), 1);
-        let eq_groups = &schema_properties.eq_group().classes[0];
+        eq_properties.add_equal_conditions(&col_x_expr, &col_a_expr);
+        assert_eq!(eq_properties.eq_group().len(), 1);
+        let eq_groups = &eq_properties.eq_group().classes[0];
         assert_eq!(eq_groups.len(), 5);
         assert!(physical_exprs_contains(eq_groups, &col_a_expr));
         assert!(physical_exprs_contains(eq_groups, &col_b_expr));
@@ -1413,7 +1424,7 @@ mod tests {
             Field::new("c", DataType::Int64, true),
         ]));
 
-        let input_properties = SchemaProperties::new(input_schema.clone());
+        let input_properties = EquivalenceProperties::new(input_schema.clone());
         let col_a = col("a", &input_schema)?;
 
         let out_schema = Arc::new(Schema::new(vec![
@@ -1466,14 +1477,14 @@ mod tests {
         ];
         // finer ordering satisfies, crude ordering should return true
         let empty_schema = &Arc::new(Schema::empty());
-        let mut schema_properties = SchemaProperties::new(empty_schema.clone());
-        schema_properties.oeq_class.push(finer.clone());
-        assert!(schema_properties.ordering_satisfy(&crude));
+        let mut eq_properties_finer = EquivalenceProperties::new(empty_schema.clone());
+        eq_properties_finer.oeq_class.push(finer.clone());
+        assert!(eq_properties_finer.ordering_satisfy(&crude));
 
         // Crude ordering doesn't satisfy finer ordering. should return false
-        let mut schema_properties = SchemaProperties::new(empty_schema.clone());
-        schema_properties.oeq_class.push(crude.clone());
-        assert!(!schema_properties.ordering_satisfy(&finer));
+        let mut eq_properties_crude = EquivalenceProperties::new(empty_schema.clone());
+        eq_properties_crude.oeq_class.push(crude.clone());
+        assert!(!eq_properties_crude.ordering_satisfy(&finer));
         Ok(())
     }
 
@@ -1483,7 +1494,7 @@ mod tests {
         // [a ASC], [d ASC, b ASC], [e DESC, f ASC, g ASC]
         // and
         // Column [a=c] (e.g they are aliases).
-        let (test_schema, schema_properties) = create_test_params()?;
+        let (test_schema, eq_properties) = create_test_params()?;
         let col_a = &col("a", &test_schema)?;
         let col_b = &col("b", &test_schema)?;
         let col_c = &col("c", &test_schema)?;
@@ -1500,7 +1511,7 @@ mod tests {
             nulls_first: true,
         };
         let table_data_with_properties =
-            generate_table_for_schema_properties(&schema_properties, 625, 5)?;
+            generate_table_for_eq_properties(&eq_properties, 625, 5)?;
 
         // First element in the tuple stores vector of requirement, second element is the expected return value for ordering_satisfy function
         let requirements = vec![
@@ -1637,7 +1648,7 @@ mod tests {
                 expected
             );
             assert_eq!(
-                schema_properties.ordering_satisfy(&required),
+                eq_properties.ordering_satisfy(&required),
                 expected,
                 "{err_msg}"
             );
@@ -1657,13 +1668,10 @@ mod tests {
 
         for seed in 0..N_RANDOM_SCHEMA {
             // Create a random schema with random properties
-            let (test_schema, schema_properties) = create_random_schema(seed as u64)?;
+            let (test_schema, eq_properties) = create_random_schema(seed as u64)?;
             // Generate a data that satisfies properties given
-            let table_data_with_properties = generate_table_for_schema_properties(
-                &schema_properties,
-                N_ELEMENTS,
-                N_DISTINCT,
-            )?;
+            let table_data_with_properties =
+                generate_table_for_eq_properties(&eq_properties, N_ELEMENTS, N_DISTINCT)?;
             let col_exprs = vec![
                 col("a", &test_schema)?,
                 col("b", &test_schema)?,
@@ -1693,7 +1701,7 @@ mod tests {
                     // Check whether ordering_satisfy API result and
                     // experimental result matches.
                     assert_eq!(
-                        schema_properties.ordering_satisfy(&requirement),
+                        eq_properties.ordering_satisfy(&requirement),
                         expected,
                         "{}",
                         err_msg
@@ -1719,7 +1727,7 @@ mod tests {
             nulls_first: false,
         };
         // a=c (e.g they are aliases).
-        let mut eq_properties = SchemaProperties::new(test_schema);
+        let mut eq_properties = EquivalenceProperties::new(test_schema);
         eq_properties.add_equal_conditions(col_a, col_c);
 
         let orderings = vec![
@@ -1993,18 +2001,18 @@ mod tests {
         let col_z = &col("z", &schema)?;
         let col_w = &col("w", &schema)?;
 
-        let mut join_schema_properties = SchemaProperties::new(Arc::new(schema));
+        let mut join_eq_properties = EquivalenceProperties::new(Arc::new(schema));
         // a=x and d=w
-        join_schema_properties.add_equal_conditions(col_a, col_x);
-        join_schema_properties.add_equal_conditions(col_d, col_w);
+        join_eq_properties.add_equal_conditions(col_a, col_x);
+        join_eq_properties.add_equal_conditions(col_d, col_w);
 
         updated_right_ordering_equivalence_class(
             &mut right_oeq_class,
             &join_type,
             left_columns_len,
         );
-        join_schema_properties.add_ordering_equivalence_class(right_oeq_class);
-        let result = join_schema_properties.oeq_class().clone();
+        join_eq_properties.add_ordering_equivalence_class(right_oeq_class);
+        let result = join_eq_properties.oeq_class().clone();
 
         // [x ASC, y ASC], [z ASC, w ASC]
         let orderings = vec![
@@ -2101,14 +2109,14 @@ mod tests {
 
     // Generate a table that satisfies schema properties,
     // in terms of ordering equivalences, equivalences, and constants.
-    fn generate_table_for_schema_properties(
-        schema_properties: &SchemaProperties,
+    fn generate_table_for_eq_properties(
+        eq_properties: &EquivalenceProperties,
         n_elem: usize,
         n_distinct: usize,
     ) -> Result<RecordBatch> {
         let mut rng = StdRng::seed_from_u64(23);
 
-        let schema = schema_properties.schema();
+        let schema = eq_properties.schema();
         let mut schema_vec = vec![None; schema.fields.len()];
 
         // Utility closure to generate random array
@@ -2120,7 +2128,7 @@ mod tests {
         };
 
         // Fill constant columns
-        for constant in &schema_properties.constants {
+        for constant in &eq_properties.constants {
             let col = constant.as_any().downcast_ref::<Column>().unwrap();
             let (idx, _field) = schema.column_with_name(col.name()).unwrap();
             let arr =
@@ -2129,7 +2137,7 @@ mod tests {
         }
 
         // Fill columns based on ordering equivalences
-        for ordering in schema_properties.oeq_class.iter() {
+        for ordering in eq_properties.oeq_class.iter() {
             let (sort_columns, indices): (Vec<_>, Vec<_>) = ordering
                 .iter()
                 .map(|PhysicalSortExpr { expr, options }| {
@@ -2153,7 +2161,7 @@ mod tests {
         }
 
         // Fill columns based on equivalence groups
-        for eq_group in schema_properties.eq_group.iter() {
+        for eq_group in eq_properties.eq_group.iter() {
             let representative_array =
                 get_representative_arr(eq_group, &schema_vec, schema.clone())
                     .unwrap_or_else(|| generate_random_array(n_elem, n_distinct));
@@ -2186,7 +2194,7 @@ mod tests {
         let col_b = &Column::new("b", 1);
         let col_c = &Column::new("c", 2);
         // Assume that column a and c are aliases.
-        let (_test_schema, schema_properties) = create_test_params()?;
+        let (_test_schema, eq_properties) = create_test_params()?;
 
         let col_a_expr = Arc::new(col_a.clone()) as Arc<dyn PhysicalExpr>;
         let col_b_expr = Arc::new(col_b.clone()) as Arc<dyn PhysicalExpr>;
@@ -2202,10 +2210,10 @@ mod tests {
             // Cannot normalize column b
             (&col_b_expr, &col_b_expr),
         ];
-        let eq_groups = schema_properties.eq_group();
+        let eq_group = eq_properties.eq_group();
         for (expr, expected_eq) in expressions {
             assert!(
-                expected_eq.eq(&eq_groups.normalize_expr(expr.clone())),
+                expected_eq.eq(&eq_group.normalize_expr(expr.clone())),
                 "error in test: expr: {expr:?}"
             );
         }
@@ -2220,7 +2228,7 @@ mod tests {
             nulls_first: false,
         };
         // Assume that column a and c are aliases.
-        let (test_schema, schema_properties) = create_test_params()?;
+        let (test_schema, eq_properties) = create_test_params()?;
         let col_a = &col("a", &test_schema)?;
         let col_c = &col("c", &test_schema)?;
         let col_d = &col("d", &test_schema)?;
@@ -2239,7 +2247,7 @@ mod tests {
             let reqs = convert_to_sort_reqs(&reqs);
             let expected = convert_to_sort_reqs(&expected);
 
-            let normalized = schema_properties.normalize_sort_requirements(&reqs);
+            let normalized = eq_properties.normalize_sort_requirements(&reqs);
             assert!(
                 expected.eq(&normalized),
                 "error in test: reqs: {reqs:?}, expected: {expected:?}, normalized: {normalized:?}"
@@ -2255,7 +2263,7 @@ mod tests {
         // a=c
         // and following orderings are valid
         // [a ASC], [d ASC, b ASC], [e DESC, f ASC, g ASC]
-        let (test_schema, schema_properties) = create_test_params()?;
+        let (test_schema, eq_properties) = create_test_params()?;
         let col_a = &col("a", &test_schema)?;
         let col_b = &col("b", &test_schema)?;
         let col_c = &col("c", &test_schema)?;
@@ -2316,7 +2324,7 @@ mod tests {
             let expected_normalized = convert_to_sort_reqs(&expected_normalized);
 
             assert_eq!(
-                schema_properties.normalize_sort_requirements(&req),
+                eq_properties.normalize_sort_requirements(&req),
                 expected_normalized
             );
         }
@@ -2330,7 +2338,7 @@ mod tests {
         let col_a = &col("a", &schema)?;
         let col_b = &col("b", &schema)?;
         let col_c = &col("c", &schema)?;
-        let schema_properties = SchemaProperties::new(schema);
+        let eq_properties = EquivalenceProperties::new(schema);
         let option_asc = SortOptions {
             descending: false,
             nulls_first: false,
@@ -2376,7 +2384,7 @@ mod tests {
             let lhs = convert_to_sort_reqs(&lhs);
             let rhs = convert_to_sort_reqs(&rhs);
             let expected = expected.map(|expected| convert_to_sort_reqs(&expected));
-            let finer = schema_properties.get_finer_requirement(&lhs, &rhs);
+            let finer = eq_properties.get_finer_requirement(&lhs, &rhs);
             assert_eq!(finer, expected)
         }
 
@@ -2388,7 +2396,7 @@ mod tests {
         let schema = create_test_schema()?;
         let col_a = &col("a", &schema)?;
         let col_b = &col("b", &schema)?;
-        let schema_properties = SchemaProperties::new(schema);
+        let eq_properties = EquivalenceProperties::new(schema);
         let option_asc = SortOptions {
             descending: false,
             nulls_first: false,
@@ -2420,7 +2428,7 @@ mod tests {
             let lhs = convert_to_sort_exprs(&lhs);
             let rhs = convert_to_sort_exprs(&rhs);
             let expected = expected.map(|expected| convert_to_sort_exprs(&expected));
-            let finer = schema_properties.get_meet_ordering(&lhs, &rhs);
+            let finer = eq_properties.get_meet_ordering(&lhs, &rhs);
             assert_eq!(finer, expected)
         }
 
@@ -2499,7 +2507,7 @@ mod tests {
             Field::new("d", DataType::Int32, true),
         ]);
 
-        let mut schema_properties = SchemaProperties::new(Arc::new(schema.clone()));
+        let mut eq_properties = EquivalenceProperties::new(Arc::new(schema.clone()));
         let col_a = &col("a", &schema)?;
         let col_b = &col("b", &schema)?;
         let col_c = &col("c", &schema)?;
@@ -2509,9 +2517,9 @@ mod tests {
             nulls_first: false,
         };
         // b=a (e.g they are aliases)
-        schema_properties.add_equal_conditions(col_b, col_a);
+        eq_properties.add_equal_conditions(col_b, col_a);
         // [b ASC], [d ASC]
-        schema_properties.add_new_orderings(vec![
+        eq_properties.add_new_orderings(vec![
             vec![PhysicalSortExpr {
                 expr: col_b.clone(),
                 options: option_asc,
@@ -2549,7 +2557,7 @@ mod tests {
         for (expr, expected) in test_cases {
             let expr_ordering = ExprOrdering::new(expr.clone());
             let expr_ordering = expr_ordering
-                .transform_up(&|expr| update_ordering(expr, &schema_properties))?;
+                .transform_up(&|expr| update_ordering(expr, &eq_properties))?;
             let err_msg = format!(
                 "expr:{:?}, expected: {:?}, actual: {:?}",
                 expr, expected, expr_ordering.state

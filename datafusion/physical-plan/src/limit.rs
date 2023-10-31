@@ -26,7 +26,7 @@ use super::expressions::PhysicalSortExpr;
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream, Statistics};
 use crate::{
-    DisplayFormatType, Distribution, ExecutionPlan, Partitioning, SchemaProperties,
+    DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan, Partitioning,
 };
 
 use arrow::array::ArrayRef;
@@ -133,8 +133,8 @@ impl ExecutionPlan for GlobalLimitExec {
         self.input.output_ordering()
     }
 
-    fn schema_properties(&self) -> SchemaProperties {
-        self.input.schema_properties()
+    fn equivalence_properties(&self) -> EquivalenceProperties {
+        self.input.equivalence_properties()
     }
 
     fn with_new_children(
@@ -318,8 +318,8 @@ impl ExecutionPlan for LocalLimitExec {
         vec![true]
     }
 
-    fn schema_properties(&self) -> SchemaProperties {
-        self.input.schema_properties()
+    fn equivalence_properties(&self) -> EquivalenceProperties {
+        self.input.equivalence_properties()
     }
 
     fn unbounded_output(&self, _children: &[bool]) -> Result<bool> {

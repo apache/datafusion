@@ -40,7 +40,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
 use datafusion_common::{exec_err, internal_err, DFSchemaRef, DataFusionError, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::SchemaProperties;
+use datafusion_physical_expr::EquivalenceProperties;
 
 use futures::Stream;
 use itertools::Itertools;
@@ -223,15 +223,15 @@ impl ExecutionPlan for UnionExec {
         }
     }
 
-    fn schema_properties(&self) -> SchemaProperties {
+    fn equivalence_properties(&self) -> EquivalenceProperties {
         // TODO: In some cases, we should be able to preserve some equivalence
         //       classes and constants. Add support for such cases.
         let children_eqs = self
             .inputs
             .iter()
-            .map(|child| child.schema_properties())
+            .map(|child| child.equivalence_properties())
             .collect::<Vec<_>>();
-        let mut result = SchemaProperties::new(self.schema());
+        let mut result = EquivalenceProperties::new(self.schema());
         // Use the ordering equivalence class of the first child as the seed:
         let mut meets = children_eqs[0]
             .oeq_class()
@@ -785,7 +785,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_union_schema_properties() -> Result<()> {
+    async fn test_union_equivalence_properties() -> Result<()> {
         let schema = create_test_schema()?;
         let col_a = &col("a", &schema)?;
         let col_b = &col("b", &schema)?;
@@ -866,8 +866,8 @@ mod tests {
             );
 
             let union = UnionExec::new(vec![child1, child2]);
-            let union_schema_properties = union.schema_properties();
-            let union_actual_orderings = union_schema_properties.oeq_class();
+            let union_eq_properties = union.equivalence_properties();
+            let union_actual_orderings = union_eq_properties.oeq_class();
             let err_msg = format!(
                 "Error in test id: {:?}, test case: {:?}",
                 test_idx, test_cases[test_idx]

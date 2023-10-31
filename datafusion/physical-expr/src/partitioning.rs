@@ -20,7 +20,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use crate::{physical_exprs_equal, PhysicalExpr, SchemaProperties};
+use crate::{physical_exprs_equal, EquivalenceProperties, PhysicalExpr};
 
 /// Partitioning schemes supported by operators.
 #[derive(Debug, Clone)]
@@ -63,10 +63,10 @@ impl Partitioning {
 
     /// Returns true when the guarantees made by this [[Partitioning]] are sufficient to
     /// satisfy the partitioning scheme mandated by the `required` [[Distribution]]
-    pub fn satisfy<F: FnOnce() -> SchemaProperties>(
+    pub fn satisfy<F: FnOnce() -> EquivalenceProperties>(
         &self,
         required: Distribution,
-        schema_properties: F,
+        eq_properties: F,
     ) -> bool {
         match required {
             Distribution::UnspecifiedDistribution => true,
@@ -79,10 +79,10 @@ impl Partitioning {
                     Partitioning::Hash(partition_exprs, _) => {
                         let fast_match =
                             physical_exprs_equal(&required_exprs, partition_exprs);
-                        // If the required exprs do not match, need to leverage the schema_properties provided by the child
+                        // If the required exprs do not match, need to leverage the eq_properties provided by the child
                         // and normalize both exprs based on the equivalent groups.
                         if !fast_match {
-                            let eq_properties = schema_properties();
+                            let eq_properties = eq_properties();
                             let eq_groups = eq_properties.eq_group();
                             if !eq_groups.is_empty() {
                                 let normalized_required_exprs = required_exprs
@@ -195,19 +195,19 @@ mod tests {
         for distribution in distribution_types {
             let result = (
                 single_partition.satisfy(distribution.clone(), || {
-                    SchemaProperties::new(schema.clone())
+                    EquivalenceProperties::new(schema.clone())
                 }),
                 unspecified_partition.satisfy(distribution.clone(), || {
-                    SchemaProperties::new(schema.clone())
+                    EquivalenceProperties::new(schema.clone())
                 }),
                 round_robin_partition.satisfy(distribution.clone(), || {
-                    SchemaProperties::new(schema.clone())
+                    EquivalenceProperties::new(schema.clone())
                 }),
                 hash_partition1.satisfy(distribution.clone(), || {
-                    SchemaProperties::new(schema.clone())
+                    EquivalenceProperties::new(schema.clone())
                 }),
                 hash_partition2.satisfy(distribution.clone(), || {
-                    SchemaProperties::new(schema.clone())
+                    EquivalenceProperties::new(schema.clone())
                 }),
             );
 
