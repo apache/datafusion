@@ -337,6 +337,9 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///     }
     /// }
     /// ```
+    ///
+    /// See [`futures::stream::StreamExt`] and [`futures::stream::TryStreamExt`] for further
+    /// combinators that can be used with streams
     fn execute(
         &self,
         partition: usize,
