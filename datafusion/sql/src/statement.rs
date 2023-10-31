@@ -430,6 +430,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 table,
                 on,
                 returning,
+                ignore,
             } => {
                 if or.is_some() {
                     plan_err!("Inserts with or clauses not supported")?;
@@ -448,6 +449,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
                 if returning.is_some() {
                     plan_err!("Insert-returning clause not supported")?;
+                }
+                if ignore {
+                    plan_err!("Insert-ignore clause not supported")?;
                 }
                 let _ = into; // optional keyword doesn't change behavior
                 self.insert_to_plan(table_name, columns, source, overwrite)
@@ -471,6 +475,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 selection,
                 returning,
                 from,
+                order_by,
+                limit,
             } => {
                 if !tables.is_empty() {
                     plan_err!("DELETE <TABLE> not supported")?;
@@ -483,6 +489,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if returning.is_some() {
                     plan_err!("Delete-returning clause not yet supported")?;
                 }
+
+                if !order_by.is_empty() {
+                    plan_err!("Delete-order-by clause not yet supported")?;
+                }
+
+                if limit.is_some() {
+                    plan_err!("Delete-limit clause not yet supported")?;
+                }
+
                 let table_name = self.get_delete_target(from)?;
                 self.delete_to_plan(table_name, selection)
             }
