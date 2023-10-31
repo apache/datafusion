@@ -239,7 +239,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///
     ///
     /// Often its needed to call [`.await`](https://doc.rust-lang.org/std/keyword.await.html) just after the stream async combinators.
-    /// To call it within the sync method please use the snippet:
+    /// To call it within the sync method please refer the snippet below. The snippet can also be used to help output/debug the node execution on batch level
     ///
     /// ```no_run
     /// use datafusion_common::DataFusionError;
