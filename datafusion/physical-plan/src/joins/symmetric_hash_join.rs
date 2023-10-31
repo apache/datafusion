@@ -818,7 +818,7 @@ pub(crate) fn join_with_probe_batch(
     if build_hash_joiner.input_buffer.num_rows() == 0 || probe_batch.num_rows() == 0 {
         return Ok(None);
     }
-    let (build_indices, probe_indices) = build_equal_condition_join_indices(
+    let (build_indices, probe_indices, _) = build_equal_condition_join_indices(
         &build_hash_joiner.hashmap,
         &build_hash_joiner.input_buffer,
         probe_batch,
@@ -830,6 +830,8 @@ pub(crate) fn join_with_probe_batch(
         filter,
         build_hash_joiner.build_side,
         Some(build_hash_joiner.deleted_offset),
+        usize::MAX,
+        None,
     )?;
     if need_to_produce_result_in_final(build_hash_joiner.build_side, join_type) {
         record_visited_indices(

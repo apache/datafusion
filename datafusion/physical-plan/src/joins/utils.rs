@@ -19,6 +19,7 @@
 
 use std::collections::HashSet;
 use std::future::Future;
+use std::ops::Range;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::usize;
@@ -847,7 +848,7 @@ pub(crate) fn build_batch_from_indices(
 pub(crate) fn adjust_indices_by_join_type(
     left_indices: UInt64Array,
     right_indices: UInt32Array,
-    count_right_batch: usize,
+    adjust_range: Range<usize>,
     join_type: JoinType,
 ) -> (UInt64Array, UInt32Array) {
     match join_type {
@@ -863,21 +864,20 @@ pub(crate) fn adjust_indices_by_join_type(
         JoinType::Right | JoinType::Full => {
             // matched
             // unmatched right row will be produced in this batch
-            let right_unmatched_indices =
-                get_anti_indices(count_right_batch, &right_indices);
+            let right_unmatched_indices = get_anti_indices(adjust_range, &right_indices);
             // combine the matched and unmatched right result together
             append_right_indices(left_indices, right_indices, right_unmatched_indices)
         }
         JoinType::RightSemi => {
             // need to remove the duplicated record in the right side
-            let right_indices = get_semi_indices(count_right_batch, &right_indices);
+            let right_indices = get_semi_indices(adjust_range, &right_indices);
             // the left_indices will not be used later for the `right semi` join
             (left_indices, right_indices)
         }
         JoinType::RightAnti => {
             // need to remove the duplicated record in the right side
             // get the anti index for the right side
-            let right_indices = get_anti_indices(count_right_batch, &right_indices);
+            let right_indices = get_anti_indices(adjust_range, &right_indices);
             // the left_indices will not be used later for the `right anti` join
             (left_indices, right_indices)
         }
@@ -919,20 +919,26 @@ pub(crate) fn append_right_indices(
     }
 }
 
-/// Get unmatched and deduplicated indices
+/// Get unmatched and deduplicated indices for specified range of indices
 pub(crate) fn get_anti_indices(
-    row_count: usize,
+    rg: Range<usize>,
     input_indices: &UInt32Array,
 ) -> UInt32Array {
-    let mut bitmap = BooleanBufferBuilder::new(row_count);
-    bitmap.append_n(row_count, false);
-    input_indices.iter().flatten().for_each(|v| {
-        bitmap.set_bit(v as usize, true);
-    });
+    let mut bitmap = BooleanBufferBuilder::new(rg.len());
+    bitmap.append_n(rg.len(), false);
+    input_indices
+        .iter()
+        .flatten()
+        .map(|v| v as usize)
+        .filter(|v| rg.contains(v))
+        .for_each(|v| {
+            bitmap.set_bit(v - rg.start, true);
+        });
+
+    let offset = rg.start;
 
     // get the anti index
-    (0..row_count)
-        .filter_map(|idx| (!bitmap.get_bit(idx)).then_some(idx as u32))
+    (rg).filter_map(|idx| (!bitmap.get_bit(idx - offset)).then_some(idx as u32))
         .collect::<UInt32Array>()
 }
 
@@ -953,20 +959,26 @@ pub(crate) fn get_anti_u64_indices(
         .collect::<UInt64Array>()
 }
 
-/// Get matched and deduplicated indices
+/// Get matched and deduplicated indices for specified range of indices
 pub(crate) fn get_semi_indices(
-    row_count: usize,
+    rg: Range<usize>,
     input_indices: &UInt32Array,
 ) -> UInt32Array {
-    let mut bitmap = BooleanBufferBuilder::new(row_count);
-    bitmap.append_n(row_count, false);
-    input_indices.iter().flatten().for_each(|v| {
-        bitmap.set_bit(v as usize, true);
-    });
+    let mut bitmap = BooleanBufferBuilder::new(rg.len());
+    bitmap.append_n(rg.len(), false);
+    input_indices
+        .iter()
+        .flatten()
+        .map(|v| v as usize)
+        .filter(|v| rg.contains(v))
+        .for_each(|v| {
+            bitmap.set_bit(v - rg.start, true);
+        });
+
+    let offset = rg.start;
 
     // get the semi index
-    (0..row_count)
-        .filter_map(|idx| (bitmap.get_bit(idx)).then_some(idx as u32))
+    (rg).filter_map(|idx| (bitmap.get_bit(idx - offset)).then_some(idx as u32))
         .collect::<UInt32Array>()
 }
 
