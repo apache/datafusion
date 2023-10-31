@@ -52,7 +52,8 @@ async fn main() -> Result<()> {
     write_csv_file(file);
 
     // Reading CSV file with inferred schema example
-    let csv_df = example_read_csv_file_with_inferred_schema(file_path.to_str().unwrap()).await;
+    let csv_df =
+        example_read_csv_file_with_inferred_schema(file_path.to_str().unwrap()).await;
     csv_df.show().await?;
 
     // Reading CSV file with defined schema
@@ -75,7 +76,8 @@ fn write_csv_file(mut file: File) {
 a1,"10 6, 2013",3,1381017600,5.0
 a2,"08 9, 2013",2,1376006400,4.5"#;
     // write the data
-    file.write_all(content.as_ref()).expect("Problem with writing file!");
+    file.write_all(content.as_ref())
+        .expect("Problem with writing file!");
 }
 
 // Example to read data from a csv file with inferred schema
@@ -83,7 +85,9 @@ async fn example_read_csv_file_with_inferred_schema(file_path: &str) -> DataFram
     // Create a session context
     let ctx = SessionContext::new();
     // Register a lazy DataFrame using the context
-    ctx.read_csv(file_path, CsvReadOptions::default()).await.unwrap()
+    ctx.read_csv(file_path, CsvReadOptions::default())
+        .await
+        .unwrap()
 }
 
 // Example to read csv file with a defined schema for the csv file
