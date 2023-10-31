@@ -235,7 +235,28 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         Ok(None)
     }
 
-    /// Begin execution of `partition`, returning a stream of [`RecordBatch`]es.
+    /// Start plan execution for `partition`, returning a [`SendableRecordBatchStream`] of [`RecordBatch`]es.
+    ///
+    ///
+    /// Often its needed to call [`.await`](https://doc.rust-lang.org/std/keyword.await.html) just after the stream async combinators.
+    /// To call it within the sync method please use the snippet:
+    ///
+    /// ```no_run
+    /// use datafusion_common::DataFusionError;
+    ///
+    /// fn print_plan_exec() -> Result<(), DataFusionError> {
+    ///     let stream = node.execute(0, task_ctx)?;
+    ///     futures::stream::once(async move {
+    ///         while let Some(batch) = stream.next().await {
+    ///             let batch = batch?;
+    ///             println!("{}", batch);
+    ///             return Ok(());
+    ///         }
+    ///         Ok(())
+    ///     });
+    ///     Ok(())
+    /// }
+    /// ```
     fn execute(
         &self,
         partition: usize,
