@@ -142,7 +142,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             // next, aggregate built-ins
             if let Ok(fun) = AggregateFunction::from_str(&name) {
-                let distinct = distinct;
                 let order_by =
                     self.order_by_to_sort_expr(&order_by, schema, planner_context)?;
                 let order_by = (!order_by.is_empty()).then_some(order_by);
