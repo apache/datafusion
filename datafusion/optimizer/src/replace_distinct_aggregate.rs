@@ -72,27 +72,17 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
                 ..
             })) => {
                 // Construct the aggregation expression to be used to fetch the selected expressions.
-                // Alias them as a safe-guard from 'common_sub_expression_eliminate' mangling the
-                // output field name.
                 let aggr_expr = select_expr
                     .iter()
                     .map(|e| {
-                        Ok(Expr::AggregateFunction(AggregateFunction::new(
+                        Expr::AggregateFunction(AggregateFunction::new(
                             AggregateFunctionFunc::FirstValue,
                             vec![e.clone()],
                             false,
                             None,
                             sort_expr.clone(),
                         ))
-                        .alias(e.display_name()?))
                     })
-                    .collect::<Result<Vec<Expr>>>()?;
-
-                // The `ON` expressions will serve as the grouping expressions
-                let on_expr = on_expr
-                    .iter()
-                    .enumerate()
-                    .map(|(i, e)| e.clone().alias(format!("_on_expr_{i}")))
                     .collect::<Vec<Expr>>();
 
                 // Build the aggregation plan
@@ -100,22 +90,8 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
                     .aggregate(on_expr.clone(), aggr_expr.to_vec())?
                     .build()?;
 
-                // Whereas the aggregation plan by default outputs both the grouping and the aggregation
-                // expressions, for `DISTINCT ON` we only need to emit the original selection expressions.
-                let project_exprs = plan
-                    .schema()
-                    .fields()
-                    .iter()
-                    .skip(on_expr.len())
-                    .map(|f| col(f.unqualified_column().name))
-                    .collect::<Vec<Expr>>();
-
-                let plan = LogicalPlanBuilder::from(plan)
-                    .project(project_exprs)?
-                    .build()?;
-
                 let plan = if let Some(sort_expr) = sort_expr {
-                    // While sort expressions were used in the `first_value` aggregation itself above,
+                    // While sort expressions were used in the `FIRST_VALUE` aggregation itself above,
                     // this on it's own isn't enough to guarantee the proper output order of the grouping
                     // (`ON`) expression, so we need to sort those as well.
                     LogicalPlanBuilder::from(plan)
@@ -124,6 +100,23 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
                 } else {
                     plan
                 };
+
+                // Whereas the aggregation plan by default outputs both the grouping and the aggregation
+                // expressions, for `DISTINCT ON` we only need to emit the original selection expressions.
+                let project_exprs = plan
+                    .schema()
+                    .fields()
+                    .iter()
+                    .skip(on_expr.len())
+                    .zip(select_expr.iter())
+                    .map(|(f, sel)| {
+                        Ok(col(f.qualified_column()).alias(sel.display_name()?))
+                    })
+                    .collect::<Result<Vec<Expr>>>()?;
+
+                let plan = LogicalPlanBuilder::from(plan)
+                    .project(project_exprs)?
+                    .build()?;
 
                 Ok(Some(plan))
             }

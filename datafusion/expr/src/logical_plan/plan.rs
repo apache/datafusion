@@ -2213,10 +2213,19 @@ impl DistinctOn {
     ) -> Result<Self> {
         let on_expr = normalize_cols(on_expr, input.as_ref())?;
 
-        let schema = DFSchema::new_with_metadata(
-            exprlist_to_fields(&select_expr, &input)?,
-            input.schema().metadata().clone(),
-        )?;
+        // Create fields with any qualifier stuffed in the name itself
+        let fields = exprlist_to_fields(&select_expr, &input)?
+            .iter()
+            .map(|f| {
+                DFField::new_unqualified(
+                    &f.qualified_name(),
+                    f.data_type().clone(),
+                    f.is_nullable(),
+                )
+            })
+            .collect();
+        let schema =
+            DFSchema::new_with_metadata(fields, input.schema().metadata().clone())?;
 
         let mut distinct_on = DistinctOn {
             on_expr,

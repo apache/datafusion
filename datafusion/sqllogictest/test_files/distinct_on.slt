@@ -78,6 +78,20 @@ e 1
 d 1
 c 4
 
+# Basic example + omit ON column from selection
+query I
+SELECT DISTINCT ON (c1) c2 FROM aggregate_test_100 ORDER BY c1, c3;
+----
+5
+4
+2
+1
+3
+
+# ON expressions are not a sub-set of the ORDER BY expressions
+query error SELECT DISTINCT ON expressions must match initial ORDER BY expressions
+SELECT DISTINCT ON (c2 % 2 = 0) c2, c3 - 100 FROM aggregate_test_100 ORDER BY c2, c3;
+
 # Use expressions in the ON and ORDER BY clauses, as well as the selection
 query II
 SELECT DISTINCT ON (c2 % 2 = 0) c2, c3 - 100 FROM aggregate_test_100 ORDER BY c2 % 2 = 0, c3 DESC;
@@ -85,18 +99,14 @@ SELECT DISTINCT ON (c2 % 2 = 0) c2, c3 - 100 FROM aggregate_test_100 ORDER BY c2
 1 25
 4 23
 
-# ON expressions are not a sub-set of the ORDER BY expressions
-query error SELECT DISTINCT ON expressions must match initial ORDER BY expressions
-SELECT DISTINCT ON (c2 % 2 = 0) c2, c3 - 100 FROM aggregate_test_100 ORDER BY c2, c3;
-
 # Multiple complex expressions
 query TIB
-SELECT DISTINCT ON (chr(ascii(c1) + 3), c2 % 2) chr(ascii(c1) + 3), c2 % 2, c3 > 80 AND c2 % 2 = 1
+SELECT DISTINCT ON (chr(ascii(c1) + 3), c2 % 2) chr(ascii(upper(c1)) + 3), c2 % 2, c3 > 80 AND c2 % 2 = 1
 FROM aggregate_test_100
 WHERE c1 IN ('a', 'b')
 ORDER BY chr(ascii(c1) + 3), c2 % 2, c3 DESC;
 ----
-d 0 false
-d 1 true
-e 0 false
-e 1 false
+D 0 false
+D 1 true
+E 0 false
+E 1 false
