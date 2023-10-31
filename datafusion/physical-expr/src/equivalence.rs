@@ -974,7 +974,7 @@ impl SchemaProperties {
             let expr_ordering = ExprOrdering::new(source.clone())
                 .transform_up(&|expr| update_ordering(expr, self))
                 .unwrap();
-            if let Some(SortProperties::Ordered(options)) = expr_ordering.state {
+            if let SortProperties::Ordered(options) = expr_ordering.state {
                 // Push new ordering to the state.
                 projected_orderings.push(vec![PhysicalSortExpr {
                     expr: target.clone(),
@@ -1152,9 +1152,9 @@ fn update_ordering(
     mut node: ExprOrdering,
     eq_properties: &SchemaProperties,
 ) -> Result<Transformed<ExprOrdering>> {
-    if let Some(children_sort_options) = &node.children_states {
+    if !node.expr.children().is_empty() {
         // We have an intermediate (non-leaf) node, account for its children:
-        node.state = Some(node.expr.get_ordering(children_sort_options));
+        node.state = node.expr.get_ordering(&node.children_states);
         Ok(Transformed::Yes(node))
     } else if node.expr.as_any().is::<Column>() {
         // We have a Column, which is one of the two possible leaf node types:
@@ -1162,15 +1162,14 @@ fn update_ordering(
         let normalized_expr = eq_group.normalize_expr(node.expr.clone());
         let oeq_class = &eq_properties.oeq_class;
         if let Some(options) = oeq_class.get_options(&normalized_expr) {
-            node.state = Some(SortProperties::Ordered(options));
+            node.state = SortProperties::Ordered(options);
             Ok(Transformed::Yes(node))
         } else {
-            node.state = None;
             Ok(Transformed::No(node))
         }
     } else {
         // We have a Literal, which is the other possible leaf node type:
-        node.state = Some(node.expr.get_ordering(&[]));
+        node.state = node.expr.get_ordering(&[]);
         Ok(Transformed::Yes(node))
     }
 }
@@ -1180,7 +1179,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::expressions::{col, lit, Column};
+    use crate::expressions::{col, lit, BinaryExpr, Column};
     use crate::physical_expr::{physical_exprs_bag_equal, physical_exprs_equal};
 
     use arrow::compute::{lexsort_to_indices, SortColumn};
@@ -1189,6 +1188,7 @@ mod tests {
     use arrow_schema::{Fields, SortOptions};
     use datafusion_common::Result;
 
+    use datafusion_expr::Operator;
     use itertools::{izip, Itertools};
     use rand::rngs::StdRng;
     use rand::seq::SliceRandom;
@@ -2428,7 +2428,7 @@ mod tests {
     }
 
     #[test]
-    fn test_set_ordered_helper() -> Result<()> {
+    fn test_find_longest_permutation() -> Result<()> {
         // Schema satisfies following orderings:
         // [a ASC], [d ASC, b ASC], [e DESC, f ASC, g ASC]
         // and
@@ -2485,6 +2485,76 @@ mod tests {
             let expected = convert_to_sort_exprs(&expected);
             let (actual, _) = eq_properties.find_longest_permutation(&exprs);
             assert_eq!(actual, expected);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_ordering() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Int32, true),
+            Field::new("d", DataType::Int32, true),
+        ]);
+
+        let mut schema_properties = SchemaProperties::new(Arc::new(schema.clone()));
+        let col_a = &col("a", &schema)?;
+        let col_b = &col("b", &schema)?;
+        let col_c = &col("c", &schema)?;
+        let col_d = &col("d", &schema)?;
+        let option_asc = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        // b=a (e.g they are aliases)
+        schema_properties.add_equal_conditions(col_b, col_a);
+        // [b ASC], [d ASC]
+        schema_properties.add_new_orderings(vec![
+            vec![PhysicalSortExpr {
+                expr: col_b.clone(),
+                options: option_asc,
+            }],
+            vec![PhysicalSortExpr {
+                expr: col_d.clone(),
+                options: option_asc,
+            }],
+        ]);
+
+        let test_cases = vec![
+            // d + b
+            (
+                Arc::new(BinaryExpr::new(
+                    col_d.clone(),
+                    Operator::Plus,
+                    col_b.clone(),
+                )) as Arc<dyn PhysicalExpr>,
+                SortProperties::Ordered(option_asc),
+            ),
+            // b
+            (col_b.clone(), SortProperties::Ordered(option_asc)),
+            // a
+            (col_a.clone(), SortProperties::Ordered(option_asc)),
+            // a + c
+            (
+                Arc::new(BinaryExpr::new(
+                    col_a.clone(),
+                    Operator::Plus,
+                    col_c.clone(),
+                )),
+                SortProperties::Unordered,
+            ),
+        ];
+        for (expr, expected) in test_cases {
+            let expr_ordering = ExprOrdering::new(expr.clone());
+            let expr_ordering = expr_ordering
+                .transform_up(&|expr| update_ordering(expr, &schema_properties))?;
+            let err_msg = format!(
+                "expr:{:?}, expected: {:?}, actual: {:?}",
+                expr, expected, expr_ordering.state
+            );
+            assert_eq!(expr_ordering.state, expected, "{}", err_msg);
         }
 
         Ok(())
