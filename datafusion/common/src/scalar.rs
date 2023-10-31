@@ -1631,7 +1631,7 @@ impl ScalarValue {
             .unwrap()
     }
 
-    /// Converts `Vec<ScalaValue>` where each element has type corresponding to
+    /// Converts `Vec<ScalarValue>` where each element has type corresponding to
     /// `data_type`, to a [`ListArray`].
     ///
     /// Example
