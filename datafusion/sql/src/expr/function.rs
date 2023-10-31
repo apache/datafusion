@@ -146,9 +146,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let order_by = (!order_by.is_empty()).then_some(order_by);
                 let args =
                     self.function_args_to_expr(function.args, schema, planner_context)?;
+                let filter: Option<Box<Expr>> = function
+                    .filter
+                    .map(|e| self.sql_expr_to_logical_expr(*e, schema, planner_context))
+                    .transpose()?
+                    .map(Box::new);
 
                 return Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
-                    fun, args, distinct, None, order_by,
+                    fun, args, distinct, filter, order_by,
                 )));
             };
 

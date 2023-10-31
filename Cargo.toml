@@ -55,7 +55,7 @@ arrow-buffer = { version = "48.0.0", default-features = false }
 arrow-flight = { version = "48.0.0", features = ["flight-sql-experimental"] }
 arrow-schema = { version = "48.0.0", default-features = false }
 parquet = { version = "48.0.0", features = ["arrow", "async", "object_store"] }
-sqlparser = { version = "0.38.0", features = ["visitor"] }
+sqlparser = { version = "0.39.0", features = ["visitor"] }
 chrono = { version = "0.4.31", default-features = false }
 
 [profile.release]
