@@ -773,7 +773,7 @@ pub fn find_orderings_of_exprs(
                     &input_ordering_equal_properties,
                 )
             })?;
-            if let Some(SortProperties::Ordered(sort_options)) = transformed.state {
+            if let SortProperties::Ordered(sort_options) = transformed.state {
                 orderings.push(Some(PhysicalSortExpr {
                     expr: Arc::new(Column::new(name, index)),
                     options: sort_options,
@@ -1833,6 +1833,94 @@ mod tests {
         )?;
 
         assert_eq!(vec![None, None], orderings);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_find_orderings_of_exprs() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Int32, true),
+            Field::new("d", DataType::Int32, true),
+        ]);
+
+        let mut eq = EquivalenceProperties::new(Arc::new(schema.clone()));
+        let col_a = &col("a", &schema)?;
+        let col_b = &col("b", &schema)?;
+        let col_c = &col("c", &schema)?;
+        let col_d = &col("d", &schema)?;
+        let option_asc = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        // b=a (e.g they are aliases)
+        eq.add_equal_conditions((&Column::new("b", 1), &Column::new("a", 0)));
+        let mut oeq = OrderingEquivalenceProperties::new(Arc::new(schema.clone()));
+        // [b ASC], [d ASC]
+        oeq.add_equal_conditions((
+            &vec![PhysicalSortExpr {
+                expr: col_b.clone(),
+                options: option_asc,
+            }],
+            &vec![PhysicalSortExpr {
+                expr: col_d.clone(),
+                options: option_asc,
+            }],
+        ));
+
+        let orderings = find_orderings_of_exprs(
+            &[
+                // d + b
+                (
+                    Arc::new(BinaryExpr::new(
+                        col_d.clone(),
+                        Operator::Plus,
+                        col_b.clone(),
+                    )),
+                    "d+b".to_string(),
+                ),
+                // b as b_new
+                (col_b.clone(), "b_new".to_string()),
+                // a as a_new
+                (col_a.clone(), "a_new".to_string()),
+                // a + c
+                (
+                    Arc::new(BinaryExpr::new(
+                        col_a.clone(),
+                        Operator::Plus,
+                        col_c.clone(),
+                    )),
+                    "a+c".to_string(),
+                ),
+            ],
+            Some(&[PhysicalSortExpr {
+                expr: col_b.clone(),
+                options: option_asc,
+            }]),
+            eq,
+            oeq,
+        )?;
+
+        assert_eq!(
+            vec![
+                Some(PhysicalSortExpr {
+                    expr: Arc::new(Column::new("d+b", 0)),
+                    options: option_asc,
+                }),
+                Some(PhysicalSortExpr {
+                    expr: Arc::new(Column::new("b_new", 1)),
+                    options: option_asc,
+                }),
+                Some(PhysicalSortExpr {
+                    expr: Arc::new(Column::new("a_new", 2)),
+                    options: option_asc,
+                }),
+                None,
+            ],
+            orderings
+        );
 
         Ok(())
     }

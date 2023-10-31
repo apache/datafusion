@@ -46,6 +46,7 @@ use datafusion_physical_expr::{
 };
 
 use bytes::{Buf, Bytes};
+use datafusion_common::config::ConfigOptions;
 use futures::{ready, StreamExt, TryStreamExt};
 use object_store::{GetOptions, GetResultPayload, ObjectStore};
 use tokio::io::AsyncWriteExt;
@@ -117,34 +118,6 @@ impl CsvExec {
     pub fn escape(&self) -> Option<u8> {
         self.escape
     }
-
-    /// Redistribute files across partitions according to their size
-    /// See comments on `repartition_file_groups()` for more detail.
-    ///
-    /// Return `None` if can't get repartitioned(empty/compressed file).
-    pub fn get_repartitioned(
-        &self,
-        target_partitions: usize,
-        repartition_file_min_size: usize,
-    ) -> Option<Self> {
-        // Parallel execution on compressed CSV file is not supported yet.
-        if self.file_compression_type.is_compressed() {
-            return None;
-        }
-
-        let repartitioned_file_groups_option = FileScanConfig::repartition_file_groups(
-            self.base_config.file_groups.clone(),
-            target_partitions,
-            repartition_file_min_size,
-        );
-
-        if let Some(repartitioned_file_groups) = repartitioned_file_groups_option {
-            let mut new_plan = self.clone();
-            new_plan.base_config.file_groups = repartitioned_file_groups;
-            return Some(new_plan);
-        }
-        None
-    }
 }
 
 impl DisplayAs for CsvExec {
@@ -203,6 +176,35 @@ impl ExecutionPlan for CsvExec {
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
+    }
+
+    /// Redistribute files across partitions according to their size
+    /// See comments on `repartition_file_groups()` for more detail.
+    ///
+    /// Return `None` if can't get repartitioned(empty/compressed file).
+    fn repartitioned(
+        &self,
+        target_partitions: usize,
+        config: &ConfigOptions,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let repartition_file_min_size = config.optimizer.repartition_file_min_size;
+        // Parallel execution on compressed CSV file is not supported yet.
+        if self.file_compression_type.is_compressed() {
+            return Ok(None);
+        }
+
+        let repartitioned_file_groups_option = FileScanConfig::repartition_file_groups(
+            self.base_config.file_groups.clone(),
+            target_partitions,
+            repartition_file_min_size,
+        );
+
+        if let Some(repartitioned_file_groups) = repartitioned_file_groups_option {
+            let mut new_plan = self.clone();
+            new_plan.base_config.file_groups = repartitioned_file_groups;
+            return Ok(Some(Arc::new(new_plan)));
+        }
+        Ok(None)
     }
 
     fn execute(

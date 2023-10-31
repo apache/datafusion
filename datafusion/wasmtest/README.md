@@ -17,9 +17,16 @@
   under the License.
 -->
 
-## wasmtest
+# DataFusion wasmtest
 
-Library crate to verify that various DataFusion crates compile successfully to the `wasm32-unknown-unknown` target with wasm-pack.
+[DataFusion][df] is an extensible query execution framework, written in Rust, that uses Apache Arrow as its in-memory format.
+
+This crate is a submodule of DataFusion used to verify that various DataFusion crates compile successfully to the
+`wasm32-unknown-unknown` target with wasm-pack.
+
+[df]: https://crates.io/crates/datafusion
+
+## wasmtest
 
 Some of DataFusion's downstream projects compile to WASM to run in the browser. Doing so requires special care that certain library dependencies are not included in DataFusion.
 
