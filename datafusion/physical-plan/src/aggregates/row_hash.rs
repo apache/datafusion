@@ -328,7 +328,9 @@ impl GroupedHashAggregateStream {
             .collect();
 
         let name = format!("GroupedHashAggregateStream[{partition}]");
-        let reservation = MemoryConsumer::new(name).register(context.memory_pool());
+        let reservation = MemoryConsumer::new(name)
+            .with_can_spill(true)
+            .register(context.memory_pool());
 
         let group_ordering = agg
             .aggregation_ordering
