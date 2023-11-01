@@ -119,10 +119,8 @@ mod unix_test {
             input: Arc<dyn ExecutionPlan>,
             _overwrite: bool,
         ) -> Result<Arc<dyn ExecutionPlan>> {
-            let ordering = match &self.0.sort {
-                Some(order) => Some(order.iter().map(|e| e.clone().into()).collect()),
-                None => None,
-            };
+            let sort = self.0.sort.as_ref();
+            let ordering = sort.map(|o| o.iter().map(|e| e.clone().into()).collect());
 
             Ok(Arc::new(FileSinkExec::new(
                 input,
