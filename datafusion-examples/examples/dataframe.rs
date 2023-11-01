@@ -20,7 +20,6 @@ use datafusion::error::Result;
 use datafusion::prelude::*;
 use std::fs::File;
 use std::io::Write;
-use std::path::PathBuf;
 use tempfile::tempdir;
 
 /// This example demonstrates executing a simple query against an Arrow data source (Parquet) and
@@ -45,9 +44,8 @@ async fn main() -> Result<()> {
     df.show().await?;
 
     // create a csv file waiting to be written
-    let path = "example.csv";
     let dir = tempdir()?;
-    let file_path = PathBuf::from(dir.path()).join(path);
+    let file_path = dir.path().join("example.csv");
     let file = File::create(&file_path)?;
     write_csv_file(file);
 
