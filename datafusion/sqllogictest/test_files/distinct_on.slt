@@ -110,3 +110,16 @@ D 0 false
 D 1 true
 E 0 false
 E 1 false
+
+# Joins using CTEs
+query II
+WITH t1 AS (SELECT * FROM aggregate_test_100),
+t2 AS (SELECT * FROM aggregate_test_100)
+SELECT DISTINCT ON (t1.c1, t2.c2) t2.c3, t1.c4
+FROM t1 INNER JOIN t2 ON t1.c13 = t2.c13
+ORDER BY t1.c1, t2.c2, t2.c5
+LIMIT 3;
+----
+-25 15295
+45 15673
+-72 -11122
