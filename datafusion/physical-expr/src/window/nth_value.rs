@@ -28,6 +28,7 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::window_state::WindowAggState;
 use datafusion_expr::PartitionEvaluator;
 use std::any::Any;
+use std::cmp::Ordering;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -82,7 +83,7 @@ impl NthValue {
                 name: name.into(),
                 expr,
                 data_type,
-                kind: NthValueKind::Nth(n),
+                kind: NthValueKind::Nth(n as i64),
             }),
         }
     }
@@ -125,7 +126,7 @@ impl BuiltInWindowFunctionExpr for NthValue {
         let reversed_kind = match self.kind {
             NthValueKind::First => NthValueKind::Last,
             NthValueKind::Last => NthValueKind::First,
-            NthValueKind::Nth(_) => return None,
+            NthValueKind::Nth(idx) => NthValueKind::Nth(-idx),
         };
         Some(Arc::new(Self {
             name: self.name.clone(),
@@ -152,7 +153,13 @@ impl PartitionEvaluator for NthValueEvaluator {
     fn memoize(&mut self, state: &mut WindowAggState) -> Result<()> {
         let out = &state.out_col;
         let size = out.len();
-        let (is_prunable, is_last) = match self.state.kind {
+        // Stores how many entries we need to keep track in the buffer to calculate correct result.
+        // If we can memoize a result (FIRST, NTH_VALUE(positive_index)). It is enough to keep only single row
+        // For LAST_VALUE also it is enough to keep single row (last row)
+        // However, For NTH_VALUE(negative_index) we need to keep at least ABS(negative_index) number of values
+        // in the buffer.
+        let mut n_buffer_size = 1;
+        let (is_prunable, is_reverse_direction) = match self.state.kind {
             NthValueKind::First => {
                 let n_range =
                     state.window_frame_range.end - state.window_frame_range.start;
@@ -162,16 +169,30 @@ impl PartitionEvaluator for NthValueEvaluator {
             NthValueKind::Nth(n) => {
                 let n_range =
                     state.window_frame_range.end - state.window_frame_range.start;
-                (n_range >= (n as usize) && size >= (n as usize), false)
+                match n.cmp(&0) {
+                    Ordering::Greater => {
+                        (n_range >= (n as usize) && size > (n as usize), false)
+                    }
+                    Ordering::Less => {
+                        let reverse_index = -n as usize;
+                        n_buffer_size = reverse_index;
+                        // Negative index represents reverse direction.
+                        (n_range >= reverse_index, true)
+                    }
+                    Ordering::Equal => {
+                        // n = 0  is not valid for nth_value (index starts from 0)
+                        unreachable!();
+                    }
+                }
             }
         };
         if is_prunable {
-            if self.state.finalized_result.is_none() && !is_last {
+            if self.state.finalized_result.is_none() && !is_reverse_direction {
                 let result = ScalarValue::try_from_array(out, size - 1)?;
                 self.state.finalized_result = Some(result);
             }
             state.window_frame_range.start =
-                state.window_frame_range.end.saturating_sub(1);
+                state.window_frame_range.end.saturating_sub(n_buffer_size);
         }
         Ok(())
     }
@@ -195,12 +216,35 @@ impl PartitionEvaluator for NthValueEvaluator {
                 NthValueKind::First => ScalarValue::try_from_array(arr, range.start),
                 NthValueKind::Last => ScalarValue::try_from_array(arr, range.end - 1),
                 NthValueKind::Nth(n) => {
-                    // We are certain that n > 0.
-                    let index = (n as usize) - 1;
-                    if index >= n_range {
-                        ScalarValue::try_from(arr.data_type())
-                    } else {
-                        ScalarValue::try_from_array(arr, range.start + index)
+                    match n.cmp(&0) {
+                        Ordering::Greater => {
+                            // SQL indices are not 0-based.
+                            let index = (n as usize) - 1;
+                            if index >= n_range {
+                                // Outside the range, Return NULL
+                                ScalarValue::try_from(arr.data_type())
+                            } else {
+                                ScalarValue::try_from_array(arr, range.start + index)
+                            }
+                        }
+                        // n < 0
+                        Ordering::Less => {
+                            let reverse_index = -n as usize;
+                            if n_range >= reverse_index {
+                                ScalarValue::try_from_array(
+                                    arr,
+                                    // Calculate proper index using length(`n_range`) and distance(`reverse_index`) from the end
+                                    range.start + n_range - reverse_index,
+                                )
+                            } else {
+                                // Outside the range, Return NULL
+                                ScalarValue::try_from(arr.data_type())
+                            }
+                        }
+                        Ordering::Equal => {
+                            // n = 0  is not valid for nth_value (index starts from 0)
+                            unreachable!();
+                        }
                     }
                 }
             }

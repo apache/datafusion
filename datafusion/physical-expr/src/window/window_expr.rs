@@ -290,7 +290,7 @@ pub struct NumRowsState {
 pub enum NthValueKind {
     First,
     Last,
-    Nth(u32),
+    Nth(i64),
 }
 
 #[derive(Debug, Clone)]

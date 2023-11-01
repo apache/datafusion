@@ -167,7 +167,7 @@ impl TryFrom<Arc<dyn WindowExpr>> for protobuf::PhysicalWindowExprNode {
                         args.insert(
                             1,
                             Arc::new(Literal::new(
-                                datafusion_common::ScalarValue::Int64(Some(n as i64)),
+                                datafusion_common::ScalarValue::Int64(Some(n)),
                             )),
                         );
                         protobuf::BuiltInWindowFunction::NthValue
