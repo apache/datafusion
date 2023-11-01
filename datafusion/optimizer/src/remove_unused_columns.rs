@@ -21,12 +21,12 @@
 //! - Adds projection to decrease table column size before operators that benefits from less memory at its input.
 //! - Removes unnecessary [LogicalPlan::Projection] from the [LogicalPlan].
 use crate::optimizer::ApplyOrder;
-use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
     get_required_group_by_exprs_indices, Column, DFSchema, JoinType, Result,
 };
 use datafusion_expr::{
-    logical_plan::LogicalPlan, Aggregate, Expr, Projection, TableScan, Window,
+    logical_plan::LogicalPlan, projection_schema, Aggregate, Expr, Projection, TableScan,
+    Window,
 };
 use itertools::{izip, Itertools};
 use std::collections::HashSet;
@@ -60,12 +60,7 @@ impl OptimizerRule for RemoveUnusedColumns {
     ) -> Result<Option<LogicalPlan>> {
         // All of the fields at the output are necessary.
         let indices = require_all_indices(plan);
-        let unnecessary_columns_removed =
-            remove_unnecessary_columns(plan, config, &indices)?;
-        let projections_eliminated = unnecessary_columns_removed
-            .map(|plan| plan.transform_up(&eliminate_projection))
-            .transpose()?;
-        Ok(projections_eliminated)
+        remove_unnecessary_columns(plan, config, &indices)
     }
 
     fn name(&self) -> &str {
@@ -430,22 +425,35 @@ fn remove_unnecessary_columns(
             let exprs_used = get_at_indices(&proj.expr, indices);
             let required_indices =
                 indices_referred_by_exprs(&proj.input, exprs_used.iter())?;
-            if let Some(input) =
+            return if let Some(input) =
                 remove_unnecessary_columns(&proj.input, _config, &required_indices)?
             {
-                let new_proj = Projection::try_new(exprs_used, Arc::new(input))?;
-                let new_proj = LogicalPlan::Projection(new_proj);
-                return Ok(Some(new_proj));
+                if &projection_schema(&input, &exprs_used)? == input.schema() {
+                    Ok(Some(input))
+                } else {
+                    let new_proj =
+                        Projection::try_new(exprs_used, Arc::new(input.clone()))?;
+                    let new_proj = LogicalPlan::Projection(new_proj);
+                    Ok(Some(new_proj))
+                }
             } else if exprs_used.len() < proj.expr.len() {
                 // Projection expression used is different than the existing projection
                 // In this case, even if child doesn't change we should update projection to use less columns.
-                let new_proj = Projection::try_new(exprs_used, proj.input.clone())?;
-                let new_proj = LogicalPlan::Projection(new_proj);
-                return Ok(Some(new_proj));
+                if &projection_schema(&proj.input, &exprs_used)? == proj.input.schema() {
+                    Ok(Some(proj.input.as_ref().clone()))
+                } else {
+                    let new_proj = Projection::try_new(
+                        exprs_used,
+                        Arc::new(proj.input.as_ref().clone()),
+                    )?;
+                    let new_proj = LogicalPlan::Projection(new_proj);
+                    Ok(Some(new_proj))
+                }
+                // Ok(Some(new_proj))
             } else {
                 // Projection doesn't change.
-                return Ok(None);
-            }
+                Ok(None)
+            };
         }
         LogicalPlan::Aggregate(aggregate) => {
             // Split parent requirements to group by and aggregate sections
@@ -631,39 +639,5 @@ fn remove_unnecessary_columns(
             .collect::<Vec<_>>();
         let res = plan.with_new_inputs(&new_inputs)?;
         Ok(Some(res))
-    }
-}
-
-/// Eliminates a `Projection` from a logical plan if it's unnecessary.
-///
-/// If the provided `plan` is a `LogicalPlan::Projection`, and the schema of the child plan
-/// (input of the projection) matches the schema of the projection itself, then the
-/// projection is unnecessary and can be removed. In such cases, this function returns
-/// a `Transformed::Yes` variant containing the child plan without the projection.
-///
-/// If the `plan` is not a `LogicalPlan::Projection` or the schemas don't match, it returns
-/// a `Transformed::No` variant containing the original `plan`.
-///
-/// # Arguments
-///
-/// * `plan` - The logical plan to be analyzed for projection elimination.
-///
-/// # Returns
-///
-/// A `Result` indicating whether the plan was transformed or not. The result contains
-/// either the transformed plan or the original plan.
-fn eliminate_projection(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
-    match plan {
-        LogicalPlan::Projection(ref projection) => {
-            let child_plan = projection.input.as_ref();
-            if plan.schema() == child_plan.schema() {
-                // If child schema and schema of the projection is same
-                // Projection can be removed.
-                Ok(Transformed::Yes(child_plan.clone()))
-            } else {
-                Ok(Transformed::No(plan))
-            }
-        }
-        _ => Ok(Transformed::No(plan)),
     }
 }

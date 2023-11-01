@@ -1744,11 +1744,8 @@ pub struct Projection {
 impl Projection {
     /// Create a new Projection
     pub fn try_new(expr: Vec<Expr>, input: Arc<LogicalPlan>) -> Result<Self> {
-        let schema = Arc::new(DFSchema::new_with_metadata(
-            exprlist_to_fields(&expr, &input)?,
-            input.schema().metadata().clone(),
-        )?);
-        Self::try_new_with_schema(expr, input, schema)
+        let projection_schema = projection_schema(&input, &expr)?;
+        Self::try_new_with_schema(expr, input, projection_schema)
     }
 
     /// Create a new Projection using the specified output schema
@@ -1760,11 +1757,6 @@ impl Projection {
         if expr.len() != schema.fields().len() {
             return plan_err!("Projection has mismatch between number of expressions ({}) and number of fields in schema ({})", expr.len(), schema.fields().len());
         }
-        // Update functional dependencies of `input` according to projection
-        // expressions:
-        let id_key_groups = calc_func_dependencies_for_project(&expr, &input)?;
-        let schema = schema.as_ref().clone();
-        let schema = Arc::new(schema.with_functional_dependencies(id_key_groups));
         Ok(Self {
             expr,
             input,
@@ -1786,6 +1778,30 @@ impl Projection {
             schema,
         }
     }
+}
+
+/// Computes the schema of the result produced by applying a projection to the input logical plan.
+///
+/// # Arguments
+///
+/// * `input`: A reference to the input `LogicalPlan` for which the projection schema
+/// will be computed.
+/// * `exprs`: A slice of `Expr` expressions representing the projection operation to apply.
+///
+/// # Returns
+///
+/// A `Result` containing an `Arc<DFSchema>` representing the schema of the result
+/// produced by the projection operation. If the schema computation is successful,
+/// the `Result` will contain the schema; otherwise, it will contain an error.
+pub fn projection_schema(input: &LogicalPlan, exprs: &[Expr]) -> Result<Arc<DFSchema>> {
+    let schema = Arc::new(DFSchema::new_with_metadata(
+        exprlist_to_fields(exprs, input)?,
+        input.schema().metadata().clone(),
+    )?);
+    let id_key_groups = calc_func_dependencies_for_project(exprs, input)?;
+    let schema = schema.as_ref().clone();
+    let schema = Arc::new(schema.with_functional_dependencies(id_key_groups));
+    Ok(schema)
 }
 
 /// Aliased subquery
