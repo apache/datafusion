@@ -26,4 +26,4 @@ edition = { workspace = true }
 arrow = { workspace = true }
 datafusion-common = { path = "../datafusion/common" }
 env_logger = "0.10.0"
-rand = "0.8"
+rand = { workspace = true }
