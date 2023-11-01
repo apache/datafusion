@@ -27,7 +27,6 @@ use itertools::Itertools;
 use log::debug;
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
-use percent_encoding;
 use std::sync::Arc;
 use url::Url;
 
@@ -45,6 +44,16 @@ pub struct ListingTableUrl {
 
 impl ListingTableUrl {
     /// Parse a provided string as a `ListingTableUrl`
+    ///
+    /// # URL Encoding
+    ///
+    /// URL paths are expected to be URL-encoded. That is, the URL for a file named `bar%2Efoo`
+    /// would be `file:///bar%252Efoo`, as per the [URL] specification.
+    ///
+    /// It should be noted that some tools, such as the AWS CLI, take a different approach and
+    /// instead interpret the URL path verbatim. For example the object `bar%2Efoo` would be
+    /// addressed as `s3://BUCKET/bar%252Efoo` using [`ListingTableUrl`] but `s3://BUCKET/bar%2Efoo`
+    /// when using the aws-cli.
     ///
     /// # Paths without a Scheme
     ///
@@ -77,6 +86,7 @@ impl ListingTableUrl {
     /// filter when listing files from object storage
     ///
     /// [file URI]: https://en.wikipedia.org/wiki/File_URI_scheme
+    /// [URL]: https://url.spec.whatwg.org/
     pub fn parse(s: impl AsRef<str>) -> Result<Self> {
         let s = s.as_ref();
 
@@ -86,7 +96,7 @@ impl ListingTableUrl {
         }
 
         match Url::parse(s) {
-            Ok(url) => Ok(Self::new(url, None)),
+            Ok(url) => Self::try_new(url, None),
             Err(url::ParseError::RelativeUrlWithoutBase) => Self::parse_path(s),
             Err(e) => Err(DataFusionError::External(Box::new(e))),
         }
@@ -138,15 +148,13 @@ impl ListingTableUrl {
         .map_err(|_| DataFusionError::Internal(format!("Can not open path: {s}")))?;
         // TODO: Currently we do not have an IO-related error variant that accepts ()
         //       or a string. Once we have such a variant, change the error type above.
-        Ok(Self::new(url, glob))
+        Self::try_new(url, glob)
     }
 
     /// Creates a new [`ListingTableUrl`] from a url and optional glob expression
-    fn new(url: Url, glob: Option<Pattern>) -> Self {
-        let decoded_path =
-            percent_encoding::percent_decode_str(url.path()).decode_utf8_lossy();
-        let prefix = Path::from(decoded_path.as_ref());
-        Self { url, prefix, glob }
+    fn try_new(url: Url, glob: Option<Pattern>) -> Result<Self> {
+        let prefix = Path::from_url_path(url.path())?;
+        Ok(Self { url, prefix, glob })
     }
 
     /// Returns the URL scheme
@@ -286,6 +294,7 @@ fn split_glob_expression(path: &str) -> Option<(&str, &str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
     fn test_prefix_path() {
@@ -317,8 +326,27 @@ mod tests {
         let url = ListingTableUrl::parse("file:///foo/bar?").unwrap();
         assert_eq!(url.prefix.as_ref(), "foo/bar");
 
-        let url = ListingTableUrl::parse("file:///foo/😺").unwrap();
-        assert_eq!(url.prefix.as_ref(), "foo/%F0%9F%98%BA");
+        let err = ListingTableUrl::parse("file:///foo/😺").unwrap_err();
+        assert_eq!(err.to_string(), "Object Store error: Encountered object with invalid path: Error parsing Path \"/foo/😺\": Encountered illegal character sequence \"😺\" whilst parsing path segment \"😺\"");
+
+        let url = ListingTableUrl::parse("file:///foo/bar%2Efoo").unwrap();
+        assert_eq!(url.prefix.as_ref(), "foo/bar.foo");
+
+        let url = ListingTableUrl::parse("file:///foo/bar%2Efoo").unwrap();
+        assert_eq!(url.prefix.as_ref(), "foo/bar.foo");
+
+        let url = ListingTableUrl::parse("file:///foo/bar%252Ffoo").unwrap();
+        assert_eq!(url.prefix.as_ref(), "foo/bar%2Ffoo");
+
+        let url = ListingTableUrl::parse("file:///foo/a%252Fb.txt").unwrap();
+        assert_eq!(url.prefix.as_ref(), "foo/a%2Fb.txt");
+
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("bar%2Ffoo");
+        std::fs::File::create(&path).unwrap();
+
+        let url = ListingTableUrl::parse(path.to_str().unwrap()).unwrap();
+        assert!(url.prefix.as_ref().ends_with("bar%2Ffoo"), "{}", url.prefix);
     }
 
     #[test]
