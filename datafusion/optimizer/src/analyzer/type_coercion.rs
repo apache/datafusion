@@ -23,6 +23,7 @@ use arrow::datatypes::{DataType, IntervalUnit};
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{RewriteRecursion, TreeNodeRewriter};
+use datafusion_common::utils::{base_type, coerced_type_with_base_type_only};
 use datafusion_common::{
     exec_err, internal_err, plan_datafusion_err, plan_err, DFSchema, DFSchemaRef,
     DataFusionError, Result, ScalarValue,
@@ -601,19 +602,27 @@ fn coerce_arguments_for_fun(
             .iter()
             .map(|e| e.get_type(schema))
             .collect::<Result<Vec<_>>>()?;
+        let current_base_types = current_types
+            .iter()
+            .map(base_type)
+            .collect::<Result<Vec<_>>>()?;
 
-        let new_type = current_types
+        let new_base_type = current_base_types
             .iter()
             .skip(1)
-            .fold(current_types.first().unwrap().clone(), |acc, x| {
+            .fold(current_base_types.first().unwrap().clone(), |acc, x| {
                 comparison_coercion(&acc, x).unwrap_or(acc)
             });
 
         return expressions
             .iter()
             .zip(current_types)
-            .map(|(expr, from_type)| cast_array_expr(expr, &from_type, &new_type, schema))
-            .collect();
+            .map(|(expr, from_type)| {
+                let to_type =
+                    coerced_type_with_base_type_only(&from_type, &new_base_type)?;
+                cast_array_expr(expr, &from_type, &to_type, schema)
+            })
+            .collect::<Result<Vec<_>>>();
     }
 
     Ok(expressions)

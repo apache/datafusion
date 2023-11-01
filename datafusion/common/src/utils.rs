@@ -25,6 +25,7 @@ use arrow::compute::{partition, SortColumn, SortOptions};
 use arrow::datatypes::{Field, SchemaRef, UInt32Type};
 use arrow::record_batch::RecordBatch;
 use arrow_array::ListArray;
+use arrow_schema::DataType;
 use sqlparser::ast::Ident;
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
@@ -346,6 +347,42 @@ pub fn wrap_into_list_array(arr: ArrayRef) -> ListArray {
         arr,
         None,
     )
+}
+
+/// Get the base type of a data type. For example, the base type of `List<Int32>` is `Int32`.
+pub fn base_type(data_type: &DataType) -> Result<DataType> {
+    match data_type {
+        DataType::List(field) => match field.data_type() {
+            DataType::List(_) => base_type(field.data_type()),
+            base_type => Ok(base_type.to_owned()),
+        },
+        _ => Ok(data_type.to_owned()),
+    }
+}
+
+/// Coerced only the base type.
+/// For example, if the data type is `List<Int32>` and the base type is `Float64`,
+/// the result would be `List<Float64>`.
+pub fn coerced_type_with_base_type_only(
+    data_type: &DataType,
+    base_type: &DataType,
+) -> Result<DataType> {
+    match data_type {
+        DataType::List(field) => match field.data_type() {
+            DataType::List(_) => Ok(DataType::List(Arc::new(Field::new(
+                field.name(),
+                coerced_type_with_base_type_only(field.data_type(), base_type)?,
+                field.is_nullable(),
+            )))),
+            _ => Ok(DataType::List(Arc::new(Field::new(
+                field.name(),
+                base_type.clone(),
+                field.is_nullable(),
+            )))),
+        },
+
+        _ => Ok(base_type.clone()),
+    }
 }
 
 /// An extension trait for smart pointers. Provides an interface to get a

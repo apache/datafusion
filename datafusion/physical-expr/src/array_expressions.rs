@@ -24,6 +24,7 @@ use arrow::array::*;
 use arrow::buffer::OffsetBuffer;
 use arrow::compute;
 use arrow::datatypes::{DataType, Field, UInt64Type};
+use arrow_array::types::Int32Type;
 use arrow_buffer::NullBuffer;
 
 use datafusion_common::cast::{
@@ -325,7 +326,10 @@ fn array_array(args: &[ArrayRef], data_type: DataType) -> Result<ArrayRef> {
                 let mut array_lengths = vec![];
                 let mut valid = BooleanBufferBuilder::new(column_count);
                 for arg in args {
-                    if arg.as_any().downcast_ref::<NullArray>().is_some() {
+                    // For debug purposes, there should not be NullArray anymore
+                    assert!(arg.as_any().downcast_ref::<NullArray>().is_none());
+
+                    if arg.is_null(index) {
                         array_lengths.push(0);
                         valid.append(false);
                     } else {
@@ -408,15 +412,20 @@ pub fn make_array(arrays: &[ArrayRef]) -> Result<ArrayRef> {
         )?));
     }
 
-    let args = arrays.iter().collect::<Vec<_>>();
-    check_datatypes("make_array", args.as_slice())?;
+    let mut data_type = DataType::Null;
+    for arg in arrays {
+        if !arg.is_null(0) {
+            data_type = arg.data_type().to_owned();
+            break;
+        }
+    }
 
-    println!("args: {:?}", args);
-
-    let data_type = args[0].data_type().to_owned();
     match data_type {
+        // Pure null array cases
         DataType::Null => {
-            return internal_err!("Null is not expected in make_array");
+            Ok(Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(
+                vec![Some(vec![None; arrays.len()])],
+            )))
         }
         data_type => array_array(arrays, data_type),
     }
