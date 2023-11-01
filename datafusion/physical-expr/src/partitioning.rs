@@ -159,7 +159,8 @@ impl PartialEq for Partitioning {
 }
 
 /// How data is distributed amongst partitions. See [`Partitioning`] for more
-/// details. [derive(Debug, Clone)]
+/// details.
+#[derive(Debug, Clone)]
 pub enum Distribution {
     /// Unspecified distribution
     UnspecifiedDistribution,
