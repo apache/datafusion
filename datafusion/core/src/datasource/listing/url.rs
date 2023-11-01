@@ -45,6 +45,16 @@ pub struct ListingTableUrl {
 impl ListingTableUrl {
     /// Parse a provided string as a `ListingTableUrl`
     ///
+    /// # URL Encoding
+    ///
+    /// URL paths are expected to be URL-encoded. That is, the URL for a file named `bar%2Efoo`
+    /// would be `file:///bar%252Efoo`, as per the [URL] specification.
+    ///
+    /// It should be noted that some tools, such as the AWS CLI, take a different approach and
+    /// instead interpret the URL path verbatim. For example the object `bar%2Efoo` would be
+    /// addressed as `s3://BUCKET/bar%252Efoo` using [`ListingTableUrl`] but `s3://BUCKET/bar%2Efoo`
+    /// when using the aws-cli.
+    ///
     /// # Paths without a Scheme
     ///
     /// If no scheme is provided, or the string is an absolute filesystem path
@@ -76,6 +86,7 @@ impl ListingTableUrl {
     /// filter when listing files from object storage
     ///
     /// [file URI]: https://en.wikipedia.org/wiki/File_URI_scheme
+    /// [URL]: https://url.spec.whatwg.org/
     pub fn parse(s: impl AsRef<str>) -> Result<Self> {
         let s = s.as_ref();
 
