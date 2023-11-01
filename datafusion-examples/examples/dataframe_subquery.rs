@@ -16,6 +16,7 @@
 // under the License.
 
 use std::sync::Arc;
+use arrow_schema::DataType;
 
 use datafusion::error::Result;
 use datafusion::prelude::*;
@@ -46,7 +47,7 @@ async fn where_scalar_subquery(ctx: &SessionContext) -> Result<()> {
             scalar_subquery(Arc::new(
                 ctx.table("t2")
                     .await?
-                    .filter(col("t1.c1").eq(col("t2.c1")))?
+                    .filter(out_ref_col(DataType::Utf8,"t1.c1").eq(col("t2.c1")))?
                     .aggregate(vec![], vec![avg(col("t2.c2"))])?
                     .select(vec![avg(col("t2.c2"))])?
                     .into_unoptimized_plan(),
@@ -89,7 +90,7 @@ async fn where_exist_subquery(ctx: &SessionContext) -> Result<()> {
         .filter(exists(Arc::new(
             ctx.table("t2")
                 .await?
-                .filter(col("t1.c1").eq(col("t2.c1")))?
+                .filter(out_ref_col(DataType::Utf8,"t1.c1").eq(col("t2.c1")))?
                 .select(vec![col("t2.c2")])?
                 .into_unoptimized_plan(),
         )))?
