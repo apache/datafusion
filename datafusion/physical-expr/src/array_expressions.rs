@@ -29,7 +29,7 @@ use arrow_buffer::NullBuffer;
 use datafusion_common::cast::{
     as_generic_string_array, as_int64_array, as_list_array, as_string_array,
 };
-use datafusion_common::utils::wrap_into_list_array;
+use datafusion_common::utils::array_into_list_array;
 use datafusion_common::{
     exec_err, internal_err, not_impl_err, plan_err, DataFusionError, Result,
 };
@@ -412,7 +412,7 @@ pub fn make_array(arrays: &[ArrayRef]) -> Result<ArrayRef> {
         // Either an empty array or all nulls:
         DataType::Null => {
             let array = new_null_array(&DataType::Null, arrays.len());
-            Ok(Arc::new(wrap_into_list_array(array)))
+            Ok(Arc::new(array_into_list_array(array)))
         }
         data_type => array_array(arrays, data_type),
     }
