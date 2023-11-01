@@ -26,12 +26,11 @@ use std::task::{Context, Poll};
 
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 
-use crate::datasource::physical_plan::FileMeta;
 use crate::error::Result;
 
 use arrow_array::RecordBatch;
 
-use datafusion_common::{exec_err, DataFusionError};
+use datafusion_common::DataFusionError;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -141,6 +140,7 @@ impl AsyncWrite for AsyncPutWriter {
 }
 
 /// Stores data needed during abortion of MultiPart writers
+#[derive(Clone)]
 pub(crate) struct MultiPart {
     /// A shared reference to the object store
     store: Arc<dyn ObjectStore>,
@@ -163,45 +163,28 @@ impl MultiPart {
     }
 }
 
-pub(crate) enum AbortMode {
-    Put,
-    Append,
-    MultiPart(MultiPart),
-}
-
 /// A wrapper struct with abort method and writer
 pub(crate) struct AbortableWrite<W: AsyncWrite + Unpin + Send> {
     writer: W,
-    mode: AbortMode,
+    multipart: MultiPart,
 }
 
 impl<W: AsyncWrite + Unpin + Send> AbortableWrite<W> {
     /// Create a new `AbortableWrite` instance with the given writer, and write mode.
-    pub(crate) fn new(writer: W, mode: AbortMode) -> Self {
-        Self { writer, mode }
+    pub(crate) fn new(writer: W, multipart: MultiPart) -> Self {
+        Self { writer, multipart }
     }
 
     /// handling of abort for different write modes
     pub(crate) fn abort_writer(&self) -> Result<BoxFuture<'static, Result<()>>> {
-        match &self.mode {
-            AbortMode::Put => Ok(async { Ok(()) }.boxed()),
-            AbortMode::Append => exec_err!("Cannot abort in append mode"),
-            AbortMode::MultiPart(MultiPart {
-                store,
-                multipart_id,
-                location,
-            }) => {
-                let location = location.clone();
-                let multipart_id = multipart_id.clone();
-                let store = store.clone();
-                Ok(Box::pin(async move {
-                    store
-                        .abort_multipart(&location, &multipart_id)
-                        .await
-                        .map_err(DataFusionError::ObjectStore)
-                }))
-            }
-        }
+        let multi = self.multipart.clone();
+        Ok(Box::pin(async move {
+            multi
+                .store
+                .abort_multipart(&multi.location, &multi.multipart_id)
+                .await
+                .map_err(DataFusionError::ObjectStore)
+        }))
     }
 }
 
@@ -229,16 +212,6 @@ impl<W: AsyncWrite + Unpin + Send> AsyncWrite for AbortableWrite<W> {
     }
 }
 
-/// An enum that defines different file writer modes.
-#[derive(Debug, Clone, Copy)]
-pub enum FileWriterMode {
-    /// Data is appended to an existing file.
-    Append,
-    /// Data is written to a new file.
-    Put,
-    /// Data is written to a new file in multiple parts.
-    PutMultipart,
-}
 /// A trait that defines the methods required for a RecordBatch serializer.
 #[async_trait]
 pub trait BatchSerializer: Unpin + Send {
@@ -255,51 +228,16 @@ pub trait BatchSerializer: Unpin + Send {
 /// Returns an [`AbortableWrite`] which writes to the given object store location
 /// with the specified compression
 pub(crate) async fn create_writer(
-    writer_mode: FileWriterMode,
     file_compression_type: FileCompressionType,
-    file_meta: FileMeta,
+    location: &Path,
     object_store: Arc<dyn ObjectStore>,
 ) -> Result<AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>> {
-    let object = &file_meta.object_meta;
-    match writer_mode {
-        // If the mode is append, call the store's append method and return wrapped in
-        // a boxed trait object.
-        FileWriterMode::Append => {
-            let writer = object_store
-                .append(&object.location)
-                .await
-                .map_err(DataFusionError::ObjectStore)?;
-            let writer = AbortableWrite::new(
-                file_compression_type.convert_async_writer(writer)?,
-                AbortMode::Append,
-            );
-            Ok(writer)
-        }
-        // If the mode is put, create a new AsyncPut writer and return it wrapped in
-        // a boxed trait object
-        FileWriterMode::Put => {
-            let writer = Box::new(AsyncPutWriter::new(object.clone(), object_store));
-            let writer = AbortableWrite::new(
-                file_compression_type.convert_async_writer(writer)?,
-                AbortMode::Put,
-            );
-            Ok(writer)
-        }
-        // If the mode is put multipart, call the store's put_multipart method and
-        // return the writer wrapped in a boxed trait object.
-        FileWriterMode::PutMultipart => {
-            let (multipart_id, writer) = object_store
-                .put_multipart(&object.location)
-                .await
-                .map_err(DataFusionError::ObjectStore)?;
-            Ok(AbortableWrite::new(
-                file_compression_type.convert_async_writer(writer)?,
-                AbortMode::MultiPart(MultiPart::new(
-                    object_store,
-                    multipart_id,
-                    object.location.clone(),
-                )),
-            ))
-        }
-    }
+    let (multipart_id, writer) = object_store
+        .put_multipart(location)
+        .await
+        .map_err(DataFusionError::ObjectStore)?;
+    Ok(AbortableWrite::new(
+        file_compression_type.convert_async_writer(writer)?,
+        MultiPart::new(object_store, multipart_id, location.clone()),
+    ))
 }

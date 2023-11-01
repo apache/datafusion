@@ -31,9 +31,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 pub use self::url::ListingTableUrl;
-pub use table::{
-    ListingOptions, ListingTable, ListingTableConfig, ListingTableInsertMode,
-};
+pub use table::{ListingOptions, ListingTable, ListingTableConfig};
 
 /// Stream of files get listed from object store
 pub type PartitionedFileStream =

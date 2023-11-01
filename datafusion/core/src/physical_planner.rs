@@ -27,7 +27,6 @@ use crate::datasource::file_format::csv::CsvFormat;
 use crate::datasource::file_format::json::JsonFormat;
 #[cfg(feature = "parquet")]
 use crate::datasource::file_format::parquet::ParquetFormat;
-use crate::datasource::file_format::write::FileWriterMode;
 use crate::datasource::file_format::FileFormat;
 use crate::datasource::listing::ListingTableUrl;
 use crate::datasource::physical_plan::FileSinkConfig;
@@ -592,7 +591,6 @@ impl DefaultPhysicalPlanner {
                         output_schema: Arc::new(schema),
                         table_partition_cols: vec![],
                         unbounded_input: false,
-                        writer_mode: FileWriterMode::PutMultipart,
                         single_file_output: *single_file_output,
                         overwrite: false,
                         file_type_writer_options

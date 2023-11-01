@@ -21,8 +21,6 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use super::listing::ListingTableInsertMode;
-
 #[cfg(feature = "parquet")]
 use crate::datasource::file_format::parquet::ParquetFormat;
 use crate::datasource::file_format::{
@@ -154,19 +152,6 @@ impl TableProviderFactory for ListingTableFactory {
             .take_bool_option("single_file")?
             .unwrap_or(false);
 
-        let explicit_insert_mode = statement_options.take_str_option("insert_mode");
-        let insert_mode = match explicit_insert_mode {
-            Some(mode) => ListingTableInsertMode::from_str(mode.as_str()),
-            None => match file_type {
-                FileType::CSV => Ok(ListingTableInsertMode::AppendToFile),
-                #[cfg(feature = "parquet")]
-                FileType::PARQUET => Ok(ListingTableInsertMode::AppendNewFiles),
-                FileType::AVRO => Ok(ListingTableInsertMode::AppendNewFiles),
-                FileType::JSON => Ok(ListingTableInsertMode::AppendToFile),
-                FileType::ARROW => Ok(ListingTableInsertMode::AppendNewFiles),
-            },
-        }?;
-
         let file_type = file_format.file_type();
 
         // Use remaining options and session state to build FileTypeWriterOptions
@@ -219,7 +204,6 @@ impl TableProviderFactory for ListingTableFactory {
             .with_target_partitions(state.config().target_partitions())
             .with_table_partition_cols(table_partition_cols)
             .with_file_sort_order(cmd.order_exprs.clone())
-            .with_insert_mode(insert_mode)
             .with_single_file(single_file)
             .with_write_options(file_type_writer_options)
             .with_infinite_source(unbounded);
