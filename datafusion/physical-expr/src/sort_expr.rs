@@ -25,7 +25,7 @@ use crate::PhysicalExpr;
 
 use arrow::compute::kernels::sort::{SortColumn, SortOptions};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::plan_err;
+use datafusion_common::exec_err;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
@@ -66,7 +66,7 @@ impl PhysicalSortExpr {
         let array_to_sort = match value_to_sort {
             ColumnarValue::Array(array) => array,
             ColumnarValue::Scalar(scalar) => {
-                return plan_err!(
+                return exec_err!(
                     "Sort operation is not applicable to scalar value {scalar}"
                 );
             }
