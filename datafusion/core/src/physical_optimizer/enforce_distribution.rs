@@ -26,9 +26,6 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 
 use crate::config::ConfigOptions;
-use crate::datasource::physical_plan::CsvExec;
-#[cfg(feature = "parquet")]
-use crate::datasource::physical_plan::ParquetExec;
 use crate::error::Result;
 use crate::physical_optimizer::utils::{
     add_sort_above, get_children_exectrees, get_plan_string, is_coalesce_partitions,
@@ -554,7 +551,7 @@ fn reorder_aggregate_keys(
                         agg_exec.filter_expr().to_vec(),
                         agg_exec.order_by_expr().to_vec(),
                         partial_agg,
-                        agg_exec.input_schema().clone(),
+                        agg_exec.input_schema(),
                     )?);
 
                     // Need to create a new projection to change the expr ordering back
@@ -1188,7 +1185,6 @@ fn ensure_distribution(
     // When `false`, round robin repartition will not be added to increase parallelism
     let enable_round_robin = config.optimizer.enable_round_robin_repartition;
     let repartition_file_scans = config.optimizer.repartition_file_scans;
-    let repartition_file_min_size = config.optimizer.repartition_file_min_size;
     let batch_size = config.execution.batch_size;
     let is_unbounded = unbounded_output(&dist_context.plan);
     // Use order preserving variants either of the conditions true
@@ -1265,25 +1261,13 @@ fn ensure_distribution(
                 // Unless partitioning doesn't increase the partition count, it is not beneficial:
                 && child.output_partitioning().partition_count() < target_partitions
             {
-                // When `repartition_file_scans` is set, leverage source operators
-                // (`ParquetExec`, `CsvExec` etc.) to increase parallelism at the source.
+                // When `repartition_file_scans` is set, attempt to increase
+                // parallelism at the source.
                 if repartition_file_scans {
-                    #[cfg(feature = "parquet")]
-                    if let Some(parquet_exec) =
-                        child.as_any().downcast_ref::<ParquetExec>()
+                    if let Some(new_child) =
+                        child.repartitioned(target_partitions, config)?
                     {
-                        child = Arc::new(parquet_exec.get_repartitioned(
-                            target_partitions,
-                            repartition_file_min_size,
-                        ));
-                    }
-                    if let Some(csv_exec) = child.as_any().downcast_ref::<CsvExec>() {
-                        if let Some(csv_exec) = csv_exec.get_repartitioned(
-                            target_partitions,
-                            repartition_file_min_size,
-                        ) {
-                            child = Arc::new(csv_exec);
-                        }
+                        child = new_child;
                     }
                 }
                 // Increase parallelism by adding round-robin repartitioning
@@ -1644,8 +1628,8 @@ mod tests {
     use crate::datasource::file_format::file_compression_type::FileCompressionType;
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
-    use crate::datasource::physical_plan::FileScanConfig;
     use crate::datasource::physical_plan::ParquetExec;
+    use crate::datasource::physical_plan::{CsvExec, FileScanConfig};
     use crate::physical_optimizer::enforce_sorting::EnforceSorting;
     use crate::physical_optimizer::output_requirements::OutputRequirements;
     use crate::physical_plan::aggregates::{

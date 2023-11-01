@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow_schema::DataType;
 use std::sync::Arc;
 
 use datafusion::error::Result;
@@ -38,7 +39,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-//select c1,c2 from t1 where (select avg(t2.c2) from t2 where t1.c1 = t2.c1)>0 limit 10;
+//select c1,c2 from t1 where (select avg(t2.c2) from t2 where t1.c1 = t2.c1)>0 limit 3;
 async fn where_scalar_subquery(ctx: &SessionContext) -> Result<()> {
     ctx.table("t1")
         .await?
@@ -46,7 +47,7 @@ async fn where_scalar_subquery(ctx: &SessionContext) -> Result<()> {
             scalar_subquery(Arc::new(
                 ctx.table("t2")
                     .await?
-                    .filter(col("t1.c1").eq(col("t2.c1")))?
+                    .filter(out_ref_col(DataType::Utf8, "t1.c1").eq(col("t2.c1")))?
                     .aggregate(vec![], vec![avg(col("t2.c2"))])?
                     .select(vec![avg(col("t2.c2"))])?
                     .into_unoptimized_plan(),
@@ -60,7 +61,7 @@ async fn where_scalar_subquery(ctx: &SessionContext) -> Result<()> {
     Ok(())
 }
 
-//SELECT t1.c1, t1.c2 FROM t1 WHERE t1.c2 in (select max(t2.c2) from t2 where t2.c1 > 0 ) limit 10
+//SELECT t1.c1, t1.c2 FROM t1 WHERE t1.c2 in (select max(t2.c2) from t2 where t2.c1 > 0 ) limit 3;
 async fn where_in_subquery(ctx: &SessionContext) -> Result<()> {
     ctx.table("t1")
         .await?
@@ -82,14 +83,14 @@ async fn where_in_subquery(ctx: &SessionContext) -> Result<()> {
     Ok(())
 }
 
-//SELECT t1.c1, t1.c2 FROM t1 WHERE EXISTS (select t2.c2 from t2 where t1.c1 = t2.c1) limit 10
+//SELECT t1.c1, t1.c2 FROM t1 WHERE EXISTS (select t2.c2 from t2 where t1.c1 = t2.c1) limit 3;
 async fn where_exist_subquery(ctx: &SessionContext) -> Result<()> {
     ctx.table("t1")
         .await?
         .filter(exists(Arc::new(
             ctx.table("t2")
                 .await?
-                .filter(col("t1.c1").eq(col("t2.c1")))?
+                .filter(out_ref_col(DataType::Utf8, "t1.c1").eq(col("t2.c1")))?
                 .select(vec![col("t2.c2")])?
                 .into_unoptimized_plan(),
         )))?

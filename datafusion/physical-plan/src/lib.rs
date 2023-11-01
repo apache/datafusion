@@ -76,6 +76,7 @@ pub use crate::metrics::Metric;
 pub use crate::topk::TopK;
 pub use crate::visitor::{accept, visit_execution_plan, ExecutionPlanVisitor};
 
+use datafusion_common::config::ConfigOptions;
 pub use datafusion_common::hash_utils;
 pub use datafusion_common::utils::project_schema;
 pub use datafusion_common::{internal_err, ColumnStatistics, Statistics};
@@ -209,7 +210,136 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>>;
 
-    /// creates an iterator
+    /// If supported, attempt to increase the partitioning of this `ExecutionPlan` to
+    /// produce `target_partitions` partitions.
+    ///
+    /// If the `ExecutionPlan` does not support changing its partitioning,
+    /// returns `Ok(None)` (the default).
+    ///
+    /// It is the `ExecutionPlan` can increase its partitioning, but not to the
+    /// `target_partitions`, it may return an ExecutionPlan with fewer
+    /// partitions. This might happen, for example, if each new partition would
+    /// be too small to be efficiently processed individually.
+    ///
+    /// The DataFusion optimizer attempts to use as many threads as possible by
+    /// repartitioning its inputs to match the target number of threads
+    /// available (`target_partitions`). Some data sources, such as the built in
+    /// CSV and Parquet readers, implement this method as they are able to read
+    /// from their input files in parallel, regardless of how the source data is
+    /// split amongst files.
+    fn repartitioned(
+        &self,
+        _target_partitions: usize,
+        _config: &ConfigOptions,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        Ok(None)
+    }
+
+    /// Begin execution of `partition`, returning a stream of [`RecordBatch`]es.
+    ///
+    /// # Implementation Examples
+    ///
+    /// ## Return Precomputed Batch
+    ///
+    /// We can return a precomputed batch as a stream
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use arrow_array::RecordBatch;
+    /// # use arrow_schema::SchemaRef;
+    /// # use datafusion_common::Result;
+    /// # use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+    /// # use datafusion_physical_plan::memory::MemoryStream;
+    /// # use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
+    /// struct MyPlan {
+    ///     batch: RecordBatch,
+    /// }
+    ///
+    /// impl MyPlan {
+    ///     fn execute(
+    ///         &self,
+    ///         partition: usize,
+    ///         context: Arc<TaskContext>
+    ///     ) -> Result<SendableRecordBatchStream> {
+    ///         let fut = futures::future::ready(Ok(self.batch.clone()));
+    ///         let stream = futures::stream::once(fut);
+    ///         Ok(Box::pin(RecordBatchStreamAdapter::new(self.batch.schema(), stream)))
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// ## Async Compute Batch
+    ///
+    /// We can also lazily compute a RecordBatch when the returned stream is polled
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use arrow_array::RecordBatch;
+    /// # use arrow_schema::SchemaRef;
+    /// # use datafusion_common::Result;
+    /// # use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+    /// # use datafusion_physical_plan::memory::MemoryStream;
+    /// # use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
+    /// struct MyPlan {
+    ///     schema: SchemaRef,
+    /// }
+    ///
+    /// async fn get_batch() -> Result<RecordBatch> {
+    ///     todo!()
+    /// }
+    ///
+    /// impl MyPlan {
+    ///     fn execute(
+    ///         &self,
+    ///         partition: usize,
+    ///         context: Arc<TaskContext>
+    ///     ) -> Result<SendableRecordBatchStream> {
+    ///         let fut = get_batch();
+    ///         let stream = futures::stream::once(fut);
+    ///         Ok(Box::pin(RecordBatchStreamAdapter::new(self.schema.clone(), stream)))
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// ## Async Compute Batch Stream
+    ///
+    /// We can lazily compute a RecordBatch stream when the returned stream is polled
+    /// flattening the result into a single stream
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use arrow_array::RecordBatch;
+    /// # use arrow_schema::SchemaRef;
+    /// # use futures::TryStreamExt;
+    /// # use datafusion_common::Result;
+    /// # use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+    /// # use datafusion_physical_plan::memory::MemoryStream;
+    /// # use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
+    /// struct MyPlan {
+    ///     schema: SchemaRef,
+    /// }
+    ///
+    /// async fn get_batch_stream() -> Result<SendableRecordBatchStream> {
+    ///     todo!()
+    /// }
+    ///
+    /// impl MyPlan {
+    ///     fn execute(
+    ///         &self,
+    ///         partition: usize,
+    ///         context: Arc<TaskContext>
+    ///     ) -> Result<SendableRecordBatchStream> {
+    ///         // A future that yields a stream
+    ///         let fut = get_batch_stream();
+    ///         // Use TryStreamExt::try_flatten to flatten the stream of streams
+    ///         let stream = futures::stream::once(fut).try_flatten();
+    ///         Ok(Box::pin(RecordBatchStreamAdapter::new(self.schema.clone(), stream)))
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// See [`futures::stream::StreamExt`] and [`futures::stream::TryStreamExt`] for further
+    /// combinators that can be used with streams
     fn execute(
         &self,
         partition: usize,
@@ -217,7 +347,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ) -> Result<SendableRecordBatchStream>;
 
     /// Return a snapshot of the set of [`Metric`]s for this
-    /// [`ExecutionPlan`].
+    /// [`ExecutionPlan`]. If no `Metric`s are available, return None.
     ///
     /// While the values of the metrics in the returned
     /// [`MetricsSet`]s may change as execution progresses, the

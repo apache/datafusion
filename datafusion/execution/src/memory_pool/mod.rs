@@ -157,6 +157,11 @@ impl MemoryReservation {
         self.size
     }
 
+    /// Returns [MemoryConsumer] for this [MemoryReservation]
+    pub fn consumer(&self) -> &MemoryConsumer {
+        &self.registration.consumer
+    }
+
     /// Frees all bytes from this reservation back to the underlying
     /// pool, returning the number of bytes freed.
     pub fn free(&mut self) -> usize {

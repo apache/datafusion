@@ -430,6 +430,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 table,
                 on,
                 returning,
+                ignore,
             } => {
                 if or.is_some() {
                     plan_err!("Inserts with or clauses not supported")?;
@@ -448,6 +449,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
                 if returning.is_some() {
                     plan_err!("Insert-returning clause not supported")?;
+                }
+                if ignore {
+                    plan_err!("Insert-ignore clause not supported")?;
                 }
                 let _ = into; // optional keyword doesn't change behavior
                 self.insert_to_plan(table_name, columns, source, overwrite)
@@ -471,6 +475,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 selection,
                 returning,
                 from,
+                order_by,
+                limit,
             } => {
                 if !tables.is_empty() {
                     plan_err!("DELETE <TABLE> not supported")?;
@@ -483,6 +489,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if returning.is_some() {
                     plan_err!("Delete-returning clause not yet supported")?;
                 }
+
+                if !order_by.is_empty() {
+                    plan_err!("Delete-order-by clause not yet supported")?;
+                }
+
+                if limit.is_some() {
+                    plan_err!("Delete-limit clause not yet supported")?;
+                }
+
                 let table_name = self.get_delete_target(from)?;
                 self.delete_to_plan(table_name, selection)
             }
@@ -963,10 +978,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // Do a table lookup to verify the table exists
         let table_name = self.object_name_to_table_reference(table_name)?;
         let table_source = self.context_provider.get_table_source(table_name.clone())?;
-        let arrow_schema = (*table_source.schema()).clone();
         let table_schema = Arc::new(DFSchema::try_from_qualified_schema(
             table_name.clone(),
-            &arrow_schema,
+            &table_source.schema(),
         )?);
 
         // Overwrite with assignment expressions
@@ -985,21 +999,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             })
             .collect::<Result<HashMap<String, Expr>>>()?;
 
-        let values_and_types = table_schema
-            .fields()
-            .iter()
-            .map(|f| {
-                let col_name = f.name();
-                let val = assign_map.remove(col_name).unwrap_or_else(|| {
-                    ast::Expr::Identifier(ast::Ident::from(col_name.as_str()))
-                });
-                (col_name, val, f.data_type())
-            })
-            .collect::<Vec<_>>();
-
-        // Build scan
-        let from = from.unwrap_or(table);
-        let scan = self.plan_from_tables(vec![from], &mut planner_context)?;
+        // Build scan, join with from table if it exists.
+        let mut input_tables = vec![table];
+        input_tables.extend(from);
+        let scan = self.plan_from_tables(input_tables, &mut planner_context)?;
 
         // Filter
         let source = match predicate_expr {
@@ -1007,33 +1010,49 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             Some(predicate_expr) => {
                 let filter_expr = self.sql_to_expr(
                     predicate_expr,
-                    &table_schema,
+                    scan.schema(),
                     &mut planner_context,
                 )?;
                 let mut using_columns = HashSet::new();
                 expr_to_columns(&filter_expr, &mut using_columns)?;
                 let filter_expr = normalize_col_with_schemas_and_ambiguity_check(
                     filter_expr,
-                    &[&[&table_schema]],
+                    &[&[&scan.schema()]],
                     &[using_columns],
                 )?;
                 LogicalPlan::Filter(Filter::try_new(filter_expr, Arc::new(scan))?)
             }
         };
 
-        // Projection
-        let mut exprs = vec![];
-        for (col_name, expr, dt) in values_and_types.into_iter() {
-            let mut expr = self.sql_to_expr(expr, &table_schema, &mut planner_context)?;
-            // Update placeholder's datatype to the type of the target column
-            if let datafusion_expr::Expr::Placeholder(placeholder) = &mut expr {
-                placeholder.data_type =
-                    placeholder.data_type.take().or_else(|| Some(dt.clone()));
-            }
-            // Cast to target column type, if necessary
-            let expr = expr.cast_to(dt, source.schema())?.alias(col_name);
-            exprs.push(expr);
-        }
+        // Build updated values for each column, using the previous value if not modified
+        let exprs = table_schema
+            .fields()
+            .iter()
+            .map(|field| {
+                let expr = match assign_map.remove(field.name()) {
+                    Some(new_value) => {
+                        let mut expr = self.sql_to_expr(
+                            new_value,
+                            source.schema(),
+                            &mut planner_context,
+                        )?;
+                        // Update placeholder's datatype to the type of the target column
+                        if let datafusion_expr::Expr::Placeholder(placeholder) = &mut expr
+                        {
+                            placeholder.data_type = placeholder
+                                .data_type
+                                .take()
+                                .or_else(|| Some(field.data_type().clone()));
+                        }
+                        // Cast to target column type, if necessary
+                        expr.cast_to(field.data_type(), source.schema())?
+                    }
+                    None => datafusion_expr::Expr::Column(field.qualified_column()),
+                };
+                Ok(expr.alias(field.name()))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
         let source = project(source, exprs)?;
 
         let plan = LogicalPlan::Dml(DmlStatement {
