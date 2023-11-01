@@ -609,7 +609,7 @@ impl BuiltinScalarFunction {
                             if !input_expr_type.equals_datatype(&Null) {
                                 expr_type = input_expr_type.clone();
                             }
-                        // For nested list cases, since Null is already converted to other primitive types after evalute(),
+                        // For nested list cases, since Null is already converted to other primitive types after evalua te(),
                         // we can only find the return type based on whether input_expr_type is List.
                         } else if let DataType::List(_) = input_expr_type {
                             expr_type = input_expr_type.clone();

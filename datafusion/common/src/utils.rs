@@ -349,7 +349,17 @@ pub fn wrap_into_list_array(arr: ArrayRef) -> ListArray {
     )
 }
 
-/// Get the base type of a data type. For example, the base type of `List<Int32>` is `Int32`.
+/// Get the base type of a data type.
+///
+/// Example
+/// ```
+/// use arrow::datatypes::{DataType, Field};
+/// use datafusion_common::utils::base_type;
+/// use std::sync::Arc;
+///
+/// let data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+/// let base_type = base_type(&data_type).unwrap();
+/// assert_eq!(base_type, DataType::Int32);
 pub fn base_type(data_type: &DataType) -> Result<DataType> {
     match data_type {
         DataType::List(field) => match field.data_type() {
@@ -361,8 +371,17 @@ pub fn base_type(data_type: &DataType) -> Result<DataType> {
 }
 
 /// Coerced only the base type.
-/// For example, if the data type is `List<Int32>` and the base type is `Float64`,
-/// the result would be `List<Float64>`.
+///
+/// Example
+/// ```
+/// use arrow::datatypes::{DataType, Field};
+/// use datafusion_common::utils::coerced_type_with_base_type_only;
+/// use std::sync::Arc;
+///
+/// let data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+/// let base_type = DataType::Float64;
+/// let coerced_type = coerced_type_with_base_type_only(&data_type, &base_type).unwrap();
+/// assert_eq!(coerced_type, DataType::List(Arc::new(Field::new("item", DataType::Float64, true))));
 pub fn coerced_type_with_base_type_only(
     data_type: &DataType,
     base_type: &DataType,

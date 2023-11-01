@@ -326,9 +326,6 @@ fn array_array(args: &[ArrayRef], data_type: DataType) -> Result<ArrayRef> {
                 let mut array_lengths = vec![];
                 let mut valid = BooleanBufferBuilder::new(column_count);
                 for arg in args {
-                    // For debug purposes, there should not be NullArray anymore
-                    assert!(arg.as_any().downcast_ref::<NullArray>().is_none());
-
                     if arg.is_null(index) {
                         array_lengths.push(0);
                         valid.append(false);
@@ -808,13 +805,6 @@ fn concat_internal(args: &[ArrayRef]) -> Result<ArrayRef> {
             // Get all the arrays on i-th row
             let values = list_arrays
                 .iter()
-                // .map(|arr| {
-                //     let res = arr.value(i);
-                //     let res2 = arr.value_length(i);
-                //     println!("res2: {:?}", res2);
-                //     res
-                // })
-                // .filter(|arr| arr.len() > 0)
                 .map(|arr| arr.value(i))
                 .collect::<Vec<_>>();
 
@@ -830,8 +820,6 @@ fn concat_internal(args: &[ArrayRef]) -> Result<ArrayRef> {
             valid.append(true);
         }
     }
-
-    println!("arrays: {:?}", arrays);
 
     // Assume all arrays have the same data type
     let data_type = list_arrays[0].value_type();
@@ -988,7 +976,6 @@ macro_rules! general_repeat_list {
 
 /// Array_empty SQL function
 pub fn array_empty(args: &[ArrayRef]) -> Result<ArrayRef> {
-    println!("args: {:?}", args);
     if args[0].as_any().downcast_ref::<NullArray>().is_some() {
         // Make sure to return Boolean type.
         return Ok(Arc::new(BooleanArray::new_null(args[0].len())));
@@ -1945,15 +1932,7 @@ pub fn string_to_array<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef
 mod tests {
     use super::*;
     use arrow::datatypes::Int64Type;
-    use datafusion_common::{cast::as_uint64_array, utils::wrap_into_list_array};
-
-    #[test]
-    fn testaa() {
-        let array = new_null_array(&DataType::Null, 1);
-        let p = Arc::new(wrap_into_list_array(array));
-        let res = array_empty(&[p]).unwrap();
-        println!("a: {:?}", res);
-    }
+    use datafusion_common::cast::as_uint64_array;
 
     #[test]
     fn test_array() {
