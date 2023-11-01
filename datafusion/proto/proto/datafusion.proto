@@ -1153,12 +1153,6 @@ message PhysicalPlanNode {
   }
 }
 
-enum FileWriterMode {
-  APPEND = 0;
-  PUT = 1;
-  PUT_MULTIPART = 2;
-}
-
 enum CompressionTypeVariant {
   GZIP = 0;
   BZIP2 = 1;
@@ -1183,12 +1177,13 @@ message JsonWriterOptions {
 }
 
 message FileSinkConfig {
+  reserved 6; // writer_mode
+
   string object_store_url = 1;
   repeated PartitionedFile file_groups = 2;
   repeated string table_paths = 3;
   Schema output_schema = 4;
   repeated PartitionColumn table_partition_cols = 5;
-  FileWriterMode writer_mode = 6;
   bool single_file_output = 7;
   bool unbounded_input = 8;
   bool overwrite = 9;

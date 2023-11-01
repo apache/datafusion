@@ -7471,9 +7471,6 @@ impl serde::Serialize for FileSinkConfig {
         if !self.table_partition_cols.is_empty() {
             len += 1;
         }
-        if self.writer_mode != 0 {
-            len += 1;
-        }
         if self.single_file_output {
             len += 1;
         }
@@ -7501,11 +7498,6 @@ impl serde::Serialize for FileSinkConfig {
         }
         if !self.table_partition_cols.is_empty() {
             struct_ser.serialize_field("tablePartitionCols", &self.table_partition_cols)?;
-        }
-        if self.writer_mode != 0 {
-            let v = FileWriterMode::try_from(self.writer_mode)
-                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.writer_mode)))?;
-            struct_ser.serialize_field("writerMode", &v)?;
         }
         if self.single_file_output {
             struct_ser.serialize_field("singleFileOutput", &self.single_file_output)?;
@@ -7539,8 +7531,6 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
             "outputSchema",
             "table_partition_cols",
             "tablePartitionCols",
-            "writer_mode",
-            "writerMode",
             "single_file_output",
             "singleFileOutput",
             "unbounded_input",
@@ -7557,7 +7547,6 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
             TablePaths,
             OutputSchema,
             TablePartitionCols,
-            WriterMode,
             SingleFileOutput,
             UnboundedInput,
             Overwrite,
@@ -7588,7 +7577,6 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
                             "tablePaths" | "table_paths" => Ok(GeneratedField::TablePaths),
                             "outputSchema" | "output_schema" => Ok(GeneratedField::OutputSchema),
                             "tablePartitionCols" | "table_partition_cols" => Ok(GeneratedField::TablePartitionCols),
-                            "writerMode" | "writer_mode" => Ok(GeneratedField::WriterMode),
                             "singleFileOutput" | "single_file_output" => Ok(GeneratedField::SingleFileOutput),
                             "unboundedInput" | "unbounded_input" => Ok(GeneratedField::UnboundedInput),
                             "overwrite" => Ok(GeneratedField::Overwrite),
@@ -7617,7 +7605,6 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
                 let mut table_paths__ = None;
                 let mut output_schema__ = None;
                 let mut table_partition_cols__ = None;
-                let mut writer_mode__ = None;
                 let mut single_file_output__ = None;
                 let mut unbounded_input__ = None;
                 let mut overwrite__ = None;
@@ -7654,12 +7641,6 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
                             }
                             table_partition_cols__ = Some(map_.next_value()?);
                         }
-                        GeneratedField::WriterMode => {
-                            if writer_mode__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("writerMode"));
-                            }
-                            writer_mode__ = Some(map_.next_value::<FileWriterMode>()? as i32);
-                        }
                         GeneratedField::SingleFileOutput => {
                             if single_file_output__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("singleFileOutput"));
@@ -7692,7 +7673,6 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
                     table_paths: table_paths__.unwrap_or_default(),
                     output_schema: output_schema__,
                     table_partition_cols: table_partition_cols__.unwrap_or_default(),
-                    writer_mode: writer_mode__.unwrap_or_default(),
                     single_file_output: single_file_output__.unwrap_or_default(),
                     unbounded_input: unbounded_input__.unwrap_or_default(),
                     overwrite: overwrite__.unwrap_or_default(),
@@ -7798,80 +7778,6 @@ impl<'de> serde::Deserialize<'de> for FileTypeWriterOptions {
             }
         }
         deserializer.deserialize_struct("datafusion.FileTypeWriterOptions", FIELDS, GeneratedVisitor)
-    }
-}
-impl serde::Serialize for FileWriterMode {
-    #[allow(deprecated)]
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let variant = match self {
-            Self::Append => "APPEND",
-            Self::Put => "PUT",
-            Self::PutMultipart => "PUT_MULTIPART",
-        };
-        serializer.serialize_str(variant)
-    }
-}
-impl<'de> serde::Deserialize<'de> for FileWriterMode {
-    #[allow(deprecated)]
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        const FIELDS: &[&str] = &[
-            "APPEND",
-            "PUT",
-            "PUT_MULTIPART",
-        ];
-
-        struct GeneratedVisitor;
-
-        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-            type Value = FileWriterMode;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                write!(formatter, "expected one of: {:?}", &FIELDS)
-            }
-
-            fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                i32::try_from(v)
-                    .ok()
-                    .and_then(|x| x.try_into().ok())
-                    .ok_or_else(|| {
-                        serde::de::Error::invalid_value(serde::de::Unexpected::Signed(v), &self)
-                    })
-            }
-
-            fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                i32::try_from(v)
-                    .ok()
-                    .and_then(|x| x.try_into().ok())
-                    .ok_or_else(|| {
-                        serde::de::Error::invalid_value(serde::de::Unexpected::Unsigned(v), &self)
-                    })
-            }
-
-            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                match value {
-                    "APPEND" => Ok(FileWriterMode::Append),
-                    "PUT" => Ok(FileWriterMode::Put),
-                    "PUT_MULTIPART" => Ok(FileWriterMode::PutMultipart),
-                    _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
-                }
-            }
-        }
-        deserializer.deserialize_any(GeneratedVisitor)
     }
 }
 impl serde::Serialize for FilterExecNode {

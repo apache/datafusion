@@ -3409,4 +3409,3 @@ set datafusion.optimizer.prefer_existing_sort = false;
 
 statement ok
 drop table annotated_data;
-
