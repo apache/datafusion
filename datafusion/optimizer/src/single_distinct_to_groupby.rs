@@ -28,7 +28,7 @@ use datafusion_expr::{
     expr::AggregateFunction,
     logical_plan::{Aggregate, LogicalPlan, Projection},
     utils::columnize_expr,
-    Cast, Expr, ExprSchemable,
+    Expr, ExprSchemable,
 };
 
 use hashbrown::HashSet;
@@ -74,7 +74,7 @@ fn is_single_distinct_agg(plan: &LogicalPlan) -> Result<bool> {
                         distinct_count += 1;
                     }
                     for e in args {
-                        fields_set.insert(e.display_name()?);
+                        fields_set.insert(e.canonical_name());
                     }
                 }
             }
@@ -165,26 +165,13 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                             }) => {
                                 // is_single_distinct_agg ensure args.len=1
                                 if group_fields_set.insert(args[0].display_name()?) {
-                                    inner_group_exprs.push(match &args[0] {
-                                        Expr::Cast(cast_expr) => cast_expr
-                                            .expr
-                                            .clone()
-                                            .alias(SINGLE_DISTINCT_ALIAS),
-                                        _ => args[0].clone().alias(SINGLE_DISTINCT_ALIAS),
-                                    });
+                                    inner_group_exprs.push(
+                                        args[0].clone().alias(SINGLE_DISTINCT_ALIAS),
+                                    );
                                 }
-
-                                let mut expr = col(SINGLE_DISTINCT_ALIAS);
-                                if let Expr::Cast(cast_expr) = &args[0] {
-                                    expr = Expr::Cast(Cast::new(
-                                        Box::new(expr),
-                                        cast_expr.data_type.clone(),
-                                    ));
-                                }
-
                                 Ok(Expr::AggregateFunction(AggregateFunction::new(
                                     fun.clone(),
-                                    vec![expr],
+                                    vec![col(SINGLE_DISTINCT_ALIAS)],
                                     false, // intentional to remove distinct here
                                     filter.clone(),
                                     order_by.clone(),

@@ -22,6 +22,9 @@
 statement ok
 CREATE TABLE t(x int) AS VALUES (1), (2), (1);
 
+statement ok
+create table t1(x bigint,y int) as values (9223372036854775807,2), (9223372036854775806,2);
+
 query II
 SELECT SUM(DISTINCT x), MAX(DISTINCT x) from t GROUP BY x ORDER BY x;
 ----
@@ -33,3 +36,42 @@ SELECT MAX(DISTINCT x), SUM(DISTINCT x) from t GROUP BY x ORDER BY x;
 ----
 1 1
 2 2
+
+query TT
+EXPLAIN SELECT SUM(DISTINCT CAST(x AS DOUBLE)), MAX(DISTINCT x) FROM t1 GROUP BY y;
+----
+logical_plan
+Projection: SUM(DISTINCT t1.x), MAX(DISTINCT t1.x)
+--Aggregate: groupBy=[[t1.y]], aggr=[[SUM(DISTINCT CAST(t1.x AS Float64)), MAX(DISTINCT t1.x)]]
+----TableScan: t1 projection=[x, y]
+physical_plan
+ProjectionExec: expr=[SUM(DISTINCT t1.x)@1 as SUM(DISTINCT t1.x), MAX(DISTINCT t1.x)@2 as MAX(DISTINCT t1.x)]
+--AggregateExec: mode=FinalPartitioned, gby=[y@0 as y], aggr=[SUM(DISTINCT t1.x), MAX(DISTINCT t1.x)]
+----CoalesceBatchesExec: target_batch_size=8192
+------RepartitionExec: partitioning=Hash([y@0], 4), input_partitions=4
+--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+----------AggregateExec: mode=Partial, gby=[y@1 as y], aggr=[SUM(DISTINCT t1.x), MAX(DISTINCT t1.x)]
+------------MemoryExec: partitions=1, partition_sizes=[1]
+
+query TT
+EXPLAIN SELECT SUM(DISTINCT CAST(x AS DOUBLE)), MAX(DISTINCT CAST(x AS DOUBLE)) FROM t1 GROUP BY y;
+----
+logical_plan
+Projection: SUM(alias1) AS SUM(DISTINCT t1.x), MAX(alias1) AS MAX(DISTINCT t1.x)
+--Aggregate: groupBy=[[t1.y]], aggr=[[SUM(alias1), MAX(alias1)]]
+----Aggregate: groupBy=[[t1.y, CAST(t1.x AS Float64)t1.x AS t1.x AS alias1]], aggr=[[]]
+------Projection: CAST(t1.x AS Float64) AS CAST(t1.x AS Float64)t1.x, t1.y
+--------TableScan: t1 projection=[x, y]
+physical_plan
+ProjectionExec: expr=[SUM(alias1)@1 as SUM(DISTINCT t1.x), MAX(alias1)@2 as MAX(DISTINCT t1.x)]
+--AggregateExec: mode=FinalPartitioned, gby=[y@0 as y], aggr=[SUM(alias1), MAX(alias1)]
+----CoalesceBatchesExec: target_batch_size=8192
+------RepartitionExec: partitioning=Hash([y@0], 4), input_partitions=4
+--------AggregateExec: mode=Partial, gby=[y@0 as y], aggr=[SUM(alias1), MAX(alias1)]
+----------AggregateExec: mode=FinalPartitioned, gby=[y@0 as y, alias1@1 as alias1], aggr=[]
+------------CoalesceBatchesExec: target_batch_size=8192
+--------------RepartitionExec: partitioning=Hash([y@0, alias1@1], 4), input_partitions=4
+----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+------------------AggregateExec: mode=Partial, gby=[y@1 as y, CAST(t1.x AS Float64)t1.x@0 as alias1], aggr=[]
+--------------------ProjectionExec: expr=[CAST(x@0 AS Float64) as CAST(t1.x AS Float64)t1.x, y@1 as y]
+----------------------MemoryExec: partitions=1, partition_sizes=[1]
