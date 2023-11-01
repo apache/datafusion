@@ -95,7 +95,8 @@ pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 ///
 /// Calling [`execute`] produces an `async` [`SendableRecordBatchStream`] of
 /// [`RecordBatch`] that incrementally computes a partition of the
-/// `ExecutionPlan`'s output from its input.
+/// `ExecutionPlan`'s output from its input. See [`Partitioning`] for more
+/// details on partitioning.
 ///
 /// Methods such as [`schema`] and [`output_partitioning`] communicate
 /// properties of this output to the DataFusion optimizer, and methods such as
