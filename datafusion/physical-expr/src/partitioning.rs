@@ -15,14 +15,43 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`Partitioning`] and [`Distribution`] for physical expressions
+//! [`Partitioning`] and [`Distribution`] for `ExecutionPlans`
 
 use std::fmt;
 use std::sync::Arc;
 
 use crate::{expr_list_eq_strict_order, EquivalenceProperties, PhysicalExpr};
 
-/// Partitioning schemes supported by operators.
+/// Partitioning schemes supported by [`ExecutionPlan`]s.
+///
+/// A partition represents an independent stream that an `ExecutionPlan` can
+/// produce in parallel. Each `ExecutionPlan` must produce at least one
+/// partition, and the number of partitions varies based on the input and the
+/// operation performed.
+///
+/// ```text
+///     ▲      ▲      ▲
+///     │      │      │
+///     │      │      │        An ExecutionPlan with 3
+///     │      │      │        output partitions will
+/// ┌───┴──────┴──────┴──┐     produce 3 streams of
+/// │   ExecutionPlan    │     RecordBatches that run in
+/// └────────────────────┘     parallel.
+/// ```
+///
+/// # Examples
+///
+/// A simple `FileScanExec` might produce one output stream (partition) for each
+/// file (note the actual DataFusion file scaners can read individual files in
+/// parallel, potentially producing multiple partitions per file)
+///
+/// Plans such as `SortPreservingMerge` produce a single output stream
+/// (1 output partition) by combining some number of input streams (input partitions)
+///
+/// Plans such as `FilterExec` produce the same number of output streams
+/// (partitions) as input streams (partitions).
+///
+/// [`ExecutionPlan`]: crate::physical_plan::ExecutionPlan
 #[derive(Debug, Clone)]
 pub enum Partitioning {
     /// Allocate batches using a round-robin algorithm and the specified number of partitions
@@ -129,8 +158,8 @@ impl PartialEq for Partitioning {
     }
 }
 
-/// Distribution schemes
-#[derive(Debug, Clone)]
+/// How data is distributed amongst partitions. See [`Partitioning`] for more
+/// details. [derive(Debug, Clone)]
 pub enum Distribution {
     /// Unspecified distribution
     UnspecifiedDistribution,
@@ -142,7 +171,7 @@ pub enum Distribution {
 }
 
 impl Distribution {
-    /// Creates a Partitioning for this Distribution to satisfy itself
+    /// Creates a `Partitioning` that satisfies this `Distribution`
     pub fn create_partitioning(&self, partition_count: usize) -> Partitioning {
         match self {
             Distribution::UnspecifiedDistribution => {
