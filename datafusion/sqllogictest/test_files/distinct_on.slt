@@ -92,6 +92,10 @@ SELECT DISTINCT ON (c1) c2 FROM aggregate_test_100 ORDER BY c1, c3;
 query error SELECT DISTINCT ON expressions must match initial ORDER BY expressions
 SELECT DISTINCT ON (c2 % 2 = 0) c2, c3 - 100 FROM aggregate_test_100 ORDER BY c2, c3;
 
+# ON expressions are empty
+query error DataFusion error: Error during planning: No `ON` expressions provided
+SELECT DISTINCT ON () c1, c2 FROM aggregate_test_100 ORDER BY c1, c2;
+
 # Use expressions in the ON and ORDER BY clauses, as well as the selection
 query II
 SELECT DISTINCT ON (c2 % 2 = 0) c2, c3 - 100 FROM aggregate_test_100 ORDER BY c2 % 2 = 0, c3 DESC;

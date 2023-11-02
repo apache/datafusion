@@ -2204,13 +2204,17 @@ pub struct DistinctOn {
 }
 
 impl DistinctOn {
-    /// Create a new `DistintOn` struct.
+    /// Create a new `DistinctOn` struct.
     pub fn try_new(
         on_expr: Vec<Expr>,
         select_expr: Vec<Expr>,
         sort_expr: Option<Vec<Expr>>,
         input: Arc<LogicalPlan>,
     ) -> Result<Self> {
+        if on_expr.is_empty() {
+            return plan_err!("No `ON` expressions provided");
+        }
+
         let on_expr = normalize_cols(on_expr, input.as_ref())?;
 
         // Create fields with any qualifier stuffed in the name itself

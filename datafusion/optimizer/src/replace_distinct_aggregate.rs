@@ -36,6 +36,23 @@ use datafusion_expr::{Aggregate, Distinct, DistinctOn, Expr, LogicalPlan};
 /// ```text
 /// SELECT a, b FROM tab GROUP BY a, b
 /// ```
+///
+/// On the other hand, in the case of a [[DistinctOn]] query the replacement is
+/// a bit more involved and effectively converts
+/// ```text
+/// SELECT DISTINCT ON (a) b FROM tab ORDER BY a DESC, c
+/// ```
+///
+/// into
+/// ```text
+/// SELECT b FROM (
+///     SELECT a, FIRST_VALUE(b ORDER BY a DESC, c) AS b
+///     FROM tab
+///     GROUP BY a
+/// )
+/// ORDER BY a DESC
+/// ```
+/// ```
 
 /// Optimizer that replaces logical [[Distinct]] with a logical [[Aggregate]]
 #[derive(Default)]
