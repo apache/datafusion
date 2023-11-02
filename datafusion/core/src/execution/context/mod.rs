@@ -838,7 +838,7 @@ impl SessionContext {
     }
 
     /// Heuristically determines the format (e.g. parquet, csv) to use with the `table_paths`
-    fn infer_types(table_paths: &Vec<ListingTableUrl>) -> Option<String> {
+    fn infer_types(table_paths: &[ListingTableUrl]) -> Option<String> {
         let extension = table_paths[0]
             .prefix()
             .filename()
