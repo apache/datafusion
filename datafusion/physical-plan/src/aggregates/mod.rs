@@ -25,7 +25,7 @@ use crate::aggregates::{
     no_grouping::AggregateStream, row_hash::GroupedHashAggregateStream,
     topk_stream::GroupedTopKAggregateStream,
 };
-use crate::common::calculate_projection_mapping;
+
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::windows::{
     get_ordered_partition_by_indices, get_window_mode, PartitionSearchMode,
@@ -60,6 +60,7 @@ mod topk;
 mod topk_stream;
 
 pub use datafusion_expr::AggregateFunction;
+use datafusion_physical_expr::equivalence::ProjectionMapping;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
 
 /// Hash aggregate modes
@@ -294,9 +295,8 @@ pub struct AggregateExec {
     /// expressions from protobuf for final aggregate.
     pub input_schema: SchemaRef,
     /// The mapping used to normalize expressions like Partitioning and
-    /// PhysicalSortExpr. The key is the expression from the input schema
-    /// and the value is the expression from the output schema.
-    projection_mapping: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>,
+    /// PhysicalSortExpr that maps input to output
+    projection_mapping: ProjectionMapping,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     required_input_ordering: Option<LexRequirement>,
@@ -535,7 +535,7 @@ impl AggregateExec {
 
         // construct a map from the input expression to the output expression of the Aggregation group by
         let projection_mapping =
-            calculate_projection_mapping(&group_by.expr, &input.schema())?;
+            ProjectionMapping::try_new(&group_by.expr, &input.schema())?;
 
         let required_input_ordering =
             (!new_requirement.is_empty()).then_some(new_requirement);
