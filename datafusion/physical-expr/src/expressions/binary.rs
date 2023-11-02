@@ -560,7 +560,7 @@ impl BinaryExpr {
         use Operator::*;
         match &self.op {
             IsDistinctFrom | IsNotDistinctFrom | Lt | LtEq | Gt | GtEq | Eq | NotEq
-            | Plus | Minus | Multiply | Divide | Modulo | ArrowAccess => unreachable!(),
+            | Plus | Minus | Multiply | Divide | Modulo | ArrowAccess | LongArrow => unreachable!(),
             And => {
                 if left_data_type == &DataType::Boolean {
                     boolean_op!(&left, &right, and_kleene)
