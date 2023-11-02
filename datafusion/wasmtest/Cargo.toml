@@ -38,11 +38,11 @@ crate-type = ["cdylib", "rlib",]
 # code size when deploying.
 console_error_panic_hook = { version = "0.1.1", optional = true }
 
-datafusion-common = { path = "../common", version = "32.0.0", default-features = false }
-datafusion-expr = { path = "../expr" }
-datafusion-optimizer = { path = "../optimizer" }
-datafusion-physical-expr = { path = "../physical-expr" }
-datafusion-sql = { path = "../sql" }
+datafusion-common = { workspace = true }
+datafusion-expr = { workspace = true }
+datafusion-optimizer = { workspace = true }
+datafusion-physical-expr = { workspace = true }
+datafusion-sql = { workspace = true }
 
 # getrandom must be compiled with js feature
 getrandom = { version = "0.2.8", features = ["js"] }

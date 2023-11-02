@@ -32,24 +32,24 @@ path = "src/lib.rs"
 
 [dependencies]
 arrow = { workspace = true }
-async-trait = "0.1.41"
-bigdecimal = "0.4.1"
+async-trait = { workspace = true }
+bigdecimal = { workspace = true }
 bytes = { version = "1.4.0", optional = true }
 chrono = { workspace = true, optional = true }
 datafusion = { path = "../core", version = "32.0.0" }
-datafusion-common = { path = "../common", version = "32.0.0", default-features = false }
+datafusion-common = { workspace = true }
 futures = { version = "0.3.28" }
-half = "2.2.1"
-itertools = "0.11"
-log = "^0.4"
-object_store = "0.7.0"
+half = { workspace = true }
+itertools = { workspace = true }
+log = { workspace = true }
+object_store = { workspace = true }
 postgres-protocol = { version = "0.6.4", optional = true }
 postgres-types = { version = "0.2.4", optional = true }
 rust_decimal = { version = "1.27.0" }
 sqllogictest = "0.17.0"
 sqlparser = { workspace = true }
-tempfile = "3"
-thiserror = "1.0.44"
+tempfile = { workspace = true }
+thiserror = { workspace = true }
 tokio = { version = "1.0" }
 tokio-postgres = { version = "0.7.7", optional = true }
 
@@ -58,8 +58,8 @@ avro = ["datafusion/avro"]
 postgres = ["bytes", "chrono", "tokio-postgres", "postgres-types", "postgres-protocol"]
 
 [dev-dependencies]
-env_logger = "0.10"
-num_cpus = "1.13.0"
+env_logger = { workspace = true }
+num_cpus = { workspace = true }
 
 [[test]]
 harness = false
