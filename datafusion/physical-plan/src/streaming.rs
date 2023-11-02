@@ -36,7 +36,7 @@ use log::debug;
 
 /// A partition that can be converted into a [`SendableRecordBatchStream`]
 ///
-/// Combined with [`StreamingTable`], you can use this trait to implement
+/// Combined with [`StreamingTableExec`], you can use this trait to implement
 /// [`ExecutionPlan`] for a custom source with less boiler plate than
 /// implementing `ExecutionPlan` directly for many use cases.
 pub trait PartitionStream: Send + Sync {
