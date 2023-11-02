@@ -22,21 +22,8 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-
-use datafusion_common::{
-    aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
-    DFField, DFSchema, DFSchemaRef, DataFusionError, FunctionalDependencies,
-    OwnedTableReference, Result, ScalarValue, UnnestOptions,
-};
-pub use datafusion_common::{JoinConstraint, JoinType};
-// backwards compatibility
-pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
-use datafusion_common::tree_node::{
-    RewriteRecursion, Transformed, TreeNode, TreeNodeRewriter, TreeNodeVisitor,
-    VisitRecursion,
-};
-
+use super::dml::CopyTo;
+use super::DdlStatement;
 use crate::dml::CopyOptions;
 use crate::expr::{Alias, Exists, InSubquery, Placeholder};
 use crate::expr_rewriter::create_col_from_scalar_expr;
@@ -53,8 +40,19 @@ use crate::{
     TableSource,
 };
 
-use super::dml::CopyTo;
-use super::DdlStatement;
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion_common::tree_node::{
+    RewriteRecursion, Transformed, TreeNode, TreeNodeRewriter, TreeNodeVisitor,
+    VisitRecursion,
+};
+use datafusion_common::{
+    aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
+    DFField, DFSchema, DFSchemaRef, DataFusionError, FunctionalDependencies,
+    OwnedTableReference, Result, ScalarValue, UnnestOptions,
+};
+// backwards compatibility
+pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
+pub use datafusion_common::{JoinConstraint, JoinType};
 
 /// A LogicalPlan represents the different types of relational
 /// operators (such as Projection, Filter, etc) and can be created by
