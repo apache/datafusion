@@ -1931,8 +1931,8 @@ mod tests {
                 Some(vec![Some(6), Some(7), Some(8)]),
             ]));
 
-        let array2d_1 = Arc::new(wrap_into_list_array(array1d_1.clone())) as ArrayRef;
-        let array2d_2 = Arc::new(wrap_into_list_array(array1d_2.clone())) as ArrayRef;
+        let array2d_1 = Arc::new(array_into_list_array(array1d_1.clone())) as ArrayRef;
+        let array2d_2 = Arc::new(array_into_list_array(array1d_2.clone())) as ArrayRef;
 
         let res =
             align_array_dimensions(vec![array1d_1.to_owned(), array2d_2.to_owned()])
@@ -1946,8 +1946,8 @@ mod tests {
             expected_dim
         );
 
-        let array3d_1 = Arc::new(wrap_into_list_array(array2d_1)) as ArrayRef;
-        let array3d_2 = wrap_into_list_array(array2d_2.to_owned());
+        let array3d_1 = Arc::new(array_into_list_array(array2d_1)) as ArrayRef;
+        let array3d_2 = array_into_list_array(array2d_2.to_owned());
         let res =
             align_array_dimensions(vec![array1d_1, Arc::new(array3d_2.clone())]).unwrap();
 
