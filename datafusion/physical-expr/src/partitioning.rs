@@ -22,24 +22,74 @@ use std::sync::Arc;
 
 use crate::{expr_list_eq_strict_order, EquivalenceProperties, PhysicalExpr};
 
-/// Partitioning schemes supported by [`ExecutionPlan`]s.
+/// Output partitioning supported by [`ExecutionPlan`]s.
 ///
-/// A partition represents an independent stream of data batches that an `ExecutionPlan` can
-/// produce in parallel. Each `ExecutionPlan` must produce at least one
-/// partition, and the number of output partitions varies based on the input and the
-/// operation performed.
+/// When `executed`, `ExecutionPlan`s  produce one or more independent stream of
+/// data batches in parallel, referred to as partitions. The streams are Rust
+/// `aync` [`Stream`]s (a special kind of future). The number of output
+/// partitions varies based on the input and the operation performed.
+///
+/// For example, an `ExecutionPlan` that has output partitioning of 3 will
+/// produce 3 distinct output streams as the result of calling
+/// `ExecutionPlan::execute(0)`, `ExecutionPlan::execute(1)`, and
+/// `ExecutionPlan::execute(2)`, as shown below:
 ///
 /// ```text
-///     ▲      ▲      ▲
-///     │      │      │
-///     │      │      │        An ExecutionPlan with 3
-///     │      │      │        output partitions will
-/// ┌───┴──────┴──────┴──┐     produce 3 streams of
-/// │   ExecutionPlan    │     RecordBatches that run in
-/// └────────────────────┘     parallel.
+///                                                   ...         ...        ...
+///               ...                                  ▲           ▲           ▲
+///                                                    │           │           │
+///                ▲                                   │           │           │
+///                │                                   │           │           │
+///                │                               ┌───┴────┐  ┌───┴────┐  ┌───┴────┐
+///     ┌────────────────────┐                     │ Stream │  │ Stream │  │ Stream │
+///     │   ExecutionPlan    │                     │  (0)   │  │  (1)   │  │  (2)   │
+///     └────────────────────┘                     └────────┘  └────────┘  └────────┘
+///                ▲                                   ▲           ▲           ▲
+///                │                                   │           │           │
+///     ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─                          │           │           │
+///             Input        │                         │           │           │
+///     └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─                          │           │           │
+///                ▲                               ┌ ─ ─ ─ ─   ┌ ─ ─ ─ ─   ┌ ─ ─ ─ ─
+///                │                                 Input  │    Input  │    Input  │
+///                │                               │ Stream    │ Stream    │ Stream
+///                                                   (0)   │     (1)   │     (2)   │
+///               ...                              └ ─ ▲ ─ ─   └ ─ ▲ ─ ─   └ ─ ▲ ─ ─
+///                                                    │           │           │
+///                                                    │           │           │
+///                                                    │           │           │
+///
+// ExecutionPlan with 3 output                     3 (async) streams, one for each
+// partitions                                      output partition
 /// ```
 ///
-/// # Examples
+/// It is common (but not required) that an `ExecutionPlan` has the same number
+/// of input partitions as output partitons. However, some plans have different
+/// numbers such as the `RepartitionExec` that redistributes batches from some
+/// number of inputs to some number of outputs
+///
+/// ```text
+///               ...                                     ...         ...        ...
+///
+///                                                        ▲           ▲           ▲
+///                ▲                                       │           │           │
+///                │                                       │           │           │
+///       ┌────────┴───────────┐                           │           │           │
+///       │  RepartitionExec   │                      ┌────┴───┐  ┌────┴───┐  ┌────┴───┐
+///       └────────────────────┘                      │ Stream │  │ Stream │  │ Stream │
+///                ▲                                  │  (0)   │  │  (1)   │  │  (2)   │
+///                │                                  └────────┘  └────────┘  └────────┘
+///                │                                       ▲           ▲           ▲
+///                ...                                     │           │           │
+///                                                        └──────────┐│┌──────────┘
+///                                                                   │││
+///                                                                   │││
+/// RepartitionExec with 3 output
+/// partitions and 1 input partition                   3 (async) streams, that internally
+///                                                    pull from the same input stream
+///                                                                  ...
+/// ```
+///
+/// # Additional Examples
 ///
 /// A simple `FileScanExec` might produce one output stream (partition) for each
 /// file (note the actual DataFusion file scaners can read individual files in
@@ -52,6 +102,7 @@ use crate::{expr_list_eq_strict_order, EquivalenceProperties, PhysicalExpr};
 /// (partitions) as input streams (partitions).
 ///
 /// [`ExecutionPlan`]: crate::physical_plan::ExecutionPlan
+/// [`Stream`]: futures::stream::Stream
 #[derive(Debug, Clone)]
 pub enum Partitioning {
     /// Allocate batches using a round-robin algorithm and the specified number of partitions
