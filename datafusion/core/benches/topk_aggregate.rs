@@ -78,10 +78,10 @@ async fn aggregate(
     let batch = batches.first().unwrap();
     assert_eq!(batch.num_rows(), 10);
 
-    let actual = format!("{}", pretty_format_batches(&batches)?);
+    let actual = format!("{}", pretty_format_batches(&batches)?).to_lowercase();
     let expected_asc = r#"
 +----------------------------------+--------------------------+
-| trace_id                         | MAX(traces.timestamp_ms) |
+| trace_id                         | max(traces.timestamp_ms) |
 +----------------------------------+--------------------------+
 | 5868861a23ed31355efc5200eb80fe74 | 16909009999999           |
 | 4040e64656804c3d77320d7a0e7eb1f0 | 16909009999998           |
