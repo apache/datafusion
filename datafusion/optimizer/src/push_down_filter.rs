@@ -54,7 +54,7 @@ use std::sync::Arc;
 ///
 /// ```text
 ///  Sort (a, b)
-///    Filter (a > 10)  <-- filter is moved before the sort
+///    Filter (a > 10)  <-- Filter is moved before the sort
 /// ```
 ///
 /// However it is not always possible to push filters down. For example, given a
@@ -74,7 +74,7 @@ use std::sync::Arc;
 ///
 /// The filter-commutative property is plan and column-specific. A filter on `a`
 /// can be pushed through a `Aggregate(group_by = [a], agg=[SUM(b))`. However, a
-/// a filter on  `SUM(b)` can not be pushed through the same aggregate.
+/// filter on  `SUM(b)` can not be pushed through the same aggregate.
 ///
 /// # Handling Conjuctions
 ///
