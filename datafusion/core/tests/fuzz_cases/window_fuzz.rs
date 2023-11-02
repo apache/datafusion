@@ -45,6 +45,7 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
 
