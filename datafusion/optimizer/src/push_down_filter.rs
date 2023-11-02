@@ -76,10 +76,10 @@ use std::sync::Arc;
 /// can be pushed through a `Aggregate(group_by = [a], agg=[SUM(b))`. However, a
 /// filter on  `SUM(b)` can not be pushed through the same aggregate.
 ///
-/// # Handling Conjuctions
+/// # Handling Conjunctions
 ///
 /// It is possible to only push down **part** of a filter expression if is
-/// connected with `AND`s (more formally if it is a "conjuction").
+/// connected with `AND`s (more formally if it is a "conjunction").
 ///
 /// For example, given the following plan:
 ///
