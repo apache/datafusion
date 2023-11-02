@@ -138,7 +138,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_from_wrong_file_extentnion() -> Result<()> {
+    async fn read_from_wrong_file_extension() -> Result<()> {
         let ctx = SessionContext::new();
 
         // Make up a new dataframe.
@@ -155,6 +155,7 @@ mod tests {
             ],
         )?)?;
 
+        // Write the dataframe to a parquet file named 'output1.parquet'
         write_df
             .clone()
             .write_parquet(
@@ -168,7 +169,9 @@ mod tests {
             )
             .await?;
 
+        // Write the dataframe to a parquet file named 'output2.parquet.snappy'
         write_df
+            .clone()
             .write_parquet(
                 "output2.parquet.snappy",
                 DataFrameWriteOptions::new().with_single_file_output(true),
@@ -180,6 +183,20 @@ mod tests {
             )
             .await?;
 
+        // Write the dataframe to a parquet file named 'output3.parquet.snappy.parquet'
+        write_df
+            .write_parquet(
+                "output3.parquet.snappy.parquet",
+                DataFrameWriteOptions::new().with_single_file_output(true),
+                Some(
+                    WriterProperties::builder()
+                        .set_compression(Compression::SNAPPY)
+                        .build(),
+                ),
+            )
+            .await?;
+
+        // Read the dataframe from 'output1.parquet' with the default file extension.
         let read_df = ctx
             .read_parquet(
                 "output1.parquet",
@@ -193,6 +210,21 @@ mod tests {
         let total_rows: usize = results.iter().map(|rb| rb.num_rows()).sum();
         assert_eq!(total_rows, 5);
 
+        // Read the dataframe from 'output2.parquet.snappy' with the correct file extension.
+        let read_df = ctx
+            .read_parquet(
+                "output2.parquet.snappy",
+                ParquetReadOptions {
+                    file_extension: "snappy",
+                    ..Default::default()
+                },
+            )
+            .await?;
+        let results = read_df.collect().await?;
+        let total_rows: usize = results.iter().map(|rb| rb.num_rows()).sum();
+        assert_eq!(total_rows, 5);
+
+        // Read the dataframe from 'output3.parquet.snappy.parquet' with the wrong file extension.
         let read_df = ctx
             .read_parquet(
                 "output2.parquet.snappy",
@@ -204,8 +236,22 @@ mod tests {
 
         assert_eq!(
             read_df.unwrap_err().strip_backtrace(),
-            "Execution error: File extension 'parquet.snappy' does not match the expected extension '.parquet'"
+            "Execution error: File 'output2.parquet.snappy' does not match the expected extension '.parquet'"
         );
+
+        // Read the dataframe from 'output3.parquet.snappy.parquet' with the correct file extension.
+        let read_df = ctx
+            .read_parquet(
+                "output3.parquet.snappy.parquet",
+                ParquetReadOptions {
+                    ..Default::default()
+                },
+            )
+            .await?;
+
+        let results = read_df.collect().await?;
+        let total_rows: usize = results.iter().map(|rb| rb.num_rows()).sum();
+        assert_eq!(total_rows, 5);
         Ok(())
     }
 
