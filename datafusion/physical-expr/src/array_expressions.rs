@@ -27,7 +27,7 @@ use arrow::datatypes::{DataType, Field, UInt64Type};
 use arrow_buffer::NullBuffer;
 
 use datafusion_common::cast::{
-    as_generic_string_array, as_int64_array, as_list_array, as_string_array,
+    as_generic_string_array, as_int64_array, as_list_array, as_string_array, as_int32_array,
 };
 use datafusion_common::utils::wrap_into_list_array;
 use datafusion_common::{
@@ -1435,6 +1435,33 @@ array_replacement_function!(
     replace_all,
     "Array_replace_all SQL function"
 );
+
+pub fn array_replace_v2(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let list_arr = as_list_array(&args[0])?;
+    let from_arr = as_int64_array(&args[1])?;
+    let to_arr = &args[2];
+
+    let row_number = list_arr.len();
+    for i in 0..row_number {
+        let arr = list_arr.value(i);
+        match arr.data_type()  {
+            DataType::Int64 => {
+                let from = from_arr.value(i);
+                let arr = as_int64_array(&arr)?;
+                let to_arr = as_int64_array(&to_arr)?;
+            
+                let to = to_arr.value(i);
+                arr.to_data()
+
+            }
+            _ => not_impl_err!("array_replace_v2 only support int64 array")
+        }
+    }
+
+
+    let arr = Arc::new(list_arr.to_owned()) as ArrayRef;
+    Ok(arr)
+}
 
 macro_rules! to_string {
     ($ARG:expr, $ARRAY:expr, $DELIMITER:expr, $NULL_STRING:expr, $WITH_NULL_STRING:expr, $ARRAY_TYPE:ident) => {{

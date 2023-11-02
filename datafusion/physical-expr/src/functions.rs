@@ -514,7 +514,7 @@ pub fn create_physical_fun(
             make_scalar_function(array_expressions::array_remove_all)(args)
         }),
         BuiltinScalarFunction::ArrayReplace => {
-            Arc::new(|args| make_scalar_function(array_expressions::array_replace)(args))
+            Arc::new(|args| make_scalar_function(array_expressions::array_replace_v2)(args))
         }
         BuiltinScalarFunction::ArrayReplaceN => Arc::new(|args| {
             make_scalar_function(array_expressions::array_replace_n)(args)
