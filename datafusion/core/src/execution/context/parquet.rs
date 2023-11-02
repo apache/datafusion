@@ -156,8 +156,21 @@ mod tests {
         )?)?;
 
         write_df
+            .clone()
             .write_parquet(
-                "output.parquet.snappy",
+                "output1.parquet",
+                DataFrameWriteOptions::new().with_single_file_output(true),
+                Some(
+                    WriterProperties::builder()
+                        .set_compression(Compression::SNAPPY)
+                        .build(),
+                ),
+            )
+            .await?;
+
+        write_df
+            .write_parquet(
+                "output2.parquet.snappy",
                 DataFrameWriteOptions::new().with_single_file_output(true),
                 Some(
                     WriterProperties::builder()
@@ -169,12 +182,26 @@ mod tests {
 
         let read_df = ctx
             .read_parquet(
-                "output.parquet.snappy",
+                "output1.parquet",
+                ParquetReadOptions {
+                    ..Default::default()
+                },
+            )
+            .await?;
+
+        let results = read_df.collect().await?;
+        let total_rows: usize = results.iter().map(|rb| rb.num_rows()).sum();
+        assert_eq!(total_rows, 5);
+
+        let read_df = ctx
+            .read_parquet(
+                "output2.parquet.snappy",
                 ParquetReadOptions {
                     ..Default::default()
                 },
             )
             .await;
+
         assert_eq!(
             read_df.unwrap_err().strip_backtrace(),
             "Execution error: File extension 'parquet.snappy' does not match the expected extension '.parquet'"
