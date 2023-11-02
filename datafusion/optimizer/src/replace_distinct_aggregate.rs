@@ -37,7 +37,7 @@ use datafusion_expr::{Aggregate, Distinct, DistinctOn, Expr, LogicalPlan};
 /// SELECT a, b FROM tab GROUP BY a, b
 /// ```
 ///
-/// On the other hand, in the case of a [[DistinctOn]] query the replacement is
+/// On the other hand, for a `DISTINCT ON` query the replacement is
 /// a bit more involved and effectively converts
 /// ```text
 /// SELECT DISTINCT ON (a) b FROM tab ORDER BY a DESC, c
@@ -51,7 +51,6 @@ use datafusion_expr::{Aggregate, Distinct, DistinctOn, Expr, LogicalPlan};
 ///     GROUP BY a
 /// )
 /// ORDER BY a DESC
-/// ```
 /// ```
 
 /// Optimizer that replaces logical [[Distinct]] with a logical [[Aggregate]]

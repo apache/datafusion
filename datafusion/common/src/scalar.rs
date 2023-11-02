@@ -30,7 +30,7 @@ use crate::cast::{
 };
 use crate::error::{DataFusionError, Result, _internal_err, _not_impl_err};
 use crate::hash_utils::create_hashes;
-use crate::utils::wrap_into_list_array;
+use crate::utils::array_into_list_array;
 use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::compute::kernels::numeric::*;
 use arrow::datatypes::{i256, FieldRef, Fields, SchemaBuilder};
@@ -1667,7 +1667,7 @@ impl ScalarValue {
         } else {
             Self::iter_to_array(values.iter().cloned()).unwrap()
         };
-        Arc::new(wrap_into_list_array(values))
+        Arc::new(array_into_list_array(values))
     }
 
     /// Converts a scalar value into an array of `size` rows.
@@ -2058,7 +2058,7 @@ impl ScalarValue {
                 let list_array = as_list_array(array);
                 let nested_array = list_array.value(index);
                 // Produces a single element `ListArray` with the value at `index`.
-                let arr = Arc::new(wrap_into_list_array(nested_array));
+                let arr = Arc::new(array_into_list_array(nested_array));
 
                 ScalarValue::List(arr)
             }
@@ -2067,7 +2067,7 @@ impl ScalarValue {
                 let list_array = as_fixed_size_list_array(array)?;
                 let nested_array = list_array.value(index);
                 // Produces a single element `ListArray` with the value at `index`.
-                let arr = Arc::new(wrap_into_list_array(nested_array));
+                let arr = Arc::new(array_into_list_array(nested_array));
 
                 ScalarValue::List(arr)
             }
@@ -3052,7 +3052,7 @@ mod tests {
 
         let array = ScalarValue::new_list(scalars.as_slice(), &DataType::Utf8);
 
-        let expected = wrap_into_list_array(Arc::new(StringArray::from(vec![
+        let expected = array_into_list_array(Arc::new(StringArray::from(vec![
             "rust",
             "arrow",
             "data-fusion",
@@ -3091,9 +3091,9 @@ mod tests {
     #[test]
     fn iter_to_array_string_test() {
         let arr1 =
-            wrap_into_list_array(Arc::new(StringArray::from(vec!["foo", "bar", "baz"])));
+            array_into_list_array(Arc::new(StringArray::from(vec!["foo", "bar", "baz"])));
         let arr2 =
-            wrap_into_list_array(Arc::new(StringArray::from(vec!["rust", "world"])));
+            array_into_list_array(Arc::new(StringArray::from(vec!["rust", "world"])));
 
         let scalars = vec![
             ScalarValue::List(Arc::new(arr1)),
@@ -4335,13 +4335,13 @@ mod tests {
         // Define list-of-structs scalars
 
         let nl0_array = ScalarValue::iter_to_array(vec![s0.clone(), s1.clone()]).unwrap();
-        let nl0 = ScalarValue::List(Arc::new(wrap_into_list_array(nl0_array)));
+        let nl0 = ScalarValue::List(Arc::new(array_into_list_array(nl0_array)));
 
         let nl1_array = ScalarValue::iter_to_array(vec![s2.clone()]).unwrap();
-        let nl1 = ScalarValue::List(Arc::new(wrap_into_list_array(nl1_array)));
+        let nl1 = ScalarValue::List(Arc::new(array_into_list_array(nl1_array)));
 
         let nl2_array = ScalarValue::iter_to_array(vec![s1.clone()]).unwrap();
-        let nl2 = ScalarValue::List(Arc::new(wrap_into_list_array(nl2_array)));
+        let nl2 = ScalarValue::List(Arc::new(array_into_list_array(nl2_array)));
 
         // iter_to_array for list-of-struct
         let array = ScalarValue::iter_to_array(vec![nl0, nl1, nl2]).unwrap();

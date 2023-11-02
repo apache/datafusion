@@ -185,7 +185,7 @@ mod tests {
     use arrow_array::types::Int32Type;
     use arrow_array::{Array, ListArray};
     use arrow_buffer::OffsetBuffer;
-    use datafusion_common::utils::wrap_into_list_array;
+    use datafusion_common::utils::array_into_list_array;
     use datafusion_common::{internal_err, DataFusionError};
 
     // arrow::compute::sort cann't sort ListArray directly, so we need to sort the inner primitive array and wrap it back into ListArray.
@@ -201,7 +201,7 @@ mod tests {
         };
 
         let arr = arrow::compute::sort(&arr, None).unwrap();
-        let list_arr = wrap_into_list_array(arr);
+        let list_arr = array_into_list_array(arr);
         ScalarValue::List(Arc::new(list_arr))
     }
 
