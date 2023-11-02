@@ -858,8 +858,8 @@ impl SessionContext {
 
         // check if the file extension matches the expected extension
         for path in &table_paths {
-            if !path.as_str().ends_with(&option_extension) {
-                let file_name = path.prefix().filename().unwrap_or_default();
+            let file_name = path.prefix().filename().unwrap_or_default();
+            if !path.as_str().ends_with(&option_extension) && file_name.contains('.') {
                 return exec_err!(
                     "File '{file_name}' does not match the expected extension '{option_extension}'"
                 );

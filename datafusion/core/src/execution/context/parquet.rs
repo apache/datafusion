@@ -138,7 +138,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_from_wrong_file_extension() -> Result<()> {
+    async fn read_from_different_file_extension() -> Result<()> {
         let ctx = SessionContext::new();
 
         // Make up a new dataframe.
