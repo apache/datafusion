@@ -837,16 +837,6 @@ impl SessionContext {
             .insert(f.name.clone(), Arc::new(f));
     }
 
-    /// Heuristically determines the format (e.g. parquet, csv) to use with the `table_paths`
-    fn infer_types(table_paths: &[ListingTableUrl]) -> Option<String> {
-        let extension = table_paths[0]
-            .prefix()
-            .filename()
-            .map(|filename| filename.split('.').skip(1).collect::<Vec<&str>>().join("."))
-            .unwrap_or("".to_owned());
-        Some(extension)
-    }
-
     /// Creates a [`DataFrame`] for reading a data source.
     ///
     /// For more control such as reading multiple files, you can use
@@ -866,19 +856,14 @@ impl SessionContext {
             return exec_err!("No table paths were provided");
         }
 
-        let extension = Self::infer_types(&table_paths).unwrap();
-        // some the file extension might be started with "." and some not
-        let extension_alternative = ".".to_string() + extension.as_str();
-
-        if option_extension != extension
-            && option_extension != extension_alternative
-            && !extension.is_empty()
-        {
-            return exec_err!(
-                "File extension '{}' does not match the expected extension '{}'",
-                extension,
-                option_extension
-            );
+        // check if the file extension matches the expected extension
+        for path in &table_paths {
+            if !path.as_str().ends_with(&option_extension) {
+                let file_name = path.prefix().filename().unwrap_or_default();
+                return exec_err!(
+                    "File '{file_name}' does not match the expected extension '{option_extension}'"
+                );
+            }
         }
 
         let resolved_schema = options
