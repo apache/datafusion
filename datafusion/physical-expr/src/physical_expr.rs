@@ -272,6 +272,7 @@ pub fn physical_exprs_bag_equal(
 pub fn deduplicate_physical_exprs(exprs: &mut Vec<Arc<dyn PhysicalExpr>>) {
     // TODO: Once we can use `HashSet`s with `Arc<dyn PhysicalExpr>`, this
     //       function should use a `HashSet` to reduce computational complexity.
+    // See issue: https://github.com/apache/arrow-datafusion/issues/8027
     let mut idx = 0;
     while idx < exprs.len() {
         let mut rest_idx = idx + 1;

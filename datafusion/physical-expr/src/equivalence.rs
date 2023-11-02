@@ -327,6 +327,7 @@ impl EquivalenceGroup {
         });
         // TODO: Convert the algorithm below to a version that uses `HashMap`.
         //       once `Arc<dyn PhysicalExpr>` can be stored in `HashMap`.
+        // See issue: https://github.com/apache/arrow-datafusion/issues/8027
         let mut new_classes = vec![];
         for (source, target) in mapping {
             if new_classes.is_empty() {
