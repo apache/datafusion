@@ -1266,7 +1266,9 @@ mod tests {
     use arrow::array::{ArrayRef, Date32Array, Int32Array, UInt32Builder, UInt64Builder};
     use arrow::datatypes::{DataType, Field, Schema};
 
-    use datafusion_common::{assert_batches_sorted_eq, assert_contains, ScalarValue};
+    use datafusion_common::{
+        assert_batches_eq, assert_batches_sorted_eq, assert_contains, ScalarValue,
+    };
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::Literal;
     use hashbrown::raw::RawTable;
@@ -2970,6 +2972,142 @@ mod tests {
                 result_string.contains("bad data error"),
                 "actual: {result_string}"
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn join_splitted_batch() {
+        let left = build_table(
+            ("a1", &vec![1, 2, 3, 4]),
+            ("b1", &vec![1, 1, 1, 1]),
+            ("c1", &vec![0, 0, 0, 0]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20, 30, 40, 50]),
+            ("b2", &vec![1, 1, 1, 1, 1]),
+            ("c2", &vec![0, 0, 0, 0, 0]),
+        );
+        let on = vec![(
+            Column::new_with_schema("b1", &left.schema()).unwrap(),
+            Column::new_with_schema("b2", &right.schema()).unwrap(),
+        )];
+
+        let join_types = vec![
+            JoinType::Inner,
+            JoinType::Left,
+            JoinType::Right,
+            JoinType::Full,
+            JoinType::RightSemi,
+            JoinType::RightAnti,
+            JoinType::LeftSemi,
+            JoinType::LeftAnti,
+        ];
+        let expected_resultset_records = 20;
+        let common_result = [
+            "+----+----+----+----+----+----+",
+            "| a1 | b1 | c1 | a2 | b2 | c2 |",
+            "+----+----+----+----+----+----+",
+            "| 4  | 1  | 0  | 10 | 1  | 0  |",
+            "| 3  | 1  | 0  | 10 | 1  | 0  |",
+            "| 2  | 1  | 0  | 10 | 1  | 0  |",
+            "| 1  | 1  | 0  | 10 | 1  | 0  |",
+            "| 4  | 1  | 0  | 20 | 1  | 0  |",
+            "| 3  | 1  | 0  | 20 | 1  | 0  |",
+            "| 2  | 1  | 0  | 20 | 1  | 0  |",
+            "| 1  | 1  | 0  | 20 | 1  | 0  |",
+            "| 4  | 1  | 0  | 30 | 1  | 0  |",
+            "| 3  | 1  | 0  | 30 | 1  | 0  |",
+            "| 2  | 1  | 0  | 30 | 1  | 0  |",
+            "| 1  | 1  | 0  | 30 | 1  | 0  |",
+            "| 4  | 1  | 0  | 40 | 1  | 0  |",
+            "| 3  | 1  | 0  | 40 | 1  | 0  |",
+            "| 2  | 1  | 0  | 40 | 1  | 0  |",
+            "| 1  | 1  | 0  | 40 | 1  | 0  |",
+            "| 4  | 1  | 0  | 50 | 1  | 0  |",
+            "| 3  | 1  | 0  | 50 | 1  | 0  |",
+            "| 2  | 1  | 0  | 50 | 1  | 0  |",
+            "| 1  | 1  | 0  | 50 | 1  | 0  |",
+            "+----+----+----+----+----+----+",
+        ];
+        let left_batch = [
+            "+----+----+----+",
+            "| a1 | b1 | c1 |",
+            "+----+----+----+",
+            "| 1  | 1  | 0  |",
+            "| 2  | 1  | 0  |",
+            "| 3  | 1  | 0  |",
+            "| 4  | 1  | 0  |",
+            "+----+----+----+",
+        ];
+        let right_batch = [
+            "+----+----+----+",
+            "| a2 | b2 | c2 |",
+            "+----+----+----+",
+            "| 10 | 1  | 0  |",
+            "| 20 | 1  | 0  |",
+            "| 30 | 1  | 0  |",
+            "| 40 | 1  | 0  |",
+            "| 50 | 1  | 0  |",
+            "+----+----+----+",
+        ];
+        let right_empty = [
+            "+----+----+----+",
+            "| a2 | b2 | c2 |",
+            "+----+----+----+",
+            "+----+----+----+",
+        ];
+        let left_empty = [
+            "+----+----+----+",
+            "| a1 | b1 | c1 |",
+            "+----+----+----+",
+            "+----+----+----+",
+        ];
+
+        // validation of partial join results output for different batch_size setting
+        for join_type in join_types {
+            for batch_size in (1..21).rev() {
+                let session_config = SessionConfig::default().with_batch_size(batch_size);
+                let task_ctx = TaskContext::default().with_session_config(session_config);
+                let task_ctx = Arc::new(task_ctx);
+
+                let join =
+                    join(left.clone(), right.clone(), on.clone(), &join_type, false)
+                        .unwrap();
+
+                let stream = join.execute(0, task_ctx).unwrap();
+                let batches = common::collect(stream).await.unwrap();
+
+                // For inner/right join expected batch count equals ceil_div result,
+                // as there is no need to append non-joined build side data.
+                // For other join types it'll be ceil_div + 1 -- for additional batch
+                // containing not visited build side rows (empty in this test case).
+                let expected_batch_count = match join_type {
+                    JoinType::Inner
+                    | JoinType::Right
+                    | JoinType::RightSemi
+                    | JoinType::RightAnti => {
+                        (expected_resultset_records + batch_size - 1) / batch_size
+                    }
+                    _ => (expected_resultset_records + batch_size - 1) / batch_size + 1,
+                };
+                assert_eq!(
+                    batches.len(),
+                    expected_batch_count,
+                    "expected {} output batches for {} join with batch_size = {}",
+                    expected_batch_count,
+                    join_type,
+                    batch_size
+                );
+
+                let expected = match join_type {
+                    JoinType::RightSemi => right_batch.to_vec(),
+                    JoinType::RightAnti => right_empty.to_vec(),
+                    JoinType::LeftSemi => left_batch.to_vec(),
+                    JoinType::LeftAnti => left_empty.to_vec(),
+                    _ => common_result.to_vec(),
+                };
+                assert_batches_eq!(expected, &batches);
+            }
         }
     }
 

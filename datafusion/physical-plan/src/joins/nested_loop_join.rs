@@ -648,20 +648,20 @@ fn adjust_indices_by_join_type(
             // matched
             // unmatched left row will be produced in this batch
             let left_unmatched_indices =
-                get_anti_u64_indices(count_left_batch, &left_indices);
+                get_anti_u64_indices(0..count_left_batch, &left_indices);
             // combine the matched and unmatched left result together
             append_left_indices(left_indices, right_indices, left_unmatched_indices)
         }
         JoinType::LeftSemi => {
             // need to remove the duplicated record in the left side
-            let left_indices = get_semi_u64_indices(count_left_batch, &left_indices);
+            let left_indices = get_semi_u64_indices(0..count_left_batch, &left_indices);
             // the right_indices will not be used later for the `left semi` join
             (left_indices, right_indices)
         }
         JoinType::LeftAnti => {
             // need to remove the duplicated record in the left side
             // get the anti index for the left side
-            let left_indices = get_anti_u64_indices(count_left_batch, &left_indices);
+            let left_indices = get_anti_u64_indices(0..count_left_batch, &left_indices);
             // the right_indices will not be used later for the `left anti` join
             (left_indices, right_indices)
         }
