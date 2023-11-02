@@ -235,7 +235,7 @@ impl MemoryReservation {
         }
     }
 
-    /// Returns a new empty [`MemoryReservation`] with the same [`MemoryConsumer`]
+    /// Returns a new empty [`MemoryReservation`] with the same [`MemoryConsumer`]
     pub fn new_empty(&self) -> Self {
         Self {
             size: 0,
