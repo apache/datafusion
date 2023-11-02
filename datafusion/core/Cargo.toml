@@ -123,6 +123,10 @@ name = "aggregate_query_sql"
 
 [[bench]]
 harness = false
+name = "distinct_query_sql"
+
+[[bench]]
+harness = false
 name = "sort_limit_query_sql"
 
 [[bench]]
