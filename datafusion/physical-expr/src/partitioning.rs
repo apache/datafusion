@@ -24,9 +24,9 @@ use crate::{expr_list_eq_strict_order, EquivalenceProperties, PhysicalExpr};
 
 /// Partitioning schemes supported by [`ExecutionPlan`]s.
 ///
-/// A partition represents an independent stream that an `ExecutionPlan` can
+/// A partition represents an independent stream of data batches that an `ExecutionPlan` can
 /// produce in parallel. Each `ExecutionPlan` must produce at least one
-/// partition, and the number of partitions varies based on the input and the
+/// partition, and the number of output partitions varies based on the input and the
 /// operation performed.
 ///
 /// ```text
