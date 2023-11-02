@@ -89,6 +89,7 @@ pub async fn from_substrait_rel(
                                 location: path.into(),
                                 size,
                                 e_tag: None,
+                                version: None,
                             },
                             partition_values: vec![],
                             range: None,

@@ -198,17 +198,15 @@ impl ListingTableUrl {
         let is_dir = self.url.as_str().ends_with('/');
         let list = match is_dir {
             true => match ctx.runtime_env().cache_manager.get_list_files_cache() {
-                None => futures::stream::once(store.list(Some(&self.prefix)))
-                    .try_flatten()
-                    .boxed(),
+                None => store.list(Some(&self.prefix)),
                 Some(cache) => {
                     if let Some(res) = cache.get(&self.prefix) {
                         debug!("Hit list all files cache");
                         futures::stream::iter(res.as_ref().clone().into_iter().map(Ok))
                             .boxed()
                     } else {
-                        let list_res = store.list(Some(&self.prefix)).await;
-                        let vec = list_res?.try_collect::<Vec<ObjectMeta>>().await?;
+                        let list_res = store.list(Some(&self.prefix));
+                        let vec = list_res.try_collect::<Vec<ObjectMeta>>().await?;
                         cache.put(&self.prefix, Arc::new(vec.clone()));
                         futures::stream::iter(vec.into_iter().map(Ok)).boxed()
                     }

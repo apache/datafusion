@@ -536,6 +536,7 @@ impl TryFrom<&protobuf::PartitionedFile> for PartitionedFile {
                 last_modified: Utc.timestamp_nanos(val.last_modified_ns as i64),
                 size: val.size as usize,
                 e_tag: None,
+                version: None,
             },
             partition_values: val
                 .partition_values

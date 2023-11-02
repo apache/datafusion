@@ -50,3 +50,6 @@ assert_cmd = "2.0"
 ctor = "0.2.0"
 predicates = "3.0"
 rstest = "0.17"
+
+[patch.crates-io]
+object_store = { git = "https://github.com/apache/arrow-rs.git", rev = "ab53d2dd5fb2af2bab69f95a6ddae2226c166500" }

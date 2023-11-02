@@ -1719,6 +1719,7 @@ mod tests {
                 last_modified: Utc.timestamp_nanos(0),
                 size: 1337,
                 e_tag: None,
+                version: None,
             },
             partition_values: vec![],
             range: None,

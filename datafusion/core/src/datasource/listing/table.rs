@@ -1598,13 +1598,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_insert_into_sql_csv_defaults() -> Result<()> {
-        helper_test_insert_into_sql(
-            "csv",
-            FileCompressionType::UNCOMPRESSED,
-            "",
-            None,
-        )
-        .await?;
+        helper_test_insert_into_sql("csv", FileCompressionType::UNCOMPRESSED, "", None)
+            .await?;
         Ok(())
     }
 
@@ -1622,13 +1617,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_insert_into_sql_json_defaults() -> Result<()> {
-        helper_test_insert_into_sql(
-            "json",
-            FileCompressionType::UNCOMPRESSED,
-            "",
-            None,
-        )
-        .await?;
+        helper_test_insert_into_sql("json", FileCompressionType::UNCOMPRESSED, "", None)
+            .await?;
         Ok(())
     }
 

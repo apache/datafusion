@@ -49,9 +49,7 @@ use std::{
 
 use super::listing::ListingTableUrl;
 use crate::error::{DataFusionError, Result};
-use crate::{
-    physical_plan::{DisplayAs, DisplayFormatType},
-};
+use crate::physical_plan::{DisplayAs, DisplayFormatType};
 use crate::{
     datasource::{
         listing::{FileRange, PartitionedFile},
@@ -786,6 +784,7 @@ mod tests {
             last_modified: Utc::now(),
             size: 42,
             e_tag: None,
+            version: None,
         };
 
         PartitionedFile {

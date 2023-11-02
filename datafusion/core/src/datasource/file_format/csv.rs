@@ -673,6 +673,7 @@ mod tests {
             last_modified: DateTime::default(),
             size: usize::MAX,
             e_tag: None,
+            version: None,
         };
 
         let num_rows_to_read = 100;

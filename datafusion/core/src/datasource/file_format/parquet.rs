@@ -1199,7 +1199,9 @@ mod tests {
     use log::error;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
-    use object_store::{GetOptions, GetResult, ListResult, MultipartId};
+    use object_store::{
+        GetOptions, GetResult, ListResult, MultipartId, PutOptions, PutResult,
+    };
     use parquet::arrow::arrow_reader::ArrowReaderOptions;
     use parquet::arrow::ParquetRecordBatchStreamBuilder;
     use parquet::file::metadata::{ParquetColumnIndex, ParquetOffsetIndex};
@@ -1283,7 +1285,12 @@ mod tests {
 
     #[async_trait]
     impl ObjectStore for RequestCountingObjectStore {
-        async fn put(&self, _location: &Path, _bytes: Bytes) -> object_store::Result<()> {
+        async fn put_opts(
+            &self,
+            _location: &Path,
+            _bytes: Bytes,
+            _opts: PutOptions,
+        ) -> object_store::Result<PutResult> {
             Err(object_store::Error::NotImplemented)
         }
 
@@ -1320,12 +1327,13 @@ mod tests {
             Err(object_store::Error::NotImplemented)
         }
 
-        async fn list(
+        fn list(
             &self,
             _prefix: Option<&Path>,
-        ) -> object_store::Result<BoxStream<'_, object_store::Result<ObjectMeta>>>
-        {
-            Err(object_store::Error::NotImplemented)
+        ) -> BoxStream<'_, object_store::Result<ObjectMeta>> {
+            Box::pin(futures::stream::once(async {
+                Err(object_store::Error::NotImplemented)
+            }))
         }
 
         async fn list_with_delimiter(

@@ -76,3 +76,6 @@ overflow-checks = false
 panic = 'unwind'
 rpath = false
 
+
+[patch.crates-io]
+object_store = { git = "https://github.com/apache/arrow-rs.git", rev = "ab53d2dd5fb2af2bab69f95a6ddae2226c166500" }
