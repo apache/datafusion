@@ -2404,17 +2404,13 @@ pub struct Unnest {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
-    use arrow::datatypes::{DataType, Field, Schema};
-
-    use datafusion_common::tree_node::TreeNodeVisitor;
-    use datafusion_common::{not_impl_err, DFSchema, TableReference};
-
+    use super::*;
     use crate::logical_plan::table_scan;
     use crate::{col, exists, in_subquery, lit, placeholder};
-
-    use super::*;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::tree_node::TreeNodeVisitor;
+    use datafusion_common::{not_impl_err, DFSchema, TableReference};
+    use std::collections::HashMap;
 
     fn employee_schema() -> Schema {
         Schema::new(vec![
