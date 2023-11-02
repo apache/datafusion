@@ -89,7 +89,7 @@ use std::sync::Arc;
 /// ```
 ///
 /// The `a > 10` is commutative with the `Aggregate` but  `SUM(b) < 5` is not.
-/// Therefoe it is possible to only push part of the expression, resulting in:
+/// Therefore it is possible to only push part of the expression, resulting in:
 ///
 /// ```text
 /// Filter(SUM(b) < 5)
