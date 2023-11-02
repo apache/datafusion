@@ -122,10 +122,10 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
                     "Cannot infer common array type for arrow operation {lhs} {op} {rhs}"
                 ))
             }),
-        Operator::ArrowAccess => Ok(Signature {
+        Operator::ArrowAccess | Operator::LongArrow => Ok(Signature {
             lhs: lhs.clone(),
             rhs: rhs.clone(),
-            ret: arrow_access_result_type(lhs, rhs)?,
+            ret: get_arrow_return_type(lhs, rhs, op)?,
         }),
         Operator::Plus
         | Operator::Minus
@@ -630,7 +630,7 @@ pub fn json_type() -> DataType {
     DataType::Struct(json_struct)
 }
 
-pub fn arrow_access_result_type(left: &DataType, right: &DataType) -> Result<DataType> {
+pub fn get_arrow_return_type(left: &DataType, right: &DataType, arrow_type: &Operator) -> Result<DataType> {
     if left != &json_type() {
         Err(DataFusionError::Plan(format!(
             "Cannot use arrow access operator on non-json {left}!"
@@ -640,7 +640,11 @@ pub fn arrow_access_result_type(left: &DataType, right: &DataType) -> Result<Dat
             "Right side of of access operator must integer or text (not {right})!"
         )))
     } else {
-        Ok(json_type())
+        match arrow_type {
+            Operator::ArrowAccess => Ok(json_type()),
+            Operator::LongArrow => Ok(DataType::Utf8),
+            _ => unreachable!()
+        }
     }
 }
 
@@ -1406,6 +1410,21 @@ mod tests {
             Operator::Or,
             DataType::Boolean
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_json_access_result_type() -> Result<()> {
+        let input_json = DataType::Struct(Fields::from(vec![Field::new(
+            "json",
+            DataType::Utf8,
+            false,
+        )]));
+        let result_type = get_result_type(&input_json, &Operator::ArrowAccess, &DataType::Int32)?;
+        assert_eq!(result_type, json_type());
+
+        let result_type = get_result_type(&input_json, &Operator::LongArrow, &DataType::Int32)?;
+        assert_eq!(result_type, DataType::Utf8);
         Ok(())
     }
 }

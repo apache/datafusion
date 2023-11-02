@@ -83,6 +83,8 @@ pub enum Operator {
     ArrowAt,
     /// JSON Access, like `->`
     ArrowAccess,
+    /// JSON Access, like `->>`
+    LongArrow,
 }
 
 impl Operator {
@@ -117,7 +119,8 @@ impl Operator {
             | Operator::StringConcat
             | Operator::AtArrow
             | Operator::ArrowAt
-            | Operator::ArrowAccess => None,
+            | Operator::ArrowAccess
+            | Operator::LongArrow => None,
         }
     }
 
@@ -197,7 +200,8 @@ impl Operator {
             | Operator::BitwiseShiftRight
             | Operator::BitwiseShiftLeft
             | Operator::StringConcat
-            | Operator::ArrowAccess => None,
+            | Operator::ArrowAccess
+            | Operator::LongArrow => None,
         }
     }
 
@@ -229,7 +233,8 @@ impl Operator {
             | Operator::StringConcat
             | Operator::AtArrow
             | Operator::ArrowAt
-            | Operator::ArrowAccess => 0,
+            | Operator::ArrowAccess
+            | Operator::LongArrow => 0,
         }
     }
 }
@@ -265,6 +270,7 @@ impl fmt::Display for Operator {
             Operator::AtArrow => "@>",
             Operator::ArrowAt => "<@",
             Operator::ArrowAccess => "->",
+            Operator::LongArrow => "->>",
         };
         write!(f, "{display}")
     }
