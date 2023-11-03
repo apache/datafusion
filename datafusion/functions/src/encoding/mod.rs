@@ -15,120 +15,29 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#[cfg(feature = "encoding_expressions")]
 mod inner;
+#[cfg(feature = "encoding_expressions")]
+mod meta;
 
-use datafusion_common::arrow::datatypes::DataType;
-use datafusion_common::{plan_err, DataFusionError, Result};
-use datafusion_expr::TypeSignature::*;
-use datafusion_expr::{
-    ColumnarValue, FunctionImplementation, ScalarUDF, Signature, Volatility,
-};
+use crate::utils::insert;
+use datafusion_expr::ScalarUDF;
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
-use DataType::*;
-
-// TODO make stub implementations when feature is not activated
-//#[cfg(feature = "encoding_expressions")]
-//pub mod encoding_expressions;
-
-pub fn encode_udf() -> ScalarUDF {
-    ScalarUDF::new_from_impl(Arc::new(EncodeFunc {}))
-}
-
-pub fn decode_udf() -> ScalarUDF {
-    ScalarUDF::new_from_impl(Arc::new(DecodeFunc {}))
-}
-
-fn insert(registry: &mut HashMap<String, Arc<ScalarUDF>>, udf: ScalarUDF) {
-    registry.insert(udf.name().to_string(), Arc::new(udf));
-}
+use std::sync::Arc;
 
 /// Registers the `encode` and `decode` functions with the function registry
+#[cfg(feature = "encoding_expressions")]
 pub fn register(registry: &mut HashMap<String, Arc<ScalarUDF>>) {
-    insert(registry, encode_udf());
-    insert(registry, decode_udf());
+    insert(registry, meta::EncodeFunc {});
+    insert(registry, meta::DecodeFunc {});
 }
 
-struct EncodeFunc {}
+/// Registers the `encode` and `decode` stubs with the function registry
+#[cfg(not(feature = "encoding_expressions"))]
+pub fn register(registry: &mut HashMap<String, Arc<ScalarUDF>>) {
+    let hint = "Requires compilation with feature flag: encoding_expressions.";
 
-static ENCODE_SIGNATURE: OnceLock<Signature> = OnceLock::new();
-
-impl FunctionImplementation for EncodeFunc {
-    fn name(&self) -> &str {
-        "encode"
-    }
-
-    fn signature(&self) -> &Signature {
-        ENCODE_SIGNATURE.get_or_init(|| {
-            Signature::one_of(
-                vec![
-                    Exact(vec![Utf8, Utf8]),
-                    Exact(vec![LargeUtf8, Utf8]),
-                    Exact(vec![Binary, Utf8]),
-                    Exact(vec![LargeBinary, Utf8]),
-                ],
-                Volatility::Immutable,
-            )
-        })
-    }
-
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(match arg_types[0] {
-            Utf8 => Utf8,
-            LargeUtf8 => LargeUtf8,
-            Binary => Utf8,
-            LargeBinary => LargeUtf8,
-            Null => Null,
-            _ => {
-                return plan_err!("The encode function can only accept utf8 or binary.");
-            }
-        })
-    }
-
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        // Put a feature flag here to make sure this is only compiled when the feature is activated
-        inner::encode(args)
-    }
-}
-
-struct DecodeFunc {}
-
-static DECODE_SIGNATURE: OnceLock<Signature> = OnceLock::new();
-
-impl FunctionImplementation for DecodeFunc {
-    fn name(&self) -> &str {
-        "decode"
-    }
-
-    fn signature(&self) -> &Signature {
-        DECODE_SIGNATURE.get_or_init(|| {
-            Signature::one_of(
-                vec![
-                    Exact(vec![Utf8, Utf8]),
-                    Exact(vec![LargeUtf8, Utf8]),
-                    Exact(vec![Binary, Utf8]),
-                    Exact(vec![LargeBinary, Utf8]),
-                ],
-                Volatility::Immutable,
-            )
-        })
-    }
-
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(match arg_types[0] {
-            Utf8 => Binary,
-            LargeUtf8 => LargeBinary,
-            Binary => Binary,
-            LargeBinary => LargeBinary,
-            Null => Null,
-            _ => {
-                return plan_err!("The decode function can only accept utf8 or binary.");
-            }
-        })
-    }
-
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        // Put a feature flag here to make sure this is only compiled when the feature is activated
-        inner::decode(args)
+    for function_name in ["encode", "decode"] {
+        insert(registry, crate::utils::StubFunc::new(function_name, hint));
     }
 }

@@ -37,7 +37,6 @@ enum Encoding {
     Base64,
     Hex,
 }
-
 fn encode_process(value: &ColumnarValue, encoding: Encoding) -> Result<ColumnarValue> {
     match value {
         ColumnarValue::Array(a) => match a.data_type() {

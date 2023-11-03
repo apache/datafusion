@@ -22,6 +22,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 pub mod encoding;
+pub mod utils;
 
 /// Registers all "built in" functions from this crate with the provided registry
 pub fn register_all(registry: &mut HashMap<String, Arc<ScalarUDF>>) {
