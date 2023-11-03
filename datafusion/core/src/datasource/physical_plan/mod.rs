@@ -861,6 +861,7 @@ mod tests {
             object_meta,
             partition_values: vec![],
             range: None,
+            statistics: None,
             extensions: None,
         }
     }

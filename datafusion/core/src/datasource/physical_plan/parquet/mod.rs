@@ -1533,6 +1533,7 @@ mod tests {
                 object_meta: meta.clone(),
                 partition_values: vec![],
                 range: Some(FileRange { start, end }),
+                statistics: None,
                 extensions: None,
             }
         }
@@ -1634,6 +1635,7 @@ mod tests {
                 ),
             ],
             range: None,
+            statistics: None,
             extensions: None,
         };
 
@@ -1728,6 +1730,7 @@ mod tests {
             },
             partition_values: vec![],
             range: None,
+            statistics: None,
             extensions: None,
         };
 
