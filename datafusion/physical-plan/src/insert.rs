@@ -278,6 +278,11 @@ impl ExecutionPlan for FileSinkExec {
             stream,
         )))
     }
+
+    /// Returns the metrics of the underlying [DataSink]
+    fn metrics(&self) -> Option<MetricsSet> {
+        self.sink.metrics()
+    }
 }
 
 /// Create a output record batch with a count
