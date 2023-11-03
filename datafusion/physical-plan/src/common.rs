@@ -31,8 +31,10 @@ use arrow::datatypes::Schema;
 use arrow::ipc::writer::{FileWriter, IpcWriteOptions};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
+use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 
@@ -371,6 +373,38 @@ impl IPCWriter {
 #[deprecated(since = "28.0.0", note = "RecordBatch::get_array_memory_size")]
 pub fn batch_byte_size(batch: &RecordBatch) -> usize {
     batch.get_array_memory_size()
+}
+
+/// Constructs the mapping between a projection's input and output
+pub fn calculate_projection_mapping(
+    expr: &[(Arc<dyn PhysicalExpr>, String)],
+    input_schema: &Arc<Schema>,
+) -> Result<ProjectionMapping> {
+    // Construct a map from the input expressions to the output expression of the projection:
+    let mut projection_mapping = vec![];
+    for (expr_idx, (expression, name)) in expr.iter().enumerate() {
+        let target_expr = Arc::new(Column::new(name, expr_idx)) as _;
+
+        let source_expr = expression.clone().transform_down(&|e| match e
+            .as_any()
+            .downcast_ref::<Column>()
+        {
+            Some(col) => {
+                // Sometimes, expression and its name in the input_schema doesn't match.
+                // This can cause problems. Hence in here we make sure that expression name
+                // matches with the name in the inout_schema.
+                // Conceptually, source_expr and expression should be same.
+                let idx = col.index();
+                let matching_input_field = input_schema.field(idx);
+                let matching_input_column = Column::new(matching_input_field.name(), idx);
+                Ok(Transformed::Yes(Arc::new(matching_input_column)))
+            }
+            None => Ok(Transformed::No(e)),
+        })?;
+
+        projection_mapping.push((source_expr, target_expr));
+    }
+    Ok(projection_mapping)
 }
 
 #[cfg(test)]
