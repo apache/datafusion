@@ -806,7 +806,7 @@ impl SessionContext {
         self.state
             .write()
             .scalar_functions
-            .insert(f.name.clone(), Arc::new(f));
+            .insert(f.name().to_string(), Arc::new(f));
     }
 
     /// Registers an aggregate UDF within this context.

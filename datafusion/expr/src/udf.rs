@@ -15,23 +15,31 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Udf module contains foundational types that are used to represent UDFs in DataFusion.
+//! [`ScalarUDF`]: Scalar User Defined Functions
 
 use crate::{Expr, ReturnTypeFunction, ScalarFunctionImplementation, Signature};
+use arrow::datatypes::DataType;
+use datafusion_common::Result;
 use std::fmt;
 use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
-/// Logical representation of a UDF.
+/// Logical representation of a Scalar User Defined Function.
+///
+/// A scalar function produces a single row output for each row of input.
+///
+/// This struct contains the information DataFusion needs to plan and invoke
+/// functions such name, type signature, return type, and actual implementation.
+///
 #[derive(Clone)]
 pub struct ScalarUDF {
-    /// name
-    pub name: String,
-    /// signature
-    pub signature: Signature,
-    /// Return type
-    pub return_type: ReturnTypeFunction,
+    /// The name of the function
+    name: String,
+    /// The signature (the types of arguments that are supported)
+    signature: Signature,
+    /// Function that returns the return type given the argument types
+    return_type: ReturnTypeFunction,
     /// actual implementation
     ///
     /// The fn param is the wrapped function but be aware that the function will
@@ -40,7 +48,7 @@ pub struct ScalarUDF {
     /// will be passed. In that case the single element is a null array to indicate
     /// the batch's row count (so that the generative zero-argument function can know
     /// the result array size).
-    pub fun: ScalarFunctionImplementation,
+    fun: ScalarFunctionImplementation,
 }
 
 impl Debug for ScalarUDF {
@@ -88,5 +96,24 @@ impl ScalarUDF {
     /// This utility allows using the UDF without requiring access to the registry.
     pub fn call(&self, args: Vec<Expr>) -> Expr {
         Expr::ScalarUDF(crate::expr::ScalarUDF::new(Arc::new(self.clone()), args))
+    }
+
+    /// Returns this function's name
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    /// Returns this function's signature
+    pub fn signature(&self) -> &Signature {
+        &self.signature
+    }
+    /// return the return type of this function given the types of the arguments
+    pub fn return_type(&self, args: &[DataType]) -> Result<DataType> {
+        // Old API returns an Arc of the datatype for some reason
+        let res = (self.return_type)(args)?;
+        Ok(res.as_ref().clone())
+    }
+    /// return the implementation of this function
+    pub fn fun(&self) -> &ScalarFunctionImplementation {
+        &self.fun
     }
 }

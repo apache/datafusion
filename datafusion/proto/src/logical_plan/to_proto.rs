@@ -754,7 +754,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
             }
             Expr::ScalarUDF(ScalarUDF { fun, args }) => Self {
                 expr_type: Some(ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode {
-                    fun_name: fun.name.clone(),
+                    fun_name: fun.name().to_string(),
                     args: args
                         .iter()
                         .map(|expr| expr.try_into())

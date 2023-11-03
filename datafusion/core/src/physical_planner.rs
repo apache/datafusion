@@ -222,7 +222,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             create_function_physical_name(&func.fun.to_string(), false, &func.args)
         }
         Expr::ScalarUDF(ScalarUDF { fun, args }) => {
-            create_function_physical_name(&fun.name, false, args)
+            create_function_physical_name(fun.name(), false, args)
         }
         Expr::WindowFunction(WindowFunction { fun, args, .. }) => {
             create_function_physical_name(&fun.to_string(), false, args)

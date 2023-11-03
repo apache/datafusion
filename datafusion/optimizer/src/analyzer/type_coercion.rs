@@ -323,7 +323,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 let new_expr = coerce_arguments_for_signature(
                     args.as_slice(),
                     &self.schema,
-                    &fun.signature,
+                    fun.signature(),
                 )?;
                 Ok(Expr::ScalarUDF(ScalarUDF::new(fun, new_expr)))
             }
