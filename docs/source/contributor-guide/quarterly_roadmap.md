@@ -29,15 +29,16 @@ A quarterly roadmap will be published to give the DataFusion community visibilit
 - Improve data output (`COPY`, `INSERT` and DataFrame) output capability [#6569](https://github.com/apache/arrow-datafusion/issues/6569)
 - Implementation of `ARRAY` types and related functions [#6980](https://github.com/apache/arrow-datafusion/issues/6980)
 - Write an industrial paper about DataFusion for SIGMOD [#6782](https://github.com/apache/arrow-datafusion/issues/6782)
-- Faster Merging with Parallel Cascaded Merge: [#7181] (https://github.com/apache/arrow-datafusion/issues/7181)
+- Faster Merging with Parallel Cascaded Merge: [#7181](https://github.com/apache/arrow-datafusion/issues/7181)
 
 ### Planning (needs additional help, guidance)
-The following work items are still in the planning / proposal stage. 
+
+The following work items are still in the planning / proposal stage.
 
 - Improved planning speed, especially for schemas with large numbers of columns [#5637](https://github.com/apache/arrow-datafusion/issues/5637) / [#7698](https://github.com/apache/arrow-datafusion/issues/7698)
-- Componentization (split out function packages, etc) - [#7977](https://github.com/apache/arrow-datafusion/issues/7977)
+- Make it easier to customize DataFusion, with split out function packages, etc. - [#7977](https://github.com/apache/arrow-datafusion/issues/7977)
 - User Defined Types [#7923](https://github.com/apache/arrow-datafusion/issues/7923)
-
+- ORC Support [#4707](https://github.com/apache/arrow-datafusion/issues/4707)
 
 ## 2022 Q2
 
