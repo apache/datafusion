@@ -72,6 +72,8 @@ use futures::{Stream, StreamExt};
 use hashbrown::HashSet;
 use parking_lot::Mutex;
 
+use super::hash_join::HashJoinStreamState;
+
 const HASHMAP_SHRINK_SCALE_FACTOR: usize = 4;
 
 /// A symmetric hash join with range conditions is when both streams are hashed on the
@@ -550,6 +552,7 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             null_equals_null: self.null_equals_null,
             final_result: false,
             reservation,
+            state: HashJoinStreamState::default(),
         }))
     }
 }
@@ -586,6 +589,8 @@ struct SymmetricHashJoinStream {
     reservation: SharedMemoryReservation,
     /// Flag indicating whether there is nothing to process anymore
     final_result: bool,
+    /// Stream state for compatibility with HashJoinExec
+    state: HashJoinStreamState,
 }
 
 impl RecordBatchStream for SymmetricHashJoinStream {
@@ -814,11 +819,12 @@ pub(crate) fn join_with_probe_batch(
     column_indices: &[ColumnIndex],
     random_state: &RandomState,
     null_equals_null: bool,
+    hash_join_stream_state: &mut HashJoinStreamState,
 ) -> Result<Option<RecordBatch>> {
     if build_hash_joiner.input_buffer.num_rows() == 0 || probe_batch.num_rows() == 0 {
         return Ok(None);
     }
-    let (build_indices, probe_indices, _) = build_equal_condition_join_indices(
+    let (build_indices, probe_indices) = build_equal_condition_join_indices(
         &build_hash_joiner.hashmap,
         &build_hash_joiner.input_buffer,
         probe_batch,
@@ -831,8 +837,12 @@ pub(crate) fn join_with_probe_batch(
         build_hash_joiner.build_side,
         Some(build_hash_joiner.deleted_offset),
         usize::MAX,
-        None,
+        hash_join_stream_state,
     )?;
+
+    // Resetting state to avoid potential overflows
+    hash_join_stream_state.reset_state();
+
     if need_to_produce_result_in_final(build_hash_joiner.build_side, join_type) {
         record_visited_indices(
             &mut build_hash_joiner.visited_rows,
@@ -1099,6 +1109,7 @@ impl SymmetricHashJoinStream {
                         &self.column_indices,
                         &self.random_state,
                         self.null_equals_null,
+                        &mut self.state,
                     )?;
                     // Increment the offset for the probe hash joiner:
                     probe_hash_joiner.offset += probe_batch.num_rows();

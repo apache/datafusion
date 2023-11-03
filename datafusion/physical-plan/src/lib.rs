@@ -517,4 +517,6 @@ pub fn unbounded_output(plan: &Arc<dyn ExecutionPlan>) -> bool {
 }
 
 #[cfg(test)]
+use rstest_reuse;
+
 pub mod test;

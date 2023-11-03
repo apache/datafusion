@@ -59,5 +59,6 @@ uuid = { version = "^1.2", features = ["v4"] }
 
 [dev-dependencies]
 rstest = { workspace = true }
+rstest_reuse = "0.6.0"
 termtree = "0.4.1"
 tokio = { version = "1.28", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }
