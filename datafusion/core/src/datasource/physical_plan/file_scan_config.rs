@@ -194,6 +194,104 @@ impl FileScanConfig {
             .with_repartition_file_min_size(repartition_file_min_size)
             .repartition_file_groups(&file_groups)
     }
+
+    #[allow(unused)]
+    fn sort_file_groups(
+        table_schema: &Schema,
+        file_groups: Vec<Vec<PartitionedFile>>,
+        target_partitions: usize,
+        sort_order: LexOrdering,
+    ) -> Option<Vec<Vec<PartitionedFile>>> {
+        use arrow::row::{RowConverter, SortField};
+        let sort_columns = sort_order
+            .iter()
+            .map(|sort_expr| {
+                sort_expr
+                    .expr
+                    .as_any()
+                    .downcast_ref::<datafusion_physical_expr::expressions::Column>()
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let flattened_files = file_groups.iter().flatten().collect::<Vec<_>>();
+        let statistics_and_partition_values = flattened_files
+            .iter()
+            .map(|file| {
+                (file
+                    .statistics
+                    .as_ref()
+                    .zip(Some(file.partition_values.as_slice())))
+            })
+            .collect::<Option<Vec<_>>>()?;
+
+        let min_values =
+            get_statistic(table_schema, &statistics_and_partition_values, |s| {
+                s.min_value.get_value().unwrap().clone()
+            })
+            .ok()?;
+
+        let max_values =
+            get_statistic(table_schema, &statistics_and_partition_values, |s| {
+                s.max_value.get_value().unwrap().clone()
+            })
+            .ok()?;
+
+        let min_values_batch =
+            RecordBatch::try_new(Arc::new(table_schema.to_owned()), min_values).ok()?;
+
+        use arrow::compute::lexsort_to_indices;
+        let columns = sort_order
+            .iter()
+            .map(|expr| expr.evaluate_to_sort_column(&min_values_batch))
+            .collect::<Result<Vec<_>>>()
+            .ok()?;
+        let sorted_idx = lexsort_to_indices(&columns, None).ok()?;
+
+        let mut file_groups: Vec<Vec<PartitionedFile>> = vec![];
+
+        // first fit
+
+        for &idx in sorted_idx.values() {
+            let file = flattened_files[idx as usize];
+            for file_group in &mut file_groups {
+                match file_group.last() {
+                    Some(file) => {
+                        // if file.statistics.unwrap().col
+                    }
+                    None => {
+                        file_group.push(file.clone());
+                        break;
+                    }
+                }
+            }
+
+            file_groups.push(vec![file.clone()]);
+        }
+
+        Some(file_groups)
+    }
+}
+
+fn get_statistic(
+    table_schema: &Schema,
+    statistics_and_partition_values: &[(&Statistics, &[ScalarValue])],
+    f: impl Fn(&ColumnStatistics) -> ScalarValue,
+) -> Result<Vec<ArrayRef>> {
+    table_schema
+        .all_fields()
+        .into_iter()
+        .enumerate()
+        .map(|(i, _field)| {
+            ScalarValue::iter_to_array(statistics_and_partition_values.iter().map(
+                |(s, pv)| {
+                    if i < s.column_statistics.len() {
+                        f(&s.column_statistics[i])
+                    } else {
+                        pv[i - s.column_statistics.len()].clone()
+                    }
+                },
+            ))
+        })
+        .collect::<Result<Vec<_>>>()
 }
 
 /// A helper that projects partition columns into the file record batches.
