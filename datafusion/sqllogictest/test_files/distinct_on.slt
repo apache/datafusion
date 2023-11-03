@@ -37,10 +37,6 @@ LOCATION '../../testing/data/csv/aggregate_test_100.csv'
 
 # Basic example: distinct on the first column project the second one, and
 # order by the third
-# TODO: Note that the value for 'a' is actually degenerate, and while Postgres
-# returns the actual first match (4), DataFusion returns the last one, presumably
-# because `first_value` aggregation function doesn't have a dedicated `GroupsAccumulator`
-# and instead uses `GroupsAccumulatorAdapter`.
 query TI
 SELECT DISTINCT ON (c1) c1, c2 FROM aggregate_test_100 ORDER BY c1, c3;
 ----
