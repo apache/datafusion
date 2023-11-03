@@ -725,35 +725,31 @@ pub fn array_prepend(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 fn align_array_dimensions(args: Vec<ArrayRef>) -> Result<Vec<ArrayRef>> {
-    // Find the maximum number of dimensions
-    let max_ndim: u64 = (*args
+    let args_ndim = args
         .iter()
-        .map(|arr| compute_array_ndims(Some(arr.clone())))
-        .collect::<Result<Vec<Option<u64>>>>()?
-        .iter()
-        .max()
-        .unwrap())
-    .unwrap();
+        .map(|arg| compute_array_ndims(Some(arg.to_owned())))
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .map(|x| x.unwrap_or(0))
+        .collect::<Vec<_>>();
+    let max_ndim = args_ndim.iter().max().unwrap_or(&0);
 
     // Align the dimensions of the arrays
     let aligned_args: Result<Vec<ArrayRef>> = args
         .into_iter()
-        .map(|array| {
-            let ndim = compute_array_ndims(Some(array.clone()))?.unwrap();
+        .zip(args_ndim.iter())
+        .map(|(array, ndim)| {
             if ndim < max_ndim {
                 let mut aligned_array = array.clone();
                 for _ in 0..(max_ndim - ndim) {
-                    let data_type = aligned_array.as_ref().data_type().clone();
-                    let offsets: Vec<i32> =
-                        (0..downcast_arg!(aligned_array, ListArray).offsets().len())
-                            .map(|i| i as i32)
-                            .collect();
-                    let field = Arc::new(Field::new("item", data_type, true));
+                    let data_type = aligned_array.data_type().to_owned();
+                    let array_lengths = vec![1; aligned_array.len()];
+                    let offsets = OffsetBuffer::<i32>::from_lengths(array_lengths);
 
                     aligned_array = Arc::new(ListArray::try_new(
-                        field,
-                        OffsetBuffer::new(offsets.into()),
-                        Arc::new(aligned_array.clone()),
+                        Arc::new(Field::new("item", data_type, true)),
+                        offsets,
+                        aligned_array,
                         None,
                     )?)
                 }
@@ -1922,6 +1918,47 @@ mod tests {
     use super::*;
     use arrow::datatypes::Int64Type;
     use datafusion_common::cast::as_uint64_array;
+
+    #[test]
+    fn test_align_array_dimensions() {
+        let array1d_1 =
+            Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+                Some(vec![Some(1), Some(2), Some(3)]),
+                Some(vec![Some(4), Some(5)]),
+            ]));
+        let array1d_2 =
+            Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+                Some(vec![Some(6), Some(7), Some(8)]),
+            ]));
+
+        let array2d_1 = Arc::new(array_into_list_array(array1d_1.clone())) as ArrayRef;
+        let array2d_2 = Arc::new(array_into_list_array(array1d_2.clone())) as ArrayRef;
+
+        let res =
+            align_array_dimensions(vec![array1d_1.to_owned(), array2d_2.to_owned()])
+                .unwrap();
+
+        let expected = as_list_array(&array2d_1).unwrap();
+        let expected_dim = compute_array_ndims(Some(array2d_1.to_owned())).unwrap();
+        assert_ne!(as_list_array(&res[0]).unwrap(), expected);
+        assert_eq!(
+            compute_array_ndims(Some(res[0].clone())).unwrap(),
+            expected_dim
+        );
+
+        let array3d_1 = Arc::new(array_into_list_array(array2d_1)) as ArrayRef;
+        let array3d_2 = array_into_list_array(array2d_2.to_owned());
+        let res =
+            align_array_dimensions(vec![array1d_1, Arc::new(array3d_2.clone())]).unwrap();
+
+        let expected = as_list_array(&array3d_1).unwrap();
+        let expected_dim = compute_array_ndims(Some(array3d_1.to_owned())).unwrap();
+        assert_ne!(as_list_array(&res[0]).unwrap(), expected);
+        assert_eq!(
+            compute_array_ndims(Some(res[0].clone())).unwrap(),
+            expected_dim
+        );
+    }
 
     #[test]
     fn test_array() {
