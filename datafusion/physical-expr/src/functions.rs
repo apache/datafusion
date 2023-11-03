@@ -211,7 +211,7 @@ pub fn create_physical_expr(
         &format!("{fun}"),
         fun_expr,
         input_phy_exprs.to_vec(),
-        &data_type,
+        data_type,
         monotonicity,
     )))
 }

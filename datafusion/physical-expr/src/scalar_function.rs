@@ -77,14 +77,14 @@ impl ScalarFunctionExpr {
         name: &str,
         fun: ScalarFunctionImplementation,
         args: Vec<Arc<dyn PhysicalExpr>>,
-        return_type: &DataType,
+        return_type: DataType,
         monotonicity: Option<FuncMonotonicity>,
     ) -> Self {
         Self {
             fun,
             name: name.to_owned(),
             args,
-            return_type: return_type.clone(),
+            return_type,
             monotonicity,
         }
     }
@@ -165,7 +165,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
             &self.name,
             self.fun.clone(),
             children,
-            self.return_type(),
+            self.return_type().clone(),
             self.monotonicity.clone(),
         )))
     }

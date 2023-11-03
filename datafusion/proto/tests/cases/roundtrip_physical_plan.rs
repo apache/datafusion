@@ -515,7 +515,7 @@ fn roundtrip_builtin_scalar_function() -> Result<()> {
         "acos",
         fun_expr,
         vec![col("a", &schema)?],
-        &DataType::Int64,
+        DataType::Int64,
         None,
     );
 
@@ -549,7 +549,7 @@ fn roundtrip_scalar_udf() -> Result<()> {
         "dummy",
         scalar_fn,
         vec![col("a", &schema)?],
-        &DataType::Int64,
+        DataType::Int64,
         None,
     );
 

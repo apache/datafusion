@@ -1178,7 +1178,7 @@ impl fmt::Display for Expr {
                 fmt_function(f, &func.fun.to_string(), false, &func.args, true)
             }
             Expr::ScalarUDF(ScalarUDF { fun, args }) => {
-                fmt_function(f, &fun.name, false, args, true)
+                fmt_function(f, fun.name(), false, args, true)
             }
             Expr::WindowFunction(WindowFunction {
                 fun,
@@ -1512,7 +1512,7 @@ fn create_name(e: &Expr) -> Result<String> {
             create_function_name(&func.fun.to_string(), false, &func.args)
         }
         Expr::ScalarUDF(ScalarUDF { fun, args }) => {
-            create_function_name(&fun.name, false, args)
+            create_function_name(fun.name(), false, args)
         }
         Expr::WindowFunction(WindowFunction {
             fun,
