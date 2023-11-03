@@ -28,7 +28,7 @@ use crate::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalSortExpr};
 
 use async_trait::async_trait;
 use futures::stream::StreamExt;
@@ -161,6 +161,14 @@ impl ExecutionPlan for StreamingTableExec {
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         self.projected_output_ordering.as_deref()
+    }
+
+    fn equivalence_properties(&self) -> EquivalenceProperties {
+        let mut result = EquivalenceProperties::new(self.schema());
+        if let Some(ordering) = &self.projected_output_ordering {
+            result.add_new_orderings([ordering.clone()])
+        }
+        result
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

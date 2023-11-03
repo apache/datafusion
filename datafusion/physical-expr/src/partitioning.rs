@@ -20,7 +20,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use crate::{expr_list_eq_strict_order, EquivalenceProperties, PhysicalExpr};
+use crate::{physical_exprs_equal, EquivalenceProperties, PhysicalExpr};
 
 /// Partitioning schemes supported by operators.
 #[derive(Debug, Clone)]
@@ -66,7 +66,7 @@ impl Partitioning {
     pub fn satisfy<F: FnOnce() -> EquivalenceProperties>(
         &self,
         required: Distribution,
-        equal_properties: F,
+        eq_properties: F,
     ) -> bool {
         match required {
             Distribution::UnspecifiedDistribution => true,
@@ -78,31 +78,28 @@ impl Partitioning {
                     // then we need to have the partition count and hash functions validation.
                     Partitioning::Hash(partition_exprs, _) => {
                         let fast_match =
-                            expr_list_eq_strict_order(&required_exprs, partition_exprs);
+                            physical_exprs_equal(&required_exprs, partition_exprs);
                         // If the required exprs do not match, need to leverage the eq_properties provided by the child
-                        // and normalize both exprs based on the eq_properties
+                        // and normalize both exprs based on the equivalent groups.
                         if !fast_match {
-                            let eq_properties = equal_properties();
-                            let eq_classes = eq_properties.classes();
-                            if !eq_classes.is_empty() {
+                            let eq_properties = eq_properties();
+                            let eq_groups = eq_properties.eq_group();
+                            if !eq_groups.is_empty() {
                                 let normalized_required_exprs = required_exprs
                                     .iter()
-                                    .map(|e| eq_properties.normalize_expr(e.clone()))
+                                    .map(|e| eq_groups.normalize_expr(e.clone()))
                                     .collect::<Vec<_>>();
                                 let normalized_partition_exprs = partition_exprs
                                     .iter()
-                                    .map(|e| eq_properties.normalize_expr(e.clone()))
+                                    .map(|e| eq_groups.normalize_expr(e.clone()))
                                     .collect::<Vec<_>>();
-                                expr_list_eq_strict_order(
+                                return physical_exprs_equal(
                                     &normalized_required_exprs,
                                     &normalized_partition_exprs,
-                                )
-                            } else {
-                                fast_match
+                                );
                             }
-                        } else {
-                            fast_match
                         }
+                        fast_match
                     }
                     _ => false,
                 }
@@ -120,7 +117,7 @@ impl PartialEq for Partitioning {
                 Partitioning::RoundRobinBatch(count2),
             ) if count1 == count2 => true,
             (Partitioning::Hash(exprs1, count1), Partitioning::Hash(exprs2, count2))
-                if expr_list_eq_strict_order(exprs1, exprs2) && (count1 == count2) =>
+                if physical_exprs_equal(exprs1, exprs2) && (count1 == count2) =>
             {
                 true
             }
@@ -158,15 +155,13 @@ impl Distribution {
 
 #[cfg(test)]
 mod tests {
-    use crate::expressions::Column;
+    use std::sync::Arc;
 
     use super::*;
-    use arrow::datatypes::DataType;
-    use arrow::datatypes::Field;
-    use arrow::datatypes::Schema;
-    use datafusion_common::Result;
+    use crate::expressions::Column;
 
-    use std::sync::Arc;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::Result;
 
     #[test]
     fn partitioning_satisfy_distribution() -> Result<()> {
