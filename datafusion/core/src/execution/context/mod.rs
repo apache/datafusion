@@ -40,6 +40,7 @@ use datafusion_common::{
     exec_err, not_impl_err, plan_datafusion_err, plan_err,
     tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion},
 };
+pub use datafusion_execution::registry::MutableFunctionRegistry;
 use datafusion_execution::registry::SerializerRegistry;
 use datafusion_expr::{
     logical_plan::{DdlStatement, Statement},
@@ -795,48 +796,6 @@ impl SessionContext {
             .add_var_provider(variable_type, provider);
     }
 
-    /// Registers a scalar UDF within this context.
-    ///
-    /// Note in SQL queries, function names are looked up using
-    /// lowercase unless the query uses quotes. For example,
-    ///
-    /// - `SELECT MY_FUNC(x)...` will look for a function named `"my_func"`
-    /// - `SELECT "my_FUNC"(x)` will look for a function named `"my_FUNC"`
-    pub fn register_udf(&self, f: ScalarUDF) {
-        self.state
-            .write()
-            .scalar_functions
-            .insert(f.name().to_string(), Arc::new(f));
-    }
-
-    /// Registers an aggregate UDF within this context.
-    ///
-    /// Note in SQL queries, aggregate names are looked up using
-    /// lowercase unless the query uses quotes. For example,
-    ///
-    /// - `SELECT MY_UDAF(x)...` will look for an aggregate named `"my_udaf"`
-    /// - `SELECT "my_UDAF"(x)` will look for an aggregate named `"my_UDAF"`
-    pub fn register_udaf(&self, f: AggregateUDF) {
-        self.state
-            .write()
-            .aggregate_functions
-            .insert(f.name.clone(), Arc::new(f));
-    }
-
-    /// Registers a window UDF within this context.
-    ///
-    /// Note in SQL queries, window function names are looked up using
-    /// lowercase unless the query uses quotes. For example,
-    ///
-    /// - `SELECT MY_UDWF(x)...` will look for a window function named `"my_udwf"`
-    /// - `SELECT "my_UDWF"(x)` will look for a window function named `"my_UDWF"`
-    pub fn register_udwf(&self, f: WindowUDF) {
-        self.state
-            .write()
-            .window_functions
-            .insert(f.name.clone(), Arc::new(f));
-    }
-
     /// Creates a [`DataFrame`] for reading a data source.
     ///
     /// For more control such as reading multiple files, you can use
@@ -1155,6 +1114,50 @@ impl FunctionRegistry for SessionContext {
 
     fn udwf(&self, name: &str) -> Result<Arc<WindowUDF>> {
         self.state.read().udwf(name)
+    }
+}
+
+impl MutableFunctionRegistry for SessionContext {
+    /// Registers a scalar UDF within this context.
+    ///
+    /// Note in SQL queries, function names are looked up using
+    /// lowercase unless the query uses quotes. For example,
+    ///
+    /// - `SELECT MY_FUNC(x)...` will look for a function named `"my_func"`
+    /// - `SELECT "my_FUNC"(x)` will look for a function named `"my_FUNC"`
+    fn register_udf(&self, f: ScalarUDF) {
+        self.state
+            .write()
+            .scalar_functions
+            .insert(f.name().to_string(), Arc::new(f));
+    }
+
+    /// Registers an aggregate UDF within this context.
+    ///
+    /// Note in SQL queries, aggregate names are looked up using
+    /// lowercase unless the query uses quotes. For example,
+    ///
+    /// - `SELECT MY_UDAF(x)...` will look for an aggregate named `"my_udaf"`
+    /// - `SELECT "my_UDAF"(x)` will look for an aggregate named `"my_UDAF"`
+    fn register_udaf(&self, f: AggregateUDF) {
+        self.state
+            .write()
+            .aggregate_functions
+            .insert(f.name.clone(), Arc::new(f));
+    }
+
+    /// Registers a window UDF within this context.
+    ///
+    /// Note in SQL queries, window function names are looked up using
+    /// lowercase unless the query uses quotes. For example,
+    ///
+    /// - `SELECT MY_UDWF(x)...` will look for a window function named `"my_udwf"`
+    /// - `SELECT "my_UDWF"(x)` will look for a window function named `"my_UDWF"`
+    fn register_udwf(&self, f: WindowUDF) {
+        self.state
+            .write()
+            .window_functions
+            .insert(f.name.clone(), Arc::new(f));
     }
 }
 

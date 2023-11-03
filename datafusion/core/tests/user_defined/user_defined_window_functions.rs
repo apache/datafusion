@@ -31,6 +31,7 @@ use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray};
 use arrow_schema::DataType;
 use datafusion::{assert_batches_eq, prelude::SessionContext};
 use datafusion_common::{Result, ScalarValue};
+use datafusion_execution::MutableFunctionRegistry;
 use datafusion_expr::{
     function::PartitionEvaluatorFactory, PartitionEvaluator, ReturnTypeFunction,
     Signature, Volatility, WindowUDF,

@@ -59,7 +59,7 @@ use crate::logical_expr::{
 use crate::physical_plan::SendableRecordBatchStream;
 use crate::physical_plan::{collect, collect_partitioned};
 use crate::physical_plan::{execute_stream, execute_stream_partitioned, ExecutionPlan};
-use crate::prelude::SessionContext;
+use crate::prelude::*;
 
 /// Contains options that control how data is
 /// written out from a DataFrame

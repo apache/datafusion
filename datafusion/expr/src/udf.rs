@@ -17,7 +17,9 @@
 
 //! [`ScalarUDF`]: Scalar User Defined Functions
 
-use crate::{Expr, ReturnTypeFunction, ScalarFunctionImplementation, Signature};
+use crate::{
+    ColumnarValue, Expr, ReturnTypeFunction, ScalarFunctionImplementation, Signature,
+};
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
 use std::fmt;
@@ -92,6 +94,23 @@ impl ScalarUDF {
         }
     }
 
+    /// Create a new `ScalarUDF` from a `FuncImpl`
+    pub fn new_from_impl(
+        arc_fun: Arc<dyn FunctionImplementation + Send + Sync>,
+    ) -> ScalarUDF {
+        let captured_self = arc_fun.clone();
+        let return_type: ReturnTypeFunction = Arc::new(move |arg_types| {
+            let return_type = captured_self.return_type(arg_types)?;
+            Ok(Arc::new(return_type))
+        });
+
+        let captured_self = arc_fun.clone();
+        let func: ScalarFunctionImplementation =
+            Arc::new(move |args| captured_self.invoke(args));
+
+        ScalarUDF::new(arc_fun.name(), arc_fun.signature(), &return_type, &func)
+    }
+
     /// creates a logical expression with a call of the UDF
     /// This utility allows using the UDF without requiring access to the registry.
     pub fn call(&self, args: Vec<Expr>) -> Expr {
@@ -116,4 +135,19 @@ impl ScalarUDF {
     pub fn fun(&self) -> &ScalarFunctionImplementation {
         &self.fun
     }
+}
+
+/// Convenience trait for implementing ScalarUDF. See [`ScalarUDF::from_impl()`]
+pub trait FunctionImplementation {
+    /// Returns this function's name
+    fn name(&self) -> &str;
+
+    /// Returns this function's signature
+    fn signature(&self) -> &Signature;
+
+    /// return the return type of this function given the types of the arguments
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType>;
+
+    /// Invoke the function on `args`, returning the appropriate result
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue>;
 }

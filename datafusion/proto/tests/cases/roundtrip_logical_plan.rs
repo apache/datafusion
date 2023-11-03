@@ -31,6 +31,7 @@ use datafusion::datasource::provider::TableProviderFactory;
 use datafusion::datasource::TableProvider;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+use datafusion::execution::MutableFunctionRegistry;
 use datafusion::physical_plan::functions::make_scalar_function;
 use datafusion::prelude::{create_udf, CsvReadOptions, SessionConfig, SessionContext};
 use datafusion::test_util::{TestTableFactory, TestTableProvider};

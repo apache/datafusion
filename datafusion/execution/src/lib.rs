@@ -28,6 +28,6 @@ mod stream;
 mod task;
 
 pub use disk_manager::DiskManager;
-pub use registry::FunctionRegistry;
+pub use registry::{FunctionRegistry, MutableFunctionRegistry};
 pub use stream::{RecordBatchStream, SendableRecordBatchStream};
 pub use task::TaskContext;
