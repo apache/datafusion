@@ -1437,7 +1437,7 @@ to_timestamp_nanos(expression)
 
 ### `to_timestamp_nanos`
 
-Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000Z`).
+Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000000Z`).
 Supports strings, integer, and unsigned integer types as input.
 Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
 Integers and unsigned integers are interpreted as nanoseconds since the unix epoch (`1970-01-01T00:00:00Z`)
