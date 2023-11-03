@@ -48,8 +48,9 @@ use datafusion_common::{exec_err, DataFusionError, JoinSide, Result, Statistics}
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_expr::JoinType;
-use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortExpr};
 
+use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 
 /// Data of the inner table side
@@ -188,6 +189,19 @@ impl ExecutionPlan for NestedLoopJoinExec {
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
         distribution_from_join_type(&self.join_type)
+    }
+
+    fn equivalence_properties(&self) -> EquivalenceProperties {
+        join_equivalence_properties(
+            self.left.equivalence_properties(),
+            self.right.equivalence_properties(),
+            &self.join_type,
+            self.schema(),
+            &self.maintains_input_order(),
+            None,
+            // No on columns in nested loop join
+            &[],
+        )
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

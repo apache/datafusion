@@ -106,7 +106,7 @@ const ARROW_MAGIC: [u8; 6] = [b'A', b'R', b'R', b'O', b'W', b'1'];
 const CONTINUATION_MARKER: [u8; 4] = [0xff; 4];
 
 /// Custom implementation of inferring schema. Should eventually be moved upstream to arrow-rs.
-/// See https://github.com/apache/arrow-rs/issues/5021
+/// See `<https://github.com/apache/arrow-rs/issues/5021>`
 async fn infer_schema_from_file_stream(
     mut stream: BoxStream<'static, object_store::Result<Bytes>>,
 ) -> Result<SchemaRef> {
