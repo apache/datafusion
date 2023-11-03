@@ -1319,7 +1319,19 @@ impl SessionState {
             table_factories,
         }
     }
-
+    /// Returns new [`SessionState`] using the provided
+    /// [`SessionConfig`] and [`RuntimeEnv`].
+    #[deprecated(
+        since = "32.0.0",
+        note = "Use SessionState::new_with_config_rt_and_catalog_list"
+    )]
+    pub fn with_config_rt_and_catalog_list(
+        config: SessionConfig,
+        runtime: Arc<RuntimeEnv>,
+        catalog_list: Arc<dyn CatalogList>,
+    ) -> Self {
+        Self::new_with_config_rt_and_catalog_list(config, runtime, catalog_list)
+    }
     fn register_default_schema(
         config: &SessionConfig,
         table_factories: &HashMap<String, Arc<dyn TableProviderFactory>>,
