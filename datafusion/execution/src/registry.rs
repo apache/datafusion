@@ -36,36 +36,6 @@ pub trait FunctionRegistry {
     fn udwf(&self, name: &str) -> Result<Arc<WindowUDF>>;
 }
 
-/// A Function registry that can have functions registered
-pub trait MutableFunctionRegistry {
-    /// Registers a scalar UDF within this context.
-    ///
-    /// Note in SQL queries, function names are looked up using
-    /// lowercase unless the query uses quotes. For example,
-    ///
-    /// - `SELECT MY_FUNC(x)...` will look for a function named `"my_func"`
-    /// - `SELECT "my_FUNC"(x)` will look for a function named `"my_FUNC"`
-    fn register_udf(&self, f: ScalarUDF);
-
-    /// Registers an aggregate UDF within this context.
-    ///
-    /// Note in SQL queries, aggregate names are looked up using
-    /// lowercase unless the query uses quotes. For example,
-    ///
-    /// - `SELECT MY_UDAF(x)...` will look for an aggregate named `"my_udaf"`
-    /// - `SELECT "my_UDAF"(x)` will look for an aggregate named `"my_UDAF"`
-    fn register_udaf(&self, f: AggregateUDF);
-
-    /// Registers a window UDF within this context.
-    ///
-    /// Note in SQL queries, window function names are looked up using
-    /// lowercase unless the query uses quotes. For example,
-    ///
-    /// - `SELECT MY_UDWF(x)...` will look for a window function named `"my_udwf"`
-    /// - `SELECT "my_UDWF"(x)` will look for a window function named `"my_UDWF"`
-    fn register_udwf(&self, f: WindowUDF);
-}
-
 /// Serializer and deserializer registry for extensions like [UserDefinedLogicalNode].
 pub trait SerializerRegistry: Send + Sync {
     /// Serialize this node to a byte array. This serialization should not include

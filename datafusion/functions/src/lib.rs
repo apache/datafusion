@@ -17,4 +17,13 @@
 
 //! Several packages of built in functions for DataFusion
 
+use datafusion_expr::ScalarUDF;
+use std::collections::HashMap;
+use std::sync::Arc;
+
 pub mod encoding;
+
+/// Registers all "built in" functions from this crate with the provided registry
+pub fn register_all(registry: &mut HashMap<String, Arc<ScalarUDF>>) {
+    encoding::register(registry);
+}

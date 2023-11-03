@@ -62,6 +62,7 @@ ctor = "0.2.0"
 datafusion = { path = "datafusion/core" }
 datafusion-common = { path = "datafusion/common" }
 datafusion-expr = { path = "datafusion/expr" }
+datafusion-functions = { path = "datafusion/functions" }
 datafusion-sql = { path = "datafusion/sql" }
 datafusion-optimizer = { path = "datafusion/optimizer" }
 datafusion-physical-expr = { path = "datafusion/physical-expr" }

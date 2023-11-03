@@ -20,7 +20,7 @@ use std::sync::Arc;
 use arrow::array::ArrayRef;
 use arrow::datatypes::DataType;
 
-use datafusion::execution::{FunctionRegistry, MutableFunctionRegistry};
+use datafusion::execution::FunctionRegistry;
 use datafusion::physical_plan::functions::make_scalar_function;
 use datafusion::prelude::SessionContext;
 use datafusion_expr::{col, create_udf, lit};

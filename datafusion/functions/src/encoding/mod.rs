@@ -19,11 +19,11 @@ mod inner;
 
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::{plan_err, DataFusionError, Result};
-use datafusion_execution::registry::MutableFunctionRegistry;
 use datafusion_expr::TypeSignature::*;
 use datafusion_expr::{
     ColumnarValue, FunctionImplementation, ScalarUDF, Signature, Volatility,
 };
+use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 use DataType::*;
 
@@ -39,12 +39,14 @@ pub fn decode_udf() -> ScalarUDF {
     ScalarUDF::new_from_impl(Arc::new(DecodeFunc {}))
 }
 
-/// Registers the `encode` and `decode` functions with the function registry
-pub fn register(registry: &dyn MutableFunctionRegistry) -> Result<()> {
-    registry.register_udf(encode_udf());
-    registry.register_udf(decode_udf());
+fn insert(registry: &mut HashMap<String, Arc<ScalarUDF>>, udf: ScalarUDF) {
+    registry.insert(udf.name().to_string(), Arc::new(udf));
+}
 
-    Ok(())
+/// Registers the `encode` and `decode` functions with the function registry
+pub fn register(registry: &mut HashMap<String, Arc<ScalarUDF>>) {
+    insert(registry, encode_udf());
+    insert(registry, decode_udf());
 }
 
 struct EncodeFunc {}
@@ -95,7 +97,7 @@ static DECODE_SIGNATURE: OnceLock<Signature> = OnceLock::new();
 
 impl FunctionImplementation for DecodeFunc {
     fn name(&self) -> &str {
-        "encode"
+        "decode"
     }
 
     fn signature(&self) -> &Signature {

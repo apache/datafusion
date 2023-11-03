@@ -35,7 +35,6 @@ use datafusion::{
     },
     assert_batches_eq,
     error::Result,
-    execution::MutableFunctionRegistry,
     logical_expr::{
         AccumulatorFactoryFunction, AggregateUDF, ReturnTypeFunction, Signature,
         StateTypeFunction, TypeSignature, Volatility,

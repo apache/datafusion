@@ -40,7 +40,7 @@ backtrace = ["datafusion-common/backtrace"]
 compression = ["xz2", "bzip2", "flate2", "zstd", "async-compression"]
 crypto_expressions = ["datafusion-physical-expr/crypto_expressions", "datafusion-optimizer/crypto_expressions"]
 default = ["crypto_expressions", "encoding_expressions", "regex_expressions", "unicode_expressions", "compression", "parquet"]
-encoding_expressions = ["datafusion-physical-expr/encoding_expressions"]
+encoding_expressions = ["datafusion-functions/encoding_expressions"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
 force_hash_collisions = []
 parquet = ["datafusion-common/parquet", "dep:parquet"]
@@ -65,6 +65,7 @@ dashmap = { workspace = true }
 datafusion-common = { path = "../common", version = "32.0.0", features = ["object_store"], default-features = false }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
+datafusion-functions = { workspace = true }
 datafusion-optimizer = { path = "../optimizer", version = "32.0.0", default-features = false }
 datafusion-physical-expr = { path = "../physical-expr", version = "32.0.0", default-features = false }
 datafusion-physical-plan = { workspace = true }

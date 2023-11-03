@@ -40,7 +40,6 @@ use datafusion_common::{
     exec_err, not_impl_err, plan_datafusion_err, plan_err,
     tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion},
 };
-pub use datafusion_execution::registry::MutableFunctionRegistry;
 use datafusion_execution::registry::SerializerRegistry;
 use datafusion_expr::{
     logical_plan::{DdlStatement, Statement},
@@ -796,6 +795,48 @@ impl SessionContext {
             .add_var_provider(variable_type, provider);
     }
 
+    /// Registers a scalar UDF within this context.
+    ///
+    /// Note in SQL queries, function names are looked up using
+    /// lowercase unless the query uses quotes. For example,
+    ///
+    /// - `SELECT MY_FUNC(x)...` will look for a function named `"my_func"`
+    /// - `SELECT "my_FUNC"(x)` will look for a function named `"my_FUNC"`
+    pub fn register_udf(&self, f: ScalarUDF) {
+        self.state
+            .write()
+            .scalar_functions
+            .insert(f.name().to_string(), Arc::new(f));
+    }
+
+    /// Registers an aggregate UDF within this context.
+    ///
+    /// Note in SQL queries, aggregate names are looked up using
+    /// lowercase unless the query uses quotes. For example,
+    ///
+    /// - `SELECT MY_UDAF(x)...` will look for an aggregate named `"my_udaf"`
+    /// - `SELECT "my_UDAF"(x)` will look for an aggregate named `"my_UDAF"`
+    pub fn register_udaf(&self, f: AggregateUDF) {
+        self.state
+            .write()
+            .aggregate_functions
+            .insert(f.name.clone(), Arc::new(f));
+    }
+
+    /// Registers a window UDF within this context.
+    ///
+    /// Note in SQL queries, window function names are looked up using
+    /// lowercase unless the query uses quotes. For example,
+    ///
+    /// - `SELECT MY_UDWF(x)...` will look for a window function named `"my_udwf"`
+    /// - `SELECT "my_UDWF"(x)` will look for a window function named `"my_UDWF"`
+    pub fn register_udwf(&self, f: WindowUDF) {
+        self.state
+            .write()
+            .window_functions
+            .insert(f.name.clone(), Arc::new(f));
+    }
+
     /// Creates a [`DataFrame`] for reading a data source.
     ///
     /// For more control such as reading multiple files, you can use
@@ -1117,50 +1158,6 @@ impl FunctionRegistry for SessionContext {
     }
 }
 
-impl MutableFunctionRegistry for SessionContext {
-    /// Registers a scalar UDF within this context.
-    ///
-    /// Note in SQL queries, function names are looked up using
-    /// lowercase unless the query uses quotes. For example,
-    ///
-    /// - `SELECT MY_FUNC(x)...` will look for a function named `"my_func"`
-    /// - `SELECT "my_FUNC"(x)` will look for a function named `"my_FUNC"`
-    fn register_udf(&self, f: ScalarUDF) {
-        self.state
-            .write()
-            .scalar_functions
-            .insert(f.name().to_string(), Arc::new(f));
-    }
-
-    /// Registers an aggregate UDF within this context.
-    ///
-    /// Note in SQL queries, aggregate names are looked up using
-    /// lowercase unless the query uses quotes. For example,
-    ///
-    /// - `SELECT MY_UDAF(x)...` will look for an aggregate named `"my_udaf"`
-    /// - `SELECT "my_UDAF"(x)` will look for an aggregate named `"my_UDAF"`
-    fn register_udaf(&self, f: AggregateUDF) {
-        self.state
-            .write()
-            .aggregate_functions
-            .insert(f.name.clone(), Arc::new(f));
-    }
-
-    /// Registers a window UDF within this context.
-    ///
-    /// Note in SQL queries, window function names are looked up using
-    /// lowercase unless the query uses quotes. For example,
-    ///
-    /// - `SELECT MY_UDWF(x)...` will look for a window function named `"my_udwf"`
-    /// - `SELECT "my_UDWF"(x)` will look for a window function named `"my_UDWF"`
-    fn register_udwf(&self, f: WindowUDF) {
-        self.state
-            .write()
-            .window_functions
-            .insert(f.name.clone(), Arc::new(f));
-    }
-}
-
 /// A planner used to add extensions to DataFusion logical and physical plans.
 #[async_trait]
 pub trait QueryPlanner {
@@ -1301,6 +1298,10 @@ impl SessionState {
             );
         }
 
+        // register built in functions
+        let mut scalar_functions = HashMap::new();
+        datafusion_functions::register_all(&mut scalar_functions);
+
         SessionState {
             session_id,
             analyzer: Analyzer::new(),
@@ -1308,7 +1309,7 @@ impl SessionState {
             physical_optimizers: PhysicalOptimizer::new(),
             query_planner: Arc::new(DefaultQueryPlanner {}),
             catalog_list,
-            scalar_functions: HashMap::new(),
+            scalar_functions,
             aggregate_functions: HashMap::new(),
             window_functions: HashMap::new(),
             serializer_registry: Arc::new(EmptySerializerRegistry),
@@ -1318,19 +1319,7 @@ impl SessionState {
             table_factories,
         }
     }
-    /// Returns new [`SessionState`] using the provided
-    /// [`SessionConfig`] and [`RuntimeEnv`].
-    #[deprecated(
-        since = "32.0.0",
-        note = "Use SessionState::new_with_config_rt_and_catalog_list"
-    )]
-    pub fn with_config_rt_and_catalog_list(
-        config: SessionConfig,
-        runtime: Arc<RuntimeEnv>,
-        catalog_list: Arc<dyn CatalogList>,
-    ) -> Self {
-        Self::new_with_config_rt_and_catalog_list(config, runtime, catalog_list)
-    }
+
     fn register_default_schema(
         config: &SessionConfig,
         table_factories: &HashMap<String, Arc<dyn TableProviderFactory>>,
