@@ -209,7 +209,10 @@ impl TableProvider for MemTable {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Create a physical plan from the logical plan.
         // Check that the schema of the plan matches the schema of this table.
-        if !self.schema().equivalent_names_and_types(&input.schema()) {
+        if !self
+            .schema()
+            .logically_equivalent_names_and_types(&input.schema())
+        {
             return plan_err!(
                 "Inserting query must have the same schema with the table."
             );

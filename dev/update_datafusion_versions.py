@@ -43,6 +43,7 @@ crates = {
     'datafusion-wasmtest': 'datafusion/wasmtest/Cargo.toml',
     'datafusion-benchmarks': 'benchmarks/Cargo.toml',
     'datafusion-examples': 'datafusion-examples/Cargo.toml',
+    'datafusion-docs': 'docs/Cargo.toml',
 }
 
 def update_workspace_version(new_version: str):

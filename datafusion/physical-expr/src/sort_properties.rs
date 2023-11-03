@@ -155,36 +155,35 @@ impl Neg for SortProperties {
 #[derive(Debug)]
 pub struct ExprOrdering {
     pub expr: Arc<dyn PhysicalExpr>,
-    pub state: Option<SortProperties>,
-    pub children_states: Option<Vec<SortProperties>>,
+    pub state: SortProperties,
+    pub children_states: Vec<SortProperties>,
 }
 
 impl ExprOrdering {
+    /// Creates a new [`ExprOrdering`] with [`SortProperties::Unordered`] states
+    /// for `expr` and its children.
     pub fn new(expr: Arc<dyn PhysicalExpr>) -> Self {
+        let size = expr.children().len();
         Self {
             expr,
-            state: None,
-            children_states: None,
+            state: SortProperties::Unordered,
+            children_states: vec![SortProperties::Unordered; size],
         }
     }
 
-    pub fn children(&self) -> Vec<ExprOrdering> {
+    /// Updates this [`ExprOrdering`]'s children states with the given states.
+    pub fn with_new_children(mut self, children_states: Vec<SortProperties>) -> Self {
+        self.children_states = children_states;
+        self
+    }
+
+    /// Creates new [`ExprOrdering`] objects for each child of the expression.
+    pub fn children_expr_orderings(&self) -> Vec<ExprOrdering> {
         self.expr
             .children()
             .into_iter()
             .map(ExprOrdering::new)
             .collect()
-    }
-
-    pub fn new_with_children(
-        children_states: Vec<SortProperties>,
-        parent_expr: Arc<dyn PhysicalExpr>,
-    ) -> Self {
-        Self {
-            expr: parent_expr,
-            state: None,
-            children_states: Some(children_states),
-        }
     }
 }
 
@@ -193,7 +192,7 @@ impl TreeNode for ExprOrdering {
     where
         F: FnMut(&Self) -> Result<VisitRecursion>,
     {
-        for child in self.children() {
+        for child in self.children_expr_orderings() {
             match op(&child)? {
                 VisitRecursion::Continue => {}
                 VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
@@ -207,17 +206,20 @@ impl TreeNode for ExprOrdering {
     where
         F: FnMut(Self) -> Result<Self>,
     {
-        let children = self.children();
-        if children.is_empty() {
+        if self.children_states.is_empty() {
             Ok(self)
         } else {
-            Ok(ExprOrdering::new_with_children(
-                children
+            let child_expr_orderings = self.children_expr_orderings();
+            // After mapping over the children, the function `F` applies to the
+            // current object and updates its state.
+            Ok(self.with_new_children(
+                child_expr_orderings
                     .into_iter()
+                    // Update children states after this transformation:
                     .map(transform)
-                    .map_ok(|c| c.state.unwrap_or(SortProperties::Unordered))
+                    // Extract the state (i.e. sort properties) information:
+                    .map_ok(|c| c.state)
                     .collect::<Result<Vec<_>>>()?,
-                self.expr,
             ))
         }
     }
@@ -248,13 +250,13 @@ pub fn update_ordering(
     //       a BinaryExpr like a + b), and there is an ordering equivalence of
     //       it (let's say like c + d), we actually can find it at this step.
     if sort_expr.expr.eq(&node.expr) {
-        node.state = Some(SortProperties::Ordered(sort_expr.options));
+        node.state = SortProperties::Ordered(sort_expr.options);
         return Ok(Transformed::Yes(node));
     }
 
-    if let Some(children_sort_options) = &node.children_states {
+    if !node.expr.children().is_empty() {
         // We have an intermediate (non-leaf) node, account for its children:
-        node.state = Some(node.expr.get_ordering(children_sort_options));
+        node.state = node.expr.get_ordering(&node.children_states);
     } else if let Some(column) = node.expr.as_any().downcast_ref::<Column>() {
         // We have a Column, which is one of the two possible leaf node types:
         node.state = get_indices_of_matching_sort_exprs_with_order_eq(
@@ -268,10 +270,11 @@ pub fn update_ordering(
                 descending: sort_options[0].descending,
                 nulls_first: sort_options[0].nulls_first,
             })
-        });
+        })
+        .unwrap_or(SortProperties::Unordered);
     } else {
         // We have a Literal, which is the other possible leaf node type:
-        node.state = Some(node.expr.get_ordering(&[]));
+        node.state = node.expr.get_ordering(&[]);
     }
     Ok(Transformed::Yes(node))
 }

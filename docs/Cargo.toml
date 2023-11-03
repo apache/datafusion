@@ -16,11 +16,12 @@
 # under the License.
 
 [package]
-name = "datafusion-substrait"
-description = "DataFusion Substrait Producer and Consumer"
-readme = "README.md"
+name = "datafusion-docs-tests"
+description = "DataFusion Documentation Tests"
+publish = false
 version = { workspace = true }
 edition = { workspace = true }
+readme = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
@@ -28,15 +29,4 @@ authors = { workspace = true }
 rust-version = "1.70"
 
 [dependencies]
-async-recursion = "1.0"
-chrono = { workspace = true }
-datafusion = { workspace = true }
-itertools = { workspace = true }
-object_store = { workspace = true }
-prost = "0.12"
-prost-types = "0.12"
-substrait = "0.18.0"
-tokio = "1.17"
-
-[features]
-protoc = ["substrait/protoc"]
+datafusion = { path = "../datafusion/core", version = "32.0.0", default-features = false }

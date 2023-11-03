@@ -328,7 +328,9 @@ impl GroupedHashAggregateStream {
             .collect();
 
         let name = format!("GroupedHashAggregateStream[{partition}]");
-        let reservation = MemoryConsumer::new(name).register(context.memory_pool());
+        let reservation = MemoryConsumer::new(name)
+            .with_can_spill(true)
+            .register(context.memory_pool());
 
         let group_ordering = agg
             .aggregation_ordering
@@ -673,7 +675,16 @@ impl GroupedHashAggregateStream {
         let spillfile = self.runtime.disk_manager.create_tmp_file("HashAggSpill")?;
         let mut writer = IPCWriter::new(spillfile.path(), &emit.schema())?;
         // TODO: slice large `sorted` and write to multiple files in parallel
-        writer.write(&sorted)?;
+        let mut offset = 0;
+        let total_rows = sorted.num_rows();
+
+        while offset < total_rows {
+            let length = std::cmp::min(total_rows - offset, self.batch_size);
+            let batch = sorted.slice(offset, length);
+            offset += batch.num_rows();
+            writer.write(&batch)?;
+        }
+
         writer.finish()?;
         self.spill_state.spills.push(spillfile);
         Ok(())
