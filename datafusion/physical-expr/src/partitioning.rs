@@ -101,8 +101,8 @@ use crate::{expr_list_eq_strict_order, EquivalenceProperties, PhysicalExpr};
 /// Plans such as `FilterExec` produce the same number of output streams
 /// (partitions) as input streams (partitions).
 ///
-/// [`ExecutionPlan`]: crate::physical_plan::ExecutionPlan
-/// [`Stream`]: futures::stream::Stream
+/// [`ExecutionPlan`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html
+/// [`Stream`]: https://docs.rs/futures/latest/futures/stream/trait.Stream.html
 #[derive(Debug, Clone)]
 pub enum Partitioning {
     /// Allocate batches using a round-robin algorithm and the specified number of partitions
