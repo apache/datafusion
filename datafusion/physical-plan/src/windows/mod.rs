@@ -55,13 +55,19 @@ pub use datafusion_physical_expr::window::{
 };
 
 #[derive(Debug, Clone, PartialEq)]
-/// Specifies partition column properties in terms of input ordering
+/// Specifies partition expression properties in terms of existing ordering(s).
+/// As an example if existing ordering is [a ASC, b ASC, c ASC],
+/// `PARTITION BY b` will have `PartitionSearchMode::Linear`.
+/// `PARTITION BY a, c` and `PARTITION BY c, a` will have `PartitionSearchMode::PartiallySorted(0)`, `PartitionSearchMode::PartiallySorted(1)`
+///  respectively (subset `a` defines an ordered section. Indices points to index of `a` among partition by expressions).
+/// `PARTITION BY a, b` and `PARTITION BY b, a` will have `PartitionSearchMode::Sorted` mode.
 pub enum PartitionSearchMode {
-    /// None of the columns among the partition columns is ordered.
+    /// None of the partition expressions is ordered.
     Linear,
-    /// Some columns of the partition columns are ordered but not all
+    /// A non-empty subset of the the partition expressions are ordered.
+    /// Indices stored constructs ordered subset, that is satisfied by existing ordering(s).
     PartiallySorted(Vec<usize>),
-    /// All Partition columns are ordered (Also empty case)
+    /// All Partition expressions are ordered (Also empty case)
     Sorted,
 }
 
