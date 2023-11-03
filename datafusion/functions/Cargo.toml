@@ -1,0 +1,31 @@
+[package]
+name = "datafusion-functions"
+description = "Function packages for the datafusion query engine"
+keywords = ["datafusion", "logical", "plan", "expressions"]
+readme = "README.md"
+version = { workspace = true }
+edition = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
+rust-version = { workspace = true }
+
+[features]
+default = ["encoding_expressions"]
+# enable the encoding expressions
+encoding_expressions = ["base64", "hex"]
+
+
+[lib]
+name = "datafusion_functions"
+path = "src/lib.rs"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+datafusion-common = { workspace = true }
+datafusion-expr = { workspace = true }
+datafusion-execution = { workspace = true }
+base64 = { version = "0.21", optional = true }
+hex = { version = "0.4", optional = true }

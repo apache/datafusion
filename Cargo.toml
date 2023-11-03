@@ -22,6 +22,7 @@ members = [
     "datafusion/core",
     "datafusion/expr",
     "datafusion/execution",
+    "datafusion/functions",
     "datafusion/optimizer",
     "datafusion/physical-expr",
     "datafusion/physical-plan",
