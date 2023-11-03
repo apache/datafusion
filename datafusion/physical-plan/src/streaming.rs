@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Execution plan for streaming [`PartitionStream`]
+//! Generic plans for deferred execution: [`StreamingTableExec`] and [`PartitionStream`]
 
 use std::any::Any;
 use std::sync::Arc;
@@ -35,6 +35,10 @@ use futures::stream::StreamExt;
 use log::debug;
 
 /// A partition that can be converted into a [`SendableRecordBatchStream`]
+///
+/// Combined with [`StreamingTableExec`], you can use this trait to implement
+/// [`ExecutionPlan`] for a custom source with less boiler plate than
+/// implementing `ExecutionPlan` directly for many use cases.
 pub trait PartitionStream: Send + Sync {
     /// Returns the schema of this partition
     fn schema(&self) -> &SchemaRef;
@@ -43,7 +47,10 @@ pub trait PartitionStream: Send + Sync {
     fn execute(&self, ctx: Arc<TaskContext>) -> SendableRecordBatchStream;
 }
 
-/// An [`ExecutionPlan`] for [`PartitionStream`]
+/// An [`ExecutionPlan`] for one or more [`PartitionStream`]s.
+///
+/// If your source can be represented as one or more [`PartitionStream`]s, you can
+/// use this struct to implement [`ExecutionPlan`].
 pub struct StreamingTableExec {
     partitions: Vec<Arc<dyn PartitionStream>>,
     projection: Option<Arc<[usize]>>,
