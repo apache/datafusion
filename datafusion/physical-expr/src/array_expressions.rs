@@ -1243,23 +1243,18 @@ fn general_replace(args: &[ArrayRef], arr_n: Vec<i64>) -> Result<ArrayRef> {
         match arr {
             Some(arr) => {
                 let indices = UInt32Array::from(vec![row_index as u32]);
-                let from_a = arrow::compute::take(from_array, &indices, None)?;
+                let from_arr = arrow::compute::take(from_array, &indices, None)?;
 
-                let eq_array = match from_a.data_type() {
-                    // Not found arrow_ord::cmp_eq for List, compare it by loop
+                let eq_array = match from_arr.data_type() {
+                    // arrow_ord::cmp_eq does not support ListArray, so we need to compare it by loop
                     DataType::List(_) => {
-                        let from_a = as_list_array(&from_a)?.value(0);
-
+                        let from_a = as_list_array(&from_arr)?.value(0);
                         let list_arr = as_list_array(&arr)?;
 
                         let mut bool_values = vec![];
-                        for a in list_arr.iter() {
-                            if let Some(a) = a {
-                                if a.eq(&from_a) {
-                                    bool_values.push(Some(true));
-                                } else {
-                                    bool_values.push(Some(false));
-                                }
+                        for arr in list_arr.iter() {
+                            if let Some(a) = arr {
+                                bool_values.push(Some(a.eq(&from_a)));
                             } else {
                                 return internal_err!(
                                     "Null value is not supported in array_replace"
@@ -1269,8 +1264,8 @@ fn general_replace(args: &[ArrayRef], arr_n: Vec<i64>) -> Result<ArrayRef> {
                         BooleanArray::from(bool_values)
                     }
                     _ => {
-                        let from_a = Scalar::new(from_a);
-                        arrow_ord::cmp::eq(&arr, &from_a)?
+                        let from_arr = Scalar::new(from_arr);
+                        arrow_ord::cmp::eq(&arr, &from_arr)?
                     }
                 };
 
