@@ -1323,7 +1323,9 @@ mod tests {
 
     use arrow::array::{ArrayRef, Date32Array, Int32Array, UInt32Builder, UInt64Builder};
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::{assert_batches_eq, assert_batches_sorted_eq, assert_contains, ScalarValue};
+    use datafusion_common::{
+        assert_batches_eq, assert_batches_sorted_eq, assert_contains, ScalarValue,
+    };
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion_expr::Operator;
