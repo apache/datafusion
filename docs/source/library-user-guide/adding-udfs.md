@@ -50,6 +50,7 @@ fn add_one(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 ```
 
+
 For brevity, we'll skipped some error handling, but e.g. you may want to check that `args.len()` is the expected number of arguments.
 
 This "works" in isolation, i.e. if you have a slice of `ArrayRef`s, you can call `add_one` and it will return a new `ArrayRef` with 1 added to each value.
@@ -69,6 +70,7 @@ let result = result
 assert_eq!(result, &Int64Array::from(vec![Some(2), None, Some(4)]));
 ```
 
+
 The challenge however is that DataFusion doesn't know about this function. We need to register it with DataFusion so that it can be used in the context of a query.
 
 ### Registering a Scalar UDF
@@ -87,6 +89,7 @@ let udf = create_udf(
 );
 ```
 
+
 A few things to note:
 
 - The first argument is the name of the function. This is the name that will be used in SQL queries.
@@ -104,15 +107,16 @@ let ctx = SessionContext::new();
 ctx.register_udf(udf);
 ```
 
+
 At this point, you can use the `add_one` function in your query:
 
 <!-- include: library_udfs::call_udf -->
 
 ```rust
-let ctx = SessionContext::new();
 let sql = "SELECT add_one(1)";
 let df = ctx.sql(&sql).await?;
 ```
+
 
 ## Adding a Window UDF
 

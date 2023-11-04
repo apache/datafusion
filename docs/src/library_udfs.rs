@@ -83,8 +83,8 @@ async fn call_udf() -> Result<()> {
         Volatility::Immutable,
         make_scalar_function(add_one),
     );
-    //begin:call_udf
     let ctx = SessionContext::new();
+    //begin:call_udf
     let sql = "SELECT add_one(1)";
     let df = ctx.sql(&sql).await?;
     //end:call_udf
