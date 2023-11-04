@@ -79,7 +79,7 @@ def update_examples(source_file):
                         raise "failed to read source code from unit tests"
                     for x in source:
                         lines.append(x)
-                    lines.append("```\n\n")
+                    lines.append("```\n")
             elif state == state_before_code:
                 # there can be blank lines between the include directive and the start of the code
                 if len(line.strip()) > 0:

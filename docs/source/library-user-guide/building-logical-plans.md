@@ -66,7 +66,6 @@ let plan = LogicalPlan::Filter(Filter::try_new(filter_expr, Arc::new(table_scan)
 println!("{}", plan.display_indent_schema());
 ```
 
-
 This example produces the following plan:
 
 ```
@@ -122,7 +121,6 @@ let plan = builder.filter(col("id").gt(lit(500)))?.build()?;
 // print the plan
 println!("{}", plan.display_indent_schema());
 ```
-
 
 This example produces the following plan:
 
