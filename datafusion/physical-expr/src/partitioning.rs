@@ -58,8 +58,9 @@ use crate::{expr_list_eq_strict_order, EquivalenceProperties, PhysicalExpr};
 ///                                                    │           │           │
 ///                                                    │           │           │
 ///
-// ExecutionPlan with 3 output                     3 (async) streams, one for each
-// partitions                                      output partition
+/// ExecutionPlan with 1 input                      3 (async) streams, one for each
+/// that has 3 partitions, which itself             output partition
+/// has 3 output partitions
 /// ```
 ///
 /// It is common (but not required) that an `ExecutionPlan` has the same number
@@ -83,9 +84,9 @@ use crate::{expr_list_eq_strict_order, EquivalenceProperties, PhysicalExpr};
 ///                                                        └──────────┐│┌──────────┘
 ///                                                                   │││
 ///                                                                   │││
-/// RepartitionExec with 3 output
-/// partitions and 1 input partition                   3 (async) streams, that internally
-///                                                    pull from the same input stream
+/// RepartitionExec with one input
+/// that has 3 partitions, but                        3 (async) streams, that internally
+/// itself has only 1 output partition                  pull from the same input stream
 ///                                                                  ...
 /// ```
 ///
