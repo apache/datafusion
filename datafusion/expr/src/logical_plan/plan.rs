@@ -633,7 +633,9 @@ impl LogicalPlan {
                         .collect::<Vec<_>>(),
                 }))
             }
-            LogicalPlan::Filter { .. } => {
+            LogicalPlan::Filter(Filter {
+                projected_schema, ..
+            }) => {
                 assert_eq!(1, expr.len());
                 let predicate = expr.pop().unwrap();
 
@@ -675,8 +677,12 @@ impl LogicalPlan {
                 let mut remove_aliases = RemoveAliases {};
                 let predicate = predicate.rewrite(&mut remove_aliases)?;
 
-                Filter::try_new(predicate, Arc::new(inputs[0].clone()), None)
-                    .map(LogicalPlan::Filter)
+                Filter::try_new(
+                    predicate,
+                    Arc::new(inputs[0].clone()),
+                    projected_schema.clone(),
+                )
+                .map(LogicalPlan::Filter)
             }
             LogicalPlan::Repartition(Repartition {
                 partitioning_scheme,
