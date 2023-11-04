@@ -1340,7 +1340,7 @@ fn general_replace(
         Arc::new(Field::new("item", data_type, true)),
         OffsetBuffer::new(offsets.into()),
         values,
-        None,
+        list_array.nulls().cloned(),
     )?))
 }
 
@@ -1847,6 +1847,8 @@ pub fn string_to_array<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef
 mod tests {
     use super::*;
     use arrow::datatypes::Int64Type;
+    use arrow::util::pretty::pretty_format_columns;
+    use arrow_array::types::Int32Type;
     use datafusion_common::cast::as_uint64_array;
 
     #[test]
@@ -2785,6 +2787,53 @@ mod tests {
                 .downcast_ref::<Int64Array>()
                 .unwrap()
                 .values()
+        );
+    }
+
+    #[test]
+    fn test_array_replace_with_null() {
+        // ([3, 1, NULL, 3], 3,    4,    2)  => [4, 1, NULL, 4] NULL not matched
+        // ([3, 1, NULL, 3], NULL, 5,    2)  => [3, 1, NULL, 3]  NULL  not replaced (not eq)
+        // ([NULL],          3,    2,    1)  => NULL
+        // ([3, 1, 3],       3,    NULL, 1)  => [NULL, 1 3]
+        let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>([
+            Some(vec![Some(3), Some(1), None, Some(3)]),
+            Some(vec![Some(3), Some(1), None, Some(3)]),
+            None,
+            Some(vec![Some(3), Some(1), Some(3)]),
+        ]);
+
+        let from = Int32Array::from(vec![Some(3), None, Some(3), Some(3)]);
+        let to = Int32Array::from(vec![Some(4), Some(5), Some(2), None]);
+        let n = vec![2, 2, 1, 1];
+
+        let expected = ListArray::from_iter_primitive::<Int32Type, _, _>([
+            Some(vec![Some(4), Some(1), None, Some(4)]),
+            Some(vec![Some(3), Some(1), None, Some(3)]),
+            None,
+            Some(vec![None, Some(1), Some(3)]),
+        ]);
+        println!("expected_list_array: {:?}", list_array);
+
+        let list_array = Arc::new(list_array) as ArrayRef;
+        let from = Arc::new(from) as ArrayRef;
+        let to = Arc::new(to) as ArrayRef;
+        let expected = Arc::new(expected) as ArrayRef;
+
+        let replaced = general_replace(
+            as_list_array(&list_array).unwrap(),
+            &from as &ArrayRef,
+            &to,
+            n,
+        )
+        .unwrap();
+        assert_eq!(
+            &replaced,
+            &expected,
+            "\n\n{}\n\n{}\n\n{}",
+            pretty_format_columns("input", &[Arc::new(list_array) as _]).unwrap(),
+            pretty_format_columns("replaced", &[replaced.clone()]).unwrap(),
+            pretty_format_columns("expected", &[expected.clone()]).unwrap(),
         );
     }
 
