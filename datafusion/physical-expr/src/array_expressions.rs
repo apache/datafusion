@@ -24,10 +24,12 @@ use arrow::array::*;
 use arrow::buffer::OffsetBuffer;
 use arrow::compute;
 use arrow::datatypes::{DataType, Field, UInt64Type};
+use arrow_array::types::Int64Type;
 use arrow_buffer::NullBuffer;
 
 use datafusion_common::cast::{
-    as_generic_string_array, as_int64_array, as_list_array, as_string_array, as_int32_array,
+    as_generic_string_array, as_int32_array, as_int64_array, as_list_array,
+    as_string_array,
 };
 use datafusion_common::utils::wrap_into_list_array;
 use datafusion_common::{
@@ -1436,31 +1438,130 @@ array_replacement_function!(
     "Array_replace_all SQL function"
 );
 
-pub fn array_replace_v2(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let list_arr = as_list_array(&args[0])?;
-    let from_arr = as_int64_array(&args[1])?;
-    let to_arr = &args[2];
+fn general_replace(args: &[ArrayRef], n: u32) -> Result<ArrayRef> {
+    let list_array = as_list_array(&args[0])?;
+    let from_array = &args[1];
+    let to_array = &args[2];
 
-    let row_number = list_arr.len();
-    for i in 0..row_number {
-        let arr = list_arr.value(i);
-        match arr.data_type()  {
-            DataType::Int64 => {
-                let from = from_arr.value(i);
-                let arr = as_int64_array(&arr)?;
-                let to_arr = as_int64_array(&to_arr)?;
-            
-                let to = to_arr.value(i);
-                arr.to_data()
+    let mut offsets: Vec<i32> = vec![0];
+    // TODO: change to array value type
+    let mut values = new_empty_array(from_array.data_type());
 
+    for (row_index, arr) in list_array.iter().enumerate() {
+        let last_offset: i32 = offsets.last().copied().ok_or_else(|| {
+            DataFusionError::Internal(format!("offsets should not be empty"))
+        })?;
+        match arr {
+            Some(arr) => {
+                let indices = UInt32Array::from(vec![row_index as u32]);
+                let p = arrow::compute::take(from_array, &indices, None).unwrap();
+                let from_a = Scalar::new(p);
+                println!("arr: {:?}, from_a: {:?}", arr, from_a);
+                let eq_array = arrow_ord::cmp::eq(&arr, &from_a).unwrap();
+
+                let arrays = vec![arr, to_array.clone()];
+                let arrays_data = arrays
+                    .iter()
+                    .map(|a| a.to_data())
+                    .collect::<Vec<ArrayData>>();
+                let arrays_data = arrays_data.iter().collect::<Vec<&ArrayData>>();
+
+                let arrays = arrays
+                    .iter()
+                    .map(|arr| arr.as_ref())
+                    .collect::<Vec<&dyn Array>>();
+                let capacity = Capacities::Array(arrays.iter().map(|a| a.len()).sum());
+
+                let mut mutable =
+                    MutableArrayData::with_capacities(arrays_data, false, capacity);
+
+                let mut counter = 0;
+                for (i, itm) in eq_array.iter().enumerate() {
+                    if let Some(v) = itm {
+                        if v {
+                            mutable.extend(1, row_index, row_index + 1);
+                            counter += 1;
+                            if counter == n {
+                                // extend the rest of the array
+                                mutable.extend(0, i + 1, eq_array.len());
+                                break;
+                            }
+                        } else {
+                            mutable.extend(0, i, i + 1);
+                        }
+                    } else {
+                    }
+                }
+
+                let data = mutable.freeze();
+                let replaced_array = arrow_array::make_array(data);
+                println!("replaced_array: {:?}", replaced_array);
+
+                let v = arrow::compute::concat(&[&values, &replaced_array])?;
+                values = v;
+                offsets.push(last_offset + replaced_array.len() as i32);
             }
-            _ => not_impl_err!("array_replace_v2 only support int64 array")
+            None => {
+                offsets.push(last_offset);
+            }
         }
     }
 
+    let field = Arc::new(Field::new("item", from_array.data_type().clone(), true));
 
-    let arr = Arc::new(list_arr.to_owned()) as ArrayRef;
-    Ok(arr)
+    let res = Arc::new(ListArray::try_new(
+        field,
+        OffsetBuffer::new(offsets.into()),
+        Arc::new(values),
+        None,
+    )?);
+    Ok(res)
+}
+
+pub fn array_replace_v2(args: &[ArrayRef]) -> Result<ArrayRef> {
+    // let list_arr = as_list_array(&args[0])?;
+    // let from_arr = as_int64_array(&args[1])?;
+    // let to_arr = &args[2];
+
+    // let row_number = list_arr.len();
+    // for i in 0..row_number {
+    //     let arr = list_arr.value(i);
+    //     match arr.data_type() {
+    //         DataType::Int64 => {
+    //             let from = from_arr.value(i);
+    //             let arr = as_int64_array(&arr)?;
+    //             let to_arr = as_int64_array(&to_arr)?;
+
+    //             let to = to_arr.value(i);
+    //             println!("arr: {:?}, from: {}, to: {}", arr, from, to);
+    //         }
+    //         _ => return not_impl_err!("array_replace_v2 only support int64 array"),
+    //     }
+    // }
+
+    // let arr = Arc::new(list_arr.to_owned()) as ArrayRef;
+    // Ok(arr)
+
+    let arr = as_list_array(&args[0])?;
+    let from = &args[1];
+    let to = &args[2];
+    let max = Int64Array::from_value(1, args[0].len());
+
+    let res = match arr.value_type() {
+        DataType::List(field) => {
+            macro_rules! array_function {
+                ($ARRAY_TYPE:ident) => {
+                    general_replace_list!(arr, from, to, max, $ARRAY_TYPE)
+                };
+            }
+            call_array_function!(field.data_type(), true)
+        }
+        data_type => {
+            return general_replace(args, 1);
+        }
+    };
+
+    Ok(res)
 }
 
 macro_rules! to_string {
@@ -1948,7 +2049,47 @@ pub fn string_to_array<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef
 mod tests {
     use super::*;
     use arrow::datatypes::Int64Type;
+    use arrow_array;
+    use arrow_ord;
     use datafusion_common::cast::as_uint64_array;
+
+    #[test]
+    fn test_eq() {
+        let a = Arc::new(Int64Array::from(vec![Some(1), Some(2), Some(3)])) as ArrayRef;
+
+        // let b = Int64Array::new_scalar(2);
+        let b = Arc::new(Int64Array::from(vec![Some(2)])) as ArrayRef;
+        let b = Scalar::new(b);
+        let c = arrow_ord::cmp::eq(&a, &b).unwrap();
+        let d = Arc::new(Int64Array::from(vec![Some(4)])) as ArrayRef;
+
+        let arrays = vec![a.clone(), d.clone()];
+        let a_data = a.into_data();
+        let d_data = d.into_data();
+
+        let arrays = arrays.iter().map(|x| x.as_ref()).collect::<Vec<_>>();
+        let capacity = Capacities::Array(arrays.iter().map(|a| a.len()).sum());
+
+        let array_data = vec![a_data.clone(), d_data.clone()];
+        let array_data = array_data.iter().collect::<Vec<_>>();
+
+        let mut mutable = MutableArrayData::with_capacities(array_data, false, capacity);
+
+        for (i, itm) in c.iter().enumerate() {
+            if let Some(v) = itm {
+                if v {
+                    mutable.extend(1, 0, 1);
+                } else {
+                    mutable.extend(0, i, i + 1);
+                }
+            } else {
+            }
+        }
+
+        let data = mutable.freeze();
+        let res = arrow_array::make_array(data);
+        println!("res: {:?}", res);
+    }
 
     #[test]
     fn test_array() {
