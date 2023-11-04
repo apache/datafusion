@@ -55,8 +55,8 @@ pub use datafusion_physical_expr::window::{
 };
 
 #[derive(Debug, Clone, PartialEq)]
-/// Specifies aggregation grouping and/or window partitioning properties of an
-/// expression in terms of the existing ordering.
+/// Specifies aggregation grouping and/or window partitioning properties of a
+/// set of expressions in terms of the existing ordering.
 /// For example, if the existing ordering is `[a ASC, b ASC, c ASC]`:
 /// - A `PARTITION BY b` clause will result in `Linear` mode.
 /// - A `PARTITION BY a, c` or a `PARTITION BY c, a` clause will result in
@@ -66,15 +66,15 @@ pub use datafusion_physical_expr::window::{
 ///   `Sorted` mode.
 /// Note that the examples above are applicable for `GROUP BY` clauses too.
 pub enum PartitionSearchMode {
-    /// There is no partial permutation of the partition expressions satisfying
-    /// the existing ordering.
+    /// There is no partial permutation of the expressions satisfying the
+    /// existing ordering.
     Linear,
-    /// There is a partial permutation of the partition expressions satisfying
-    /// the existing ordering. Indices describing the longest partial permutation
+    /// There is a partial permutation of the expressions satisfying the
+    /// existing ordering. Indices describing the longest partial permutation
     /// are stored in the vector.
     PartiallySorted(Vec<usize>),
-    /// There is a (full) permutation of the partition expressions satisfying
-    /// the existing ordering.
+    /// There is a (full) permutation of the expressions satisfying the
+    /// existing ordering.
     Sorted,
 }
 
