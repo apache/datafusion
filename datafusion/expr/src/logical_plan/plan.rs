@@ -162,7 +162,9 @@ impl LogicalPlan {
                 projected_schema, ..
             }) => projected_schema,
             LogicalPlan::Projection(Projection { schema, .. }) => schema,
-            LogicalPlan::Filter(Filter { input, .. }) => input.schema(),
+            LogicalPlan::Filter(Filter {
+                projected_schema, ..
+            }) => projected_schema,
             LogicalPlan::Distinct(Distinct { input }) => input.schema(),
             LogicalPlan::Window(Window { schema, .. }) => schema,
             LogicalPlan::Aggregate(Aggregate { schema, .. }) => schema,
@@ -1547,8 +1549,21 @@ impl LogicalPlan {
                     }
                     LogicalPlan::Filter(Filter {
                         predicate: ref expr,
+                        projection,
+                        projected_schema,
                         ..
-                    }) => write!(f, "Filter: {expr}"),
+                    }) => {
+                        if let Some(indices) = projection {
+                            let names: Vec<&str> = indices
+                                .iter()
+                                .map(|i| projected_schema.field(*i).name().as_str())
+                                .collect();
+
+                            write!(f, "Filter: {expr}, projection=[{}]", names.join(", "))
+                        } else {
+                            write!(f, "Filter: {expr}")
+                        }
+                    }
                     LogicalPlan::Window(Window {
                         ref window_expr, ..
                     }) => {
