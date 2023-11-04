@@ -73,13 +73,13 @@ def update_examples(source_file):
                     test_file = matches.group(1)
                     test_method = matches.group(2)
                     test_filename = "src/{}.rs".format(test_file)
-                    lines.append("```rust\n")
+                    lines.append("\n```rust\n")
                     source = read_source(test_filename, test_method)
                     if len(source) == 0:
                         raise "failed to read source code from unit tests"
                     for x in source:
                         lines.append(x)
-                    lines.append("```\n")
+                    lines.append("```\n\n")
             elif state == state_before_code:
                 # there can be blank lines between the include directive and the start of the code
                 if len(line.strip()) > 0:
