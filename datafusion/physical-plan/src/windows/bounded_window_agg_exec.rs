@@ -30,8 +30,8 @@ use std::task::{Context, Poll};
 use crate::expressions::PhysicalSortExpr;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::windows::{
-    calc_requirements, get_ordered_partition_by_indices, window_ordering_equivalence,
-    PartitionSearchMode,
+    calc_requirements, get_ordered_partition_by_indices, get_partition_by_sort_exprs,
+    window_equivalence_properties, PartitionSearchMode,
 };
 use crate::{
     ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
@@ -58,8 +58,7 @@ use datafusion_physical_expr::window::{
     PartitionBatches, PartitionKey, PartitionWindowAggStates, WindowState,
 };
 use datafusion_physical_expr::{
-    EquivalenceProperties, OrderingEquivalenceProperties, PhysicalExpr,
-    PhysicalSortRequirement,
+    EquivalenceProperties, PhysicalExpr, PhysicalSortRequirement,
 };
 
 use ahash::RandomState;
@@ -150,9 +149,12 @@ impl BoundedWindowAggExec {
     // Hence returned `PhysicalSortExpr` corresponding to `PARTITION BY` columns can be used safely
     // to calculate partition separation points
     pub fn partition_by_sort_keys(&self) -> Result<Vec<PhysicalSortExpr>> {
-        // Partition by sort keys indices are stored in self.ordered_partition_by_indices.
-        let sort_keys = self.input.output_ordering().unwrap_or(&[]);
-        get_at_indices(sort_keys, &self.ordered_partition_by_indices)
+        let partition_by = self.window_expr()[0].partition_by();
+        get_partition_by_sort_exprs(
+            &self.input,
+            partition_by,
+            &self.ordered_partition_by_indices,
+        )
     }
 
     /// Initializes the appropriate [`PartitionSearcher`] implementation from
@@ -264,13 +266,9 @@ impl ExecutionPlan for BoundedWindowAggExec {
         }
     }
 
+    /// Get the [`EquivalenceProperties`] within the plan
     fn equivalence_properties(&self) -> EquivalenceProperties {
-        self.input().equivalence_properties()
-    }
-
-    /// Get the OrderingEquivalenceProperties within the plan
-    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        window_ordering_equivalence(&self.schema, &self.input, &self.window_expr)
+        window_equivalence_properties(&self.schema, &self.input, &self.window_expr)
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {

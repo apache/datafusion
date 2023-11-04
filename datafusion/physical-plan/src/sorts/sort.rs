@@ -835,7 +835,10 @@ impl ExecutionPlan for SortExec {
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
-        self.input.equivalence_properties()
+        // Reset the ordering equivalence class with the new ordering:
+        self.input
+            .equivalence_properties()
+            .with_reorder(self.expr.to_vec())
     }
 
     fn with_new_children(

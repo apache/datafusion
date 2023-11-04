@@ -22,8 +22,7 @@ use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use crate::physical_expr::down_cast_any_ref;
-use crate::utils::expr_list_eq_any_order;
+use crate::physical_expr::{down_cast_any_ref, physical_exprs_bag_equal};
 use crate::PhysicalExpr;
 
 use arrow::array::*;
@@ -410,7 +409,7 @@ impl PartialEq<dyn Any> for InListExpr {
             .downcast_ref::<Self>()
             .map(|x| {
                 self.expr.eq(&x.expr)
-                    && expr_list_eq_any_order(&self.list, &x.list)
+                    && physical_exprs_bag_equal(&self.list, &x.list)
                     && self.negated == x.negated
             })
             .unwrap_or(false)

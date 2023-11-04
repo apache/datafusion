@@ -1391,10 +1391,11 @@ extract(field FROM source)
 
 ### `to_timestamp`
 
-Converts a value to RFC3339 nanosecond timestamp format (`YYYY-MM-DDT00:00:00Z`).
-Supports timestamp, integer, and unsigned integer types as input.
-Integers and unsigned integers are parsed as Unix second timestamps and
-return the corresponding RFC3339 timestamp.
+Converts a value to a timestamp (`YYYY-MM-DDT00:00:00Z`).
+Supports strings, integer, and unsigned integer types as input.
+Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
+Integers and unsigned integers are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`)
+return the corresponding timestamp.
 
 ```
 to_timestamp(expression)
@@ -1407,10 +1408,11 @@ to_timestamp(expression)
 
 ### `to_timestamp_millis`
 
-Converts a value to RFC3339 millisecond timestamp format (`YYYY-MM-DDT00:00:00.000Z`).
-Supports timestamp, integer, and unsigned integer types as input.
-Integers and unsigned integers are parsed as Unix nanosecond timestamps and
-return the corresponding RFC3339 timestamp.
+Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000Z`).
+Supports strings, integer, and unsigned integer types as input.
+Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
+Integers and unsigned integers are interpreted as milliseconds since the unix epoch (`1970-01-01T00:00:00Z`)
+return the corresponding timestamp.
 
 ```
 to_timestamp_millis(expression)
@@ -1423,10 +1425,11 @@ to_timestamp_millis(expression)
 
 ### `to_timestamp_micros`
 
-Converts a value to RFC3339 microsecond timestamp format (`YYYY-MM-DDT00:00:00.000000Z`).
-Supports timestamp, integer, and unsigned integer types as input.
-Integers and unsigned integers are parsed as Unix nanosecond timestamps and
-return the corresponding RFC3339 timestamp.
+Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000Z`).
+Supports strings, integer, and unsigned integer types as input.
+Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
+Integers and unsigned integers are interpreted as microseconds since the unix epoch (`1970-01-01T00:00:00Z`)
+return the corresponding timestamp.
 
 ```
 to_timestamp_nanos(expression)
@@ -1434,10 +1437,11 @@ to_timestamp_nanos(expression)
 
 ### `to_timestamp_nanos`
 
-Converts a value to RFC3339 nanosecond timestamp format (`YYYY-MM-DDT00:00:00.000000000Z`).
-Supports timestamp, integer, and unsigned integer types as input.
-Integers and unsigned integers are parsed as Unix nanosecond timestamps and
-return the corresponding RFC3339 timestamp.
+Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000000Z`).
+Supports strings, integer, and unsigned integer types as input.
+Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
+Integers and unsigned integers are interpreted as nanoseconds since the unix epoch (`1970-01-01T00:00:00Z`)
+return the corresponding timestamp.
 
 ```
 to_timestamp_nanos(expression)
@@ -1450,10 +1454,11 @@ to_timestamp_nanos(expression)
 
 ### `to_timestamp_seconds`
 
-Converts a value to RFC3339 second timestamp format (`YYYY-MM-DDT00:00:00Z`).
-Supports timestamp, integer, and unsigned integer types as input.
-Integers and unsigned integers are parsed as Unix nanosecond timestamps and
-return the corresponding RFC3339 timestamp.
+Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000Z`).
+Supports strings, integer, and unsigned integer types as input.
+Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
+Integers and unsigned integers are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`)
+return the corresponding timestamp.
 
 ```
 to_timestamp_seconds(expression)
@@ -1467,8 +1472,8 @@ to_timestamp_seconds(expression)
 ### `from_unixtime`
 
 Converts an integer to RFC3339 timestamp format (`YYYY-MM-DDT00:00:00.000000000Z`).
-Input is parsed as a Unix nanosecond timestamp and returns the corresponding
-RFC3339 timestamp.
+Integers and unsigned integers are interpreted as nanoseconds since the unix epoch (`1970-01-01T00:00:00Z`)
+return the corresponding timestamp.
 
 ```
 from_unixtime(expression)
