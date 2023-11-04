@@ -1518,6 +1518,103 @@ fn general_replace(args: &[ArrayRef], n: u32) -> Result<ArrayRef> {
     Ok(res)
 }
 
+fn general_list_replace(args: &[ArrayRef], n: u32) -> Result<ArrayRef> {
+    let list_array = as_list_array(&args[0])?;
+    let from_array = &args[1];
+    let to_array = &args[2];
+
+    let mut offsets: Vec<i32> = vec![0];
+    // TODO: change to array value type
+    let mut values = new_empty_array(from_array.data_type());
+
+    for (row_index, arr) in list_array.iter().enumerate() {
+        let last_offset: i32 = offsets.last().copied().ok_or_else(|| {
+            DataFusionError::Internal(format!("offsets should not be empty"))
+        })?;
+        match arr {
+            Some(arr) => {
+                let indices = UInt32Array::from(vec![row_index as u32]);
+                let from_a = arrow::compute::take(from_array, &indices, None).unwrap();
+                let from_a = as_list_array(&from_a)?.value(0);
+
+                let list_arr = as_list_array(&arr)?;
+
+                let mut bool_values = vec![];
+                for a in list_arr.iter() {
+                    if let Some(a) = a {
+                        if a.eq(&from_a) {
+                            bool_values.push(Some(true));
+                        } else {
+                            bool_values.push(Some(false));    
+                        }
+                    }
+                }
+                let eq_array = BooleanArray::from(bool_values);
+
+                // println!("arr: {:?}, from_a: {:?}", arr, from_a);
+                // let eq_array = arrow_ord::cmp::eq(&arr, &from_a).unwrap();
+                println!("eq_array: {:?}", eq_array);
+
+                let arrays = vec![arr, to_array.clone()];
+                let arrays_data = arrays
+                    .iter()
+                    .map(|a| a.to_data())
+                    .collect::<Vec<ArrayData>>();
+                let arrays_data = arrays_data.iter().collect::<Vec<&ArrayData>>();
+
+                let arrays = arrays
+                    .iter()
+                    .map(|arr| arr.as_ref())
+                    .collect::<Vec<&dyn Array>>();
+                let capacity = Capacities::Array(arrays.iter().map(|a| a.len()).sum());
+
+                let mut mutable =
+                    MutableArrayData::with_capacities(arrays_data, false, capacity);
+
+                let mut counter = 0;
+
+                for (i, itm) in eq_array.iter().enumerate() {
+                    if let Some(v) = itm {
+                        if v {
+                            mutable.extend(1, row_index, row_index + 1);
+                            counter += 1;
+                            if counter == n {
+                                // extend the rest of the array
+                                mutable.extend(0, i + 1, eq_array.len());
+                                break;
+                            }
+                        } else {
+                            mutable.extend(0, i, i + 1);
+                        }
+                    } else {
+                    }
+                }
+
+                let data = mutable.freeze();
+                let replaced_array = arrow_array::make_array(data);
+                println!("replaced_array: {:?}", replaced_array);
+
+                let v = arrow::compute::concat(&[&values, &replaced_array])?;
+                values = v;
+                offsets.push(last_offset + replaced_array.len() as i32);
+            }
+            None => {
+                offsets.push(last_offset);
+            }
+        }
+    }
+
+    let field = Arc::new(Field::new("item", from_array.data_type().clone(), true));
+
+    let res = Arc::new(ListArray::try_new(
+        field,
+        OffsetBuffer::new(offsets.into()),
+        Arc::new(values),
+        None,
+    )?);
+    Ok(res)
+}
+
 pub fn array_replace_v2(args: &[ArrayRef]) -> Result<ArrayRef> {
     // let list_arr = as_list_array(&args[0])?;
     // let from_arr = as_int64_array(&args[1])?;
@@ -1549,12 +1646,13 @@ pub fn array_replace_v2(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     let res = match arr.value_type() {
         DataType::List(field) => {
-            macro_rules! array_function {
-                ($ARRAY_TYPE:ident) => {
-                    general_replace_list!(arr, from, to, max, $ARRAY_TYPE)
-                };
-            }
-            call_array_function!(field.data_type(), true)
+            // macro_rules! array_function {
+            //     ($ARRAY_TYPE:ident) => {
+            //         general_replace_list!(arr, from, to, max, $ARRAY_TYPE)
+            //     };
+            // }
+            // call_array_function!(field.data_type(), true)
+            return general_list_replace(args, 1);
         }
         data_type => {
             return general_replace(args, 1);
@@ -2052,6 +2150,33 @@ mod tests {
     use arrow_array;
     use arrow_ord;
     use datafusion_common::cast::as_uint64_array;
+
+    #[test]
+    fn test_eq2() {
+        let arr_a = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+            Some(vec![Some(1), Some(2), Some(3)]),
+            Some(vec![Some(4), Some(5), Some(6)]),
+        ]);
+        let arr_b = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+            Some(vec![Some(1), Some(2), Some(3)]),
+        ]);
+        // let b = arr_b.value(0);
+        let b = Arc::new(arr_b) as ArrayRef;
+        for a in arr_a.iter() {
+            println!("a: {:?}, b: {:?}", a, b.clone());
+            if let Some(a) = a {
+                if a.eq(&b) {
+                    println!("equal");
+                } else {
+                    println!("not equal");
+                }
+            } else {
+                println!("none");
+            }
+        }
+        // let a_f = Arc::new(a) as ArrayRef;
+
+    }
 
     #[test]
     fn test_eq() {
