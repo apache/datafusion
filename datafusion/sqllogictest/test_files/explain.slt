@@ -273,7 +273,7 @@ query TT
 EXPLAIN SELECT a, b, c FROM simple_explain_test limit 10;
 ----
 physical_plan
-GlobalLimitExec: skip=0, fetch=10, statistics=[Rows=Exact(10), Bytes=Absent]
+GlobalLimitExec: skip=0, fetch=10, statistics=[Rows=Inexact(10), Bytes=Absent]
 --CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a, b, c], limit=10, has_header=true, statistics=[Rows=Absent, Bytes=Absent]
 
 # Parquet scan with statistics collected
