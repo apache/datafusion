@@ -1910,7 +1910,7 @@ impl Filter {
                     .collect::<Result<_>>()?;
                 let projected_func_dependencies = func_dependencies
                     .project_functional_dependencies(&indices, indices.len());
-                let schema = input.schema().as_ref().clone();
+                let schema = p.as_ref().clone();
                 Result::Ok(Arc::new(
                     schema.with_functional_dependencies(projected_func_dependencies),
                 ))

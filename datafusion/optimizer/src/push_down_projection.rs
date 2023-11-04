@@ -29,7 +29,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 use arrow::error::Result as ArrowResult;
 use datafusion_common::ScalarValue::UInt8;
 use datafusion_common::{
-    plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, Result,
+    plan_err, Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result,
 };
 use datafusion_expr::expr::{AggregateFunction, Alias};
 use datafusion_expr::Filter;
@@ -462,27 +462,27 @@ fn push_down_filter(
     filter: &Filter,
 ) -> Result<LogicalPlan> {
     let schema = filter.input.schema();
-    let projection: Vec<usize> = used_columns
-        .iter()
-        .filter_map(|c| {
-            schema
-                .index_of_column_by_name(c.relation.as_ref(), &c.name)
-                .transpose()
-        })
-        .collect::<Result<Vec<usize>>>()?;
 
-    let new_schema = DFSchema::new_with_metadata(
-        projection
-            .into_iter()
-            .map(|i| schema.fields()[i].clone())
-            .collect(),
-        schema.metadata().clone(),
-    )?;
+    let fields: Vec<DFField> = used_columns
+        .iter()
+        .map(|c| {
+            let i = schema.index_of_column_by_name(c.relation.as_ref(), &c.name)?;
+            Ok(i.map(|i| schema.fields()[i].clone()))
+        })
+        .filter_map(Result::transpose)
+        .collect::<Result<_>>()?;
+
+    let new_schema = DFSchema::new_with_metadata(fields, schema.metadata().clone())?;
+    let new_schema = if !schema.logically_equivalent_names_and_types(&new_schema) {
+        Some(Arc::new(new_schema))
+    } else {
+        None
+    };
 
     Filter::try_new(
         filter.predicate.clone(),
         filter.input.clone(),
-        Some(Arc::new(new_schema)),
+        new_schema,
     )
     .map(LogicalPlan::Filter)
 }
