@@ -2195,7 +2195,9 @@ pub struct DistinctOn {
     pub on_expr: Vec<Expr>,
     /// The selected projection expression list
     pub select_expr: Vec<Expr>,
-    /// The `ORDER BY` clause, whose initial expressions must match those of the `ON` clause
+    /// The `ORDER BY` clause, whose initial expressions must match those of the `ON` clause when
+    /// present. Note that those matching expressions actually wrap the `ON` expressions with
+    /// additional info pertaining to the sorting procedure (i.e. ASC/DESC, and NULLS FIRST/LAST).
     pub sort_expr: Option<Vec<Expr>>,
     /// The logical plan that is being DISTINCT'd
     pub input: Arc<LogicalPlan>,
