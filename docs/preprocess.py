@@ -73,8 +73,10 @@ def update_examples(source_file):
                     test_file = matches.group(1)
                     test_method = matches.group(2)
                     test_filename = "src/{}.rs".format(test_file)
-                    lines.append("```rust")
-                    lines.extend(read_source(test_filename, test_method))
+                    lines.append("```rust\n")
+                    source = read_source(test_filename, test_method)
+                    for x in source:
+                        lines.append(x)
                     lines.append("```")
             elif state == state_before_code:
                 # there can be blank lines between the include directive and the start of the code
@@ -87,9 +89,12 @@ def update_examples(source_file):
                 if line.strip() == "```":
                     state = state_scan
 
-    with open(source_file, "w") as output:
-        for line in lines:
-            output.write(line)
+    if state == state_scan:
+        with open(source_file, "w") as output:
+            for line in lines:
+                output.write(line)
+    else:
+        raise "failed to rewrite example source code"
 
 
 def main():
