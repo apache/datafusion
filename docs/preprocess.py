@@ -75,6 +75,8 @@ def update_examples(source_file):
                     test_filename = "src/{}.rs".format(test_file)
                     lines.append("```rust\n")
                     source = read_source(test_filename, test_method)
+                    if len(source) == 0:
+                        raise "failed to read source code from unit tests"
                     for x in source:
                         lines.append(x)
                     lines.append("```\n")
