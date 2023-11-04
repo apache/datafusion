@@ -77,7 +77,7 @@ def update_examples(source_file):
                     source = read_source(test_filename, test_method)
                     for x in source:
                         lines.append(x)
-                    lines.append("```")
+                    lines.append("```\n")
             elif state == state_before_code:
                 # there can be blank lines between the include directive and the start of the code
                 if len(line.strip()) > 0:

@@ -37,18 +37,34 @@ A Scalar UDF is a function that takes a row of data and returns a single value. 
 
 <!-- include: library_udfs::add_one -->
 ```rust
-TODO
-```
+fn add_one(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let i64s = as_int64_array(&args[0])?;
 
+    let new_array = i64s
+        .iter()
+        .map(|array_elem| array_elem.map(|value| value + 1))
+        .collect::<Int64Array>();
+
+    Ok(Arc::new(new_array))
+}
+```
 For brevity, we'll skipped some error handling, but e.g. you may want to check that `args.len()` is the expected number of arguments.
 
 This "works" in isolation, i.e. if you have a slice of `ArrayRef`s, you can call `add_one` and it will return a new `ArrayRef` with 1 added to each value.
 
 <!-- include: library_udfs::call_add_one -->
 ```rust
-TODO
-```
+let input = vec![Some(1), None, Some(3)];
+let input = Arc::new(Int64Array::from(input)) as ArrayRef;
 
+let result = add_one(&[input])?;
+let result = result
+    .as_any()
+    .downcast_ref::<Int64Array>()
+    .expect("result is Int64Array");
+
+assert_eq!(result, &Int64Array::from(vec![Some(2), None, Some(4)]));
+```
 The challenge however is that DataFusion doesn't know about this function. We need to register it with DataFusion so that it can be used in the context of a query.
 
 ### Registering a Scalar UDF
@@ -57,9 +73,14 @@ To register a Scalar UDF, you need to wrap the function implementation in a `Sca
 
 <!-- include: library_udfs::create_udf -->
 ```rust
-TODO
+let udf = create_udf(
+    "add_one",
+    vec![DataType::Int64],
+    Arc::new(DataType::Int64),
+    Volatility::Immutable,
+    make_scalar_function(add_one),
+);
 ```
-
 A few things to note:
 
 - The first argument is the name of the function. This is the name that will be used in SQL queries.
@@ -72,16 +93,17 @@ That gives us a `ScalarUDF` that we can register with the `SessionContext`:
 
 <!-- include: library_udfs::register_udf -->
 ```rust
-TODO
+let ctx = SessionContext::new();
+ctx.register_udf(udf);
 ```
-
 At this point, you can use the `add_one` function in your query:
 
 <!-- include: library_udfs::call_udf -->
 ```rust
-TODO
+let ctx = SessionContext::new();
+let sql = "SELECT add_one(1)";
+let df = ctx.sql(&sql).await?;
 ```
-
 ## Adding a Window UDF
 
 Scalar UDFs are functions that take a row of data and return a single value. Window UDFs are similar, but they also have access to the rows around them. Access to the the proximal rows is helpful, but adds some complexity to the implementation.
