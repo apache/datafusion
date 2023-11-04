@@ -137,7 +137,7 @@ impl ScalarUDF {
     }
 }
 
-/// Convenience trait for implementing ScalarUDF. See [`ScalarUDF::from_impl()`]
+/// Convenience trait for implementing ScalarUDF. See [`ScalarUDF::new_from_impl()`]
 pub trait FunctionImplementation {
     /// Returns this function's name
     fn name(&self) -> &str;
