@@ -55,11 +55,11 @@ pub enum Operator {
     Or,
     /// `IS DISTINCT FROM` (see [`distinct`])
     ///
-    /// [distinct]: arrow::compute::kernels::cmp::distinct
+    /// [`distinct`]: arrow::compute::kernels::cmp::distinct
     IsDistinctFrom,
     /// `IS NOT DISTINCT FROM` (see [`not_distinct`])
     ///
-    /// [not_distinct]: arrow::compute::kernels::cmp::not_distinct
+    /// [`not_distinct`]: arrow::compute::kernels::cmp::not_distinct
     IsNotDistinctFrom,
     /// Case sensitive regex match
     RegexMatch,
