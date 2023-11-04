@@ -950,7 +950,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     &[&[&schema]],
                     &[using_columns],
                 )?;
-                LogicalPlan::Filter(Filter::try_new(filter_expr, Arc::new(scan))?)
+                LogicalPlan::Filter(Filter::try_new(filter_expr, Arc::new(scan), None)?)
             }
         };
 
@@ -1020,7 +1020,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     &[&[&scan.schema()]],
                     &[using_columns],
                 )?;
-                LogicalPlan::Filter(Filter::try_new(filter_expr, Arc::new(scan))?)
+                LogicalPlan::Filter(Filter::try_new(filter_expr, Arc::new(scan), None)?)
             }
         };
 

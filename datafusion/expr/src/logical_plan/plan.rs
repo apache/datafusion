@@ -46,8 +46,8 @@ use datafusion_common::tree_node::{
     VisitRecursion,
 };
 use datafusion_common::{
-    aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
-    DFField, DFSchema, DFSchemaRef, DataFusionError, FunctionalDependencies,
+    aggregate_functional_dependencies, internal_err, plan_err, project_schema, Column,
+    Constraints, DFField, DFSchema, DFSchemaRef, DataFusionError, FunctionalDependencies,
     OwnedTableReference, Result, ScalarValue, UnnestOptions,
 };
 // backwards compatibility
@@ -671,7 +671,7 @@ impl LogicalPlan {
                 let mut remove_aliases = RemoveAliases {};
                 let predicate = predicate.rewrite(&mut remove_aliases)?;
 
-                Filter::try_new(predicate, Arc::new(inputs[0].clone()))
+                Filter::try_new(predicate, Arc::new(inputs[0].clone()), None)
                     .map(LogicalPlan::Filter)
             }
             LogicalPlan::Repartition(Repartition {
@@ -1838,11 +1838,19 @@ pub struct Filter {
     pub predicate: Expr,
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
+    /// Optional projection
+    pub projection: Option<Vec<usize>>,
+    /// Schema representing the data after the optional projection is applied
+    pub projected_schema: DFSchemaRef,
 }
 
 impl Filter {
     /// Create a new filter operator.
-    pub fn try_new(predicate: Expr, input: Arc<LogicalPlan>) -> Result<Self> {
+    pub fn try_new(
+        predicate: Expr,
+        input: Arc<LogicalPlan>,
+        projection: Option<Vec<usize>>,
+    ) -> Result<Self> {
         // Filter predicates must return a boolean value so we try and validate that here.
         // Note that it is not always possible to resolve the predicate expression during plan
         // construction (such as with correlated subqueries) so we make a best effort here and
@@ -1864,7 +1872,25 @@ impl Filter {
             );
         }
 
-        Ok(Self { predicate, input })
+        let func_dependencies = input.schema().functional_dependencies();
+
+        let projected_schema = projection
+            .as_ref()
+            .map(|p| {
+                let projected_func_dependencies =
+                    func_dependencies.project_functional_dependencies(p, p.len());
+                let schema = input.schema().as_ref().clone();
+                Arc::new(schema.with_functional_dependencies(projected_func_dependencies))
+            })
+            .unwrap_or_else(|| input.schema().clone());
+        let projected_schema = projected_schema;
+
+        Ok(Self {
+            predicate,
+            input,
+            projection,
+            projected_schema,
+        })
     }
 }
 

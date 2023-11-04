@@ -98,6 +98,7 @@ impl MyAnalyzerRule {
                     Transformed::Yes(LogicalPlan::Filter(Filter::try_new(
                         predicate,
                         filter.input,
+                        filter.projection.clone(),
                     )?))
                 }
                 _ => Transformed::No(plan),
@@ -142,6 +143,7 @@ impl OptimizerRule for MyOptimizerRule {
                 Ok(Some(LogicalPlan::Filter(Filter::try_new(
                     predicate,
                     filter.input,
+                    filter.projection.clone(),
                 )?)))
             }
             Some(optimized_plan) => Ok(Some(optimized_plan)),
@@ -151,6 +153,7 @@ impl OptimizerRule for MyOptimizerRule {
                     Ok(Some(LogicalPlan::Filter(Filter::try_new(
                         predicate,
                         filter.input.clone(),
+                        filter.projection.clone(),
                     )?)))
                 }
                 _ => Ok(None),

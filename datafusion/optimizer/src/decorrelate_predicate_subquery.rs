@@ -147,7 +147,7 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
 
                 let expr = conjunction(other_exprs);
                 if let Some(expr) = expr {
-                    let new_filter = Filter::try_new(expr, Arc::new(cur_input))?;
+                    let new_filter = Filter::try_new(expr, Arc::new(cur_input), None)?;
                     cur_input = LogicalPlan::Filter(new_filter);
                 }
                 Ok(Some(cur_input))

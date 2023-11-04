@@ -32,6 +32,7 @@ use datafusion_common::{
     plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, Result,
 };
 use datafusion_expr::expr::{AggregateFunction, Alias};
+use datafusion_expr::Filter;
 use datafusion_expr::{
     logical_plan::{Aggregate, LogicalPlan, Projection, TableScan, Union},
     utils::{expr_to_columns, exprlist_to_columns, exprlist_to_fields},
@@ -308,6 +309,9 @@ impl OptimizerRule for PushDownProjection {
                 } else {
                     let mut required_columns = HashSet::new();
                     exprlist_to_columns(&projection.expr, &mut required_columns)?;
+
+                    let child_plan = push_down_filter(&required_columns, filter)?;
+
                     exprlist_to_columns(
                         &[filter.predicate.clone()],
                         &mut required_columns,
@@ -451,6 +455,28 @@ fn generate_projection(
         .collect::<Vec<_>>();
 
     Ok(LogicalPlan::Projection(Projection::try_new(expr, input)?))
+}
+
+fn push_down_filter(
+    used_columns: &HashSet<Column>,
+    filter: &Filter,
+) -> Result<LogicalPlan> {
+    let schema = filter.input.schema();
+    let projection: Vec<usize> = used_columns
+        .iter()
+        .filter_map(|c| {
+            schema
+                .index_of_column_by_name(c.relation.as_ref(), &c.name)
+                .transpose()
+        })
+        .collect::<Result<Vec<usize>>>()?;
+
+    Filter::try_new(
+        filter.predicate.clone(),
+        filter.input.clone(),
+        Some(projection),
+    )
+    .map(LogicalPlan::Filter)
 }
 
 fn push_down_scan(
