@@ -40,8 +40,44 @@ STORED AS CSV
 WITH HEADER ROW
 LOCATION '../../testing/data/csv/aggregate_test_100.csv'
 
-# test_insert_into
 
+statement ok
+create table dictionary_encoded_values as values 
+('a', arrow_cast('foo', 'Dictionary(Int32, Utf8)')), ('b', arrow_cast('bar', 'Dictionary(Int32, Utf8)'));
+
+query TTT
+describe dictionary_encoded_values;
+----
+column1 Utf8 YES
+column2 Dictionary(Int32, Utf8) YES
+
+statement ok
+CREATE EXTERNAL TABLE dictionary_encoded_parquet_partitioned(
+  a varchar,
+  b varchar,
+) 
+STORED AS parquet
+LOCATION 'test_files/scratch/insert_to_external/parquet_types_partitioned'
+PARTITIONED BY (b)
+OPTIONS(
+create_local_path 'true',
+insert_mode 'append_new_files',
+);
+
+query TT
+insert into dictionary_encoded_parquet_partitioned 
+select * from dictionary_encoded_values
+----
+2
+
+query TT
+select * from dictionary_encoded_parquet_partitioned order by (a);
+----
+a foo
+b bar
+
+
+# test_insert_into
 statement ok
 set datafusion.execution.target_partitions = 8;
 

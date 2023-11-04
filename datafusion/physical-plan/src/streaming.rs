@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Execution plan for streaming [`PartitionStream`]
+//! Generic plans for deferred execution: [`StreamingTableExec`] and [`PartitionStream`]
 
 use std::any::Any;
 use std::sync::Arc;
@@ -28,13 +28,17 @@ use crate::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalSortExpr};
 
 use async_trait::async_trait;
 use futures::stream::StreamExt;
 use log::debug;
 
 /// A partition that can be converted into a [`SendableRecordBatchStream`]
+///
+/// Combined with [`StreamingTableExec`], you can use this trait to implement
+/// [`ExecutionPlan`] for a custom source with less boiler plate than
+/// implementing `ExecutionPlan` directly for many use cases.
 pub trait PartitionStream: Send + Sync {
     /// Returns the schema of this partition
     fn schema(&self) -> &SchemaRef;
@@ -43,7 +47,10 @@ pub trait PartitionStream: Send + Sync {
     fn execute(&self, ctx: Arc<TaskContext>) -> SendableRecordBatchStream;
 }
 
-/// An [`ExecutionPlan`] for [`PartitionStream`]
+/// An [`ExecutionPlan`] for one or more [`PartitionStream`]s.
+///
+/// If your source can be represented as one or more [`PartitionStream`]s, you can
+/// use this struct to implement [`ExecutionPlan`].
 pub struct StreamingTableExec {
     partitions: Vec<Arc<dyn PartitionStream>>,
     projection: Option<Arc<[usize]>>,
@@ -154,6 +161,14 @@ impl ExecutionPlan for StreamingTableExec {
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         self.projected_output_ordering.as_deref()
+    }
+
+    fn equivalence_properties(&self) -> EquivalenceProperties {
+        let mut result = EquivalenceProperties::new(self.schema());
+        if let Some(ordering) = &self.projected_output_ordering {
+            result.add_new_orderings([ordering.clone()])
+        }
+        result
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

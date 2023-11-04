@@ -17,9 +17,8 @@
 
 use std::sync::Arc;
 
+use crate::datasource::physical_plan::parquet::plan_to_parquet;
 use parquet::file::properties::WriterProperties;
-
-use crate::datasource::physical_plan::plan_to_parquet;
 
 use super::super::options::{ParquetReadOptions, ReadOptions};
 use super::{DataFilePaths, DataFrame, ExecutionPlan, Result, SessionContext};

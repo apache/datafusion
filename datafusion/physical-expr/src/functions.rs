@@ -74,15 +74,20 @@ pub fn create_physical_expr(
         // so we don't have to pay a per-array/batch cost.
         BuiltinScalarFunction::ToTimestamp => {
             Arc::new(match input_phy_exprs[0].data_type(input_schema) {
-                Ok(DataType::Int64) | Ok(DataType::Timestamp(_, None)) => {
-                    |col_values: &[ColumnarValue]| {
-                        cast_column(
-                            &col_values[0],
-                            &DataType::Timestamp(TimeUnit::Nanosecond, None),
-                            None,
-                        )
-                    }
-                }
+                Ok(DataType::Int64) => |col_values: &[ColumnarValue]| {
+                    cast_column(
+                        &col_values[0],
+                        &DataType::Timestamp(TimeUnit::Second, None),
+                        None,
+                    )
+                },
+                Ok(DataType::Timestamp(_, None)) => |col_values: &[ColumnarValue]| {
+                    cast_column(
+                        &col_values[0],
+                        &DataType::Timestamp(TimeUnit::Nanosecond, None),
+                        None,
+                    )
+                },
                 Ok(DataType::Utf8) => datetime_expressions::to_timestamp,
                 other => {
                     return internal_err!(
@@ -125,6 +130,25 @@ pub fn create_physical_expr(
                 other => {
                     return internal_err!(
                         "Unsupported data type {other:?} for function to_timestamp_micros"
+                    );
+                }
+            })
+        }
+        BuiltinScalarFunction::ToTimestampNanos => {
+            Arc::new(match input_phy_exprs[0].data_type(input_schema) {
+                Ok(DataType::Int64) | Ok(DataType::Timestamp(_, None)) => {
+                    |col_values: &[ColumnarValue]| {
+                        cast_column(
+                            &col_values[0],
+                            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+                            None,
+                        )
+                    }
+                }
+                Ok(DataType::Utf8) => datetime_expressions::to_timestamp_nanos,
+                other => {
+                    return internal_err!(
+                        "Unsupported data type {other:?} for function to_timestamp_nanos"
                     );
                 }
             })
@@ -333,6 +357,8 @@ where
                 ColumnarValue::Array(a) => Some(a.len()),
             });
 
+        let is_scalar = len.is_none();
+
         let inferred_length = len.unwrap_or(1);
         let args = args
             .iter()
@@ -349,7 +375,14 @@ where
             .collect::<Vec<ArrayRef>>();
 
         let result = (inner)(&args);
-        result.map(ColumnarValue::Array)
+
+        if is_scalar {
+            // If all inputs are scalar, keeps output as scalar
+            let result = result.and_then(|arr| ScalarValue::try_from_array(&arr, 0));
+            result.map(ColumnarValue::Scalar)
+        } else {
+            result.map(ColumnarValue::Array)
+        }
     })
 }
 

@@ -35,38 +35,33 @@ use datafusion_physical_expr::expressions::{col, Sum};
 use datafusion_physical_expr::{AggregateExpr, PhysicalSortExpr};
 use test_utils::add_empty_batches;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn aggregate_test() {
-        let test_cases = vec![
-            vec!["a"],
-            vec!["b", "a"],
-            vec!["c", "a"],
-            vec!["c", "b", "a"],
-            vec!["d", "a"],
-            vec!["d", "b", "a"],
-            vec!["d", "c", "a"],
-            vec!["d", "c", "b", "a"],
-        ];
-        let n = 300;
-        let distincts = vec![10, 20];
-        for distinct in distincts {
-            let mut handles = Vec::new();
-            for i in 0..n {
-                let test_idx = i % test_cases.len();
-                let group_by_columns = test_cases[test_idx].clone();
-                let job = tokio::spawn(run_aggregate_test(
-                    make_staggered_batches::<true>(1000, distinct, i as u64),
-                    group_by_columns,
-                ));
-                handles.push(job);
-            }
-            for job in handles {
-                job.await.unwrap();
-            }
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn aggregate_test() {
+    let test_cases = vec![
+        vec!["a"],
+        vec!["b", "a"],
+        vec!["c", "a"],
+        vec!["c", "b", "a"],
+        vec!["d", "a"],
+        vec!["d", "b", "a"],
+        vec!["d", "c", "a"],
+        vec!["d", "c", "b", "a"],
+    ];
+    let n = 300;
+    let distincts = vec![10, 20];
+    for distinct in distincts {
+        let mut handles = Vec::new();
+        for i in 0..n {
+            let test_idx = i % test_cases.len();
+            let group_by_columns = test_cases[test_idx].clone();
+            let job = tokio::spawn(run_aggregate_test(
+                make_staggered_batches::<true>(1000, distinct, i as u64),
+                group_by_columns,
+            ));
+            handles.push(job);
+        }
+        for job in handles {
+            job.await.unwrap();
         }
     }
 }

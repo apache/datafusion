@@ -23,9 +23,8 @@ use std::{any::Any, sync::Arc};
 
 use super::DisplayAs;
 use crate::{
-    expressions::Column, DisplayFormatType, Distribution, EquivalenceProperties,
-    ExecutionPlan, Partitioning, PhysicalExpr, PhysicalSortExpr, RecordBatchStream,
-    SendableRecordBatchStream,
+    expressions::Column, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
+    PhysicalExpr, PhysicalSortExpr, RecordBatchStream, SendableRecordBatchStream,
 };
 
 use arrow::array::{
@@ -134,10 +133,6 @@ impl ExecutionPlan for UnnestExec {
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         None
-    }
-
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        self.input.equivalence_properties()
     }
 
     fn execute(
