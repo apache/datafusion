@@ -20,7 +20,7 @@ import os
 import re
 
 
-def copy_test_source(test_filename, test_method, output):
+def read_source(test_filename, test_method):
     lines = []
     with open(test_filename) as test:
         in_example_code = False
@@ -32,10 +32,6 @@ def copy_test_source(test_filename, test_method, output):
                 break
             if in_example_code:
                 lines.append(test_line)
-
-    # remove blank lines from the end of the list
-    while lines and lines[-1] == "":
-        lines.pop()
 
     # remove leading indent when possible
     consistent_indent = True
@@ -54,38 +50,51 @@ def copy_test_source(test_filename, test_method, output):
             else:
                 lines.append(line)
 
-    # write to output
-    output.write("```rust\n")
-    for line in lines:
-        output.write(line)
-    output.write("```")
+    return lines
 
 
-def add_source(input, output):
-    print("Copying", input, "to", output)
+def update_examples(source_file):
+    print("Updating code samples in ", source_file)
+    lines = []
+    # finite state machine to track state
+    state_scan = "scan"
+    state_before_code = "before"
+    state_in_code = "in"
     # <!-- include: library_logical_plan::plan_builder_1 -->
     include_pattern = "<!-- include: ([a-z0-9_]*)::([a-z0-9_]*) -->"
-    with open(input, "r") as input:
-        with open(output, "w") as output:
-            for line in input.readlines():
+    with open(source_file, "r") as input:
+        state = state_scan
+        for line in input.readlines():
+            if state == state_scan:
+                lines.append(line)
                 matches = re.search(include_pattern, line)
                 if matches is not None:
+                    state = state_before_code
                     test_file = matches.group(1)
                     test_method = matches.group(2)
                     test_filename = "src/{}.rs".format(test_file)
-                    copy_test_source(test_filename, test_method, output)
-                else:
-                    output.write(line)
+                    lines.append("```rust")
+                    lines.extend(read_source(test_filename, test_method))
+                    lines.append("```")
+            elif state == state_before_code:
+                # there can be blank lines between the include directive and the start of the code
+                if len(line.strip()) > 0:
+                    if line.startswith("```rust"):
+                        state = state_in_code
+                    else:
+                        raise "expected Rust code to immediately follow include directive but found other content"
+            elif state == state_in_code:
+                if line.strip() == "```":
+                    state = state_scan
+
+    with open(source_file, "w") as output:
+        for line in lines:
+            output.write(line)
 
 
 def main():
     for file in glob.glob("source/**/*.md"):
-        dest = "temp/" + file[7:]
-        last_path_sep = dest.rindex("/")
-        dir = dest[0:last_path_sep]
-        if not os.path.exists(dir):
-            os.makedirs(dir)
-        add_source(file, dest)
+        update_examples(file)
 
 
 if __name__ == "__main__":

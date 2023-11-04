@@ -26,7 +26,7 @@ rm -rf temp 2> /dev/null
 mkdir temp
 cp -rf source/* temp/
 
-# copy markdown files into temp dir again and insert source from tests
+# update markdown files with latest example source code from tests
 python preprocess.py
 
 # replace relative URLs with absolute URLs
