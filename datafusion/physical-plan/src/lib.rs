@@ -33,7 +33,6 @@ use datafusion_common::tree_node::Transformed;
 use datafusion_common::utils::DataPtr;
 use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::equivalence::OrderingEquivalenceProperties;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{
     EquivalenceProperties, PhysicalSortExpr, PhysicalSortRequirement,
@@ -83,8 +82,7 @@ pub use datafusion_common::{internal_err, ColumnStatistics, Statistics};
 pub use datafusion_expr::{Accumulator, ColumnarValue};
 pub use datafusion_physical_expr::window::WindowExpr;
 pub use datafusion_physical_expr::{
-    expressions, functions, ordering_equivalence_properties_helper, udf, AggregateExpr,
-    Distribution, Partitioning, PhysicalExpr,
+    expressions, functions, udf, AggregateExpr, Distribution, Partitioning, PhysicalExpr,
 };
 
 // Backwards compatibility
@@ -205,19 +203,14 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
             .collect()
     }
 
-    /// Get the EquivalenceProperties within the plan
+    /// Get the [`EquivalenceProperties`] within the plan
     fn equivalence_properties(&self) -> EquivalenceProperties {
         EquivalenceProperties::new(self.schema())
     }
 
-    /// Get the OrderingEquivalenceProperties within the plan
-    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        OrderingEquivalenceProperties::new(self.schema())
-    }
-
-    /// Get a list of `ExecutionPlan` that provide input for this plan. The
-    /// returned list will be empty for leaf nodes such as scans, will contain a
-    /// single value for unary nodes, or two values for binary nodes (such as
+    /// Get a list of children `ExecutionPlan`s that act as inputs to this plan.
+    /// The returned list will be empty for leaf nodes such as scans, will contain
+    /// a single value for unary nodes, or two values for binary nodes (such as
     /// joins).
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>>;
 
