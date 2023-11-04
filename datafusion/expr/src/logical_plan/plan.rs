@@ -46,8 +46,8 @@ use datafusion_common::tree_node::{
     VisitRecursion,
 };
 use datafusion_common::{
-    aggregate_functional_dependencies, internal_err, plan_err, project_schema, Column,
-    Constraints, DFField, DFSchema, DFSchemaRef, DataFusionError, FunctionalDependencies,
+    aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
+    DFField, DFSchema, DFSchemaRef, DataFusionError, FunctionalDependencies,
     OwnedTableReference, Result, ScalarValue, UnnestOptions,
 };
 // backwards compatibility
@@ -1898,7 +1898,6 @@ impl Filter {
                 Arc::new(schema.with_functional_dependencies(projected_func_dependencies))
             })
             .unwrap_or_else(|| input.schema().clone());
-        let projected_schema = projected_schema;
 
         Ok(Self {
             predicate,
