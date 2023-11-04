@@ -163,8 +163,10 @@ impl LogicalPlan {
             }) => projected_schema,
             LogicalPlan::Projection(Projection { schema, .. }) => schema,
             LogicalPlan::Filter(Filter {
-                projected_schema, ..
-            }) => projected_schema,
+                projected_schema,
+                input,
+                ..
+            }) => projected_schema.as_ref().unwrap_or(input.schema()),
             LogicalPlan::Distinct(Distinct { input }) => input.schema(),
             LogicalPlan::Window(Window { schema, .. }) => schema,
             LogicalPlan::Aggregate(Aggregate { schema, .. }) => schema,
@@ -1549,14 +1551,14 @@ impl LogicalPlan {
                     }
                     LogicalPlan::Filter(Filter {
                         predicate: ref expr,
-                        projection,
                         projected_schema,
                         ..
                     }) => {
-                        if let Some(indices) = projection {
-                            let names: Vec<&str> = indices
+                        if let Some(projected_schema) = projected_schema {
+                            let names: Vec<&str> = projected_schema
+                                .fields()
                                 .iter()
-                                .map(|i| projected_schema.field(*i).name().as_str())
+                                .map(|i| i.name().as_str())
                                 .collect();
 
                             write!(f, "Filter: {expr}, projection=[{}]", names.join(", "))
@@ -1853,10 +1855,8 @@ pub struct Filter {
     pub predicate: Expr,
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
-    /// Optional projection
-    pub projection: Option<Vec<usize>>,
     /// Schema representing the data after the optional projection is applied
-    pub projected_schema: DFSchemaRef,
+    pub projected_schema: Option<DFSchemaRef>,
 }
 
 impl Filter {
@@ -1864,7 +1864,7 @@ impl Filter {
     pub fn try_new(
         predicate: Expr,
         input: Arc<LogicalPlan>,
-        projection: Option<Vec<usize>>,
+        projected_schema: Option<DFSchemaRef>,
     ) -> Result<Self> {
         // Filter predicates must return a boolean value so we try and validate that here.
         // Note that it is not always possible to resolve the predicate expression during plan
@@ -1889,20 +1889,31 @@ impl Filter {
 
         let func_dependencies = input.schema().functional_dependencies();
 
-        let projected_schema = projection
+        let projected_schema = projected_schema
             .as_ref()
-            .map(|p| {
-                let projected_func_dependencies =
-                    func_dependencies.project_functional_dependencies(p, p.len());
+            .map(|p| -> Result<_> {
+                let indices: Vec<usize> = p
+                    .fields()
+                    .iter()
+                    .filter_map(|x| {
+                        input
+                            .schema()
+                            .index_of_column_by_name(x.qualifier(), x.name())
+                            .transpose()
+                    })
+                    .collect::<Result<_>>()?;
+                let projected_func_dependencies = func_dependencies
+                    .project_functional_dependencies(&indices, indices.len());
                 let schema = input.schema().as_ref().clone();
-                Arc::new(schema.with_functional_dependencies(projected_func_dependencies))
+                Result::Ok(Arc::new(
+                    schema.with_functional_dependencies(projected_func_dependencies),
+                ))
             })
-            .unwrap_or_else(|| input.schema().clone());
+            .transpose()?;
 
         Ok(Self {
             predicate,
             input,
-            projection,
             projected_schema,
         })
     }

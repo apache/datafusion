@@ -78,7 +78,7 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
             Transformed::Yes(LogicalPlan::Filter(Filter::try_new(
                 new_expr,
                 filter.input,
-                filter.projection,
+                filter.projected_schema.clone(),
             )?))
         }
         _ => Transformed::No(plan),

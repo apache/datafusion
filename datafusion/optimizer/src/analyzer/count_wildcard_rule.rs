@@ -102,12 +102,14 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
         LogicalPlan::Filter(Filter {
             predicate,
             input,
-            projection,
+            projected_schema,
             ..
         }) => {
             let predicate = rewrite_preserving_name(predicate, &mut rewriter)?;
             Ok(Transformed::Yes(LogicalPlan::Filter(Filter::try_new(
-                predicate, input, projection,
+                predicate,
+                input,
+                projected_schema.clone(),
             )?)))
         }
 

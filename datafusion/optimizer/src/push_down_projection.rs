@@ -471,10 +471,18 @@ fn push_down_filter(
         })
         .collect::<Result<Vec<usize>>>()?;
 
+    let new_schema = DFSchema::new_with_metadata(
+        projection
+            .into_iter()
+            .map(|i| schema.fields()[i].clone())
+            .collect(),
+        schema.metadata().clone(),
+    )?;
+
     Filter::try_new(
         filter.predicate.clone(),
         filter.input.clone(),
-        Some(projection),
+        Some(Arc::new(new_schema)),
     )
     .map(LogicalPlan::Filter)
 }
