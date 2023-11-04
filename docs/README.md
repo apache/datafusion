@@ -73,10 +73,16 @@ let foo = 1 + 1;
 ```
 
 We can now put an `include` directive in the markdown file, specifying the name of the Rust file containing the test
-and the name of the example.
+and the name of the example. The include directive must be followed immediately by a code block starting with  
+`&#96;&#96;&#96;rust and ending with &#96;&#96;&#96;. This code block will be replaced whenever the `preprocess.py`
+Python script is executed. Note that this action can potentially be destructive so be sure to commit documentation
+changes or otherwise back them up before running this script.
 
 ```md
 <!-- include: my_rust_file::my_example -->
+
+&#96;&#96;&#96;rust
+&#96;&#96;&#96;
 ```
 
 ## Release Process
