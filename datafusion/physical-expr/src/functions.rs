@@ -517,10 +517,10 @@ pub fn create_physical_fun(
             make_scalar_function(array_expressions::array_replace_v2)(args)
         }),
         BuiltinScalarFunction::ArrayReplaceN => Arc::new(|args| {
-            make_scalar_function(array_expressions::array_replace_n)(args)
+            make_scalar_function(array_expressions::array_replace_n_v2)(args)
         }),
         BuiltinScalarFunction::ArrayReplaceAll => Arc::new(|args| {
-            make_scalar_function(array_expressions::array_replace_all)(args)
+            make_scalar_function(array_expressions::array_replace_all_v2)(args)
         }),
         BuiltinScalarFunction::ArraySlice => {
             Arc::new(|args| make_scalar_function(array_expressions::array_slice)(args))
