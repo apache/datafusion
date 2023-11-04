@@ -55,19 +55,26 @@ pub use datafusion_physical_expr::window::{
 };
 
 #[derive(Debug, Clone, PartialEq)]
-/// Specifies partition expression properties in terms of existing ordering(s).
-/// As an example if existing ordering is [a ASC, b ASC, c ASC],
-/// `PARTITION BY b` will have `PartitionSearchMode::Linear`.
-/// `PARTITION BY a, c` and `PARTITION BY c, a` will have `PartitionSearchMode::PartiallySorted(0)`, `PartitionSearchMode::PartiallySorted(1)`
-///  respectively (subset `a` defines an ordered section. Indices points to index of `a` among partition by expressions).
-/// `PARTITION BY a, b` and `PARTITION BY b, a` will have `PartitionSearchMode::Sorted` mode.
+/// Specifies aggregation grouping and/or window partitioning properties of a
+/// set of expressions in terms of the existing ordering.
+/// For example, if the existing ordering is `[a ASC, b ASC, c ASC]`:
+/// - A `PARTITION BY b` clause will result in `Linear` mode.
+/// - A `PARTITION BY a, c` or a `PARTITION BY c, a` clause will result in
+///   `PartiallySorted([0])` or `PartiallySorted([1])` modes, respectively.
+///   The vector stores the index of `a` in the respective PARTITION BY expression.
+/// - A `PARTITION BY a, b` or a `PARTITION BY b, a` clause will result in
+///   `Sorted` mode.
+/// Note that the examples above are applicable for `GROUP BY` clauses too.
 pub enum PartitionSearchMode {
-    /// None of the partition expressions is ordered.
+    /// There is no partial permutation of the expressions satisfying the
+    /// existing ordering.
     Linear,
-    /// A non-empty subset of the the partition expressions are ordered.
-    /// Indices stored constructs ordered subset, that is satisfied by existing ordering(s).
+    /// There is a partial permutation of the expressions satisfying the
+    /// existing ordering. Indices describing the longest partial permutation
+    /// are stored in the vector.
     PartiallySorted(Vec<usize>),
-    /// All Partition expressions are ordered (Also empty case)
+    /// There is a (full) permutation of the expressions satisfying the
+    /// existing ordering.
     Sorted,
 }
 
