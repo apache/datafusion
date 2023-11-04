@@ -1332,17 +1332,17 @@ fn general_replace(args: &[ArrayRef], arr_n: Vec<i64>) -> Result<ArrayRef> {
     )?))
 }
 
-pub fn array_replace_v2(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn array_replace(args: &[ArrayRef]) -> Result<ArrayRef> {
     general_replace(args, vec![1; args[0].len()])
 }
 
-pub fn array_replace_n_v2(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn array_replace_n(args: &[ArrayRef]) -> Result<ArrayRef> {
     let arr = as_int64_array(&args[3])?;
     let arr_n = arr.values().to_vec();
     general_replace(args, arr_n)
 }
 
-pub fn array_replace_all_v2(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn array_replace_all(args: &[ArrayRef]) -> Result<ArrayRef> {
     general_replace(args, vec![i64::MAX; args[0].len()])
 }
 
@@ -2710,7 +2710,7 @@ mod tests {
     fn test_array_replace() {
         // array_replace([3, 1, 2, 3, 2, 3], 3, 4) = [4, 1, 2, 3, 2, 3]
         let list_array = return_array_with_repeating_elements();
-        let array = array_replace_v2(&[
+        let array = array_replace(&[
             list_array,
             Arc::new(Int64Array::from_value(3, 1)),
             Arc::new(Int64Array::from_value(4, 1)),
@@ -2741,7 +2741,7 @@ mod tests {
         let list_array = return_nested_array_with_repeating_elements();
         let from_array = return_array();
         let to_array = return_extra_array();
-        let array = array_replace_v2(&[list_array, from_array, to_array])
+        let array = array_replace(&[list_array, from_array, to_array])
             .expect("failed to initialize function array_replace");
         let result =
             as_list_array(&array).expect("failed to initialize function array_replace");
@@ -2770,7 +2770,7 @@ mod tests {
     fn test_array_replace_n() {
         // array_replace_n([3, 1, 2, 3, 2, 3], 3, 4, 2) = [4, 1, 2, 4, 2, 3]
         let list_array = return_array_with_repeating_elements();
-        let array = array_replace_n_v2(&[
+        let array = array_replace_n(&[
             list_array,
             Arc::new(Int64Array::from_value(3, 1)),
             Arc::new(Int64Array::from_value(4, 1)),
@@ -2803,7 +2803,7 @@ mod tests {
         let list_array = return_nested_array_with_repeating_elements();
         let from_array = return_array();
         let to_array = return_extra_array();
-        let array = array_replace_n_v2(&[
+        let array = array_replace_n(&[
             list_array,
             from_array,
             to_array,
@@ -2837,7 +2837,7 @@ mod tests {
     fn test_array_replace_all() {
         // array_replace_all([3, 1, 2, 3, 2, 3], 3, 4) = [4, 1, 2, 4, 2, 4]
         let list_array = return_array_with_repeating_elements();
-        let array = array_replace_all_v2(&[
+        let array = array_replace_all(&[
             list_array,
             Arc::new(Int64Array::from_value(3, 1)),
             Arc::new(Int64Array::from_value(4, 1)),
@@ -2868,7 +2868,7 @@ mod tests {
         let list_array = return_nested_array_with_repeating_elements();
         let from_array = return_array();
         let to_array = return_extra_array();
-        let array = array_replace_all_v2(&[list_array, from_array, to_array])
+        let array = array_replace_all(&[list_array, from_array, to_array])
             .expect("failed to initialize function array_replace_all");
         let result = as_list_array(&array)
             .expect("failed to initialize function array_replace_all");
