@@ -208,9 +208,9 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         EquivalenceProperties::new(self.schema())
     }
 
-    /// Get a list of `ExecutionPlan` that provide input for this plan. The
-    /// returned list will be empty for leaf nodes such as scans, will contain a
-    /// single value for unary nodes, or two values for binary nodes (such as
+    /// Get a list of children `ExecutionPlan`s that act as inputs to this plan.
+    /// The returned list will be empty for leaf nodes such as scans, will contain
+    /// a single value for unary nodes, or two values for binary nodes (such as
     /// joins).
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>>;
 
