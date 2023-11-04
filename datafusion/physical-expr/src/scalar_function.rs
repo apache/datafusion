@@ -30,15 +30,13 @@
 //! to a function that supports f64, it is coerced to f64.
 
 use std::any::Any;
-use std::fmt::Debug;
-use std::fmt::{self, Formatter};
+use std::fmt::{self, Debug, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::functions::out_ordering;
-use crate::physical_expr::down_cast_any_ref;
+use crate::physical_expr::{down_cast_any_ref, physical_exprs_equal};
 use crate::sort_properties::SortProperties;
-use crate::utils::expr_list_eq_strict_order;
 use crate::PhysicalExpr;
 
 use arrow::datatypes::{DataType, Schema};
@@ -195,7 +193,7 @@ impl PartialEq<dyn Any> for ScalarFunctionExpr {
             .downcast_ref::<Self>()
             .map(|x| {
                 self.name == x.name
-                    && expr_list_eq_strict_order(&self.args, &x.args)
+                    && physical_exprs_equal(&self.args, &x.args)
                     && self.return_type == x.return_type
             })
             .unwrap_or(false)

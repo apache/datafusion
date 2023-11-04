@@ -17,14 +17,10 @@
 
 use std::{ops::Neg, sync::Arc};
 
-use crate::expressions::Column;
-use crate::utils::get_indices_of_matching_sort_exprs_with_order_eq;
-use crate::{
-    EquivalenceProperties, OrderingEquivalenceProperties, PhysicalExpr, PhysicalSortExpr,
-};
+use crate::PhysicalExpr;
 
 use arrow_schema::SortOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
+use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_common::Result;
 
 use itertools::Itertools;
@@ -223,58 +219,4 @@ impl TreeNode for ExprOrdering {
             ))
         }
     }
-}
-
-/// Calculates the [`SortProperties`] of a given [`ExprOrdering`] node.
-/// The node is either a leaf node, or an intermediate node:
-/// - If it is a leaf node, the children states are `None`. We directly find
-/// the order of the node by looking at the given sort expression and equivalence
-/// properties if it is a `Column` leaf, or we mark it as unordered. In the case
-/// of a `Literal` leaf, we mark it as singleton so that it can cooperate with
-/// some ordered columns at the upper steps.
-/// - If it is an intermediate node, the children states matter. Each `PhysicalExpr`
-/// and operator has its own rules about how to propagate the children orderings.
-/// However, before the children order propagation, it is checked that whether
-/// the intermediate node can be directly matched with the sort expression. If there
-/// is a match, the sort expression emerges at that node immediately, discarding
-/// the order coming from the children.
-pub fn update_ordering(
-    mut node: ExprOrdering,
-    sort_expr: &PhysicalSortExpr,
-    equal_properties: &EquivalenceProperties,
-    ordering_equal_properties: &OrderingEquivalenceProperties,
-) -> Result<Transformed<ExprOrdering>> {
-    // If we can directly match a sort expr with the current node, we can set
-    // its state and return early.
-    // TODO: If there is a PhysicalExpr other than a Column at this node (e.g.
-    //       a BinaryExpr like a + b), and there is an ordering equivalence of
-    //       it (let's say like c + d), we actually can find it at this step.
-    if sort_expr.expr.eq(&node.expr) {
-        node.state = SortProperties::Ordered(sort_expr.options);
-        return Ok(Transformed::Yes(node));
-    }
-
-    if !node.expr.children().is_empty() {
-        // We have an intermediate (non-leaf) node, account for its children:
-        node.state = node.expr.get_ordering(&node.children_states);
-    } else if let Some(column) = node.expr.as_any().downcast_ref::<Column>() {
-        // We have a Column, which is one of the two possible leaf node types:
-        node.state = get_indices_of_matching_sort_exprs_with_order_eq(
-            &[sort_expr.clone()],
-            &[column.clone()],
-            equal_properties,
-            ordering_equal_properties,
-        )
-        .map(|(sort_options, _)| {
-            SortProperties::Ordered(SortOptions {
-                descending: sort_options[0].descending,
-                nulls_first: sort_options[0].nulls_first,
-            })
-        })
-        .unwrap_or(SortProperties::Unordered);
-    } else {
-        // We have a Literal, which is the other possible leaf node type:
-        node.state = node.expr.get_ordering(&[]);
-    }
-    Ok(Transformed::Yes(node))
 }

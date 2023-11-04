@@ -35,7 +35,6 @@ use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::stats::Precision;
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::OrderingEquivalenceProperties;
 
 use futures::stream::{Stream, StreamExt};
 use log::trace;
@@ -136,10 +135,6 @@ impl ExecutionPlan for GlobalLimitExec {
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
         self.input.equivalence_properties()
-    }
-
-    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        self.input.ordering_equivalence_properties()
     }
 
     fn with_new_children(
@@ -325,10 +320,6 @@ impl ExecutionPlan for LocalLimitExec {
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
         self.input.equivalence_properties()
-    }
-
-    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        self.input.ordering_equivalence_properties()
     }
 
     fn unbounded_output(&self, _children: &[bool]) -> Result<bool> {

@@ -48,9 +48,9 @@ use datafusion_common::{exec_err, DataFusionError, JoinSide, Result, Statistics}
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_expr::JoinType;
+use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortExpr};
 
-use datafusion_physical_expr::equivalence::combine_join_equivalence_properties;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 
 /// Data of the inner table side
@@ -192,14 +192,15 @@ impl ExecutionPlan for NestedLoopJoinExec {
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
-        let left_columns_len = self.left.schema().fields.len();
-        combine_join_equivalence_properties(
-            self.join_type,
+        join_equivalence_properties(
             self.left.equivalence_properties(),
             self.right.equivalence_properties(),
-            left_columns_len,
-            &[], // empty join keys
+            &self.join_type,
             self.schema(),
+            &self.maintains_input_order(),
+            None,
+            // No on columns in nested loop join
+            &[],
         )
     }
 
