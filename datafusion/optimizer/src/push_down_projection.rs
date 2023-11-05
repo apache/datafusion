@@ -479,12 +479,8 @@ fn push_down_filter(
         None
     };
 
-    Filter::try_new(
-        filter.predicate.clone(),
-        filter.input.clone(),
-        new_schema,
-    )
-    .map(LogicalPlan::Filter)
+    Filter::try_new(filter.predicate.clone(), filter.input.clone(), new_schema)
+        .map(LogicalPlan::Filter)
 }
 
 fn push_down_scan(

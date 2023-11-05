@@ -331,7 +331,10 @@ async fn csv_explain_plans() {
     let actual = actual.into_iter().map(|r| r.join("\t")).collect::<String>();
     // Since the plan contains path that are environmentally dependant (e.g. full path of the test file), only verify important content
     assert_contains!(&actual, "logical_plan");
-    assert_contains!(actual, "Filter: aggregate_test_100.c2 > Int8(10), projection=[c1]");
+    assert_contains!(
+        actual,
+        "Filter: aggregate_test_100.c2 > Int8(10), projection=[c1]"
+    );
 }
 
 #[tokio::test]

@@ -76,7 +76,7 @@ impl FilterExec {
         input: Arc<dyn ExecutionPlan>,
     ) -> Result<Self> {
         let projected_schema = project_schema(&input.schema(), projection.as_ref())?;
-        match predicate.data_type(projected_schema.as_ref())? {
+        match predicate.data_type(input.schema().as_ref())? {
             DataType::Boolean => Ok(Self {
                 predicate,
                 projection,
@@ -123,7 +123,6 @@ impl ExecutionPlan for FilterExec {
 
     /// Get the schema for this execution plan
     fn schema(&self) -> SchemaRef {
-        // The filter operator does not make any changes to the schema of its input
         self.projected_schema.clone()
     }
 
@@ -153,9 +152,10 @@ impl ExecutionPlan for FilterExec {
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
-        let stats = self.statistics().unwrap();
+        let stats = self.input().statistics().unwrap();
         // Combine the equal predicates with the input equivalence properties
         let mut result = self.input.equivalence_properties();
+
         let (equal_pairs, _) = collect_columns_from_predicate(&self.predicate);
         for (lhs, rhs) in equal_pairs {
             let lhs_expr = Arc::new(lhs.clone()) as _;
@@ -213,12 +213,20 @@ impl ExecutionPlan for FilterExec {
         }
         let input_stats = self.input.statistics()?;
 
+        let column_stats = self
+            .projection
+            .as_ref()
+            .map(|x| {
+                x.iter()
+                    .map(|i| input_stats.column_statistics[*i].clone())
+                    .collect()
+            })
+            .unwrap_or(input_stats.column_statistics.clone());
+
         let num_rows = input_stats.num_rows;
         let total_byte_size = input_stats.total_byte_size;
-        let input_analysis_ctx = AnalysisContext::try_from_statistics(
-            &self.schema(),
-            &input_stats.column_statistics,
-        )?;
+        let input_analysis_ctx =
+            AnalysisContext::try_from_statistics(&self.schema(), &column_stats)?;
         let analysis_ctx = analyze(predicate, input_analysis_ctx)?;
 
         // Estimate (inexact) selectivity of predicate
@@ -300,14 +308,20 @@ struct FilterExecStream {
 pub(crate) fn batch_filter(
     batch: &RecordBatch,
     predicate: &Arc<dyn PhysicalExpr>,
+    projection: &Option<Vec<usize>>,
 ) -> Result<RecordBatch> {
     predicate
         .evaluate(batch)
         .map(|v| v.into_array(batch.num_rows()))
         .and_then(|array| {
+            //load just the columns requested
+            let batch = match projection.as_ref() {
+                Some(columns) => batch.project(columns)?,
+                None => batch.clone(),
+            };
             Ok(as_boolean_array(&array)?)
                 // apply filter array to record batch
-                .and_then(|filter_array| Ok(filter_record_batch(batch, filter_array)?))
+                .and_then(|filter_array| Ok(filter_record_batch(&batch, filter_array)?))
         })
 }
 
@@ -323,13 +337,10 @@ impl Stream for FilterExecStream {
             match self.input.poll_next_unpin(cx) {
                 Poll::Ready(value) => match value {
                     Some(Ok(batch)) => {
-                        let timer = self.baseline_metrics.elapsed_compute().timer();
-                        // load just the columns requested
-                        let batch = match self.projection.as_ref() {
-                            Some(columns) => batch.project(columns)?,
-                            None => batch.clone(),
-                        };
-                        let filtered_batch = batch_filter(&batch, &self.predicate)?;
+                        let timer: crate::metrics::ScopedTimerGuard<'_> =
+                            self.baseline_metrics.elapsed_compute().timer();
+                        let filtered_batch =
+                            batch_filter(&batch, &self.predicate, &self.projection)?;
                         // skip entirely filtered batches
                         if filtered_batch.num_rows() == 0 {
                             continue;
