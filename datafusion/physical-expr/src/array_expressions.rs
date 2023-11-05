@@ -2813,7 +2813,6 @@ mod tests {
             None,
             Some(vec![None, Some(1), Some(3)]),
         ]);
-        println!("expected_list_array: {:?}", list_array);
 
         let list_array = Arc::new(list_array) as ArrayRef;
         let from = Arc::new(from) as ArrayRef;
