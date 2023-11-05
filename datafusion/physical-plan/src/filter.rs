@@ -241,7 +241,7 @@ impl ExecutionPlan for FilterExec {
         };
 
         let column_statistics = collect_new_statistics(
-            &input_stats.column_statistics,
+            &column_stats,
             analysis_ctx.boundaries,
         );
         Ok(Statistics {
