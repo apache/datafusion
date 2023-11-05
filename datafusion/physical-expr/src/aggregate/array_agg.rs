@@ -65,8 +65,9 @@ impl AggregateExpr for ArrayAgg {
     fn field(&self) -> Result<Field> {
         Ok(Field::new_list(
             &self.name,
-            Field::new("item", self.input_data_type.clone(), self.is_expr_nullable),
-            false,
+            // This should be the same as return type of AggregateFunction::ArrayAgg
+            Field::new("item", self.input_data_type.clone(), true),
+            self.is_expr_nullable,
         ))
     }
 
@@ -79,8 +80,8 @@ impl AggregateExpr for ArrayAgg {
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![Field::new_list(
             format_state_name(&self.name, "array_agg"),
-            Field::new("item", self.input_data_type.clone(), self.is_expr_nullable),
-            false,
+            Field::new("item", self.input_data_type.clone(), true),
+            self.is_expr_nullable,
         )])
     }
 

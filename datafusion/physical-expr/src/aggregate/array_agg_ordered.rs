@@ -85,8 +85,9 @@ impl AggregateExpr for OrderSensitiveArrayAgg {
     fn field(&self) -> Result<Field> {
         Ok(Field::new_list(
             &self.name,
-            Field::new("item", self.input_data_type.clone(), self.is_expr_nullable),
-            true, // This should be aligned with the return type of `AggregateFunction::ArrayAgg`
+            // This should be the same as return type of AggregateFunction::ArrayAgg
+            Field::new("item", self.input_data_type.clone(), true),
+            self.is_expr_nullable,
         ))
     }
 
@@ -101,18 +102,14 @@ impl AggregateExpr for OrderSensitiveArrayAgg {
     fn state_fields(&self) -> Result<Vec<Field>> {
         let mut fields = vec![Field::new_list(
             format_state_name(&self.name, "array_agg"),
-            Field::new("item", self.input_data_type.clone(), self.is_expr_nullable),
-            true, // This should be the same as field()
+            Field::new("item", self.input_data_type.clone(), true),
+            self.is_expr_nullable, // This should be the same as field()
         )];
         let orderings = ordering_fields(&self.ordering_req, &self.order_by_data_types);
         fields.push(Field::new_list(
             format_state_name(&self.name, "array_agg_orderings"),
-            Field::new(
-                "item",
-                DataType::Struct(Fields::from(orderings)),
-                self.is_expr_nullable,
-            ),
-            true,
+            Field::new("item", DataType::Struct(Fields::from(orderings)), true),
+            self.is_expr_nullable,
         ));
         Ok(fields)
     }

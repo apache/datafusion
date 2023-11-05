@@ -40,6 +40,8 @@ pub struct DistinctArrayAgg {
     input_data_type: DataType,
     /// The input expression
     expr: Arc<dyn PhysicalExpr>,
+    /// Whether the input expression can produce NULL values
+    is_expr_nullable: bool,
 }
 
 impl DistinctArrayAgg {
@@ -48,12 +50,14 @@ impl DistinctArrayAgg {
         expr: Arc<dyn PhysicalExpr>,
         name: impl Into<String>,
         input_data_type: DataType,
+        is_expr_nullable: bool,
     ) -> Self {
         let name = name.into();
         Self {
             name,
             expr,
             input_data_type,
+            is_expr_nullable,
         }
     }
 }
@@ -67,8 +71,9 @@ impl AggregateExpr for DistinctArrayAgg {
     fn field(&self) -> Result<Field> {
         Ok(Field::new_list(
             &self.name,
+            // This should be the same as return type of AggregateFunction::ArrayAgg
             Field::new("item", self.input_data_type.clone(), true),
-            false,
+            self.is_expr_nullable,
         ))
     }
 
@@ -82,7 +87,7 @@ impl AggregateExpr for DistinctArrayAgg {
         Ok(vec![Field::new_list(
             format_state_name(&self.name, "distinct_array_agg"),
             Field::new("item", self.input_data_type.clone(), true),
-            false,
+            self.is_expr_nullable,
         )])
     }
 
@@ -238,6 +243,7 @@ mod tests {
             col("a", &schema)?,
             "bla".to_string(),
             datatype,
+            true,
         ));
         let actual = aggregate(&batch, agg)?;
 
@@ -255,6 +261,7 @@ mod tests {
             col("a", &schema)?,
             "bla".to_string(),
             datatype,
+            true,
         ));
 
         let mut accum1 = agg.create_accumulator()?;

@@ -140,10 +140,13 @@ pub fn create_aggregate_expr(
                     "ARRAY_AGG(DISTINCT ORDER BY a ASC) order-sensitive aggregations are not available"
                 );
             }
+            let expr = input_phy_exprs[0].clone();
+            let is_expr_nullable = expr.nullable(input_schema)?;
             Arc::new(expressions::DistinctArrayAgg::new(
-                input_phy_exprs[0].clone(),
+                expr,
                 name,
                 data_type,
+                is_expr_nullable,
             ))
         }
         (AggregateFunction::Min, _) => Arc::new(expressions::Min::new(
