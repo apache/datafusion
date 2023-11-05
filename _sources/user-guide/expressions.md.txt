@@ -107,11 +107,6 @@ but these operators always return a `bool` which makes them not work with the ex
 | x % y, x.rem(y)  | Remainder      |
 | -x, x.neg()      | Negation       |
 
-:::{note}
-In Rust, the keyword `mod` is reserved and cannot be used as an identifier.
-To avoid any conflicts and ensure code completion works smoothly, we use `mod_` instead.
-:::
-
 ## Math Functions
 
 | Syntax                | Description                                       |
