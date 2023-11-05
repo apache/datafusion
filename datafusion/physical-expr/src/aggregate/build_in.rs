@@ -443,8 +443,8 @@ mod tests {
                         assert_eq!(
                             Field::new_list(
                                 "c1",
-                                Field::new("item", data_type.clone(), true,),
-                                false,
+                                Field::new("item", data_type.clone(), true),
+                                true,
                             ),
                             result_agg_phy_exprs.field().unwrap()
                         );
@@ -482,8 +482,8 @@ mod tests {
                         assert_eq!(
                             Field::new_list(
                                 "c1",
-                                Field::new("item", data_type.clone(), true,),
-                                false,
+                                Field::new("item", data_type.clone(), true),
+                                true,
                             ),
                             result_agg_phy_exprs.field().unwrap()
                         );

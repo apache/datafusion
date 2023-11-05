@@ -1341,7 +1341,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_array_agg_schema() -> Result<()> {
+    async fn test_array_agg_ord_schema() -> Result<()> {
         let ctx = SessionContext::new();
 
         let create_table_query = r#"
@@ -1358,6 +1358,66 @@ mod tests {
         let query = r#"SELECT
         array_agg("double_field" ORDER BY "string_field") as "double_field",
         array_agg("string_field" ORDER BY "string_field") as "string_field"
+    FROM test_table"#;
+
+        let result = ctx.sql(query).await?;
+        let logical_expr_dfschema = result.schema();
+        let logical_expr_schema = SchemaRef::from(logical_expr_dfschema.to_owned());
+        let batches = result.collect().await?;
+        let physical_expr_schema = batches[0].schema();
+        assert_eq!(logical_expr_schema, physical_expr_schema);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_array_agg_schema() -> Result<()> {
+        let ctx = SessionContext::new();
+
+        let create_table_query = r#"
+            CREATE TABLE test_table (
+                "double_field" DOUBLE,
+                "string_field" VARCHAR
+            ) AS VALUES
+                (1.0, 'a'),
+                (2.0, 'b'),
+                (3.0, 'c')
+        "#;
+        ctx.sql(create_table_query).await?;
+
+        let query = r#"SELECT
+        array_agg("double_field") as "double_field",
+        array_agg("string_field") as "string_field"
+    FROM test_table"#;
+
+        let result = ctx.sql(query).await?;
+        let logical_expr_dfschema = result.schema();
+        let logical_expr_schema = SchemaRef::from(logical_expr_dfschema.to_owned());
+        let batches = result.collect().await?;
+        let physical_expr_schema = batches[0].schema();
+        assert_eq!(logical_expr_schema, physical_expr_schema);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_array_agg_distinct_schema() -> Result<()> {
+        let ctx = SessionContext::new();
+
+        let create_table_query = r#"
+            CREATE TABLE test_table (
+                "double_field" DOUBLE,
+                "string_field" VARCHAR
+            ) AS VALUES
+                (1.0, 'a'),
+                (2.0, 'b'),
+                (2.0, 'a')
+        "#;
+        ctx.sql(create_table_query).await?;
+
+        let query = r#"SELECT
+        array_agg(distinct "double_field") as "double_field",
+        array_agg(distinct "string_field") as "string_field"
     FROM test_table"#;
 
         let result = ctx.sql(query).await?;
