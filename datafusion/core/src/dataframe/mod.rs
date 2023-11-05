@@ -1332,13 +1332,42 @@ mod tests {
     use datafusion_physical_expr::expressions::Column;
 
     use crate::execution::context::SessionConfig;
+    use crate::execution::options::ParquetReadOptions;
     use crate::physical_plan::ColumnarValue;
     use crate::physical_plan::Partitioning;
     use crate::physical_plan::PhysicalExpr;
+    use crate::test_util::parquet_test_data;
     use crate::test_util::{register_aggregate_csv, test_table, test_table_with_name};
     use crate::{assert_batches_sorted_eq, execution::context::SessionContext};
 
     use super::*;
+
+    #[tokio::test]
+    async fn test_array_agg_schema() -> Result<()> {
+        let ctx = SessionContext::new();
+        ctx.register_parquet(
+            "test",
+            &format!("{}/test_array_agg.parquet", parquet_test_data()),
+            ParquetReadOptions::default(),
+        )
+        .await?;
+
+        ctx.register_table("test_table", ctx.table("test").await?.into_view())?;
+
+        let query = r#"SELECT
+        array_agg("double_field" ORDER BY "string_field") as "double_field",
+        array_agg("string_field" ORDER BY "string_field") as "string_field"
+    FROM test_table"#;
+
+        let result = ctx.sql(query).await?;
+        let logical_expr_dfschema = result.schema();
+        let logical_expr_schema = SchemaRef::from(logical_expr_dfschema.to_owned());
+        let batches = result.collect().await?;
+        let physical_expr_schema = batches[0].schema();
+        assert_eq!(logical_expr_schema, physical_expr_schema);
+
+        Ok(())
+    }
 
     #[tokio::test]
     async fn select_columns() -> Result<()> {

@@ -50,6 +50,7 @@ use itertools::izip;
 pub struct OrderSensitiveArrayAgg {
     name: String,
     input_data_type: DataType,
+    is_expr_nullable: bool,
     order_by_data_types: Vec<DataType>,
     expr: Arc<dyn PhysicalExpr>,
     ordering_req: LexOrdering,
@@ -61,6 +62,7 @@ impl OrderSensitiveArrayAgg {
         expr: Arc<dyn PhysicalExpr>,
         name: impl Into<String>,
         input_data_type: DataType,
+        is_expr_nullable: bool,
         order_by_data_types: Vec<DataType>,
         ordering_req: LexOrdering,
     ) -> Self {
@@ -68,6 +70,7 @@ impl OrderSensitiveArrayAgg {
             name: name.into(),
             expr,
             input_data_type,
+            is_expr_nullable,
             order_by_data_types,
             ordering_req,
         }
@@ -82,8 +85,8 @@ impl AggregateExpr for OrderSensitiveArrayAgg {
     fn field(&self) -> Result<Field> {
         Ok(Field::new_list(
             &self.name,
-            Field::new("item", self.input_data_type.clone(), true),
-            false,
+            Field::new("item", self.input_data_type.clone(), self.is_expr_nullable),
+            true, // This should be aligned with the return type of `AggregateFunction::ArrayAgg`
         ))
     }
 
@@ -98,14 +101,18 @@ impl AggregateExpr for OrderSensitiveArrayAgg {
     fn state_fields(&self) -> Result<Vec<Field>> {
         let mut fields = vec![Field::new_list(
             format_state_name(&self.name, "array_agg"),
-            Field::new("item", self.input_data_type.clone(), true),
-            false,
+            Field::new("item", self.input_data_type.clone(), self.is_expr_nullable),
+            true, // This should be the same as field()
         )];
         let orderings = ordering_fields(&self.ordering_req, &self.order_by_data_types);
         fields.push(Field::new_list(
             format_state_name(&self.name, "array_agg_orderings"),
-            Field::new("item", DataType::Struct(Fields::from(orderings)), true),
-            false,
+            Field::new(
+                "item",
+                DataType::Struct(Fields::from(orderings)),
+                self.is_expr_nullable,
+            ),
+            true,
         ));
         Ok(fields)
     }

@@ -114,13 +114,21 @@ pub fn create_aggregate_expr(
         ),
         (AggregateFunction::ArrayAgg, false) => {
             let expr = input_phy_exprs[0].clone();
+            let is_expr_nullable = expr.nullable(input_schema)?;
+            println!("null: {:?}", is_expr_nullable);
             if ordering_req.is_empty() {
-                Arc::new(expressions::ArrayAgg::new(expr, name, data_type))
+                Arc::new(expressions::ArrayAgg::new(
+                    expr,
+                    name,
+                    data_type,
+                    is_expr_nullable,
+                ))
             } else {
                 Arc::new(expressions::OrderSensitiveArrayAgg::new(
                     expr,
                     name,
                     data_type,
+                    is_expr_nullable,
                     ordering_types,
                     ordering_req.to_vec(),
                 ))

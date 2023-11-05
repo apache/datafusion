@@ -37,6 +37,7 @@ pub struct ArrayAgg {
     name: String,
     input_data_type: DataType,
     expr: Arc<dyn PhysicalExpr>,
+    is_expr_nullable: bool,
 }
 
 impl ArrayAgg {
@@ -45,11 +46,13 @@ impl ArrayAgg {
         expr: Arc<dyn PhysicalExpr>,
         name: impl Into<String>,
         data_type: DataType,
+        is_expr_nullable: bool,
     ) -> Self {
         Self {
             name: name.into(),
             expr,
             input_data_type: data_type,
+            is_expr_nullable,
         }
     }
 }
@@ -62,7 +65,7 @@ impl AggregateExpr for ArrayAgg {
     fn field(&self) -> Result<Field> {
         Ok(Field::new_list(
             &self.name,
-            Field::new("item", self.input_data_type.clone(), true),
+            Field::new("item", self.input_data_type.clone(), self.is_expr_nullable),
             false,
         ))
     }
@@ -76,7 +79,7 @@ impl AggregateExpr for ArrayAgg {
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![Field::new_list(
             format_state_name(&self.name, "array_agg"),
-            Field::new("item", self.input_data_type.clone(), true),
+            Field::new("item", self.input_data_type.clone(), self.is_expr_nullable),
             false,
         )])
     }
@@ -184,7 +187,6 @@ mod tests {
     use super::*;
     use crate::expressions::col;
     use crate::expressions::tests::aggregate;
-    use crate::generic_test_op;
     use arrow::array::ArrayRef;
     use arrow::array::Int32Array;
     use arrow::datatypes::*;
@@ -194,6 +196,30 @@ mod tests {
     use arrow_buffer::OffsetBuffer;
     use datafusion_common::DataFusionError;
     use datafusion_common::Result;
+
+    macro_rules! test_op {
+        ($ARRAY:expr, $DATATYPE:expr, $OP:ident, $EXPECTED:expr) => {
+            test_op!($ARRAY, $DATATYPE, $OP, $EXPECTED, $EXPECTED.data_type())
+        };
+        ($ARRAY:expr, $DATATYPE:expr, $OP:ident, $EXPECTED:expr, $EXPECTED_DATATYPE:expr) => {{
+            let schema = Schema::new(vec![Field::new("a", $DATATYPE, true)]);
+
+            let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![$ARRAY])?;
+
+            let agg = Arc::new(<$OP>::new(
+                col("a", &schema)?,
+                "bla".to_string(),
+                $EXPECTED_DATATYPE,
+                true,
+            ));
+            let actual = aggregate(&batch, agg)?;
+            let expected = ScalarValue::from($EXPECTED);
+
+            assert_eq!(expected, actual);
+
+            Ok(()) as Result<(), DataFusionError>
+        }};
+    }
 
     #[test]
     fn array_agg_i32() -> Result<()> {
@@ -208,7 +234,7 @@ mod tests {
         ])]);
         let list = ScalarValue::List(Arc::new(list));
 
-        generic_test_op!(a, DataType::Int32, ArrayAgg, list, DataType::Int32)
+        test_op!(a, DataType::Int32, ArrayAgg, list, DataType::Int32)
     }
 
     #[test]
@@ -264,7 +290,7 @@ mod tests {
 
         let array = ScalarValue::iter_to_array(vec![l1, l2, l3]).unwrap();
 
-        generic_test_op!(
+        test_op!(
             array,
             DataType::List(Arc::new(Field::new_list(
                 "item",
