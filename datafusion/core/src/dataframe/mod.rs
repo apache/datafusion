@@ -1332,11 +1332,9 @@ mod tests {
     use datafusion_physical_expr::expressions::Column;
 
     use crate::execution::context::SessionConfig;
-    use crate::execution::options::ParquetReadOptions;
     use crate::physical_plan::ColumnarValue;
     use crate::physical_plan::Partitioning;
     use crate::physical_plan::PhysicalExpr;
-    use crate::test_util::parquet_test_data;
     use crate::test_util::{register_aggregate_csv, test_table, test_table_with_name};
     use crate::{assert_batches_sorted_eq, execution::context::SessionContext};
 
@@ -1345,14 +1343,17 @@ mod tests {
     #[tokio::test]
     async fn test_array_agg_schema() -> Result<()> {
         let ctx = SessionContext::new();
-        ctx.register_parquet(
-            "test",
-            &format!("{}/test_array_agg.parquet", parquet_test_data()),
-            ParquetReadOptions::default(),
-        )
-        .await?;
 
-        ctx.register_table("test_table", ctx.table("test").await?.into_view())?;
+        let create_table_query = r#"
+            CREATE TABLE test_table (
+                "double_field" DOUBLE,
+                "string_field" VARCHAR
+            ) AS VALUES
+                (1.0, 'a'),
+                (2.0, 'b'),
+                (3.0, 'c')
+        "#;
+        ctx.sql(create_table_query).await?;
 
         let query = r#"SELECT
         array_agg("double_field" ORDER BY "string_field") as "double_field",
