@@ -240,10 +240,8 @@ impl ExecutionPlan for FilterExec {
             None => Precision::Absent,
         };
 
-        let column_statistics = collect_new_statistics(
-            &column_stats,
-            analysis_ctx.boundaries,
-        );
+        let column_statistics =
+            collect_new_statistics(&column_stats, analysis_ctx.boundaries);
         Ok(Statistics {
             num_rows,
             total_byte_size,
