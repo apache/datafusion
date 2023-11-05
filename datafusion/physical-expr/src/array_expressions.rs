@@ -1233,13 +1233,12 @@ array_removement_function!(
 /// list of int32s, the second and third argument are int32 arrays, and the
 /// fourth argument is the number of occurrences to replace
 ///
-/// ```
+/// ```text
 /// general_replace(
 ///   [1, 2, 3, 2], 2, 10, 1    ==> [1, 10, 3, 2]   (only the first 2 is replaced)
 ///   [4, 5, 6, 5], 5, 20, 2    ==> [4, 20, 6, 20]  (both 5s are replaced)
 /// )
 /// ```
-///
 fn general_replace(
     list_array: &ListArray,
     from_array: &ArrayRef,
