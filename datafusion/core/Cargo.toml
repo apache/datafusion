@@ -62,11 +62,11 @@ bytes = { workspace = true }
 bzip2 = { version = "0.4.3", optional = true }
 chrono = { workspace = true }
 dashmap = { workspace = true }
-datafusion-common = { path = "../common", version = "32.0.0", features = ["object_store"], default-features = false }
+datafusion-common = { path = "../common", version = "33.0.0", features = ["object_store"], default-features = false }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
-datafusion-optimizer = { path = "../optimizer", version = "32.0.0", default-features = false }
-datafusion-physical-expr = { path = "../physical-expr", version = "32.0.0", default-features = false }
+datafusion-optimizer = { path = "../optimizer", version = "33.0.0", default-features = false }
+datafusion-physical-expr = { path = "../physical-expr", version = "33.0.0", default-features = false }
 datafusion-physical-plan = { workspace = true }
 datafusion-sql = { workspace = true }
 flate2 = { version = "1.0.24", optional = true }
