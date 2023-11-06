@@ -37,6 +37,8 @@ use datafusion_common::{
 
 use itertools::Itertools;
 
+use crate::aggregate::count;
+
 macro_rules! downcast_arg {
     ($ARG:expr, $ARRAY_TYPE:ident) => {{
         $ARG.as_any().downcast_ref::<$ARRAY_TYPE>().ok_or_else(|| {
@@ -977,29 +979,155 @@ pub fn array_empty(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Array_repeat SQL function
 pub fn array_repeat(args: &[ArrayRef]) -> Result<ArrayRef> {
+    println!("args: {:?}", args);
     let element = &args[0];
     let count = as_int64_array(&args[1])?;
 
     let res = match element.data_type() {
         DataType::List(field) => {
-            macro_rules! array_function {
-                ($ARRAY_TYPE:ident) => {
-                    general_repeat_list!(element, count, $ARRAY_TYPE)
-                };
-            }
-            call_array_function!(field.data_type(), true)
+            // macro_rules! array_function {
+            //     ($ARRAY_TYPE:ident) => {
+            //         general_repeat_list!(element, count, $ARRAY_TYPE)
+            //     };
+            // }
+            // call_array_function!(field.data_type(), true)
+            let list_array = as_list_array(element)?;
+            let res = general_list_repeat_v2(list_array, count)?;
+            return Ok(res);
         }
         data_type => {
-            macro_rules! array_function {
-                ($ARRAY_TYPE:ident) => {
-                    general_repeat!(element, count, $ARRAY_TYPE)
-                };
-            }
-            call_array_function!(data_type, false)
+            let res = general_repeat_v2(element, count)?;
+            return Ok(res);
+            // macro_rules! array_function {
+            //     ($ARRAY_TYPE:ident) => {
+            //         general_repeat!(element, count, $ARRAY_TYPE)
+            //     };
+            // }
+            // call_array_function!(data_type, false)
         }
     };
 
     Ok(res)
+}
+
+pub fn general_repeat_v2(array: &ArrayRef, count_array: &Int64Array) -> Result<ArrayRef> {
+    println!("array: {:?}", array);
+    println!("count_array: {:?}", count_array);
+
+    let mut offsets: Vec<i32> = vec![0];
+    let data_type = array.data_type();
+    let mut new_values = vec![];
+
+    for (row_index, count) in count_array.iter().enumerate() {
+        let last_offset: i32 = offsets
+        .last()
+        .copied()
+        .ok_or_else(|| internal_datafusion_err!("offsets should not be empty"))?; 
+
+        if array.is_null(row_index) {
+            offsets.push(last_offset);
+        } else {
+            let original_data = array.to_data();
+            let capacity = Capacities::Array(original_data.len());
+            let mut mutable = MutableArrayData::with_capacities(
+                vec![&original_data],
+                false,
+                capacity,
+            );
+            
+            for _ in 0..count.unwrap_or(0) {
+                mutable.extend(0, row_index, row_index + 1);
+            }
+
+            let data = mutable.freeze();
+            let final_array = arrow_array::make_array(data);
+            offsets.push(last_offset + final_array.len() as i32);
+            new_values.push(final_array);
+        }
+    }
+
+    let values = if new_values.is_empty() {
+        new_empty_array(data_type)
+    } else {
+        let new_values: Vec<_> = new_values.iter().map(|a| a.as_ref()).collect();
+        arrow::compute::concat(&new_values)?
+    };
+    Ok(Arc::new(ListArray::try_new(
+        Arc::new(Field::new("item", data_type.to_owned(), true)),
+        OffsetBuffer::new(offsets.into()),
+        values,
+        array.nulls().cloned(),
+    )?))
+
+}
+pub fn general_list_repeat_v2(list_array: &ListArray, count_array: &Int64Array) -> Result<ArrayRef> {
+    let mut offsets: Vec<i32> = vec![0];
+    let data_type = list_array.data_type();
+    let value_type = list_array.value_type();
+    let mut new_values = vec![];
+
+    println!("list_array: {:?}", list_array);
+    println!("count_array: {:?}", count_array);
+
+    for (list_array_row, count) in list_array.iter().zip(count_array.iter()) {
+        let last_offset: i32 = offsets
+        .last()
+        .copied()
+        .ok_or_else(|| internal_datafusion_err!("offsets should not be empty"))?; 
+
+        match list_array_row {
+            Some(list_array_row) => {
+                let count = count.unwrap_or(1) as usize;
+                let original_data = list_array_row.to_data();
+                let capacity = Capacities::Array(original_data.len() * count);
+                let mut mutable = MutableArrayData::with_capacities(
+                    vec![&original_data],
+                    false,
+                    capacity,
+                );
+                let mut inner_offsets = vec![];
+                for _ in 0..count {
+                    mutable.extend(0, 0, original_data.len());
+                    inner_offsets.push(original_data.len() as i32);
+                }
+                let data = mutable.freeze();
+                let final_array = arrow_array::make_array(data);
+                println!("final_array: {:?}", final_array);
+                println!("inner_offsets: {:?}", inner_offsets);
+
+                let list_arr = ListArray::try_new(
+                    Arc::new(Field::new("item", value_type.clone(), true)),
+                    OffsetBuffer::from_lengths(vec![original_data.len(); count]),
+                    final_array,
+                    None,
+                )?;
+                let list_arr = Arc::new(list_arr) as ArrayRef;
+                println!("list_arr: {:?}", list_arr);
+
+                offsets.push(last_offset + list_arr.len() as i32);
+                new_values.push(list_arr);
+            }
+            None => {
+                 // Null element results in a null row (no new offsets)
+                 offsets.push(last_offset);
+            }
+        }
+    }
+    let values = if new_values.is_empty() {
+        new_empty_array(data_type)
+    } else {
+        let new_values: Vec<_> = new_values.iter().map(|a| a.as_ref()).collect();
+        arrow::compute::concat(&new_values)?
+    };
+    println!("values: {:?}", values);
+    println!("data_type: {:?}", data_type);
+    Ok(Arc::new(ListArray::try_new(
+        Arc::new(Field::new("item", data_type.to_owned(), true)),
+        OffsetBuffer::new(offsets.into()),
+        values,
+        list_array.nulls().cloned(),
+    )?))
+
 }
 
 macro_rules! position {
