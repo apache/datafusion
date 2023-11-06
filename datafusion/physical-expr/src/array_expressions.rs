@@ -997,6 +997,7 @@ pub fn array_repeat(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
         data_type => {
             let res = general_repeat_v2(element, count)?;
+            println!("res: {:?}", res);
             return Ok(res);
             // macro_rules! array_function {
             //     ($ARRAY_TYPE:ident) => {
@@ -1019,23 +1020,28 @@ pub fn general_repeat_v2(array: &ArrayRef, count_array: &Int64Array) -> Result<A
     let mut new_values = vec![];
 
     for (row_index, count) in count_array.iter().enumerate() {
+        if count.is_none() {
+            return internal_err!("count should not be null");
+        }
+        let count = count.unwrap() as usize;
+
         let last_offset: i32 = offsets
-        .last()
-        .copied()
-        .ok_or_else(|| internal_datafusion_err!("offsets should not be empty"))?; 
+            .last()
+            .copied()
+            .ok_or_else(|| internal_datafusion_err!("offsets should not be empty"))?;
 
         if array.is_null(row_index) {
-            offsets.push(last_offset);
+            let final_array = new_null_array(data_type, count);
+            println!("final_array: {:?}", final_array);
+            offsets.push(last_offset + final_array.len() as i32);
+            new_values.push(final_array);
         } else {
             let original_data = array.to_data();
             let capacity = Capacities::Array(original_data.len());
-            let mut mutable = MutableArrayData::with_capacities(
-                vec![&original_data],
-                false,
-                capacity,
-            );
-            
-            for _ in 0..count.unwrap_or(0) {
+            let mut mutable =
+                MutableArrayData::with_capacities(vec![&original_data], false, capacity);
+
+            for _ in 0..count {
                 mutable.extend(0, row_index, row_index + 1);
             }
 
@@ -1052,15 +1058,19 @@ pub fn general_repeat_v2(array: &ArrayRef, count_array: &Int64Array) -> Result<A
         let new_values: Vec<_> = new_values.iter().map(|a| a.as_ref()).collect();
         arrow::compute::concat(&new_values)?
     };
+    println!("values: {:?}", values);
     Ok(Arc::new(ListArray::try_new(
         Arc::new(Field::new("item", data_type.to_owned(), true)),
         OffsetBuffer::new(offsets.into()),
         values,
-        array.nulls().cloned(),
+        None,
     )?))
-
 }
-pub fn general_list_repeat_v2(list_array: &ListArray, count_array: &Int64Array) -> Result<ArrayRef> {
+
+pub fn general_list_repeat_v2(
+    list_array: &ListArray,
+    count_array: &Int64Array,
+) -> Result<ArrayRef> {
     let mut offsets: Vec<i32> = vec![0];
     let data_type = list_array.data_type();
     let value_type = list_array.value_type();
@@ -1071,9 +1081,9 @@ pub fn general_list_repeat_v2(list_array: &ListArray, count_array: &Int64Array) 
 
     for (list_array_row, count) in list_array.iter().zip(count_array.iter()) {
         let last_offset: i32 = offsets
-        .last()
-        .copied()
-        .ok_or_else(|| internal_datafusion_err!("offsets should not be empty"))?; 
+            .last()
+            .copied()
+            .ok_or_else(|| internal_datafusion_err!("offsets should not be empty"))?;
 
         match list_array_row {
             Some(list_array_row) => {
@@ -1108,8 +1118,8 @@ pub fn general_list_repeat_v2(list_array: &ListArray, count_array: &Int64Array) 
                 new_values.push(list_arr);
             }
             None => {
-                 // Null element results in a null row (no new offsets)
-                 offsets.push(last_offset);
+                // Null element results in a null row (no new offsets)
+                offsets.push(last_offset);
             }
         }
     }
@@ -1127,7 +1137,6 @@ pub fn general_list_repeat_v2(list_array: &ListArray, count_array: &Int64Array) 
         values,
         list_array.nulls().cloned(),
     )?))
-
 }
 
 macro_rules! position {
