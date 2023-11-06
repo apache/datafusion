@@ -729,7 +729,7 @@ fn roundtrip_json_sink() -> Result<()> {
     let file_sink_config = FileSinkConfig {
         object_store_url: ObjectStoreUrl::local_filesystem(),
         file_groups: vec![PartitionedFile::new("/tmp".to_string(), 1)],
-        table_paths: vec![ListingTableUrl::parse("/tmp")?],
+        table_paths: vec![ListingTableUrl::parse("file:///")?],
         output_schema: schema.clone(),
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
         writer_mode: FileWriterMode::Put,
