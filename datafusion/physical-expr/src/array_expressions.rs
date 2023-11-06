@@ -3019,17 +3019,6 @@ mod tests {
         make_array(&args).expect("failed to initialize function array")
     }
 
-    fn return_extra_array() -> ArrayRef {
-        // Returns: [11, 12, 13, 14]
-        let args = [
-            Arc::new(Int64Array::from(vec![Some(11)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(12)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(13)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(14)])) as ArrayRef,
-        ];
-        make_array(&args).expect("failed to initialize function array")
-    }
-
     fn return_nested_array() -> ArrayRef {
         // Returns: [[1, 2, 3, 4], [5, 6, 7, 8]]
         let args = [
