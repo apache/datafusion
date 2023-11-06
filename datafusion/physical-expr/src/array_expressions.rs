@@ -843,125 +843,6 @@ pub fn array_concat(args: &[ArrayRef]) -> Result<ArrayRef> {
     concat_internal(new_args.as_slice())
 }
 
-macro_rules! general_repeat {
-    ($ELEMENT:expr, $COUNT:expr, $ARRAY_TYPE:ident) => {{
-        let mut offsets: Vec<i32> = vec![0];
-        let mut values =
-            downcast_arg!(new_empty_array($ELEMENT.data_type()), $ARRAY_TYPE).clone();
-
-        let element_array = downcast_arg!($ELEMENT, $ARRAY_TYPE);
-        for (el, c) in element_array.iter().zip($COUNT.iter()) {
-            let last_offset: i32 = offsets.last().copied().ok_or_else(|| {
-                DataFusionError::Internal(format!("offsets should not be empty"))
-            })?;
-            match el {
-                Some(el) => {
-                    let c = if c < Some(0) { 0 } else { c.unwrap() } as usize;
-                    let repeated_array =
-                        [Some(el.clone())].repeat(c).iter().collect::<$ARRAY_TYPE>();
-
-                    values = downcast_arg!(
-                        compute::concat(&[&values, &repeated_array])?.clone(),
-                        $ARRAY_TYPE
-                    )
-                    .clone();
-                    offsets.push(last_offset + repeated_array.len() as i32);
-                }
-                None => {
-                    offsets.push(last_offset);
-                }
-            }
-        }
-
-        let field = Arc::new(Field::new("item", $ELEMENT.data_type().clone(), true));
-
-        Arc::new(ListArray::try_new(
-            field,
-            OffsetBuffer::new(offsets.into()),
-            Arc::new(values),
-            None,
-        )?)
-    }};
-}
-
-macro_rules! general_repeat_list {
-    ($ELEMENT:expr, $COUNT:expr, $ARRAY_TYPE:ident) => {{
-        let mut offsets: Vec<i32> = vec![0];
-        let mut values =
-            downcast_arg!(new_empty_array($ELEMENT.data_type()), ListArray).clone();
-
-        let element_array = downcast_arg!($ELEMENT, ListArray);
-        for (el, c) in element_array.iter().zip($COUNT.iter()) {
-            let last_offset: i32 = offsets.last().copied().ok_or_else(|| {
-                DataFusionError::Internal(format!("offsets should not be empty"))
-            })?;
-            match el {
-                Some(el) => {
-                    let c = if c < Some(0) { 0 } else { c.unwrap() } as usize;
-                    let repeated_vec = vec![el; c];
-
-                    let mut i: i32 = 0;
-                    let mut repeated_offsets = vec![i];
-                    repeated_offsets.extend(
-                        repeated_vec
-                            .clone()
-                            .into_iter()
-                            .map(|a| {
-                                i += a.len() as i32;
-                                i
-                            })
-                            .collect::<Vec<_>>(),
-                    );
-
-                    let mut repeated_values = downcast_arg!(
-                        new_empty_array(&element_array.value_type()),
-                        $ARRAY_TYPE
-                    )
-                    .clone();
-                    for repeated_list in repeated_vec {
-                        repeated_values = downcast_arg!(
-                            compute::concat(&[&repeated_values, &repeated_list])?,
-                            $ARRAY_TYPE
-                        )
-                        .clone();
-                    }
-
-                    let field = Arc::new(Field::new(
-                        "item",
-                        element_array.value_type().clone(),
-                        true,
-                    ));
-                    let repeated_array = ListArray::try_new(
-                        field,
-                        OffsetBuffer::new(repeated_offsets.clone().into()),
-                        Arc::new(repeated_values),
-                        None,
-                    )?;
-
-                    values = downcast_arg!(
-                        compute::concat(&[&values, &repeated_array,])?.clone(),
-                        ListArray
-                    )
-                    .clone();
-                    offsets.push(last_offset + repeated_array.len() as i32);
-                }
-                None => {
-                    offsets.push(last_offset);
-                }
-            }
-        }
-
-        let field = Arc::new(Field::new("item", $ELEMENT.data_type().clone(), true));
-
-        Arc::new(ListArray::try_new(
-            field,
-            OffsetBuffer::new(offsets.into()),
-            Arc::new(values),
-            None,
-        )?)
-    }};
-}
-
 /// Array_empty SQL function
 pub fn array_empty(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args[0].as_any().downcast_ref::<NullArray>().is_some() {
@@ -979,51 +860,31 @@ pub fn array_empty(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Array_repeat SQL function
 pub fn array_repeat(args: &[ArrayRef]) -> Result<ArrayRef> {
-    println!("args: {:?}", args);
     let element = &args[0];
     let count = as_int64_array(&args[1])?;
 
-    let res = match element.data_type() {
-        DataType::List(field) => {
-            // macro_rules! array_function {
-            //     ($ARRAY_TYPE:ident) => {
-            //         general_repeat_list!(element, count, $ARRAY_TYPE)
-            //     };
-            // }
-            // call_array_function!(field.data_type(), true)
+    match element.data_type() {
+        DataType::List(_) => {
             let list_array = as_list_array(element)?;
-            let res = general_list_repeat_v2(list_array, count)?;
-            return Ok(res);
+            general_list_repeat(list_array, count)
         }
-        data_type => {
-            let res = general_repeat_v2(element, count)?;
-            println!("res: {:?}", res);
-            return Ok(res);
-            // macro_rules! array_function {
-            //     ($ARRAY_TYPE:ident) => {
-            //         general_repeat!(element, count, $ARRAY_TYPE)
-            //     };
-            // }
-            // call_array_function!(data_type, false)
+        _ => {
+            general_repeat(element, count)
         }
-    };
-
-    Ok(res)
+    }
 }
 
-pub fn general_repeat_v2(array: &ArrayRef, count_array: &Int64Array) -> Result<ArrayRef> {
-    println!("array: {:?}", array);
-    println!("count_array: {:?}", count_array);
-
+pub fn general_repeat(array: &ArrayRef, count_array: &Int64Array) -> Result<ArrayRef> {
     let mut offsets: Vec<i32> = vec![0];
     let data_type = array.data_type();
     let mut new_values = vec![];
 
     for (row_index, count) in count_array.iter().enumerate() {
-        if count.is_none() {
-            return internal_err!("count should not be null");
-        }
-        let count = count.unwrap() as usize;
+        let count = match count {
+            Some(c) if c >= 0 => c as usize,
+            Some(_) => return internal_err!("count should not be negative"),
+            None => return internal_err!("count should not be null"),
+        };
 
         let last_offset: i32 = offsets
             .last()
@@ -1032,12 +893,11 @@ pub fn general_repeat_v2(array: &ArrayRef, count_array: &Int64Array) -> Result<A
 
         if array.is_null(row_index) {
             let final_array = new_null_array(data_type, count);
-            println!("final_array: {:?}", final_array);
             offsets.push(last_offset + final_array.len() as i32);
             new_values.push(final_array);
         } else {
             let original_data = array.to_data();
-            let capacity = Capacities::Array(original_data.len());
+            let capacity = Capacities::Array(count);
             let mut mutable =
                 MutableArrayData::with_capacities(vec![&original_data], false, capacity);
 
@@ -1046,9 +906,9 @@ pub fn general_repeat_v2(array: &ArrayRef, count_array: &Int64Array) -> Result<A
             }
 
             let data = mutable.freeze();
-            let final_array = arrow_array::make_array(data);
-            offsets.push(last_offset + final_array.len() as i32);
-            new_values.push(final_array);
+            let repeated_array = arrow_array::make_array(data);
+            offsets.push(last_offset + repeated_array.len() as i32);
+            new_values.push(repeated_array);
         }
     }
 
@@ -1058,7 +918,7 @@ pub fn general_repeat_v2(array: &ArrayRef, count_array: &Int64Array) -> Result<A
         let new_values: Vec<_> = new_values.iter().map(|a| a.as_ref()).collect();
         arrow::compute::concat(&new_values)?
     };
-    println!("values: {:?}", values);
+
     Ok(Arc::new(ListArray::try_new(
         Arc::new(Field::new("item", data_type.to_owned(), true)),
         OffsetBuffer::new(offsets.into()),
@@ -1067,7 +927,7 @@ pub fn general_repeat_v2(array: &ArrayRef, count_array: &Int64Array) -> Result<A
     )?))
 }
 
-pub fn general_list_repeat_v2(
+pub fn general_list_repeat(
     list_array: &ListArray,
     count_array: &Int64Array,
 ) -> Result<ArrayRef> {
@@ -1076,10 +936,13 @@ pub fn general_list_repeat_v2(
     let value_type = list_array.value_type();
     let mut new_values = vec![];
 
-    println!("list_array: {:?}", list_array);
-    println!("count_array: {:?}", count_array);
-
     for (list_array_row, count) in list_array.iter().zip(count_array.iter()) {
+        let count = match count {
+            Some(c) if c >= 0 => c as usize,
+            Some(_) => return internal_err!("count should not be negative"),
+            None => return internal_err!("count should not be null"),
+        };
+
         let last_offset: i32 = offsets
             .last()
             .copied()
@@ -1087,7 +950,6 @@ pub fn general_list_repeat_v2(
 
         match list_array_row {
             Some(list_array_row) => {
-                let count = count.unwrap_or(1) as usize;
                 let original_data = list_array_row.to_data();
                 let capacity = Capacities::Array(original_data.len() * count);
                 let mut mutable = MutableArrayData::with_capacities(
@@ -1101,18 +963,15 @@ pub fn general_list_repeat_v2(
                     inner_offsets.push(original_data.len() as i32);
                 }
                 let data = mutable.freeze();
-                let final_array = arrow_array::make_array(data);
-                println!("final_array: {:?}", final_array);
-                println!("inner_offsets: {:?}", inner_offsets);
+                let repeated_array = arrow_array::make_array(data);
 
                 let list_arr = ListArray::try_new(
                     Arc::new(Field::new("item", value_type.clone(), true)),
                     OffsetBuffer::from_lengths(vec![original_data.len(); count]),
-                    final_array,
+                    repeated_array,
                     None,
                 )?;
                 let list_arr = Arc::new(list_arr) as ArrayRef;
-                println!("list_arr: {:?}", list_arr);
 
                 offsets.push(last_offset + list_arr.len() as i32);
                 new_values.push(list_arr);
@@ -1129,8 +988,7 @@ pub fn general_list_repeat_v2(
         let new_values: Vec<_> = new_values.iter().map(|a| a.as_ref()).collect();
         arrow::compute::concat(&new_values)?
     };
-    println!("values: {:?}", values);
-    println!("data_type: {:?}", data_type);
+
     Ok(Arc::new(ListArray::try_new(
         Arc::new(Field::new("item", data_type.to_owned(), true)),
         OffsetBuffer::new(offsets.into()),
