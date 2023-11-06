@@ -330,16 +330,7 @@ impl BuiltinScalarFunction {
         note = "please use TypeSignature::supports_zero_argument instead"
     )]
     pub fn supports_zero_argument(&self) -> bool {
-        matches!(
-            self,
-            BuiltinScalarFunction::Pi
-                | BuiltinScalarFunction::Random
-                | BuiltinScalarFunction::Now
-                | BuiltinScalarFunction::CurrentDate
-                | BuiltinScalarFunction::CurrentTime
-                | BuiltinScalarFunction::Uuid
-                | BuiltinScalarFunction::MakeArray
-        )
+        self.signature().type_signature.supports_zero_argument()
     }
 
     /// Returns the [Volatility] of the builtin function.
