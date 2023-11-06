@@ -1281,7 +1281,8 @@ fn general_replace(
                     }
                     _ => {
                         let from_arr = Scalar::new(from_array_row);
-                        arrow_ord::cmp::eq(&list_array_row, &from_arr)?
+                        // use not_distinct so NULL = NULL
+                        arrow_ord::cmp::not_distinct(&list_array_row, &from_arr)?
                     }
                 };
 
