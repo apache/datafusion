@@ -46,13 +46,14 @@ license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/apache/arrow-datafusion"
 rust-version = "1.70"
-version = "32.0.0"
+version = "33.0.0"
 
 [workspace.dependencies]
 arrow = { version = "48.0.0", features = ["prettyprint"] }
 arrow-array = { version = "48.0.0", default-features = false, features = ["chrono-tz"] }
 arrow-buffer = { version = "48.0.0", default-features = false }
 arrow-flight = { version = "48.0.0", features = ["flight-sql-experimental"] }
+arrow-ord = { version = "48.0.0", default-features = false }
 arrow-schema = { version = "48.0.0", default-features = false }
 async-trait = "0.1.73"
 bigdecimal = "0.4.1"
