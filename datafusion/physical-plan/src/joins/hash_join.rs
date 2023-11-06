@@ -750,9 +750,11 @@ where
 /// [`Stream`] for [`HashJoinExec`] that does the actual join.
 ///
 /// This stream:
-/// 1. Reads the entire left side input and constructs a hash table
-/// 2.
-/// 2. [RecordBatch]es as they arrive from the right  of the join.
+///
+/// 1. Reads the entire left input and constructs a hash table
+///
+/// 2. Streams [RecordBatch]es as they arrive from the right input and joins
+/// them with the contents of the hash table
 struct HashJoinStream {
     /// Input schema
     schema: Arc<Schema>,
