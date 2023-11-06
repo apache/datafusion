@@ -42,7 +42,7 @@ use indexmap::IndexMap;
 pub type EquivalenceClass = Vec<Arc<dyn PhysicalExpr>>;
 
 /// Stores the mapping between source expressions and target expressions for a
-/// projection.
+/// projection, and the output schema of the table after the projection applied.
 #[derive(Debug, Clone)]
 pub struct ProjectionMapping {
     /// `(source expression)` --> `(target expression)`
@@ -97,16 +97,12 @@ impl ProjectionMapping {
         let fields: Result<Vec<Field>> = expr
             .iter()
             .map(|(e, name)| {
-                let mut field = Field::new(
+                Ok(Field::new(
                     name,
                     e.data_type(input_schema)?,
                     e.nullable(input_schema)?,
-                );
-                field.set_metadata(
-                    get_field_metadata(e, input_schema).unwrap_or_default(),
-                );
-
-                Ok(field)
+                )
+                .with_metadata(get_field_metadata(e, input_schema).unwrap_or_default()))
             })
             .collect();
 
@@ -133,49 +129,7 @@ impl ProjectionMapping {
         self.output_schema.clone()
     }
 
-    /// This function projects ordering requirement according to projection.
-    ///
-    /// # Arguments
-    ///
-    /// * `lex_req` - Lexicographical ordering requirement.
-    ///
-    /// # Returns
-    ///
-    /// An `Option` containing the Lexicographical projected ordering requirement.
-    pub fn project_lex_reqs(&self, lex_req: LexRequirementRef) -> Option<LexRequirement> {
-        lex_req
-            .iter()
-            .map(|sort_req| {
-                self.target_expr(&sort_req.expr)
-                    .map(|expr| PhysicalSortRequirement {
-                        expr,
-                        options: sort_req.options,
-                    })
-            })
-            .collect::<Option<Vec<_>>>()
-    }
-
-    /// This function returns target value for each expression
-    ///
-    /// # Arguments
-    ///
-    /// * `exprs` - Source (e.g key) physical expressions
-    ///
-    /// # Returns
-    ///
-    /// An `Option` containing a the targets (e.g value) for the source each expression.
-    /// Returns `Some(Vec<_>)` if all of the expressions are source in the projection mapping.
-    pub fn target_exprs(
-        &self,
-        exprs: &[Arc<dyn PhysicalExpr>],
-    ) -> Option<Vec<Arc<dyn PhysicalExpr>>> {
-        exprs
-            .iter()
-            .map(|expr| self.target_expr(expr))
-            .collect::<Option<Vec<_>>>()
-    }
-
-    /// This function returns target value for given expression
+    /// This function returns the target value for a given expression.
     ///
     /// # Arguments
     ///
@@ -189,16 +143,53 @@ impl ProjectionMapping {
         &self,
         expr: &Arc<dyn PhysicalExpr>,
     ) -> Option<Arc<dyn PhysicalExpr>> {
-        if let Some(idx) = self
-            .inner
+        self.inner
             .iter()
-            .position(|(source, _target)| source.eq(expr))
-        {
-            let (_source, target) = &self.inner[idx];
-            Some(target.clone())
-        } else {
-            None
-        }
+            .find(|(source, _)| source.eq(expr))
+            .map(|(_source, target)| target.clone())
+    }
+
+    /// This function returns the target values for each expression.
+    ///
+    /// # Arguments
+    ///
+    /// * `exprs` - Source (e.g key) physical expressions
+    ///
+    /// # Returns
+    ///
+    /// An `Option` containing the targets (e.g value) for the source expressions.
+    /// Returns `Some(Vec<_>)` if all of the expressions exist in the source of the mapping.
+    pub fn target_exprs(
+        &self,
+        exprs: &[Arc<dyn PhysicalExpr>],
+    ) -> Option<Vec<Arc<dyn PhysicalExpr>>> {
+        exprs
+            .iter()
+            .map(|expr| self.target_expr(expr))
+            .collect::<Option<Vec<_>>>()
+    }
+
+    /// This function projects ordering requirement according to projection.
+    ///
+    /// # Arguments
+    ///
+    /// * `lex_req` - Lexicographical ordering requirement.
+    ///
+    /// # Returns
+    ///
+    /// An `Option` containing the Lexicographical projected ordering requirement.
+    /// If any of the requirements is not found in the source expressions, it returns None.
+    pub fn project_lex_reqs(&self, lex_req: LexRequirementRef) -> Option<LexRequirement> {
+        lex_req
+            .iter()
+            .map(|sort_req| {
+                self.target_expr(&sort_req.expr)
+                    .map(|expr| PhysicalSortRequirement {
+                        expr,
+                        options: sort_req.options,
+                    })
+            })
+            .collect::<Option<Vec<_>>>()
     }
 }
 
@@ -993,10 +984,9 @@ impl EquivalenceProperties {
         self.ordering_satisfy_requirement(&sort_requirements)
     }
 
-    /// Checks whether the given sort requirements are satisfied by any of the
-    /// existing orderings.
-    /// This function applies an implicit projection to itself before calling `ordering_satisfy_requirement_helper`.
-    /// This enables us to consider complex expressions during analysis.
+    /// Checks whether the given sort requirements are satisfied by any of the existing orderings.
+    /// This function applies an implicit projection to itself before calling `ordering_satisfy_requirement_helper`
+    /// to define the orderings of complex [`PhysicalExpr`]'s during analysis.
     pub fn ordering_satisfy_requirement(&self, reqs: LexRequirementRef) -> bool {
         let exprs = reqs
             .iter()
