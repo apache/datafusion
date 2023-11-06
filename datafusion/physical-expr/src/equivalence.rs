@@ -1951,8 +1951,8 @@ mod tests {
                         table_data_with_properties.clone(),
                     )?;
                     let err_msg = format!(
-                        "Error in test case requirement:{:?}, expected: {:?}, eq_properties.constants: {:?}, eq_properties.eq_group: {:?}, eq_properties.oeq_class: {:?}",
-                        requirement, expected, eq_properties.constants, eq_properties.eq_group, eq_properties.oeq_class
+                        "Error in test case requirement:{:?}, expected: {:?}",
+                        requirement, expected
                     );
                     // Check whether ordering_satisfy API result and
                     // experimental result matches.
