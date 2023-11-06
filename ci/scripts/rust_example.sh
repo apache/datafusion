@@ -19,6 +19,8 @@
 
 set -ex
 cd datafusion-examples/examples/
+cargo fmt --all -- --check
+
 files=$(ls .)
 for filename in $files
 do
@@ -31,5 +33,3 @@ do
      cargo run --example $example_name
   fi
 done
-
-cargo fmt --all -- --check
