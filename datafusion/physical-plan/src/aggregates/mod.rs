@@ -613,6 +613,8 @@ impl AggregateExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<StreamType> {
+        // println!("aggregate self.input.equivalence_properties():{:?}", self.input.equivalence_properties());
+        // println!("aggregate self.equivalence_properties():{:?}", self.equivalence_properties());
         // no group by at all
         if self.group_by.expr.is_empty() {
             return Ok(StreamType::AggregateStream(AggregateStream::new(
