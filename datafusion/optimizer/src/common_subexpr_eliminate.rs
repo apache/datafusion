@@ -238,9 +238,10 @@ impl CommonSubexprEliminate {
         let rewritten = pop_expr(&mut rewritten)?;
 
         if affected_id.is_empty() {
-            // Alias aggregation epxressions if they have changed
-            // TODO: This should have really been identified above and handled in the `else` branch
-            let aggr_exprs = new_aggr_expr
+            // Alias aggregation expressions if they have changed
+            // TODO: This should be handled in `build_recover_project_plan` once qualified aliases
+            // are implemented
+            let new_aggr_expr = new_aggr_expr
                 .iter()
                 .zip(aggr_expr.iter())
                 .map(|(new_expr, old_expr)| {
@@ -248,7 +249,7 @@ impl CommonSubexprEliminate {
                 })
                 .collect::<Result<Vec<Expr>>>()?;
             // Since group_epxr changes, schema changes also. Use try_new method.
-            Aggregate::try_new(Arc::new(new_input), new_group_expr, aggr_exprs)
+            Aggregate::try_new(Arc::new(new_input), new_group_expr, new_aggr_expr)
                 .map(LogicalPlan::Aggregate)
         } else {
             let mut agg_exprs = vec![];
