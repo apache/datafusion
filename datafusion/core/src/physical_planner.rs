@@ -250,7 +250,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             for e in args {
                 names.push(create_physical_name(e, false)?);
             }
-            Ok(format!("{}({})", fun.name, names.join(",")))
+            Ok(format!("{}({})", fun.name(), names.join(",")))
         }
         Expr::GroupingSet(grouping_set) => match grouping_set {
             GroupingSet::Rollup(exprs) => Ok(format!(

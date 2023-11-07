@@ -598,12 +598,12 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     }
                     WindowFunction::AggregateUDF(aggr_udf) => {
                         protobuf::window_expr_node::WindowFunction::Udaf(
-                            aggr_udf.name.clone(),
+                            aggr_udf.name().to_string(),
                         )
                     }
                     WindowFunction::WindowUDF(window_udf) => {
                         protobuf::window_expr_node::WindowFunction::Udwf(
-                            window_udf.name.clone(),
+                            window_udf.name().to_string(),
                         )
                     }
                 };
@@ -769,7 +769,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
             }) => Self {
                 expr_type: Some(ExprType::AggregateUdfExpr(Box::new(
                     protobuf::AggregateUdfExprNode {
-                        fun_name: fun.name.clone(),
+                        fun_name: fun.name().to_string(),
                         args: args.iter().map(|expr| expr.try_into()).collect::<Result<
                             Vec<_>,
                             Error,

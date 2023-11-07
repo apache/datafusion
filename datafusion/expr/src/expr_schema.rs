@@ -115,7 +115,7 @@ impl ExprSchemable for Expr {
                     .iter()
                     .map(|e| e.get_type(schema))
                     .collect::<Result<Vec<_>>>()?;
-                Ok((fun.return_type)(&data_types)?.as_ref().clone())
+                fun.return_type(&data_types)
             }
             Expr::Not(_)
             | Expr::IsNull(_)

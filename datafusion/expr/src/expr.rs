@@ -335,7 +335,7 @@ impl Between {
     }
 }
 
-/// ScalarFunction expression
+/// ScalarFunction expression invokes a built-in scalar function
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct ScalarFunction {
     /// The function
@@ -351,7 +351,9 @@ impl ScalarFunction {
     }
 }
 
-/// ScalarUDF expression
+/// ScalarUDF expression invokes a user-defined scalar function [`ScalarUDF`]
+///
+/// [`ScalarUDF`]: crate::ScalarUDF
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct ScalarUDF {
     /// The function
@@ -1225,7 +1227,7 @@ impl fmt::Display for Expr {
                 order_by,
                 ..
             }) => {
-                fmt_function(f, &fun.name, false, args, true)?;
+                fmt_function(f, fun.name(), false, args, true)?;
                 if let Some(fe) = filter {
                     write!(f, " FILTER (WHERE {fe})")?;
                 }
@@ -1565,7 +1567,7 @@ fn create_name(e: &Expr) -> Result<String> {
             if let Some(ob) = order_by {
                 info += &format!(" ORDER BY ([{}])", expr_vec_fmt!(ob));
             }
-            Ok(format!("{}({}){}", fun.name, names.join(","), info))
+            Ok(format!("{}({}){}", fun.name(), names.join(","), info))
         }
         Expr::GroupingSet(grouping_set) => match grouping_set {
             GroupingSet::Rollup(exprs) => {

@@ -71,10 +71,11 @@ impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
             .collect::<Result<Vec<_>>>()?;
 
         if let Some(a) = a.as_any().downcast_ref::<AggregateFunctionExpr>() {
+            let name = a.fun().name().to_string();
             return Ok(protobuf::PhysicalExprNode {
                     expr_type: Some(protobuf::physical_expr_node::ExprType::AggregateExpr(
                         protobuf::PhysicalAggregateExprNode {
-                            aggregate_function: Some(physical_aggregate_expr_node::AggregateFunction::UserDefinedAggrFunction(a.fun().name.clone())),
+                            aggregate_function: Some(physical_aggregate_expr_node::AggregateFunction::UserDefinedAggrFunction(name)),
                             expr: expressions,
                             ordering_req,
                             distinct: false,

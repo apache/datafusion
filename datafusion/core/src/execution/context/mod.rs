@@ -820,7 +820,7 @@ impl SessionContext {
         self.state
             .write()
             .aggregate_functions
-            .insert(f.name.clone(), Arc::new(f));
+            .insert(f.name().to_string(), Arc::new(f));
     }
 
     /// Registers a window UDF within this context.
@@ -834,7 +834,7 @@ impl SessionContext {
         self.state
             .write()
             .window_functions
-            .insert(f.name.clone(), Arc::new(f));
+            .insert(f.name().to_string(), Arc::new(f));
     }
 
     /// Creates a [`DataFrame`] for reading a data source.

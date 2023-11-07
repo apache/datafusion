@@ -1523,12 +1523,12 @@ fn roundtrip_window() {
         Ok(Box::new(DummyWindow {}))
     }
 
-    let dummy_window_udf = WindowUDF {
-        name: String::from("dummy_udwf"),
-        signature: Signature::exact(vec![DataType::Float64], Volatility::Immutable),
-        return_type: Arc::new(return_type),
-        partition_evaluator_factory: Arc::new(make_partition_evaluator),
-    };
+    let dummy_window_udf = WindowUDF::new(
+        "dummy_udwf",
+        &Signature::exact(vec![DataType::Float64], Volatility::Immutable),
+        &(Arc::new(return_type) as _),
+        &(Arc::new(make_partition_evaluator) as _),
+    );
 
     let test_expr6 = Expr::WindowFunction(expr::WindowFunction::new(
         WindowFunction::WindowUDF(Arc::new(dummy_window_udf.clone())),

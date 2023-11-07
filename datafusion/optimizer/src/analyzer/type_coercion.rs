@@ -364,7 +364,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 let new_expr = coerce_arguments_for_signature(
                     args.as_slice(),
                     &self.schema,
-                    &fun.signature,
+                    fun.signature(),
                 )?;
                 let expr = Expr::AggregateUDF(expr::AggregateUDF::new(
                     fun, new_expr, filter, order_by,
