@@ -2539,6 +2539,7 @@ pub enum ScalarFunction {
     ArrayPopBack = 116,
     StringToArray = 117,
     ToTimestampNanos = 118,
+    ArrayIntersect = 119,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2658,6 +2659,7 @@ impl ScalarFunction {
             ScalarFunction::ArrayReplaceN => "ArrayReplaceN",
             ScalarFunction::ArrayRemoveAll => "ArrayRemoveAll",
             ScalarFunction::ArrayReplaceAll => "ArrayReplaceAll",
+            ScalarFunction::ArrayIntersect => "ArrayIntersect",
             ScalarFunction::Nanvl => "Nanvl",
             ScalarFunction::Flatten => "Flatten",
             ScalarFunction::Isnan => "Isnan",
