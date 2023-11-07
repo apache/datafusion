@@ -36,7 +36,7 @@ async fn create_context() -> Result<SessionContext> {
 
     // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
     println!("pwd: {}", std::env::current_dir().unwrap().display());
-    let csv_path = "datafusion/core/tests/data/cars.csv".to_string();
+    let csv_path = "../../datafusion/core/tests/data/cars.csv".to_string();
     let read_options = CsvReadOptions::default().has_header(true);
 
     ctx.register_csv("cars", &csv_path, read_options).await?;
