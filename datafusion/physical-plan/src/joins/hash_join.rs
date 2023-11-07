@@ -753,7 +753,7 @@ where
 ///
 /// 1. Reads the entire left input (build) and constructs a hash table
 ///
-/// 2. Streams [RecordBatch]es as they arrive from the right input and joins
+/// 2. Streams [RecordBatch]es as they arrive from the right input (probe) and joins
 /// them with the contents of the hash table
 struct HashJoinStream {
     /// Input schema
