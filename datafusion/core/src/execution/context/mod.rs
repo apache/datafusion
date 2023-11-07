@@ -849,6 +849,23 @@ impl SessionContext {
         let table_paths = table_paths.to_urls()?;
         let session_config = self.copied_config();
         let listing_options = options.to_listing_options(&session_config);
+
+        let option_extension = listing_options.file_extension.clone();
+
+        if table_paths.is_empty() {
+            return exec_err!("No table paths were provided");
+        }
+
+        // check if the file extension matches the expected extension
+        for path in &table_paths {
+            let file_name = path.prefix().filename().unwrap_or_default();
+            if !path.as_str().ends_with(&option_extension) && file_name.contains('.') {
+                return exec_err!(
+                    "File '{file_name}' does not match the expected extension '{option_extension}'"
+                );
+            }
+        }
+
         let resolved_schema = options
             .get_resolved_schema(&session_config, self.state(), table_paths[0].clone())
             .await?;
