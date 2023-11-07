@@ -42,7 +42,7 @@ impl ParquetFormat {
 
 fn nyi_error() -> DataFusionError {
     not_impl_datafusion_err!(
-        "Parquet support is not enabled. Hint enable the `parquet` feature flag"
+        "Parquet support is not enabled. Hint: enable the `parquet` feature flag"
     )
 }
 
