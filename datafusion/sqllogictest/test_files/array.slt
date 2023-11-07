@@ -1773,6 +1773,12 @@ select array_union([1,2,3], []);
 ----
 [1, 2, 3]
 
+# array_union scalar function #4
+query ?
+select array_union([1, 2, 3, 4], [5, 4]);
+----
+[1, 2, 3, 4, 5]
+
 
 # list_to_string scalar function #4 (function alias `array_to_string`)
 query TTT
