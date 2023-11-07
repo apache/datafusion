@@ -549,7 +549,11 @@ mod tests {
         // Ensure a useful error happens at plan time if invalid casts are used
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
 
-        let result = try_cast(col("a", &schema).unwrap(), &schema, DataType::LargeBinary);
+        let result = try_cast(
+            col("a", &schema).unwrap(),
+            &schema,
+            DataType::Interval(IntervalUnit::MonthDayNano),
+        );
         result.expect_err("expected Invalid TRY_CAST");
     }
 
