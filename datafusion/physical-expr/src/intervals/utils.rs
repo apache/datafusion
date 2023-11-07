@@ -26,7 +26,7 @@ use crate::{
 
 use arrow_schema::{DataType, SchemaRef};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::interval_aritmetic::{Interval, IntervalBound};
+use datafusion_expr::interval_aritmetic::Interval;
 use datafusion_expr::Operator;
 
 const MDN_DAY_MASK: i128 = 0xFFFF_FFFF_0000_0000_0000_0000;
@@ -125,27 +125,17 @@ pub fn convert_interval_type_to_duration(interval: &Interval) -> Option<Interval
     }
 }
 
-/// Converts an [`IntervalBound`] containing a time interval to one containing a `Duration`, if applicable. Otherwise, returns [`None`].
+/// Converts an [`ScalarValue`] containing a time interval to one containing a `Duration`, if applicable. Otherwise, returns [`None`].
 fn convert_interval_bound_to_duration(
-    interval_bound: &IntervalBound,
-) -> Option<IntervalBound> {
-    match interval_bound.value() {
-        ScalarValue::IntervalMonthDayNano(Some(mdn)) => {
-            interval_mdn_to_duration_ns(mdn).ok().map(|duration| {
-                IntervalBound::new(
-                    ScalarValue::DurationNanosecond(Some(duration)),
-                    *interval_bound.is_open(),
-                )
-            })
-        }
-        ScalarValue::IntervalDayTime(Some(dt)) => {
-            interval_dt_to_duration_ms(dt).ok().map(|duration| {
-                IntervalBound::new(
-                    ScalarValue::DurationMillisecond(Some(duration)),
-                    *interval_bound.is_open(),
-                )
-            })
-        }
+    interval_bound: &ScalarValue,
+) -> Option<ScalarValue> {
+    match interval_bound {
+        ScalarValue::IntervalMonthDayNano(Some(mdn)) => interval_mdn_to_duration_ns(mdn)
+            .ok()
+            .map(|duration| ScalarValue::DurationNanosecond(Some(duration))),
+        ScalarValue::IntervalDayTime(Some(dt)) => interval_dt_to_duration_ms(dt)
+            .ok()
+            .map(|duration| ScalarValue::DurationMillisecond(Some(duration))),
         _ => None,
     }
 }
@@ -162,19 +152,17 @@ pub fn convert_duration_type_to_interval(interval: &Interval) -> Option<Interval
     }
 }
 
-/// Converts an [`IntervalBound`] containing a `Duration` to one containing a time interval, if applicable. Otherwise, returns [`None`].
+/// Converts a [`ScalarValue`] containing a `Duration` to one containing a time interval, if applicable. Otherwise, returns [`None`].
 fn convert_duration_bound_to_interval(
-    interval_bound: &IntervalBound,
-) -> Option<IntervalBound> {
-    match interval_bound.value() {
-        ScalarValue::DurationNanosecond(Some(duration)) => Some(IntervalBound::new(
-            ScalarValue::new_interval_mdn(0, 0, *duration),
-            *interval_bound.is_open(),
-        )),
-        ScalarValue::DurationMillisecond(Some(duration)) => Some(IntervalBound::new(
-            ScalarValue::new_interval_dt(0, *duration as i32),
-            *interval_bound.is_open(),
-        )),
+    interval_bound: &ScalarValue,
+) -> Option<ScalarValue> {
+    match interval_bound {
+        ScalarValue::DurationNanosecond(Some(duration)) => {
+            Some(ScalarValue::new_interval_mdn(0, 0, *duration))
+        }
+        ScalarValue::DurationMillisecond(Some(duration)) => {
+            Some(ScalarValue::new_interval_dt(0, *duration as i32))
+        }
         _ => None,
     }
 }

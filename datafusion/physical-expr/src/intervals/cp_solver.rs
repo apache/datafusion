@@ -30,7 +30,7 @@ use crate::PhysicalExpr;
 use arrow_schema::DataType;
 use datafusion_common::Result;
 use datafusion_expr::interval_aritmetic::{
-    apply_operator, equalize_intervals, satisfy_comparison, Interval, IntervalBound,
+    apply_operator, equalize_intervals, satisfy_comparison, Interval,
 };
 use datafusion_expr::Operator;
 
@@ -182,18 +182,15 @@ impl ExprIntervalGraphNode {
     /// This function creates a DAEG node from Datafusion's [ExprTreeNode]
     /// object. Literals are created with definite, singleton intervals while
     /// any other expression starts with an indefinite interval ([-∞, ∞]).
-    pub fn make_node(node: &ExprTreeNode<NodeIndex>) -> ExprIntervalGraphNode {
+    pub fn make_node(node: &ExprTreeNode<NodeIndex>) -> Result<ExprIntervalGraphNode> {
         let expr = node.expression().clone();
         if let Some(literal) = expr.as_any().downcast_ref::<Literal>() {
             let value = literal.value();
-            let interval = Interval::try_new(
-                IntervalBound::new_closed(value.clone()),
-                IntervalBound::new_closed(value.clone()),
-            )
-            .unwrap_or(Interval::make_unbounded(&literal.value().data_type()));
-            ExprIntervalGraphNode::new_with_interval(expr, interval)
+            let interval = Interval::try_new(value.clone(), value.clone())
+                .unwrap_or(Interval::make_unbounded(&literal.value().data_type())?);
+            Ok(ExprIntervalGraphNode::new_with_interval(expr, interval))
         } else {
-            ExprIntervalGraphNode::new(expr)
+            Ok(ExprIntervalGraphNode::new(expr))
         }
     }
 }
@@ -320,9 +317,9 @@ pub fn propagate_comparison(
     left_child: &Interval,
     right_child: &Interval,
 ) -> Result<Option<Vec<Interval>>> {
-    if parent == &Interval::CERTAINLY_FALSE || parent == &Interval::UNCERTAIN {
-        // TODO: False expecting comparison operators are not supported yet.
+    if parent == &Interval::UNCERTAIN || parent == &Interval::CERTAINLY_FALSE {
         // We cannot propagate over an uncertain interval.
+        // TODO: False expecting comparison operators are not supported yet.
         Ok(None)
     } else {
         match op {
@@ -481,7 +478,7 @@ impl ExprIntervalGraph {
     ///  use std::sync::Arc;
     ///  use datafusion_common::ScalarValue;
     ///  use datafusion_expr::Operator;
-    ///  use datafusion_expr::interval_aritmetic::{Interval, IntervalBound};
+    ///  use datafusion_expr::interval_aritmetic::Interval;
     ///  use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
     ///  use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
     ///  use datafusion_physical_expr::PhysicalExpr;
@@ -498,13 +495,19 @@ impl ExprIntervalGraph {
     ///  // Provide intervals for leaf variables (here, there is only one).
     ///  let intervals = vec![(
     ///     left_index,
-    ///     Interval::make(Some(10), Some(20), (true, true)),
+    ///     Interval::try_new(
+    ///                    ScalarValue::UInt32(Some(10)),
+    ///                  ScalarValue::UInt32(Some(20)),
+    ///            ),
     ///  )];
     ///  // Evaluate bounds for the composite expression:
     ///  graph.assign_intervals(&intervals);
     ///  assert_eq!(
     ///     graph.evaluate_bounds().unwrap(),
-    ///     &Interval::make(Some(20), Some(30), (true, true)),
+    ///     &Interval::try_new(
+    ///                    ScalarValue::UInt32(Some(20)),
+    ///                  ScalarValue::UInt32(Some(30)),
+    ///            ),
     ///  )
     ///
     /// ```
@@ -743,10 +746,22 @@ mod tests {
                 // NOTE: These randomized tests only check for conservative containment,
                 // not openness/closedness of endpoints.
                 assert!(
-                    calculated_interval_node.lower().value() <= expected.lower().value()
+                    calculated_interval_node.lower() <= expected.lower(),
+                    "{}",
+                    format!(
+                        "Calculated {} must be less than or equal {}",
+                        calculated_interval_node.lower(),
+                        expected.lower()
+                    )
                 );
                 assert!(
-                    calculated_interval_node.upper().value() >= expected.upper().value()
+                    calculated_interval_node.upper() >= expected.upper(),
+                    "{}",
+                    format!(
+                        "Calculated {} must be greater than or equal {}",
+                        calculated_interval_node.upper(),
+                        expected.upper()
+                    )
                 );
             },
         );
@@ -788,10 +803,22 @@ mod tests {
                 experiment(
                     expr,
                     (left_col, right_col),
-                    Interval::make(left_given.0, left_given.1, (true, true))?,
-                    Interval::make(right_given.0, right_given.1, (true, true))?,
-                    Interval::make(left_expected.0, left_expected.1, (true, true))?,
-                    Interval::make(right_expected.0, right_expected.1, (true, true))?,
+                    Interval::try_new(
+                        ScalarValue::try_from(left_given.0).unwrap(),
+                        ScalarValue::try_from(left_given.1).unwrap(),
+                    )?,
+                    Interval::try_new(
+                        ScalarValue::try_from(right_given.0).unwrap(),
+                        ScalarValue::try_from(right_given.1).unwrap(),
+                    )?,
+                    Interval::try_new(
+                        ScalarValue::try_from(left_expected.0).unwrap(),
+                        ScalarValue::try_from(left_expected.1).unwrap(),
+                    )?,
+                    Interval::try_new(
+                        ScalarValue::try_from(right_expected.0).unwrap(),
+                        ScalarValue::try_from(right_expected.1).unwrap(),
+                    )?,
                     PropagationResult::Success,
                 )
             }
@@ -817,10 +844,16 @@ mod tests {
         experiment(
             expr,
             (left_col, right_col),
-            Interval::make(Some(10), Some(20), (true, true))?,
-            Interval::make(Some(100), None, (true, true))?,
-            Interval::make(Some(10), Some(20), (true, true))?,
-            Interval::make(Some(100), None, (true, true))?,
+            Interval::try_new(
+                ScalarValue::Int32(Some(10)),
+                ScalarValue::Int32(Some(20)),
+            )?,
+            Interval::try_new(ScalarValue::Int32(Some(100)), ScalarValue::Int32(None))?,
+            Interval::try_new(
+                ScalarValue::Int32(Some(10)),
+                ScalarValue::Int32(Some(20)),
+            )?,
+            Interval::try_new(ScalarValue::Int32(Some(100)), ScalarValue::Int32(None))?,
             PropagationResult::Infeasible,
         )
     }
@@ -1227,9 +1260,9 @@ mod tests {
     fn test_gather_node_indices_cannot_provide() -> Result<()> {
         // Expression: a@0 + 1 + b@1 > y@0 - z@1 -> provide a@0 + b@1
         // TODO: We expect nodes a@0 and b@1 to be pruned, and intervals to be provided from the a@0 + b@1 node.
-        //  However, we do not have an exact node for a@0 + b@1 due to the binary tree structure of the expressions.
-        //  Pruning and interval providing for BinaryExpr expressions are more challenging without exact matches.
-        //  Currently, we only support exact matches for BinaryExprs, but we plan to extend support beyond exact matches in the future.
+        // However, we do not have an exact node for a@0 + b@1 due to the binary tree structure of the expressions.
+        // Pruning and interval providing for BinaryExpr expressions are more challenging without exact matches.
+        // Currently, we only support exact matches for BinaryExprs, but we plan to extend support beyond exact matches in the future.
         let left_expr = Arc::new(BinaryExpr::new(
             Arc::new(BinaryExpr::new(
                 Arc::new(Column::new("a", 0)),
@@ -1272,40 +1305,22 @@ mod tests {
             Arc::new(Literal::new(ScalarValue::new_interval_mdn(0, 1, 321))),
         );
         let parent = Interval::try_new(
-            IntervalBound::new(
-                // 15.10.2020 - 10:11:12.000_000_321 AM
-                ScalarValue::TimestampNanosecond(Some(1_602_756_672_000_000_321), None),
-                false,
-            ),
-            IntervalBound::new(
-                // 16.10.2020 - 10:11:12.000_000_321 AM
-                ScalarValue::TimestampNanosecond(Some(1_602_843_072_000_000_321), None),
-                false,
-            ),
+            // 15.10.2020 - 10:11:12.000_000_321 AM
+            ScalarValue::TimestampNanosecond(Some(1_602_756_672_000_000_321), None),
+            // 16.10.2020 - 10:11:12.000_000_321 AM
+            ScalarValue::TimestampNanosecond(Some(1_602_843_072_000_000_321), None),
         )?;
         let left_child = Interval::try_new(
-            IntervalBound::new(
-                // 10.10.2020 - 10:11:12 AM
-                ScalarValue::TimestampNanosecond(Some(1_602_324_672_000_000_000), None),
-                false,
-            ),
-            IntervalBound::new(
-                // 20.10.2020 - 10:11:12 AM
-                ScalarValue::TimestampNanosecond(Some(1_603_188_672_000_000_000), None),
-                false,
-            ),
+            // 10.10.2020 - 10:11:12 AM
+            ScalarValue::TimestampNanosecond(Some(1_602_324_672_000_000_000), None),
+            // 20.10.2020 - 10:11:12 AM
+            ScalarValue::TimestampNanosecond(Some(1_603_188_672_000_000_000), None),
         )?;
         let right_child = Interval::try_new(
-            IntervalBound::new(
-                // 1 day 321 ns
-                ScalarValue::IntervalMonthDayNano(Some(0x1_0000_0000_0000_0141)),
-                false,
-            ),
-            IntervalBound::new(
-                // 1 day 321 ns
-                ScalarValue::IntervalMonthDayNano(Some(0x1_0000_0000_0000_0141)),
-                false,
-            ),
+            // 1 day 321 ns
+            ScalarValue::IntervalMonthDayNano(Some(0x1_0000_0000_0000_0141)),
+            // 1 day 321 ns
+            ScalarValue::IntervalMonthDayNano(Some(0x1_0000_0000_0000_0141)),
         )?;
         let children = vec![&left_child, &right_child];
         let result = expression
@@ -1316,33 +1331,21 @@ mod tests {
             vec![
                 Interval::try_new(
                     // 14.10.2020 - 10:11:12 AM
-                    IntervalBound::new(
-                        ScalarValue::TimestampNanosecond(
-                            Some(1_602_670_272_000_000_000),
-                            None
-                        ),
-                        false,
+                    ScalarValue::TimestampNanosecond(
+                        Some(1_602_670_272_000_000_000),
+                        None
                     ),
                     // 15.10.2020 - 10:11:12 AM
-                    IntervalBound::new(
-                        ScalarValue::TimestampNanosecond(
-                            Some(1_602_756_672_000_000_000),
-                            None
-                        ),
-                        false,
+                    ScalarValue::TimestampNanosecond(
+                        Some(1_602_756_672_000_000_000),
+                        None
                     ),
                 )?,
                 Interval::try_new(
                     // 1 day 321 ns in Duration type
-                    IntervalBound::new(
-                        ScalarValue::IntervalMonthDayNano(Some(0x1_0000_0000_0000_0141)),
-                        false,
-                    ),
+                    ScalarValue::IntervalMonthDayNano(Some(0x1_0000_0000_0000_0141)),
                     // 1 day 321 ns in Duration type
-                    IntervalBound::new(
-                        ScalarValue::IntervalMonthDayNano(Some(0x1_0000_0000_0000_0141)),
-                        false,
-                    ),
+                    ScalarValue::IntervalMonthDayNano(Some(0x1_0000_0000_0000_0141)),
                 )?
             ],
             result
@@ -1359,40 +1362,22 @@ mod tests {
             Arc::new(Column::new("ts_column", 0)),
         );
         let parent = Interval::try_new(
-            IntervalBound::new(
-                // 15.10.2020 - 10:11:12 AM
-                ScalarValue::TimestampMillisecond(Some(1_602_756_672_000), None),
-                false,
-            ),
-            IntervalBound::new(
-                // 16.10.2020 - 10:11:12 AM
-                ScalarValue::TimestampMillisecond(Some(1_602_843_072_000), None),
-                false,
-            ),
+            // 15.10.2020 - 10:11:12 AM
+            ScalarValue::TimestampMillisecond(Some(1_602_756_672_000), None),
+            // 16.10.2020 - 10:11:12 AM
+            ScalarValue::TimestampMillisecond(Some(1_602_843_072_000), None),
         )?;
         let right_child = Interval::try_new(
-            IntervalBound::new(
-                // 10.10.2020 - 10:11:12 AM
-                ScalarValue::TimestampMillisecond(Some(1_602_324_672_000), None),
-                false,
-            ),
-            IntervalBound::new(
-                // 20.10.2020 - 10:11:12 AM
-                ScalarValue::TimestampMillisecond(Some(1_603_188_672_000), None),
-                false,
-            ),
+            // 10.10.2020 - 10:11:12 AM
+            ScalarValue::TimestampMillisecond(Some(1_602_324_672_000), None),
+            // 20.10.2020 - 10:11:12 AM
+            ScalarValue::TimestampMillisecond(Some(1_603_188_672_000), None),
         )?;
         let left_child = Interval::try_new(
-            IntervalBound::new(
-                // 2 days
-                ScalarValue::IntervalDayTime(Some(172_800_000)),
-                false,
-            ),
-            IntervalBound::new(
-                // 10 days
-                ScalarValue::IntervalDayTime(Some(864_000_000)),
-                false,
-            ),
+            // 2 days
+            ScalarValue::IntervalDayTime(Some(172_800_000)),
+            // 10 days
+            ScalarValue::IntervalDayTime(Some(864_000_000)),
         )?;
         let children = vec![&left_child, &right_child];
         let result = expression
@@ -1402,28 +1387,16 @@ mod tests {
         assert_eq!(
             vec![
                 Interval::try_new(
-                    IntervalBound::new(
-                        // 2 days
-                        ScalarValue::IntervalDayTime(Some(172_800_000)),
-                        false,
-                    ),
-                    IntervalBound::new(
-                        // 6 days
-                        ScalarValue::IntervalDayTime(Some(518_400_000)),
-                        false,
-                    ),
+                    // 2 days
+                    ScalarValue::IntervalDayTime(Some(172_800_000)),
+                    // 6 days
+                    ScalarValue::IntervalDayTime(Some(518_400_000)),
                 )?,
                 Interval::try_new(
                     // 10.10.2020 - 10:11:12 AM
-                    IntervalBound::new(
-                        ScalarValue::TimestampMillisecond(Some(1_602_324_672_000), None),
-                        false,
-                    ),
+                    ScalarValue::TimestampMillisecond(Some(1_602_324_672_000), None),
                     // 14.10.2020 - 10:11:12 AM
-                    IntervalBound::new(
-                        ScalarValue::TimestampMillisecond(Some(1_602_670_272_000), None),
-                        false,
-                    )
+                    ScalarValue::TimestampMillisecond(Some(1_602_670_272_000), None),
                 )?
             ],
             result
@@ -1437,24 +1410,21 @@ mod tests {
         // In the examples below:
         // `left` is unbounded: [?, ?],
         // `right` is known to be [1000,1000]
-        // so `left` < `right` results in no new knowledge of `right` but knowing that `left` is now < 1000:` [?, 1000)
-        let left = Interval::try_new(
-            IntervalBound::make_unbounded(DataType::Int64).unwrap(),
-            IntervalBound::make_unbounded(DataType::Int64).unwrap(),
-        )?;
+        // so `left` < `right` results in no new knowledge of `right` but knowing that `left` is now < 1000:` [?, 999]
+        let left = Interval::make_unbounded(&DataType::Int64)?;
         let right = Interval::try_new(
-            IntervalBound::new(ScalarValue::Int64(Some(1000)), false),
-            IntervalBound::new(ScalarValue::Int64(Some(1000)), false),
+            ScalarValue::Int64(Some(1000)),
+            ScalarValue::Int64(Some(1000)),
         )?;
         assert_eq!(
             (Some(vec![
                 Interval::try_new(
-                    IntervalBound::make_unbounded(DataType::Int64)?,
-                    IntervalBound::new(ScalarValue::Int64(Some(1000)), true)
+                    ScalarValue::try_from(&DataType::Int64)?,
+                    ScalarValue::Int64(Some(999))
                 )?,
                 Interval::try_new(
-                    IntervalBound::new(ScalarValue::Int64(Some(1000)), false),
-                    IntervalBound::new(ScalarValue::Int64(Some(1000)), false)
+                    ScalarValue::Int64(Some(1000)),
+                    ScalarValue::Int64(Some(1000))
                 )?
             ])),
             propagate_comparison(
@@ -1465,42 +1435,25 @@ mod tests {
             )?
         );
 
-        let left = Interval::try_new(
-            IntervalBound::make_unbounded(DataType::Timestamp(
-                TimeUnit::Nanosecond,
-                None,
-            ))?,
-            IntervalBound::make_unbounded(DataType::Timestamp(
-                TimeUnit::Nanosecond,
-                None,
-            ))?,
-        )?;
+        let left =
+            Interval::make_unbounded(&DataType::Timestamp(TimeUnit::Nanosecond, None))?;
         let right = Interval::try_new(
-            IntervalBound::new(ScalarValue::TimestampNanosecond(Some(1000), None), false),
-            IntervalBound::new(ScalarValue::TimestampNanosecond(Some(1000), None), false),
+            ScalarValue::TimestampNanosecond(Some(1000), None),
+            ScalarValue::TimestampNanosecond(Some(1000), None),
         )?;
         assert_eq!(
             (Some(vec![
                 Interval::try_new(
-                    IntervalBound::make_unbounded(DataType::Timestamp(
+                    ScalarValue::try_from(&DataType::Timestamp(
                         TimeUnit::Nanosecond,
                         None
                     ))
                     .unwrap(),
-                    IntervalBound::new(
-                        ScalarValue::TimestampNanosecond(Some(1000), None),
-                        true
-                    )
+                    ScalarValue::TimestampNanosecond(Some(999), None),
                 )?,
                 Interval::try_new(
-                    IntervalBound::new(
-                        ScalarValue::TimestampNanosecond(Some(1000), None),
-                        false
-                    ),
-                    IntervalBound::new(
-                        ScalarValue::TimestampNanosecond(Some(1000), None),
-                        false
-                    )
+                    ScalarValue::TimestampNanosecond(Some(1000), None),
+                    ScalarValue::TimestampNanosecond(Some(1000), None),
                 )?
             ])),
             propagate_comparison(
@@ -1511,57 +1464,27 @@ mod tests {
             )?
         );
 
-        let left = Interval::try_new(
-            IntervalBound::make_unbounded(DataType::Timestamp(
-                TimeUnit::Nanosecond,
-                Some("+05:00".into()),
-            ))?,
-            IntervalBound::make_unbounded(DataType::Timestamp(
-                TimeUnit::Nanosecond,
-                Some("+05:00".into()),
-            ))?,
-        )?;
+        let left = Interval::make_unbounded(&DataType::Timestamp(
+            TimeUnit::Nanosecond,
+            Some("+05:00".into()),
+        ))?;
         let right = Interval::try_new(
-            IntervalBound::new(
-                ScalarValue::TimestampNanosecond(Some(1000), Some("+05:00".into())),
-                false,
-            ),
-            IntervalBound::new(
-                ScalarValue::TimestampNanosecond(Some(1000), Some("+05:00".into())),
-                false,
-            ),
+            ScalarValue::TimestampNanosecond(Some(1000), Some("+05:00".into())),
+            ScalarValue::TimestampNanosecond(Some(1000), Some("+05:00".into())),
         )?;
         assert_eq!(
             (Some(vec![
                 Interval::try_new(
-                    IntervalBound::make_unbounded(DataType::Timestamp(
+                    ScalarValue::try_from(&DataType::Timestamp(
                         TimeUnit::Nanosecond,
                         Some("+05:00".into()),
                     ))
                     .unwrap(),
-                    IntervalBound::new(
-                        ScalarValue::TimestampNanosecond(
-                            Some(1000),
-                            Some("+05:00".into())
-                        ),
-                        true
-                    )
+                    ScalarValue::TimestampNanosecond(Some(999), Some("+05:00".into())),
                 )?,
                 Interval::try_new(
-                    IntervalBound::new(
-                        ScalarValue::TimestampNanosecond(
-                            Some(1000),
-                            Some("+05:00".into())
-                        ),
-                        false
-                    ),
-                    IntervalBound::new(
-                        ScalarValue::TimestampNanosecond(
-                            Some(1000),
-                            Some("+05:00".into())
-                        ),
-                        false
-                    )
+                    ScalarValue::TimestampNanosecond(Some(1000), Some("+05:00".into())),
+                    ScalarValue::TimestampNanosecond(Some(1000), Some("+05:00".into())),
                 )?
             ])),
             propagate_comparison(

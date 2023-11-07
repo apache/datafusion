@@ -45,7 +45,7 @@ use datafusion_common::{
     exec_err, plan_datafusion_err, plan_err, DataFusionError, JoinType, Result,
     SharedResult,
 };
-use datafusion_expr::interval_aritmetic::{Interval, IntervalBound};
+use datafusion_expr::interval_aritmetic::Interval;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
 use datafusion_physical_expr::utils::merge_vectors;
@@ -901,27 +901,25 @@ fn max_distinct_count(
             Some(stats.distinct_count.clone())
         }
         (_, Some(max), Some(min)) => {
-            let numeric_range = Interval::try_new(
-                IntervalBound::new(min.clone(), false),
-                IntervalBound::new(max.clone(), false),
-            )
-            .ok()?
-            .cardinality()
-            .ok()
-            .flatten()? as usize;
+            let Ok(numeric_range) = Interval::try_new(min.clone(), max.clone()) else {
+                return None;
+            };
 
             // The number can never be greater than the number of rows we have (minus
             // the nulls, since they don't count as distinct values).
             let ceiling =
                 num_rows.get_value()? - stats.null_count.get_value().unwrap_or(&0);
+            let max_dc = numeric_range
+                .cardinality()
+                .map_or(ceiling, |c| (c as usize).min(ceiling));
             Some(
                 if num_rows.is_exact().unwrap_or(false)
                     && stats.max_value.is_exact().unwrap_or(false)
                     && stats.min_value.is_exact().unwrap_or(false)
                 {
-                    Precision::Exact(numeric_range.min(ceiling))
+                    Precision::Exact(max_dc)
                 } else {
-                    Precision::Inexact(numeric_range.min(ceiling))
+                    Precision::Inexact(max_dc)
                 },
             )
         }

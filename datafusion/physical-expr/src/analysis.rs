@@ -30,7 +30,7 @@ use datafusion_common::stats::Precision;
 use datafusion_common::{
     internal_err, ColumnStatistics, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::interval_aritmetic::{cardinality_ratio, Interval, IntervalBound};
+use datafusion_expr::interval_aritmetic::{cardinality_ratio, Interval};
 
 /// The shared context used during the analysis of an expression. Includes
 /// the boundaries for all known columns.
@@ -93,20 +93,16 @@ impl ExprBoundaries {
         let field = &schema.fields()[col_index];
         let empty_field = ScalarValue::try_from(field.data_type())?;
         let interval = Interval::try_new(
-            IntervalBound::new_closed(
-                col_stats
-                    .min_value
-                    .get_value()
-                    .cloned()
-                    .unwrap_or(empty_field.clone()),
-            ),
-            IntervalBound::new_closed(
-                col_stats
-                    .max_value
-                    .get_value()
-                    .cloned()
-                    .unwrap_or(empty_field),
-            ),
+            col_stats
+                .min_value
+                .get_value()
+                .cloned()
+                .unwrap_or(empty_field.clone()),
+            col_stats
+                .max_value
+                .get_value()
+                .cloned()
+                .unwrap_or(empty_field),
         )?;
         let column = Column::new(field.name(), col_index);
         Ok(ExprBoundaries {

@@ -208,7 +208,10 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     ///    (
     ///        col("x"),
     ///        NullableInterval::NotNull {
-    ///            values: Interval::make(Some(3_i64), Some(5_i64), (false, false)),
+    ///            values: Interval::try_new(
+    ///            ScalarValue::Int64(Some(3)).unwrap(),
+    ///            ScalarValue::Int64(Some(5)).unwrap(),
+    ///        )?
     ///        }
     ///    ),
     ///    // y = 3
@@ -3281,8 +3284,11 @@ mod tests {
             (
                 col("c3"),
                 NullableInterval::NotNull {
-                    values: Interval::make(Some(0_i64), Some(2_i64), (false, false))
-                        .unwrap(),
+                    values: Interval::try_new(
+                        ScalarValue::Int64(Some(0)),
+                        ScalarValue::Int64(Some(2)),
+                    )
+                    .unwrap(),
                 },
             ),
             (
@@ -3302,21 +3308,31 @@ mod tests {
             (
                 col("c3"),
                 NullableInterval::MaybeNull {
-                    values: Interval::make(Some(0_i64), Some(2_i64), (false, false))
-                        .unwrap(),
+                    values: Interval::try_new(
+                        ScalarValue::Int64(Some(0)),
+                        ScalarValue::Int64(Some(2)),
+                    )
+                    .unwrap(),
                 },
             ),
             (
                 col("c4"),
                 NullableInterval::MaybeNull {
-                    values: Interval::make(Some(9_u32), Some(9_u32), (false, false))
-                        .unwrap(),
+                    values: Interval::try_new(
+                        ScalarValue::UInt32(Some(9)),
+                        ScalarValue::UInt32(Some(9)),
+                    )
+                    .unwrap(),
                 },
             ),
             (
                 col("c1"),
                 NullableInterval::NotNull {
-                    values: Interval::make(Some("d"), Some("f"), (false, false)).unwrap(),
+                    values: Interval::try_new(
+                        ScalarValue::Utf8(Some("d".to_string())),
+                        ScalarValue::Utf8(Some("f".to_string())),
+                    )
+                    .unwrap(),
                 },
             ),
         ];

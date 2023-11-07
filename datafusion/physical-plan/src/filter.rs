@@ -215,6 +215,7 @@ impl ExecutionPlan for FilterExec {
             &self.input.schema(),
             &input_stats.column_statistics,
         )?;
+
         let analysis_ctx = analyze(predicate, input_analysis_ctx)?;
 
         // Estimate (inexact) selectivity of predicate
@@ -260,18 +261,13 @@ fn collect_new_statistics(
                     ..
                 },
             )| {
-                let closed_interval = interval.close_bounds();
                 ColumnStatistics {
                     null_count: match input_column_stats[idx].null_count.get_value() {
                         Some(nc) => Precision::Inexact(*nc),
                         None => Precision::Absent,
                     },
-                    max_value: Precision::Inexact(
-                        closed_interval.upper().value().clone(),
-                    ),
-                    min_value: Precision::Inexact(
-                        closed_interval.lower().value().clone(),
-                    ),
+                    max_value: Precision::Inexact(interval.upper().clone()),
+                    min_value: Precision::Inexact(interval.lower().clone()),
                     distinct_count: match distinct_count.get_value() {
                         Some(dc) => Precision::Inexact(*dc),
                         None => Precision::Absent,

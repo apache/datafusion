@@ -446,7 +446,7 @@ impl<T: Clone> TreeNode for ExprTreeNode<T> {
 /// identical expressions in one node. Caller specifies the node type in the
 /// DAEG via the `constructor` argument, which constructs nodes in the DAEG
 /// from the [ExprTreeNode] ancillary object.
-struct PhysicalExprDAEGBuilder<'a, T, F: Fn(&ExprTreeNode<NodeIndex>) -> T> {
+struct PhysicalExprDAEGBuilder<'a, T, F: Fn(&ExprTreeNode<NodeIndex>) -> Result<T>> {
     // The resulting DAEG (expression DAG).
     graph: StableGraph<T, usize>,
     // A vector of visited expression nodes and their corresponding node indices.
@@ -455,7 +455,7 @@ struct PhysicalExprDAEGBuilder<'a, T, F: Fn(&ExprTreeNode<NodeIndex>) -> T> {
     constructor: &'a F,
 }
 
-impl<'a, T, F: Fn(&ExprTreeNode<NodeIndex>) -> T> TreeNodeRewriter
+impl<'a, T, F: Fn(&ExprTreeNode<NodeIndex>) -> Result<T>> TreeNodeRewriter
     for PhysicalExprDAEGBuilder<'a, T, F>
 {
     type N = ExprTreeNode<NodeIndex>;
@@ -476,7 +476,7 @@ impl<'a, T, F: Fn(&ExprTreeNode<NodeIndex>) -> T> TreeNodeRewriter
             // add edges to its child nodes. Add the visited expression to the vector
             // of visited expressions and return the newly created node index.
             None => {
-                let node_idx = self.graph.add_node((self.constructor)(&node));
+                let node_idx = self.graph.add_node((self.constructor)(&node)?);
                 for expr_node in node.child_nodes.iter() {
                     self.graph.add_edge(node_idx, expr_node.data.unwrap(), 0);
                 }
@@ -497,7 +497,7 @@ pub fn build_dag<T, F>(
     constructor: &F,
 ) -> Result<(NodeIndex, StableGraph<T, usize>)>
 where
-    F: Fn(&ExprTreeNode<NodeIndex>) -> T,
+    F: Fn(&ExprTreeNode<NodeIndex>) -> Result<T>,
 {
     // Create a new expression tree node from the input expression.
     let init = ExprTreeNode::new(expr);
@@ -838,7 +838,7 @@ mod tests {
         }
     }
 
-    fn make_dummy_node(node: &ExprTreeNode<NodeIndex>) -> PhysicalExprDummyNode {
+    fn make_dummy_node(node: &ExprTreeNode<NodeIndex>) -> Result<PhysicalExprDummyNode> {
         let expr = node.expression().clone();
         let dummy_property = if expr.as_any().is::<BinaryExpr>() {
             "Binary"
@@ -850,12 +850,12 @@ mod tests {
             "Other"
         }
         .to_owned();
-        PhysicalExprDummyNode {
+        Ok(PhysicalExprDummyNode {
             expr,
             property: DummyProperty {
                 expr_type: dummy_property,
             },
-        }
+        })
     }
 
     // Generate a schema which consists of 5 columns (a, b, c, d, e)

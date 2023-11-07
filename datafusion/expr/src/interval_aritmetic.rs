@@ -30,47 +30,82 @@ use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::ops::{AddAssign, SubAssign};
 
-/// This type represents an interval, which is used to calculate reliable
-/// bounds for expressions:
+/// The `Interval` type represents a closed interval used for computing
+/// reliable bounds for mathematical expressions.
 ///
-/// * An interval always owns its endpoints (closed bounds).
+/// Features:
 ///
-/// * If the interval's `lower` and/or `upper` bounds are not known, they are
-/// called *unbounded* endpoint and represented using a `NULL`.
+/// 1. **Closed Bounds**: The interval always encompasses its endpoints.
 ///
-/// * If the interval's `lower` and/or `upper` bounds are overflowed after
-/// some operations, they are considered as unbounded. There is no difference
-/// between being unbounded and being overflowed.
+/// 2. **Unbounded Endpoints**: If the `lower` or `upper` bounds are indeterminate,
+///    they are labeled as *unbounded*. This is represented using a `NULL`.
+///
+/// 3. **Overflow Handling**: If after certain operations, the `lower` or `upper`
+///    bounds exceed their limits, they either become unbounded or they are fixed to
+///    the maximum/minimum value of the datatype, depending on the direction of the
+///    bound overflowed, opting for the safer choice. The system treats overflowed
+///    bounds the same as unbounded ones.
+///  
+/// 4. **Float Special Cases**: For floating-point numbers:
+///    - `inf` values are converted to `NULL` to ensure consistency, as floats have
+///      their own maximum values.
+///    - NaN (Not a Number) values are interpreted as unbounded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Interval {
     lower: ScalarValue,
     upper: ScalarValue,
 }
 
+macro_rules! handle_float_intervals {
+    ($variant:ident, $primitive_type:ident, $lower:expr, $upper:expr) => {{
+        let lower = match $lower {
+            ScalarValue::$variant(Some(l_val))
+                if l_val == $primitive_type::NEG_INFINITY || l_val.is_nan() =>
+            {
+                ScalarValue::$variant(None)
+            }
+            ScalarValue::$variant(Some(l_val)) if l_val == $primitive_type::INFINITY => {
+                return internal_err!("Interval lower value cannot be positive infinity");
+            }
+            ScalarValue::$variant(Some(l_val)) => ScalarValue::$variant(Some(l_val)),
+            _ => ScalarValue::$variant(None),
+        };
+
+        let upper = match $upper {
+            ScalarValue::$variant(Some(r_val))
+                if r_val == $primitive_type::INFINITY || r_val.is_nan() =>
+            {
+                ScalarValue::$variant(None)
+            }
+            ScalarValue::$variant(Some(r_val))
+                if r_val == $primitive_type::NEG_INFINITY =>
+            {
+                return internal_err!("Interval upper value cannot be negative infinity");
+            }
+            ScalarValue::$variant(Some(r_val)) => ScalarValue::$variant(Some(r_val)),
+            _ => ScalarValue::$variant(None),
+        };
+
+        Interval { lower, upper }
+    }};
+}
+
 impl Interval {
-    /// Creates a new interval object, if possible; otherwise, returns an error.
+    /// Attempts to create a new `Interval` from the given lower and upper bounds.
     ///
-    /// # Boolean intervals
+    /// # Notes
     ///
-    /// Unboundedness have no meaning for booleans. For that reason, NULL values
-    /// are not sustained for booleans, they are standardized as true or false depending
-    /// on the location of the bound.
-    /// - `[NULL` rounds to `[false`
-    /// - `NULL]` rounds to `true]`
+    /// - **Boolean Intervals**:
+    ///   - Unboundedness (`NULL`) for boolean values is interpreted as `false` for lower and `true` for upper bounds.
     ///
-    /// # Floating point intervals
-    ///
-    /// Using NULL for infinite values may be confusing for floating point values since
-    /// they have built-in Inf, -Inf and NaN representations. To avoid two different outcomes,
-    /// Inf, -Inf and NaN values of floating point numbers are represented as NULL throughout
-    /// the interval arithmetic library. Even if an interval is tried to be created by these values,
-    /// they are standardized to NULL and do not appear again.
+    /// - **Floating Point Intervals**:
+    ///   - Floating-point values with `NaN`, `Inf`, or `-Inf` are represented as `NULL` within the interval.
+    ///   - An error is returned if the lower bound is positive infinity or if the upper bound is negative infinity.
     pub fn try_new(lower: ScalarValue, upper: ScalarValue) -> Result<Interval> {
         if lower.data_type() != upper.data_type() {
-            return Err(DataFusionError::Internal(
+            return internal_err!(
                 "Interval bounds must be in the same datatype to create a valid Interval"
-                    .to_owned(),
-            ));
+            );
         }
 
         let interval = if let ScalarValue::Boolean(_) = lower {
@@ -87,60 +122,12 @@ impl Interval {
                 lower: standardized_lower,
                 upper: standardized_upper,
             }
-        } else if let ScalarValue::Float32(Some(l_f32)) = lower {
-            // Handle risky floating point values:
-            let lower =
-                ScalarValue::Float32(if l_f32 == f32::NEG_INFINITY || l_f32.is_nan() {
-                    None
-                } else if l_f32 == f32::INFINITY {
-                    return Err(DataFusionError::Internal(
-                        "Interval lower value cannot be positive infinity".to_owned(),
-                    ));
-                } else {
-                    Some(l_f32)
-                });
-
-            let upper =
-                ScalarValue::Float32(if let ScalarValue::Float32(Some(r_f32)) = upper {
-                    if r_f32 == f32::INFINITY || r_f32.is_nan() {
-                        None
-                    } else if l_f32 == f32::NEG_INFINITY {
-                        return Err(DataFusionError::Internal(
-                            "Interval upper value cannot be negative infinity".to_owned(),
-                        ));
-                    } else {
-                        Some(r_f32)
-                    }
-                } else {
-                    None
-                });
-            Interval { lower, upper }
-        } else if let ScalarValue::Float64(Some(l_f64)) = lower {
-            let lower =
-                ScalarValue::Float64(if l_f64 == f64::NEG_INFINITY || l_f64.is_nan() {
-                    None
-                } else if l_f64 == f64::INFINITY {
-                    return Err(DataFusionError::Internal(
-                        "Interval lower value cannot be positive infinity".to_owned(),
-                    ));
-                } else {
-                    Some(l_f64)
-                });
-            let upper =
-                ScalarValue::Float64(if let ScalarValue::Float64(Some(r_f64)) = upper {
-                    if r_f64 == f64::INFINITY || r_f64.is_nan() {
-                        None
-                    } else if l_f64 == f64::NEG_INFINITY {
-                        return Err(DataFusionError::Internal(
-                            "Interval upper value cannot be negative infinity".to_owned(),
-                        ));
-                    } else {
-                        Some(r_f64)
-                    }
-                } else {
-                    None
-                });
-            Interval { lower, upper }
+        }
+        // Handle risky floating point values:
+        else if let ScalarValue::Float32(Some(_)) = lower {
+            handle_float_intervals!(Float32, f32, lower, upper)
+        } else if let ScalarValue::Float64(Some(_)) = lower {
+            handle_float_intervals!(Float64, f64, lower, upper)
         } else {
             // Others:
             Interval {
@@ -155,10 +142,10 @@ impl Interval {
         {
             Ok(interval)
         } else {
-            return Err(DataFusionError::Internal(format!(
+            Err(DataFusionError::Internal(format!(
                 "Interval's lower bound {:?} is greater than the upper bound {:?}",
                 lower, upper
-            )));
+            )))
         }
     }
 
@@ -201,16 +188,29 @@ impl Interval {
         )
     }
 
+    pub const CERTAINLY_FALSE: Interval = Interval {
+        lower: ScalarValue::Boolean(Some(false)),
+        upper: ScalarValue::Boolean(Some(false)),
+    };
+
+    pub const UNCERTAIN: Interval = Interval {
+        lower: ScalarValue::Boolean(Some(false)),
+        upper: ScalarValue::Boolean(Some(true)),
+    };
+
+    pub const CERTAINLY_TRUE: Interval = Interval {
+        lower: ScalarValue::Boolean(Some(true)),
+        upper: ScalarValue::Boolean(Some(true)),
+    };
+
     /// Decide if this interval is certainly greater than, possibly greater than,
     /// or can't be greater than `other` by returning [true, true],
     /// [false, true] or [false, false] respectively.
     pub(crate) fn gt<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
         let rhs = other.borrow();
         if self.get_datatype() != rhs.get_datatype() {
-            return Err(DataFusionError::Internal(
-                "Intervals must be in the same type to be compared".to_owned(),
-            ));
-        };
+            return internal_err!("Intervals must be in the same type to be compared");
+        }
 
         let flags = if !(self.upper.is_null() || rhs.lower.is_null())
             && self.upper <= rhs.lower
@@ -241,9 +241,7 @@ impl Interval {
     pub(crate) fn gt_eq<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
         let rhs = other.borrow();
         if self.get_datatype() != rhs.get_datatype() {
-            return Err(DataFusionError::Internal(
-                "Intervals must be in the same type to be compared".to_owned(),
-            ));
+            return internal_err!("Intervals must be in the same type to be compared");
         };
 
         let flags = if !(self.lower.is_null() || rhs.upper.is_null())
@@ -289,9 +287,9 @@ impl Interval {
     pub(crate) fn equal<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
         let rhs = other.borrow();
         if self.get_datatype() != rhs.get_datatype() {
-            return Err(DataFusionError::Internal(
-                "Intervals must be in the same type to be added".to_owned(),
-            ));
+            return internal_err!(
+                "Intervals must be in the same type to be checked equality"
+            );
         };
 
         let flags = if !self.lower.is_null()
@@ -355,9 +353,7 @@ impl Interval {
     pub fn intersect<T: Borrow<Interval>>(&self, other: T) -> Result<Option<Interval>> {
         let rhs = other.borrow();
         if self.get_datatype() != rhs.get_datatype() {
-            return Err(DataFusionError::Internal(
-                "Intervals must be in the same type to be added".to_owned(),
-            ));
+            return internal_err!("Intervals must be in the same type to be intersected");
         };
 
         // If it is evident that the result is an empty interval,
@@ -382,14 +378,14 @@ impl Interval {
     }
 
     /// Decide if this interval is certainly contains, possibly contains,
-    /// or can't can't `other` by returning [true, true],
+    /// or can't contain `other` by returning [true, true],
     /// [false, true] or [false, false] respectively.
     pub fn contains<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
         if self.get_datatype() != rhs.get_datatype() {
-            return Err(DataFusionError::Internal(
-                "Intervals must be in the same type to be added".to_owned(),
-            ));
+            return internal_err!(
+                "Intervals must be in the same type to check containment"
+            );
         };
 
         Ok(match self.intersect(other.borrow())? {
@@ -410,11 +406,6 @@ impl Interval {
     /// one can choose single values arbitrarily from each of the operands.
     pub fn add<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
         let rhs = other.borrow();
-        if self.get_datatype() != rhs.get_datatype() {
-            return Err(DataFusionError::Internal(
-                "Intervals must be in the same type to be added".to_owned(),
-            ));
-        };
 
         Interval::try_new(
             add_bounds::<false>(&self.lower, &rhs.lower)?,
@@ -428,11 +419,6 @@ impl Interval {
     /// if one can choose single values arbitrarily from each of the operands.
     pub fn sub<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
         let rhs = other.borrow();
-        if self.get_datatype() != rhs.get_datatype() {
-            return Err(DataFusionError::Internal(
-                "Intervals must be in the same type to be subtracted".to_owned(),
-            ));
-        };
 
         Interval::try_new(
             sub_bounds::<false>(&self.lower, &rhs.upper)?,
@@ -447,11 +433,6 @@ impl Interval {
     /// if one can choose single values arbitrarily from each of the operands.
     pub fn mul<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
         let rhs = other.borrow();
-        if self.get_datatype() != rhs.get_datatype() {
-            return Err(DataFusionError::Internal(
-                "Intervals must be in the same type to be multiplied".to_owned(),
-            ));
-        };
 
         let zero_point = Interval::try_new(
             ScalarValue::new_zero(&self.get_datatype())?,
@@ -482,65 +463,34 @@ impl Interval {
     /// give an interval set, not the all space.
     pub fn div<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
         let rhs = other.borrow();
-        if self.get_datatype() != rhs.get_datatype() {
-            return Err(DataFusionError::Internal(
-                "Intervals must be in the same type to be multiplied".to_owned(),
-            ));
-        };
 
-        let unbounded = Interval::make_unbounded(&get_result_type(
-            &self.get_datatype(),
-            &Operator::Divide,
-            &rhs.get_datatype(),
-        )?);
-        let zero_point = Interval::try_new(
-            ScalarValue::new_zero(&self.get_datatype())?,
-            ScalarValue::new_zero(&self.get_datatype())?,
-        )?;
-        if rhs.contains(&zero_point)? == Interval::CERTAINLY_TRUE {
-            return unbounded;
+        let zero = ScalarValue::new_zero(&self.get_datatype())?;
+        let zero_point = Interval::try_new(zero.clone(), zero.clone())?;
+
+        if rhs.contains(&zero_point)? == Interval::CERTAINLY_TRUE
+        // The purpose is early exit with unbounded interval if the interval
+        // is in the form of [some_negative, some_positive] or [0,0].
+            && !(rhs.lower.eq(&zero) ^ rhs.upper.eq(&zero))
+        {
+            return Interval::make_unbounded(&get_result_type(
+                &self.get_datatype(),
+                &Operator::Divide,
+                &rhs.get_datatype(),
+            )?);
         }
-        match (
-            Interval::CERTAINLY_TRUE == self.contains(&zero_point)?,
-            Interval::CERTAINLY_TRUE == rhs.contains(&zero_point)?,
-        ) {
-            // Since the parameter of contains function is a singleton,
-            // it is impossible to have an UNCERTAIN case.
-            (true, true) => {
-                // <-------=====0=====------->
-                // <-------=====0=====------->
-                unbounded
-            }
-            // only option is CERTAINLY_FALSE for rhs
-            (true, false) => div_helper_lhs_zero_inclusive(self, rhs, &zero_point),
-            // only option is CERTAINLY_FALSE for lhs
-            (false, true) => {
-                // <---======---0------------>
-                // <-------=====0=====------->
-                //             or
-                // <------------0---======--->
-                // <-------=====0=====------->
-                unbounded
-            }
-            // only option is CERTAINLY_FALSE for both sides
-            (false, false) => div_helper_zero_exclusive(self, rhs, &zero_point),
+
+        // 1) Since the parameter of contains function is a singleton,
+        // it is impossible to have an UNCERTAIN case.
+        // 2) We handle the case of rhs reaches 0 from both negative
+        // and positive directions, so rhs can only contain zero as
+        // edge point of the bound.
+        if Interval::CERTAINLY_TRUE == self.contains(&zero_point)? {
+            div_helper_lhs_zero_inclusive(self, rhs, &zero_point)
+        } else {
+            // Only option is CERTAINLY_FALSE for rhs.
+            div_helper_zero_exclusive(self, rhs, &zero_point)
         }
     }
-
-    pub const CERTAINLY_FALSE: Interval = Interval {
-        lower: ScalarValue::Boolean(Some(false)),
-        upper: ScalarValue::Boolean(Some(false)),
-    };
-
-    pub const UNCERTAIN: Interval = Interval {
-        lower: ScalarValue::Boolean(Some(false)),
-        upper: ScalarValue::Boolean(Some(true)),
-    };
-
-    pub const CERTAINLY_TRUE: Interval = Interval {
-        lower: ScalarValue::Boolean(Some(true)),
-        upper: ScalarValue::Boolean(Some(true)),
-    };
 
     /// Returns the cardinality of this interval, which is the number of all
     /// distinct points inside it. This function returns `None` if:
@@ -551,7 +501,7 @@ impl Interval {
     pub fn cardinality(&self) -> Option<u64> {
         let data_type = self.get_datatype();
         if data_type.is_integer() {
-            self.upper.distance(&self.lower).map(|diff| diff as _)
+            self.upper.distance(&self.lower).map(|diff| diff as u64)
         }
         // Ordering floating-point numbers according to their binary representations
         // coincide with their natural ordering. Therefore, we can consider their
@@ -576,7 +526,7 @@ impl Interval {
                     else {
                         return None;
                     };
-                    Some(count as _)
+                    Some(count as u64)
                 }
                 (
                     ScalarValue::Float64(Some(lower)),
@@ -592,7 +542,7 @@ impl Interval {
                     else {
                         return None;
                     };
-                    Some(count as _)
+                    Some(count as u64)
                 }
                 _ => None,
             }
@@ -600,6 +550,7 @@ impl Interval {
             // Cardinality calculations are not implemented for this data type yet:
             None
         }
+        .map(|result| (result + 1))
     }
 }
 
@@ -614,7 +565,7 @@ impl Default for Interval {
 
 impl Display for Interval {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}{}, {}{}", "[", self.lower, self.upper, "]")
+        write!(f, "[{}, {}]", self.lower, self.upper)
     }
 }
 
@@ -652,15 +603,11 @@ fn add_bounds<const UPPER: bool>(
 
     Ok(match lhs.data_type() {
         DataType::Float64 | DataType::Float32 => {
-            alter_fp_rounding_mode::<UPPER, _>(&lhs, &rhs, |lhs, rhs| {
-                lhs.add_checked(rhs)
-            })
+            alter_fp_rounding_mode::<UPPER, _>(lhs, rhs, |lhs, rhs| lhs.add_checked(rhs))
         }
         _ => lhs.add_checked(rhs),
     }
-    // We cannot represent the overflow cases.
-    // Set the bound as unbounded.
-    .unwrap_or(ScalarValue::try_from(dt)?))
+    .unwrap_or(handle_overflow::<UPPER>(lhs, rhs, dt)?))
 }
 
 // Cannot be used other than add method of intervals since
@@ -677,15 +624,13 @@ fn sub_bounds<const UPPER: bool>(
 
     Ok(match lhs.data_type() {
         DataType::Float64 | DataType::Float32 => {
-            alter_fp_rounding_mode::<UPPER, _>(&lhs, &rhs, |lhs, rhs| {
-                lhs.sub_checked(rhs)
-            })
+            alter_fp_rounding_mode::<UPPER, _>(lhs, rhs, |lhs, rhs| lhs.sub_checked(rhs))
         }
         _ => lhs.sub_checked(rhs),
     }
     // We cannot represent the overflow cases.
     // Set the bound as unbounded.
-    .unwrap_or(ScalarValue::try_from(dt)?))
+    .unwrap_or(handle_overflow::<UPPER>(lhs, rhs, dt)?))
 }
 
 // Cannot be used other than add method of intervals since
@@ -702,15 +647,13 @@ fn mul_bounds<const UPPER: bool>(
 
     Ok(match lhs.data_type() {
         DataType::Float64 | DataType::Float32 => {
-            alter_fp_rounding_mode::<UPPER, _>(&lhs, &rhs, |lhs, rhs| {
-                lhs.mul_checked(rhs)
-            })
+            alter_fp_rounding_mode::<UPPER, _>(lhs, rhs, |lhs, rhs| lhs.mul_checked(rhs))
         }
         _ => lhs.mul_checked(rhs),
     }
     // We cannot represent the overflow cases.
     // Set the bound as unbounded.
-    .unwrap_or(ScalarValue::try_from(dt)?))
+    .unwrap_or(handle_overflow::<UPPER>(lhs, rhs, dt)?))
 }
 
 // Cannot be used other than add method of intervals since
@@ -720,20 +663,79 @@ fn div_bounds<const UPPER: bool>(
     rhs: &ScalarValue,
 ) -> Result<ScalarValue> {
     let dt = get_result_type(&lhs.data_type(), &Operator::Divide, &rhs.data_type())?;
+    let zero = ScalarValue::new_zero(&dt)?;
 
-    if lhs.is_null() || rhs.is_null() {
+    if lhs.is_null() || rhs.eq(&zero) {
         return ScalarValue::try_from(dt);
+    } else if rhs.is_null() {
+        return Ok(zero);
     }
 
     Ok(match lhs.data_type() {
         DataType::Float64 | DataType::Float32 => {
-            alter_fp_rounding_mode::<UPPER, _>(&lhs, &rhs, |lhs, rhs| lhs.div(rhs))
+            alter_fp_rounding_mode::<UPPER, _>(lhs, rhs, |lhs, rhs| lhs.div(rhs))
         }
         _ => lhs.div(rhs),
     }
     // We cannot represent the overflow cases.
     // Set the bound as unbounded.
-    .unwrap_or(ScalarValue::try_from(dt)?))
+    .unwrap_or(handle_overflow::<UPPER>(lhs, rhs, dt)?))
+}
+
+macro_rules! value_transition {
+    ($bound:ident, $direction:expr, $value:expr) => {
+        match $value {
+            UInt8(Some(value)) if value == u8::$bound => UInt8(None),
+            UInt16(Some(value)) if value == u16::$bound => UInt16(None),
+            UInt32(Some(value)) if value == u32::$bound => UInt32(None),
+            UInt64(Some(value)) if value == u64::$bound => UInt64(None),
+            Int8(Some(value)) if value == i8::$bound => Int8(None),
+            Int16(Some(value)) if value == i16::$bound => Int16(None),
+            Int32(Some(value)) if value == i32::$bound => Int32(None),
+            Int64(Some(value)) if value == i64::$bound => Int64(None),
+            Float32(Some(value)) if value == f32::$bound => Float32(None),
+            Float64(Some(value)) if value == f64::$bound => Float64(None),
+            DurationSecond(Some(value)) if value == i64::$bound => DurationSecond(None),
+            DurationMillisecond(Some(value)) if value == i64::$bound => {
+                DurationMillisecond(None)
+            }
+            DurationMicrosecond(Some(value)) if value == i64::$bound => {
+                DurationMicrosecond(None)
+            }
+            TimestampSecond(Some(value), tz) if value == i64::$bound => {
+                TimestampSecond(None, tz)
+            }
+            TimestampMillisecond(Some(value), tz) if value == i64::$bound => {
+                TimestampMillisecond(None, tz)
+            }
+            TimestampMicrosecond(Some(value), tz) if value == i64::$bound => {
+                TimestampMicrosecond(None, tz)
+            }
+            TimestampNanosecond(Some(value), tz) if value == i64::$bound => {
+                TimestampNanosecond(None, tz)
+            }
+            IntervalYearMonth(Some(value)) if value == i32::$bound => {
+                IntervalYearMonth(None)
+            }
+            IntervalDayTime(Some(value)) if value == i64::$bound => IntervalDayTime(None),
+            IntervalMonthDayNano(Some(value)) if value == i128::$bound => {
+                IntervalMonthDayNano(None)
+            }
+            _ => next_value_helper::<$direction>($value),
+        }
+    };
+}
+
+// It should remain private since it may malform the intervals if used randomly.
+fn next_value(value: ScalarValue) -> ScalarValue {
+    use ScalarValue::*;
+    value_transition!(MAX, true, value)
+}
+
+// It should remain private since it may malform the intervals if used randomly.
+fn prev_value(value: ScalarValue) -> ScalarValue {
+    use ScalarValue::*;
+    value_transition!(MIN, false, value)
 }
 
 trait OneTrait: Sized + std::ops::Add + std::ops::Sub {
@@ -742,7 +744,20 @@ trait OneTrait: Sized + std::ops::Add + std::ops::Sub {
 macro_rules! impl_OneTrait{
     ($($m:ty),*) => {$( impl OneTrait for $m  { fn one() -> Self { 1 as $m } })*}
 }
-impl_OneTrait! {u8, u16, u32, u64, i8, i16, i32, i64}
+impl_OneTrait! {u8, u16, u32, u64, i8, i16, i32, i64, i128}
+
+/// This function either increments or decrements its argument, depending on the `INC` value.
+/// If `true`, it increments; otherwise it decrements the argument.
+fn increment_decrement<const INC: bool, T: OneTrait + SubAssign + AddAssign>(
+    mut val: T,
+) -> T {
+    if INC {
+        val.add_assign(T::one());
+    } else {
+        val.sub_assign(T::one());
+    }
+    val
+}
 
 /// This function returns the next/previous value depending on the `ADD` value.
 /// If `true`, it returns the next value; otherwise it returns the previous value.
@@ -766,77 +781,38 @@ fn next_value_helper<const INC: bool>(value: ScalarValue) -> ScalarValue {
         UInt16(Some(val)) => UInt16(Some(increment_decrement::<INC, u16>(val))),
         UInt32(Some(val)) => UInt32(Some(increment_decrement::<INC, u32>(val))),
         UInt64(Some(val)) => UInt64(Some(increment_decrement::<INC, u64>(val))),
+        DurationSecond(Some(val)) => {
+            DurationSecond(Some(increment_decrement::<INC, i64>(val)))
+        }
+        DurationMillisecond(Some(val)) => {
+            DurationMillisecond(Some(increment_decrement::<INC, i64>(val)))
+        }
+        DurationMicrosecond(Some(val)) => {
+            DurationMicrosecond(Some(increment_decrement::<INC, i64>(val)))
+        }
+        TimestampSecond(Some(val), tz) => {
+            TimestampSecond(Some(increment_decrement::<INC, i64>(val)), tz)
+        }
+        TimestampMillisecond(Some(val), tz) => {
+            TimestampMillisecond(Some(increment_decrement::<INC, i64>(val)), tz)
+        }
+        TimestampMicrosecond(Some(val), tz) => {
+            TimestampMicrosecond(Some(increment_decrement::<INC, i64>(val)), tz)
+        }
+        TimestampNanosecond(Some(val), tz) => {
+            TimestampNanosecond(Some(increment_decrement::<INC, i64>(val)), tz)
+        }
+        IntervalYearMonth(Some(val)) => {
+            IntervalYearMonth(Some(increment_decrement::<INC, i32>(val)))
+        }
+        IntervalDayTime(Some(val)) => {
+            IntervalDayTime(Some(increment_decrement::<INC, i64>(val)))
+        }
+        IntervalMonthDayNano(Some(val)) => {
+            IntervalMonthDayNano(Some(increment_decrement::<INC, i128>(val)))
+        }
         _ => value, // Unbounded values return without change.
     }
-}
-// It should remain private since it may malform the intervals if used randomly.
-fn next_value(value: ScalarValue) -> ScalarValue {
-    match value {
-        // Passing from representable numbers to an overflowed bound needs a special handling.
-        ScalarValue::UInt8(Some(value)) if value == u8::MAX => ScalarValue::UInt8(None),
-        ScalarValue::UInt16(Some(value)) if value == u16::MAX => {
-            ScalarValue::UInt16(None)
-        }
-        ScalarValue::UInt32(Some(value)) if value == u32::MAX => {
-            ScalarValue::UInt32(None)
-        }
-        ScalarValue::UInt64(Some(value)) if value == u64::MAX => {
-            ScalarValue::UInt64(None)
-        }
-        ScalarValue::Int8(Some(value)) if value == i8::MAX => ScalarValue::Int8(None),
-        ScalarValue::Int16(Some(value)) if value == i16::MAX => ScalarValue::Int16(None),
-        ScalarValue::Int32(Some(value)) if value == i32::MAX => ScalarValue::Int32(None),
-        ScalarValue::Int64(Some(value)) if value == i64::MAX => ScalarValue::Int64(None),
-        ScalarValue::Float32(Some(value)) if value == f32::MAX => {
-            ScalarValue::Float32(None)
-        }
-        ScalarValue::Float64(Some(value)) if value == f64::MAX => {
-            ScalarValue::Float64(None)
-        }
-        // Unbounded cases are handled in the next_value_helper function.
-        _ => next_value_helper::<true>(value),
-    }
-}
-// It should remain private since it may malform the intervals if used randomly.
-fn prev_value(value: ScalarValue) -> ScalarValue {
-    match value {
-        // Passing from representable numbers to an overflowed bound needs a special handling.
-        ScalarValue::UInt8(Some(value)) if value == u8::MIN => ScalarValue::UInt8(None),
-        ScalarValue::UInt16(Some(value)) if value == u16::MIN => {
-            ScalarValue::UInt16(None)
-        }
-        ScalarValue::UInt32(Some(value)) if value == u32::MIN => {
-            ScalarValue::UInt32(None)
-        }
-        ScalarValue::UInt64(Some(value)) if value == u64::MIN => {
-            ScalarValue::UInt64(None)
-        }
-        ScalarValue::Int8(Some(value)) if value == i8::MIN => ScalarValue::Int8(None),
-        ScalarValue::Int16(Some(value)) if value == i16::MIN => ScalarValue::Int16(None),
-        ScalarValue::Int32(Some(value)) if value == i32::MIN => ScalarValue::Int32(None),
-        ScalarValue::Int64(Some(value)) if value == i64::MIN => ScalarValue::Int64(None),
-        ScalarValue::Float32(Some(value)) if value == f32::MIN => {
-            ScalarValue::Float32(None)
-        }
-        ScalarValue::Float64(Some(value)) if value == f64::MIN => {
-            ScalarValue::Float64(None)
-        }
-        // Unbounded cases are handled in the next_value_helper function.
-        _ => next_value_helper::<false>(value),
-    }
-}
-
-/// This function either increments or decrements its argument, depending on the `INC` value.
-/// If `true`, it increments; otherwise it decrements the argument.
-fn increment_decrement<const INC: bool, T: OneTrait + SubAssign + AddAssign>(
-    mut val: T,
-) -> T {
-    if INC {
-        val.add_assign(T::one());
-    } else {
-        val.sub_assign(T::one());
-    }
-    val
 }
 
 /// Returns the greater one of two interval bounds.
@@ -844,9 +820,7 @@ fn increment_decrement<const INC: bool, T: OneTrait + SubAssign + AddAssign>(
 fn max_of_bounds(first: &ScalarValue, second: &ScalarValue) -> ScalarValue {
     if first.is_null() {
         second.clone()
-    } else if second.is_null() {
-        first.clone()
-    } else if first >= second {
+    } else if second.is_null() || first >= second {
         first.clone()
     } else {
         second.clone()
@@ -858,9 +832,7 @@ fn max_of_bounds(first: &ScalarValue, second: &ScalarValue) -> ScalarValue {
 fn min_of_bounds(first: &ScalarValue, second: &ScalarValue) -> ScalarValue {
     if first.is_null() {
         second.clone()
-    } else if second.is_null() {
-        first.clone()
-    } else if first <= second {
+    } else if second.is_null() || first <= second {
         first.clone()
     } else {
         second.clone()
@@ -918,40 +890,33 @@ pub fn satisfy_comparison(
     }
 
     // Gt operator can only change left lower bound and right upper bound.
-    let new_left_lower = if left.lower < right.lower {
+    let new_left_lower = if left.lower < right.lower || left.lower.is_null() {
         if includes_endpoints {
             right.lower.clone()
         } else {
             next_value(right.lower.clone())
         }
-    } else if left.lower > right.lower {
+    } else if (left.lower == right.lower) && includes_endpoints {
+        right.lower.clone()
+    } else if (left.lower == right.lower) && !includes_endpoints {
+        next_value(right.lower.clone())
+    } else {
         left.lower.clone()
-    } else {
-        if includes_endpoints || left.lower.is_null() {
-            left.lower.clone()
-        } else {
-            next_value(left.lower.clone())
-        }
     };
-
-    let new_right_upper = if left.upper < right.upper
-        && !(left.upper.is_null() || right.upper.is_null())
-    {
-        if includes_endpoints {
+    let new_right_upper =
+        if (left.upper < right.upper && !left.upper.is_null()) || right.upper.is_null() {
+            if includes_endpoints {
+                left.upper.clone()
+            } else {
+                prev_value(left.upper.clone())
+            }
+        } else if (left.upper == right.upper) && includes_endpoints {
             left.upper.clone()
-        } else {
+        } else if (left.lower == right.lower) && !includes_endpoints {
             prev_value(left.upper.clone())
-        }
-    } else if left.upper > right.upper && !(right.upper.is_null() || left.upper.is_null())
-    {
-        right.upper.clone()
-    } else {
-        if includes_endpoints || right.upper.is_null() {
-            right.upper.clone()
         } else {
-            prev_value(right.upper.clone())
-        }
-    };
+            right.upper.clone()
+        };
 
     if op_gt {
         Ok(Some(vec![
@@ -966,8 +931,15 @@ pub fn satisfy_comparison(
     }
 }
 
-// <-------=====0=====------->
-// <-------=====0=====------->
+/// Multiplies two intervals that both include zero.
+///
+/// This function takes in two intervals (`lhs` and `rhs`) as arguments and returns their product.
+/// It is specifically designed to handle intervals that both contain zero within their range.
+/// Returns an error if the multiplication of bounds fails.
+///
+/// left:  <-------=====0=====------->
+///
+/// right: <-------=====0=====------->
 fn mul_helper_multi_zero_inclusive(lhs: &Interval, rhs: &Interval) -> Result<Interval> {
     if lhs.lower.is_null()
         || lhs.upper.is_null()
@@ -989,11 +961,22 @@ fn mul_helper_multi_zero_inclusive(lhs: &Interval, rhs: &Interval) -> Result<Int
     Interval::try_new(lower, upper)
 }
 
-// <-------=====0=====------->
-// <--======----0------------>
-//             or
-// <-------=====0=====------->
-// <------------0--======---->
+/// Multiplies two intervals where only left-hand side interval includes zero.
+///
+/// This function calculates the product of two intervals (`lhs` and `rhs`), when only lhs
+/// contains zero within its range. The interval not containing zero, i.e. rhs, can either be
+/// on the left side or right side of zero. Returns an error if the multiplication of bounds
+/// fails or if there is a problem with determining the result type.
+///
+/// left:  <-------=====0=====------->
+///
+/// right: <--======----0------------>
+///
+///                    or
+///
+/// left:  <-------=====0=====------->
+///
+/// right: <------------0--======---->
 fn mul_helper_single_zero_inclusive(
     lhs: &Interval,
     rhs: &Interval,
@@ -1004,7 +987,7 @@ fn mul_helper_single_zero_inclusive(
         &Operator::Multiply,
         &rhs.get_datatype(),
     )?)?;
-    if rhs.upper < zero_point.upper {
+    if rhs.upper < zero_point.upper && !rhs.upper.is_null() {
         // <-------=====0=====------->
         // <--======----0------------>
         let lower = if lhs.upper.is_null() || rhs.lower.is_null() {
@@ -1035,17 +1018,33 @@ fn mul_helper_single_zero_inclusive(
     }
 }
 
-// <--======----0------------>
-// <--======----0------------>
-//             or
-// <--======----0------------>
-// <------------0--======---->
-//             or
-// <------------0--======---->
-// <--======----0------------>
-//             or
-// <------------0--======---->
-// <------------0--======---->
+/// Multiplies two intervals where neither of them includes zero.
+///
+/// This function calculates the product of two intervals (`lhs` and `rhs`), when none of
+/// the intervals includes zero. Returns an error if the multiplication of bounds
+/// fails or if there is a problem with determining the result type.
+///
+/// left:  <--======----0------------>
+///
+/// right: <--======----0------------>
+///
+///                    or
+///
+/// left:  <--======----0------------>
+///
+/// right: <------------0--======---->
+///
+///                    or
+///
+/// left:  <------------0--======---->
+///
+/// right: <--======----0------------>
+///
+///                    or
+///
+/// left:  <------------0--======---->
+///
+/// right: <------------0--======---->
 fn mul_helper_zero_exclusive(
     lhs: &Interval,
     rhs: &Interval,
@@ -1056,7 +1055,10 @@ fn mul_helper_zero_exclusive(
         &Operator::Multiply,
         &rhs.get_datatype(),
     )?)?;
-    match (lhs.upper <= zero_point.upper, rhs.upper <= zero_point.upper) {
+    match (
+        lhs.upper <= zero_point.upper && !lhs.upper.is_null(),
+        rhs.upper <= zero_point.upper && !rhs.upper.is_null(),
+    ) {
         (true, true) => {
             // <--======----0------------>
             // <--======----0------------>
@@ -1112,11 +1114,21 @@ fn mul_helper_zero_exclusive_opposite(
     Interval::try_new(lower, upper)
 }
 
-// <-------=====0=====------->
-// <--======----0------------>
-//             or
-// <-------=====0=====------->
-// <------------0--======---->
+/// Divides left-hand side interval by right-hand side interval when left-hand side includes zero.
+///
+/// This function calculates the divison of two intervals (`lhs` and `rhs`), when lhs of
+/// the intervals includes zero. Returns an error if the division of bounds fails or
+/// if there is a problem with determining the result type.
+///
+/// left:  <-------=====0=====------->
+///
+/// right: <--======----0------------>
+///
+///                    or
+///
+/// left:  <-------=====0=====------->
+///
+/// right: <------------0--======---->
 fn div_helper_lhs_zero_inclusive(
     lhs: &Interval,
     rhs: &Interval,
@@ -1127,7 +1139,7 @@ fn div_helper_lhs_zero_inclusive(
         &Operator::Divide,
         &rhs.get_datatype(),
     )?)?;
-    if rhs.upper < zero_point.upper {
+    if rhs.upper < zero_point.upper && !rhs.upper.is_null() {
         // <-------=====0=====------->
         // <--======----0------------>
         let lower = if lhs.upper.is_null() {
@@ -1158,17 +1170,33 @@ fn div_helper_lhs_zero_inclusive(
     }
 }
 
-// <--======----0------------>
-// <--======----0------------>
-//             or
-// <--======----0------------>
-// <------------0--======---->
-//             or
-// <------------0--======---->
-// <--======----0------------>
-//             or
-// <------------0--======---->
-// <------------0--======---->
+/// Divides left-hand side interval by right-hand side interval when left-hand side includes zero.
+///
+/// This function calculates the divison of two intervals (`lhs` and `rhs`), when lhs of
+/// the intervals includes zero. Returns an error if the division of bounds fails or
+/// if there is a problem with determining the result type.
+///
+/// left:  <--======----0------------>
+///
+/// right: <--======----0------------>
+///
+///                    or
+///
+/// left:  <--======----0------------>
+///
+/// right: <------------0--======---->
+///
+///                    or
+///
+/// left:  <------------0--======---->
+///
+/// right: <--======----0------------>
+///
+///                    or
+///
+/// left:  <------------0--======---->
+///
+/// right: <------------0--======---->
 fn div_helper_zero_exclusive(
     lhs: &Interval,
     rhs: &Interval,
@@ -1179,7 +1207,10 @@ fn div_helper_zero_exclusive(
         &Operator::Divide,
         &rhs.get_datatype(),
     )?)?;
-    match (lhs.upper <= zero_point.upper, rhs.upper <= zero_point.upper) {
+    match (
+        lhs.upper <= zero_point.upper && !lhs.upper.is_null(),
+        rhs.upper <= zero_point.upper && !rhs.upper.is_null(),
+    ) {
         (true, true) => {
             // <--======----0------------>
             // <--======----0------------>
@@ -1255,6 +1286,36 @@ fn cast_scalar_value(
     ScalarValue::try_from_array(&cast_array, 0)
 }
 
+/// Since we cannot represent the overflow cases, this function
+/// sets the bound as unbounded for positive upper bounds and negative lower bounds,
+/// For other cases, select the one that narrows the most.
+/// TODO: When ScalarValue supports such methods like ScalarValue::max(data_type) and
+/// ScalarValue::min(data_type), we can even narrow more.
+fn handle_overflow<const UPPER: bool>(
+    lhs: &ScalarValue,
+    rhs: &ScalarValue,
+    dt: DataType,
+) -> Result<ScalarValue> {
+    // No need to check operator since knowing lhs sign is enough for subtraction and division cases also.
+    match (UPPER, lhs > &ScalarValue::new_zero(&lhs.data_type())?) {
+        (true, true) | (false, false) => ScalarValue::try_from(dt),
+        (true, false) => {
+            if lhs < rhs {
+                Ok(lhs.clone())
+            } else {
+                Ok(rhs.clone())
+            }
+        }
+        (false, true) => {
+            if lhs > rhs {
+                Ok(lhs.clone())
+            } else {
+                Ok(rhs.clone())
+            }
+        }
+    }
+}
+
 /// An [Interval] that also tracks null status using a boolean interval.
 ///
 /// This represents values that may be in a particular range or be null.
@@ -1268,13 +1329,17 @@ fn cast_scalar_value(
 ///
 /// // [1, 2) U {NULL}
 /// NullableInterval::MaybeNull {
-///    values: Interval::make(Some(1), Some(2), (false, true)),
-/// };
+///    values: Interval::try_new(
+///            ScalarValue::Int32(Some(1)).unwrap(),
+///            ScalarValue::Int32(Some(2)).unwrap(),
+///        )?;
 ///
 /// // (0, ∞)
 /// NullableInterval::NotNull {
-///   values: Interval::make(Some(0), None, (true, true)),
-/// };
+///   values:Interval::try_new(
+///            ScalarValue::Int32(Some(0)).unwrap(),
+///            ScalarValue::Int32(None).unwrap(),
+///        )?;
 ///
 /// // {NULL}
 /// NullableInterval::Null { datatype: DataType::Int32 };
@@ -1402,19 +1467,25 @@ impl NullableInterval {
     ///
     /// // [1, 3) > NULL -> NULL
     /// let lhs = NullableInterval::NotNull {
-    ///     values: Interval::make(Some(1), Some(3), (false, true)),
-    /// };
+    ///     values: Interval::try_new(
+    ///            ScalarValue::Int32(Some(1)).unwrap(),
+    ///            ScalarValue::Int32(Some(3)).unwrap(),
+    ///        )?;
     /// let rhs = NullableInterval::from(ScalarValue::Int32(None));
     /// let result = lhs.apply_operator(&Operator::Gt, &rhs).unwrap();
     /// assert_eq!(result.single_value(), Some(ScalarValue::Boolean(None)));
     ///
     /// // [1, 3] > [2, 4] -> [false, true]
     /// let lhs = NullableInterval::NotNull {
-    ///     values: Interval::make(Some(1), Some(3), (false, false)),
-    /// };
+    ///     values: Interval::try_new(
+    ///            ScalarValue::Int32(Some(1)).unwrap(),
+    ///            ScalarValue::Int32(Some(3)).unwrap(),
+    ///        )?;
     /// let rhs = NullableInterval::NotNull {
-    ///    values: Interval::make(Some(2), Some(4), (false, false)),
-    /// };
+    ///    values: Interval::try_new(
+    ///            ScalarValue::Int32(Some(2)).unwrap(),
+    ///            ScalarValue::Int32(Some(4)).unwrap(),
+    ///        )?;
     /// let result = lhs.apply_operator(&Operator::Gt, &rhs).unwrap();
     /// // Both inputs are valid (non-null), so result must be non-null
     /// assert_eq!(result, NullableInterval::NotNull {
@@ -1512,8 +1583,10 @@ impl NullableInterval {
     /// assert_eq!(interval.single_value(), Some(ScalarValue::Int32(None)));
     ///
     /// let interval = NullableInterval::MaybeNull {
-    ///     values: Interval::make(Some(1), Some(4), (false, true)),
-    /// };
+    ///     values: Interval::try_new(
+    ///            ScalarValue::Int32(Some(1)).unwrap(),
+    ///            ScalarValue::Int32(Some(4)).unwrap(),
+    ///        )?;
     /// assert_eq!(interval.single_value(), None);
     /// ```
     pub fn single_value(&self) -> Option<ScalarValue> {
@@ -1534,13 +1607,12 @@ impl NullableInterval {
 #[cfg(test)]
 mod tests {
     use super::{next_value, Interval};
-    use crate::interval_aritmetic::prev_value;
+    use crate::interval_aritmetic::{equalize_intervals, prev_value, satisfy_comparison};
     use arrow::datatypes::DataType;
     use datafusion_common::{Result, ScalarValue};
 
     #[test]
     fn test_next_previous_value() -> Result<()> {
-        // integer increment / decrement
         let zeros = vec![
             ScalarValue::new_zero(&DataType::UInt8)?,
             ScalarValue::new_zero(&DataType::UInt16)?,
@@ -1566,7 +1638,6 @@ mod tests {
             assert_eq!(prev_value(o), z);
         });
 
-        // floating value increment / decrement
         let values = vec![
             ScalarValue::new_zero(&DataType::Float32)?,
             ScalarValue::new_zero(&DataType::Float64)?,
@@ -1580,12 +1651,15 @@ mod tests {
                 .sub(value.clone())
                 .unwrap()
                 .lt(&eps));
-            assert_ne!(next_value(value.clone()), value.clone());
-            assert_ne!(prev_value(value.clone()), value.clone());
-            assert!(value.clone().sub(prev_value(value)).unwrap().lt(&eps));
+            assert!(value
+                .clone()
+                .sub(prev_value(value.clone()))
+                .unwrap()
+                .lt(&eps));
+            assert_ne!(next_value(value.clone()), value);
+            assert_ne!(prev_value(value.clone()), value);
         });
 
-        // Overflowing and unbounded cases
         let min_max = vec![
             (
                 ScalarValue::UInt64(Some(u64::MIN)),
@@ -1611,8 +1685,12 @@ mod tests {
             ScalarValue::Float64(None),
         ];
         min_max.into_iter().zip(inf).for_each(|((min, max), inf)| {
-            assert_eq!(next_value(max), inf);
-            assert_eq!(prev_value(min), inf);
+            assert_eq!(next_value(max.clone()), inf);
+            assert_ne!(prev_value(max.clone()), max);
+
+            assert_eq!(prev_value(min.clone()), inf);
+            assert_ne!(next_value(min.clone()), min);
+
             assert_eq!(next_value(inf.clone()), inf);
             assert_eq!(prev_value(inf.clone()), inf);
         });
@@ -1651,8 +1729,8 @@ mod tests {
                 Int16(Some(-1000)),
             ),
             (
-                (Float32(None), Float32(Some(f32::MAX))),
-                Float32(None),
+                (Float32(Some(f32::MAX)), Float32(Some(f32::MAX))),
+                Float32(Some(f32::MAX)),
                 Float32(Some(f32::MAX)),
             ),
             (
@@ -1675,23 +1753,12 @@ mod tests {
             assert_eq!(result.upper(), &upper);
         }
 
-        let unbounded_cases = vec![
-            (DataType::Boolean, Boolean(Some(false)), Boolean(Some(true))),
-            (DataType::UInt8, UInt8(None), UInt8(None)),
-            (DataType::Int64, Int64(None), Int64(None)),
-            (DataType::Float32, Float32(None), Float32(None)),
-            (DataType::Float64, Float64(None), Float64(None)),
-        ];
-        for (dt, lower, upper) in unbounded_cases {
-            let inf = Interval::make_unbounded(&dt)?;
-            assert_eq!(inf.clone().lower(), &lower);
-            assert_eq!(inf.upper(), &upper);
-        }
-
         let invalid_intervals = vec![
             (Float32(Some(f32::INFINITY)), Float32(Some(0_f32))),
             (Float64(Some(0_f64)), Float64(Some(f64::NEG_INFINITY))),
             (Boolean(Some(true)), Boolean(Some(false))),
+            (Int32(Some(1000)), Int32(Some(-2000))),
+            (UInt64(Some(1)), UInt64(Some(0))),
         ];
         for (lower, upper) in invalid_intervals {
             Interval::try_new(lower, upper).expect_err(
@@ -1703,8 +1770,35 @@ mod tests {
     }
 
     #[test]
+    fn test_make_unbounded() -> Result<()> {
+        use ScalarValue::*;
+
+        let unbounded_cases = vec![
+            (DataType::Boolean, Boolean(Some(false)), Boolean(Some(true))),
+            (DataType::UInt8, UInt8(None), UInt8(None)),
+            (DataType::UInt16, UInt16(None), UInt16(None)),
+            (DataType::UInt32, UInt32(None), UInt32(None)),
+            (DataType::UInt64, UInt64(None), UInt64(None)),
+            (DataType::Int8, Int8(None), Int8(None)),
+            (DataType::Int16, Int16(None), Int16(None)),
+            (DataType::Int32, Int32(None), Int32(None)),
+            (DataType::Int64, Int64(None), Int64(None)),
+            (DataType::Float32, Float32(None), Float32(None)),
+            (DataType::Float64, Float64(None), Float64(None)),
+        ];
+        for (dt, lower, upper) in unbounded_cases {
+            let inf = Interval::make_unbounded(&dt)?;
+            assert_eq!(inf.clone().lower(), &lower);
+            assert_eq!(inf.upper(), &upper);
+        }
+
+        Ok(())
+    }
+
+    #[test]
     fn gt_lt_test() -> Result<()> {
         use ScalarValue::*;
+
         let exactly_gt_cases = vec![
             (
                 Interval::try_new(Int64(Some(1000_i64)), Int64(None))?,
@@ -2165,6 +2259,16 @@ mod tests {
 
         let possible_cases = vec![
             (
+                Interval::try_new(Float64(None), Float64(None))?,
+                Interval::try_new(Float64(None), Float64(None))?,
+                Interval::CERTAINLY_TRUE,
+            ),
+            (
+                Interval::try_new(Int64(Some(1500_i64)), Int64(Some(2000_i64)))?,
+                Interval::try_new(Int64(Some(1501_i64)), Int64(Some(1999_i64)))?,
+                Interval::CERTAINLY_TRUE,
+            ),
+            (
                 Interval::try_new(Int64(Some(1000_i64)), Int64(None))?,
                 Interval::try_new(Int64(None), Int64(None))?,
                 Interval::UNCERTAIN,
@@ -2173,11 +2277,6 @@ mod tests {
                 Interval::try_new(Int64(Some(1000_i64)), Int64(Some(2000_i64)))?,
                 Interval::try_new(Int64(Some(500)), Int64(Some(1500_i64)))?,
                 Interval::UNCERTAIN,
-            ),
-            (
-                Interval::try_new(Float64(None), Float64(None))?,
-                Interval::try_new(Float64(None), Float64(None))?,
-                Interval::CERTAINLY_TRUE,
             ),
             (
                 Interval::try_new(Float64(Some(16.0)), Float64(Some(32.0)))?,
@@ -2230,13 +2329,23 @@ mod tests {
             ),
             (
                 Interval::try_new(Int64(Some(100_i64)), Int64(Some(200_i64)))?,
-                Interval::try_new(Int64(Some(-300_i64)), Int64(Some(150_i64)))?,
-                Interval::try_new(Int64(Some(-200_i64)), Int64(Some(350_i64)))?,
+                Interval::try_new(Int64(Some(200_i64)), Int64(None))?,
+                Interval::try_new(Int64(Some(300_i64)), Int64(None))?,
+            ),
+            (
+                Interval::try_new(Int64(None), Int64(Some(200_i64)))?,
+                Interval::try_new(Int64(Some(100_i64)), Int64(Some(200_i64)))?,
+                Interval::try_new(Int64(None), Int64(Some(400_i64)))?,
+            ),
+            (
+                Interval::try_new(Int64(Some(200_i64)), Int64(None))?,
+                Interval::try_new(Int64(Some(100_i64)), Int64(Some(200_i64)))?,
+                Interval::try_new(Int64(Some(300_i64)), Int64(None))?,
             ),
             (
                 Interval::try_new(Int64(Some(100_i64)), Int64(Some(200_i64)))?,
-                Interval::try_new(Int64(Some(200_i64)), Int64(None))?,
-                Interval::try_new(Int64(Some(300_i64)), Int64(None))?,
+                Interval::try_new(Int64(Some(-300_i64)), Int64(Some(150_i64)))?,
+                Interval::try_new(Int64(Some(-200_i64)), Int64(Some(350_i64)))?,
             ),
             (
                 Interval::try_new(Float64(Some(100_f64)), Float64(None))?,
@@ -2244,222 +2353,628 @@ mod tests {
                 Interval::try_new(Float64(None), Float64(None))?,
             ),
             (
-                Interval::try_new(Float32(Some(f32::MAX)), Float32(Some(f32::MAX)))?,
-                Interval::try_new(Float32(Some(11_f32)), Float32(Some(11_f32)))?,
-                Interval::try_new(Float32(None), Float32(None))?,
+                Interval::try_new(Float64(None), Float64(Some(100_f64)))?,
+                Interval::try_new(Float64(None), Float64(Some(200_f64)))?,
+                Interval::try_new(Float64(None), Float64(Some(300_f64)))?,
             ),
             (
-                Interval::try_new(Float32(None), Float32(Some(11_f32)))?,
-                Interval::try_new(Float32(Some(f32::MIN)), Float32(Some(0_f32)))?,
-                Interval::try_new(Float32(None), Float32(Some(11_f32)))?,
+                Interval::try_new(Float32(Some(f32::MAX)), Float32(Some(f32::MAX)))?,
+                Interval::try_new(Float32(Some(11_f32)), Float32(Some(11_f32)))?,
+                Interval::try_new(Float32(Some(f32::MAX)), Float32(None))?,
+            ),
+            (
+                Interval::try_new(Float32(Some(f32::MIN)), Float32(Some(f32::MIN)))?,
+                Interval::try_new(Float32(Some(-10_f32)), Float32(Some(10_f32)))?,
+                // Since rounding mode is up, the result would be much greater than f32::MIN
+                // (f32::MIN = -3.4_028_235e38, the result is -3.4_028_233e38)
+                Interval::try_new(
+                    Float32(None),
+                    Float32(Some(-340282330000000000000000000000000000000.0)),
+                )?,
+            ),
+            (
+                Interval::try_new(Float32(Some(f32::MIN)), Float32(Some(f32::MIN)))?,
+                Interval::try_new(Float32(Some(-10_f32)), Float32(Some(-10_f32)))?,
+                Interval::try_new(Float32(None), Float32(Some(f32::MIN)))?,
+            ),
+            (
+                Interval::try_new(Float32(Some(1.0)), Float32(Some(f32::MAX)))?,
+                Interval::try_new(Float32(Some(f32::MAX)), Float32(Some(f32::MAX)))?,
+                Interval::try_new(Float32(Some(f32::MAX)), Float32(None))?,
+            ),
+            (
+                Interval::try_new(Float32(Some(f32::MIN)), Float32(Some(f32::MIN)))?,
+                Interval::try_new(Float32(Some(f32::MAX)), Float32(Some(f32::MAX)))?,
+                Interval::try_new(Float32(Some(-0.0)), Float32(Some(0.0)))?,
             ),
         ];
         for case in cases {
             assert_eq!(case.0.add(case.1)?, case.2)
         }
+
         Ok(())
     }
 
-    // #[test]
-    // fn test_sub() -> Result<()> {
-    //     let cases = vec![
-    //         (
-    //             closed_closed(Some(100_i64), Some(200_i64)),
-    //             closed_open(Some(200_i64), None),
-    //             open_closed(None, Some(0_i64)),
-    //         ),
-    //         (
-    //             closed_open(Some(100_i64), Some(200_i64)),
-    //             open_closed(Some(300_i64), Some(150_i64)),
-    //             closed_open(Some(-50_i64), Some(-100_i64)),
-    //         ),
-    //         (
-    //             closed_open(Some(100_i64), Some(200_i64)),
-    //             open_open(Some(200_i64), None),
-    //             open_open(None, Some(0_i64)),
-    //         ),
-    //         (
-    //             closed_closed(Some(1_i64), Some(1_i64)),
-    //             closed_closed(Some(11_i64), Some(11_i64)),
-    //             closed_closed(Some(-10_i64), Some(-10_i64)),
-    //         ),
-    //     ];
-    //     for case in cases {
-    //         assert_eq!(case.0.sub(case.1)?, case.2)
-    //     }
-    //     Ok(())
-    // }
+    #[test]
+    fn test_sub() -> Result<()> {
+        use ScalarValue::*;
 
-    // #[test]
-    // fn test_mul() -> Result<()> {
-    //     let cases = vec![
-    //         (
-    //             closed_closed(Some(100_i64), Some(200_i64)),
-    //             closed_open(Some(200_i64), None),
-    //             open_closed(None, Some(0_i64)),
-    //         ),
-    //         (
-    //             closed_open(Some(100_i64), Some(200_i64)),
-    //             open_closed(Some(300_i64), Some(150_i64)),
-    //             closed_open(Some(-50_i64), Some(-100_i64)),
-    //         ),
-    //         (
-    //             closed_open(Some(100_i64), Some(200_i64)),
-    //             open_open(Some(200_i64), None),
-    //             open_open(None, Some(0_i64)),
-    //         ),
-    //         (
-    //             closed_closed(Some(1_i64), Some(1_i64)),
-    //             closed_closed(Some(11_i64), Some(11_i64)),
-    //             closed_closed(Some(-10_i64), Some(-10_i64)),
-    //         ),
-    //     ];
-    //     for case in cases {
-    //         assert_eq!(case.0.sub(case.1)?, case.2)
-    //     }
-    //     Ok(())
-    // }
+        let cases = vec![
+            (
+                Interval::try_new(Int64(Some(100_i64)), Int64(Some(200_i64)))?,
+                Interval::try_new(Int64(None), Int64(Some(200_i64)))?,
+                Interval::try_new(Int64(Some(-100_i64)), Int64(None))?,
+            ),
+            (
+                Interval::try_new(Int64(Some(100_i64)), Int64(Some(200_i64)))?,
+                Interval::try_new(Int64(Some(200_i64)), Int64(None))?,
+                Interval::try_new(Int64(None), Int64(Some(0)))?,
+            ),
+            (
+                Interval::try_new(Int64(None), Int64(Some(200_i64)))?,
+                Interval::try_new(Int64(Some(100_i64)), Int64(Some(200_i64)))?,
+                Interval::try_new(Int64(None), Int64(Some(100_i64)))?,
+            ),
+            (
+                Interval::try_new(Int64(Some(200_i64)), Int64(None))?,
+                Interval::try_new(Int64(Some(100_i64)), Int64(Some(200_i64)))?,
+                Interval::try_new(Int64(Some(0_i64)), Int64(None))?,
+            ),
+            (
+                Interval::try_new(Int64(Some(100_i64)), Int64(Some(200_i64)))?,
+                Interval::try_new(Int64(Some(-300_i64)), Int64(Some(150_i64)))?,
+                Interval::try_new(Int64(Some(-50_i64)), Int64(Some(500_i64)))?,
+            ),
+            (
+                Interval::try_new(Float64(Some(100_f64)), Float64(None))?,
+                Interval::try_new(Float64(None), Float64(Some(200_f64)))?,
+                Interval::try_new(Float64(Some(-100_f64)), Float64(None))?,
+            ),
+            (
+                Interval::try_new(Float64(None), Float64(Some(100_f64)))?,
+                Interval::try_new(Float64(None), Float64(Some(200_f64)))?,
+                Interval::try_new(Float64(None), Float64(None))?,
+            ),
+            (
+                Interval::try_new(Float32(Some(f32::MAX)), Float32(Some(f32::MAX)))?,
+                Interval::try_new(Float32(Some(11_f32)), Float32(Some(11_f32)))?,
+                // Since rounding mode is down, the result would be much smaller than f32::MAX
+                // (f32::MAX = 3.4_028_235e38, the result is 3.4_028_233e38)
+                Interval::try_new(
+                    Float32(Some(340282330000000000000000000000000000000.0)),
+                    Float32(Some(f32::MAX)),
+                )?,
+            ),
+            (
+                Interval::try_new(Float32(Some(f32::MIN)), Float32(Some(f32::MIN)))?,
+                Interval::try_new(Float32(Some(-10_f32)), Float32(Some(10_f32)))?,
+                Interval::try_new(
+                    Float32(None),
+                    Float32(Some(-340282330000000000000000000000000000000.0)),
+                )?,
+            ),
+            (
+                Interval::try_new(Float32(Some(f32::MIN)), Float32(Some(f32::MIN)))?,
+                Interval::try_new(Float32(Some(-10_f32)), Float32(Some(-10_f32)))?,
+                Interval::try_new(
+                    Float32(Some(f32::MIN)),
+                    Float32(Some(-340282330000000000000000000000000000000.0)),
+                )?,
+            ),
+            (
+                Interval::try_new(Float32(Some(1.0)), Float32(Some(f32::MAX)))?,
+                Interval::try_new(Float32(Some(f32::MAX)), Float32(Some(f32::MAX)))?,
+                Interval::try_new(Float32(Some(f32::MIN)), Float32(Some(0.0)))?,
+            ),
+            (
+                Interval::try_new(Float32(Some(f32::MIN)), Float32(Some(f32::MIN)))?,
+                Interval::try_new(Float32(Some(f32::MAX)), Float32(Some(f32::MAX)))?,
+                Interval::try_new(Float32(None), Float32(Some(f32::MIN)))?,
+            ),
+        ];
+        for case in cases {
+            assert_eq!(case.0.sub(case.1)?, case.2)
+        }
 
-    // #[test]
-    // fn test_div() -> Result<()> {
-    //     let cases = vec![
-    //         (
-    //             closed_closed(Some(100_i64), Some(200_i64)),
-    //             closed_open(Some(200_i64), None),
-    //             open_closed(None, Some(0_i64)),
-    //         ),
-    //         (
-    //             closed_open(Some(100_i64), Some(200_i64)),
-    //             open_closed(Some(300_i64), Some(150_i64)),
-    //             closed_open(Some(-50_i64), Some(-100_i64)),
-    //         ),
-    //         (
-    //             closed_open(Some(100_i64), Some(200_i64)),
-    //             open_open(Some(200_i64), None),
-    //             open_open(None, Some(0_i64)),
-    //         ),
-    //         (
-    //             closed_closed(Some(1_i64), Some(1_i64)),
-    //             closed_closed(Some(11_i64), Some(11_i64)),
-    //             closed_closed(Some(-10_i64), Some(-10_i64)),
-    //         ),
-    //     ];
-    //     for case in cases {
-    //         assert_eq!(case.0.sub(case.1)?, case.2)
-    //     }
-    //     Ok(())
-    // }
+        Ok(())
+    }
 
-    // #[test]
-    // fn test_cardinality_of_intervals() -> Result<()> {
-    //     // In IEEE 754 standard for floating-point arithmetic, if we keep the sign and exponent fields same,
-    //     // we can represent 4503599627370496 different numbers by changing the mantissa
-    //     // (4503599627370496 = 2^52, since there are 52 bits in mantissa, and 2^23 = 8388608 for f32).
-    //     let distinct_f64 = 4503599627370496;
-    //     let distinct_f32 = 8388608;
-    //     let intervals = [
-    //         Interval::try_new(
-    //             IntervalBound::new(ScalarValue::from(0.25), false),
-    //             IntervalBound::new(ScalarValue::from(0.50), true),
-    //         )?,
-    //         Interval::try_new(
-    //             IntervalBound::new(ScalarValue::from(0.5), false),
-    //             IntervalBound::new(ScalarValue::from(1.0), true),
-    //         )?,
-    //         Interval::try_new(
-    //             IntervalBound::new(ScalarValue::from(1.0), false),
-    //             IntervalBound::new(ScalarValue::from(2.0), true),
-    //         )?,
-    //         Interval::try_new(
-    //             IntervalBound::new(ScalarValue::from(32.0), false),
-    //             IntervalBound::new(ScalarValue::from(64.0), true),
-    //         )?,
-    //         Interval::try_new(
-    //             IntervalBound::new(ScalarValue::from(-0.50), false),
-    //             IntervalBound::new(ScalarValue::from(-0.25), true),
-    //         )?,
-    //         Interval::try_new(
-    //             IntervalBound::new(ScalarValue::from(-32.0), false),
-    //             IntervalBound::new(ScalarValue::from(-16.0), true),
-    //         )?,
-    //     ];
-    //     for interval in intervals {
-    //         assert_eq!(interval.cardinality()?.unwrap(), distinct_f64);
-    //     }
+    #[test]
+    fn test_mul() -> Result<()> {
+        use ScalarValue::*;
 
-    //     let intervals = [
-    //         Interval::try_new(
-    //             IntervalBound::new(ScalarValue::from(0.25_f32), false),
-    //             IntervalBound::new(ScalarValue::from(0.50_f32), true),
-    //         )?,
-    //         Interval::try_new(
-    //             IntervalBound::new(ScalarValue::from(-1_f32), false),
-    //             IntervalBound::new(ScalarValue::from(-0.5_f32), true),
-    //         )?,
-    //     ];
-    //     for interval in intervals {
-    //         assert_eq!(interval.cardinality()?.unwrap(), distinct_f32);
-    //     }
+        let cases = vec![
+            (
+                Interval::try_new(Int64(Some(1_i64)), Int64(Some(2_i64)))?,
+                Interval::try_new(Int64(None), Int64(Some(2_i64)))?,
+                Interval::try_new(Int64(None), Int64(Some(4_i64)))?,
+            ),
+            (
+                Interval::try_new(Int64(Some(1_i64)), Int64(Some(2_i64)))?,
+                Interval::try_new(Int64(Some(2_i64)), Int64(None))?,
+                Interval::try_new(Int64(Some(2_i64)), Int64(None))?,
+            ),
+            (
+                Interval::try_new(Int64(None), Int64(Some(2_i64)))?,
+                Interval::try_new(Int64(Some(1_i64)), Int64(Some(2_i64)))?,
+                Interval::try_new(Int64(None), Int64(Some(4_i64)))?,
+            ),
+            (
+                Interval::try_new(Int64(Some(2_i64)), Int64(None))?,
+                Interval::try_new(Int64(Some(1_i64)), Int64(Some(2_i64)))?,
+                Interval::try_new(Int64(Some(2_i64)), Int64(None))?,
+            ),
+            (
+                Interval::try_new(Int64(Some(1_i64)), Int64(Some(2_i64)))?,
+                Interval::try_new(Int64(Some(-3_i64)), Int64(Some(15_i64)))?,
+                Interval::try_new(Int64(Some(-6_i64)), Int64(Some(30_i64)))?,
+            ),
+            (
+                Interval::try_new(Float64(Some(1_f64)), Float64(None))?,
+                Interval::try_new(Float64(None), Float64(Some(2_f64)))?,
+                Interval::try_new(Float64(None), Float64(None))?,
+            ),
+            (
+                Interval::try_new(Float64(None), Float64(Some(1_f64)))?,
+                Interval::try_new(Float64(None), Float64(Some(2_f64)))?,
+                Interval::try_new(Float64(None), Float64(None))?,
+            ),
+            (
+                Interval::try_new(Float32(Some(f32::MAX)), Float32(Some(f32::MAX)))?,
+                Interval::try_new(Float32(Some(11_f32)), Float32(Some(11_f32)))?,
+                Interval::try_new(Float32(Some(f32::MAX)), Float32(None))?,
+            ),
+            (
+                Interval::try_new(Float32(Some(f32::MIN)), Float32(Some(f32::MIN)))?,
+                Interval::try_new(Float32(Some(-10_f32)), Float32(Some(10_f32)))?,
+                Interval::try_new(Float32(None), Float32(None))?,
+            ),
+            (
+                Interval::try_new(Float32(Some(f32::MIN)), Float32(Some(f32::MIN)))?,
+                Interval::try_new(Float32(Some(-10_f32)), Float32(Some(-10_f32)))?,
+                Interval::try_new(Float32(Some(f32::MAX)), Float32(None))?,
+            ),
+            (
+                Interval::try_new(Float32(Some(1.0)), Float32(Some(f32::MAX)))?,
+                Interval::try_new(Float32(Some(f32::MAX)), Float32(Some(f32::MAX)))?,
+                Interval::try_new(Float32(Some(f32::MAX)), Float32(None))?,
+            ),
+            (
+                Interval::try_new(Float32(Some(f32::MIN)), Float32(Some(f32::MIN)))?,
+                Interval::try_new(Float32(Some(f32::MAX)), Float32(Some(f32::MAX)))?,
+                Interval::try_new(Float32(None), Float32(Some(f32::MIN)))?,
+            ),
+        ];
+        for case in cases {
+            assert_eq!(case.0.mul(case.1)?, case.2)
+        }
 
-    //     // The regular logarithmic distribution of floating-point numbers are
-    //     // only applicable outside of the `(-phi, phi)` interval where `phi`
-    //     // denotes the largest positive subnormal floating-point number. Since
-    //     // the following intervals include such subnormal points, we cannot use
-    //     // a simple powers-of-two type formula for our expectations. Therefore,
-    //     // we manually supply the actual expected cardinality.
-    //     let interval = Interval::try_new(
-    //         IntervalBound::new(ScalarValue::from(-0.0625), false),
-    //         IntervalBound::new(ScalarValue::from(0.0625), true),
-    //     )?;
-    //     assert_eq!(interval.cardinality()?.unwrap(), 9178336040581070849);
+        Ok(())
+    }
 
-    //     let interval = Interval::try_new(
-    //         IntervalBound::new(ScalarValue::from(-0.0625_f32), false),
-    //         IntervalBound::new(ScalarValue::from(0.0625_f32), true),
-    //     )?;
-    //     assert_eq!(interval.cardinality()?.unwrap(), 2063597569);
+    #[test]
+    fn test_div() -> Result<()> {
+        use ScalarValue::*;
 
-    //     Ok(())
-    // }
+        let cases = vec![
+            (
+                Interval::try_new(Int64(Some(100_i64)), Int64(Some(200_i64)))?,
+                Interval::try_new(Int64(Some(1_i64)), Int64(Some(2_i64)))?,
+                Interval::try_new(Int64(Some(50_i64)), Int64(Some(200_i64)))?,
+            ),
+            (
+                Interval::try_new(Int64(Some(-200_i64)), Int64(Some(-100_i64)))?,
+                Interval::try_new(Int64(Some(-2_i64)), Int64(Some(-1_i64)))?,
+                Interval::try_new(Int64(Some(50_i64)), Int64(Some(200_i64)))?,
+            ),
+            (
+                Interval::try_new(Int64(Some(100_i64)), Int64(Some(200_i64)))?,
+                Interval::try_new(Int64(Some(-2_i64)), Int64(Some(-1_i64)))?,
+                Interval::try_new(Int64(Some(-200_i64)), Int64(Some(-50_i64)))?,
+            ),
+            (
+                Interval::try_new(Int64(Some(-200_i64)), Int64(Some(-100_i64)))?,
+                Interval::try_new(Int64(Some(1_i64)), Int64(Some(2_i64)))?,
+                Interval::try_new(Int64(Some(-200_i64)), Int64(Some(-50_i64)))?,
+            ),
+            (
+                Interval::try_new(Int64(Some(-200_i64)), Int64(Some(100_i64)))?,
+                Interval::try_new(Int64(Some(1_i64)), Int64(Some(2_i64)))?,
+                Interval::try_new(Int64(Some(-200_i64)), Int64(Some(100_i64)))?,
+            ),
+            (
+                Interval::try_new(Int64(Some(-100_i64)), Int64(Some(200_i64)))?,
+                Interval::try_new(Int64(Some(1_i64)), Int64(Some(2_i64)))?,
+                Interval::try_new(Int64(Some(-100_i64)), Int64(Some(200_i64)))?,
+            ),
+            (
+                Interval::try_new(Int64(Some(-100_i64)), Int64(Some(200_i64)))?,
+                Interval::try_new(Int64(Some(-1_i64)), Int64(Some(2_i64)))?,
+                Interval::try_new(Int64(None), Int64(None))?,
+            ),
+            (
+                Interval::try_new(Int64(Some(-100_i64)), Int64(Some(200_i64)))?,
+                Interval::try_new(Int64(Some(-2_i64)), Int64(Some(1_i64)))?,
+                Interval::try_new(Int64(None), Int64(None))?,
+            ),
+            (
+                Interval::try_new(Int64(Some(100_i64)), Int64(Some(200_i64)))?,
+                Interval::try_new(Int64(Some(0)), Int64(Some(1_i64)))?,
+                Interval::try_new(Int64(Some(100_i64)), Int64(None))?,
+            ),
+            (
+                Interval::try_new(Int64(Some(100_i64)), Int64(Some(200_i64)))?,
+                Interval::try_new(Int64(None), Int64(Some(0)))?,
+                Interval::try_new(Int64(None), Int64(Some(0)))?,
+            ),
+            (
+                Interval::try_new(Int64(Some(100_i64)), Int64(Some(200_i64)))?,
+                Interval::try_new(Int64(Some(0)), Int64(Some(0)))?,
+                Interval::try_new(Int64(None), Int64(None))?,
+            ),
+            (
+                Interval::try_new(Int64(Some(0)), Int64(Some(1_i64)))?,
+                Interval::try_new(Int64(Some(100_i64)), Int64(Some(200_i64)))?,
+                Interval::try_new(Int64(Some(0)), Int64(Some(0)))?,
+            ),
+            (
+                Interval::try_new(Int64(Some(0)), Int64(Some(1_i64)))?,
+                Interval::try_new(Int64(Some(100_i64)), Int64(Some(200_i64)))?,
+                Interval::try_new(Int64(Some(0)), Int64(Some(0)))?,
+            ),
+            (
+                Interval::try_new(Float32(Some(f32::MAX)), Float32(Some(f32::MAX)))?,
+                Interval::try_new(Float32(Some(-0.1)), Float32(Some(0.1)))?,
+                Interval::try_new(Float32(None), Float32(None))?,
+            ),
+            (
+                Interval::try_new(Float32(Some(f32::MIN)), Float32(None))?,
+                Interval::try_new(Float32(Some(0.1)), Float32(Some(0.1)))?,
+                Interval::try_new(Float32(None), Float32(None))?,
+            ),
+            (
+                Interval::try_new(Float32(Some(-10.0)), Float32(Some(10.0)))?,
+                Interval::try_new(Float32(Some(-0.1)), Float32(Some(-0.1)))?,
+                Interval::try_new(Float32(Some(-100.0)), Float32(Some(100.0)))?,
+            ),
+            (
+                Interval::try_new(Float32(Some(-10.0)), Float32(Some(f32::MAX)))?,
+                Interval::try_new(Float32(None), Float32(None))?,
+                Interval::try_new(Float32(None), Float32(None))?,
+            ),
+            (
+                Interval::try_new(Float32(Some(f32::MIN)), Float32(Some(10.0)))?,
+                Interval::try_new(Float32(Some(1.0)), Float32(None))?,
+                Interval::try_new(Float32(Some(f32::MIN)), Float32(Some(10.0)))?,
+            ),
+            (
+                Interval::try_new(Int64(Some(12)), Int64(Some(48)))?,
+                Interval::try_new(Int64(Some(10)), Int64(Some(20)))?,
+                Interval::try_new(Int64(Some(0)), Int64(Some(4)))?,
+            ),
+            (
+                Interval::try_new(Float32(Some(-4.0)), Float32(Some(2.0)))?,
+                Interval::try_new(Float32(Some(10.0)), Float32(Some(20.0)))?,
+                Interval::try_new(Float32(Some(-0.4)), Float32(Some(0.2)))?,
+            ),
+        ];
+        for case in cases {
+            assert_eq!(case.0.div(case.1)?, case.2)
+        }
 
-    // #[test]
-    // fn test_equalize_intervals() -> Result<()> {
-    //     Ok(())
-    // }
+        Ok(())
+    }
 
-    // #[test]
-    // fn test_satisfy_comparison() -> Result<()> {
-    //     let cases = vec![
-    //         (
-    //             closed_closed(None, Some(0_i32)),
-    //             closed_closed(Some(0_i32), None),
-    //             true,
-    //             true,
-    //             Some(vec![
-    //                 closed_closed(Some(0_i32), Some(0_i32)),
-    //                 closed_closed(Some(0_i32), Some(0_i32)),
-    //             ]),
-    //         ),
-    //         (
-    //             closed_closed(None, Some(0_i32)),
-    //             closed_closed(Some(0_i32), None),
-    //             true,
-    //             true,
-    //             Some(vec![
-    //                 closed_closed(Some(0_i32), Some(0_i32)),
-    //                 closed_closed(Some(0_i32), Some(0_i32)),
-    //             ]),
-    //         ),
-    //     ];
+    #[test]
+    fn test_cardinality_of_intervals() -> Result<()> {
+        // In IEEE 754 standard for floating-point arithmetic, if we keep the sign and exponent fields same,
+        // we can represent 4503599627370496+1 different numbers by changing the mantissa
+        // (4503599627370496 = 2^52, since there are 52 bits in mantissa, and 2^23 = 8388608 for f32).
+        let distinct_f64 = 4503599627370497;
+        let distinct_f32 = 8388609;
+        let intervals = [
+            Interval::try_new(ScalarValue::from(0.25), ScalarValue::from(0.50))?,
+            Interval::try_new(ScalarValue::from(0.5), ScalarValue::from(1.0))?,
+            Interval::try_new(ScalarValue::from(1.0), ScalarValue::from(2.0))?,
+            Interval::try_new(ScalarValue::from(32.0), ScalarValue::from(64.0))?,
+            Interval::try_new(ScalarValue::from(-0.50), ScalarValue::from(-0.25))?,
+            Interval::try_new(ScalarValue::from(-32.0), ScalarValue::from(-16.0))?,
+        ];
+        for interval in intervals {
+            assert_eq!(interval.cardinality().unwrap(), distinct_f64);
+        }
 
-    //     for (left, right, includes_endpoints, gt, expected) in cases {
-    //         assert_eq!(
-    //             satisfy_comparison(&left, &right, includes_endpoints, gt)?,
-    //             expected
-    //         );
-    //     }
-    //     Ok(())
-    // }
+        let intervals = [
+            Interval::try_new(ScalarValue::from(0.25_f32), ScalarValue::from(0.50_f32))?,
+            Interval::try_new(ScalarValue::from(-1_f32), ScalarValue::from(-0.5_f32))?,
+        ];
+        for interval in intervals {
+            assert_eq!(interval.cardinality().unwrap(), distinct_f32);
+        }
+
+        // The regular logarithmic distribution of floating-point numbers are
+        // only applicable outside of the `(-phi, phi)` interval where `phi`
+        // denotes the largest positive subnormal floating-point number. Since
+        // the following intervals include such subnormal points, we cannot use
+        // a simple powers-of-two type formula for our expectations. Therefore,
+        // we manually supply the actual expected cardinality.
+        let interval =
+            Interval::try_new(ScalarValue::from(-0.0625), ScalarValue::from(0.0625))?;
+        assert_eq!(interval.cardinality().unwrap(), 9178336040581070850);
+
+        let interval = Interval::try_new(
+            ScalarValue::from(-0.0625_f32),
+            ScalarValue::from(0.0625_f32),
+        )?;
+        assert_eq!(interval.cardinality().unwrap(), 2063597570);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_equalize_intervals() -> Result<()> {
+        use ScalarValue::*;
+        let cases = vec![
+            (
+                Interval::try_new(Int64(Some(1000_i64)), Int64(None))?,
+                Interval::try_new(Int64(None), Int64(Some(1000_i64)))?,
+                Interval::try_new(Int64(Some(1000_i64)), Int64(Some(1000_i64)))?,
+            ),
+            (
+                Interval::try_new(Int64(Some(1000_i64)), Int64(None))?,
+                Interval::try_new(Int64(None), Int64(Some(2000_i64)))?,
+                Interval::try_new(Int64(Some(1000_i64)), Int64(Some(2000_i64)))?,
+            ),
+            (
+                Interval::try_new(Int64(Some(1000_i64)), Int64(Some(2000_i64)))?,
+                Interval::try_new(Int64(Some(1000_i64)), Int64(None))?,
+                Interval::try_new(Int64(Some(1000_i64)), Int64(Some(2000_i64)))?,
+            ),
+            (
+                Interval::try_new(Float64(Some(1000.0)), Float64(None))?,
+                Interval::try_new(Float64(None), Float64(Some(1000.0)))?,
+                Interval::try_new(Float64(Some(1000.0)), Float64(Some(1000.0)))?,
+            ),
+            (
+                Interval::try_new(Float64(Some(1000.0)), Float64(Some(1500.0)))?,
+                Interval::try_new(Float64(Some(0.0)), Float64(Some(1500.0)))?,
+                Interval::try_new(Float64(Some(1000.0)), Float64(Some(1500.0)))?,
+            ),
+            (
+                Interval::try_new(Float64(Some(-1000.0)), Float64(Some(1500.0)))?,
+                Interval::try_new(Float64(Some(-1500.0)), Float64(Some(2000.0)))?,
+                Interval::try_new(Float64(Some(-1000.0)), Float64(Some(1500.0)))?,
+            ),
+            (
+                Interval::try_new(Float64(None), Float64(None))?,
+                Interval::try_new(Float64(None), Float64(None))?,
+                Interval::try_new(Float64(None), Float64(None))?,
+            ),
+        ];
+        for (first, second, result) in cases {
+            assert_eq!(
+                equalize_intervals(&first, &second)?.unwrap(),
+                vec![result.clone(), result.clone()]
+            );
+            assert_eq!(
+                equalize_intervals(&second, &first)?.unwrap(),
+                vec![result.clone(), result]
+            );
+        }
+
+        let non_equitable_cases = vec![
+            (
+                Interval::try_new(Int64(Some(1000_i64)), Int64(None))?,
+                Interval::try_new(Int64(None), Int64(Some(999_i64)))?,
+            ),
+            (
+                Interval::try_new(Int64(Some(0_i64)), Int64(Some(1000_i64)))?,
+                Interval::try_new(Int64(Some(2000_i64)), Int64(Some(3000_i64)))?,
+            ),
+        ];
+        for (first, second) in non_equitable_cases {
+            assert_eq!(equalize_intervals(&first, &second)?, None);
+            assert_eq!(equalize_intervals(&second, &first)?, None);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_satisfy_comparison() -> Result<()> {
+        use ScalarValue::*;
+        let cases = vec![
+            (
+                Interval::try_new(Int64(Some(1000_i64)), Int64(None))?,
+                Interval::try_new(Int64(None), Int64(Some(1000_i64)))?,
+                true,
+                true,
+                Interval::try_new(Int64(Some(1000_i64)), Int64(None))?,
+                Interval::try_new(Int64(None), Int64(Some(1000_i64)))?,
+            ),
+            (
+                Interval::try_new(Int64(Some(1000_i64)), Int64(None))?,
+                Interval::try_new(Int64(None), Int64(Some(1000_i64)))?,
+                true,
+                false,
+                Interval::try_new(Int64(Some(1000_i64)), Int64(Some(1000_i64)))?,
+                Interval::try_new(Int64(Some(1000_i64)), Int64(Some(1000_i64)))?,
+            ),
+            (
+                Interval::try_new(Int64(Some(1000_i64)), Int64(None))?,
+                Interval::try_new(Int64(None), Int64(Some(1000_i64)))?,
+                false,
+                true,
+                Interval::try_new(Int64(Some(1000_i64)), Int64(None))?,
+                Interval::try_new(Int64(None), Int64(Some(1000_i64)))?,
+            ),
+            (
+                Interval::try_new(Int64(Some(0_i64)), Int64(Some(1000_i64)))?,
+                Interval::try_new(Int64(Some(500_i64)), Int64(Some(1500_i64)))?,
+                true,
+                true,
+                Interval::try_new(Int64(Some(500_i64)), Int64(Some(1000_i64)))?,
+                Interval::try_new(Int64(Some(500_i64)), Int64(Some(1000_i64)))?,
+            ),
+            (
+                Interval::try_new(Int64(Some(0_i64)), Int64(Some(1000_i64)))?,
+                Interval::try_new(Int64(Some(500_i64)), Int64(Some(1500_i64)))?,
+                true,
+                false,
+                Interval::try_new(Int64(Some(0_i64)), Int64(Some(1000_i64)))?,
+                Interval::try_new(Int64(Some(500_i64)), Int64(Some(1500_i64)))?,
+            ),
+            (
+                Interval::try_new(Int64(Some(0_i64)), Int64(Some(1000_i64)))?,
+                Interval::try_new(Int64(Some(500_i64)), Int64(Some(1500_i64)))?,
+                false,
+                true,
+                Interval::try_new(Int64(Some(501_i64)), Int64(Some(1000_i64)))?,
+                Interval::try_new(Int64(Some(500_i64)), Int64(Some(999_i64)))?,
+            ),
+            (
+                Interval::try_new(Int64(Some(0_i64)), Int64(Some(1000_i64)))?,
+                Interval::try_new(Int64(Some(500_i64)), Int64(Some(1500_i64)))?,
+                false,
+                false,
+                Interval::try_new(Int64(Some(0_i64)), Int64(Some(1000_i64)))?,
+                Interval::try_new(Int64(Some(500_i64)), Int64(Some(1500_i64)))?,
+            ),
+            (
+                Interval::try_new(Int64(None), Int64(None))?,
+                Interval::try_new(Int64(Some(1_i64)), Int64(Some(1_i64)))?,
+                false,
+                true,
+                Interval::try_new(Int64(Some(2_i64)), Int64(None))?,
+                Interval::try_new(Int64(Some(1_i64)), Int64(Some(1_i64)))?,
+            ),
+            (
+                Interval::try_new(Int64(None), Int64(None))?,
+                Interval::try_new(Int64(Some(1_i64)), Int64(Some(1_i64)))?,
+                true,
+                true,
+                Interval::try_new(Int64(Some(1_i64)), Int64(None))?,
+                Interval::try_new(Int64(Some(1_i64)), Int64(Some(1_i64)))?,
+            ),
+            (
+                Interval::try_new(Int64(Some(1_i64)), Int64(Some(1_i64)))?,
+                Interval::try_new(Int64(None), Int64(None))?,
+                false,
+                true,
+                Interval::try_new(Int64(Some(1_i64)), Int64(Some(1_i64)))?,
+                Interval::try_new(Int64(None), Int64(Some(0_i64)))?,
+            ),
+            (
+                Interval::try_new(Int64(Some(1_i64)), Int64(Some(1_i64)))?,
+                Interval::try_new(Int64(None), Int64(None))?,
+                true,
+                true,
+                Interval::try_new(Int64(Some(1_i64)), Int64(Some(1_i64)))?,
+                Interval::try_new(Int64(None), Int64(Some(1_i64)))?,
+            ),
+            (
+                Interval::try_new(Int64(None), Int64(None))?,
+                Interval::try_new(Int64(Some(1_i64)), Int64(Some(1_i64)))?,
+                false,
+                false,
+                Interval::try_new(Int64(None), Int64(Some(0_i64)))?,
+                Interval::try_new(Int64(Some(1_i64)), Int64(Some(1_i64)))?,
+            ),
+            (
+                Interval::try_new(Int64(None), Int64(None))?,
+                Interval::try_new(Int64(Some(1_i64)), Int64(Some(1_i64)))?,
+                true,
+                false,
+                Interval::try_new(Int64(None), Int64(Some(1_i64)))?,
+                Interval::try_new(Int64(Some(1_i64)), Int64(Some(1_i64)))?,
+            ),
+            (
+                Interval::try_new(Int64(Some(1_i64)), Int64(Some(1_i64)))?,
+                Interval::try_new(Int64(None), Int64(None))?,
+                false,
+                false,
+                Interval::try_new(Int64(Some(1_i64)), Int64(Some(1_i64)))?,
+                Interval::try_new(Int64(Some(2_i64)), Int64(None))?,
+            ),
+            (
+                Interval::try_new(Int64(Some(1_i64)), Int64(Some(1_i64)))?,
+                Interval::try_new(Int64(None), Int64(None))?,
+                true,
+                false,
+                Interval::try_new(Int64(Some(1_i64)), Int64(Some(1_i64)))?,
+                Interval::try_new(Int64(Some(1_i64)), Int64(None))?,
+            ),
+            (
+                Interval::try_new(Float64(Some(-1000.0)), Float64(Some(1000.0)))?,
+                Interval::try_new(Float64(Some(-500.0)), Float64(Some(500.0)))?,
+                true,
+                true,
+                Interval::try_new(Float64(Some(-500.0)), Float64(Some(1000.0)))?,
+                Interval::try_new(Float64(Some(-500.0)), Float64(Some(500.0)))?,
+            ),
+            (
+                Interval::try_new(Float64(Some(-1000.0)), Float64(Some(1000.0)))?,
+                Interval::try_new(Float64(Some(-500.0)), Float64(Some(500.0)))?,
+                false,
+                true,
+                Interval::try_new(
+                    next_value(Float64(Some(-500.0))),
+                    Float64(Some(1000.0)),
+                )?,
+                Interval::try_new(Float64(Some(-500.0)), Float64(Some(500.0)))?,
+            ),
+            (
+                Interval::try_new(Float64(Some(-1000.0)), Float64(Some(1000.0)))?,
+                Interval::try_new(Float64(Some(-500.0)), Float64(Some(500.0)))?,
+                true,
+                false,
+                Interval::try_new(Float64(Some(-1000.0)), Float64(Some(500.0)))?,
+                Interval::try_new(Float64(Some(-500.0)), Float64(Some(500.0)))?,
+            ),
+            (
+                Interval::try_new(Float64(Some(-1000.0)), Float64(Some(1000.0)))?,
+                Interval::try_new(Float64(Some(-500.0)), Float64(Some(500.0)))?,
+                false,
+                false,
+                Interval::try_new(
+                    Float64(Some(-1000.0)),
+                    prev_value(Float64(Some(500.0))),
+                )?,
+                Interval::try_new(Float64(Some(-500.0)), Float64(Some(500.0)))?,
+            ),
+        ];
+        for (first, second, includes_endpoints, op_gt, left_modified, right_modified) in
+            cases
+        {
+            assert_eq!(
+                satisfy_comparison(&first, &second, includes_endpoints, op_gt)?.unwrap(),
+                vec![left_modified, right_modified]
+            );
+        }
+
+        let infeasible_cases = vec![
+            (
+                Interval::try_new(Int64(Some(1000_i64)), Int64(None))?,
+                Interval::try_new(Int64(None), Int64(Some(1000_i64)))?,
+                false,
+                false,
+            ),
+            (
+                Interval::try_new(Float64(Some(-1000.0)), Float64(Some(1000.0)))?,
+                Interval::try_new(Float64(Some(1500.0)), Float64(Some(2000.0)))?,
+                false,
+                true,
+            ),
+        ];
+        for (first, second, includes_endpoints, op_gt) in infeasible_cases {
+            assert_eq!(
+                satisfy_comparison(&first, &second, includes_endpoints, op_gt)?,
+                None
+            );
+        }
+
+        Ok(())
+    }
 
     #[test]
     fn test_interval_display() {
@@ -2473,7 +2988,7 @@ mod tests {
             ScalarValue::Float32(Some(f32::INFINITY)),
         )
         .unwrap();
-        assert_eq!(format!("{}", interval), "[NULL NULL]");
+        assert_eq!(format!("{}", interval), "[NULL, NULL]");
     }
 
     macro_rules! capture_mode_change {

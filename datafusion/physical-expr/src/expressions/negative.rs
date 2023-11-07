@@ -108,7 +108,10 @@ impl PhysicalExpr for NegativeExpr {
     /// It replaces the upper and lower bounds after multiplying them with -1.
     /// Ex: `(a, b]` => `[-b, -a)`
     fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
-        Interval::try_new(children[0].upper().negate()?, children[0].lower().negate()?)
+        Interval::try_new(
+            children[0].upper().arithmetic_negate()?,
+            children[0].lower().arithmetic_negate()?,
+        )
     }
 
     /// Returns a new [`Interval`] of a NegativeExpr  that has the existing `interval` given that
@@ -119,8 +122,10 @@ impl PhysicalExpr for NegativeExpr {
         children: &[&Interval],
     ) -> Result<Option<Vec<Interval>>> {
         let child_interval = children[0];
-        let negated_interval =
-            Interval::try_new(interval.upper().negate()?, interval.lower().negate()?)?;
+        let negated_interval = Interval::try_new(
+            interval.upper().arithmetic_negate()?,
+            interval.lower().arithmetic_negate()?,
+        )?;
 
         Ok(child_interval
             .intersect(negated_interval)?
@@ -171,6 +176,7 @@ mod tests {
     use arrow::array::*;
     use arrow::datatypes::*;
     use arrow_schema::DataType::{Float32, Float64, Int16, Int32, Int64, Int8};
+    use datafusion_common::ScalarValue;
     use datafusion_common::{cast::as_primitive_array, Result};
     use paste::paste;
 
@@ -215,8 +221,14 @@ mod tests {
         let negative_expr = NegativeExpr {
             arg: Arc::new(Column::new("a", 0)),
         };
-        let child_interval = Interval::make(Some(-2), Some(1), (true, false))?;
-        let negative_expr_interval = Interval::make(Some(-1), Some(2), (false, true))?;
+        let child_interval = Interval::try_new(
+            ScalarValue::try_from(Some(-2)).unwrap(),
+            ScalarValue::try_from(Some(1)).unwrap(),
+        )?;
+        let negative_expr_interval = Interval::try_new(
+            ScalarValue::try_from(Some(-1)).unwrap(),
+            ScalarValue::try_from(Some(2)).unwrap(),
+        )?;
         assert_eq!(
             negative_expr.evaluate_bounds(&[&child_interval])?,
             negative_expr_interval
@@ -229,10 +241,14 @@ mod tests {
         let negative_expr = NegativeExpr {
             arg: Arc::new(Column::new("a", 0)),
         };
-        let original_child_interval = Interval::make(Some(-2), Some(3), (false, false))?;
-        let negative_expr_interval = Interval::make(Some(0), Some(4), (true, false))?;
-        let after_propagation =
-            Some(vec![Interval::make(Some(-2), Some(0), (false, true))?]);
+        let original_child_interval =
+            Interval::try_new(ScalarValue::Int32(Some(-2)), ScalarValue::Int32(Some(3)))?;
+        let negative_expr_interval =
+            Interval::try_new(ScalarValue::Int32(Some(0)), ScalarValue::Int32(Some(4)))?;
+        let after_propagation = Some(vec![Interval::try_new(
+            ScalarValue::Int32(Some(-2)),
+            ScalarValue::Int32(Some(0)),
+        )?]);
         assert_eq!(
             negative_expr.propagate_constraints(
                 &negative_expr_interval,
