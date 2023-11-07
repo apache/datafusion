@@ -429,6 +429,10 @@ impl EquivalenceGroup {
         mapping: &ProjectionMapping,
         expr: &Arc<dyn PhysicalExpr>,
     ) -> Option<Arc<dyn PhysicalExpr>> {
+        // In the first pass, try to project expressions with exact match.
+        // Consider the case where equivalence class contains `a=b` and projection is `a as a1, b as b1`.
+        // In the first pass, we project `a=b` as `a1=b1`. If we were to combine below passes after projection
+        // result would be `a1=a1` (Since a=b, we can project b as a1 also.). However, second version contains no information.
         for (source, target) in mapping.iter() {
             // If we match the source, we can project. For example, if we have the mapping
             // (a as a1, a + c) `a` projects to `a1`, and `binary_expr(a+b)` projects to `col(a+b)`.
@@ -436,6 +440,7 @@ impl EquivalenceGroup {
                 return Some(target.clone());
             }
         }
+        // In the second pass, try to project expressions considering their equivalence classes.
         for (source, target) in mapping.iter() {
             // If we match an equivalent expression to source,
             // then we can project. For example, if we have the mapping
