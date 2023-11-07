@@ -116,13 +116,13 @@ impl AggregateFunction {
             ArrayAgg => "ARRAY_AGG",
             FirstValue => "FIRST_VALUE",
             LastValue => "LAST_VALUE",
-            Variance => "VARIANCE",
-            VariancePop => "VARIANCE_POP",
+            Variance => "VAR",
+            VariancePop => "VAR_POP",
             Stddev => "STDDEV",
             StddevPop => "STDDEV_POP",
-            Covariance => "COVARIANCE",
-            CovariancePop => "COVARIANCE_POP",
-            Correlation => "CORRELATION",
+            Covariance => "COVAR",
+            CovariancePop => "COVAR_POP",
+            Correlation => "CORR",
             RegrSlope => "REGR_SLOPE",
             RegrIntercept => "REGR_INTERCEPT",
             RegrCount => "REGR_COUNT",
@@ -408,6 +408,26 @@ impl AggregateFunction {
                     .collect(),
                 Volatility::Immutable,
             ),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use strum::IntoEnumIterator;
+
+    #[test]
+    // Test for AggregateFuncion's name() and from_str() implementations.
+    // For each variant in AggregateFuncion, it converts the variant's name
+    // back to a variant. The test asserts that the original variant and
+    // the reconstructed variant are the same.
+    fn test_name_and_from_str() {
+        for func_original in AggregateFunction::iter() {
+            let func_name = func_original.name();
+            let func_from_str =
+                AggregateFunction::from_str(func_name.to_lowercase().as_str()).unwrap();
+            assert_eq!(func_from_str, func_original);
         }
     }
 }
