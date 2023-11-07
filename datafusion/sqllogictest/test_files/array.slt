@@ -1121,24 +1121,50 @@ select array_prepend(make_array(1, 11, 111), column1), array_prepend(column2, ma
 ## array_repeat (aliases: `list_repeat`)
 
 # array_repeat scalar function #1
-query ???
-select array_repeat(1, 5), array_repeat(3.14, 3), array_repeat('l', 4);
+query ????????
+select 
+  array_repeat(1, 5),
+  array_repeat(3.14, 3),
+  array_repeat('l', 4),
+  array_repeat(null, 2),
+  list_repeat(-1, 5),
+  list_repeat(-3.14, 0),
+  list_repeat('rust', 4),
+  list_repeat(null, 0);
 ----
-[1, 1, 1, 1, 1] [3.14, 3.14, 3.14] [l, l, l, l]
+[1, 1, 1, 1, 1] [3.14, 3.14, 3.14] [l, l, l, l] [, ] [-1, -1, -1, -1, -1] [] [rust, rust, rust, rust] []
 
 # array_repeat scalar function #2 (element as list)
-query ???
-select array_repeat([1], 5), array_repeat([1.1, 2.2, 3.3], 3), array_repeat([[1, 2], [3, 4]], 2);
+query ????
+select
+  array_repeat([1], 5),
+  array_repeat([1.1, 2.2, 3.3], 3),
+  array_repeat([null, null], 3),
+  array_repeat([[1, 2], [3, 4]], 2);
 ----
-[[1], [1], [1], [1], [1]] [[1.1, 2.2, 3.3], [1.1, 2.2, 3.3], [1.1, 2.2, 3.3]] [[[1, 2], [3, 4]], [[1, 2], [3, 4]]]
-
-# list_repeat scalar function #3 (function alias: `array_repeat`)
-query ???
-select list_repeat(1, 5), list_repeat(3.14, 3), list_repeat('l', 4);
-----
-[1, 1, 1, 1, 1] [3.14, 3.14, 3.14] [l, l, l, l]
+[[1], [1], [1], [1], [1]] [[1.1, 2.2, 3.3], [1.1, 2.2, 3.3], [1.1, 2.2, 3.3]] [[, ], [, ], [, ]] [[[1, 2], [3, 4]], [[1, 2], [3, 4]]]
 
 # array_repeat with columns #1
+
+statement ok
+CREATE TABLE array_repeat_table
+AS VALUES
+  (1, 1),
+  (null, 2),
+  (2, 3),
+  (3, 0);
+
+query ?
+select array_repeat(column1, column2) from array_repeat_table;
+----
+[1]
+[, ]
+[2, 2, 2]
+[]
+
+statement ok
+drop table array_repeat_table; 
+
 query ?
 select array_repeat(column4, column1) from values_without_nulls;
 ----
