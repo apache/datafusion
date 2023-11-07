@@ -870,6 +870,18 @@ pub fn array_repeat(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
+/// For each element of `array[i]` repeat `count_array[i]` times.
+///
+/// Assumption for the input:
+///     1. `count[i] >= 0`
+///     2. `array.len() == count_array.len()`
+/// 
+/// For example, 
+/// ```text
+/// array_repeat(
+///     [1, 2, 3], [2, 0, 1] => [[1, 1], [], [3]]
+/// )
+/// ```
 fn general_repeat(array: &ArrayRef, count_array: &Int64Array) -> Result<ArrayRef> {
     let data_type = array.data_type();
     let mut new_values = vec![];
@@ -911,6 +923,16 @@ fn general_repeat(array: &ArrayRef, count_array: &Int64Array) -> Result<ArrayRef
     )?))
 }
 
+/// Handle List version of `general_repeat`
+/// 
+/// For each element of `list_array[i]` repeat `count_array[i]` times.
+///
+/// For example, 
+/// ```text
+/// array_repeat(
+///     [[1, 2, 3], [4, 5], [6]], [2, 0, 1] => [[[1, 2, 3], [1, 2, 3]], [], [[6]]]
+/// )
+/// ```
 fn general_list_repeat(
     list_array: &ListArray,
     count_array: &Int64Array,
