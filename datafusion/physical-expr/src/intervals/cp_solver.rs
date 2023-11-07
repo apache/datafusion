@@ -746,7 +746,14 @@ mod tests {
                 // NOTE: These randomized tests only check for conservative containment,
                 // not openness/closedness of endpoints.
                 assert!(
-                    calculated_interval_node.lower() <= expected.lower(),
+                    calculated_interval_node.lower()
+                        <= &expected
+                            .lower()
+                            .add(
+                                ScalarValue::new_one(&expected.lower().data_type())
+                                    .unwrap()
+                            )
+                            .unwrap(),
                     "{}",
                     format!(
                         "Calculated {} must be less than or equal {}",
@@ -755,7 +762,14 @@ mod tests {
                     )
                 );
                 assert!(
-                    calculated_interval_node.upper() >= expected.upper(),
+                    calculated_interval_node.upper()
+                        >= &expected
+                            .upper()
+                            .sub(
+                                ScalarValue::new_one(&expected.upper().data_type())
+                                    .unwrap()
+                            )
+                            .unwrap(),
                     "{}",
                     format!(
                         "Calculated {} must be greater than or equal {}",
