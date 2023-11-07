@@ -35,6 +35,8 @@ use arrow::array::{
 use arrow::compute;
 use arrow::datatypes::{Field, Schema, SchemaBuilder};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
+use arrow_array::{ArrowPrimitiveType, NativeAdapter, PrimitiveArray};
+use arrow_buffer::ArrowNativeType;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
@@ -920,17 +922,20 @@ pub(crate) fn append_right_indices(
     }
 }
 
-/// Get unmatched and deduplicated indices for specified range of indices
-pub(crate) fn get_anti_indices(
+/// Returns `range` indices which are not present in `input_indices`
+pub(crate) fn get_anti_indices<T: ArrowPrimitiveType>(
     range: Range<usize>,
-    input_indices: &UInt32Array,
-) -> UInt32Array {
+    input_indices: &PrimitiveArray<T>,
+) -> PrimitiveArray<T>
+where
+    NativeAdapter<T>: From<<T as ArrowPrimitiveType>::Native>,
+{
     let mut bitmap = BooleanBufferBuilder::new(range.len());
     bitmap.append_n(range.len(), false);
     input_indices
         .iter()
         .flatten()
-        .map(|v| v as usize)
+        .map(|v| v.as_usize())
         .filter(|v| range.contains(v))
         .for_each(|v| {
             bitmap.set_bit(v - range.start, true);
@@ -940,45 +945,26 @@ pub(crate) fn get_anti_indices(
 
     // get the anti index
     (range)
-        .filter_map(|idx| (!bitmap.get_bit(idx - offset)).then_some(idx as u32))
-        .collect::<UInt32Array>()
+        .filter_map(|idx| {
+            (!bitmap.get_bit(idx - offset)).then_some(T::Native::from_usize(idx))
+        })
+        .collect::<PrimitiveArray<T>>()
 }
 
-/// Get unmatched and deduplicated indices
-pub(crate) fn get_anti_u64_indices(
+/// Returns intersection of `range` and `input_indices` omitting duplicates
+pub(crate) fn get_semi_indices<T: ArrowPrimitiveType>(
     range: Range<usize>,
-    input_indices: &UInt64Array,
-) -> UInt64Array {
+    input_indices: &PrimitiveArray<T>,
+) -> PrimitiveArray<T>
+where
+    NativeAdapter<T>: From<<T as ArrowPrimitiveType>::Native>,
+{
     let mut bitmap = BooleanBufferBuilder::new(range.len());
     bitmap.append_n(range.len(), false);
     input_indices
         .iter()
         .flatten()
-        .map(|v| v as usize)
-        .filter(|v| range.contains(v))
-        .for_each(|v| {
-            bitmap.set_bit(v - range.start, true);
-        });
-
-    let offset = range.start;
-
-    // get the anti index
-    (range)
-        .filter_map(|idx| (!bitmap.get_bit(idx - offset)).then_some(idx as u64))
-        .collect::<UInt64Array>()
-}
-
-/// Get matched and deduplicated indices for specified range of indices
-pub(crate) fn get_semi_indices(
-    range: Range<usize>,
-    input_indices: &UInt32Array,
-) -> UInt32Array {
-    let mut bitmap = BooleanBufferBuilder::new(range.len());
-    bitmap.append_n(range.len(), false);
-    input_indices
-        .iter()
-        .flatten()
-        .map(|v| v as usize)
+        .map(|v| v.as_usize())
         .filter(|v| range.contains(v))
         .for_each(|v| {
             bitmap.set_bit(v - range.start, true);
@@ -988,32 +974,10 @@ pub(crate) fn get_semi_indices(
 
     // get the semi index
     (range)
-        .filter_map(|idx| (bitmap.get_bit(idx - offset)).then_some(idx as u32))
-        .collect::<UInt32Array>()
-}
-
-/// Get matched and deduplicated indices
-pub(crate) fn get_semi_u64_indices(
-    range: Range<usize>,
-    input_indices: &UInt64Array,
-) -> UInt64Array {
-    let mut bitmap = BooleanBufferBuilder::new(range.len());
-    bitmap.append_n(range.len(), false);
-    input_indices
-        .iter()
-        .flatten()
-        .map(|v| v as usize)
-        .filter(|v| range.contains(v))
-        .for_each(|v| {
-            bitmap.set_bit(v - range.start, true);
-        });
-
-    let offset = range.start;
-
-    // get the semi index
-    (range)
-        .filter_map(|idx| (bitmap.get_bit(idx - offset)).then_some(idx as u64))
-        .collect::<UInt64Array>()
+        .filter_map(|idx| {
+            (bitmap.get_bit(idx - offset)).then_some(T::Native::from_usize(idx))
+        })
+        .collect::<PrimitiveArray<T>>()
 }
 
 /// Metrics for build & probe joins

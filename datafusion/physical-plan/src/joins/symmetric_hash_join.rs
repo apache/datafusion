@@ -33,7 +33,9 @@ use std::vec;
 use std::{any::Any, usize};
 
 use crate::common::SharedMemoryReservation;
-use crate::joins::hash_join::{build_equal_condition_join_indices, update_hash};
+use crate::joins::hash_join::{
+    build_equal_condition_join_indices, update_hash, HashJoinOutputState,
+};
 use crate::joins::hash_join_utils::{
     calculate_filter_expr_intervals, combine_two_batches,
     convert_sort_expr_with_filter_schema, get_pruning_anti_indices,
@@ -71,8 +73,6 @@ use futures::stream::{select, BoxStream};
 use futures::{Stream, StreamExt};
 use hashbrown::HashSet;
 use parking_lot::Mutex;
-
-use super::hash_join::HashJoinStreamState;
 
 const HASHMAP_SHRINK_SCALE_FACTOR: usize = 4;
 
@@ -553,7 +553,7 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             null_equals_null: self.null_equals_null,
             final_result: false,
             reservation,
-            state: HashJoinStreamState::default(),
+            output_state: HashJoinOutputState::default(),
         }))
     }
 }
@@ -591,7 +591,7 @@ struct SymmetricHashJoinStream {
     /// Flag indicating whether there is nothing to process anymore
     final_result: bool,
     /// Stream state for compatibility with HashJoinExec
-    state: HashJoinStreamState,
+    output_state: HashJoinOutputState,
 }
 
 impl RecordBatchStream for SymmetricHashJoinStream {
@@ -820,7 +820,7 @@ pub(crate) fn join_with_probe_batch(
     column_indices: &[ColumnIndex],
     random_state: &RandomState,
     null_equals_null: bool,
-    hash_join_stream_state: &mut HashJoinStreamState,
+    output_state: &mut HashJoinOutputState,
 ) -> Result<Option<RecordBatch>> {
     if build_hash_joiner.input_buffer.num_rows() == 0 || probe_batch.num_rows() == 0 {
         return Ok(None);
@@ -838,11 +838,11 @@ pub(crate) fn join_with_probe_batch(
         build_hash_joiner.build_side,
         Some(build_hash_joiner.deleted_offset),
         usize::MAX,
-        hash_join_stream_state,
+        output_state,
     )?;
 
     // Resetting state to avoid potential overflows
-    hash_join_stream_state.reset_state();
+    output_state.reset_state();
 
     if need_to_produce_result_in_final(build_hash_joiner.build_side, join_type) {
         record_visited_indices(
@@ -1110,7 +1110,7 @@ impl SymmetricHashJoinStream {
                         &self.column_indices,
                         &self.random_state,
                         self.null_equals_null,
-                        &mut self.state,
+                        &mut self.output_state,
                     )?;
                     // Increment the offset for the probe hash joiner:
                     probe_hash_joiner.offset += probe_batch.num_rows();

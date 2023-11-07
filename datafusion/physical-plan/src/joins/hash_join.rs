@@ -593,7 +593,7 @@ impl ExecutionPlan for HashJoinExec {
             reservation,
             batch_size,
             probe_batch: None,
-            state: HashJoinStreamState::default(),
+            output_state: HashJoinOutputState::default(),
         }))
     }
 
@@ -756,20 +756,20 @@ where
 // State for storing left/right side indices used for partial batch output
 // & producing ranges for adjusting indices
 #[derive(Debug, Default)]
-pub(crate) struct HashJoinStreamState {
+pub(crate) struct HashJoinOutputState {
     // total rows in current probe batch
     probe_rows: usize,
     // saved probe-build indices to resume matching from
     last_matched_indices: Option<(usize, usize)>,
     // current iteration has been updated
     matched_indices_updated: bool,
-    // tracking last joined probe side index seen for further indices adjustment
+    // last probe side index, joined during current iteration
     last_joined_probe_index: Option<usize>,
-    // tracking last joined probe side index seen for further indices adjustment
+    // last probe side index, joined during previous iteration
     prev_joined_probe_index: Option<usize>,
 }
 
-impl HashJoinStreamState {
+impl HashJoinOutputState {
     // set total probe rows to process
     pub(crate) fn set_probe_rows(&mut self, probe_rows: usize) {
         self.probe_rows = probe_rows;
@@ -882,7 +882,7 @@ struct HashJoinStream {
     /// (cross-join due to key duplication on build side) `HashJoinStream` saves its state
     /// and emits result batch to upstream operator.
     /// On next poll these indices are used to skip already matched rows and adjusted probe-side indices.
-    state: HashJoinStreamState,
+    output_state: HashJoinOutputState,
 }
 
 impl RecordBatchStream for HashJoinStream {
@@ -936,7 +936,7 @@ pub(crate) fn build_equal_condition_join_indices<T: JoinHashMapType>(
     build_side: JoinSide,
     deleted_offset: Option<usize>,
     output_limit: usize,
-    state: &mut HashJoinStreamState,
+    state: &mut HashJoinOutputState,
 ) -> Result<(UInt64Array, UInt32Array)> {
     let keys_values = probe_on
         .iter()
@@ -1177,16 +1177,15 @@ impl HashJoinStream {
 
         // Fetch next probe batch
         if self.probe_batch.is_none() {
-            match self.right.poll_next_unpin(cx) {
-                Poll::Ready(Some(Ok(batch))) => {
-                    self.state.set_probe_rows(batch.num_rows());
+            match ready!(self.right.poll_next_unpin(cx)) {
+                Some(Ok(batch)) => {
+                    self.output_state.set_probe_rows(batch.num_rows());
                     self.probe_batch = Some(batch);
                 }
-                Poll::Ready(None) => {
+                None => {
                     self.probe_batch = None;
                 }
-                Poll::Ready(Some(err)) => return Poll::Ready(Some(err)),
-                Poll::Pending => return Poll::Pending,
+                Some(err) => return Poll::Ready(Some(err)),
             }
         }
 
@@ -1211,7 +1210,7 @@ impl HashJoinStream {
                     JoinSide::Left,
                     None,
                     self.batch_size,
-                    &mut self.state,
+                    &mut self.output_state,
                 );
 
                 let result = match left_right_indices {
@@ -1229,7 +1228,7 @@ impl HashJoinStream {
                         let (left_side, right_side) = adjust_indices_by_join_type(
                             left_side,
                             right_side,
-                            self.state.adjust_range(),
+                            self.output_state.adjust_range(),
                             self.join_type,
                         );
 
@@ -1245,9 +1244,9 @@ impl HashJoinStream {
                         self.join_metrics.output_batches.add(1);
                         self.join_metrics.output_rows.add(batch.num_rows());
 
-                        if self.state.is_completed() {
+                        if self.output_state.is_completed() {
                             self.probe_batch = None;
-                            self.state.reset_state();
+                            self.output_state.reset_state();
                         }
 
                         Some(result)
@@ -2732,7 +2731,7 @@ mod tests {
             JoinSide::Left,
             None,
             64,
-            &mut HashJoinStreamState::default(),
+            &mut HashJoinOutputState::default(),
         )?;
 
         let mut left_ids = UInt64Builder::with_capacity(0);
