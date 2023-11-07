@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`AggregrateUDF`]: User Defined Aggregate Functions
+//! [`AggregateUDF`]: User Defined Aggregate Functions
 
 use crate::{Accumulator, Expr};
 use crate::{
