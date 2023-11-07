@@ -108,6 +108,11 @@ impl ScalarFunctionExpr {
     pub fn return_type(&self) -> &DataType {
         &self.return_type
     }
+
+    /// Monotonicity information of the function
+    pub fn monotonicity(&self) -> &Option<FuncMonotonicity> {
+        &self.monotonicity
+    }
 }
 
 impl fmt::Display for ScalarFunctionExpr {

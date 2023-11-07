@@ -46,7 +46,7 @@ use futures::stream::{Stream, StreamExt};
 use log::trace;
 
 /// Execution plan for a projection
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ProjectionExec {
     /// The projection expressions stored as tuples of (expression, output column name)
     pub(crate) expr: Vec<(Arc<dyn PhysicalExpr>, String)>,

@@ -218,9 +218,8 @@ Dml: op=[Insert Into] table=[table_without_values]
 ------TableScan: aggregate_test_100 projection=[c1]
 physical_plan
 InsertExec: sink=MemoryTable (partitions=1)
---ProjectionExec: expr=[c1@0 as c1]
-----SortExec: expr=[c1@0 ASC NULLS LAST]
-------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1], has_header=true
+--SortExec: expr=[c1@0 ASC NULLS LAST]
+----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1], has_header=true
 
 query T
 insert into table_without_values select c1 from aggregate_test_100 order by c1;
