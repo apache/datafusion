@@ -934,7 +934,7 @@ pub fn general_list_repeat(
             .copied()
             .ok_or_else(|| internal_datafusion_err!("offsets should not be empty"))?;
 
-        match list_array_row {
+        let list_arr = match list_array_row {
             Some(list_array_row) => {
                 let original_data = list_array_row.to_data();
                 let capacity = Capacities::Array(original_data.len() * count);
@@ -957,17 +957,24 @@ pub fn general_list_repeat(
                     repeated_array,
                     None,
                 )?;
-                let list_arr = Arc::new(list_arr) as ArrayRef;
-
-                offsets.push(last_offset + list_arr.len() as i32);
-                new_values.push(list_arr);
+                Arc::new(list_arr) as ArrayRef
             }
             None => {
                 // Null element results in a null row (no new offsets)
-                offsets.push(last_offset);
+                let repeated_array = new_null_array(&value_type, count);
+                let list_arr = ListArray::try_new(
+                    Arc::new(Field::new("item", value_type.clone(), true)),
+                    OffsetBuffer::from_lengths(vec![count]),
+                    repeated_array,
+                    None,
+                )?;
+                Arc::new(list_arr) as ArrayRef
             }
-        }
+        };
+        offsets.push(last_offset + list_arr.len() as i32);
+        new_values.push(list_arr);
     }
+    
     let values = if new_values.is_empty() {
         new_empty_array(data_type)
     } else {
@@ -979,7 +986,7 @@ pub fn general_list_repeat(
         Arc::new(Field::new("item", data_type.to_owned(), true)),
         OffsetBuffer::new(offsets.into()),
         values,
-        list_array.nulls().cloned(),
+        None,
     )?))
 }
 

@@ -1149,66 +1149,28 @@ select
 statement ok
 CREATE TABLE array_repeat_table
 AS VALUES
-  (1, 1),
-  (null, 2),
-  (2, 3),
-  (3, 0);
+  (1, 1, 1.1, 'a', make_array(4, 5, 6)),
+  (2, null, null, null, null),
+  (3, 2, 2.2, 'rust', make_array(7)),
+  (0, 3, 3.3, 'datafusion', make_array(8, 9));
 
-query ?
-select array_repeat(column1, column2) from array_repeat_table;
+query ??????
+select 
+  array_repeat(column2, column1),
+  array_repeat(column3, column1),
+  array_repeat(column4, column1),
+  array_repeat(column5, column1),
+  array_repeat(column2, 3),
+  array_repeat(make_array(1), column1)
+from array_repeat_table;
 ----
-[1]
-[, ]
-[2, 2, 2]
-[]
+[1] [1.1] [a] [[4, 5, 6]] [1, 1, 1] [[1]]
+[, ] [, ] [, ] [[, ]] [, , ] [[1], [1]]
+[2, 2, 2] [2.2, 2.2, 2.2] [rust, rust, rust] [[7], [7], [7]] [2, 2, 2] [[1], [1], [1]]
+[] [] [] [] [3, 3, 3] []
 
 statement ok
 drop table array_repeat_table; 
-
-query ?
-select array_repeat(column4, column1) from values_without_nulls;
-----
-[1.1]
-[2.2, 2.2]
-[3.3, 3.3, 3.3]
-[4.4, 4.4, 4.4, 4.4]
-[5.5, 5.5, 5.5, 5.5, 5.5]
-[6.6, 6.6, 6.6, 6.6, 6.6, 6.6]
-[7.7, 7.7, 7.7, 7.7, 7.7, 7.7, 7.7]
-[8.8, 8.8, 8.8, 8.8, 8.8, 8.8, 8.8, 8.8]
-[9.9, 9.9, 9.9, 9.9, 9.9, 9.9, 9.9, 9.9, 9.9]
-
-# array_repeat with columns #2 (element as list)
-query ?
-select array_repeat(column1, column3) from arrays_values_without_nulls;
-----
-[[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]]
-[[11, 12, 13, 14, 15, 16, 17, 18, 19, 20], [11, 12, 13, 14, 15, 16, 17, 18, 19, 20]]
-[[21, 22, 23, 24, 25, 26, 27, 28, 29, 30], [21, 22, 23, 24, 25, 26, 27, 28, 29, 30], [21, 22, 23, 24, 25, 26, 27, 28, 29, 30]]
-[[31, 32, 33, 34, 35, 26, 37, 38, 39, 40], [31, 32, 33, 34, 35, 26, 37, 38, 39, 40], [31, 32, 33, 34, 35, 26, 37, 38, 39, 40], [31, 32, 33, 34, 35, 26, 37, 38, 39, 40]]
-
-# array_repeat with columns and scalars #1
-query ??
-select array_repeat(1, column1), array_repeat(column4, 3) from values_without_nulls;
-----
-[1] [1.1, 1.1, 1.1]
-[1, 1] [2.2, 2.2, 2.2]
-[1, 1, 1] [3.3, 3.3, 3.3]
-[1, 1, 1, 1] [4.4, 4.4, 4.4]
-[1, 1, 1, 1, 1] [5.5, 5.5, 5.5]
-[1, 1, 1, 1, 1, 1] [6.6, 6.6, 6.6]
-[1, 1, 1, 1, 1, 1, 1] [7.7, 7.7, 7.7]
-[1, 1, 1, 1, 1, 1, 1, 1] [8.8, 8.8, 8.8]
-[1, 1, 1, 1, 1, 1, 1, 1, 1] [9.9, 9.9, 9.9]
-
-# array_repeat with columns and scalars #2 (element as list)
-query ??
-select array_repeat([1], column3), array_repeat(column1, 3) from arrays_values_without_nulls;
-----
-[[1]] [[1, 2, 3, 4, 5, 6, 7, 8, 9, 10], [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]]
-[[1], [1]] [[11, 12, 13, 14, 15, 16, 17, 18, 19, 20], [11, 12, 13, 14, 15, 16, 17, 18, 19, 20], [11, 12, 13, 14, 15, 16, 17, 18, 19, 20]]
-[[1], [1], [1]] [[21, 22, 23, 24, 25, 26, 27, 28, 29, 30], [21, 22, 23, 24, 25, 26, 27, 28, 29, 30], [21, 22, 23, 24, 25, 26, 27, 28, 29, 30]]
-[[1], [1], [1], [1]] [[31, 32, 33, 34, 35, 26, 37, 38, 39, 40], [31, 32, 33, 34, 35, 26, 37, 38, 39, 40], [31, 32, 33, 34, 35, 26, 37, 38, 39, 40]]
 
 ## array_concat (aliases: `array_cat`, `list_concat`, `list_cat`)
 
