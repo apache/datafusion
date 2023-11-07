@@ -41,9 +41,7 @@ use crate::physical_plan::{
 use arrow::csv;
 use arrow::datatypes::SchemaRef;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{
-    ordering_equivalence_properties_helper, LexOrdering, OrderingEquivalenceProperties,
-};
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
 use bytes::{Buf, Bytes};
 use datafusion_common::config::ConfigOptions;
@@ -159,8 +157,8 @@ impl ExecutionPlan for CsvExec {
             .map(|ordering| ordering.as_slice())
     }
 
-    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        ordering_equivalence_properties_helper(
+    fn equivalence_properties(&self) -> EquivalenceProperties {
+        EquivalenceProperties::new_with_orderings(
             self.schema(),
             &self.projected_output_ordering,
         )

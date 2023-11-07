@@ -74,7 +74,7 @@ fn is_single_distinct_agg(plan: &LogicalPlan) -> Result<bool> {
                         distinct_count += 1;
                     }
                     for e in args {
-                        fields_set.insert(e.display_name()?);
+                        fields_set.insert(e.canonical_name());
                     }
                 }
             }

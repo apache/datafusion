@@ -18,7 +18,7 @@
 [package]
 name = "datafusion-cli"
 description = "Command Line Client for DataFusion query engine."
-version = "32.0.0"
+version = "33.0.0"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
 edition = "2021"
 keywords = ["arrow", "datafusion", "query", "sql"]
@@ -34,7 +34,7 @@ async-trait = "0.1.41"
 aws-config = "0.55"
 aws-credential-types = "0.55"
 clap = { version = "3", features = ["derive", "cargo"] }
-datafusion = { path = "../datafusion/core", version = "32.0.0", features = ["avro", "crypto_expressions", "encoding_expressions", "parquet", "regex_expressions", "unicode_expressions", "compression"] }
+datafusion = { path = "../datafusion/core", version = "33.0.0", features = ["avro", "crypto_expressions", "encoding_expressions", "parquet", "regex_expressions", "unicode_expressions", "compression"] }
 dirs = "4.0.0"
 env_logger = "0.9"
 mimalloc = { version = "0.1", default-features = false }
@@ -55,5 +55,6 @@ rstest = "0.17"
 arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "ffeda62fc9d6a182c1bf3b3212e676f74fc196df" }
 arrow-array = { git = "https://github.com/apache/arrow-rs.git", rev = "ffeda62fc9d6a182c1bf3b3212e676f74fc196df" }
 arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "ffeda62fc9d6a182c1bf3b3212e676f74fc196df" }
+arrow-ord = { git = "https://github.com/apache/arrow-rs.git", rev = "ffeda62fc9d6a182c1bf3b3212e676f74fc196df" }
 arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "ffeda62fc9d6a182c1bf3b3212e676f74fc196df" }
 parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "ffeda62fc9d6a182c1bf3b3212e676f74fc196df" }
