@@ -38,7 +38,7 @@ datafusion = { path = "../datafusion/core", version = "32.0.0", features = ["avr
 dirs = "4.0.0"
 env_logger = "0.9"
 mimalloc = { version = "0.1", default-features = false }
-object_store = { version = "0.7.0", features = ["aws", "gcp"] }
+object_store = { version = "0.8.0", features = ["aws", "gcp"] }
 parking_lot = { version = "0.12" }
 regex = "1.8"
 rustyline = "11.0"
@@ -52,4 +52,8 @@ predicates = "3.0"
 rstest = "0.17"
 
 [patch.crates-io]
-object_store = { git = "https://github.com/apache/arrow-rs.git", rev = "ab53d2dd5fb2af2bab69f95a6ddae2226c166500" }
+arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "ffeda62fc9d6a182c1bf3b3212e676f74fc196df" }
+arrow-array = { git = "https://github.com/apache/arrow-rs.git", rev = "ffeda62fc9d6a182c1bf3b3212e676f74fc196df" }
+arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "ffeda62fc9d6a182c1bf3b3212e676f74fc196df" }
+arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "ffeda62fc9d6a182c1bf3b3212e676f74fc196df" }
+parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "ffeda62fc9d6a182c1bf3b3212e676f74fc196df" }

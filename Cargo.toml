@@ -78,7 +78,7 @@ indexmap = "2.0.0"
 itertools = "0.11"
 log = "^0.4"
 num_cpus = "1.13.0"
-object_store = "0.7.0"
+object_store = "0.8.0"
 parking_lot = "0.12"
 parquet = { version = "48.0.0", features = ["arrow", "async", "object_store"] }
 rand = "0.8"
@@ -110,4 +110,9 @@ rpath = false
 
 
 [patch.crates-io]
-object_store = { git = "https://github.com/apache/arrow-rs.git", rev = "ab53d2dd5fb2af2bab69f95a6ddae2226c166500" }
+arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "ffeda62fc9d6a182c1bf3b3212e676f74fc196df" }
+arrow-array = { git = "https://github.com/apache/arrow-rs.git", rev = "ffeda62fc9d6a182c1bf3b3212e676f74fc196df" }
+arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "ffeda62fc9d6a182c1bf3b3212e676f74fc196df" }
+arrow-flight = { git = "https://github.com/apache/arrow-rs.git", rev = "ffeda62fc9d6a182c1bf3b3212e676f74fc196df" }
+arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "ffeda62fc9d6a182c1bf3b3212e676f74fc196df" }
+parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "ffeda62fc9d6a182c1bf3b3212e676f74fc196df" }
