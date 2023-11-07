@@ -29,9 +29,10 @@ use arrow_buffer::NullBuffer;
 use datafusion_common::cast::{
     as_generic_string_array, as_int64_array, as_list_array, as_string_array,
 };
-use datafusion_common::utils::wrap_into_list_array;
+use datafusion_common::utils::array_into_list_array;
 use datafusion_common::{
-    exec_err, internal_err, not_impl_err, plan_err, DataFusionError, Result,
+    exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err,
+    DataFusionError, Result,
 };
 
 use itertools::Itertools;
@@ -412,7 +413,7 @@ pub fn make_array(arrays: &[ArrayRef]) -> Result<ArrayRef> {
         // Either an empty array or all nulls:
         DataType::Null => {
             let array = new_null_array(&DataType::Null, arrays.len());
-            Ok(Arc::new(wrap_into_list_array(array)))
+            Ok(Arc::new(array_into_list_array(array)))
         }
         data_type => array_array(arrays, data_type),
     }
@@ -725,35 +726,31 @@ pub fn array_prepend(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 fn align_array_dimensions(args: Vec<ArrayRef>) -> Result<Vec<ArrayRef>> {
-    // Find the maximum number of dimensions
-    let max_ndim: u64 = (*args
+    let args_ndim = args
         .iter()
-        .map(|arr| compute_array_ndims(Some(arr.clone())))
-        .collect::<Result<Vec<Option<u64>>>>()?
-        .iter()
-        .max()
-        .unwrap())
-    .unwrap();
+        .map(|arg| compute_array_ndims(Some(arg.to_owned())))
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .map(|x| x.unwrap_or(0))
+        .collect::<Vec<_>>();
+    let max_ndim = args_ndim.iter().max().unwrap_or(&0);
 
     // Align the dimensions of the arrays
     let aligned_args: Result<Vec<ArrayRef>> = args
         .into_iter()
-        .map(|array| {
-            let ndim = compute_array_ndims(Some(array.clone()))?.unwrap();
+        .zip(args_ndim.iter())
+        .map(|(array, ndim)| {
             if ndim < max_ndim {
                 let mut aligned_array = array.clone();
                 for _ in 0..(max_ndim - ndim) {
-                    let data_type = aligned_array.as_ref().data_type().clone();
-                    let offsets: Vec<i32> =
-                        (0..downcast_arg!(aligned_array, ListArray).offsets().len())
-                            .map(|i| i as i32)
-                            .collect();
-                    let field = Arc::new(Field::new("item", data_type, true));
+                    let data_type = aligned_array.data_type().to_owned();
+                    let array_lengths = vec![1; aligned_array.len()];
+                    let offsets = OffsetBuffer::<i32>::from_lengths(array_lengths);
 
                     aligned_array = Arc::new(ListArray::try_new(
-                        field,
-                        OffsetBuffer::new(offsets.into()),
-                        Arc::new(aligned_array.clone()),
+                        Arc::new(Field::new("item", data_type, true)),
+                        offsets,
+                        aligned_array,
                         None,
                     )?)
                 }
@@ -811,7 +808,7 @@ fn concat_internal(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
     }
     // Assume all arrays have the same data type
-    let data_type = list_arrays[0].value_type().clone();
+    let data_type = list_arrays[0].value_type();
     let buffer = valid.finish();
 
     let elements = arrays
@@ -1225,216 +1222,120 @@ array_removement_function!(
     "Array_remove_all SQL function"
 );
 
-macro_rules! general_replace {
-    ($ARRAY:expr, $FROM:expr, $TO:expr, $MAX:expr, $ARRAY_TYPE:ident) => {{
-        let mut offsets: Vec<i32> = vec![0];
-        let mut values =
-            downcast_arg!(new_empty_array($FROM.data_type()), $ARRAY_TYPE).clone();
+fn general_replace(args: &[ArrayRef], arr_n: Vec<i64>) -> Result<ArrayRef> {
+    let list_array = as_list_array(&args[0])?;
+    let from_array = &args[1];
+    let to_array = &args[2];
 
-        let from_array = downcast_arg!($FROM, $ARRAY_TYPE);
-        let to_array = downcast_arg!($TO, $ARRAY_TYPE);
-        for (((arr, from), to), max) in $ARRAY
-            .iter()
-            .zip(from_array.iter())
-            .zip(to_array.iter())
-            .zip($MAX.iter())
-        {
-            let last_offset: i32 = offsets.last().copied().ok_or_else(|| {
-                DataFusionError::Internal(format!("offsets should not be empty"))
-            })?;
-            match arr {
-                Some(arr) => {
-                    let child_array = downcast_arg!(arr, $ARRAY_TYPE);
-                    let mut counter = 0;
-                    let max = if max < Some(1) { 1 } else { max.unwrap() };
+    let mut offsets: Vec<i32> = vec![0];
+    let data_type = list_array.value_type();
+    let mut values = new_empty_array(&data_type);
 
-                    let replaced_array = child_array
-                        .iter()
-                        .map(|el| {
-                            if counter != max && el == from {
-                                counter += 1;
-                                to
+    for (row_index, (arr, n)) in list_array.iter().zip(arr_n.iter()).enumerate() {
+        let last_offset: i32 = offsets
+            .last()
+            .copied()
+            .ok_or_else(|| internal_datafusion_err!("offsets should not be empty"))?;
+        match arr {
+            Some(arr) => {
+                let indices = UInt32Array::from(vec![row_index as u32]);
+                let from_arr = arrow::compute::take(from_array, &indices, None)?;
+
+                let eq_array = match from_arr.data_type() {
+                    // arrow_ord::cmp_eq does not support ListArray, so we need to compare it by loop
+                    DataType::List(_) => {
+                        let from_a = as_list_array(&from_arr)?.value(0);
+                        let list_arr = as_list_array(&arr)?;
+
+                        let mut bool_values = vec![];
+                        for arr in list_arr.iter() {
+                            if let Some(a) = arr {
+                                bool_values.push(Some(a.eq(&from_a)));
                             } else {
-                                el
+                                return internal_err!(
+                                    "Null value is not supported in array_replace"
+                                );
                             }
-                        })
-                        .collect::<$ARRAY_TYPE>();
+                        }
+                        BooleanArray::from(bool_values)
+                    }
+                    _ => {
+                        let from_arr = Scalar::new(from_arr);
+                        arrow_ord::cmp::eq(&arr, &from_arr)?
+                    }
+                };
 
-                    values = downcast_arg!(
-                        compute::concat(&[&values, &replaced_array])?.clone(),
-                        $ARRAY_TYPE
-                    )
-                    .clone();
-                    offsets.push(last_offset + replaced_array.len() as i32);
+                // Use MutableArrayData to build the replaced array
+                // First array is the original array, second array is the element to replace with.
+                let arrays = vec![arr, to_array.clone()];
+                let arrays_data = arrays
+                    .iter()
+                    .map(|a| a.to_data())
+                    .collect::<Vec<ArrayData>>();
+                let arrays_data = arrays_data.iter().collect::<Vec<&ArrayData>>();
+
+                let arrays = arrays
+                    .iter()
+                    .map(|arr| arr.as_ref())
+                    .collect::<Vec<&dyn Array>>();
+                let capacity = Capacities::Array(arrays.iter().map(|a| a.len()).sum());
+
+                let mut mutable =
+                    MutableArrayData::with_capacities(arrays_data, false, capacity);
+
+                let mut counter = 0;
+                for (i, to_replace) in eq_array.iter().enumerate() {
+                    if let Some(to_replace) = to_replace {
+                        if to_replace {
+                            mutable.extend(1, row_index, row_index + 1);
+                            counter += 1;
+                            if counter == *n {
+                                // extend the rest of the array
+                                mutable.extend(0, i + 1, eq_array.len());
+                                break;
+                            }
+                        } else {
+                            mutable.extend(0, i, i + 1);
+                        }
+                    } else {
+                        return internal_err!("eq_array should not contain None");
+                    }
                 }
-                None => {
-                    offsets.push(last_offset);
-                }
+
+                let data = mutable.freeze();
+                let replaced_array = arrow_array::make_array(data);
+
+                let v = arrow::compute::concat(&[&values, &replaced_array])?;
+                values = v;
+                offsets.push(last_offset + replaced_array.len() as i32);
+            }
+            None => {
+                offsets.push(last_offset);
             }
         }
+    }
 
-        let field = Arc::new(Field::new("item", $FROM.data_type().clone(), true));
-
-        Arc::new(ListArray::try_new(
-            field,
-            OffsetBuffer::new(offsets.into()),
-            Arc::new(values),
-            None,
-        )?)
-    }};
+    Ok(Arc::new(ListArray::try_new(
+        Arc::new(Field::new("item", data_type, true)),
+        OffsetBuffer::new(offsets.into()),
+        values,
+        None,
+    )?))
 }
 
-macro_rules! general_replace_list {
-    ($ARRAY:expr, $FROM:expr, $TO:expr, $MAX:expr, $ARRAY_TYPE:ident) => {{
-        let mut offsets: Vec<i32> = vec![0];
-        let mut values =
-            downcast_arg!(new_empty_array($FROM.data_type()), ListArray).clone();
-
-        let from_array = downcast_arg!($FROM, ListArray);
-        let to_array = downcast_arg!($TO, ListArray);
-        for (((arr, from), to), max) in $ARRAY
-            .iter()
-            .zip(from_array.iter())
-            .zip(to_array.iter())
-            .zip($MAX.iter())
-        {
-            let last_offset: i32 = offsets.last().copied().ok_or_else(|| {
-                DataFusionError::Internal(format!("offsets should not be empty"))
-            })?;
-            match arr {
-                Some(arr) => {
-                    let child_array = downcast_arg!(arr, ListArray);
-                    let mut counter = 0;
-                    let max = if max < Some(1) { 1 } else { max.unwrap() };
-
-                    let replaced_vec = child_array
-                        .iter()
-                        .map(|el| {
-                            if counter != max && el == from {
-                                counter += 1;
-                                to.clone().unwrap()
-                            } else {
-                                el.clone().unwrap()
-                            }
-                        })
-                        .collect::<Vec<_>>();
-
-                    let mut i: i32 = 0;
-                    let mut replaced_offsets = vec![i];
-                    replaced_offsets.extend(
-                        replaced_vec
-                            .clone()
-                            .into_iter()
-                            .map(|a| {
-                                i += a.len() as i32;
-                                i
-                            })
-                            .collect::<Vec<_>>(),
-                    );
-
-                    let mut replaced_values = downcast_arg!(
-                        new_empty_array(&from_array.value_type()),
-                        $ARRAY_TYPE
-                    )
-                    .clone();
-                    for replaced_list in replaced_vec {
-                        replaced_values = downcast_arg!(
-                            compute::concat(&[&replaced_values, &replaced_list])?,
-                            $ARRAY_TYPE
-                        )
-                        .clone();
-                    }
-
-                    let field = Arc::new(Field::new(
-                        "item",
-                        from_array.value_type().clone(),
-                        true,
-                    ));
-                    let replaced_array = ListArray::try_new(
-                        field,
-                        OffsetBuffer::new(replaced_offsets.clone().into()),
-                        Arc::new(replaced_values),
-                        None,
-                    )?;
-
-                    values = downcast_arg!(
-                        compute::concat(&[&values, &replaced_array,])?.clone(),
-                        ListArray
-                    )
-                    .clone();
-                    offsets.push(last_offset + replaced_array.len() as i32);
-                }
-                None => {
-                    offsets.push(last_offset);
-                }
-            }
-        }
-
-        let field = Arc::new(Field::new("item", $FROM.data_type().clone(), true));
-
-        Arc::new(ListArray::try_new(
-            field,
-            OffsetBuffer::new(offsets.into()),
-            Arc::new(values),
-            None,
-        )?)
-    }};
+pub fn array_replace(args: &[ArrayRef]) -> Result<ArrayRef> {
+    general_replace(args, vec![1; args[0].len()])
 }
 
-macro_rules! array_replacement_function {
-    ($FUNC:ident, $MAX_FUNC:expr, $DOC:expr) => {
-        #[doc = $DOC]
-        pub fn $FUNC(args: &[ArrayRef]) -> Result<ArrayRef> {
-            let arr = as_list_array(&args[0])?;
-            let from = &args[1];
-            let to = &args[2];
-            let max = $MAX_FUNC(args)?;
-
-            check_datatypes(stringify!($FUNC), &[arr.values(), from, to])?;
-            let res = match arr.value_type() {
-                DataType::List(field) => {
-                    macro_rules! array_function {
-                        ($ARRAY_TYPE:ident) => {
-                            general_replace_list!(arr, from, to, max, $ARRAY_TYPE)
-                        };
-                    }
-                    call_array_function!(field.data_type(), true)
-                }
-                data_type => {
-                    macro_rules! array_function {
-                        ($ARRAY_TYPE:ident) => {
-                            general_replace!(arr, from, to, max, $ARRAY_TYPE)
-                        };
-                    }
-                    call_array_function!(data_type, false)
-                }
-            };
-
-            Ok(res)
-        }
-    };
+pub fn array_replace_n(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let arr = as_int64_array(&args[3])?;
+    let arr_n = arr.values().to_vec();
+    general_replace(args, arr_n)
 }
 
-fn replace_one(args: &[ArrayRef]) -> Result<Int64Array> {
-    Ok(Int64Array::from_value(1, args[0].len()))
+pub fn array_replace_all(args: &[ArrayRef]) -> Result<ArrayRef> {
+    general_replace(args, vec![i64::MAX; args[0].len()])
 }
-
-fn replace_n(args: &[ArrayRef]) -> Result<Int64Array> {
-    as_int64_array(&args[3]).cloned()
-}
-
-fn replace_all(args: &[ArrayRef]) -> Result<Int64Array> {
-    Ok(Int64Array::from_value(i64::MAX, args[0].len()))
-}
-
-// array replacement functions
-array_replacement_function!(array_replace, replace_one, "Array_replace SQL function");
-array_replacement_function!(array_replace_n, replace_n, "Array_replace_n SQL function");
-array_replacement_function!(
-    array_replace_all,
-    replace_all,
-    "Array_replace_all SQL function"
-);
 
 macro_rules! to_string {
     ($ARG:expr, $ARRAY:expr, $DELIMITER:expr, $NULL_STRING:expr, $WITH_NULL_STRING:expr, $ARRAY_TYPE:ident) => {{
@@ -1922,6 +1823,47 @@ mod tests {
     use super::*;
     use arrow::datatypes::Int64Type;
     use datafusion_common::cast::as_uint64_array;
+
+    #[test]
+    fn test_align_array_dimensions() {
+        let array1d_1 =
+            Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+                Some(vec![Some(1), Some(2), Some(3)]),
+                Some(vec![Some(4), Some(5)]),
+            ]));
+        let array1d_2 =
+            Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+                Some(vec![Some(6), Some(7), Some(8)]),
+            ]));
+
+        let array2d_1 = Arc::new(array_into_list_array(array1d_1.clone())) as ArrayRef;
+        let array2d_2 = Arc::new(array_into_list_array(array1d_2.clone())) as ArrayRef;
+
+        let res =
+            align_array_dimensions(vec![array1d_1.to_owned(), array2d_2.to_owned()])
+                .unwrap();
+
+        let expected = as_list_array(&array2d_1).unwrap();
+        let expected_dim = compute_array_ndims(Some(array2d_1.to_owned())).unwrap();
+        assert_ne!(as_list_array(&res[0]).unwrap(), expected);
+        assert_eq!(
+            compute_array_ndims(Some(res[0].clone())).unwrap(),
+            expected_dim
+        );
+
+        let array3d_1 = Arc::new(array_into_list_array(array2d_1)) as ArrayRef;
+        let array3d_2 = array_into_list_array(array2d_2.to_owned());
+        let res =
+            align_array_dimensions(vec![array1d_1, Arc::new(array3d_2.clone())]).unwrap();
+
+        let expected = as_list_array(&array3d_1).unwrap();
+        let expected_dim = compute_array_ndims(Some(array3d_1.to_owned())).unwrap();
+        assert_ne!(as_list_array(&res[0]).unwrap(), expected);
+        assert_eq!(
+            compute_array_ndims(Some(res[0].clone())).unwrap(),
+            expected_dim
+        );
+    }
 
     #[test]
     fn test_array() {

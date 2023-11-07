@@ -17,10 +17,10 @@
   under the License.
 -->
 
-# DataFusion Physical Expressions
+# DataFusion Common
 
 [DataFusion][df] is an extensible query execution framework, written in Rust, that uses Apache Arrow as its in-memory format.
 
-This crate is a submodule of DataFusion that provides data types and utilities for physical expressions.
+This crate is a submodule of DataFusion that provides execution runtime such as the memory pools and disk manager.
 
 [df]: https://crates.io/crates/datafusion

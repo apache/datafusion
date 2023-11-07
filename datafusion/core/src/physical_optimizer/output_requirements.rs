@@ -33,7 +33,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Result, Statistics};
 use datafusion_physical_expr::{
-    Distribution, LexOrderingReq, PhysicalSortExpr, PhysicalSortRequirement,
+    Distribution, LexRequirement, PhysicalSortExpr, PhysicalSortRequirement,
 };
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 
@@ -90,14 +90,14 @@ enum RuleMode {
 #[derive(Debug)]
 struct OutputRequirementExec {
     input: Arc<dyn ExecutionPlan>,
-    order_requirement: Option<LexOrderingReq>,
+    order_requirement: Option<LexRequirement>,
     dist_requirement: Distribution,
 }
 
 impl OutputRequirementExec {
     fn new(
         input: Arc<dyn ExecutionPlan>,
-        requirements: Option<LexOrderingReq>,
+        requirements: Option<LexRequirement>,
         dist_requirement: Distribution,
     ) -> Self {
         Self {

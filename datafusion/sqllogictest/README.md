@@ -17,19 +17,26 @@
   under the License.
 -->
 
-#### Overview
+# DataFusion sqllogictest
 
-This is the Datafusion implementation of [sqllogictest](https://www.sqlite.org/sqllogictest/doc/trunk/about.wiki). We
-use [sqllogictest-rs](https://github.com/risinglightdb/sqllogictest-rs) as a parser/runner of `.slt` files
-in [`test_files`](test_files).
+[DataFusion][df] is an extensible query execution framework, written in Rust, that uses Apache Arrow as its in-memory format.
 
-#### Testing setup
+This crate is a submodule of DataFusion that contains an implementation of [sqllogictest](https://www.sqlite.org/sqllogictest/doc/trunk/about.wiki).
+
+[df]: https://crates.io/crates/datafusion
+
+## Overview
+
+This crate uses [sqllogictest-rs](https://github.com/risinglightdb/sqllogictest-rs) to parse and run `.slt` files in the
+[`test_files`](test_files) directory of this crate.
+
+## Testing setup
 
 1. `rustup update stable` DataFusion uses the latest stable release of rust
 2. `git submodule init`
 3. `git submodule update`
 
-#### Running tests: TLDR Examples
+## Running tests: TLDR Examples
 
 ```shell
 # Run all tests
@@ -56,7 +63,7 @@ cargo test --test sqllogictests -- ddl --complete
 RUST_LOG=debug cargo test --test sqllogictests -- ddl
 ```
 
-#### Cookbook: Adding Tests
+## Cookbook: Adding Tests
 
 1. Add queries
 
@@ -95,11 +102,11 @@ SELECT * from foo;
 
 Assuming it looks good, check it in!
 
-#### Reference
+# Reference
 
-#### Running tests: Validation Mode
+## Running tests: Validation Mode
 
-In this model, `sqllogictests` runs the statements and queries in a `.slt` file, comparing the expected output in the
+In this mode, `sqllogictests` runs the statements and queries in a `.slt` file, comparing the expected output in the
 file to the output produced by that run.
 
 For example, to run all tests suites in validation mode
@@ -115,10 +122,10 @@ sqllogictests also supports `cargo test` style substring matches on file names t
 cargo test --test sqllogictests -- information
 ```
 
-#### Running tests: Postgres compatibility
+## Running tests: Postgres compatibility
 
 Test files that start with prefix `pg_compat_` verify compatibility
-with Postgres by running the same script files both with DataFusion and with Posgres
+with Postgres by running the same script files both with DataFusion and with Postgres
 
 In order to run the sqllogictests running against a previously running Postgres instance, do:
 
@@ -145,7 +152,7 @@ docker run \
   postgres
 ```
 
-#### Running Tests: `tpch`
+## Running Tests: `tpch`
 
 Test files in `tpch` directory runs against the `TPCH` data set (SF =
 0.1), which must be generated before running. You can use following
@@ -165,7 +172,7 @@ Then you need to add `INCLUDE_TPCH=true` to run tpch tests:
 INCLUDE_TPCH=true cargo test --test sqllogictests
 ```
 
-#### Updating tests: Completion Mode
+## Updating tests: Completion Mode
 
 In test script completion mode, `sqllogictests` reads a prototype script and runs the statements and queries against the
 database engine. The output is a full script that is a copy of the prototype script with result inserted.
@@ -177,7 +184,7 @@ You can update the tests / generate expected output by passing the `--complete` 
 cargo test --test sqllogictests -- ddl --complete
 ```
 
-#### Running tests: `scratchdir`
+## Running tests: `scratchdir`
 
 The DataFusion sqllogictest runner automatically creates a directory
 named `test_files/scratch/<filename>`, creating it if needed and
@@ -190,7 +197,7 @@ Tests that need to write temporary files should write (only) to this
 directory to ensure they do not interfere with others concurrently
 running tests.
 
-#### `.slt` file format
+## `.slt` file format
 
 [`sqllogictest`] was originally written for SQLite to verify the
 correctness of SQL queries against the SQLite engine. The format is designed
@@ -247,7 +254,7 @@ query <type_string> <sort_mode>
 > :warning: It is encouraged to either apply `order by`, or use `rowsort` for queries without explicit `order by`
 > clauses.
 
-##### Example
+### Example
 
 ```sql
 # group_by_distinct

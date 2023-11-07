@@ -357,6 +357,8 @@ where
                 ColumnarValue::Array(a) => Some(a.len()),
             });
 
+        let is_scalar = len.is_none();
+
         let inferred_length = len.unwrap_or(1);
         let args = args
             .iter()
@@ -373,7 +375,14 @@ where
             .collect::<Vec<ArrayRef>>();
 
         let result = (inner)(&args);
-        result.map(ColumnarValue::Array)
+
+        if is_scalar {
+            // If all inputs are scalar, keeps output as scalar
+            let result = result.and_then(|arr| ScalarValue::try_from_array(&arr, 0));
+            result.map(ColumnarValue::Scalar)
+        } else {
+            result.map(ColumnarValue::Array)
+        }
     })
 }
 

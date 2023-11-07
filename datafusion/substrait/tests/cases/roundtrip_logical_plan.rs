@@ -606,7 +606,7 @@ async fn new_test_grammar() -> Result<()> {
 
 #[tokio::test]
 async fn extension_logical_plan() -> Result<()> {
-    let mut ctx = create_context().await?;
+    let ctx = create_context().await?;
     let validation_bytes = "MockUserDefinedLogicalPlan".as_bytes().to_vec();
     let ext_plan = LogicalPlan::Extension(Extension {
         node: Arc::new(MockUserDefinedLogicalPlan {
@@ -617,7 +617,7 @@ async fn extension_logical_plan() -> Result<()> {
     });
 
     let proto = to_substrait_plan(&ext_plan, &ctx)?;
-    let plan2 = from_substrait_plan(&mut ctx, &proto).await?;
+    let plan2 = from_substrait_plan(&ctx, &proto).await?;
 
     let plan1str = format!("{ext_plan:?}");
     let plan2str = format!("{plan2:?}");
@@ -712,11 +712,11 @@ async fn verify_post_join_filter_value(proto: Box<Plan>) -> Result<()> {
 }
 
 async fn assert_expected_plan(sql: &str, expected_plan_str: &str) -> Result<()> {
-    let mut ctx = create_context().await?;
+    let ctx = create_context().await?;
     let df = ctx.sql(sql).await?;
     let plan = df.into_optimized_plan()?;
     let proto = to_substrait_plan(&plan, &ctx)?;
-    let plan2 = from_substrait_plan(&mut ctx, &proto).await?;
+    let plan2 = from_substrait_plan(&ctx, &proto).await?;
     let plan2 = ctx.state().optimize(&plan2)?;
     let plan2str = format!("{plan2:?}");
     assert_eq!(expected_plan_str, &plan2str);
@@ -724,11 +724,11 @@ async fn assert_expected_plan(sql: &str, expected_plan_str: &str) -> Result<()> 
 }
 
 async fn roundtrip_fill_na(sql: &str) -> Result<()> {
-    let mut ctx = create_context().await?;
+    let ctx = create_context().await?;
     let df = ctx.sql(sql).await?;
     let plan1 = df.into_optimized_plan()?;
     let proto = to_substrait_plan(&plan1, &ctx)?;
-    let plan2 = from_substrait_plan(&mut ctx, &proto).await?;
+    let plan2 = from_substrait_plan(&ctx, &proto).await?;
     let plan2 = ctx.state().optimize(&plan2)?;
 
     // Format plan string and replace all None's with 0
@@ -743,15 +743,15 @@ async fn test_alias(sql_with_alias: &str, sql_no_alias: &str) -> Result<()> {
     // Since we ignore the SubqueryAlias in the producer, the result should be
     // the same as producing a Substrait plan from the same query without aliases
     // sql_with_alias -> substrait -> logical plan = sql_no_alias -> substrait -> logical plan
-    let mut ctx = create_context().await?;
+    let ctx = create_context().await?;
 
     let df_a = ctx.sql(sql_with_alias).await?;
     let proto_a = to_substrait_plan(&df_a.into_optimized_plan()?, &ctx)?;
-    let plan_with_alias = from_substrait_plan(&mut ctx, &proto_a).await?;
+    let plan_with_alias = from_substrait_plan(&ctx, &proto_a).await?;
 
     let df = ctx.sql(sql_no_alias).await?;
     let proto = to_substrait_plan(&df.into_optimized_plan()?, &ctx)?;
-    let plan = from_substrait_plan(&mut ctx, &proto).await?;
+    let plan = from_substrait_plan(&ctx, &proto).await?;
 
     println!("{plan_with_alias:#?}");
     println!("{plan:#?}");
@@ -763,11 +763,11 @@ async fn test_alias(sql_with_alias: &str, sql_no_alias: &str) -> Result<()> {
 }
 
 async fn roundtrip(sql: &str) -> Result<()> {
-    let mut ctx = create_context().await?;
+    let ctx = create_context().await?;
     let df = ctx.sql(sql).await?;
     let plan = df.into_optimized_plan()?;
     let proto = to_substrait_plan(&plan, &ctx)?;
-    let plan2 = from_substrait_plan(&mut ctx, &proto).await?;
+    let plan2 = from_substrait_plan(&ctx, &proto).await?;
     let plan2 = ctx.state().optimize(&plan2)?;
 
     println!("{plan:#?}");
@@ -780,11 +780,11 @@ async fn roundtrip(sql: &str) -> Result<()> {
 }
 
 async fn roundtrip_verify_post_join_filter(sql: &str) -> Result<()> {
-    let mut ctx = create_context().await?;
+    let ctx = create_context().await?;
     let df = ctx.sql(sql).await?;
     let plan = df.into_optimized_plan()?;
     let proto = to_substrait_plan(&plan, &ctx)?;
-    let plan2 = from_substrait_plan(&mut ctx, &proto).await?;
+    let plan2 = from_substrait_plan(&ctx, &proto).await?;
     let plan2 = ctx.state().optimize(&plan2)?;
 
     println!("{plan:#?}");
@@ -799,11 +799,11 @@ async fn roundtrip_verify_post_join_filter(sql: &str) -> Result<()> {
 }
 
 async fn roundtrip_all_types(sql: &str) -> Result<()> {
-    let mut ctx = create_all_type_context().await?;
+    let ctx = create_all_type_context().await?;
     let df = ctx.sql(sql).await?;
     let plan = df.into_optimized_plan()?;
     let proto = to_substrait_plan(&plan, &ctx)?;
-    let plan2 = from_substrait_plan(&mut ctx, &proto).await?;
+    let plan2 = from_substrait_plan(&ctx, &proto).await?;
     let plan2 = ctx.state().optimize(&plan2)?;
 
     println!("{plan:#?}");

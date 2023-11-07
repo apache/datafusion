@@ -735,7 +735,13 @@ impl SortExec {
         self
     }
 
-    /// Whether this `SortExec` preserves partitioning of the children
+    /// Modify how many rows to include in the result
+    ///
+    /// If None, then all rows will be returned, in sorted order.
+    /// If Some, then only the top `fetch` rows will be returned.
+    /// This can reduce the memory pressure required by the sort
+    /// operation since rows that are not going to be included
+    /// can be dropped.
     pub fn with_fetch(mut self, fetch: Option<usize>) -> Self {
         self.fetch = fetch;
         self
@@ -829,7 +835,10 @@ impl ExecutionPlan for SortExec {
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
-        self.input.equivalence_properties()
+        // Reset the ordering equivalence class with the new ordering:
+        self.input
+            .equivalence_properties()
+            .with_reorder(self.expr.to_vec())
     }
 
     fn with_new_children(

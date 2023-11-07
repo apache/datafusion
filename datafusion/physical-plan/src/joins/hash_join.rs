@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines the join plan for executing partitions in parallel and then joining the results
-//! into a set of partitions.
+//! [`HashJoinExec`] Partitioned Hash Join Operator
 
 use std::fmt;
 use std::mem::size_of;
@@ -43,8 +42,8 @@ use crate::{
         BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinOn,
     },
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
-    DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan, Partitioning,
-    PhysicalExpr, RecordBatchStream, SendableRecordBatchStream, Statistics,
+    DisplayFormatType, Distribution, ExecutionPlan, Partitioning, PhysicalExpr,
+    RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
 use super::{
@@ -56,6 +55,7 @@ use arrow::array::{
     Array, ArrayRef, BooleanArray, BooleanBufferBuilder, PrimitiveArray, UInt32Array,
     UInt32BufferBuilder, UInt64Array, UInt64BufferBuilder,
 };
+use arrow::compute::kernels::cmp::{eq, not_distinct};
 use arrow::compute::{and, take, FilterBuilder};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
@@ -67,40 +67,148 @@ use datafusion_common::{
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::OrderingEquivalenceProperties;
+use datafusion_physical_expr::equivalence::join_equivalence_properties;
+use datafusion_physical_expr::EquivalenceProperties;
 
 use ahash::RandomState;
-use arrow::compute::kernels::cmp::{eq, not_distinct};
-use datafusion_physical_expr::equivalence::{
-    combine_join_equivalence_properties, combine_join_ordering_equivalence_properties,
-};
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 
 type JoinLeftData = (JoinHashMap, RecordBatch, MemoryReservation);
 
-/// Join execution plan executes partitions in parallel and combines them into a set of
-/// partitions.
+/// Join execution plan: Evaluates eqijoin predicates in parallel on multiple
+/// partitions using a hash table and an optional filter list to apply post
+/// join.
 ///
-/// Filter expression expected to contain non-equality predicates that can not be pushed
-/// down to any of join inputs.
-/// In case of outer join, filter applied to only matched rows.
+/// # Join Expressions
+///
+/// This implementation is optimized for evaluating eqijoin predicates  (
+/// `<col1> = <col2>`) expressions, which are represented as a list of `Columns`
+/// in [`Self::on`].
+///
+/// Non-equality predicates, which can not pushed down to a join inputs (e.g.
+/// `<col1> != <col2>`) are known as "filter expressions" and are evaluated
+/// after the equijoin predicates.
+///
+/// # "Build Side" vs "Probe Side"
+///
+/// HashJoin takes two inputs, which are referred to as the "build" and the
+/// "probe". The build side is the first child, and the probe side is the second
+/// child.
+///
+/// The two inputs are treated differently and it is VERY important that the
+/// *smaller* input is placed on the build side to minimize the work of creating
+/// the hash table.
+///
+/// ```text
+///          ┌───────────┐
+///          │ HashJoin  │
+///          │           │
+///          └───────────┘
+///              │   │
+///        ┌─────┘   └─────┐
+///        ▼               ▼
+/// ┌────────────┐  ┌─────────────┐
+/// │   Input    │  │    Input    │
+/// │    [0]     │  │     [1]     │
+/// └────────────┘  └─────────────┘
+///
+///  "build side"    "probe side"
+/// ```
+///
+/// Execution proceeds in 2 stages:
+///
+/// 1. the **build phase** where a hash table is created from the tuples of the
+/// build side.
+///
+/// 2. the **probe phase** where the tuples of the probe side are streamed
+/// through, checking for matches of the join keys in the hash table.
+///
+/// ```text
+///                 ┌────────────────┐          ┌────────────────┐
+///                 │ ┌─────────┐    │          │ ┌─────────┐    │
+///                 │ │  Hash   │    │          │ │  Hash   │    │
+///                 │ │  Table  │    │          │ │  Table  │    │
+///                 │ │(keys are│    │          │ │(keys are│    │
+///                 │ │equi join│    │          │ │equi join│    │  Stage 2: batches from
+///  Stage 1: the   │ │columns) │    │          │ │columns) │    │    the probe side are
+/// *entire* build  │ │         │    │          │ │         │    │  streamed through, and
+///  side is read   │ └─────────┘    │          │ └─────────┘    │   checked against the
+/// into the hash   │      ▲         │          │          ▲     │   contents of the hash
+///     table       │       HashJoin │          │  HashJoin      │          table
+///                 └──────┼─────────┘          └──────────┼─────┘
+///             ─ ─ ─ ─ ─ ─                                 ─ ─ ─ ─ ─ ─ ─
+///            │                                                         │
+///
+///            │                                                         │
+///     ┌────────────┐                                            ┌────────────┐
+///     │RecordBatch │                                            │RecordBatch │
+///     └────────────┘                                            └────────────┘
+///     ┌────────────┐                                            ┌────────────┐
+///     │RecordBatch │                                            │RecordBatch │
+///     └────────────┘                                            └────────────┘
+///           ...                                                       ...
+///     ┌────────────┐                                            ┌────────────┐
+///     │RecordBatch │                                            │RecordBatch │
+///     └────────────┘                                            └────────────┘
+///
+///        build side                                                probe side
+///
+/// ```
+///
+/// # Example "Optimal" Plans
+///
+/// The differences in the inputs means that for classic "Star Schema Query",
+/// the optimal plan will be a **"Right Deep Tree"** . A Star Schema Query is
+/// one where there is one large table and several smaller "dimension" tables,
+/// joined on `Foreign Key = Primary Key` predicates.
+///
+/// A "Right Deep Tree" looks like this large table as the probe side on the
+/// lowest join:
+///
+/// ```text
+///             ┌───────────┐
+///             │ HashJoin  │
+///             │           │
+///             └───────────┘
+///                 │   │
+///         ┌───────┘   └──────────┐
+///         ▼                      ▼
+/// ┌───────────────┐        ┌───────────┐
+/// │ small table 1 │        │ HashJoin  │
+/// │  "dimension"  │        │           │
+/// └───────────────┘        └───┬───┬───┘
+///                   ┌──────────┘   └───────┐
+///                   │                      │
+///                   ▼                      ▼
+///           ┌───────────────┐        ┌───────────┐
+///           │ small table 2 │        │ HashJoin  │
+///           │  "dimension"  │        │           │
+///           └───────────────┘        └───┬───┬───┘
+///                               ┌────────┘   └────────┐
+///                               │                     │
+///                               ▼                     ▼
+///                       ┌───────────────┐     ┌───────────────┐
+///                       │ small table 3 │     │  large table  │
+///                       │  "dimension"  │     │    "fact"     │
+///                       └───────────────┘     └───────────────┘
+/// ```
 #[derive(Debug)]
 pub struct HashJoinExec {
     /// left (build) side which gets hashed
     pub left: Arc<dyn ExecutionPlan>,
     /// right (probe) side which are filtered by the hash table
     pub right: Arc<dyn ExecutionPlan>,
-    /// Set of common columns used to join on
+    /// Set of equijoin columns from the relations: `(left_col, right_col)`
     pub on: Vec<(Column, Column)>,
     /// Filters which are applied while finding matching rows
     pub filter: Option<JoinFilter>,
-    /// How the join is performed
+    /// How the join is performed (`OUTER`, `INNER`, etc)
     pub join_type: JoinType,
-    /// The schema once the join is applied
+    /// The output schema for the join
     schema: SchemaRef,
-    /// Build-side data
+    /// Future that consumes left input and builds the hash table
     left_fut: OnceAsync<JoinLeftData>,
-    /// Shares the `RandomState` for the hashing algorithm
+    /// Shared the `RandomState` for the hashing algorithm
     random_state: RandomState,
     /// Output order
     output_order: Option<Vec<PhysicalSortExpr>>,
@@ -110,12 +218,16 @@ pub struct HashJoinExec {
     metrics: ExecutionPlanMetricsSet,
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
-    /// If null_equals_null is true, null == null else null != null
+    /// Null matching behavior: If `null_equals_null` is true, rows that have
+    /// `null`s in both left and right equijoin columns will be matched.
+    /// Otherwise, rows that have `null`s in the join columns will not be
+    /// matched and thus will not appear in the output.
     pub null_equals_null: bool,
 }
 
 impl HashJoinExec {
     /// Tries to create a new [HashJoinExec].
+    ///
     /// # Error
     /// This function errors when it is not possible to join the left and right sides on keys `on`.
     pub fn try_new(
@@ -368,26 +480,14 @@ impl ExecutionPlan for HashJoinExec {
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
-        let left_columns_len = self.left.schema().fields.len();
-        combine_join_equivalence_properties(
-            self.join_type,
+        join_equivalence_properties(
             self.left.equivalence_properties(),
             self.right.equivalence_properties(),
-            left_columns_len,
-            self.on(),
-            self.schema(),
-        )
-    }
-
-    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        combine_join_ordering_equivalence_properties(
             &self.join_type,
-            &self.left.ordering_equivalence_properties(),
-            &self.right.ordering_equivalence_properties(),
             self.schema(),
             &self.maintains_input_order(),
             Some(Self::probe_side()),
-            self.equivalence_properties(),
+            self.on(),
         )
     }
 
@@ -419,6 +519,7 @@ impl ExecutionPlan for HashJoinExec {
         let on_right = self.on.iter().map(|on| on.1.clone()).collect::<Vec<_>>();
         let left_partitions = self.left.output_partitioning().partition_count();
         let right_partitions = self.right.output_partitioning().partition_count();
+
         if self.mode == PartitionMode::Partitioned && left_partitions != right_partitions
         {
             return internal_err!(
@@ -521,16 +622,10 @@ async fn collect_left_input(
 
     let (left_input, left_input_partition) = if let Some(partition) = partition {
         (left, partition)
+    } else if left.output_partitioning().partition_count() != 1 {
+        (Arc::new(CoalescePartitionsExec::new(left)) as _, 0)
     } else {
-        let merge = {
-            if left.output_partitioning().partition_count() != 1 {
-                Arc::new(CoalescePartitionsExec::new(left))
-            } else {
-                left
-            }
-        };
-
-        (merge, 0)
+        (left, 0)
     };
 
     // Depending on partition argument load single partition or whole left side in memory
@@ -652,27 +747,38 @@ where
     Ok(())
 }
 
-/// A stream that issues [RecordBatch]es as they arrive from the right  of the join.
+/// [`Stream`] for [`HashJoinExec`] that does the actual join.
+///
+/// This stream:
+///
+/// 1. Reads the entire left input (build) and constructs a hash table
+///
+/// 2. Streams [RecordBatch]es as they arrive from the right input (probe) and joins
+/// them with the contents of the hash table
 struct HashJoinStream {
     /// Input schema
     schema: Arc<Schema>,
-    /// columns from the left
+    /// equijoin columns from the left (build side)
     on_left: Vec<Column>,
-    /// columns from the right used to compute the hash
+    /// equijoin columns from the right (probe side)
     on_right: Vec<Column>,
-    /// join filter
+    /// optional join filter
     filter: Option<JoinFilter>,
-    /// type of the join
+    /// type of the join (left, right, semi, etc)
     join_type: JoinType,
-    /// future for data from left side
+    /// future which builds hash table from left side
     left_fut: OnceFut<JoinLeftData>,
-    /// Keeps track of the left side rows whether they are visited
+    /// Which left (probe) side rows have been matches while creating output.
+    /// For some OUTER joins, we need to know which rows have not been matched
+    /// to produce the correct.
     visited_left_side: Option<BooleanBufferBuilder>,
-    /// right
+    /// right (probe) input
     right: SendableRecordBatchStream,
     /// Random state used for hashing initialization
     random_state: RandomState,
-    /// There is nothing to process anymore and left side is processed in case of left join
+    /// The join output is complete. For outer joins, this is used to
+    /// distinguish when the input stream is exhausted and when any unmatched
+    /// rows are output.
     is_exhausted: bool,
     /// Metrics
     join_metrics: BuildProbeJoinMetrics,
@@ -690,37 +796,51 @@ impl RecordBatchStream for HashJoinStream {
     }
 }
 
-// Returns build/probe indices satisfying the equality condition.
-// On LEFT.b1 = RIGHT.b2
-// LEFT Table:
-//  a1  b1  c1
-//  1   1   10
-//  3   3   30
-//  5   5   50
-//  7   7   70
-//  9   8   90
-//  11  8   110
-// 13   10  130
-// RIGHT Table:
-//  a2   b2  c2
-//  2    2   20
-//  4    4   40
-//  6    6   60
-//  8    8   80
-// 10   10  100
-// 12   10  120
-// The result is
-// "+----+----+-----+----+----+-----+",
-// "| a1 | b1 | c1  | a2 | b2 | c2  |",
-// "+----+----+-----+----+----+-----+",
-// "| 9  | 8  | 90  | 8  | 8  | 80  |",
-// "| 11 | 8  | 110 | 8  | 8  | 80  |",
-// "| 13 | 10 | 130 | 10 | 10 | 100 |",
-// "| 13 | 10 | 130 | 12 | 10 | 120 |",
-// "+----+----+-----+----+----+-----+"
-// And the result of build and probe indices are:
-// Build indices: 4, 5, 6, 6
-// Probe indices: 3, 3, 4, 5
+/// Returns build/probe indices satisfying the equality condition.
+///
+/// # Example
+///
+/// For `LEFT.b1 = RIGHT.b2`:
+/// LEFT Table:
+/// ```text
+///  a1  b1  c1
+///  1   1   10
+///  3   3   30
+///  5   5   50
+///  7   7   70
+///  9   8   90
+///  11  8   110
+///  13   10  130
+/// ```
+///
+/// RIGHT Table:
+/// ```text
+///  a2   b2  c2
+///  2    2   20
+///  4    4   40
+///  6    6   60
+///  8    8   80
+/// 10   10  100
+/// 12   10  120
+/// ```
+///
+/// The result is
+/// ```text
+/// "+----+----+-----+----+----+-----+",
+/// "| a1 | b1 | c1  | a2 | b2 | c2  |",
+/// "+----+----+-----+----+----+-----+",
+/// "| 9  | 8  | 90  | 8  | 8  | 80  |",
+/// "| 11 | 8  | 110 | 8  | 8  | 80  |",
+/// "| 13 | 10 | 130 | 10 | 10 | 100 |",
+/// "| 13 | 10 | 130 | 12 | 10 | 120 |",
+/// "+----+----+-----+----+----+-----+"
+/// ```
+///
+/// And the result of build and probe indices are:
+/// ```text
+/// Build indices: 4, 5, 6, 6
+/// Probe indices: 3, 3, 4, 5
+/// ```
 #[allow(clippy::too_many_arguments)]
 pub fn build_equal_condition_join_indices<T: JoinHashMapType>(
     build_hashmap: &T,
@@ -908,13 +1028,14 @@ impl HashJoinStream {
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Result<RecordBatch>>> {
         let build_timer = self.join_metrics.build_time.timer();
+        // build hash table from left (build) side, if not yet done
         let left_data = match ready!(self.left_fut.get(cx)) {
             Ok(left_data) => left_data,
             Err(e) => return Poll::Ready(Some(Err(e))),
         };
         build_timer.done();
 
-        // Reserving memory for visited_left_side bitmap in case it hasn't been initialied yet
+        // Reserving memory for visited_left_side bitmap in case it hasn't been initialized yet
         // and join_type requires to store it
         if self.visited_left_side.is_none()
             && need_produce_result_in_final(self.join_type)
@@ -929,11 +1050,11 @@ impl HashJoinStream {
         let visited_left_side = self.visited_left_side.get_or_insert_with(|| {
             let num_rows = left_data.1.num_rows();
             if need_produce_result_in_final(self.join_type) {
-                // these join type need the bitmap to identify which row has be matched or unmatched.
-                // For the `left semi` join, need to use the bitmap to produce the matched row in the left side
-                // For the `left` join, need to use the bitmap to produce the unmatched row in the left side with null
-                // For the `left anti` join, need to use the bitmap to produce the unmatched row in the left side
-                // For the `full` join, need to use the bitmap to produce the unmatched row in the left side with null
+                // Some join types need to track which row has be matched or unmatched:
+                // `left semi` join:  need to use the bitmap to produce the matched row in the left side
+                // `left` join:       need to use the bitmap to produce the unmatched row in the left side with null
+                // `left anti` join:  need to use the bitmap to produce the unmatched row in the left side
+                // `full` join:       need to use the bitmap to produce the unmatched row in the left side with null
                 let mut buffer = BooleanBufferBuilder::new(num_rows);
                 buffer.append_n(num_rows, false);
                 buffer
@@ -942,6 +1063,7 @@ impl HashJoinStream {
             }
         });
         let mut hashes_buffer = vec![];
+        // get next right (probe) input batch
         self.right
             .poll_next_unpin(cx)
             .map(|maybe_batch| match maybe_batch {
@@ -1061,24 +1183,22 @@ impl Stream for HashJoinStream {
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::{ArrayRef, Date32Array, Int32Array, UInt32Builder, UInt64Builder};
-    use arrow::datatypes::{DataType, Field, Schema};
-
-    use datafusion_common::{assert_batches_sorted_eq, assert_contains, ScalarValue};
-    use datafusion_expr::Operator;
-    use datafusion_physical_expr::expressions::Literal;
-    use hashbrown::raw::RawTable;
-
+    use super::*;
     use crate::{
         common, expressions::Column, hash_utils::create_hashes,
         joins::hash_join::build_equal_condition_join_indices, memory::MemoryExec,
         repartition::RepartitionExec, test::build_table_i32, test::exec::MockExec,
     };
+
+    use arrow::array::{ArrayRef, Date32Array, Int32Array, UInt32Builder, UInt64Builder};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::{assert_batches_sorted_eq, assert_contains, ScalarValue};
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
-    use datafusion_physical_expr::expressions::BinaryExpr;
+    use datafusion_expr::Operator;
+    use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
 
-    use super::*;
+    use hashbrown::raw::RawTable;
 
     fn build_table(
         a: (&str, &Vec<i32>),

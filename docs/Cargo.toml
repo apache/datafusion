@@ -29,5 +29,5 @@ authors = { workspace = true }
 rust-version = "1.70"
 
 [dependencies]
-datafusion = { path = "../datafusion/core", version = "32.0.0", default-features = false }
+datafusion = { path = "../datafusion/core", version = "33.0.0", default-features = false }
 tokio = { version = "^1.0", features = ["rt-multi-thread"] }
