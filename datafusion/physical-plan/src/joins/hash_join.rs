@@ -1003,7 +1003,7 @@ pub(crate) fn build_equal_condition_join_indices<T: JoinHashMapType>(
         } else if let Some((_, index)) =
             hash_map.get(*hash_value, |(hash, _)| *hash_value == *hash)
         {
-            // otherwise -- checking build hashmap for precense of current hash_value
+            // otherwise -- checking build hashmap for presence of current hash_value
             Some(*index)
         } else {
             None
