@@ -418,13 +418,13 @@ mod tests {
     use strum::IntoEnumIterator;
 
     #[test]
-    // Test for AggregateFuncion's name() and from_str() implementations.
-    // For each variant in AggregateFuncion, it converts the variant's name
-    // back to a variant. The test asserts that the original variant and
+    // Test for AggregateFuncion's Display and from_str() implementations.
+    // For each variant in AggregateFuncion, it converts the variant to a string
+    // and then back to a variant. The test asserts that the original variant and
     // the reconstructed variant are the same.
-    fn test_name_and_from_str() {
+    fn test_display_and_from_str() {
         for func_original in AggregateFunction::iter() {
-            let func_name = func_original.name();
+            let func_name = func_original.to_string();
             let func_from_str =
                 AggregateFunction::from_str(func_name.to_lowercase().as_str()).unwrap();
             assert_eq!(func_from_str, func_original);
