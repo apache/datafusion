@@ -494,6 +494,10 @@ SELECT counter(*) from test;
 statement error Did you mean 'STDDEV'?
 SELECT STDEV(v1) from test;
 
+# Aggregate function
+statement error Did you mean 'COVAR'?
+SELECT COVARIA(1,1);
+
 # Window function
 statement error Did you mean 'SUM'?
 SELECT v1, v2, SUMM(v2) OVER(ORDER BY v1) from test;
