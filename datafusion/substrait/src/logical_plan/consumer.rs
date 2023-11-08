@@ -78,6 +78,10 @@ enum ScalarFunctionType {
     Like,
     /// [Expr::Like] Case insensitive operator counterpart of `Like`
     ILike,
+    /// [Expr::IsNull]
+    IsNull,
+    /// [Expr::IsNotNull]
+    IsNotNull
 }
 
 pub fn name_to_op(name: &str) -> Result<Operator> {
@@ -126,6 +130,8 @@ fn scalar_function_type_from_str(name: &str) -> Result<ScalarFunctionType> {
         "not" => Ok(ScalarFunctionType::Not),
         "like" => Ok(ScalarFunctionType::Like),
         "ilike" => Ok(ScalarFunctionType::ILike),
+        "is_null" => Ok(ScalarFunctionType::IsNull),
+        "is_not_null" => Ok(ScalarFunctionType::IsNotNull),
         others => not_impl_err!("Unsupported function name: {others:?}"),
     }
 }
@@ -879,6 +885,40 @@ pub async fn from_substrait_rex(
                 }
                 ScalarFunctionType::ILike => {
                     make_datafusion_like(true, f, input_schema, extensions).await
+                }
+                ScalarFunctionType::IsNull => {
+                    let arg = f.arguments.first().ok_or_else(|| {
+                        DataFusionError::Substrait(
+                            "expect one argument for `IS NULL` expr".to_string(),
+                        )
+                    })?;
+                    match &arg.arg_type {
+                        Some(ArgType::Value(e)) => {
+                            let expr = from_substrait_rex(e, input_schema, extensions)
+                                .await?
+                                .as_ref()
+                                .clone();
+                            Ok(Arc::new(Expr::IsNull(Box::new(expr))))
+                        }
+                        _ => not_impl_err!("Invalid arguments for IS NULL expression"),
+                    }
+                }
+                ScalarFunctionType::IsNotNull => {
+                    let arg = f.arguments.first().ok_or_else(|| {
+                        DataFusionError::Substrait(
+                            "expect one argument for `IS NOT NULL` expr".to_string(),
+                        )
+                    })?;
+                    match &arg.arg_type {
+                        Some(ArgType::Value(e)) => {
+                            let expr = from_substrait_rex(e, input_schema, extensions)
+                                .await?
+                                .as_ref()
+                                .clone();
+                            Ok(Arc::new(Expr::IsNotNull(Box::new(expr))))
+                        }
+                        _ => not_impl_err!("Invalid arguments for IS NOT NULL expression"),
+                    }
                 }
             }
         }

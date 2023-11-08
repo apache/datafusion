@@ -315,6 +315,16 @@ async fn simple_scalar_function_substr() -> Result<()> {
 }
 
 #[tokio::test]
+async fn simple_scalar_function_is_null() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE a IS NULL").await
+}
+
+#[tokio::test]
+async fn simple_scalar_function_is_not_null() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE a IS NOT NULL").await
+}
+
+#[tokio::test]
 async fn case_without_base_expression() -> Result<()> {
     roundtrip("SELECT (CASE WHEN a >= 0 THEN 'positive' ELSE 'negative' END) FROM data")
         .await
