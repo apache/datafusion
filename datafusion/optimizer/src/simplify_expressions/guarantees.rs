@@ -252,7 +252,7 @@ mod tests {
     #[test]
     fn test_inequalities_non_null_bounded() {
         let guarantees = vec![
-            // x ∈ (1, 3] (not null)
+            // x ∈ [1, 3] (not null)
             (
                 col("x"),
                 NullableInterval::NotNull {
@@ -474,7 +474,7 @@ mod tests {
     #[test]
     fn test_in_list() {
         let guarantees = vec![
-            // x ∈ [1, 10) (not null)
+            // x ∈ [1, 10] (not null)
             (
                 col("x"),
                 NullableInterval::NotNull {

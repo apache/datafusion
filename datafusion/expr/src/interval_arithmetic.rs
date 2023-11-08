@@ -112,16 +112,20 @@ impl Interval {
             );
         }
 
-        let interval = if let ScalarValue::Boolean(_) = lower {
+        let interval = if let ScalarValue::Boolean(lower_bool) = lower {
+            let upper_bool = if let ScalarValue::Boolean(upper_bool) = upper {
+                upper_bool
+            } else {
+                // We are sure that upper and lower bounds have same type.
+                unreachable!();
+            };
             // Handle boolean type:
-            let standardized_lower = match lower {
-                ScalarValue::Boolean(None) => ScalarValue::Boolean(Some(false)),
-                _ => lower.clone(),
-            };
-            let standardized_upper: ScalarValue = match upper {
-                ScalarValue::Boolean(None) => ScalarValue::Boolean(Some(true)),
-                _ => upper.clone(),
-            };
+            // Cast `None` to `Some(false)` for lower bound
+            let standardized_lower =
+                ScalarValue::Boolean(Some(lower_bool.unwrap_or(false)));
+            // Cast `None` to `Some(true)` for upper bound
+            let standardized_upper =
+                ScalarValue::Boolean(Some(upper_bool.unwrap_or(true)));
             Interval {
                 lower: standardized_lower,
                 upper: standardized_upper,
@@ -134,10 +138,7 @@ impl Interval {
             handle_float_intervals!(Float64, f64, lower, upper)
         } else {
             // Others:
-            Interval {
-                lower: lower.clone(),
-                upper: upper.clone(),
-            }
+            Interval { lower, upper }
         };
 
         if interval.lower <= interval.upper
@@ -148,7 +149,7 @@ impl Interval {
         } else {
             Err(DataFusionError::Internal(format!(
                 "Interval's lower bound {:?} is greater than the upper bound {:?}",
-                lower, upper
+                interval.lower, interval.upper
             )))
         }
     }
@@ -339,13 +340,13 @@ impl Interval {
         let rhs = other.borrow();
         match (&self.lower, &self.upper, &rhs.lower, &rhs.upper) {
             (
-                ScalarValue::Boolean(Some(self_lower)),
-                ScalarValue::Boolean(Some(self_upper)),
-                ScalarValue::Boolean(Some(other_lower)),
-                ScalarValue::Boolean(Some(other_upper)),
+                &ScalarValue::Boolean(Some(self_lower)),
+                &ScalarValue::Boolean(Some(self_upper)),
+                &ScalarValue::Boolean(Some(other_lower)),
+                &ScalarValue::Boolean(Some(other_upper)),
             ) => {
-                let lower = *self_lower && *other_lower;
-                let upper = *self_upper && *other_upper;
+                let lower = self_lower && other_lower;
+                let upper = self_upper && other_upper;
 
                 Ok(Interval {
                     lower: ScalarValue::Boolean(Some(lower)),
@@ -846,7 +847,8 @@ fn next_value_helper<const INC: bool>(value: ScalarValue) -> ScalarValue {
 }
 
 /// Returns the greater one of two interval bounds.
-/// When comparing unbounded values, they are assumed to be lower bounds.
+/// This function assumes that arguments are lower bounds.
+/// Hence null represents -inf.
 fn max_of_bounds(first: &ScalarValue, second: &ScalarValue) -> ScalarValue {
     if first.is_null() {
         second.clone()
@@ -858,7 +860,8 @@ fn max_of_bounds(first: &ScalarValue, second: &ScalarValue) -> ScalarValue {
 }
 
 /// Returns the smaller one of two interval bounds.
-/// When comparing unbounded values, they are assumed to be upper bounds.
+/// This function assumes that arguments are upper bounds.
+/// Hence null represents +inf.
 fn min_of_bounds(first: &ScalarValue, second: &ScalarValue) -> ScalarValue {
     if first.is_null() {
         second.clone()
@@ -1297,7 +1300,7 @@ fn div_helper_zero_exclusive(
 
 /// This function computes the selectivity of an operation by computing the
 /// cardinality ratio of the given input/output intervals. If this can not be
-/// calculated for some reason, it returns `1.0` meaning fullly selective (no
+/// calculated for some reason, it returns `1.0` meaning fully selective (no
 /// filtering).
 pub fn cardinality_ratio(
     initial_interval: &Interval,
