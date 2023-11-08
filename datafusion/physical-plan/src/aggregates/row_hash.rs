@@ -422,29 +422,6 @@ impl Stream for GroupedHashAggregateStream {
     ) -> Poll<Option<Self::Item>> {
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
 
-        // common function for signalling end of processing of the input stream
-        fn set_input_done_and_produce_output(
-            agg_stream: &mut std::pin::Pin<&mut GroupedHashAggregateStream>,
-        ) -> Poll<Option<<GroupedHashAggregateStream as Stream>::Item>> {
-            agg_stream.input_done = true;
-            agg_stream.group_ordering.input_done();
-            let elapsed_compute = agg_stream.baseline_metrics.elapsed_compute().clone();
-            let timer = elapsed_compute.timer();
-            if agg_stream.spill_state.spills.is_empty() {
-                let batch = extract_ok!(agg_stream.emit(EmitTo::All, false));
-                agg_stream.exec_state = ExecutionState::ProducingOutput(batch);
-            } else {
-                // If spill files exist, stream-merge them.
-                extract_ok!(agg_stream.update_merged_stream());
-                agg_stream.exec_state = ExecutionState::ReadingInput;
-            }
-            timer.done();
-            // `Ready(None)` flags the non-error case, as the `extract_ok` macro may
-            // wrap an error in `Poll::Ready`, which should be detected and immediately
-            // returned by poll_next.
-            Poll::Ready(None)
-        }
-
         loop {
             let exec_state = self.exec_state.clone();
             match exec_state {
@@ -470,11 +447,7 @@ impl Stream for GroupedHashAggregateStream {
                             {
                                 if group_values_soft_limit <= self.group_values.len() {
                                     timer.done();
-                                    if let Poll::Ready(Some(Err(e))) =
-                                        set_input_done_and_produce_output(&mut self)
-                                    {
-                                        return Poll::Ready(Some(Err(e)));
-                                    }
+                                    extract_ok!(self.set_input_done_and_produce_output());
                                     // make sure the exec_state just set is not overwritten below
                                     break 'reading_input;
                                 }
@@ -498,11 +471,7 @@ impl Stream for GroupedHashAggregateStream {
                         }
                         None => {
                             // inner is done, emit all rows and switch to producing output
-                            if let Poll::Ready(Some(Err(e))) =
-                                set_input_done_and_produce_output(&mut self)
-                            {
-                                return Poll::Ready(Some(Err(e)));
-                            }
+                            extract_ok!(self.set_input_done_and_produce_output());
                         }
                     }
                 }
@@ -785,6 +754,27 @@ impl GroupedHashAggregateStream {
         )?;
         self.input_done = false;
         self.group_ordering = GroupOrdering::Full(GroupOrderingFull::new());
+        Ok(())
+    }
+
+    // common function for signalling end of processing of the input stream
+    fn set_input_done_and_produce_output(&mut self) -> Result<()> {
+        self.input_done = true;
+        self.group_ordering.input_done();
+        let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
+        let timer = elapsed_compute.timer();
+        if self.spill_state.spills.is_empty() {
+            let batch = self.emit(EmitTo::All, false)?;
+            self.exec_state = ExecutionState::ProducingOutput(batch);
+        } else {
+            // If spill files exist, stream-merge them.
+            self.update_merged_stream()?;
+            self.exec_state = ExecutionState::ReadingInput;
+        }
+        timer.done();
+        // `Ready(None)` flags the non-error case, as the `extract_ok` macro may
+        // wrap an error in `Poll::Ready`, which should be detected and immediately
+        // returned by poll_next.
         Ok(())
     }
 }
