@@ -1779,6 +1779,7 @@ select array_union([1, 2, 3, 4], [5, 4]);
 ----
 [1, 2, 3, 4, 5]
 
+# array_union scalar function #5
 statement ok
 CREATE TABLE arrays_with_repeating_elements_for_union
 AS VALUES
@@ -1796,6 +1797,33 @@ select array_union(column1, column2) from arrays_with_repeating_elements_for_uni
 
 statement ok
 drop table arrays_with_repeating_elements_for_union;
+
+# array_union scalar function #6
+query ?
+select array_union([], []);
+----
+NULL
+
+# array_union scalar function #7
+query ?
+select array_union([[null]], []);
+----
+[[]]
+
+# array_union scalar function #8
+query ?
+select array_union([null], [null]);
+----
+[]
+
+# array_union scalar function #9
+query ?
+select array_union(null, []);
+----
+NULL
+
+
+
 
 
 # list_to_string scalar function #4 (function alias `array_to_string`)
