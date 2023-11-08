@@ -33,7 +33,7 @@ use arrow::array::ArrayRef;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::stats::Precision;
-use datafusion_common::{internal_err, ColumnStatistics, DataFusionError, Result};
+use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 
 use futures::stream::{Stream, StreamExt};
@@ -188,64 +188,78 @@ impl ExecutionPlan for GlobalLimitExec {
     fn statistics(&self) -> Result<Statistics> {
         let input_stats = self.input.statistics()?;
         let skip = self.skip;
-        // the maximum row number needs to be fetched
-        let max_row_num = self
-            .fetch
-            .map(|fetch| {
-                if fetch >= usize::MAX - skip {
-                    usize::MAX
-                } else {
-                    fetch + skip
-                }
-            })
-            .unwrap_or(match input_stats.num_rows {
-                Precision::Exact(nr) => nr,
-                _ => usize::MAX,
-            });
+        let col_stats = Statistics::unknown_column(&self.schema());
+        let fetch = self.fetch.unwrap_or(usize::MAX);
 
-        let to_inexact_cs = |cs: Vec<ColumnStatistics>| {
-            cs.into_iter().map(|cs| cs.to_inexact()).collect()
+        let mut fetched_row_number_stats = Statistics {
+            num_rows: Precision::Exact(fetch),
+            column_statistics: col_stats.clone(),
+            total_byte_size: Precision::Absent,
         };
 
-        match input_stats.num_rows {
-            Precision::Exact(nr) | Precision::Inexact(nr) => {
+        let stats = match input_stats {
+            Statistics {
+                num_rows: Precision::Exact(nr),
+                ..
+            }
+            | Statistics {
+                num_rows: Precision::Inexact(nr),
+                ..
+            } => {
                 if nr <= skip {
                     // if all input data will be skipped, return 0
-                    Ok(Statistics {
+                    let mut skip_all_rows_stats = Statistics {
                         num_rows: Precision::Exact(0),
-                        total_byte_size: Precision::Exact(0),
-                        column_statistics: vec![
-                            ColumnStatistics {
-                                null_count: Precision::Exact(0),
-                                max_value: Precision::Absent,
-                                min_value: Precision::Absent,
-                                distinct_count: Precision::Exact(0)
-                            };
-                            input_stats.column_statistics.len()
-                        ],
-                    })
-                } else if nr <= max_row_num {
-                    // if the input does not reach the "fetch" globally, return input stats
-                    Ok(input_stats)
+                        column_statistics: col_stats,
+                        total_byte_size: Precision::Absent,
+                    };
+                    if !input_stats.num_rows.is_exact().unwrap_or(false) {
+                        // The input stats are inexact, so the output stats must be too.
+                        skip_all_rows_stats = skip_all_rows_stats.into_inexact();
+                    }
+                    skip_all_rows_stats
+                } else if nr <= fetch && self.skip == 0 {
+                    // if the input does not reach the "fetch" globally, and "skip" is zero
+                    // (meaning the input and output are identical), return input stats.
+                    // Can input_stats still be used, but adjusted, in the "skip != 0" case?
+                    input_stats
+                } else if nr - skip <= fetch {
+                    // after "skip" input rows are skipped, the remaining rows are less than or equal to the
+                    // "fetch" values, so `num_rows` must equal the remaining rows
+                    let remaining_rows: usize = nr - skip;
+                    let mut skip_some_rows_stats = Statistics {
+                        num_rows: Precision::Exact(remaining_rows),
+                        column_statistics: col_stats.clone(),
+                        total_byte_size: Precision::Absent,
+                    };
+                    if !input_stats.num_rows.is_exact().unwrap_or(false) {
+                        // The input stats are inexact, so the output stats must be too.
+                        skip_some_rows_stats = skip_some_rows_stats.into_inexact();
+                    }
+                    skip_some_rows_stats
                 } else {
                     // if the input is greater than "fetch+skip", the num_rows will be the "fetch",
                     // but we won't be able to predict the other statistics
-                    Ok(Statistics {
-                        num_rows: Precision::Exact(max_row_num),
-                        total_byte_size: input_stats.total_byte_size.to_inexact(),
-                        column_statistics: to_inexact_cs(input_stats.column_statistics),
-                    })
+                    if !input_stats.num_rows.is_exact().unwrap_or(false)
+                        || self.fetch.is_none()
+                    {
+                        // If the input stats are inexact, the output stats must be too.
+                        // If the fetch value is `usize::MAX` because no LIMIT was specified,
+                        // we also can't represent it as an exact value.
+                        fetched_row_number_stats =
+                            fetched_row_number_stats.into_inexact();
+                    }
+                    fetched_row_number_stats
                 }
             }
             _ => {
-                // the result output row number will always be no greater than the limit number
-                Ok(Statistics {
-                    num_rows: Precision::Exact(max_row_num),
-                    total_byte_size: Precision::Absent,
-                    column_statistics: to_inexact_cs(input_stats.column_statistics),
-                })
+                // The result output `num_rows` will always be no greater than the limit number.
+                // Should `num_rows` be marked as `Absent` here when the `fetch` value is large,
+                // as the actual `num_rows` may be far away from the `fetch` value?
+                fetched_row_number_stats.into_inexact()
             }
-        }
+        };
+        Ok(stats)
     }
 }
 

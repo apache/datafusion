@@ -110,13 +110,6 @@ impl<T: Debug + Clone + PartialEq + Eq + PartialOrd> Precision<T> {
             _ => self,
         }
     }
-
-    /// Mutates the precision state from exact to inexact (if present).
-    pub fn make_inexact(&mut self) {
-        if let Some(value) = self.get_value() {
-            *self = Precision::Inexact(value.clone());
-        }
-    }
 }
 
 impl Precision<usize> {
@@ -303,15 +296,6 @@ impl ColumnStatistics {
             min_value: Precision::Absent,
             distinct_count: Precision::Absent,
         }
-    }
-
-    /// Demotes the precision state of all fields from exact to inexact (if present).
-    pub fn to_inexact(mut self) -> Self {
-        self.distinct_count.make_inexact();
-        self.null_count.make_inexact();
-        self.min_value.make_inexact();
-        self.max_value.make_inexact();
-        self
     }
 }
 
