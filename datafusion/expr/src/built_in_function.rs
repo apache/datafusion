@@ -28,14 +28,12 @@ use crate::signature::TIMEZONE_WILDCARD;
 use crate::type_coercion::binary::get_wider_type;
 use crate::type_coercion::functions::data_types;
 use crate::{
-    conditional_expressions, struct_expressions, utils, FuncMonotonicity, Signature,
+    conditional_expressions, struct_expressions, FuncMonotonicity, Signature,
     TypeSignature, Volatility,
 };
 
 use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
-use datafusion_common::{
-    internal_err, plan_datafusion_err, plan_err, DataFusionError, Result,
-};
+use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
 
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
@@ -483,37 +481,19 @@ impl BuiltinScalarFunction {
     }
 
     /// Returns the output [`DataType`] of this function
+    ///
+    /// This method should be invoked only after `input_expr_types` have been validated
+    /// against the function's `TypeSignature` using `type_coercion::functions::data_types()`.
+    ///
+    /// This method will:
+    /// 1. Perform additional checks on `input_expr_types` that are beyond the scope of `TypeSignature` validation.
+    /// 2. Deduce the output `DataType` based on the provided `input_expr_types`.
     pub fn return_type(self, input_expr_types: &[DataType]) -> Result<DataType> {
         use DataType::*;
         use TimeUnit::*;
 
         // Note that this function *must* return the same type that the respective physical expression returns
         // or the execution panics.
-
-        if input_expr_types.is_empty()
-            && !self.signature().type_signature.supports_zero_argument()
-        {
-            return plan_err!(
-                "{}",
-                utils::generate_signature_error_msg(
-                    &format!("{self}"),
-                    self.signature(),
-                    input_expr_types
-                )
-            );
-        }
-
-        // verify that this is a valid set of data types for this function
-        data_types(input_expr_types, &self.signature()).map_err(|_| {
-            plan_datafusion_err!(
-                "{}",
-                utils::generate_signature_error_msg(
-                    &format!("{self}"),
-                    self.signature(),
-                    input_expr_types,
-                )
-            )
-        })?;
 
         // the return type of the built in function.
         // Some built-in functions' return type depends on the incoming type.

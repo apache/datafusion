@@ -35,8 +35,17 @@ pub fn data_types(
     signature: &Signature,
 ) -> Result<Vec<DataType>> {
     if current_types.is_empty() {
-        return Ok(vec![]);
+        if signature.type_signature.supports_zero_argument() {
+            return Ok(vec![]);
+        } else {
+            return plan_err!(
+                "Coercion from {:?} to the signature {:?} failed.",
+                current_types,
+                &signature.type_signature
+            );
+        }
     }
+
     let valid_types = get_valid_types(&signature.type_signature, current_types)?;
 
     if valid_types
