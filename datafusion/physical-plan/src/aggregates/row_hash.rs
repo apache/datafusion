@@ -442,15 +442,11 @@ impl Stream for GroupedHashAggregateStream {
 
                             // If the number of group values equals or exceeds the soft limit,
                             // emit all groups and switch to producing output
-                            if let Some(group_values_soft_limit) =
-                                self.group_values_soft_limit
-                            {
-                                if group_values_soft_limit <= self.group_values.len() {
-                                    timer.done();
-                                    extract_ok!(self.set_input_done_and_produce_output());
-                                    // make sure the exec_state just set is not overwritten below
-                                    break 'reading_input;
-                                }
+                            if self.hit_soft_group_limit() {
+                                timer.done();
+                                extract_ok!(self.set_input_done_and_produce_output());
+                                // make sure the exec_state just set is not overwritten below
+                                break 'reading_input;
                             }
 
                             if let Some(to_emit) = self.group_ordering.emit_to() {
@@ -755,6 +751,15 @@ impl GroupedHashAggregateStream {
         self.input_done = false;
         self.group_ordering = GroupOrdering::Full(GroupOrderingFull::new());
         Ok(())
+    }
+
+    /// returns true if there is a soft groups limit and the number of distinct
+    /// groups we have seen is over that limit
+    fn hit_soft_group_limit(&self) -> bool {
+        let Some(group_values_soft_limit) = self.group_values_soft_limit else {
+            return false;
+        };
+        group_values_soft_limit <= self.group_values.len()
     }
 
     // common function for signalling end of processing of the input stream
