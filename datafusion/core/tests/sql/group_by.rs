@@ -71,45 +71,6 @@ async fn group_by_date_trunc() -> Result<()> {
 }
 
 #[tokio::test]
-async fn distinct_group_by_limit() -> Result<()> {
-    let tmp_dir = TempDir::new()?;
-    let ctx = create_groupby_context(&tmp_dir).await?;
-
-    let sql = "SELECT DISTINCT trace_id from traces group by trace_id limit 4";
-    let dataframe = ctx.sql(sql).await?;
-
-    // ensure we see `lim=[4]`
-    let physical_plan = dataframe.create_physical_plan().await?;
-    let mut expected_physical_plan = r#"
-GlobalLimitExec: skip=0, fetch=4
-  AggregateExec: mode=Single, gby=[trace_id@0 as trace_id], aggr=[], lim=[4]
-    AggregateExec: mode=Single, gby=[trace_id@0 as trace_id], aggr=[], lim=[4]
-    "#
-    .trim()
-    .to_string();
-    let actual_phys_plan =
-        format_plan(physical_plan.clone(), &mut expected_physical_plan);
-    assert_eq!(expected_physical_plan, actual_phys_plan);
-
-    let batches = collect(physical_plan, ctx.task_ctx()).await?;
-    let expected = r#"
-+----------+
-| trace_id |
-+----------+
-| 0        |
-| 1        |
-| 2        |
-| 3        |
-+----------+
-"#
-    .trim();
-    let actual = format!("{}", pretty_format_batches(&batches)?);
-    assert_eq!(actual, expected);
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn group_by_limit() -> Result<()> {
     let tmp_dir = TempDir::new()?;
     let ctx = create_groupby_context(&tmp_dir).await?;

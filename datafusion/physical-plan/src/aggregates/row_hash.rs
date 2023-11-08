@@ -777,9 +777,6 @@ impl GroupedHashAggregateStream {
             self.exec_state = ExecutionState::ReadingInput;
         }
         timer.done();
-        // `Ready(None)` flags the non-error case, as the `extract_ok` macro may
-        // wrap an error in `Poll::Ready`, which should be detected and immediately
-        // returned by poll_next.
         Ok(())
     }
 }

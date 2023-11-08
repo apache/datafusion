@@ -80,7 +80,9 @@ impl PhysicalOptimizer {
             // repartitioning and local sorting steps to meet distribution and ordering requirements.
             // Therefore, it should run before EnforceDistribution and EnforceSorting.
             Arc::new(JoinSelection::new()),
-            // The LimitedDistinctAggregation rule should be applied before the EnforceDistribution rule
+            // The LimitedDistinctAggregation rule should be applied before the EnforceDistribution rule,
+            // as that rule may inject other operations in between the different AggregateExecs.
+            // Applying the rule early means only directly-connected AggregateExecs must be examined.
             Arc::new(LimitedDistinctAggregation::new()),
             // The EnforceDistribution rule is for adding essential repartitioning to satisfy distribution
             // requirements. Please make sure that the whole plan tree is determined before this rule.
