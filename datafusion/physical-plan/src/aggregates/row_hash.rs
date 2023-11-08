@@ -762,7 +762,7 @@ impl GroupedHashAggregateStream {
         group_values_soft_limit <= self.group_values.len()
     }
 
-    // common function for signalling end of processing of the input stream
+    /// common function for signalling end of processing of the input stream
     fn set_input_done_and_produce_output(&mut self) -> Result<()> {
         self.input_done = true;
         self.group_ordering.input_done();
