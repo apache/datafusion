@@ -192,10 +192,10 @@ impl ExecutionPlan for FilterExec {
     /// The output statistics of a filtering operation can be estimated if the
     /// predicate's selectivity value can be determined for the incoming data.
     fn statistics(&self) -> Result<Statistics> {
-        let predicate = self.predicate().clone();
+        let predicate = self.predicate();
 
         let schema = self.schema();
-        if !check_support(&predicate, &schema) {
+        if !check_support(predicate, &schema) {
             return Ok(Statistics::new_unknown(&schema));
         }
         let input_stats = self.input.statistics()?;
@@ -252,13 +252,14 @@ fn collect_new_statistics(
                     ..
                 },
             )| {
+                let (min_value, max_value) = interval.into_bounds();
                 ColumnStatistics {
                     null_count: match input_column_stats[idx].null_count.get_value() {
                         Some(nc) => Precision::Inexact(*nc),
                         None => Precision::Absent,
                     },
-                    max_value: Precision::Inexact(interval.upper().clone()),
-                    min_value: Precision::Inexact(interval.lower().clone()),
+                    max_value: Precision::Inexact(max_value),
+                    min_value: Precision::Inexact(min_value),
                     distinct_count: match distinct_count.get_value() {
                         Some(dc) => Precision::Inexact(*dc),
                         None => Precision::Absent,

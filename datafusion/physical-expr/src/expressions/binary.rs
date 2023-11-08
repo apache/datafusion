@@ -346,6 +346,13 @@ impl PhysicalExpr for BinaryExpr {
 
         if self.op.eq(&Operator::And) {
             if interval.eq(&Interval::CERTAINLY_TRUE) {
+                // CERTAINLY_TRUE propagation of And operator to
+                // CERTAINLY_FALSE chiledren is infeasible.
+                if left_interval.eq(&Interval::CERTAINLY_FALSE)
+                    || right_interval.eq(&Interval::CERTAINLY_FALSE)
+                {
+                    return Ok(None);
+                }
                 Ok(Some(vec![
                     Interval::CERTAINLY_TRUE,
                     Interval::CERTAINLY_TRUE,

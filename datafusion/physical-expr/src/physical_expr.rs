@@ -106,8 +106,7 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
     ///
     /// A Vec of new intervals for the children, in order.
     ///
-    /// If constraint propagation reveals an infeasibility, returns [None] for
-    /// the child causing infeasibility.
+    /// If constraint propagation reveals an infeasibility for any child, returns [None].
     ///
     /// If none of the child intervals change as a result of propagation, may
     /// return an empty vector instead of cloning `children`.

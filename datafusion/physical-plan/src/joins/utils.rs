@@ -640,9 +640,9 @@ fn max_distinct_count(
             };
 
             // The number can never be greater than the number of rows we have (minus
-            // the nulls, since they don't count as distinct values).
-            let ceiling =
-                num_rows.get_value()? - stats.null_count.get_value().unwrap_or(&0);
+            // nulls, since they don't count as distinct values).
+            let ceiling = num_rows.get_value().unwrap_or(&usize::MAX)
+                - stats.null_count.get_value().unwrap_or(&0);
             let max_dc = numeric_range
                 .cardinality()
                 .map_or(ceiling, |c| (c as usize).min(ceiling));

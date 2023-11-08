@@ -28,7 +28,7 @@ use crate::expressions::Literal;
 use crate::utils::{build_dag, ExprTreeNode};
 use crate::PhysicalExpr;
 use arrow_schema::DataType;
-use datafusion_common::Result;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::interval_arithmetic::{
     apply_operator, equalize_intervals, satisfy_comparison, Interval,
 };
@@ -262,6 +262,7 @@ pub fn propagate_arithmetic(
                         // Return intervals for both children:
                         Ok(Some(vec![value, right]))
                     } else {
+                        // If the right child is infeasible, short-circuit.
                         Ok(None)
                     }
                 }
@@ -272,45 +273,49 @@ pub fn propagate_arithmetic(
     }
 }
 
-// Two intervals can be ordered in 6 ways for a Gt `>` operator:
-//
-//                           (1): Infeasible, short-circuit
-// left:   |        ================                                               |
-// right:  |                           ========================                    |
-//
-//                             (2): Update both interval
-// left:   |              ======================                                   |
-// right:  |                             ======================                    |
-//                                          |
-//                                          V
-// left:   |                             =======                                   |
-// right:  |                             =======                                   |
-//
-//                             (3): Update left interval
-// left:   |                  ==============================                       |
-// right:  |                           ==========                                  |
-//                                          |
-//                                          V
-// left:   |                           =====================                       |
-// right:  |                           ==========                                  |
-//
-//                             (4): Update right interval
-// left:   |                           ==========                                  |
-// right:  |                   ===========================                         |
-//                                          |
-//                                          V
-// left:   |                           ==========                                  |
-// right   |                   ==================                                  |
-//
-//                                   (5): No change
-// left:   |                       ============================                    |
-// right:  |               ===================                                     |
-//
-//                                   (6): No change
-// left:   |                                    ====================               |
-// right:  |                ===============                                        |
-//
-//         -inf --------------------------------------------------------------- +inf
+/// This function refines intervals `left_child` and `right_child` by applying
+/// comparison propagation through `parent` via operation. The main idea is
+/// that we can shrink ranges of variables x and y using parent interval p.
+/// Two intervals can be ordered in 6 ways for a Gt `>` operator:
+/// ```text
+///                           (1): Infeasible, short-circuit
+/// left:   |        ================                                               |
+/// right:  |                           ========================                    |
+///
+///                             (2): Update both interval
+/// left:   |              ======================                                   |
+/// right:  |                             ======================                    |
+///                                          |
+///                                          V
+/// left:   |                             =======                                   |
+/// right:  |                             =======                                   |
+///
+///                             (3): Update left interval
+/// left:   |                  ==============================                       |
+/// right:  |                           ==========                                  |
+///                                          |
+///                                          V
+/// left:   |                           =====================                       |
+/// right:  |                           ==========                                  |
+///
+///                             (4): Update right interval
+/// left:   |                           ==========                                  |
+/// right:  |                   ===========================                         |
+///                                          |
+///                                          V
+/// left:   |                           ==========                                  |
+/// right   |                   ==================                                  |
+///
+///                                   (5): No change
+/// left:   |                       ============================                    |
+/// right:  |               ===================                                     |
+///
+///                                   (6): No change
+/// left:   |                                    ====================               |
+/// right:  |                ===============                                        |
+///
+///         -inf --------------------------------------------------------------- +inf
+/// ```
 pub fn propagate_comparison(
     op: &Operator,
     parent: &Interval,
@@ -319,7 +324,7 @@ pub fn propagate_comparison(
 ) -> Result<Option<Vec<Interval>>> {
     if parent == &Interval::UNCERTAIN || parent == &Interval::CERTAINLY_FALSE {
         // We cannot propagate over an uncertain interval.
-        // TODO: False expecting comparison operators are not supported yet.
+        // TODO: Certainly false asserting comparison operators are not supported yet.
         Ok(None)
     } else {
         match op {
@@ -583,20 +588,24 @@ impl ExprIntervalGraph {
     ) -> Result<PropagationResult> {
         self.assign_intervals(leaf_bounds);
         let bounds = self.evaluate_bounds()?;
-        // There are 4 cases to consider:
+        // There are 4 types of relation to consider for requested result and expression evaluation:
         // 1) bounds ⊂ expression_request => CannotPropagate
         // 2) expression_request ⊂ bounds => Success
         // 3) Disjoint sets => Infeasible
         // 4) Partially intersecting sets => Success
         if expression_request.contains(bounds)? == Interval::CERTAINLY_TRUE {
+            // bounds ⊂ expression_request => CannotPropagate
             Ok(PropagationResult::CannotPropagate)
         } else if bounds.contains(&expression_request)? == Interval::CERTAINLY_TRUE
             || bounds.contains(&expression_request)? == Interval::UNCERTAIN
         {
+            // expression_request ⊂ bounds => Success, or
+            // Partially intersecting sets => Success
             let result = self.propagate_constraints(expression_request);
             self.update_intervals(leaf_bounds);
             result
         } else {
+            // Disjoint sets => Infeasible
             Ok(PropagationResult::Infeasible)
         }
     }
@@ -618,9 +627,49 @@ fn propagate_right(
     match op {
         Operator::Minus => apply_operator(op, left, parent),
         Operator::Plus => apply_operator(inverse_op, parent, left),
-        _ => unreachable!(),
+        Operator::Divide => apply_operator(op, left, parent),
+        Operator::Multiply => apply_operator(inverse_op, parent, left),
+        _ => Err(DataFusionError::Internal(format!(
+            "Interval arithmetic does not support the operator {}",
+            op
+        ))),
     }?
     .intersect(right)
+}
+
+/// During the propagation of [`Interval`] values on an [`ExprIntervalGraph`], if there exists a `timestamp - timestamp`
+/// operation, the result would be of type `Duration`. However, we may encounter a situation where a time interval
+/// is involved in an arithmetic operation with a `Duration` type. This function offers special handling for such cases,
+/// where the time interval resides on the left side of the operation.
+fn propagate_time_interval_at_left(
+    left_child: &Interval,
+    right_child: &Interval,
+    parent: &Interval,
+    op: &Operator,
+    inverse_op: &Operator,
+) -> Result<Option<Vec<Interval>>> {
+    // We check if the child's time interval(s) has a non-zero month or day field(s).
+    // If so, we return it as is without propagating. Otherwise, we first convert
+    // the time intervals to the Duration type, then propagate, and then convert the bounds to time intervals again.
+    if let Some(duration) = convert_interval_type_to_duration(left_child) {
+        match apply_operator(inverse_op, parent, right_child)?.intersect(duration)? {
+            Some(value) => {
+                let right = propagate_right(&value, parent, right_child, op, inverse_op)?;
+                let new_interval = convert_duration_type_to_interval(&value);
+                match (new_interval, right) {
+                    (Some(left), Some(right)) => Ok(Some(vec![left, right])),
+                    _ => Ok(None),
+                }
+            }
+            None => Ok(None),
+        }
+    } else if let Some(right) =
+        propagate_right(left_child, parent, right_child, op, inverse_op)?
+    {
+        Ok(Some(vec![left_child.clone(), right]))
+    } else {
+        Ok(None)
+    }
 }
 
 /// During the propagation of [`Interval`] values on an [`ExprIntervalGraph`], if there exists a `timestamp - timestamp`
@@ -659,42 +708,6 @@ fn propagate_time_interval_at_right(
         }
     }
 }
-
-/// During the propagation of [`Interval`] values on an [`ExprIntervalGraph`], if there exists a `timestamp - timestamp`
-/// operation, the result would be of type `Duration`. However, we may encounter a situation where a time interval
-/// is involved in an arithmetic operation with a `Duration` type. This function offers special handling for such cases,
-/// where the time interval resides on the left side of the operation.
-fn propagate_time_interval_at_left(
-    left_child: &Interval,
-    right_child: &Interval,
-    parent: &Interval,
-    op: &Operator,
-    inverse_op: &Operator,
-) -> Result<Option<Vec<Interval>>> {
-    // We check if the child's time interval(s) has a non-zero month or day field(s).
-    // If so, we return it as is without propagating. Otherwise, we first convert
-    // the time intervals to the Duration type, then propagate, and then convert the bounds to time intervals again.
-    if let Some(duration) = convert_interval_type_to_duration(left_child) {
-        match apply_operator(inverse_op, parent, right_child)?.intersect(duration)? {
-            Some(value) => {
-                let right = propagate_right(&value, parent, right_child, op, inverse_op)?;
-                let new_interval = convert_duration_type_to_interval(&value);
-                match (new_interval, right) {
-                    (Some(left), Some(right)) => Ok(Some(vec![left, right])),
-                    _ => Ok(None),
-                }
-            }
-            None => Ok(None),
-        }
-    } else if let Some(right) =
-        propagate_right(left_child, parent, right_child, op, inverse_op)?
-    {
-        Ok(Some(vec![left_child.clone(), right]))
-    } else {
-        Ok(None)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -748,15 +761,13 @@ mod tests {
             |((_, calculated_interval_node), (_, expected))| {
                 // NOTE: These randomized tests only check for conservative containment,
                 // not openness/closedness of endpoints.
+
+                // Calculated bounds are relaxed by 1 to cover all strict and
+                // and non-strict comparison cases since we have only closed bounds.
+                let one = ScalarValue::new_one(&expected.get_datatype()).unwrap();
                 assert!(
                     calculated_interval_node.lower()
-                        <= &expected
-                            .lower()
-                            .add(
-                                ScalarValue::new_one(&expected.lower().data_type())
-                                    .unwrap()
-                            )
-                            .unwrap(),
+                        <= &expected.lower().add(&one).unwrap(),
                     "{}",
                     format!(
                         "Calculated {} must be less than or equal {}",
@@ -766,13 +777,7 @@ mod tests {
                 );
                 assert!(
                     calculated_interval_node.upper()
-                        >= &expected
-                            .upper()
-                            .sub(
-                                ScalarValue::new_one(&expected.upper().data_type())
-                                    .unwrap()
-                            )
-                            .unwrap(),
+                        >= &expected.upper().sub(&one).unwrap(),
                     "{}",
                     format!(
                         "Calculated {} must be greater than or equal {}",

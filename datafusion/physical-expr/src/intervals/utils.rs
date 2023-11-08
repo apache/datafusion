@@ -160,8 +160,14 @@ fn convert_duration_bound_to_interval(
         ScalarValue::DurationNanosecond(Some(duration)) => {
             Some(ScalarValue::new_interval_mdn(0, 0, *duration))
         }
+        ScalarValue::DurationMicrosecond(Some(duration)) => {
+            Some(ScalarValue::new_interval_mdn(0, 0, *duration * 1000))
+        }
         ScalarValue::DurationMillisecond(Some(duration)) => {
             Some(ScalarValue::new_interval_dt(0, *duration as i32))
+        }
+        ScalarValue::DurationSecond(Some(duration)) => {
+            Some(ScalarValue::new_interval_dt(0, *duration as i32 * 1000))
         }
         _ => None,
     }

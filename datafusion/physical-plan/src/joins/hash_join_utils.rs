@@ -603,11 +603,11 @@ pub fn update_filter_expr_interval(
     // Convert the array to a ScalarValue:
     let value = ScalarValue::try_from_array(&array, 0)?;
     // Create a ScalarValue representing positive or negative infinity for the same data type:
+    let inf = ScalarValue::try_from(value.data_type())?;
     // Update the interval with lower and upper bounds based on the sort option:
     let interval = if sorted_expr.origin_sorted_expr().options.descending {
-        Interval::try_new(ScalarValue::try_from(value.data_type())?, value)?
+        Interval::try_new(inf, value)?
     } else {
-        let inf = ScalarValue::try_from(value.data_type())?;
         Interval::try_new(value, inf)?
     };
     // Set the calculated interval for the sorted filter expression:

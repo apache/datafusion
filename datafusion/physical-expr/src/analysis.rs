@@ -129,17 +129,17 @@ impl ExprBoundaries {
 ///
 /// * `AnalysisContext` constructed by pruned boundaries and a selectivity value.
 pub fn analyze(
-    expr: Arc<dyn PhysicalExpr>,
+    expr: &Arc<dyn PhysicalExpr>,
     context: AnalysisContext,
 ) -> Result<AnalysisContext> {
     let target_boundaries = context.boundaries;
 
-    let columns: Vec<Arc<dyn PhysicalExpr>> = collect_columns(&expr)
+    let columns: Vec<Arc<dyn PhysicalExpr>> = collect_columns(expr)
         .into_iter()
         .map(|c| Arc::new(c) as Arc<dyn PhysicalExpr>)
         .collect();
 
-    let mut graph = ExprIntervalGraph::try_new(expr)?;
+    let mut graph = ExprIntervalGraph::try_new(expr.clone())?;
 
     let target_expr_and_indices: Vec<(Arc<dyn PhysicalExpr>, usize)> =
         graph.gather_node_indices(columns.as_slice());
@@ -193,8 +193,8 @@ fn shrink_boundaries(
         }
     });
 
-    // If during selectivity calculation we encounter an error, use 1.0 as cardinality estimate
-    // safest estimate(e.q largest possible value).
+    // If during selectivity calculation we encounter an error, use 1.0 as
+    // the safest selectivity estimate.
     let selectivity =
         calculate_selectivity(&target_boundaries, &initial_boundaries).unwrap_or(1.0);
 
