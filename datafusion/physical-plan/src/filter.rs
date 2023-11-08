@@ -251,18 +251,32 @@ fn collect_new_statistics(
                     ..
                 },
             )| {
+                let null_count = match input_column_stats[idx].null_count.get_value() {
+                    Some(nc) => Precision::Inexact(*nc),
+                    None => Precision::Absent,
+                };
                 let closed_interval = interval.close_bounds();
+                let (min_value, max_value) =
+                    if closed_interval.lower.value.eq(&closed_interval.upper.value) {
+                        (
+                            Precision::Exact(closed_interval.lower.value.clone()),
+                            Precision::Exact(closed_interval.lower.value),
+                        )
+                    } else {
+                        (
+                            Precision::Inexact(closed_interval.lower.value),
+                            Precision::Inexact(closed_interval.upper.value),
+                        )
+                    };
+                let distinct_count = match distinct_count.get_value() {
+                    Some(dc) => Precision::Inexact(*dc),
+                    None => Precision::Absent,
+                };
                 ColumnStatistics {
-                    null_count: match input_column_stats[idx].null_count.get_value() {
-                        Some(nc) => Precision::Inexact(*nc),
-                        None => Precision::Absent,
-                    },
-                    max_value: Precision::Inexact(closed_interval.upper.value),
-                    min_value: Precision::Inexact(closed_interval.lower.value),
-                    distinct_count: match distinct_count.get_value() {
-                        Some(dc) => Precision::Inexact(*dc),
-                        None => Precision::Absent,
-                    },
+                    null_count,
+                    max_value,
+                    min_value,
+                    distinct_count,
                 }
             },
         )

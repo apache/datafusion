@@ -33,7 +33,7 @@ use arrow::array::ArrayRef;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::stats::Precision;
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{internal_err, ColumnStatistics, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 
 use futures::stream::{Stream, StreamExt};
@@ -198,46 +198,54 @@ impl ExecutionPlan for GlobalLimitExec {
                     fetch + skip
                 }
             })
-            .unwrap_or(usize::MAX);
-        let col_stats = Statistics::unknown_column(&self.schema());
+            .unwrap_or(match input_stats.num_rows {
+                Precision::Exact(nr) => nr,
+                _ => usize::MAX,
+            });
 
-        let fetched_row_number_stats = Statistics {
-            num_rows: Precision::Exact(max_row_num),
-            column_statistics: col_stats.clone(),
-            total_byte_size: Precision::Absent,
+        let to_inexact_cs = |cs: Vec<ColumnStatistics>| {
+            cs.into_iter().map(|cs| cs.to_inexact()).collect()
         };
 
-        let stats = match input_stats {
-            Statistics {
-                num_rows: Precision::Exact(nr),
-                ..
-            }
-            | Statistics {
-                num_rows: Precision::Inexact(nr),
-                ..
-            } => {
+        match input_stats.num_rows {
+            Precision::Exact(nr) | Precision::Inexact(nr) => {
                 if nr <= skip {
                     // if all input data will be skipped, return 0
-                    Statistics {
+                    Ok(Statistics {
                         num_rows: Precision::Exact(0),
-                        column_statistics: col_stats,
-                        total_byte_size: Precision::Absent,
-                    }
+                        total_byte_size: Precision::Exact(0),
+                        column_statistics: vec![
+                            ColumnStatistics {
+                                null_count: Precision::Exact(0),
+                                max_value: Precision::Absent,
+                                min_value: Precision::Absent,
+                                distinct_count: Precision::Exact(0)
+                            };
+                            input_stats.column_statistics.len()
+                        ],
+                    })
                 } else if nr <= max_row_num {
                     // if the input does not reach the "fetch" globally, return input stats
-                    input_stats
+                    Ok(input_stats)
                 } else {
                     // if the input is greater than the "fetch", the num_row will be the "fetch",
                     // but we won't be able to predict the other statistics
-                    fetched_row_number_stats
+                    Ok(Statistics {
+                        num_rows: Precision::Exact(max_row_num),
+                        total_byte_size: input_stats.total_byte_size.to_inexact(),
+                        column_statistics: to_inexact_cs(input_stats.column_statistics),
+                    })
                 }
             }
             _ => {
                 // the result output row number will always be no greater than the limit number
-                fetched_row_number_stats
+                Ok(Statistics {
+                    num_rows: Precision::Exact(max_row_num),
+                    total_byte_size: Precision::Absent,
+                    column_statistics: to_inexact_cs(input_stats.column_statistics),
+                })
             }
-        };
-        Ok(stats)
+        }
     }
 }
 

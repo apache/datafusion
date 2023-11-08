@@ -110,6 +110,13 @@ impl<T: Debug + Clone + PartialEq + Eq + PartialOrd> Precision<T> {
             _ => self,
         }
     }
+
+    /// Mutates the precision state from exact to inexact (if present).
+    pub fn make_inexact(&mut self) {
+        if let Some(value) = self.get_value() {
+            *self = Precision::Inexact(value.clone());
+        }
+    }
 }
 
 impl Precision<usize> {
@@ -279,9 +286,11 @@ pub struct ColumnStatistics {
 impl ColumnStatistics {
     /// Column contains a single non null value (e.g constant).
     pub fn is_singleton(&self) -> bool {
-        match (self.min_value.get_value(), self.max_value.get_value()) {
+        match (&self.min_value, &self.max_value) {
             // Min and max values are the same and not infinity.
-            (Some(min), Some(max)) => !min.is_null() && !max.is_null() && (min == max),
+            (Precision::Exact(min), Precision::Exact(max)) => {
+                !min.is_null() && !max.is_null() && (min == max)
+            }
             (_, _) => false,
         }
     }
@@ -294,6 +303,15 @@ impl ColumnStatistics {
             min_value: Precision::Absent,
             distinct_count: Precision::Absent,
         }
+    }
+
+    /// Demotes the precision state of all fields from exact to inexact (if present).
+    pub fn to_inexact(mut self) -> Self {
+        self.distinct_count.make_inexact();
+        self.null_count.make_inexact();
+        self.min_value.make_inexact();
+        self.max_value.make_inexact();
+        self
     }
 }
 
