@@ -22,14 +22,13 @@ use std::sync::Arc;
 
 use crate::aggregate::utils::{down_cast_any_ref, ordering_fields};
 use crate::expressions::format_state_name;
-use crate::{AggregateExpr, LexOrdering, PhysicalExpr, PhysicalSortExpr};
+use crate::{
+    reverse_order_bys, AggregateExpr, LexOrdering, PhysicalExpr, PhysicalSortExpr,
+};
 
-use arrow::array::ArrayRef;
-use arrow::compute;
-use arrow::compute::{lexsort_to_indices, SortColumn};
+use arrow::array::{Array, ArrayRef, AsArray, BooleanArray};
+use arrow::compute::{self, lexsort_to_indices, SortColumn};
 use arrow::datatypes::{DataType, Field};
-use arrow_array::cast::AsArray;
-use arrow_array::{Array, BooleanArray};
 use arrow_schema::SortOptions;
 use datafusion_common::utils::{compare_rows, get_arrayref_at_indices, get_row_at_idx};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
@@ -126,7 +125,7 @@ impl AggregateExpr for FirstValue {
             self.expr.clone(),
             name,
             self.input_data_type.clone(),
-            self.ordering_req.clone(),
+            reverse_order_bys(&self.ordering_req),
             self.order_by_data_types.clone(),
         )))
     }
@@ -350,7 +349,7 @@ impl AggregateExpr for LastValue {
             self.expr.clone(),
             name,
             self.input_data_type.clone(),
-            self.ordering_req.clone(),
+            reverse_order_bys(&self.ordering_req),
             self.order_by_data_types.clone(),
         )))
     }

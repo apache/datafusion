@@ -19,7 +19,7 @@
 
 # DataFusion Logical Plan and Expressions
 
-[DataFusion](df) is an extensible query execution framework, written in Rust, that uses Apache Arrow as its in-memory format.
+[DataFusion][df] is an extensible query execution framework, written in Rust, that uses Apache Arrow as its in-memory format.
 
 This crate is a submodule of DataFusion that provides data types and utilities for logical plans and expressions.
 

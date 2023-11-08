@@ -1503,7 +1503,7 @@ mod tests {
         test_evaluate(expr, lit("foobarbaz"));
 
         // Check non string arguments
-        // to_timestamp("2020-09-08T12:00:00+00:00") --> timestamp(1599566400000000000i64)
+        // to_timestamp("2020-09-08T12:00:00+00:00") --> timestamp(1599566400i64)
         let expr =
             call_fn("to_timestamp", vec![lit("2020-09-08T12:00:00+00:00")]).unwrap();
         test_evaluate(expr, lit_timestamp_nano(1599566400000000000i64));

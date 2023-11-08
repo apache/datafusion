@@ -32,34 +32,51 @@ use crate::{
 
 use arrow::datatypes::Schema;
 use arrow_schema::{DataType, Field, SchemaRef};
-use datafusion_common::utils::{
-    find_indices, get_at_indices, is_sorted, longest_consecutive_prefix,
-    merge_and_order_indices, set_difference,
-};
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
     window_function::{BuiltInWindowFunction, WindowFunction},
     PartitionEvaluator, WindowFrame, WindowUDF,
 };
+use datafusion_physical_expr::equivalence::collapse_lex_req;
 use datafusion_physical_expr::{
-    equivalence::OrderingEquivalenceBuilder,
-    utils::{convert_to_expr, get_indices_of_matching_exprs},
+    reverse_order_bys,
     window::{BuiltInWindowFunctionExpr, SlidingAggregateWindowExpr},
-    AggregateExpr, OrderingEquivalenceProperties, PhysicalSortRequirement,
+    AggregateExpr, EquivalenceProperties, LexOrdering, PhysicalSortRequirement,
 };
-
-use itertools::{izip, Itertools};
 
 mod bounded_window_agg_exec;
 mod window_agg_exec;
 
 pub use bounded_window_agg_exec::BoundedWindowAggExec;
-pub use bounded_window_agg_exec::PartitionSearchMode;
 pub use window_agg_exec::WindowAggExec;
 
 pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
 };
+
+#[derive(Debug, Clone, PartialEq)]
+/// Specifies aggregation grouping and/or window partitioning properties of a
+/// set of expressions in terms of the existing ordering.
+/// For example, if the existing ordering is `[a ASC, b ASC, c ASC]`:
+/// - A `PARTITION BY b` clause will result in `Linear` mode.
+/// - A `PARTITION BY a, c` or a `PARTITION BY c, a` clause will result in
+///   `PartiallySorted([0])` or `PartiallySorted([1])` modes, respectively.
+///   The vector stores the index of `a` in the respective PARTITION BY expression.
+/// - A `PARTITION BY a, b` or a `PARTITION BY b, a` clause will result in
+///   `Sorted` mode.
+/// Note that the examples above are applicable for `GROUP BY` clauses too.
+pub enum PartitionSearchMode {
+    /// There is no partial permutation of the expressions satisfying the
+    /// existing ordering.
+    Linear,
+    /// There is a partial permutation of the expressions satisfying the
+    /// existing ordering. Indices describing the longest partial permutation
+    /// are stored in the vector.
+    PartiallySorted(Vec<usize>),
+    /// There is a (full) permutation of the expressions satisfying the
+    /// existing ordering.
+    Sorted,
+}
 
 /// Create a physical expression for window function
 pub fn create_window_expr(
@@ -321,45 +338,51 @@ pub(crate) fn get_ordered_partition_by_indices(
     partition_by_exprs: &[Arc<dyn PhysicalExpr>],
     input: &Arc<dyn ExecutionPlan>,
 ) -> Vec<usize> {
-    let input_ordering = input.output_ordering().unwrap_or(&[]);
-    let input_ordering_exprs = convert_to_expr(input_ordering);
-    let equal_properties = || input.equivalence_properties();
-    let input_places = get_indices_of_matching_exprs(
-        &input_ordering_exprs,
-        partition_by_exprs,
-        equal_properties,
-    );
-    let mut partition_places = get_indices_of_matching_exprs(
-        partition_by_exprs,
-        &input_ordering_exprs,
-        equal_properties,
-    );
-    partition_places.sort();
-    let first_n = longest_consecutive_prefix(partition_places);
-    input_places[0..first_n].to_vec()
+    let (_, indices) = input
+        .equivalence_properties()
+        .find_longest_permutation(partition_by_exprs);
+    indices
 }
 
-pub(crate) fn window_ordering_equivalence(
+pub(crate) fn get_partition_by_sort_exprs(
+    input: &Arc<dyn ExecutionPlan>,
+    partition_by_exprs: &[Arc<dyn PhysicalExpr>],
+    ordered_partition_by_indices: &[usize],
+) -> Result<LexOrdering> {
+    let ordered_partition_exprs = ordered_partition_by_indices
+        .iter()
+        .map(|idx| partition_by_exprs[*idx].clone())
+        .collect::<Vec<_>>();
+    // Make sure ordered section doesn't move over the partition by expression
+    assert!(ordered_partition_by_indices.len() <= partition_by_exprs.len());
+    let (ordering, _) = input
+        .equivalence_properties()
+        .find_longest_permutation(&ordered_partition_exprs);
+    if ordering.len() == ordered_partition_exprs.len() {
+        Ok(ordering)
+    } else {
+        exec_err!("Expects PARTITION BY expression to be ordered")
+    }
+}
+
+pub(crate) fn window_equivalence_properties(
     schema: &SchemaRef,
     input: &Arc<dyn ExecutionPlan>,
     window_expr: &[Arc<dyn WindowExpr>],
-) -> OrderingEquivalenceProperties {
+) -> EquivalenceProperties {
     // We need to update the schema, so we can not directly use
-    // `input.ordering_equivalence_properties()`.
-    let mut builder = OrderingEquivalenceBuilder::new(schema.clone())
-        .with_equivalences(input.equivalence_properties())
-        .with_existing_ordering(input.output_ordering().map(|elem| elem.to_vec()))
-        .extend(input.ordering_equivalence_properties());
+    // `input.equivalence_properties()`.
+    let mut window_eq_properties =
+        EquivalenceProperties::new(schema.clone()).extend(input.equivalence_properties());
 
     for expr in window_expr {
         if let Some(builtin_window_expr) =
             expr.as_any().downcast_ref::<BuiltInWindowExpr>()
         {
-            builtin_window_expr
-                .add_equal_orderings(&mut builder, || input.equivalence_properties());
+            builtin_window_expr.add_equal_orderings(&mut window_eq_properties);
         }
     }
-    builder.build()
+    window_eq_properties
 }
 
 /// Constructs the best-fitting windowing operator (a `WindowAggExec` or a
@@ -386,7 +409,7 @@ pub fn get_best_fitting_window(
     let orderby_keys = window_exprs[0].order_by();
     let (should_reverse, partition_search_mode) =
         if let Some((should_reverse, partition_search_mode)) =
-            can_skip_sort(partitionby_exprs, orderby_keys, input)?
+            get_window_mode(partitionby_exprs, orderby_keys, input)?
         {
             (should_reverse, partition_search_mode)
         } else {
@@ -449,149 +472,41 @@ pub fn get_best_fitting_window(
 /// The `bool` field in the return value represents whether we should reverse window
 /// operator to remove `SortExec` before it. The `PartitionSearchMode` field represents
 /// the mode this window operator should work in to accomodate the existing ordering.
-fn can_skip_sort(
+pub fn get_window_mode(
     partitionby_exprs: &[Arc<dyn PhysicalExpr>],
     orderby_keys: &[PhysicalSortExpr],
     input: &Arc<dyn ExecutionPlan>,
 ) -> Result<Option<(bool, PartitionSearchMode)>> {
-    let physical_ordering = if let Some(physical_ordering) = input.output_ordering() {
-        physical_ordering
-    } else {
-        // If there is no physical ordering, there is no way to remove a
-        // sort, so immediately return.
-        return Ok(None);
-    };
-    let orderby_exprs = convert_to_expr(orderby_keys);
-    let physical_ordering_exprs = convert_to_expr(physical_ordering);
-    let equal_properties = || input.equivalence_properties();
-    // Get the indices of the ORDER BY expressions among input ordering expressions:
-    let ob_indices = get_indices_of_matching_exprs(
-        &orderby_exprs,
-        &physical_ordering_exprs,
-        equal_properties,
-    );
-    if ob_indices.len() != orderby_exprs.len() {
-        // If all order by expressions are not in the input ordering,
-        // there is no way to remove a sort -- immediately return:
-        return Ok(None);
-    }
-    // Get the indices of the PARTITION BY expressions among input ordering expressions:
-    let pb_indices = get_indices_of_matching_exprs(
-        partitionby_exprs,
-        &physical_ordering_exprs,
-        equal_properties,
-    );
-    let ordered_merged_indices = merge_and_order_indices(&pb_indices, &ob_indices);
-    // Get the indices of the ORDER BY columns that don't appear in the
-    // PARTITION BY clause; i.e. calculate (ORDER BY columns) ∖ (PARTITION
-    // BY columns) where `∖` represents set difference.
-    let unique_ob_indices = set_difference(&ob_indices, &pb_indices);
-    if !is_sorted(&unique_ob_indices) {
-        // ORDER BY indices should be ascending ordered
-        return Ok(None);
-    }
-    let first_n = longest_consecutive_prefix(ordered_merged_indices);
-    let furthest_ob_index = *unique_ob_indices.last().unwrap_or(&0);
-    // Cannot skip sort if last order by index is not within consecutive prefix.
-    // For instance, if input is ordered by a, b, c, d for the expression
-    // `PARTITION BY a, ORDER BY b, d`, then `first_n` would be 2 (meaning a, b defines a
-    // prefix for input ordering). However, `furthest_ob_index` would be 3 as column d
-    // occurs at the 3rd index of the existing ordering. Hence, existing ordering would
-    // not be sufficient to run the current operator.
-    // However, for expression `PARTITION BY a, ORDER BY b, c, d`, `first_n` would be 4 (meaning
-    // a, b, c, d defines a prefix for input ordering). Similarly, `furthest_ob_index` would be
-    // 3 as column d occurs at the 3rd index of the existing ordering. Therefore, the existing
-    // ordering would be sufficient to run the current operator.
-    if first_n <= furthest_ob_index {
-        return Ok(None);
-    }
-    let input_orderby_columns = get_at_indices(physical_ordering, &unique_ob_indices)?;
-    let expected_orderby_columns =
-        get_at_indices(orderby_keys, find_indices(&ob_indices, &unique_ob_indices)?)?;
-    let should_reverse = if let Some(should_reverse) = check_alignments(
-        &input.schema(),
-        &input_orderby_columns,
-        &expected_orderby_columns,
-    )? {
-        should_reverse
-    } else {
-        // If ordering directions are not aligned, we cannot calculate the
-        // result without changing existing ordering.
-        return Ok(None);
-    };
-
-    let ordered_pb_indices = pb_indices.iter().copied().sorted().collect::<Vec<_>>();
-    // Determine how many elements in the PARTITION BY columns defines a consecutive range from zero.
-    let first_n = longest_consecutive_prefix(&ordered_pb_indices);
-    let mode = if first_n == partitionby_exprs.len() {
-        // All of the PARTITION BY columns defines a consecutive range from zero.
-        PartitionSearchMode::Sorted
-    } else if first_n > 0 {
-        // All of the PARTITION BY columns defines a consecutive range from zero.
-        let ordered_range = &ordered_pb_indices[0..first_n];
-        let input_pb_exprs = get_at_indices(&physical_ordering_exprs, ordered_range)?;
-        let partially_ordered_indices = get_indices_of_matching_exprs(
-            &input_pb_exprs,
-            partitionby_exprs,
-            equal_properties,
-        );
-        PartitionSearchMode::PartiallySorted(partially_ordered_indices)
-    } else {
-        // None of the PARTITION BY columns defines a consecutive range from zero.
-        PartitionSearchMode::Linear
-    };
-
-    Ok(Some((should_reverse, mode)))
-}
-
-/// Compares all the orderings in `physical_ordering` and `required`, decides
-/// whether alignments match. A `None` return value indicates that current
-/// column is not aligned. A `Some(bool)` value indicates otherwise, and signals
-/// whether we should reverse the window expression in order to avoid sorting.
-fn check_alignments(
-    schema: &SchemaRef,
-    physical_ordering: &[PhysicalSortExpr],
-    required: &[PhysicalSortExpr],
-) -> Result<Option<bool>> {
-    let result = izip!(physical_ordering, required)
-        .map(|(lhs, rhs)| check_alignment(schema, lhs, rhs))
-        .collect::<Result<Option<Vec<_>>>>()?;
-    Ok(if let Some(res) = result {
-        if !res.is_empty() {
-            let first = res[0];
-            let all_same = res.into_iter().all(|elem| elem == first);
-            all_same.then_some(first)
-        } else {
-            Some(false)
+    let input_eqs = input.equivalence_properties();
+    let mut partition_by_reqs: Vec<PhysicalSortRequirement> = vec![];
+    let (_, indices) = input_eqs.find_longest_permutation(partitionby_exprs);
+    partition_by_reqs.extend(indices.iter().map(|&idx| PhysicalSortRequirement {
+        expr: partitionby_exprs[idx].clone(),
+        options: None,
+    }));
+    // Treat partition by exprs as constant. During analysis of requirements are satisfied.
+    let partition_by_eqs = input_eqs.add_constants(partitionby_exprs.iter().cloned());
+    let order_by_reqs = PhysicalSortRequirement::from_sort_exprs(orderby_keys);
+    let reverse_order_by_reqs =
+        PhysicalSortRequirement::from_sort_exprs(&reverse_order_bys(orderby_keys));
+    for (should_swap, order_by_reqs) in
+        [(false, order_by_reqs), (true, reverse_order_by_reqs)]
+    {
+        let req = [partition_by_reqs.clone(), order_by_reqs].concat();
+        let req = collapse_lex_req(req);
+        if partition_by_eqs.ordering_satisfy_requirement(&req) {
+            // Window can be run with existing ordering
+            let mode = if indices.len() == partitionby_exprs.len() {
+                PartitionSearchMode::Sorted
+            } else if indices.is_empty() {
+                PartitionSearchMode::Linear
+            } else {
+                PartitionSearchMode::PartiallySorted(indices)
+            };
+            return Ok(Some((should_swap, mode)));
         }
-    } else {
-        // Cannot skip some of the requirements in the input.
-        None
-    })
-}
-
-/// Compares `physical_ordering` and `required` ordering, decides whether
-/// alignments match. A `None` return value indicates that current column is
-/// not aligned. A `Some(bool)` value indicates otherwise, and signals whether
-/// we should reverse the window expression in order to avoid sorting.
-fn check_alignment(
-    input_schema: &SchemaRef,
-    physical_ordering: &PhysicalSortExpr,
-    required: &PhysicalSortExpr,
-) -> Result<Option<bool>> {
-    Ok(if required.expr.eq(&physical_ordering.expr) {
-        let physical_opts = physical_ordering.options;
-        let required_opts = required.options;
-        if required.expr.nullable(input_schema)? {
-            let reverse = physical_opts == !required_opts;
-            (reverse || physical_opts == required_opts).then_some(reverse)
-        } else {
-            // If the column is not nullable, NULLS FIRST/LAST is not important.
-            Some(physical_opts.descending != required_opts.descending)
-        }
-    } else {
-        None
-    })
+    }
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -603,13 +518,14 @@ mod tests {
     use crate::streaming::StreamingTableExec;
     use crate::test::assert_is_pending;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
-    use crate::windows::PartitionSearchMode::{Linear, PartiallySorted, Sorted};
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, SchemaRef};
     use datafusion_execution::TaskContext;
 
     use futures::FutureExt;
+
+    use PartitionSearchMode::{Linear, PartiallySorted, Sorted};
 
     fn create_test_schema() -> Result<SchemaRef> {
         let nullable_column = Field::new("nullable_col", DataType::Int32, true);
@@ -771,15 +687,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_is_column_aligned_nullable() -> Result<()> {
+    async fn test_satisfiy_nullable() -> Result<()> {
         let schema = create_test_schema()?;
         let params = vec![
-            ((true, true), (false, false), Some(true)),
-            ((true, true), (false, true), None),
-            ((true, true), (true, false), None),
-            ((true, false), (false, true), Some(true)),
-            ((true, false), (false, false), None),
-            ((true, false), (true, true), None),
+            ((true, true), (false, false), false),
+            ((true, true), (false, true), false),
+            ((true, true), (true, false), false),
+            ((true, false), (false, true), false),
+            ((true, false), (false, false), false),
+            ((true, false), (true, true), false),
+            ((true, false), (true, false), true),
         ];
         for (
             (physical_desc, physical_nulls_first),
@@ -801,7 +718,7 @@ mod tests {
                     nulls_first: req_nulls_first,
                 },
             };
-            let res = check_alignment(&schema, &physical_ordering, &required_ordering)?;
+            let res = physical_ordering.satisfy(&required_ordering.into(), &schema);
             assert_eq!(res, expected);
         }
 
@@ -809,16 +726,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_is_column_aligned_non_nullable() -> Result<()> {
+    async fn test_satisfy_non_nullable() -> Result<()> {
         let schema = create_test_schema()?;
 
         let params = vec![
-            ((true, true), (false, false), Some(true)),
-            ((true, true), (false, true), Some(true)),
-            ((true, true), (true, false), Some(false)),
-            ((true, false), (false, true), Some(true)),
-            ((true, false), (false, false), Some(true)),
-            ((true, false), (true, true), Some(false)),
+            ((true, true), (false, false), false),
+            ((true, true), (false, true), false),
+            ((true, true), (true, false), true),
+            ((true, false), (false, true), false),
+            ((true, false), (false, false), false),
+            ((true, false), (true, true), true),
+            ((true, false), (true, false), true),
         ];
         for (
             (physical_desc, physical_nulls_first),
@@ -840,7 +758,7 @@ mod tests {
                     nulls_first: req_nulls_first,
                 },
             };
-            let res = check_alignment(&schema, &physical_ordering, &required_ordering)?;
+            let res = physical_ordering.satisfy(&required_ordering.into(), &schema);
             assert_eq!(res, expected);
         }
 
@@ -848,7 +766,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_can_skip_ordering_exhaustive() -> Result<()> {
+    async fn test_get_window_mode_exhaustive() -> Result<()> {
         let test_schema = create_test_schema3()?;
         // Columns a,c are nullable whereas b,d are not nullable.
         // Source is sorted by a ASC NULLS FIRST, b ASC NULLS FIRST, c ASC NULLS FIRST, d ASC NULLS FIRST
@@ -881,7 +799,7 @@ mod tests {
             (vec!["a"], vec!["a", "c"], None),
             (vec!["a"], vec!["a", "b", "c"], Some(Sorted)),
             (vec!["b"], vec!["a"], Some(Linear)),
-            (vec!["b"], vec!["b"], None),
+            (vec!["b"], vec!["b"], Some(Linear)),
             (vec!["b"], vec!["c"], None),
             (vec!["b"], vec!["a", "b"], Some(Linear)),
             (vec!["b"], vec!["b", "c"], None),
@@ -889,7 +807,7 @@ mod tests {
             (vec!["b"], vec!["a", "b", "c"], Some(Linear)),
             (vec!["c"], vec!["a"], Some(Linear)),
             (vec!["c"], vec!["b"], None),
-            (vec!["c"], vec!["c"], None),
+            (vec!["c"], vec!["c"], Some(Linear)),
             (vec!["c"], vec!["a", "b"], Some(Linear)),
             (vec!["c"], vec!["b", "c"], None),
             (vec!["c"], vec!["a", "c"], Some(Linear)),
@@ -902,10 +820,10 @@ mod tests {
             (vec!["b", "a"], vec!["a", "c"], Some(Sorted)),
             (vec!["b", "a"], vec!["a", "b", "c"], Some(Sorted)),
             (vec!["c", "b"], vec!["a"], Some(Linear)),
-            (vec!["c", "b"], vec!["b"], None),
-            (vec!["c", "b"], vec!["c"], None),
+            (vec!["c", "b"], vec!["b"], Some(Linear)),
+            (vec!["c", "b"], vec!["c"], Some(Linear)),
             (vec!["c", "b"], vec!["a", "b"], Some(Linear)),
-            (vec!["c", "b"], vec!["b", "c"], None),
+            (vec!["c", "b"], vec!["b", "c"], Some(Linear)),
             (vec!["c", "b"], vec!["a", "c"], Some(Linear)),
             (vec!["c", "b"], vec!["a", "b", "c"], Some(Linear)),
             (vec!["c", "a"], vec!["a"], Some(PartiallySorted(vec![1]))),
@@ -955,7 +873,7 @@ mod tests {
                 order_by_exprs.push(PhysicalSortExpr { expr, options });
             }
             let res =
-                can_skip_sort(&partition_by_exprs, &order_by_exprs, &exec_unbounded)?;
+                get_window_mode(&partition_by_exprs, &order_by_exprs, &exec_unbounded)?;
             // Since reversibility is not important in this test. Convert Option<(bool, PartitionSearchMode)> to Option<PartitionSearchMode>
             let res = res.map(|(_, mode)| mode);
             assert_eq!(
@@ -968,7 +886,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_can_skip_ordering() -> Result<()> {
+    async fn test_get_window_mode() -> Result<()> {
         let test_schema = create_test_schema3()?;
         // Columns a,c are nullable whereas b,d are not nullable.
         // Source is sorted by a ASC NULLS FIRST, b ASC NULLS FIRST, c ASC NULLS FIRST, d ASC NULLS FIRST
@@ -1119,7 +1037,7 @@ mod tests {
             }
 
             assert_eq!(
-                can_skip_sort(&partition_by_exprs, &order_by_exprs, &exec_unbounded)?,
+                get_window_mode(&partition_by_exprs, &order_by_exprs, &exec_unbounded)?,
                 *expected,
                 "Unexpected result for in unbounded test case#: {case_idx:?}, case: {test_case:?}"
             );

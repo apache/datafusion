@@ -18,13 +18,12 @@
 use arrow_array::ArrayRef;
 use arrow_schema::Schema;
 use datafusion_common::Result;
-use datafusion_physical_expr::EmitTo;
-
-use super::{AggregationOrdering, GroupByOrderMode};
+use datafusion_physical_expr::{EmitTo, PhysicalSortExpr};
 
 mod full;
 mod partial;
 
+use crate::windows::PartitionSearchMode;
 pub(crate) use full::GroupOrderingFull;
 pub(crate) use partial::GroupOrderingPartial;
 
@@ -43,24 +42,19 @@ impl GroupOrdering {
     /// Create a `GroupOrdering` for the the specified ordering
     pub fn try_new(
         input_schema: &Schema,
-        ordering: &AggregationOrdering,
+        mode: &PartitionSearchMode,
+        ordering: &[PhysicalSortExpr],
     ) -> Result<Self> {
-        let AggregationOrdering {
-            mode,
-            order_indices,
-            ordering,
-        } = ordering;
-
-        Ok(match mode {
-            GroupByOrderMode::PartiallyOrdered => {
-                let partial =
-                    GroupOrderingPartial::try_new(input_schema, order_indices, ordering)?;
-                GroupOrdering::Partial(partial)
+        match mode {
+            PartitionSearchMode::Linear => Ok(GroupOrdering::None),
+            PartitionSearchMode::PartiallySorted(order_indices) => {
+                GroupOrderingPartial::try_new(input_schema, order_indices, ordering)
+                    .map(GroupOrdering::Partial)
             }
-            GroupByOrderMode::FullyOrdered => {
-                GroupOrdering::Full(GroupOrderingFull::new())
+            PartitionSearchMode::Sorted => {
+                Ok(GroupOrdering::Full(GroupOrderingFull::new()))
             }
-        })
+        }
     }
 
     // How many groups be emitted, or None if no data can be emitted

@@ -41,11 +41,10 @@ use crate::physical_plan::{
 use arrow::csv;
 use arrow::datatypes::SchemaRef;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{
-    ordering_equivalence_properties_helper, LexOrdering, OrderingEquivalenceProperties,
-};
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
 use bytes::{Buf, Bytes};
+use datafusion_common::config::ConfigOptions;
 use futures::{ready, StreamExt, TryStreamExt};
 use object_store::{GetOptions, GetResultPayload, ObjectStore};
 use tokio::io::AsyncWriteExt;
@@ -117,34 +116,6 @@ impl CsvExec {
     pub fn escape(&self) -> Option<u8> {
         self.escape
     }
-
-    /// Redistribute files across partitions according to their size
-    /// See comments on `repartition_file_groups()` for more detail.
-    ///
-    /// Return `None` if can't get repartitioned(empty/compressed file).
-    pub fn get_repartitioned(
-        &self,
-        target_partitions: usize,
-        repartition_file_min_size: usize,
-    ) -> Option<Self> {
-        // Parallel execution on compressed CSV file is not supported yet.
-        if self.file_compression_type.is_compressed() {
-            return None;
-        }
-
-        let repartitioned_file_groups_option = FileScanConfig::repartition_file_groups(
-            self.base_config.file_groups.clone(),
-            target_partitions,
-            repartition_file_min_size,
-        );
-
-        if let Some(repartitioned_file_groups) = repartitioned_file_groups_option {
-            let mut new_plan = self.clone();
-            new_plan.base_config.file_groups = repartitioned_file_groups;
-            return Some(new_plan);
-        }
-        None
-    }
 }
 
 impl DisplayAs for CsvExec {
@@ -186,8 +157,8 @@ impl ExecutionPlan for CsvExec {
             .map(|ordering| ordering.as_slice())
     }
 
-    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        ordering_equivalence_properties_helper(
+    fn equivalence_properties(&self) -> EquivalenceProperties {
+        EquivalenceProperties::new_with_orderings(
             self.schema(),
             &self.projected_output_ordering,
         )
@@ -203,6 +174,35 @@ impl ExecutionPlan for CsvExec {
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
+    }
+
+    /// Redistribute files across partitions according to their size
+    /// See comments on `repartition_file_groups()` for more detail.
+    ///
+    /// Return `None` if can't get repartitioned(empty/compressed file).
+    fn repartitioned(
+        &self,
+        target_partitions: usize,
+        config: &ConfigOptions,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let repartition_file_min_size = config.optimizer.repartition_file_min_size;
+        // Parallel execution on compressed CSV file is not supported yet.
+        if self.file_compression_type.is_compressed() {
+            return Ok(None);
+        }
+
+        let repartitioned_file_groups_option = FileScanConfig::repartition_file_groups(
+            self.base_config.file_groups.clone(),
+            target_partitions,
+            repartition_file_min_size,
+        );
+
+        if let Some(repartitioned_file_groups) = repartitioned_file_groups_option {
+            let mut new_plan = self.clone();
+            new_plan.base_config.file_groups = repartitioned_file_groups;
+            return Ok(Some(Arc::new(new_plan)));
+        }
+        Ok(None)
     }
 
     fn execute(
@@ -289,7 +289,7 @@ impl CsvConfig {
         let mut builder = csv::ReaderBuilder::new(self.file_schema.clone())
             .with_delimiter(self.delimiter)
             .with_batch_size(self.batch_size)
-            .has_header(self.has_header)
+            .with_header(self.has_header)
             .with_quote(self.quote);
 
         if let Some(proj) = &self.file_projection {
@@ -538,7 +538,7 @@ pub async fn plan_to_csv(
             let mut write_headers = true;
             while let Some(batch) = stream.next().await.transpose()? {
                 let mut writer = csv::WriterBuilder::new()
-                    .has_headers(write_headers)
+                    .with_header(write_headers)
                     .build(buffer);
                 writer.write(&batch)?;
                 buffer = writer.into_inner();
@@ -871,7 +871,7 @@ mod tests {
         let mut config = partitioned_csv_config(file_schema, file_groups)?;
 
         // Add partition columns
-        config.table_partition_cols = vec![("date".to_owned(), DataType::Utf8)];
+        config.table_partition_cols = vec![Field::new("date", DataType::Utf8, false)];
         config.file_groups[0][0].partition_values =
             vec![ScalarValue::Utf8(Some("2021-10-26".to_owned()))];
 

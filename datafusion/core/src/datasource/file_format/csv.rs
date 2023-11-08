@@ -23,7 +23,18 @@ use std::fmt;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use super::write::{stateless_append_all, stateless_multipart_put};
+use arrow_array::RecordBatch;
+use datafusion_common::{exec_err, not_impl_err, DataFusionError, FileType};
+use datafusion_execution::TaskContext;
+use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
+
+use bytes::{Buf, Bytes};
+use datafusion_physical_plan::metrics::MetricsSet;
+use futures::stream::BoxStream;
+use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
+use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore};
+
+use super::write::orchestration::{stateless_append_all, stateless_multipart_put};
 use super::{FileFormat, DEFAULT_SCHEMA_INFER_MAX_RECORD};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::write::{BatchSerializer, FileWriterMode};
@@ -39,17 +50,8 @@ use crate::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{DataType, Field, Fields, Schema};
 use arrow::{self, datatypes::SchemaRef};
-use arrow_array::RecordBatch;
-use datafusion_common::{exec_err, not_impl_err, DataFusionError, FileType};
-use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
-use datafusion_physical_plan::metrics::MetricsSet;
 
 use async_trait::async_trait;
-use bytes::{Buf, Bytes};
-use futures::stream::BoxStream;
-use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
-use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore};
 
 /// Character Separated Value `FileFormat` implementation.
 #[derive(Debug)]
@@ -431,7 +433,7 @@ impl CsvSerializer {
 impl BatchSerializer for CsvSerializer {
     async fn serialize(&mut self, batch: RecordBatch) -> Result<Bytes> {
         let builder = self.builder.clone();
-        let mut writer = builder.has_headers(self.header).build(&mut self.buffer);
+        let mut writer = builder.with_header(self.header).build(&mut self.buffer);
         writer.write(&batch)?;
         drop(writer);
         self.header = false;
@@ -485,6 +487,9 @@ impl CsvSink {
         data: SendableRecordBatchStream,
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
+        if !self.config.table_partition_cols.is_empty() {
+            return Err(DataFusionError::NotImplemented("Inserting in append mode to hive style partitioned tables is not supported".into()));
+        }
         let writer_options = self.config.file_type_writer_options.try_into_csv()?;
         let (builder, compression) =
             (&writer_options.writer_options, &writer_options.compression);
@@ -508,7 +513,7 @@ impl CsvSink {
             } else {
                 CsvSerializer::new()
                     .with_builder(inner_clone)
-                    .with_header(options_clone.has_header)
+                    .with_header(options_clone.writer_options.header())
             });
             serializer
         };
@@ -540,7 +545,7 @@ impl CsvSink {
             let serializer: Box<dyn BatchSerializer> = Box::new(
                 CsvSerializer::new()
                     .with_builder(inner_clone)
-                    .with_header(options_clone.has_header),
+                    .with_header(options_clone.writer_options.header()),
             );
             serializer
         };

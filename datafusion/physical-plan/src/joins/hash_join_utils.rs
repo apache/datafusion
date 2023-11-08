@@ -24,7 +24,7 @@ use std::ops::IndexMut;
 use std::sync::Arc;
 use std::{fmt, usize};
 
-use crate::joins::utils::{JoinFilter, JoinSide};
+use crate::joins::utils::JoinFilter;
 
 use arrow::compute::concat_batches;
 use arrow::datatypes::{ArrowNativeType, SchemaRef};
@@ -732,7 +732,7 @@ pub mod tests {
     use crate::{
         expressions::Column,
         expressions::PhysicalSortExpr,
-        joins::utils::{ColumnIndex, JoinFilter, JoinSide},
+        joins::utils::{ColumnIndex, JoinFilter},
     };
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};

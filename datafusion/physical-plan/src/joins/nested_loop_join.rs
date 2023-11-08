@@ -27,11 +27,10 @@ use std::task::Poll;
 use crate::coalesce_batches::concat_batches;
 use crate::joins::utils::{
     append_right_indices, apply_join_filter_to_indices, build_batch_from_indices,
-    build_join_schema, check_join_is_valid, combine_join_equivalence_properties,
-    estimate_join_statistics, get_anti_indices, get_anti_u64_indices,
-    get_final_indices_from_bit_map, get_semi_indices, get_semi_u64_indices,
-    partitioned_join_output_partitioning, BuildProbeJoinMetrics, ColumnIndex, JoinFilter,
-    JoinSide, OnceAsync, OnceFut,
+    build_join_schema, check_join_is_valid, estimate_join_statistics, get_anti_indices,
+    get_anti_u64_indices, get_final_indices_from_bit_map, get_semi_indices,
+    get_semi_u64_indices, partitioned_join_output_partitioning, BuildProbeJoinMetrics,
+    ColumnIndex, JoinFilter, OnceAsync, OnceFut,
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::{
@@ -45,10 +44,11 @@ use arrow::array::{
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
-use datafusion_common::{exec_err, DataFusionError, Result, Statistics};
+use datafusion_common::{exec_err, DataFusionError, JoinSide, Result, Statistics};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_expr::JoinType;
+use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortExpr};
 
 use futures::{ready, Stream, StreamExt, TryStreamExt};
@@ -192,14 +192,15 @@ impl ExecutionPlan for NestedLoopJoinExec {
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
-        let left_columns_len = self.left.schema().fields.len();
-        combine_join_equivalence_properties(
-            self.join_type,
+        join_equivalence_properties(
             self.left.equivalence_properties(),
             self.right.equivalence_properties(),
-            left_columns_len,
-            &[], // empty join keys
+            &self.join_type,
             self.schema(),
+            &self.maintains_input_order(),
+            None,
+            // No on columns in nested loop join
+            &[],
         )
     }
 
@@ -743,7 +744,6 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::joins::utils::JoinSide;
     use crate::{
         common, expressions::Column, memory::MemoryExec, repartition::RepartitionExec,
         test::build_table_i32,

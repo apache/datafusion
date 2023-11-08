@@ -40,8 +40,44 @@ STORED AS CSV
 WITH HEADER ROW
 LOCATION '../../testing/data/csv/aggregate_test_100.csv'
 
-# test_insert_into
 
+statement ok
+create table dictionary_encoded_values as values 
+('a', arrow_cast('foo', 'Dictionary(Int32, Utf8)')), ('b', arrow_cast('bar', 'Dictionary(Int32, Utf8)'));
+
+query TTT
+describe dictionary_encoded_values;
+----
+column1 Utf8 YES
+column2 Dictionary(Int32, Utf8) YES
+
+statement ok
+CREATE EXTERNAL TABLE dictionary_encoded_parquet_partitioned(
+  a varchar,
+  b varchar,
+) 
+STORED AS parquet
+LOCATION 'test_files/scratch/insert_to_external/parquet_types_partitioned'
+PARTITIONED BY (b)
+OPTIONS(
+create_local_path 'true',
+insert_mode 'append_new_files',
+);
+
+query TT
+insert into dictionary_encoded_parquet_partitioned 
+select * from dictionary_encoded_values
+----
+2
+
+query TT
+select * from dictionary_encoded_parquet_partitioned order by (a);
+----
+a foo
+b bar
+
+
+# test_insert_into
 statement ok
 set datafusion.execution.target_partitions = 8;
 
@@ -86,6 +122,127 @@ SELECT * from ordered_insert_test;
 7 9
 7 8
 7 7
+
+# test partitioned insert
+
+statement ok
+CREATE EXTERNAL TABLE
+partitioned_insert_test(a string, b string, c bigint)
+STORED AS csv
+LOCATION 'test_files/scratch/insert_to_external/insert_to_partitioned/'
+PARTITIONED BY (a, b) 
+OPTIONS(
+create_local_path 'true',
+insert_mode 'append_new_files',
+);
+
+#note that partitioned cols are moved to the end so value tuples are (c, a, b)
+query ITT
+INSERT INTO partitioned_insert_test values (1, 10, 100), (1, 10, 200), (1, 20, 100), (1, 20, 200), (2, 20, 100), (2, 20, 200);
+----
+6
+
+query ITT
+select * from partitioned_insert_test order by a,b,c
+----
+1 10 100
+1 10 200
+1 20 100
+2 20 100
+1 20 200
+2 20 200
+
+statement ok
+CREATE EXTERNAL TABLE
+partitioned_insert_test_verify(c bigint)
+STORED AS csv
+LOCATION 'test_files/scratch/insert_to_external/insert_to_partitioned/a=20/b=100/'
+OPTIONS(
+insert_mode 'append_new_files',
+);
+
+query I
+select * from partitioned_insert_test_verify;
+----
+1
+2
+
+statement ok
+CREATE EXTERNAL TABLE
+partitioned_insert_test_json(a string, b string)
+STORED AS json
+LOCATION 'test_files/scratch/insert_to_external/insert_to_partitioned_json/'
+PARTITIONED BY (a) 
+OPTIONS(
+create_local_path 'true',
+insert_mode 'append_new_files',
+);
+
+query TT
+INSERT INTO partitioned_insert_test_json values (1, 2), (3, 4), (5, 6), (1, 2), (3, 4), (5, 6);
+----
+6
+
+# Issue open for this error: https://github.com/apache/arrow-datafusion/issues/7816
+query error DataFusion error: Arrow error: Json error: Encountered unmasked nulls in non\-nullable StructArray child: Field \{ name: "a", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}
+select * from partitioned_insert_test_json order by a,b
+
+statement ok
+CREATE EXTERNAL TABLE
+partitioned_insert_test_verify_json(b string)
+STORED AS json
+LOCATION 'test_files/scratch/insert_to_external/insert_to_partitioned_json/a=2/'
+OPTIONS(
+insert_mode 'append_new_files',
+);
+
+query T
+select * from partitioned_insert_test_verify_json;
+----
+1
+1
+
+statement ok
+CREATE EXTERNAL TABLE
+partitioned_insert_test_pq(a string, b bigint)
+STORED AS parquet
+LOCATION 'test_files/scratch/insert_to_external/insert_to_partitioned_pq/'
+PARTITIONED BY (a) 
+OPTIONS(
+create_local_path 'true',
+insert_mode 'append_new_files',
+);
+
+query IT
+INSERT INTO partitioned_insert_test_pq values (1, 2), (3, 4), (5, 6), (1, 2), (3, 4), (5, 6);
+----
+6
+
+query IT
+select * from partitioned_insert_test_pq order by a ASC, b ASC
+----
+1 2
+1 2
+3 4
+3 4
+5 6
+5 6
+
+statement ok
+CREATE EXTERNAL TABLE
+partitioned_insert_test_verify_pq(b bigint)
+STORED AS parquet
+LOCATION 'test_files/scratch/insert_to_external/insert_to_partitioned_pq/a=2/'
+OPTIONS(
+insert_mode 'append_new_files',
+);
+
+query I
+select * from partitioned_insert_test_verify_pq;
+----
+1
+1
+
 
 statement ok
 CREATE EXTERNAL TABLE

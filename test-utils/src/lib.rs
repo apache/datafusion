@@ -38,7 +38,7 @@ pub fn batches_to_vec(batches: &[RecordBatch]) -> Vec<Option<i32>> {
         .collect()
 }
 
-/// extract values from batches and sort them
+/// extract i32 values from batches and sort them
 pub fn partitions_to_sorted_vec(partitions: &[Vec<RecordBatch>]) -> Vec<Option<i32>> {
     let mut values: Vec<_> = partitions
         .iter()

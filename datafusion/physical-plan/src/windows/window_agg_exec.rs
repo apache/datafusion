@@ -26,12 +26,13 @@ use crate::common::transpose;
 use crate::expressions::PhysicalSortExpr;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::windows::{
-    calc_requirements, get_ordered_partition_by_indices, window_ordering_equivalence,
+    calc_requirements, get_ordered_partition_by_indices, get_partition_by_sort_exprs,
+    window_equivalence_properties,
 };
 use crate::{
-    ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, EquivalenceProperties,
-    ExecutionPlan, Partitioning, PhysicalExpr, RecordBatchStream,
-    SendableRecordBatchStream, Statistics, WindowExpr,
+    ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
+    Partitioning, PhysicalExpr, RecordBatchStream, SendableRecordBatchStream, Statistics,
+    WindowExpr,
 };
 
 use arrow::compute::{concat, concat_batches};
@@ -43,10 +44,10 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion_common::stats::Precision;
-use datafusion_common::utils::{evaluate_partition_ranges, get_at_indices};
+use datafusion_common::utils::evaluate_partition_ranges;
 use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{OrderingEquivalenceProperties, PhysicalSortRequirement};
+use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortRequirement};
 
 use futures::stream::Stream;
 use futures::{ready, StreamExt};
@@ -107,9 +108,12 @@ impl WindowAggExec {
     // Hence returned `PhysicalSortExpr` corresponding to `PARTITION BY` columns can be used safely
     // to calculate partition separation points
     pub fn partition_by_sort_keys(&self) -> Result<Vec<PhysicalSortExpr>> {
-        // Partition by sort keys indices are stored in self.ordered_partition_by_indices.
-        let sort_keys = self.input.output_ordering().unwrap_or(&[]);
-        get_at_indices(sort_keys, &self.ordered_partition_by_indices)
+        let partition_by = self.window_expr()[0].partition_by();
+        get_partition_by_sort_exprs(
+            &self.input,
+            partition_by,
+            &self.ordered_partition_by_indices,
+        )
     }
 }
 
@@ -206,13 +210,9 @@ impl ExecutionPlan for WindowAggExec {
         }
     }
 
+    /// Get the [`EquivalenceProperties`] within the plan
     fn equivalence_properties(&self) -> EquivalenceProperties {
-        self.input().equivalence_properties()
-    }
-
-    /// Get the OrderingEquivalenceProperties within the plan
-    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        window_ordering_equivalence(&self.schema, &self.input, &self.window_expr)
+        window_equivalence_properties(&self.schema, &self.input, &self.window_expr)
     }
 
     fn with_new_children(

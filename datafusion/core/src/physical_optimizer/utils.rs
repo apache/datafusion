@@ -21,7 +21,6 @@ use std::fmt;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
-use crate::error::Result;
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::repartition::RepartitionExec;
@@ -31,8 +30,7 @@ use crate::physical_plan::union::UnionExec;
 use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::{displayable, ExecutionPlan};
 
-use datafusion_physical_expr::utils::ordering_satisfy;
-use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_physical_expr::{LexRequirementRef, PhysicalSortRequirement};
 
 /// This object implements a tree that we use while keeping track of paths
 /// leading to [`SortExec`]s.
@@ -101,16 +99,15 @@ pub(crate) fn get_children_exectrees(
 /// given ordering requirements while preserving the original partitioning.
 pub fn add_sort_above(
     node: &mut Arc<dyn ExecutionPlan>,
-    sort_expr: Vec<PhysicalSortExpr>,
+    sort_requirement: LexRequirementRef,
     fetch: Option<usize>,
-) -> Result<()> {
+) {
     // If the ordering requirement is already satisfied, do not add a sort.
-    if !ordering_satisfy(
-        node.output_ordering(),
-        Some(&sort_expr),
-        || node.equivalence_properties(),
-        || node.ordering_equivalence_properties(),
-    ) {
+    if !node
+        .equivalence_properties()
+        .ordering_satisfy_requirement(sort_requirement)
+    {
+        let sort_expr = PhysicalSortRequirement::to_sort_exprs(sort_requirement.to_vec());
         let new_sort = SortExec::new(sort_expr, node.clone()).with_fetch(fetch);
 
         *node = Arc::new(if node.output_partitioning().partition_count() > 1 {
@@ -119,7 +116,6 @@ pub fn add_sort_above(
             new_sort
         }) as _
     }
-    Ok(())
 }
 
 /// Checks whether the given operator is a limit;

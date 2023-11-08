@@ -31,9 +31,7 @@ use crate::physical_plan::{
 
 use arrow::datatypes::SchemaRef;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{
-    ordering_equivalence_properties_helper, LexOrdering, OrderingEquivalenceProperties,
-};
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
 /// Execution plan for scanning Avro data source
 #[derive(Debug, Clone)]
@@ -101,8 +99,8 @@ impl ExecutionPlan for AvroExec {
             .map(|ordering| ordering.as_slice())
     }
 
-    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        ordering_equivalence_properties_helper(
+    fn equivalence_properties(&self) -> EquivalenceProperties {
+        EquivalenceProperties::new_with_orderings(
             self.schema(),
             &self.projected_output_ordering,
         )
@@ -420,7 +418,7 @@ mod tests {
             statistics: Statistics::new_unknown(&file_schema),
             file_schema,
             limit: None,
-            table_partition_cols: vec![("date".to_owned(), DataType::Utf8)],
+            table_partition_cols: vec![Field::new("date", DataType::Utf8, false)],
             output_ordering: vec![],
             infinite_source: false,
         });

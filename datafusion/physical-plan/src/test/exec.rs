@@ -453,10 +453,6 @@ impl ExecutionPlan for ErrorExec {
     ) -> Result<SendableRecordBatchStream> {
         internal_err!("ErrorExec, unsurprisingly, errored in partition {partition}")
     }
-
-    fn statistics(&self) -> Result<Statistics> {
-        Ok(Statistics::new_unknown(&self.schema()))
-    }
 }
 
 /// A mock execution plan that simply returns the provided statistics
@@ -627,10 +623,6 @@ impl ExecutionPlan for BlockingExec {
             _refs: Arc::clone(&self.refs),
         }))
     }
-
-    fn statistics(&self) -> Result<Statistics> {
-        unimplemented!()
-    }
 }
 
 /// A [`RecordBatchStream`] that is pending forever.
@@ -763,10 +755,6 @@ impl ExecutionPlan for PanicExec {
             schema: Arc::clone(&self.schema),
             ready: false,
         }))
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        unimplemented!()
     }
 }
 

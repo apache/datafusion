@@ -93,12 +93,6 @@ impl CatalogList for MemoryCatalogList {
     }
 }
 
-impl Default for MemoryCatalogProvider {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// Represents a catalog, comprising a number of named schemas.
 pub trait CatalogProvider: Sync + Send {
     /// Returns the catalog provider as [`Any`]
@@ -158,6 +152,12 @@ impl MemoryCatalogProvider {
         Self {
             schemas: DashMap::new(),
         }
+    }
+}
+
+impl Default for MemoryCatalogProvider {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

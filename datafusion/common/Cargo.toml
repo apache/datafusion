@@ -19,9 +19,9 @@
 name = "datafusion-common"
 description = "Common functionality for DataFusion query engine"
 keywords = ["arrow", "query", "sql"]
+readme = "README.md"
 version = { workspace = true }
 edition = { workspace = true }
-readme = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
@@ -35,8 +35,7 @@ path = "src/lib.rs"
 [features]
 avro = ["apache-avro"]
 backtrace = []
-default = ["parquet"]
-pyarrow = ["pyo3", "arrow/pyarrow"]
+pyarrow = ["pyo3", "arrow/pyarrow", "parquet"]
 
 [dependencies]
 ahash = { version = "0.8", default-features = false, features = [
@@ -55,10 +54,10 @@ arrow-schema = { workspace = true }
 chrono = { workspace = true }
 half = { version = "2.1", default-features = false }
 libc = "0.2.140"
-num_cpus = "1.13.0"
+num_cpus = { workspace = true }
 object_store = { version = "0.7.0", default-features = false, optional = true }
 parquet = { workspace = true, optional = true }
-pyo3 = { version = "0.19.0", optional = true }
+pyo3 = { version = "0.20.0", optional = true }
 sqlparser = { workspace = true }
 
 [dev-dependencies]

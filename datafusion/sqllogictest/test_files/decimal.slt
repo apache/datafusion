@@ -691,5 +691,34 @@ select arrow_typeof(avg(c1)), avg(c1) from decimal256_simple;
 ----
 Decimal256(54, 10) 0.0000366666
 
+query TR
+select arrow_typeof(min(c1)), min(c1) from decimal256_simple where c4=false;
+----
+Decimal256(50, 6) 0.00002
+
+query TR
+select arrow_typeof(max(c1)), max(c1) from decimal256_simple where c4=false;
+----
+Decimal256(50, 6) 0.00005
+
+query TR
+select arrow_typeof(sum(c1)), sum(c1) from decimal256_simple;
+----
+Decimal256(60, 6) 0.00055
+
+query TR
+select arrow_typeof(median(c1)), median(c1) from decimal256_simple;
+----
+Decimal256(50, 6) 0.00004
+
+query IR
+select count(*),c1 from decimal256_simple group by c1 order by c1;
+----
+1 0.00001
+2 0.00002
+3 0.00003
+4 0.00004
+5 0.00005
+
 statement ok
 drop table decimal256_simple;

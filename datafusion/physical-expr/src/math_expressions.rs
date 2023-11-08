@@ -19,8 +19,8 @@
 
 use arrow::array::ArrayRef;
 use arrow::array::{
-    BooleanArray, Decimal128Array, Float32Array, Float64Array, Int16Array, Int32Array,
-    Int64Array, Int8Array,
+    BooleanArray, Decimal128Array, Decimal256Array, Float32Array, Float64Array,
+    Int16Array, Int32Array, Int64Array, Int8Array,
 };
 use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
@@ -701,6 +701,18 @@ macro_rules! make_try_abs_function {
     }};
 }
 
+macro_rules! make_decimal_abs_function {
+    ($ARRAY_TYPE:ident) => {{
+        |args: &[ArrayRef]| {
+            let array = downcast_arg!(&args[0], "abs arg", $ARRAY_TYPE);
+            let res: $ARRAY_TYPE = array
+                .unary(|x| x.wrapping_abs())
+                .with_data_type(args[0].data_type().clone());
+            Ok(Arc::new(res) as ArrayRef)
+        }
+    }};
+}
+
 /// Abs SQL function
 /// Return different implementations based on input datatype to reduce branches during execution
 pub(super) fn create_abs_function(
@@ -723,15 +735,9 @@ pub(super) fn create_abs_function(
         | DataType::UInt32
         | DataType::UInt64 => Ok(|args: &[ArrayRef]| Ok(args[0].clone())),
 
-        // Decimal should keep the same precision and scale by using `with_data_type()`.
-        // https://github.com/apache/arrow-rs/issues/4644
-        DataType::Decimal128(_, _) => Ok(|args: &[ArrayRef]| {
-            let array = downcast_arg!(&args[0], "abs arg", Decimal128Array);
-            let res: Decimal128Array = array
-                .unary(i128::abs)
-                .with_data_type(args[0].data_type().clone());
-            Ok(Arc::new(res) as ArrayRef)
-        }),
+        // Decimal types
+        DataType::Decimal128(_, _) => Ok(make_decimal_abs_function!(Decimal128Array)),
+        DataType::Decimal256(_, _) => Ok(make_decimal_abs_function!(Decimal256Array)),
 
         other => not_impl_err!("Unsupported data type {other:?} for function abs"),
     }

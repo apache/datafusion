@@ -17,8 +17,8 @@
 
 //! EnforceSorting optimizer rule inspects the physical plan with respect
 //! to local sorting requirements and does the following:
-//! - Adds a [SortExec] when a requirement is not met,
-//! - Removes an already-existing [SortExec] if it is possible to prove
+//! - Adds a [`SortExec`] when a requirement is not met,
+//! - Removes an already-existing [`SortExec`] if it is possible to prove
 //!   that this sort is unnecessary
 //! The rule can work on valid *and* invalid physical plans with respect to
 //! sorting requirements, but always produces a valid physical plan in this sense.
@@ -51,18 +51,16 @@ use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::physical_plan::windows::{
-    get_best_fitting_window, BoundedWindowAggExec, PartitionSearchMode, WindowAggExec,
+    get_best_fitting_window, BoundedWindowAggExec, WindowAggExec,
 };
 use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
 
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_common::{plan_err, DataFusionError};
-use datafusion_physical_expr::utils::{
-    ordering_satisfy, ordering_satisfy_requirement_concrete,
-};
 use datafusion_physical_expr::{PhysicalSortExpr, PhysicalSortRequirement};
 
 use datafusion_physical_plan::repartition::RepartitionExec;
+use datafusion_physical_plan::windows::PartitionSearchMode;
 use itertools::izip;
 
 /// This rule inspects [`SortExec`]'s in the given physical plan and removes the
@@ -399,7 +397,11 @@ fn parallelize_sorts(
         let mut prev_layer = plan.clone();
         update_child_to_remove_coalesce(&mut prev_layer, &mut coalesce_onwards[0])?;
         let (sort_exprs, fetch) = get_sort_exprs(&plan)?;
-        add_sort_above(&mut prev_layer, sort_exprs.to_vec(), fetch)?;
+        add_sort_above(
+            &mut prev_layer,
+            &PhysicalSortRequirement::from_sort_exprs(sort_exprs),
+            fetch,
+        );
         let spm = SortPreservingMergeExec::new(sort_exprs.to_vec(), prev_layer)
             .with_fetch(fetch);
         return Ok(Transformed::Yes(PlanWithCorrespondingCoalescePartitions {
@@ -447,18 +449,14 @@ fn ensure_sorting(
     {
         let physical_ordering = child.output_ordering();
         match (required_ordering, physical_ordering) {
-            (Some(required_ordering), Some(physical_ordering)) => {
-                if !ordering_satisfy_requirement_concrete(
-                    physical_ordering,
-                    &required_ordering,
-                    || child.equivalence_properties(),
-                    || child.ordering_equivalence_properties(),
-                ) {
+            (Some(required_ordering), Some(_)) => {
+                if !child
+                    .equivalence_properties()
+                    .ordering_satisfy_requirement(&required_ordering)
+                {
                     // Make sure we preserve the ordering requirements:
                     update_child_to_remove_unnecessary_sort(child, sort_onwards, &plan)?;
-                    let sort_expr =
-                        PhysicalSortRequirement::to_sort_exprs(required_ordering);
-                    add_sort_above(child, sort_expr, None)?;
+                    add_sort_above(child, &required_ordering, None);
                     if is_sort(child) {
                         *sort_onwards = Some(ExecTree::new(child.clone(), idx, vec![]));
                     } else {
@@ -468,8 +466,7 @@ fn ensure_sorting(
             }
             (Some(required), None) => {
                 // Ordering requirement is not met, we should add a `SortExec` to the plan.
-                let sort_expr = PhysicalSortRequirement::to_sort_exprs(required);
-                add_sort_above(child, sort_expr, None)?;
+                add_sort_above(child, &required, None);
                 *sort_onwards = Some(ExecTree::new(child.clone(), idx, vec![]));
             }
             (None, Some(_)) => {
@@ -495,9 +492,10 @@ fn ensure_sorting(
     {
         // This SortPreservingMergeExec is unnecessary, input already has a
         // single partition.
+        sort_onwards.truncate(1);
         return Ok(Transformed::Yes(PlanWithCorrespondingSort {
-            plan: children[0].clone(),
-            sort_onwards: vec![sort_onwards[0].clone()],
+            plan: children.swap_remove(0),
+            sort_onwards,
         }));
     }
     Ok(Transformed::Yes(PlanWithCorrespondingSort {
@@ -514,13 +512,12 @@ fn analyze_immediate_sort_removal(
 ) -> Option<PlanWithCorrespondingSort> {
     if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
         let sort_input = sort_exec.input().clone();
+
         // If this sort is unnecessary, we should remove it:
-        if ordering_satisfy(
-            sort_input.output_ordering(),
-            sort_exec.output_ordering(),
-            || sort_input.equivalence_properties(),
-            || sort_input.ordering_equivalence_properties(),
-        ) {
+        if sort_input
+            .equivalence_properties()
+            .ordering_satisfy(sort_exec.output_ordering().unwrap_or(&[]))
+        {
             // Since we know that a `SortExec` has exactly one child,
             // we can use the zero index safely:
             return Some(
@@ -603,9 +600,8 @@ fn analyze_window_sort_removal(
             .required_input_ordering()
             .swap_remove(0)
             .unwrap_or_default();
-        let sort_expr = PhysicalSortRequirement::to_sort_exprs(reqs);
         // Satisfy the ordering requirement so that the window can run:
-        add_sort_above(&mut window_child, sort_expr, None)?;
+        add_sort_above(&mut window_child, &reqs, None);
 
         let uses_bounded_memory = window_expr.iter().all(|e| e.uses_bounded_memory());
         let new_window = if uses_bounded_memory {
@@ -649,7 +645,7 @@ fn remove_corresponding_coalesce_in_sub_plan(
             && is_repartition(&new_plan)
             && is_repartition(parent)
         {
-            new_plan = new_plan.children()[0].clone()
+            new_plan = new_plan.children().swap_remove(0)
         }
         new_plan
     } else {
@@ -689,7 +685,7 @@ fn remove_corresponding_sort_from_sub_plan(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     // A `SortExec` is always at the bottom of the tree.
     let mut updated_plan = if is_sort(&sort_onwards.plan) {
-        sort_onwards.plan.children()[0].clone()
+        sort_onwards.plan.children().swap_remove(0)
     } else {
         let plan = &sort_onwards.plan;
         let mut children = plan.children();
@@ -703,12 +699,12 @@ fn remove_corresponding_sort_from_sub_plan(
         }
         // Replace with variants that do not preserve order.
         if is_sort_preserving_merge(plan) {
-            children[0].clone()
+            children.swap_remove(0)
         } else if let Some(repartition) = plan.as_any().downcast_ref::<RepartitionExec>()
         {
             Arc::new(
                 RepartitionExec::try_new(
-                    children[0].clone(),
+                    children.swap_remove(0),
                     repartition.partitioning().clone(),
                 )?
                 .with_preserve_order(false),
@@ -730,7 +726,7 @@ fn remove_corresponding_sort_from_sub_plan(
                 updated_plan,
             ));
         } else {
-            updated_plan = Arc::new(CoalescePartitionsExec::new(updated_plan.clone()));
+            updated_plan = Arc::new(CoalescePartitionsExec::new(updated_plan));
         }
     }
     Ok(updated_plan)
@@ -777,8 +773,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::Result;
     use datafusion_expr::JoinType;
-    use datafusion_physical_expr::expressions::Column;
-    use datafusion_physical_expr::expressions::{col, NotExpr};
+    use datafusion_physical_expr::expressions::{col, Column, NotExpr};
 
     fn create_test_schema() -> Result<SchemaRef> {
         let nullable_column = Field::new("nullable_col", DataType::Int32, true);

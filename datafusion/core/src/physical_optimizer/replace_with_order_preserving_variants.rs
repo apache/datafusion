@@ -31,7 +31,6 @@ use super::utils::is_repartition;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
-use datafusion_physical_expr::utils::ordering_satisfy;
 use datafusion_physical_plan::unbounded_output;
 
 /// For a given `plan`, this object carries the information one needs from its
@@ -71,14 +70,15 @@ impl OrderPreservationContext {
                 // ordering, (or that can maintain ordering with the replacement of
                 // its variant)
                 let plan = item.plan;
+                let children = plan.children();
                 let ordering_onwards = item.ordering_onwards;
-                if plan.children().is_empty() {
+                if children.is_empty() {
                     // Plan has no children, there is nothing to propagate.
                     None
                 } else if ordering_onwards[0].is_none()
                     && ((is_repartition(&plan) && !plan.maintains_input_order()[0])
                         || (is_coalesce_partitions(&plan)
-                            && plan.children()[0].output_ordering().is_some()))
+                            && children[0].output_ordering().is_some()))
                 {
                     Some(ExecTree::new(plan, idx, vec![]))
                 } else {
@@ -175,19 +175,18 @@ fn get_updated_plan(
     // When a `RepartitionExec` doesn't preserve ordering, replace it with
     // a `SortPreservingRepartitionExec` if appropriate:
     if is_repartition(&plan) && !plan.maintains_input_order()[0] && is_spr_better {
-        let child = plan.children()[0].clone();
-        plan = Arc::new(
-            RepartitionExec::try_new(child, plan.output_partitioning())?
-                .with_preserve_order(true),
-        ) as _
+        let child = plan.children().swap_remove(0);
+        let repartition = RepartitionExec::try_new(child, plan.output_partitioning())?;
+        plan = Arc::new(repartition.with_preserve_order(true)) as _
     }
     // When the input of a `CoalescePartitionsExec` has an ordering, replace it
     // with a `SortPreservingMergeExec` if appropriate:
+    let mut children = plan.children();
     if is_coalesce_partitions(&plan)
-        && plan.children()[0].output_ordering().is_some()
+        && children[0].output_ordering().is_some()
         && is_spm_better
     {
-        let child = plan.children()[0].clone();
+        let child = children.swap_remove(0);
         plan = Arc::new(SortPreservingMergeExec::new(
             child.output_ordering().unwrap_or(&[]).to_vec(),
             child,
@@ -258,12 +257,10 @@ pub(crate) fn replace_with_order_preserving_variants(
             is_spm_better || use_order_preserving_variant,
         )?;
         // If this sort is unnecessary, we should remove it and update the plan:
-        if ordering_satisfy(
-            updated_sort_input.output_ordering(),
-            plan.output_ordering(),
-            || updated_sort_input.equivalence_properties(),
-            || updated_sort_input.ordering_equivalence_properties(),
-        ) {
+        if updated_sort_input
+            .equivalence_properties()
+            .ordering_satisfy(plan.output_ordering().unwrap_or(&[]))
+        {
             return Ok(Transformed::Yes(OrderPreservationContext {
                 plan: updated_sort_input,
                 ordering_onwards: vec![None],
@@ -278,30 +275,27 @@ pub(crate) fn replace_with_order_preserving_variants(
 mod tests {
     use super::*;
 
-    use crate::prelude::SessionConfig;
-
     use crate::datasource::file_format::file_compression_type::FileCompressionType;
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::physical_plan::{CsvExec, FileScanConfig};
     use crate::physical_plan::coalesce_batches::CoalesceBatchesExec;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-
     use crate::physical_plan::filter::FilterExec;
     use crate::physical_plan::joins::{HashJoinExec, PartitionMode};
     use crate::physical_plan::repartition::RepartitionExec;
     use crate::physical_plan::sorts::sort::SortExec;
     use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
     use crate::physical_plan::{displayable, Partitioning};
+    use crate::prelude::SessionConfig;
 
+    use arrow::compute::SortOptions;
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::tree_node::TreeNode;
     use datafusion_common::{Result, Statistics};
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_expr::{JoinType, Operator};
     use datafusion_physical_expr::expressions::{self, col, Column};
     use datafusion_physical_expr::PhysicalSortExpr;
-
-    use arrow::compute::SortOptions;
-    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 
     /// Runs the `replace_with_order_preserving_variants` sub-rule and asserts the plan
     /// against the original and expected plans.

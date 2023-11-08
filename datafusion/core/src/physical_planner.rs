@@ -25,6 +25,7 @@ use crate::datasource::file_format::arrow::ArrowFormat;
 use crate::datasource::file_format::avro::AvroFormat;
 use crate::datasource::file_format::csv::CsvFormat;
 use crate::datasource::file_format::json::JsonFormat;
+#[cfg(feature = "parquet")]
 use crate::datasource::file_format::parquet::ParquetFormat;
 use crate::datasource::file_format::write::FileWriterMode;
 use crate::datasource::file_format::FileFormat;
@@ -599,6 +600,7 @@ impl DefaultPhysicalPlanner {
 
                     let sink_format: Arc<dyn FileFormat> = match file_format {
                         FileType::CSV => Arc::new(CsvFormat::default()),
+                        #[cfg(feature = "parquet")]
                         FileType::PARQUET => Arc::new(ParquetFormat::default()),
                         FileType::JSON => Arc::new(JsonFormat::default()),
                         FileType::AVRO => Arc::new(AvroFormat {} ),
@@ -2057,9 +2059,7 @@ mod tests {
     use super::*;
     use crate::datasource::file_format::options::CsvReadOptions;
     use crate::datasource::MemTable;
-    use crate::physical_plan::{
-        expressions, DisplayFormatType, Partitioning, Statistics,
-    };
+    use crate::physical_plan::{expressions, DisplayFormatType, Partitioning};
     use crate::physical_plan::{DisplayAs, SendableRecordBatchStream};
     use crate::physical_planner::PhysicalPlanner;
     use crate::prelude::{SessionConfig, SessionContext};
@@ -2669,10 +2669,6 @@ mod tests {
             _context: Arc<TaskContext>,
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!("NoOpExecutionPlan::execute");
-        }
-
-        fn statistics(&self) -> Result<Statistics> {
-            unimplemented!("NoOpExecutionPlan::statistics");
         }
     }
 

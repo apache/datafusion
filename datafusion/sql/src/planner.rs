@@ -24,8 +24,8 @@ use arrow_schema::*;
 use datafusion_common::field_not_found;
 use datafusion_common::internal_err;
 use datafusion_expr::WindowUDF;
-use sqlparser::ast::ExactNumberInfo;
 use sqlparser::ast::TimezoneInfo;
+use sqlparser::ast::{ArrayElemTypeDef, ExactNumberInfo};
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{DataType as SQLDataType, Ident, ObjectName, TableAlias};
 
@@ -297,14 +297,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     pub(crate) fn convert_data_type(&self, sql_type: &SQLDataType) -> Result<DataType> {
         match sql_type {
-            SQLDataType::Array(Some(inner_sql_type)) => {
+            SQLDataType::Array(ArrayElemTypeDef::AngleBracket(inner_sql_type))
+            | SQLDataType::Array(ArrayElemTypeDef::SquareBracket(inner_sql_type)) => {
                 let data_type = self.convert_simple_data_type(inner_sql_type)?;
 
                 Ok(DataType::List(Arc::new(Field::new(
                     "field", data_type, true,
                 ))))
             }
-            SQLDataType::Array(None) => {
+            SQLDataType::Array(ArrayElemTypeDef::None) => {
                 not_impl_err!("Arrays with unspecified type is not supported")
             }
             other => self.convert_simple_data_type(other),
@@ -330,7 +331,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLDataType::Char(_)
             | SQLDataType::Varchar(_)
             | SQLDataType::Text
-            | SQLDataType::String => Ok(DataType::Utf8),
+            | SQLDataType::String(_) => Ok(DataType::Utf8),
             SQLDataType::Timestamp(None, tz_info) => {
                 let tz = if matches!(tz_info, TimezoneInfo::Tz)
                     || matches!(tz_info, TimezoneInfo::WithTimeZone)
@@ -400,7 +401,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::Dec(_)
             | SQLDataType::BigNumeric(_)
             | SQLDataType::BigDecimal(_)
-            | SQLDataType::Clob(_) => not_impl_err!(
+            | SQLDataType::Clob(_)
+            | SQLDataType::Bytes(_)
+            | SQLDataType::Int64
+            | SQLDataType::Float64
+            | SQLDataType::Struct(_)
+            => not_impl_err!(
                 "Unsupported SQL type {sql_type:?}"
             ),
         }

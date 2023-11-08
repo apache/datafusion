@@ -42,8 +42,8 @@ use crate::joins::hash_join_utils::{
 };
 use crate::joins::utils::{
     build_batch_from_indices, build_join_schema, check_join_is_valid,
-    combine_join_equivalence_properties, partitioned_join_output_partitioning,
-    prepare_sorted_exprs, ColumnIndex, JoinFilter, JoinOn, JoinSide,
+    partitioned_join_output_partitioning, prepare_sorted_exprs, ColumnIndex, JoinFilter,
+    JoinOn,
 };
 use crate::{
     expressions::{Column, PhysicalSortExpr},
@@ -58,11 +58,12 @@ use arrow::compute::concat_batches;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::bisect;
-use datafusion_common::{internal_err, plan_err, DataFusionError, JoinType, Result};
+use datafusion_common::{
+    internal_err, plan_err, DataFusionError, JoinSide, JoinType, Result,
+};
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
-use datafusion_expr::interval_arithmetic::Interval;
-use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
+use datafusion_physical_expr::equivalence::join_equivalence_properties;
 
 use ahash::RandomState;
 use futures::stream::{select, BoxStream};
@@ -428,14 +429,15 @@ impl ExecutionPlan for SymmetricHashJoinExec {
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
-        let left_columns_len = self.left.schema().fields.len();
-        combine_join_equivalence_properties(
-            self.join_type,
+        join_equivalence_properties(
             self.left.equivalence_properties(),
             self.right.equivalence_properties(),
-            left_columns_len,
-            self.on(),
+            &self.join_type,
             self.schema(),
+            &self.maintains_input_order(),
+            // Has alternating probe side
+            None,
+            self.on(),
         )
     }
 

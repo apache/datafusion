@@ -342,7 +342,7 @@ pub(crate) fn parse_version_string(str_setting: &str) -> Result<WriterVersion> {
         "2.0" => Ok(WriterVersion::PARQUET_2_0),
         _ => Err(DataFusionError::Configuration(format!(
             "Unknown or unsupported parquet writer version {str_setting} \
-            valid options are '1.0' and '2.0'"
+            valid options are 1.0 and 2.0"
         ))),
     }
 }
@@ -355,7 +355,7 @@ pub(crate) fn parse_statistics_string(str_setting: &str) -> Result<EnabledStatis
         "page" => Ok(EnabledStatistics::Page),
         _ => Err(DataFusionError::Configuration(format!(
             "Unknown or unsupported parquet statistics setting {str_setting} \
-            valid options are 'none', 'page', and 'chunk'"
+            valid options are none, page, and chunk"
         ))),
     }
 }
