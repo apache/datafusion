@@ -130,3 +130,7 @@ c9,
 nth_value(c5, 2, 3) over (order by c9) as nv1
 from aggregate_test_100
 order by c9
+
+
+statement error Inconsistent data type across values list at row 1 column 0. Was Int64 but found Utf8
+create table foo as values (1), ('foo');

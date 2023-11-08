@@ -228,7 +228,7 @@ impl ExecutionPlan for GlobalLimitExec {
                     // if the input does not reach the "fetch" globally, return input stats
                     Ok(input_stats)
                 } else {
-                    // if the input is greater than the "fetch", the num_row will be the "fetch",
+                    // if the input is greater than "fetch+skip", the num_rows will be the "fetch",
                     // but we won't be able to predict the other statistics
                     Ok(Statistics {
                         num_rows: Precision::Exact(max_row_num),
@@ -560,7 +560,10 @@ mod tests {
     use crate::common::collect;
     use crate::{common, test};
 
+    use crate::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
     use arrow_schema::Schema;
+    use datafusion_physical_expr::expressions::col;
+    use datafusion_physical_expr::PhysicalExpr;
 
     #[tokio::test]
     async fn limit() -> Result<()> {
@@ -720,7 +723,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn skip_3_fetch_10() -> Result<()> {
+    async fn skip_3_fetch_10_stats() -> Result<()> {
         // there are total of 100 rows, we skipped 3 rows (offset = 3)
         let row_count = skip_and_fetch(3, Some(10)).await?;
         assert_eq!(row_count, 10);
@@ -756,7 +759,58 @@ mod tests {
         assert_eq!(row_count, Precision::Exact(10));
 
         let row_count = row_number_statistics_for_global_limit(5, Some(10)).await?;
-        assert_eq!(row_count, Precision::Exact(15));
+        assert_eq!(row_count, Precision::Exact(10));
+
+        let row_count = row_number_statistics_for_global_limit(400, Some(10)).await?;
+        assert_eq!(row_count, Precision::Exact(0));
+
+        let row_count = row_number_statistics_for_global_limit(398, Some(10)).await?;
+        assert_eq!(row_count, Precision::Exact(2));
+
+        let row_count = row_number_statistics_for_global_limit(398, Some(1)).await?;
+        assert_eq!(row_count, Precision::Exact(1));
+
+        let row_count = row_number_statistics_for_global_limit(398, None).await?;
+        assert_eq!(row_count, Precision::Exact(2));
+
+        let row_count =
+            row_number_statistics_for_global_limit(0, Some(usize::MAX)).await?;
+        assert_eq!(row_count, Precision::Exact(400));
+
+        let row_count =
+            row_number_statistics_for_global_limit(398, Some(usize::MAX)).await?;
+        assert_eq!(row_count, Precision::Exact(2));
+
+        let row_count =
+            row_number_inexact_statistics_for_global_limit(0, Some(10)).await?;
+        assert_eq!(row_count, Precision::Inexact(10));
+
+        let row_count =
+            row_number_inexact_statistics_for_global_limit(5, Some(10)).await?;
+        assert_eq!(row_count, Precision::Inexact(10));
+
+        let row_count =
+            row_number_inexact_statistics_for_global_limit(400, Some(10)).await?;
+        assert_eq!(row_count, Precision::Inexact(0));
+
+        let row_count =
+            row_number_inexact_statistics_for_global_limit(398, Some(10)).await?;
+        assert_eq!(row_count, Precision::Inexact(2));
+
+        let row_count =
+            row_number_inexact_statistics_for_global_limit(398, Some(1)).await?;
+        assert_eq!(row_count, Precision::Inexact(1));
+
+        let row_count = row_number_inexact_statistics_for_global_limit(398, None).await?;
+        assert_eq!(row_count, Precision::Inexact(2));
+
+        let row_count =
+            row_number_inexact_statistics_for_global_limit(0, Some(usize::MAX)).await?;
+        assert_eq!(row_count, Precision::Inexact(400));
+
+        let row_count =
+            row_number_inexact_statistics_for_global_limit(398, Some(usize::MAX)).await?;
+        assert_eq!(row_count, Precision::Inexact(2));
 
         Ok(())
     }
@@ -780,6 +834,47 @@ mod tests {
 
         let offset =
             GlobalLimitExec::new(Arc::new(CoalescePartitionsExec::new(csv)), skip, fetch);
+
+        Ok(offset.statistics()?.num_rows)
+    }
+
+    pub fn build_group_by(
+        input_schema: &SchemaRef,
+        columns: Vec<String>,
+    ) -> PhysicalGroupBy {
+        let mut group_by_expr: Vec<(Arc<dyn PhysicalExpr>, String)> = vec![];
+        for column in columns.iter() {
+            group_by_expr.push((col(column, input_schema).unwrap(), column.to_string()));
+        }
+        PhysicalGroupBy::new_single(group_by_expr.clone())
+    }
+
+    async fn row_number_inexact_statistics_for_global_limit(
+        skip: usize,
+        fetch: Option<usize>,
+    ) -> Result<Precision<usize>> {
+        let num_partitions = 4;
+        let csv = test::scan_partitioned(num_partitions);
+
+        assert_eq!(csv.output_partitioning().partition_count(), num_partitions);
+
+        // Adding a "GROUP BY i" changes the input stats from Exact to Inexact.
+        let agg = AggregateExec::try_new(
+            AggregateMode::Final,
+            build_group_by(&csv.schema().clone(), vec!["i".to_string()]),
+            vec![],
+            vec![None],
+            vec![None],
+            csv.clone(),
+            csv.schema().clone(),
+        )?;
+        let agg_exec: Arc<dyn ExecutionPlan> = Arc::new(agg);
+
+        let offset = GlobalLimitExec::new(
+            Arc::new(CoalescePartitionsExec::new(agg_exec)),
+            skip,
+            fetch,
+        );
 
         Ok(offset.statistics()?.num_rows)
     }
