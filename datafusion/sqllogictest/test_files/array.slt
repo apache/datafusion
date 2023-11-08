@@ -1822,6 +1822,12 @@ select array_union(null, []);
 ----
 NULL
 
+query ?
+select array_union(null, null);
+----
+NULL
+
+
 
 
 
