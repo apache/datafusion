@@ -227,8 +227,9 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     )?;
                     if !expr_result_map_for_count_bug.is_empty() {
                         // has count bug
-                        let un_matched_row = Expr::Literal(ScalarValue::Boolean(Some(true)))
-                            .alias(UN_MATCHED_ROW_INDICATOR);
+                        let un_matched_row =
+                            Expr::Literal(ScalarValue::Boolean(Some(true)))
+                                .alias(UN_MATCHED_ROW_INDICATOR);
                         // add the unmatched rows indicator to the Aggregation's group expressions
                         missing_exprs.push(un_matched_row);
                     }

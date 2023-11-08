@@ -25,7 +25,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
 use datafusion_expr::{
     col,
-    expr::{AggregateFunction},
+    expr::AggregateFunction,
     logical_plan::{Aggregate, LogicalPlan},
     Expr,
 };
@@ -169,13 +169,13 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                     );
                                 }
                                 Ok(Expr::AggregateFunction(AggregateFunction::new(
-                                        fun.clone(),
-                                        vec![col(SINGLE_DISTINCT_ALIAS)],
-                                        false, // intentional to remove distinct here
-                                        filter.clone(),
-                                        order_by.clone(),
-                                    )).alias(aggr_expr.display_name()?),
-                                )
+                                    fun.clone(),
+                                    vec![col(SINGLE_DISTINCT_ALIAS)],
+                                    false, // intentional to remove distinct here
+                                    filter.clone(),
+                                    order_by.clone(),
+                                ))
+                                .alias(aggr_expr.display_name()?))
                             }
                             _ => Ok(aggr_expr.clone()),
                         })
