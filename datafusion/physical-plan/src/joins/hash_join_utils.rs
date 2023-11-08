@@ -100,8 +100,6 @@ use hashbrown::HashSet;
 /// | 0 | 0 | 0 | 2 | 4 | <--- hash value 1 maps to 5,4,2 (which means indices values 4,3,1)
 /// ---------------------
 /// ```
-///
-///TODO: [speed up collision checks](https://github.com/apache/arrow-datafusion/issues/50)
 pub struct JoinHashMap {
     // Stores hash value to last row index
     pub map: RawTable<(u64, u64)>,
