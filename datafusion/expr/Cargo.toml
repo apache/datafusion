@@ -40,8 +40,8 @@ ahash = { version = "0.8", default-features = false, features = [
 ] }
 arrow = { workspace = true }
 arrow-array = { workspace = true }
-paste = "^1.0"
 datafusion-common = { workspace = true }
+paste = "^1.0"
 sqlparser = { workspace = true }
 strum = { version = "0.25.0", features = ["derive"] }
 strum_macros = "0.25.0"
