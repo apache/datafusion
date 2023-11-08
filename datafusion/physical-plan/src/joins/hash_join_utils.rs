@@ -31,7 +31,7 @@ use arrow::datatypes::{ArrowNativeType, SchemaRef};
 use arrow_array::builder::BooleanBufferBuilder;
 use arrow_array::{ArrowPrimitiveType, NativeAdapter, PrimitiveArray, RecordBatch};
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{DataFusionError, JoinSide, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::collect_columns;
@@ -736,7 +736,7 @@ pub mod tests {
     };
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::ScalarValue;
+    use datafusion_common::{JoinSide, ScalarValue};
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{binary, cast, col, lit};
     use std::sync::Arc;

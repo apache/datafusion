@@ -20,7 +20,6 @@ use std::fmt::{Debug, Display};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use crate::intervals::Interval;
 use crate::sort_properties::SortProperties;
 use crate::utils::scatter;
 use arrow::array::BooleanArray;
