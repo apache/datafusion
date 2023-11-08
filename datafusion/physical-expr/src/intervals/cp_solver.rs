@@ -29,7 +29,7 @@ use crate::utils::{build_dag, ExprTreeNode};
 use crate::PhysicalExpr;
 use arrow_schema::DataType;
 use datafusion_common::Result;
-use datafusion_expr::interval_aritmetic::{
+use datafusion_expr::interval_arithmetic::{
     apply_operator, equalize_intervals, satisfy_comparison, Interval,
 };
 use datafusion_expr::Operator;
@@ -475,41 +475,44 @@ impl ExprIntervalGraph {
     /// # Examples
     ///
     /// ```
-    ///  use std::sync::Arc;
-    ///  use datafusion_common::ScalarValue;
-    ///  use datafusion_expr::Operator;
-    ///  use datafusion_expr::interval_aritmetic::Interval;
-    ///  use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
-    ///  use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
-    ///  use datafusion_physical_expr::PhysicalExpr;
-    ///  let expr = Arc::new(BinaryExpr::new(
-    ///             Arc::new(Column::new("gnz", 0)),
-    ///             Operator::Plus,
-    ///             Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
-    ///         ));
-    ///  let mut graph = ExprIntervalGraph::try_new(expr).unwrap();
-    ///  // Do it once, while constructing.
-    ///  let node_indices = graph
+    /// use std::sync::Arc;
+    /// use datafusion_common::ScalarValue;
+    /// use datafusion_expr::Operator;
+    /// use datafusion_expr::interval_arithmetic::Interval;
+    /// use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
+    /// use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
+    /// use datafusion_physical_expr::PhysicalExpr;
+    ///
+    /// let expr = Arc::new(BinaryExpr::new(
+    ///     Arc::new(Column::new("gnz", 0)),
+    ///     Operator::Plus,
+    ///     Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
+    /// ));
+    ///
+    /// let mut graph = ExprIntervalGraph::try_new(expr).unwrap();
+    /// // Do it once, while constructing.
+    /// let node_indices = graph
     ///     .gather_node_indices(&[Arc::new(Column::new("gnz", 0))]);
-    ///  let left_index = node_indices.get(0).unwrap().1;
-    ///  // Provide intervals for leaf variables (here, there is only one).
-    ///  let intervals = vec![(
+    /// let left_index = node_indices.get(0).unwrap().1;
+    ///
+    /// // Provide intervals for leaf variables (here, there is only one).
+    /// let intervals = vec![(
     ///     left_index,
     ///     Interval::try_new(
-    ///                    ScalarValue::UInt32(Some(10)),
-    ///                  ScalarValue::UInt32(Some(20)),
-    ///            ),
-    ///  )];
-    ///  // Evaluate bounds for the composite expression:
-    ///  graph.assign_intervals(&intervals);
-    ///  assert_eq!(
+    ///         ScalarValue::Int32(Some(10)),
+    ///         ScalarValue::Int32(Some(20)),
+    ///     ).unwrap(),
+    /// )];
+    ///
+    /// // Evaluate bounds for the composite expression:
+    /// graph.assign_intervals(&intervals);
+    /// assert_eq!(
     ///     graph.evaluate_bounds().unwrap(),
     ///     &Interval::try_new(
-    ///                    ScalarValue::UInt32(Some(20)),
-    ///                  ScalarValue::UInt32(Some(30)),
-    ///            ),
-    ///  )
-    ///
+    ///         ScalarValue::Int32(Some(20)),
+    ///         ScalarValue::Int32(Some(30)),
+    ///     ).unwrap(),
+    /// )
     /// ```
     pub fn evaluate_bounds(&mut self) -> Result<&Interval> {
         let mut dfs = DfsPostOrder::new(&self.graph, self.root);

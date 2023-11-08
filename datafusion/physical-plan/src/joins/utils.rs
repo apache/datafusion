@@ -45,7 +45,7 @@ use datafusion_common::{
     exec_err, plan_datafusion_err, plan_err, DataFusionError, JoinType, Result,
     SharedResult,
 };
-use datafusion_expr::interval_aritmetic::Interval;
+use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
 use datafusion_physical_expr::utils::merge_vectors;
@@ -1834,7 +1834,7 @@ mod tests {
                     column_statistics: right_col_stats,
                 },
             ),
-            None
+            Some(Precision::Inexact(100))
         );
         Ok(())
     }

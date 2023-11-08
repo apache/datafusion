@@ -21,7 +21,7 @@
 use datafusion_common::{tree_node::TreeNodeRewriter, DataFusionError, Result};
 use datafusion_expr::{
     expr::InList,
-    interval_aritmetic::{Interval, NullableInterval},
+    interval_arithmetic::{Interval, NullableInterval},
     lit, Between, BinaryExpr, Expr,
 };
 use std::collections::HashMap;

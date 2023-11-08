@@ -30,7 +30,7 @@ use datafusion_common::stats::Precision;
 use datafusion_common::{
     internal_err, ColumnStatistics, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::interval_aritmetic::{cardinality_ratio, Interval};
+use datafusion_expr::interval_arithmetic::{cardinality_ratio, Interval};
 
 /// The shared context used during the analysis of an expression. Includes
 /// the boundaries for all known columns.

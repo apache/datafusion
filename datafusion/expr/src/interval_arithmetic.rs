@@ -353,7 +353,7 @@ impl Interval {
     pub fn intersect<T: Borrow<Interval>>(&self, other: T) -> Result<Option<Interval>> {
         let rhs = other.borrow();
         if self.get_datatype() != rhs.get_datatype() {
-            return internal_err!("Intervals must be in the same type to be intersected");
+            return Ok(None);
         };
 
         // If it is evident that the result is an empty interval,
@@ -967,7 +967,7 @@ fn mul_helper_multi_zero_inclusive(lhs: &Interval, rhs: &Interval) -> Result<Int
 /// contains zero within its range. The interval not containing zero, i.e. rhs, can either be
 /// on the left side or right side of zero. Returns an error if the multiplication of bounds
 /// fails or if there is a problem with determining the result type.
-///
+/// ``` text
 /// left:  <-------=====0=====------->
 ///
 /// right: <--======----0------------>
@@ -977,6 +977,7 @@ fn mul_helper_multi_zero_inclusive(lhs: &Interval, rhs: &Interval) -> Result<Int
 /// left:  <-------=====0=====------->
 ///
 /// right: <------------0--======---->
+/// ``` text
 fn mul_helper_single_zero_inclusive(
     lhs: &Interval,
     rhs: &Interval,
@@ -1023,7 +1024,7 @@ fn mul_helper_single_zero_inclusive(
 /// This function calculates the product of two intervals (`lhs` and `rhs`), when none of
 /// the intervals includes zero. Returns an error if the multiplication of bounds
 /// fails or if there is a problem with determining the result type.
-///
+/// ``` text
 /// left:  <--======----0------------>
 ///
 /// right: <--======----0------------>
@@ -1045,6 +1046,7 @@ fn mul_helper_single_zero_inclusive(
 /// left:  <------------0--======---->
 ///
 /// right: <------------0--======---->
+/// ``` text
 fn mul_helper_zero_exclusive(
     lhs: &Interval,
     rhs: &Interval,
@@ -1119,7 +1121,7 @@ fn mul_helper_zero_exclusive_opposite(
 /// This function calculates the divison of two intervals (`lhs` and `rhs`), when lhs of
 /// the intervals includes zero. Returns an error if the division of bounds fails or
 /// if there is a problem with determining the result type.
-///
+/// ``` text
 /// left:  <-------=====0=====------->
 ///
 /// right: <--======----0------------>
@@ -1129,6 +1131,7 @@ fn mul_helper_zero_exclusive_opposite(
 /// left:  <-------=====0=====------->
 ///
 /// right: <------------0--======---->
+/// ```
 fn div_helper_lhs_zero_inclusive(
     lhs: &Interval,
     rhs: &Interval,
@@ -1175,7 +1178,7 @@ fn div_helper_lhs_zero_inclusive(
 /// This function calculates the divison of two intervals (`lhs` and `rhs`), when lhs of
 /// the intervals includes zero. Returns an error if the division of bounds fails or
 /// if there is a problem with determining the result type.
-///
+/// ``` text
 /// left:  <--======----0------------>
 ///
 /// right: <--======----0------------>
@@ -1197,6 +1200,7 @@ fn div_helper_lhs_zero_inclusive(
 /// left:  <------------0--======---->
 ///
 /// right: <------------0--======---->
+/// ``` text
 fn div_helper_zero_exclusive(
     lhs: &Interval,
     rhs: &Interval,
@@ -1325,27 +1329,30 @@ fn handle_overflow<const UPPER: bool>(
 /// ```
 /// use arrow::datatypes::DataType;
 /// use datafusion_common::ScalarValue;
-/// use datafusion_expr::interval_aritmetic::{Interval, NullableInterval};
+/// use datafusion_expr::interval_arithmetic::Interval;
+/// use datafusion_expr::interval_arithmetic::NullableInterval;
 ///
 /// // [1, 2) U {NULL}
-/// NullableInterval::MaybeNull {
+/// let maybe_null = NullableInterval::MaybeNull {
 ///    values: Interval::try_new(
-///            ScalarValue::Int32(Some(1)).unwrap(),
-///            ScalarValue::Int32(Some(2)).unwrap(),
-///        )?;
+///            ScalarValue::Int32(Some(1)),
+///            ScalarValue::Int32(Some(2)),
+///        ).unwrap(),
+/// };
 ///
 /// // (0, ∞)
-/// NullableInterval::NotNull {
-///   values:Interval::try_new(
-///            ScalarValue::Int32(Some(0)).unwrap(),
-///            ScalarValue::Int32(None).unwrap(),
-///        )?;
+/// let not_null = NullableInterval::NotNull {
+///   values: Interval::try_new(
+///            ScalarValue::Int32(Some(0)),
+///            ScalarValue::Int32(None),
+///        ).unwrap(),
+/// };
 ///
 /// // {NULL}
-/// NullableInterval::Null { datatype: DataType::Int32 };
+/// let null_interval = NullableInterval::Null { datatype: DataType::Int32 };
 ///
 /// // {4}
-/// NullableInterval::from(ScalarValue::Int32(Some(4)));
+/// let single_value = NullableInterval::from(ScalarValue::Int32(Some(4)));
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NullableInterval {
@@ -1457,7 +1464,8 @@ impl NullableInterval {
     /// ```
     /// use datafusion_common::ScalarValue;
     /// use datafusion_expr::Operator;
-    /// use datafusion_expr::interval_aritmetic::{Interval, NullableInterval};
+    /// use datafusion_expr::interval_arithmetic::Interval;
+    /// use datafusion_expr::interval_arithmetic::NullableInterval;
     ///
     /// // 4 > 3 -> true
     /// let lhs = NullableInterval::from(ScalarValue::Int32(Some(4)));
@@ -1468,9 +1476,10 @@ impl NullableInterval {
     /// // [1, 3) > NULL -> NULL
     /// let lhs = NullableInterval::NotNull {
     ///     values: Interval::try_new(
-    ///            ScalarValue::Int32(Some(1)).unwrap(),
-    ///            ScalarValue::Int32(Some(3)).unwrap(),
-    ///        )?;
+    ///            ScalarValue::Int32(Some(1)),
+    ///            ScalarValue::Int32(Some(3)),
+    ///        ).unwrap(),
+    /// };
     /// let rhs = NullableInterval::from(ScalarValue::Int32(None));
     /// let result = lhs.apply_operator(&Operator::Gt, &rhs).unwrap();
     /// assert_eq!(result.single_value(), Some(ScalarValue::Boolean(None)));
@@ -1478,21 +1487,22 @@ impl NullableInterval {
     /// // [1, 3] > [2, 4] -> [false, true]
     /// let lhs = NullableInterval::NotNull {
     ///     values: Interval::try_new(
-    ///            ScalarValue::Int32(Some(1)).unwrap(),
-    ///            ScalarValue::Int32(Some(3)).unwrap(),
-    ///        )?;
+    ///            ScalarValue::Int32(Some(1)),
+    ///            ScalarValue::Int32(Some(3)),
+    ///        ).unwrap(),
+    /// };
     /// let rhs = NullableInterval::NotNull {
     ///    values: Interval::try_new(
-    ///            ScalarValue::Int32(Some(2)).unwrap(),
-    ///            ScalarValue::Int32(Some(4)).unwrap(),
-    ///        )?;
+    ///            ScalarValue::Int32(Some(2)),
+    ///            ScalarValue::Int32(Some(4)),
+    ///        ).unwrap(),
+    /// };
     /// let result = lhs.apply_operator(&Operator::Gt, &rhs).unwrap();
     /// // Both inputs are valid (non-null), so result must be non-null
     /// assert_eq!(result, NullableInterval::NotNull {
-    ///    // Uncertain whether inequality is true or false
+    /// // Uncertain whether inequality is true or false
     ///    values: Interval::UNCERTAIN,
     /// });
-    ///
     /// ```
     pub fn apply_operator(&self, op: &Operator, rhs: &Self) -> Result<Self> {
         match op {
@@ -1574,7 +1584,8 @@ impl NullableInterval {
     ///
     /// ```
     /// use datafusion_common::ScalarValue;
-    /// use datafusion_expr::interval_aritmetic::{Interval, NullableInterval};
+    /// use datafusion_expr::interval_arithmetic::Interval;
+    /// use datafusion_expr::interval_arithmetic::NullableInterval;
     ///
     /// let interval = NullableInterval::from(ScalarValue::Int32(Some(4)));
     /// assert_eq!(interval.single_value(), Some(ScalarValue::Int32(Some(4))));
@@ -1584,9 +1595,10 @@ impl NullableInterval {
     ///
     /// let interval = NullableInterval::MaybeNull {
     ///     values: Interval::try_new(
-    ///            ScalarValue::Int32(Some(1)).unwrap(),
-    ///            ScalarValue::Int32(Some(4)).unwrap(),
-    ///        )?;
+    ///         ScalarValue::Int32(Some(1)),
+    ///         ScalarValue::Int32(Some(4)),
+    ///     ).unwrap(),
+    /// };
     /// assert_eq!(interval.single_value(), None);
     /// ```
     pub fn single_value(&self) -> Option<ScalarValue> {
@@ -1607,7 +1619,9 @@ impl NullableInterval {
 #[cfg(test)]
 mod tests {
     use super::{next_value, Interval};
-    use crate::interval_aritmetic::{equalize_intervals, prev_value, satisfy_comparison};
+    use crate::interval_arithmetic::{
+        equalize_intervals, prev_value, satisfy_comparison,
+    };
     use arrow::datatypes::DataType;
     use datafusion_common::{Result, ScalarValue};
 

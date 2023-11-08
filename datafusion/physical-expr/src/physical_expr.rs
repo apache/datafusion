@@ -23,7 +23,7 @@ use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::DataPtr;
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
-use datafusion_expr::interval_aritmetic::Interval;
+use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::ColumnarValue;
 
 use std::any::Any;

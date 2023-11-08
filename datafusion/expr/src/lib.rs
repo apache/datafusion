@@ -37,7 +37,7 @@ pub mod expr_rewriter;
 pub mod expr_schema;
 pub mod field_util;
 pub mod function;
-pub mod interval_aritmetic;
+pub mod interval_arithmetic;
 mod literal;
 pub mod logical_plan;
 mod nullif;

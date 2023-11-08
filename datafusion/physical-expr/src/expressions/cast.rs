@@ -31,7 +31,7 @@ use arrow::record_batch::RecordBatch;
 use compute::can_cast_types;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion_common::{not_impl_err, DataFusionError, Result, ScalarValue};
-use datafusion_expr::interval_aritmetic::Interval;
+use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::ColumnarValue;
 
 const DEFAULT_CAST_OPTIONS: CastOptions<'static> = CastOptions {

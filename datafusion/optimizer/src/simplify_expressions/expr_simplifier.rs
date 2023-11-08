@@ -43,7 +43,7 @@ use datafusion_expr::{
 };
 use datafusion_expr::{
     expr::{InList, InSubquery, ScalarFunction},
-    interval_aritmetic::NullableInterval,
+    interval_arithmetic::NullableInterval,
 };
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
 
@@ -179,7 +179,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// ```rust
     /// use arrow::datatypes::{DataType, Field, Schema};
     /// use datafusion_expr::{col, lit, Expr};
-    /// use datafusion_expr::interval_aritmetic::{Interval, NullableInterval};
+    /// use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
     /// use datafusion_common::{Result, ScalarValue, ToDFSchema};
     /// use datafusion_physical_expr::execution_props::ExecutionProps;
     /// use datafusion_optimizer::simplify_expressions::{
@@ -209,9 +209,9 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     ///        col("x"),
     ///        NullableInterval::NotNull {
     ///            values: Interval::try_new(
-    ///            ScalarValue::Int64(Some(3)).unwrap(),
-    ///            ScalarValue::Int64(Some(5)).unwrap(),
-    ///        )?
+    ///            ScalarValue::Int64(Some(3)),
+    ///            ScalarValue::Int64(Some(5)),
+    ///        ).unwrap()
     ///        }
     ///    ),
     ///    // y = 3
@@ -1318,7 +1318,7 @@ mod tests {
     };
     use chrono::{DateTime, TimeZone, Utc};
     use datafusion_common::{assert_contains, cast::as_int32_array, DFField, ToDFSchema};
-    use datafusion_expr::{interval_aritmetic::Interval, *};
+    use datafusion_expr::{interval_arithmetic::Interval, *};
     use datafusion_physical_expr::{
         execution_props::ExecutionProps, functions::make_scalar_function,
     };

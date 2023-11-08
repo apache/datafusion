@@ -61,7 +61,7 @@ use datafusion_common::utils::bisect;
 use datafusion_common::{internal_err, plan_err, DataFusionError, JoinType, Result};
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
-use datafusion_expr::interval_aritmetic::Interval;
+use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
 
 use ahash::RandomState;
