@@ -2243,14 +2243,11 @@ array_union(array1, array2)
 +----------------------------------------------------+
 ```
 
-
-----
-
+---
 
 #### Aliases
 
 - list_union
-
 
 ### `cardinality`
 

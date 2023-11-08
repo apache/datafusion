@@ -704,7 +704,7 @@ scalar_expr!(
     array delimiter,
     "converts each element to its text representation."
 );
-nary_scalar_expr!(ArrayUnion, array_union, "returns an array of the elements in the union of array1 and array2 without duplicates.");
+scalar_expr!(ArrayUnion, array_union, array1 array2, "returns an array of the elements in the union of array1 and array2 without duplicates.");
 
 scalar_expr!(
     Cardinality,

@@ -2466,7 +2466,7 @@ pub enum ScalarFunction {
     ArrayPopBack = 116,
     StringToArray = 117,
     ToTimestampNanos = 118,
-    ArrayUnion = 119
+    ArrayUnion = 119,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.

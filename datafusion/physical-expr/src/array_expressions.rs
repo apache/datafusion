@@ -24,7 +24,7 @@ use arrow::array::*;
 use arrow::buffer::OffsetBuffer;
 use arrow::compute;
 use arrow::datatypes::{DataType, Field, UInt64Type};
-use arrow::row::{RowConverter, SortField, Row};
+use arrow::row::{RowConverter, SortField};
 use arrow_buffer::NullBuffer;
 
 use arrow_schema::FieldRef;
@@ -1364,11 +1364,10 @@ macro_rules! to_string {
 fn union_generic_lists<OffsetSize: OffsetSizeTrait>(
     l: &GenericListArray<OffsetSize>,
     r: &GenericListArray<OffsetSize>,
-    field: &FieldRef
+    field: &FieldRef,
 ) -> Result<GenericListArray<OffsetSize>> {
-    let converter =
-        RowConverter::new(vec![SortField::new(l.value_type().clone())])?;
-    
+    let converter = RowConverter::new(vec![SortField::new(l.value_type().clone())])?;
+
     let nulls = NullBuffer::union(l.nulls(), r.nulls());
     let l_values = l.values().clone();
     let r_values = r.values().clone();
@@ -1380,35 +1379,33 @@ fn union_generic_lists<OffsetSize: OffsetSizeTrait>(
     offsets.push(OffsetSize::usize_as(0));
     let mut rows = Vec::with_capacity(l_values.num_rows() + r_values.num_rows());
     let mut dedup = HashSet::new();
-    // Needed to preserve ordering
-    let mut row_elements:Vec<Row<'_>> = vec![];
     for (l_w, r_w) in l.offsets().windows(2).zip(r.offsets().windows(2)) {
         let l_slice = l_w[0].as_usize()..l_w[1].as_usize();
         let r_slice = r_w[0].as_usize()..r_w[1].as_usize();
         for i in l_slice {
             let left_row = l_values.row(i);
             if dedup.insert(left_row) {
-                row_elements.push(left_row);
+                rows.push(left_row);
             }
         }
         for i in r_slice {
-            let right_row=r_values.row(i);
-            if dedup.insert(right_row){
-                row_elements.push(right_row);
+            let right_row = r_values.row(i);
+            if dedup.insert(right_row) {
+                rows.push(right_row);
             }
         }
-
-        rows.extend(row_elements.iter());
         offsets.push(OffsetSize::usize_as(rows.len()));
         dedup.clear();
-        row_elements.clear();
     }
 
     let values = converter.convert_rows(rows)?;
     let offsets = OffsetBuffer::new(offsets.into());
     let result = values[0].clone();
     Ok(GenericListArray::<OffsetSize>::new(
-        field.clone(), offsets, result, nulls,
+        field.clone(),
+        offsets,
+        result,
+        nulls,
     ))
 }
 
@@ -1437,9 +1434,9 @@ pub fn array_union(args: &[ArrayRef]) -> Result<ArrayRef> {
             Ok(Arc::new(result))
         }
         _ => {
-            return internal_err!(
+            internal_err!(
                 "array_union only support list with offsets of type int32 and int64"
-            );
+            )
         }
     }
 }

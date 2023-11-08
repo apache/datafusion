@@ -19773,6 +19773,7 @@ impl serde::Serialize for ScalarFunction {
             Self::ArrayPopBack => "ArrayPopBack",
             Self::StringToArray => "StringToArray",
             Self::ToTimestampNanos => "ToTimestampNanos",
+            Self::ArrayUnion => "ArrayUnion",
         };
         serializer.serialize_str(variant)
     }
@@ -19903,6 +19904,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "ArrayPopBack",
             "StringToArray",
             "ToTimestampNanos",
+            "ArrayUnion",
         ];
 
         struct GeneratedVisitor;
@@ -20062,6 +20064,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "ArrayPopBack" => Ok(ScalarFunction::ArrayPopBack),
                     "StringToArray" => Ok(ScalarFunction::StringToArray),
                     "ToTimestampNanos" => Ok(ScalarFunction::ToTimestampNanos),
+                    "ArrayUnion" => Ok(ScalarFunction::ArrayUnion),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }
