@@ -1888,6 +1888,12 @@ impl DefaultPhysicalPlanner {
                 }
             }
 
+            let show_statistics = if e.verbose {
+                true
+            } else {
+                config.show_statistics
+            };
+
             if !config.logical_plan_only && e.logical_optimization_succeeded {
                 match self
                     .create_initial_plan(e.plan.as_ref(), session_state)
@@ -1896,7 +1902,7 @@ impl DefaultPhysicalPlanner {
                     Ok(input) => {
                         stringified_plans.push(
                             displayable(input.as_ref())
-                                .set_show_statistics(config.show_statistics)
+                                .set_show_statistics(show_statistics)
                                 .to_stringified(e.verbose, InitialPhysicalPlan),
                         );
 
@@ -1908,14 +1914,14 @@ impl DefaultPhysicalPlanner {
                                 let plan_type = OptimizedPhysicalPlan { optimizer_name };
                                 stringified_plans.push(
                                     displayable(plan)
-                                        .set_show_statistics(config.show_statistics)
+                                        .set_show_statistics(show_statistics)
                                         .to_stringified(e.verbose, plan_type),
                                 );
                             },
                         ) {
                             Ok(input) => stringified_plans.push(
                                 displayable(input.as_ref())
-                                    .set_show_statistics(config.show_statistics)
+                                    .set_show_statistics(show_statistics)
                                     .to_stringified(e.verbose, FinalPhysicalPlan),
                             ),
                             Err(DataFusionError::Context(optimizer_name, e)) => {
