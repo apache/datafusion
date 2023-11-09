@@ -2659,7 +2659,6 @@ impl ScalarFunction {
             ScalarFunction::ArrayReplaceN => "ArrayReplaceN",
             ScalarFunction::ArrayRemoveAll => "ArrayRemoveAll",
             ScalarFunction::ArrayReplaceAll => "ArrayReplaceAll",
-            ScalarFunction::ArrayIntersect => "ArrayIntersect",
             ScalarFunction::Nanvl => "Nanvl",
             ScalarFunction::Flatten => "Flatten",
             ScalarFunction::Isnan => "Isnan",
@@ -2668,6 +2667,7 @@ impl ScalarFunction {
             ScalarFunction::ArrayPopBack => "ArrayPopBack",
             ScalarFunction::StringToArray => "StringToArray",
             ScalarFunction::ToTimestampNanos => "ToTimestampNanos",
+            ScalarFunction::ArrayIntersect => "ArrayIntersect",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2792,6 +2792,7 @@ impl ScalarFunction {
             "ArrayPopBack" => Some(Self::ArrayPopBack),
             "StringToArray" => Some(Self::StringToArray),
             "ToTimestampNanos" => Some(Self::ToTimestampNanos),
+            "ArrayIntersect" => Some(Self::ArrayIntersect),
             _ => None,
         }
     }

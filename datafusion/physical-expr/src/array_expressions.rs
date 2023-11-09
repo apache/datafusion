@@ -1847,7 +1847,7 @@ pub fn array_intersect(args: &[ArrayRef]) -> Result<ArrayRef> {
     let dt = first_array.value_type().clone();
 
     let mut offsets = vec![0];
-    let mut tmp_values = vec![];
+    let mut new_arrays = vec![];
 
     let converter = RowConverter::new(vec![SortField::new(dt.clone())])?;
     for (first_arr, second_arr) in first_array.iter().zip(second_array.iter()) {
@@ -1868,24 +1868,23 @@ pub fn array_intersect(args: &[ArrayRef]) -> Result<ArrayRef> {
                 None => return internal_err!("offsets should not be empty"),
             };
             offsets.push(last_offset + rows.len() as i32);
-            let tmp_value = converter.convert_rows(rows)?;
-            tmp_values.push(
-                tmp_value
-                    .get(0)
-                    .ok_or_else(|| {
-                        DataFusionError::Internal(format!(
-                            "array_intersect: failed to get value from rows"
-                        ))
-                    })?
-                    .clone(),
-            );
+            let arrays = converter.convert_rows(rows)?;
+            let array = match arrays.get(0) {
+                Some(array) => array.clone(),
+                None => {
+                    return internal_err!(
+                        "array_intersect: failed to get array from rows"
+                    )
+                }
+            };
+            new_arrays.push(array);
         }
     }
 
     let field = Arc::new(Field::new("item", dt, true));
     let offsets = OffsetBuffer::new(offsets.into());
-    let tmp_values_ref = tmp_values.iter().map(|v| v.as_ref()).collect::<Vec<_>>();
-    let values = compute::concat(&tmp_values_ref)?;
+    let new_arrays_ref = new_arrays.iter().map(|v| v.as_ref()).collect::<Vec<_>>();
+    let values = compute::concat(&new_arrays_ref)?;
     let arr = Arc::new(ListArray::try_new(field, offsets, values, None)?);
     Ok(arr)
 }
