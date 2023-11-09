@@ -1171,6 +1171,7 @@ mod tests {
         AggregateExpr, EquivalenceProperties, PhysicalExpr, PhysicalSortExpr,
     };
 
+    use datafusion_execution::memory_pool::FairSpillPool;
     use futures::{FutureExt, Stream};
 
     // Generate a schema which consists of 5 columns (a, b, c, d, e)
@@ -1271,8 +1272,11 @@ mod tests {
     fn new_spill_ctx(batch_size: usize, max_memory: usize) -> Arc<TaskContext> {
         let session_config = SessionConfig::new().with_batch_size(batch_size);
         let runtime = Arc::new(
-            RuntimeEnv::new(RuntimeConfig::default().with_memory_limit(max_memory, 1.0))
-                .unwrap(),
+            RuntimeEnv::new(
+                RuntimeConfig::default()
+                    .with_memory_pool(Arc::new(FairSpillPool::new(max_memory))),
+            )
+            .unwrap(),
         );
         let task_ctx = TaskContext::default()
             .with_session_config(session_config)

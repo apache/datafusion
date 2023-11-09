@@ -23,9 +23,11 @@ use std::sync::Arc;
 
 use arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::Schema;
-use datafusion::datasource::listing::{FileRange, PartitionedFile};
+use datafusion::datasource::file_format::json::JsonSink;
+use datafusion::datasource::file_format::write::FileWriterMode;
+use datafusion::datasource::listing::{FileRange, ListingTableUrl, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
-use datafusion::datasource::physical_plan::FileScanConfig;
+use datafusion::datasource::physical_plan::{FileScanConfig, FileSinkConfig};
 use datafusion::execution::context::ExecutionProps;
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::window_function::WindowFunction;
@@ -39,8 +41,12 @@ use datafusion::physical_plan::windows::create_window_expr;
 use datafusion::physical_plan::{
     functions, ColumnStatistics, Partitioning, PhysicalExpr, Statistics, WindowExpr,
 };
+use datafusion_common::file_options::json_writer::JsonWriterOptions;
+use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
-use datafusion_common::{not_impl_err, DataFusionError, JoinSide, Result, ScalarValue};
+use datafusion_common::{
+    not_impl_err, DataFusionError, FileTypeWriterOptions, JoinSide, Result, ScalarValue,
+};
 
 use crate::common::proto_error;
 use crate::convert_required;
@@ -695,5 +701,88 @@ impl TryFrom<&protobuf::Statistics> for Statistics {
             // No column statistic (None) is encoded with empty array
             column_statistics: s.column_stats.iter().map(|s| s.into()).collect(),
         })
+    }
+}
+
+impl TryFrom<&protobuf::JsonSink> for JsonSink {
+    type Error = DataFusionError;
+
+    fn try_from(value: &protobuf::JsonSink) -> Result<Self, Self::Error> {
+        Ok(Self::new(convert_required!(value.config)?))
+    }
+}
+
+impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
+    type Error = DataFusionError;
+
+    fn try_from(conf: &protobuf::FileSinkConfig) -> Result<Self, Self::Error> {
+        let file_groups = conf
+            .file_groups
+            .iter()
+            .map(TryInto::try_into)
+            .collect::<Result<Vec<_>>>()?;
+        let table_paths = conf
+            .table_paths
+            .iter()
+            .map(ListingTableUrl::parse)
+            .collect::<Result<Vec<_>>>()?;
+        let table_partition_cols = conf
+            .table_partition_cols
+            .iter()
+            .map(|protobuf::PartitionColumn { name, arrow_type }| {
+                let data_type = convert_required!(arrow_type)?;
+                Ok((name.clone(), data_type))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self {
+            object_store_url: ObjectStoreUrl::parse(&conf.object_store_url)?,
+            file_groups,
+            table_paths,
+            output_schema: Arc::new(convert_required!(conf.output_schema)?),
+            table_partition_cols,
+            writer_mode: conf.writer_mode().into(),
+            single_file_output: conf.single_file_output,
+            unbounded_input: conf.unbounded_input,
+            overwrite: conf.overwrite,
+            file_type_writer_options: convert_required!(conf.file_type_writer_options)?,
+        })
+    }
+}
+
+impl From<protobuf::FileWriterMode> for FileWriterMode {
+    fn from(value: protobuf::FileWriterMode) -> Self {
+        match value {
+            protobuf::FileWriterMode::Append => Self::Append,
+            protobuf::FileWriterMode::Put => Self::Put,
+            protobuf::FileWriterMode::PutMultipart => Self::PutMultipart,
+        }
+    }
+}
+
+impl From<protobuf::CompressionTypeVariant> for CompressionTypeVariant {
+    fn from(value: protobuf::CompressionTypeVariant) -> Self {
+        match value {
+            protobuf::CompressionTypeVariant::Gzip => Self::GZIP,
+            protobuf::CompressionTypeVariant::Bzip2 => Self::BZIP2,
+            protobuf::CompressionTypeVariant::Xz => Self::XZ,
+            protobuf::CompressionTypeVariant::Zstd => Self::ZSTD,
+            protobuf::CompressionTypeVariant::Uncompressed => Self::UNCOMPRESSED,
+        }
+    }
+}
+
+impl TryFrom<&protobuf::FileTypeWriterOptions> for FileTypeWriterOptions {
+    type Error = DataFusionError;
+
+    fn try_from(value: &protobuf::FileTypeWriterOptions) -> Result<Self, Self::Error> {
+        let file_type = value
+            .file_type
+            .as_ref()
+            .ok_or_else(|| proto_error("Missing required field in protobuf"))?;
+        match file_type {
+            protobuf::file_type_writer_options::FileType::JsonOptions(opts) => Ok(
+                Self::JSON(JsonWriterOptions::new(opts.compression().into())),
+            ),
+        }
     }
 }

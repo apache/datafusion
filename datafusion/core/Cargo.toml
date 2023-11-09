@@ -62,11 +62,11 @@ bytes = { workspace = true }
 bzip2 = { version = "0.4.3", optional = true }
 chrono = { workspace = true }
 dashmap = { workspace = true }
-datafusion-common = { path = "../common", version = "32.0.0", features = ["object_store"], default-features = false }
+datafusion-common = { path = "../common", version = "33.0.0", features = ["object_store"], default-features = false }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
-datafusion-optimizer = { path = "../optimizer", version = "32.0.0", default-features = false }
-datafusion-physical-expr = { path = "../physical-expr", version = "32.0.0", default-features = false }
+datafusion-optimizer = { path = "../optimizer", version = "33.0.0", default-features = false }
+datafusion-physical-expr = { path = "../physical-expr", version = "33.0.0", default-features = false }
 datafusion-physical-plan = { workspace = true }
 datafusion-sql = { workspace = true }
 flate2 = { version = "1.0.24", optional = true }
@@ -81,7 +81,7 @@ num-traits = { version = "0.2", optional = true }
 num_cpus = { workspace = true }
 object_store = { workspace = true }
 parking_lot = { workspace = true }
-parquet = { workspace = true, optional = true }
+parquet = { workspace = true, optional = true, default-features = true }
 pin-project-lite = "^0.2.7"
 rand = { workspace = true }
 sqlparser = { workspace = true }
