@@ -788,16 +788,31 @@ fn update_expr(
     projected_exprs: &[(Arc<dyn PhysicalExpr>, String)],
     sync_with_child: bool,
 ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
-    let mut rewritten = false;
+    #[derive(Debug, PartialEq)]
+    enum RewriteState {
+        /// The expression is unchanged.
+        Unchanged,
+        /// Some part of the expression has been rewritten
+        RewrittenValid,
+        /// Some part of the expression has been rewritten, but some column
+        /// references could not be.
+        RewrittenInvalid,
+    }
+
+    let mut state = RewriteState::Unchanged;
 
     let new_expr = expr
         .clone()
-        .transform_down_mut(&mut |expr: Arc<dyn PhysicalExpr>| {
+        .transform_up_mut(&mut |expr: Arc<dyn PhysicalExpr>| {
+            if state == RewriteState::RewrittenInvalid {
+                return Ok(Transformed::No(expr));
+            }
+
             let Some(column) = expr.as_any().downcast_ref::<Column>() else {
                 return Ok(Transformed::No(expr));
             };
             if sync_with_child {
-                rewritten = true;
+                state = RewriteState::RewrittenValid;
                 // Update the index of `column`:
                 Ok(Transformed::Yes(projected_exprs[column.index()].0.clone()))
             } else {
@@ -815,15 +830,23 @@ fn update_expr(
                     },
                 );
                 if let Some(new_col) = new_col {
-                    rewritten = true;
+                    state = RewriteState::RewrittenValid;
                     Ok(Transformed::Yes(new_col))
                 } else {
+                    // didn't find a rewrite, stop trying
+                    state = RewriteState::RewrittenInvalid;
                     Ok(Transformed::No(expr))
                 }
             }
         });
 
-    new_expr.map(|new_expr| if rewritten { Some(new_expr) } else { None })
+    new_expr.map(|new_expr| {
+        if state == RewriteState::RewrittenValid {
+            Some(new_expr)
+        } else {
+            None
+        }
+    })
 }
 
 /// Creates a new [`ProjectionExec`] instance with the given child plan and
