@@ -99,6 +99,19 @@ pub fn placeholder(id: impl Into<String>) -> Expr {
     })
 }
 
+/// Create an '*' [`Expr::Wildcard`] expression that matches all columns
+///
+/// # Example
+///
+/// ```rust
+/// # use datafusion_expr::{wildcard};
+/// let p = wildcard();
+/// assert_eq!(p.to_string(), "*")
+/// ```
+pub fn wildcard() -> Expr {
+    Expr::Wildcard { qualifier: None }
+}
+
 /// Return a new expression `left <op> right`
 pub fn binary_expr(left: Expr, op: Operator, right: Expr) -> Expr {
     Expr::BinaryExpr(BinaryExpr::new(Box::new(left), op, Box::new(right)))

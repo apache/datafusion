@@ -363,7 +363,7 @@ message LogicalExprNode {
     SortExprNode sort = 12;
     NegativeNode negative = 13;
     InListNode in_list = 14;
-    bool wildcard = 15;
+    Wildcard wildcard = 15;
     ScalarFunctionNode scalar_function = 16;
     TryCastNode try_cast = 17;
 
@@ -397,6 +397,10 @@ message LogicalExprNode {
     PlaceholderNode placeholder = 34;
 
   }
+}
+
+message Wildcard {
+  optional string qualifier = 1;
 }
 
 message PlaceholderNode {

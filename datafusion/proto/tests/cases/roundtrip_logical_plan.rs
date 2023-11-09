@@ -1147,7 +1147,17 @@ fn roundtrip_inlist() {
 
 #[test]
 fn roundtrip_wildcard() {
-    let test_expr = Expr::Wildcard;
+    let test_expr = Expr::Wildcard { qualifier: None };
+
+    let ctx = SessionContext::new();
+    roundtrip_expr_test(test_expr, ctx);
+}
+
+#[test]
+fn roundtrip_qualified_wildcard() {
+    let test_expr = Expr::Wildcard {
+        qualifier: Some("foo".into()),
+    };
 
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
