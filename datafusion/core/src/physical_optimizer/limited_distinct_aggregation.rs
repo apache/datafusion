@@ -64,13 +64,11 @@ impl LimitedDistinctAggregation {
         Some(Arc::new(new_aggr))
     }
 
-    /// transform_local_limit matches an `AggregateExec` as the child of a `LocalLimitExec`
+    /// transform_limit matches an `AggregateExec` as the child of a `LocalLimitExec`
     /// or `GlobalLimitExec` and pushes the limit into the aggregation as a soft limit when
     /// there is a group by, but no sorting, no aggregate expressions, and no filters in the
     /// aggregation
-    fn transform_local_limit(
-        plan: Arc<dyn ExecutionPlan>,
-    ) -> Option<Arc<dyn ExecutionPlan>> {
+    fn transform_limit(plan: Arc<dyn ExecutionPlan>) -> Option<Arc<dyn ExecutionPlan>> {
         let limit: usize;
         let mut global_fetch: Option<usize> = None;
         let mut global_skip: usize = 0;
@@ -166,7 +164,7 @@ impl PhysicalOptimizerRule for LimitedDistinctAggregation {
             plan.transform_down(&|plan| {
                 Ok(
                     if let Some(plan) =
-                        LimitedDistinctAggregation::transform_local_limit(plan.clone())
+                        LimitedDistinctAggregation::transform_limit(plan.clone())
                     {
                         Transformed::Yes(plan)
                     } else {
