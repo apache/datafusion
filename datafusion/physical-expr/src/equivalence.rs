@@ -176,7 +176,7 @@ impl ProjectionMapping {
     ///
     /// # Returns
     ///
-    /// An `Option` containing the projected lexicorgraphical ordering requirement.
+    /// An `Option` containing the projected lexicographical ordering requirement.
     /// If any of the given requirements is absent in the mapping, returns `None`.
     pub fn project_lex_reqs(&self, lex_req: LexRequirementRef) -> Option<LexRequirement> {
         lex_req
@@ -425,22 +425,17 @@ impl EquivalenceGroup {
         expr: &Arc<dyn PhysicalExpr>,
     ) -> Option<Arc<dyn PhysicalExpr>> {
         // First, we try to project expressions with an exact match. If we are
-        // unable to do this, we consult equivalence classes. Consider the case
-        // where an equivalence class contains `a = b` and the projection mapping
-        // states `a -> a1, b -> b1`. In the first pass, we project `a = b` as
-        // `a1 = b1`. If we were to consult equivalence classes directly without
-        // first searching for an exact match, we would end up with `a1 = a1`,
-        // which would contain no information.
+        // unable to do this, we consult equivalence classes.
         if let Some(target) = mapping.target_expr(expr) {
-            // If we match the source, we can project. For example, if we have the mapping
-            // (a as a1, a + c) `a` projects to `a1`, and `binary_expr(a+b)` projects to `col(a+b)`.
+            // If we match the source, we can project directly:
             return Some(target);
         } else {
-            // If expr is not inside mapping keys, try to project expressions considering their equivalence classes.
+            // If the given expression is not inside the mapping, try to project
+            // expressions considering the equivalence classes.
             for (source, target) in mapping.iter() {
-                // If we match an equivalent expression to source,
-                // then we can project. For example, if we have the mapping
-                // (a as a1, a + c) and the equivalence class (a, b), expression `b` projects to `a1`.
+                // If we match an equivalent expression to `source`, then we
+                // can project. For example, if we have the mapping `a -> a1`
+                // and the equivalence `a = b`, expression `b` projects to `a1`.
                 if self
                     .get_equivalence_class(source)
                     .map_or(false, |group| physical_exprs_contains(group, expr))
@@ -452,17 +447,15 @@ impl EquivalenceGroup {
         // Project a non-leaf expression by projecting its children.
         let children = expr.children();
         if children.is_empty() {
-            // Leaf expression should be inside mapping.
-            return None;
-        } else if let Some(children) = children
-            .into_iter()
-            .map(|child| self.project_expr(mapping, &child))
-            .collect::<Option<Vec<_>>>()
-        {
-            return Some(expr.clone().with_new_children(children).unwrap());
+            // A leaf expression should be inside the given mapping.
+            None
+        } else {
+            children
+                .into_iter()
+                .map(|child| self.project_expr(mapping, &child))
+                .collect::<Option<Vec<_>>>()
+                .map(|p| expr.clone().with_new_children(p).unwrap())
         }
-        // Arriving here implies the expression was invalid after projection.
-        None
     }
 
     /// Projects `ordering` according to the given projection mapping.
@@ -994,49 +987,40 @@ impl EquivalenceProperties {
             .iter()
             .map(|sort_req| sort_req.expr.clone())
             .collect::<Vec<_>>();
-        let projection_mapping = self.implicit_projection_mapping(&exprs);
-        let projected_eqs =
-            self.project(&projection_mapping, projection_mapping.output_schema());
-        if let Some(projected_reqs) = projection_mapping.project_lex_reqs(reqs) {
-            projected_eqs.ordering_satisfy_requirement_helper(&projected_reqs)
-        } else {
-            false
-        }
-    }
-
-    /// Helper function to check whether the given sort requirements are satisfied by any of the
-    /// existing orderings.
-    fn ordering_satisfy_requirement_helper(&self, reqs: LexRequirementRef) -> bool {
-        // First, standardize the given requirement:
-        let normalized_reqs = self.normalize_sort_requirements(reqs);
-        if normalized_reqs.is_empty() {
-            // Requirements are tautologically satisfied if empty.
-            return true;
-        }
-        let mut indices = HashSet::new();
-        for ordering in self.normalized_oeq_class().iter() {
-            let match_indices = ordering
-                .iter()
-                .map(|sort_expr| {
-                    normalized_reqs
-                        .iter()
-                        .position(|sort_req| sort_expr.satisfy(sort_req, &self.schema))
-                })
-                .collect::<Vec<_>>();
-            // Find the largest contiguous increasing sequence starting from the first index:
-            if let Some(&Some(first)) = match_indices.first() {
-                indices.insert(first);
-                let mut iter = match_indices.windows(2);
-                while let Some([Some(current), Some(next)]) = iter.next() {
-                    if next > current {
-                        indices.insert(*next);
-                    } else {
-                        break;
+        let mapping = self.implicit_projection_mapping(&exprs);
+        let projected_eqs = self.project(&mapping, mapping.output_schema());
+        mapping.project_lex_reqs(reqs).map_or(false, |reqs| {
+            // First, standardize the given requirement:
+            let normalized_reqs = projected_eqs.normalize_sort_requirements(&reqs);
+            if normalized_reqs.is_empty() {
+                // Requirements are tautologically satisfied if empty.
+                return true;
+            }
+            let mut indices = HashSet::new();
+            for ordering in projected_eqs.normalized_oeq_class().iter() {
+                let match_indices = ordering
+                    .iter()
+                    .map(|sort_expr| {
+                        normalized_reqs.iter().position(|sort_req| {
+                            sort_expr.satisfy(sort_req, &projected_eqs.schema)
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                // Find the largest contiguous increasing sequence starting from the first index:
+                if let Some(&Some(first)) = match_indices.first() {
+                    indices.insert(first);
+                    let mut iter = match_indices.windows(2);
+                    while let Some([Some(current), Some(next)]) = iter.next() {
+                        if next > current {
+                            indices.insert(*next);
+                        } else {
+                            break;
+                        }
                     }
                 }
             }
-        }
-        indices.len() == normalized_reqs.len()
+            indices.len() == normalized_reqs.len()
+        })
     }
 
     /// Checks whether the `given`` sort requirements are equal or more specific
@@ -1139,40 +1123,29 @@ impl EquivalenceProperties {
         (!meet.is_empty()).then_some(meet)
     }
 
-    /// Creates a projection mapping to support complex expressions.
-    /// All of the existing fields + complex expressions
-    /// (expressions that needs to be evaluated using existing fields) such (a+b), (date_bin(ts), etc.)
-    /// are projected.
-    /// With this API, we can determine ordering properties of complex expressions without actually evaluating them.
+    /// Creates a projection mapping to support complex expressions (e.g. a + b,
+    /// DATE_BIN(c), ...). Using this implicit projection, we can determine the
+    /// ordering properties of complex expressions without actually evaluating them.
     fn implicit_projection_mapping(
         &self,
         exprs: &[Arc<dyn PhysicalExpr>],
     ) -> ProjectionMapping {
-        // Project existing fields as is
-        let mut proj_exprs = self
+        // First project existing fields as is, then project complex expressions:
+        let proj_exprs = self
             .schema
             .fields
             .iter()
             .enumerate()
             .map(|(idx, field)| {
-                let col =
-                    Arc::new(Column::new(field.name(), idx)) as Arc<dyn PhysicalExpr>;
-                (col, field.name().to_string())
+                let name = field.name();
+                (Arc::new(Column::new(name, idx)) as _, name.to_string())
             })
+            .chain(exprs.iter().flat_map(|expr| {
+                // Do not project column expressions:
+                let is_column = expr.as_any().is::<Column>();
+                (!is_column).then(|| (expr.clone(), expr.to_string()))
+            }))
             .collect::<Vec<_>>();
-        // Project complex expression
-        let complex_proj_exprs = exprs
-            .iter()
-            .flat_map(|expr| {
-                if expr.as_any().is::<Column>() {
-                    // Do not project column expressions
-                    None
-                } else {
-                    Some((expr.clone(), expr.to_string()))
-                }
-            })
-            .collect::<Vec<_>>();
-        proj_exprs.extend(complex_proj_exprs);
         ProjectionMapping::try_new(&proj_exprs, self.schema()).unwrap()
     }
 
@@ -1225,7 +1198,7 @@ impl EquivalenceProperties {
             .constants
             .iter()
             .flat_map(|constant| projection_mapping.target_expr(constant))
-            .collect::<Vec<_>>();
+            .collect();
         Self {
             eq_group: self.eq_group.project(projection_mapping),
             oeq_class: OrderingEquivalenceClass::new(projected_orderings),
@@ -1254,20 +1227,11 @@ impl EquivalenceProperties {
         let projection_mapping = self.implicit_projection_mapping(exprs);
         let projected =
             self.project(&projection_mapping, projection_mapping.output_schema());
-        projected.find_longest_permutation_helper(
-            &projection_mapping.target_exprs(exprs).unwrap_or_default(),
-        )
-    }
-
-    /// Helper function to calculate longest permutation.
-    fn find_longest_permutation_helper(
-        &self,
-        exprs: &[Arc<dyn PhysicalExpr>],
-    ) -> (LexOrdering, Vec<usize>) {
-        let normalized_exprs = self.eq_group.normalize_exprs(exprs.to_vec());
+        let exprs = projection_mapping.target_exprs(exprs).unwrap_or_default();
+        let normalized_exprs = projected.eq_group.normalize_exprs(exprs.clone());
         // Use a map to associate expression indices with sort options:
         let mut ordered_exprs = IndexMap::<usize, SortOptions>::new();
-        for ordering in self.normalized_oeq_class().iter() {
+        for ordering in projected.normalized_oeq_class().iter() {
             for sort_expr in ordering {
                 if let Some(idx) = normalized_exprs
                     .iter()
