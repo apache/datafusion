@@ -616,7 +616,7 @@ mod tests {
         // expected not to push the limit to the AggregateExec
         let expected = [
             "LocalLimitExec: fetch=10",
-            "AggregateExec: mode=Single, gby=[a@0 as a], aggr=[], ordering_mode=FullyOrdered",
+            "AggregateExec: mode=Single, gby=[a@0 as a], aggr=[], ordering_mode=Sorted",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC]",
         ];
         let plan: Arc<dyn ExecutionPlan> = Arc::new(limit_exec);
