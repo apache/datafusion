@@ -48,7 +48,7 @@ use hashbrown::HashSet;
 /// E.g. 1 -> [3, 6, 8] indicates that the column values map to rows 3, 6 and 8 for hash value 1
 /// As the key is a hash value, we need to check possible hash collisions in the probe stage
 /// During this stage it might be the case that a row is contained the same hashmap value,
-/// but the values don't match. Those are checked in the [`equal_rows_arr`] method.
+/// but the values don't match. Those are checked in the [`equal_rows_arr`]: crate::joins::hash_join::equal_rows_arr method.
 ///
 /// The indices (values) are stored in a separate chained list stored in the `Vec<u64>`.
 ///
@@ -56,8 +56,6 @@ use hashbrown::HashSet;
 ///
 /// The chain can be followed until the value "0" has been reached, meaning the end of the list.
 /// Also see chapter 5.3 of [Balancing vectorized query execution with bandwidth-optimized storage](https://dare.uva.nl/search?identifier=5ccbb60a-38b8-4eeb-858a-e7735dd37487)
-///
-/// [`equal_rows_arr`]: crate::joins::hash_join::equal_rows_arr
 ///
 /// # Example
 ///
