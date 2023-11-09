@@ -45,7 +45,7 @@ pub type EquivalenceClass = Vec<Arc<dyn PhysicalExpr>>;
 /// projection, and the output (post-projection) schema of the table.
 #[derive(Debug, Clone)]
 pub struct ProjectionMapping {
-    /// Mapping between source expressions  and target expressions.
+    /// Mapping between source expressions and target expressions.
     /// Vector indices correspond to the indices after projection.
     map: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>,
     /// Output (post-projection) schema.
@@ -431,23 +431,22 @@ impl EquivalenceGroup {
         // `a1 = b1`. If we were to consult equivalence classes directly without
         // first searching for an exact match, we would end up with `a1 = a1`,
         // which would contain no information.
-        for (source, target) in mapping.iter() {
+        if let Some(target) = mapping.target_expr(expr) {
             // If we match the source, we can project. For example, if we have the mapping
             // (a as a1, a + c) `a` projects to `a1`, and `binary_expr(a+b)` projects to `col(a+b)`.
-            if source.eq(expr) {
-                return Some(target.clone());
-            }
-        }
-        // In the second pass, try to project expressions considering their equivalence classes.
-        for (source, target) in mapping.iter() {
-            // If we match an equivalent expression to source,
-            // then we can project. For example, if we have the mapping
-            // (a as a1, a + c) and the equivalence class (a, b), expression `b` projects to `a1`.
-            if self
-                .get_equivalence_class(source)
-                .map_or(false, |group| physical_exprs_contains(group, expr))
-            {
-                return Some(target.clone());
+            return Some(target);
+        } else {
+            // If expr is not inside mapping keys, try to project expressions considering their equivalence classes.
+            for (source, target) in mapping.iter() {
+                // If we match an equivalent expression to source,
+                // then we can project. For example, if we have the mapping
+                // (a as a1, a + c) and the equivalence class (a, b), expression `b` projects to `a1`.
+                if self
+                    .get_equivalence_class(source)
+                    .map_or(false, |group| physical_exprs_contains(group, expr))
+                {
+                    return Some(target.clone());
+                }
             }
         }
         // Project a non-leaf expression by projecting its children.
