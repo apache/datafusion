@@ -1102,7 +1102,7 @@ pub fn array_positions(args: &[ArrayRef]) -> Result<ArrayRef> {
 ///   [4, 5, 6, 5], 5, 20, 2    ==> [4, 20, 6, 20]  (both 5s are replaced)
 /// )
 /// ```
-fn general_remove_v2(
+fn general_remove(
     list_array: &ListArray,
     element_array: &ArrayRef,
     arr_n: Vec<i64>,
@@ -1149,12 +1149,11 @@ fn general_remove_v2(
                 };
 
                 // We need to keep at most first n elements as `false`, which represent the elements to remove.
-                let filtered_array = if eq_array.false_count() < *n as usize {
-                    list_array_row
+                let eq_array = if eq_array.false_count() < *n as usize {
+                    eq_array
                 } else {
-                    println!("eq_array: {:?}", eq_array);
                     let mut count = 0;
-                    let eq_array = eq_array.iter().map(|e| {
+                    eq_array.iter().map(|e| {
                         // Keep first n `false` elements, and reverse other elements to `true`.
                         if let Some(false) = e {
                             if count < *n {
@@ -1166,13 +1165,10 @@ fn general_remove_v2(
                         } else {
                             e
                         }
-                    }).collect::<BooleanArray>();
-
-                    println!("eq_array: {:?}", eq_array);
-
-                    arrow::compute::filter(&list_array_row, &eq_array)?
+                    }).collect::<BooleanArray>()
                 };
 
+                let filtered_array = arrow::compute::filter(&list_array_row, &eq_array)?;
                 offsets.push(last_offset + filtered_array.len() as i32);
                 new_values.push(filtered_array);
             }
@@ -1186,7 +1182,7 @@ fn general_remove_v2(
     let values = if new_values.is_empty() {
         new_empty_array(&data_type)
     } else {
-        let new_values: Vec<_> = new_values.iter().map(|a| a.as_ref()).collect();
+        let new_values = new_values.iter().map(|x| x.as_ref()).collect::<Vec<_>>();
         arrow::compute::concat(&new_values)?
     };
 
@@ -1198,19 +1194,19 @@ fn general_remove_v2(
     )?))
 }
 
-pub fn array_remove_all_v2(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn array_remove_all(args: &[ArrayRef]) -> Result<ArrayRef> {
     let arr_n = vec![i64::MAX; args[0].len()];
-    general_remove_v2(as_list_array(&args[0])?, &args[1], arr_n)
+    general_remove(as_list_array(&args[0])?, &args[1], arr_n)
 }
 
-pub fn array_remove_v2(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn array_remove(args: &[ArrayRef]) -> Result<ArrayRef> {
     let arr_n = vec![1; args[0].len()];
-    general_remove_v2(as_list_array(&args[0])?, &args[1], arr_n)
+    general_remove(as_list_array(&args[0])?, &args[1], arr_n)
 }
 
-pub fn array_remove_n_v2(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn array_remove_n(args: &[ArrayRef]) -> Result<ArrayRef> {
     let arr_n = as_int64_array(&args[2])?.values().to_vec();
-    general_remove_v2(as_list_array(&args[0])?, &args[1], arr_n)
+    general_remove(as_list_array(&args[0])?, &args[1], arr_n)
 }
 
 // array removement functions
