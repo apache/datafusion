@@ -42,12 +42,13 @@ use indexmap::IndexMap;
 pub type EquivalenceClass = Vec<Arc<dyn PhysicalExpr>>;
 
 /// Stores the mapping between source expressions and target expressions for a
-/// projection, and the output schema of the table after the projection applied.
+/// projection, and the output (post-projection) schema of the table.
 #[derive(Debug, Clone)]
 pub struct ProjectionMapping {
-    /// `(source expression)` --> `(target expression)`
-    /// Indices in the vector corresponds to the indices after projection.
-    inner: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>,
+    /// Mapping between source expressions  and target expressions.
+    /// Vector indices correspond to the indices after projection.
+    map: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>,
+    /// Output (post-projection) schema.
     output_schema: SchemaRef,
 }
 
@@ -55,46 +56,48 @@ impl ProjectionMapping {
     /// Constructs the mapping between a projection's input and output
     /// expressions.
     ///
-    /// For example, given the input projection expressions (`a+b`, `c+d`)
-    /// and an output schema with two columns `"c+d"` and `"a+b"`
-    /// the projection mapping would be
+    /// For example, given the input projection expressions (`a + b`, `c + d`)
+    /// and an output schema with two columns `"c + d"` and `"a + b"`, the
+    /// projection mapping would be:
+    ///
     /// ```text
-    ///  [0]: (c+d, col("c+d"))
-    ///  [1]: (a+b, col("a+b"))
+    ///  [0]: (c + d, col("c + d"))
+    ///  [1]: (a + b, col("a + b"))
     /// ```
-    /// where `col("c+d")` means the column named "c+d".
+    ///
+    /// where `col("c + d")` means the column named `"c + d"`.
     pub fn try_new(
         expr: &[(Arc<dyn PhysicalExpr>, String)],
         input_schema: &SchemaRef,
     ) -> Result<Self> {
         // Construct a map from the input expressions to the output expression of the projection:
-        let mut inner = vec![];
-        for (expr_idx, (expression, name)) in expr.iter().enumerate() {
-            let target_expr = Arc::new(Column::new(name, expr_idx)) as _;
+        let map = expr
+            .iter()
+            .enumerate()
+            .map(|(expr_idx, (expression, name))| {
+                let target_expr = Arc::new(Column::new(name, expr_idx)) as _;
+                expression
+                    .clone()
+                    .transform_down(&|e| match e.as_any().downcast_ref::<Column>() {
+                        Some(col) => {
+                            // Sometimes, an expression and its name in the input_schema
+                            // doesn't match. This can cause problems, so we make sure
+                            // that the expression name matches with the name in `input_schema`.
+                            // Conceptually, `source_expr` and `expression` should be the same.
+                            let idx = col.index();
+                            let matching_input_field = input_schema.field(idx);
+                            let matching_input_column =
+                                Column::new(matching_input_field.name(), idx);
+                            Ok(Transformed::Yes(Arc::new(matching_input_column)))
+                        }
+                        None => Ok(Transformed::No(e)),
+                    })
+                    .map(|source_expr| (source_expr, target_expr))
+            })
+            .collect::<Result<Vec<_>>>()?;
 
-            let source_expr = expression.clone().transform_down(&|e| match e
-                .as_any()
-                .downcast_ref::<Column>(
-            ) {
-                Some(col) => {
-                    // Sometimes, expression and its name in the input_schema doesn't match.
-                    // This can cause problems. Hence in here we make sure that expression name
-                    // matches with the name in the inout_schema.
-                    // Conceptually, source_expr and expression should be same.
-                    let idx = col.index();
-                    let matching_input_field = input_schema.field(idx);
-                    let matching_input_column =
-                        Column::new(matching_input_field.name(), idx);
-                    Ok(Transformed::Yes(Arc::new(matching_input_column)))
-                }
-                None => Ok(Transformed::No(e)),
-            })?;
-
-            inner.push((source_expr, target_expr));
-        }
-
-        // Calculate output schema
-        let fields: Result<Vec<Field>> = expr
+        // Calculate output schema:
+        let fields = expr
             .iter()
             .map(|(e, name)| {
                 Ok(Field::new(
@@ -104,72 +107,68 @@ impl ProjectionMapping {
                 )
                 .with_metadata(get_field_metadata(e, input_schema).unwrap_or_default()))
             })
-            .collect();
+            .collect::<Result<Vec<_>>>()?;
 
         let output_schema = Arc::new(Schema::new_with_metadata(
-            fields?,
+            fields,
             input_schema.metadata().clone(),
         ));
 
-        Ok(Self {
-            inner,
-            output_schema,
-        })
+        Ok(Self { map, output_schema })
     }
 
     /// Iterate over pairs of (source, target) expressions
     pub fn iter(
         &self,
     ) -> impl Iterator<Item = &(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)> + '_ {
-        self.inner.iter()
+        self.map.iter()
     }
 
-    /// Get a reference to the output schema after projection applied
+    /// Returns a reference to the output (post-projection) schema.
     pub fn output_schema(&self) -> SchemaRef {
         self.output_schema.clone()
     }
 
-    /// This function returns the target value for a given expression.
+    /// This function returns the target expression for a given source expression.
     ///
     /// # Arguments
     ///
-    /// * `expr` - Source (e.g key) physical expression
+    /// * `expr` - Source physical expression.
     ///
     /// # Returns
     ///
-    /// An `Option` containing a the target (e.g value) for the source expression.
+    /// An `Option` containing the target expression for the given source.
     /// `None` means that source is not found inside the mapping.
     pub fn target_expr(
         &self,
         expr: &Arc<dyn PhysicalExpr>,
     ) -> Option<Arc<dyn PhysicalExpr>> {
-        self.inner
+        self.map
             .iter()
             .find(|(source, _)| source.eq(expr))
-            .map(|(_source, target)| target.clone())
+            .map(|(_, target)| target.clone())
     }
 
-    /// This function returns the target values for each expression.
+    /// This function returns the target expressions for all given source
+    /// expressions.
     ///
     /// # Arguments
     ///
-    /// * `exprs` - Source (e.g key) physical expressions
+    /// * `exprs` - Source physical expressions.
     ///
     /// # Returns
     ///
-    /// An `Option` containing the targets (e.g value) for the source expressions.
-    /// Returns `Some(Vec<_>)` if all of the expressions exist in the source of the mapping.
+    /// An `Option` containing the target expressions for all the sources.
+    /// If any of the given sources is absent in the mapping, returns `None`.
     pub fn target_exprs(
         &self,
         exprs: &[Arc<dyn PhysicalExpr>],
     ) -> Option<Vec<Arc<dyn PhysicalExpr>>> {
-        exprs
-            .iter()
-            .map(|expr| self.target_expr(expr))
-            .collect::<Option<Vec<_>>>()
+        exprs.iter().map(|expr| self.target_expr(expr)).collect()
     }
 
-    /// This function projects ordering requirement according to projection.
+    /// This function projects the given ordering requirement according to this
+    /// mapping.
     ///
     /// # Arguments
     ///
@@ -177,8 +176,8 @@ impl ProjectionMapping {
     ///
     /// # Returns
     ///
-    /// An `Option` containing the Lexicographical projected ordering requirement.
-    /// If any of the requirements is not found in the source expressions, it returns None.
+    /// An `Option` containing the projected lexicorgraphical ordering requirement.
+    /// If any of the given requirements is absent in the mapping, returns `None`.
     pub fn project_lex_reqs(&self, lex_req: LexRequirementRef) -> Option<LexRequirement> {
         lex_req
             .iter()
@@ -189,26 +188,22 @@ impl ProjectionMapping {
                         options: sort_req.options,
                     })
             })
-            .collect::<Option<Vec<_>>>()
+            .collect()
     }
 }
 
-/// If e is a direct column reference, returns the field level
-/// metadata for that field, if any. Otherwise returns None
+/// If `e` refers to a column, returns its field level metadata, if any.
+/// Otherwise, returns `None`.
 fn get_field_metadata(
     e: &Arc<dyn PhysicalExpr>,
     input_schema: &Schema,
 ) -> Option<HashMap<String, String>> {
-    let name = if let Some(column) = e.as_any().downcast_ref::<Column>() {
-        column.name()
-    } else {
-        return None;
-    };
-
-    input_schema
-        .field_with_name(name)
-        .ok()
-        .map(|f| f.metadata().clone())
+    e.as_any().downcast_ref::<Column>().and_then(|column| {
+        input_schema
+            .field_with_name(column.name())
+            .ok()
+            .map(|f| f.metadata().clone())
+    })
 }
 
 /// An `EquivalenceGroup` is a collection of `EquivalenceClass`es where each
@@ -429,10 +424,13 @@ impl EquivalenceGroup {
         mapping: &ProjectionMapping,
         expr: &Arc<dyn PhysicalExpr>,
     ) -> Option<Arc<dyn PhysicalExpr>> {
-        // In the first pass, try to project expressions with exact match.
-        // Consider the case where equivalence class contains `a=b` and projection is `a as a1, b as b1`.
-        // In the first pass, we project `a=b` as `a1=b1`. If we were to combine below passes after projection
-        // result would be `a1=a1` (Since a=b, we can project b as a1 also.). However, second version contains no information.
+        // First, we try to project expressions with an exact match. If we are
+        // unable to do this, we consult equivalence classes. Consider the case
+        // where an equivalence class contains `a = b` and the projection mapping
+        // states `a -> a1, b -> b1`. In the first pass, we project `a = b` as
+        // `a1 = b1`. If we were to consult equivalence classes directly without
+        // first searching for an exact match, we would end up with `a1 = a1`,
+        // which would contain no information.
         for (source, target) in mapping.iter() {
             // If we match the source, we can project. For example, if we have the mapping
             // (a as a1, a + c) `a` projects to `a1`, and `binary_expr(a+b)` projects to `col(a+b)`.
