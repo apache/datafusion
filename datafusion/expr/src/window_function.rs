@@ -281,6 +281,7 @@ impl BuiltInWindowFunction {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use strum::IntoEnumIterator;
 
     #[test]
     fn test_count_return_type() -> Result<()> {
@@ -446,5 +447,19 @@ mod tests {
             ))
         );
         assert_eq!(find_df_window_func("not_exist"), None)
+    }
+
+    #[test]
+    // Test for BuiltInWindowFunction's Display and from_str() implementations.
+    // For each variant in BuiltInWindowFunction, it converts the variant to a string
+    // and then back to a variant. The test asserts that the original variant and
+    // the reconstructed variant are the same. This assertion is also necessary for
+    // function suggestion. See https://github.com/apache/arrow-datafusion/issues/8082
+    fn test_display_and_from_str() {
+        for func_original in BuiltInWindowFunction::iter() {
+            let func_name = func_original.to_string();
+            let func_from_str = BuiltInWindowFunction::from_str(&func_name).unwrap();
+            assert_eq!(func_from_str, func_original);
+        }
     }
 }

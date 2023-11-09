@@ -99,21 +99,21 @@ pub enum Expr {
     SimilarTo(Like),
     /// Negation of an expression. The expression's type must be a boolean to make sense.
     Not(Box<Expr>),
-    /// Whether an expression is not Null. This expression is never null.
+    /// True if argument is not NULL, false otherwise. This expression itself is never NULL.
     IsNotNull(Box<Expr>),
-    /// Whether an expression is Null. This expression is never null.
+    /// True if argument is NULL, false otherwise. This expression itself is never NULL.
     IsNull(Box<Expr>),
-    /// Whether an expression is True. Boolean operation
+    /// True if argument is true, false otherwise. This expression itself is never NULL.
     IsTrue(Box<Expr>),
-    /// Whether an expression is False. Boolean operation
+    /// True if argument is  false, false otherwise. This expression itself is never NULL.
     IsFalse(Box<Expr>),
-    /// Whether an expression is Unknown. Boolean operation
+    /// True if argument is NULL, false otherwise. This expression itself is never NULL.
     IsUnknown(Box<Expr>),
-    /// Whether an expression is not True. Boolean operation
+    /// True if argument is FALSE or NULL, false otherwise. This expression itself is never NULL.
     IsNotTrue(Box<Expr>),
-    /// Whether an expression is not False. Boolean operation
+    /// True if argument is TRUE OR NULL, false otherwise. This expression itself is never NULL.
     IsNotFalse(Box<Expr>),
-    /// Whether an expression is not Unknown. Boolean operation
+    /// True if argument is TRUE or FALSE, false otherwise. This expression itself is never NULL.
     IsNotUnknown(Box<Expr>),
     /// arithmetic negation of an expression, the operand must be of a signed numeric data type
     Negative(Box<Expr>),
