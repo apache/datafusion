@@ -768,14 +768,14 @@ impl GroupedHashAggregateStream {
         self.group_ordering.input_done();
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         let timer = elapsed_compute.timer();
-        if self.spill_state.spills.is_empty() {
+        self.exec_state = if self.spill_state.spills.is_empty() {
             let batch = self.emit(EmitTo::All, false)?;
-            self.exec_state = ExecutionState::ProducingOutput(batch);
+            ExecutionState::ProducingOutput(batch)
         } else {
             // If spill files exist, stream-merge them.
             self.update_merged_stream()?;
-            self.exec_state = ExecutionState::ReadingInput;
-        }
+            ExecutionState::ReadingInput
+        };
         timer.done();
         Ok(())
     }
