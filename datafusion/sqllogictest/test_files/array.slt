@@ -1822,10 +1822,25 @@ select array_union(null, []);
 ----
 NULL
 
+# array_union scalar function #10
 query ?
 select array_union(null, null);
 ----
 NULL
+
+# array_union scalar function #11
+query ?
+select array_union([1.2, 3.0], [1.2, 3.0, 5.7]);
+----
+[1.2, 3.0, 5.7]
+
+# array_union scalar function #12
+query ?
+select array_union(['hello'], ['hello','datafusion']);
+----
+[hello, datafusion]
+
+
 
 
 
