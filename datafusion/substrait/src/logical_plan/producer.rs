@@ -1046,7 +1046,7 @@ pub fn to_substrait_rex(
                     options: vec![],
                 })),
             })
-        },
+        }
         Expr::IsNotNull(arg) => {
             let arguments: Vec<FunctionArgument> = vec![FunctionArgument {
                 arg_type: Some(ArgType::Value(to_substrait_rex(
@@ -1069,7 +1069,9 @@ pub fn to_substrait_rex(
                 })),
             })
         }
-        _ => not_impl_err!("Unsupported expression: {expr:?}"),
+        _ => {
+            not_impl_err!("Unsupported expression: {expr:?}")
+        }
     }
 }
 

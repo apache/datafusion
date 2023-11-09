@@ -81,7 +81,7 @@ enum ScalarFunctionType {
     /// [Expr::IsNull]
     IsNull,
     /// [Expr::IsNotNull]
-    IsNotNull
+    IsNotNull,
 }
 
 pub fn name_to_op(name: &str) -> Result<Operator> {
@@ -917,7 +917,9 @@ pub async fn from_substrait_rex(
                                 .clone();
                             Ok(Arc::new(Expr::IsNotNull(Box::new(expr))))
                         }
-                        _ => not_impl_err!("Invalid arguments for IS NOT NULL expression"),
+                        _ => {
+                            not_impl_err!("Invalid arguments for IS NOT NULL expression")
+                        }
                     }
                 }
             }
