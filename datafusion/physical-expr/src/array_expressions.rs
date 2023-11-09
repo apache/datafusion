@@ -1212,15 +1212,6 @@ pub fn array_remove_n(args: &[ArrayRef]) -> Result<ArrayRef> {
     general_remove(as_list_array(&args[0])?, &args[1], arr_n)
 }
 
-// array removement functions
-array_removement_function!(array_remove, remove_one, "Array_remove SQL function");
-array_removement_function!(array_remove_n, remove_n, "Array_remove_n SQL function");
-array_removement_function!(
-    array_remove_all,
-    remove_all,
-    "Array_remove_all SQL function"
-);
-
 /// For each element of `list_array[i]`, replaces up to `arr_n[i]`  occurences
 /// of `from_array[i]`, `to_array[i]`.
 ///
