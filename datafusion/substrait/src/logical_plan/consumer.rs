@@ -177,7 +177,7 @@ fn split_eq_and_noneq_join_predicate_with_nulls_equality(
 
 /// Convert Substrait Plan to DataFusion DataFrame
 pub async fn from_substrait_plan(
-    ctx: &mut SessionContext,
+    ctx: &SessionContext,
     plan: &Plan,
 ) -> Result<LogicalPlan> {
     // Register function extension
@@ -219,7 +219,7 @@ pub async fn from_substrait_plan(
 /// Convert Substrait Rel to DataFusion DataFrame
 #[async_recursion]
 pub async fn from_substrait_rel(
-    ctx: &mut SessionContext,
+    ctx: &SessionContext,
     rel: &Rel,
     extensions: &HashMap<u32, &String>,
 ) -> Result<LogicalPlan> {

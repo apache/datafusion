@@ -62,10 +62,10 @@ async fn parquet_exec() -> Result<()> {
     let substrait_rel =
         producer::to_substrait_rel(parquet_exec.as_ref(), &mut extension_info)?;
 
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
 
     let parquet_exec_roundtrip =
-        consumer::from_substrait_rel(&mut ctx, substrait_rel.as_ref(), &HashMap::new())
+        consumer::from_substrait_rel(&ctx, substrait_rel.as_ref(), &HashMap::new())
             .await?;
 
     let expected = format!("{}", displayable(parquet_exec.as_ref()).indent(true));

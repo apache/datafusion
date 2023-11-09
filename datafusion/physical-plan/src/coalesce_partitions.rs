@@ -26,11 +26,12 @@ use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::stream::{ObservedStream, RecordBatchReceiverStream};
 use super::{DisplayAs, SendableRecordBatchStream, Statistics};
 
-use crate::{DisplayFormatType, EquivalenceProperties, ExecutionPlan, Partitioning};
+use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::EquivalenceProperties;
 
 /// Merge execution plan executes partitions in parallel and combines them into a single
 /// partition. No guarantees are made about the order of the resulting partition.
@@ -101,7 +102,10 @@ impl ExecutionPlan for CoalescePartitionsExec {
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
-        self.input.equivalence_properties()
+        let mut output_eq = self.input.equivalence_properties();
+        // Coalesce partitions loses existing orderings.
+        output_eq.clear_orderings();
+        output_eq
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {

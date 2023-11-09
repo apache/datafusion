@@ -47,7 +47,8 @@ use arrow::{
 use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 pub use datafusion_expr::FuncMonotonicity;
 use datafusion_expr::{
-    BuiltinScalarFunction, ColumnarValue, ScalarFunctionImplementation,
+    type_coercion::functions::data_types, BuiltinScalarFunction, ColumnarValue,
+    ScalarFunctionImplementation,
 };
 use std::ops::Neg;
 use std::sync::Arc;
@@ -65,6 +66,9 @@ pub fn create_physical_expr(
         .map(|e| e.data_type(input_schema))
         .collect::<Result<Vec<_>>>()?;
 
+    // verify that input data types is consistent with function's `TypeSignature`
+    data_types(&input_expr_types, &fun.signature())?;
+
     let data_type = fun.return_type(&input_expr_types)?;
 
     let fun_expr: ScalarFunctionImplementation = match fun {
@@ -74,15 +78,20 @@ pub fn create_physical_expr(
         // so we don't have to pay a per-array/batch cost.
         BuiltinScalarFunction::ToTimestamp => {
             Arc::new(match input_phy_exprs[0].data_type(input_schema) {
-                Ok(DataType::Int64) | Ok(DataType::Timestamp(_, None)) => {
-                    |col_values: &[ColumnarValue]| {
-                        cast_column(
-                            &col_values[0],
-                            &DataType::Timestamp(TimeUnit::Nanosecond, None),
-                            None,
-                        )
-                    }
-                }
+                Ok(DataType::Int64) => |col_values: &[ColumnarValue]| {
+                    cast_column(
+                        &col_values[0],
+                        &DataType::Timestamp(TimeUnit::Second, None),
+                        None,
+                    )
+                },
+                Ok(DataType::Timestamp(_, None)) => |col_values: &[ColumnarValue]| {
+                    cast_column(
+                        &col_values[0],
+                        &DataType::Timestamp(TimeUnit::Nanosecond, None),
+                        None,
+                    )
+                },
                 Ok(DataType::Utf8) => datetime_expressions::to_timestamp,
                 other => {
                     return internal_err!(
@@ -125,6 +134,25 @@ pub fn create_physical_expr(
                 other => {
                     return internal_err!(
                         "Unsupported data type {other:?} for function to_timestamp_micros"
+                    );
+                }
+            })
+        }
+        BuiltinScalarFunction::ToTimestampNanos => {
+            Arc::new(match input_phy_exprs[0].data_type(input_schema) {
+                Ok(DataType::Int64) | Ok(DataType::Timestamp(_, None)) => {
+                    |col_values: &[ColumnarValue]| {
+                        cast_column(
+                            &col_values[0],
+                            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+                            None,
+                        )
+                    }
+                }
+                Ok(DataType::Utf8) => datetime_expressions::to_timestamp_nanos,
+                other => {
+                    return internal_err!(
+                        "Unsupported data type {other:?} for function to_timestamp_nanos"
                     );
                 }
             })
@@ -333,6 +361,8 @@ where
                 ColumnarValue::Array(a) => Some(a.len()),
             });
 
+        let is_scalar = len.is_none();
+
         let inferred_length = len.unwrap_or(1);
         let args = args
             .iter()
@@ -349,7 +379,14 @@ where
             .collect::<Vec<ArrayRef>>();
 
         let result = (inner)(&args);
-        result.map(ColumnarValue::Array)
+
+        if is_scalar {
+            // If all inputs are scalar, keeps output as scalar
+            let result = result.and_then(|arr| ScalarValue::try_from_array(&arr, 0));
+            result.map(ColumnarValue::Scalar)
+        } else {
+            result.map(ColumnarValue::Array)
+        }
     })
 }
 
@@ -2919,13 +2956,8 @@ mod tests {
                         "Builtin scalar function {fun} does not support empty arguments"
                     );
                 }
-                Err(DataFusionError::Plan(err)) => {
-                    if !err
-                        .contains("No function matches the given name and argument types")
-                    {
-                        return plan_err!(
-                            "Builtin scalar function {fun} didn't got the right error message with empty arguments");
-                    }
+                Err(DataFusionError::Plan(_)) => {
+                    // Continue the loop
                 }
                 Err(..) => {
                     return internal_err!(

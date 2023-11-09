@@ -165,7 +165,7 @@ impl LogicalPlanBuilder {
                         let data_type = expr.get_type(&empty_schema)?;
                         if let Some(prev_data_type) = &field_types[j] {
                             if prev_data_type != &data_type {
-                                return plan_err!("Inconsistent data type across values list at row {i} column {j}");
+                                return plan_err!("Inconsistent data type across values list at row {i} column {j}. Was {prev_data_type} but found {data_type}")
                             }
                         }
                         Ok(Some(data_type))

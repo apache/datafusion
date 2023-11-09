@@ -222,7 +222,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 planner_context,
             ),
 
-            SQLExpr::Cast { expr, data_type } => Ok(Expr::Cast(Cast::new(
+            SQLExpr::Cast {
+                expr, data_type, ..
+            } => Ok(Expr::Cast(Cast::new(
                 Box::new(self.sql_expr_to_logical_expr(
                     *expr,
                     schema,
@@ -231,7 +233,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.convert_data_type(&data_type)?,
             ))),
 
-            SQLExpr::TryCast { expr, data_type } => Ok(Expr::TryCast(TryCast::new(
+            SQLExpr::TryCast {
+                expr, data_type, ..
+            } => Ok(Expr::TryCast(TryCast::new(
                 Box::new(self.sql_expr_to_logical_expr(
                     *expr,
                     schema,
@@ -412,6 +416,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 expr,
                 trim_where,
                 trim_what,
+                ..
             } => self.sql_trim_to_expr(
                 *expr,
                 trim_where,
@@ -477,8 +482,34 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.parse_array_agg(array_agg, schema, planner_context)
             }
 
+            SQLExpr::Struct { values, fields } => {
+                self.parse_struct(values, fields, schema, planner_context)
+            }
+
             _ => not_impl_err!("Unsupported ast node in sqltorel: {sql:?}"),
         }
+    }
+
+    fn parse_struct(
+        &self,
+        values: Vec<SQLExpr>,
+        fields: Vec<sqlparser::ast::StructField>,
+        input_schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
+        if !fields.is_empty() {
+            return not_impl_err!("Struct fields are not supported yet");
+        }
+        let args = values
+            .into_iter()
+            .map(|value| {
+                self.sql_expr_to_logical_expr(value, input_schema, planner_context)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Expr::ScalarFunction(ScalarFunction::new(
+            BuiltinScalarFunction::Struct,
+            args,
+        )))
     }
 
     fn parse_array_agg(

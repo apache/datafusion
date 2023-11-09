@@ -24,7 +24,7 @@ use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field};
 use arrow_array::Array;
 use datafusion_common::cast::as_list_array;
-use datafusion_common::utils::wrap_into_list_array;
+use datafusion_common::utils::array_into_list_array;
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_expr::Accumulator;
@@ -161,7 +161,7 @@ impl Accumulator for ArrayAggAccumulator {
         }
 
         let concated_array = arrow::compute::concat(&element_arrays)?;
-        let list_array = wrap_into_list_array(concated_array);
+        let list_array = array_into_list_array(concated_array);
 
         Ok(ScalarValue::List(Arc::new(list_array)))
     }

@@ -23,7 +23,8 @@ use crate::expr::{
 };
 use crate::field_util::GetFieldAccessSchema;
 use crate::type_coercion::binary::get_result_type;
-use crate::{LogicalPlan, Projection, Subquery};
+use crate::type_coercion::functions::data_types;
+use crate::{utils, LogicalPlan, Projection, Subquery};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{
@@ -89,12 +90,24 @@ impl ExprSchemable for Expr {
                 Ok((fun.return_type)(&data_types)?.as_ref().clone())
             }
             Expr::ScalarFunction(ScalarFunction { fun, args }) => {
-                let data_types = args
+                let arg_data_types = args
                     .iter()
                     .map(|e| e.get_type(schema))
                     .collect::<Result<Vec<_>>>()?;
 
-                fun.return_type(&data_types)
+                // verify that input data types is consistent with function's `TypeSignature`
+                data_types(&arg_data_types, &fun.signature()).map_err(|_| {
+                    plan_datafusion_err!(
+                        "{}",
+                        utils::generate_signature_error_msg(
+                            &format!("{fun}"),
+                            fun.signature(),
+                            &arg_data_types,
+                        )
+                    )
+                })?;
+
+                fun.return_type(&arg_data_types)
             }
             Expr::WindowFunction(WindowFunction { fun, args, .. }) => {
                 let data_types = args

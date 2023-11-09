@@ -19,7 +19,7 @@
 
 # DataFusion Query Optimizer
 
-[DataFusion](df) is an extensible query execution framework, written in Rust, that uses Apache Arrow as its in-memory
+[DataFusion][df] is an extensible query execution framework, written in Rust, that uses Apache Arrow as its in-memory
 format.
 
 DataFusion has modular design, allowing individual crates to be re-used in other projects.

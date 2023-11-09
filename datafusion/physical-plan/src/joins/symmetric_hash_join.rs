@@ -63,10 +63,10 @@ use datafusion_common::{
 };
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::intervals::ExprIntervalGraph;
 
 use ahash::RandomState;
-use datafusion_physical_expr::equivalence::combine_join_equivalence_properties;
 use futures::stream::{select, BoxStream};
 use futures::{Stream, StreamExt};
 use hashbrown::HashSet;
@@ -430,14 +430,15 @@ impl ExecutionPlan for SymmetricHashJoinExec {
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
-        let left_columns_len = self.left.schema().fields.len();
-        combine_join_equivalence_properties(
-            self.join_type,
+        join_equivalence_properties(
             self.left.equivalence_properties(),
             self.right.equivalence_properties(),
-            left_columns_len,
-            self.on(),
+            &self.join_type,
             self.schema(),
+            &self.maintains_input_order(),
+            // Has alternating probe side
+            None,
+            self.on(),
         )
     }
 

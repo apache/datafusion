@@ -19,9 +19,9 @@
 name = "datafusion-sql"
 description = "DataFusion SQL Query Planner"
 keywords = ["datafusion", "sql", "parser", "planner"]
+readme = "README.md"
 version = { workspace = true }
 edition = { workspace = true }
-readme = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
@@ -39,13 +39,13 @@ unicode_expressions = []
 [dependencies]
 arrow = { workspace = true }
 arrow-schema = { workspace = true }
-datafusion-common = { path = "../common", version = "32.0.0", default-features = false }
-datafusion-expr = { path = "../expr", version = "32.0.0" }
-log = "^0.4"
+datafusion-common = { workspace = true }
+datafusion-expr = { workspace = true }
+log = { workspace = true }
 sqlparser = { workspace = true }
 
 [dev-dependencies]
-ctor = "0.2.0"
-env_logger = "0.10"
+ctor = { workspace = true }
+env_logger = { workspace = true }
 paste = "^1.0"
 rstest = "0.18"

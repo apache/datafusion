@@ -46,7 +46,7 @@ use datafusion_expr::{
     array_to_string, ascii, asin, asinh, atan, atan2, atanh, bit_length, btrim,
     cardinality, cbrt, ceil, character_length, chr, coalesce, concat_expr,
     concat_ws_expr, cos, cosh, cot, current_date, current_time, date_bin, date_part,
-    date_trunc, degrees, digest, exp,
+    date_trunc, decode, degrees, digest, encode, exp,
     expr::{self, InList, Sort, WindowFunction},
     factorial, floor, from_unixtime, gcd, isnan, iszero, lcm, left, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
@@ -54,7 +54,8 @@ use datafusion_expr::{
     random, regexp_match, regexp_replace, repeat, replace, reverse, right, round, rpad,
     rtrim, sha224, sha256, sha384, sha512, signum, sin, sinh, split_part, sqrt,
     starts_with, strpos, substr, substring, tan, tanh, to_hex, to_timestamp_micros,
-    to_timestamp_millis, to_timestamp_seconds, translate, trim, trunc, upper, uuid,
+    to_timestamp_millis, to_timestamp_nanos, to_timestamp_seconds, translate, trim,
+    trunc, upper, uuid,
     window_frame::regularize,
     AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction,
     Case, Cast, Expr, GetFieldAccess, GetIndexedField, GroupingSet,
@@ -521,6 +522,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Substr => Self::Substr,
             ScalarFunction::ToHex => Self::ToHex,
             ScalarFunction::ToTimestampMicros => Self::ToTimestampMicros,
+            ScalarFunction::ToTimestampNanos => Self::ToTimestampNanos,
             ScalarFunction::ToTimestampSeconds => Self::ToTimestampSeconds,
             ScalarFunction::Now => Self::Now,
             ScalarFunction::CurrentDate => Self::CurrentDate,
@@ -1470,6 +1472,14 @@ pub fn parse_expr(
                 ScalarFunction::Sha384 => Ok(sha384(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Sha512 => Ok(sha512(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Md5 => Ok(md5(parse_expr(&args[0], registry)?)),
+                ScalarFunction::Encode => Ok(encode(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
+                ScalarFunction::Decode => Ok(decode(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
                 ScalarFunction::NullIf => Ok(nullif(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
@@ -1591,6 +1601,9 @@ pub fn parse_expr(
                 }
                 ScalarFunction::ToTimestampMicros => {
                     Ok(to_timestamp_micros(parse_expr(&args[0], registry)?))
+                }
+                ScalarFunction::ToTimestampNanos => {
+                    Ok(to_timestamp_nanos(parse_expr(&args[0], registry)?))
                 }
                 ScalarFunction::ToTimestampSeconds => {
                     Ok(to_timestamp_seconds(parse_expr(&args[0], registry)?))

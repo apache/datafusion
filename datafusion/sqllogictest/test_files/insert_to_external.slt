@@ -40,8 +40,44 @@ STORED AS CSV
 WITH HEADER ROW
 LOCATION '../../testing/data/csv/aggregate_test_100.csv'
 
-# test_insert_into
 
+statement ok
+create table dictionary_encoded_values as values 
+('a', arrow_cast('foo', 'Dictionary(Int32, Utf8)')), ('b', arrow_cast('bar', 'Dictionary(Int32, Utf8)'));
+
+query TTT
+describe dictionary_encoded_values;
+----
+column1 Utf8 YES
+column2 Dictionary(Int32, Utf8) YES
+
+statement ok
+CREATE EXTERNAL TABLE dictionary_encoded_parquet_partitioned(
+  a varchar,
+  b varchar,
+) 
+STORED AS parquet
+LOCATION 'test_files/scratch/insert_to_external/parquet_types_partitioned'
+PARTITIONED BY (b)
+OPTIONS(
+create_local_path 'true',
+insert_mode 'append_new_files',
+);
+
+query TT
+insert into dictionary_encoded_parquet_partitioned 
+select * from dictionary_encoded_values
+----
+2
+
+query TT
+select * from dictionary_encoded_parquet_partitioned order by (a);
+----
+a foo
+b bar
+
+
+# test_insert_into
 statement ok
 set datafusion.execution.target_partitions = 8;
 
@@ -64,7 +100,7 @@ Dml: op=[Insert Into] table=[ordered_insert_test]
 --Projection: column1 AS a, column2 AS b
 ----Values: (Int64(5), Int64(1)), (Int64(4), Int64(2)), (Int64(7), Int64(7)), (Int64(7), Int64(8)), (Int64(7), Int64(9))...
 physical_plan
-InsertExec: sink=CsvSink(writer_mode=PutMultipart, file_groups=[])
+FileSinkExec: sink=CsvSink(writer_mode=PutMultipart, file_groups=[])
 --SortExec: expr=[a@0 ASC NULLS LAST,b@1 DESC]
 ----ProjectionExec: expr=[column1@0 as a, column2@1 as b]
 ------ValuesExec
@@ -279,7 +315,7 @@ Dml: op=[Insert Into] table=[table_without_values]
 --------WindowAggr: windowExpr=[[SUM(CAST(aggregate_test_100.c4 AS Int64)) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING, COUNT(UInt8(1)) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING AS COUNT(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING]]
 ----------TableScan: aggregate_test_100 projection=[c1, c4, c9]
 physical_plan
-InsertExec: sink=ParquetSink(writer_mode=PutMultipart, file_groups=[])
+FileSinkExec: sink=ParquetSink(writer_mode=PutMultipart, file_groups=[])
 --ProjectionExec: expr=[SUM(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@0 as field1, COUNT(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@1 as field2]
 ----SortPreservingMergeExec: [c1@2 ASC NULLS LAST]
 ------ProjectionExec: expr=[SUM(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@3 as SUM(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING, COUNT(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@4 as COUNT(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING, c1@0 as c1]
@@ -342,7 +378,7 @@ Dml: op=[Insert Into] table=[table_without_values]
 ----WindowAggr: windowExpr=[[SUM(CAST(aggregate_test_100.c4 AS Int64)) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING, COUNT(UInt8(1)) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING AS COUNT(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING]]
 ------TableScan: aggregate_test_100 projection=[c1, c4, c9]
 physical_plan
-InsertExec: sink=ParquetSink(writer_mode=PutMultipart, file_groups=[])
+FileSinkExec: sink=ParquetSink(writer_mode=PutMultipart, file_groups=[])
 --CoalescePartitionsExec
 ----ProjectionExec: expr=[SUM(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@3 as field1, COUNT(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@4 as field2]
 ------BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING: Ok(Field { name: "SUM(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(1)) }, COUNT(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING: Ok(Field { name: "COUNT(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(1)) }], mode=[Sorted]
@@ -386,7 +422,7 @@ Dml: op=[Insert Into] table=[table_without_values]
 ----Sort: aggregate_test_100.c1 ASC NULLS LAST
 ------TableScan: aggregate_test_100 projection=[c1]
 physical_plan
-InsertExec: sink=ParquetSink(writer_mode=PutMultipart, file_groups=[])
+FileSinkExec: sink=ParquetSink(writer_mode=PutMultipart, file_groups=[])
 --ProjectionExec: expr=[c1@0 as c1]
 ----SortExec: expr=[c1@0 ASC NULLS LAST]
 ------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1], has_header=true

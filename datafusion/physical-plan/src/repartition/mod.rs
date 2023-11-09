@@ -29,9 +29,7 @@ use crate::hash_utils::create_hashes;
 use crate::metrics::BaselineMetrics;
 use crate::repartition::distributor_channels::{channels, partition_aware_channels};
 use crate::sorts::streaming_merge;
-use crate::{
-    DisplayFormatType, EquivalenceProperties, ExecutionPlan, Partitioning, Statistics,
-};
+use crate::{DisplayFormatType, ExecutionPlan, Partitioning, Statistics};
 
 use self::distributor_channels::{DistributionReceiver, DistributionSender};
 
@@ -46,7 +44,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{OrderingEquivalenceProperties, PhysicalExpr};
+use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 
 use futures::stream::Stream;
 use futures::{FutureExt, StreamExt};
@@ -427,12 +425,11 @@ impl ExecutionPlan for RepartitionExec {
 
     fn with_new_children(
         self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let repartition =
-            RepartitionExec::try_new(children[0].clone(), self.partitioning.clone())?
-                .with_preserve_order(self.preserve_order);
-        Ok(Arc::new(repartition))
+            RepartitionExec::try_new(children.swap_remove(0), self.partitioning.clone());
+        repartition.map(|r| Arc::new(r.with_preserve_order(self.preserve_order)) as _)
     }
 
     /// Specifies whether this plan generates an infinite stream of records.
@@ -468,11 +465,15 @@ impl ExecutionPlan for RepartitionExec {
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
-        self.input.equivalence_properties()
-    }
-
-    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        self.input.ordering_equivalence_properties()
+        let mut result = self.input.equivalence_properties();
+        // If the ordering is lost, reset the ordering equivalence class.
+        if !self.maintains_input_order()[0] {
+            result.clear_orderings();
+        }
+        if self.preserve_order {
+            result = result.with_reorder(self.sort_exprs().unwrap_or_default().to_vec())
+        }
+        result
     }
 
     fn execute(
