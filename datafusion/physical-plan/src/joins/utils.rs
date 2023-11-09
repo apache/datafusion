@@ -219,7 +219,7 @@ pub fn calculate_join_output_ordering(
 }
 
 /// Information about the index and placement (left or right) of the columns
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ColumnIndex {
     /// Index of the column
     pub index: usize,
