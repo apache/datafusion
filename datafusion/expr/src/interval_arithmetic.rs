@@ -55,6 +55,21 @@ pub struct Interval {
     upper: ScalarValue,
 }
 
+/// Handles the NaN and INF foating point values.
+///
+/// - NaN values are always converted to unbounded i.e. `null` values.
+///
+/// - When the bound is a lower bound, and if the value is NEG_INF,
+/// it becomes `null`. If the value is INF, then it becomes maximum
+/// representable number within that floating datatype. We cannot
+/// assign `null` for a lower bound in that case since it would be interpreted
+/// as NEG_INF.
+///
+/// /// - When the bound is an upper bound, and if the value is INF,
+/// it becomes `null`. If the value is NEG_INF, then it becomes minimum
+/// representable number within that floating datatype. We cannot
+/// assign `null` for an upper bound in that case since it would be interpreted
+/// as INF.
 macro_rules! handle_float_intervals {
     ($scalar_value:ident, $primitive_type:ident, $lower:expr, $upper:expr) => {{
         let lower = match $lower {
@@ -229,7 +244,7 @@ impl Interval {
             );
         }
 
-        let flags = if !(self.upper.is_null() || rhs.lower.is_null())
+        let (lower, upper) = if !(self.upper.is_null() || rhs.lower.is_null())
             && self.upper <= rhs.lower
         {
             // Values in this interval are certainly less than or
@@ -247,8 +262,8 @@ impl Interval {
         };
 
         Ok(Interval {
-            lower: ScalarValue::from(flags.0),
-            upper: ScalarValue::from(flags.1),
+            lower: ScalarValue::from(lower),
+            upper: ScalarValue::from(upper),
         })
     }
 
@@ -267,7 +282,7 @@ impl Interval {
             );
         };
 
-        let flags = if !(self.lower.is_null() || rhs.upper.is_null())
+        let (lower, upper) = if !(self.lower.is_null() || rhs.upper.is_null())
             && self.lower >= rhs.upper
         {
             // Values in this interval are certainly greater than or
@@ -285,8 +300,8 @@ impl Interval {
         };
 
         Ok(Interval {
-            lower: ScalarValue::from(flags.0),
-            upper: ScalarValue::from(flags.1),
+            lower: ScalarValue::from(lower),
+            upper: ScalarValue::from(upper),
         })
     }
 
@@ -317,7 +332,7 @@ impl Interval {
             );
         };
 
-        let flags = if !self.lower.is_null()
+        let (lower, upper) = if !self.lower.is_null()
             && (self.lower == self.upper)
             && (rhs.lower == rhs.upper)
             && (self.lower == rhs.lower)
@@ -330,8 +345,8 @@ impl Interval {
         };
 
         Ok(Interval {
-            lower: ScalarValue::from(flags.0),
-            upper: ScalarValue::from(flags.1),
+            lower: ScalarValue::from(lower),
+            upper: ScalarValue::from(upper),
         })
     }
 
@@ -638,7 +653,7 @@ fn add_bounds<const UPPER: bool>(
         }
         _ => lhs.add_checked(rhs),
     }
-    .unwrap_or(handle_overflow::<UPPER>(lhs, rhs, dt)?))
+    .unwrap_or(handle_overflow::<UPPER>(lhs, rhs, Operator::Plus, dt)?))
 }
 
 // Cannot be used other than add method of intervals since
@@ -661,7 +676,7 @@ fn sub_bounds<const UPPER: bool>(
     }
     // We cannot represent the overflow cases.
     // Set the bound as unbounded.
-    .unwrap_or(handle_overflow::<UPPER>(lhs, rhs, dt)?))
+    .unwrap_or(handle_overflow::<UPPER>(lhs, rhs, Operator::Minus, dt)?))
 }
 
 // Cannot be used other than add method of intervals since
@@ -684,7 +699,7 @@ fn mul_bounds<const UPPER: bool>(
     }
     // We cannot represent the overflow cases.
     // Set the bound as unbounded.
-    .unwrap_or(handle_overflow::<UPPER>(lhs, rhs, dt)?))
+    .unwrap_or(handle_overflow::<UPPER>(lhs, rhs, Operator::Multiply, dt)?))
 }
 
 // Cannot be used other than add method of intervals since
@@ -710,7 +725,7 @@ fn div_bounds<const UPPER: bool>(
     }
     // We cannot represent the overflow cases.
     // Set the bound as unbounded.
-    .unwrap_or(handle_overflow::<UPPER>(lhs, rhs, dt)?))
+    .unwrap_or(handle_overflow::<UPPER>(lhs, rhs, Operator::Divide, dt)?))
 }
 
 macro_rules! value_transition {
@@ -1334,10 +1349,19 @@ fn cast_scalar_value(
 fn handle_overflow<const UPPER: bool>(
     lhs: &ScalarValue,
     rhs: &ScalarValue,
+    op: Operator,
     dt: DataType,
 ) -> Result<ScalarValue> {
+    let zero = ScalarValue::new_zero(&dt)?;
+    let positive_sign = match op {
+        Operator::Multiply | Operator::Divide => {
+            lhs.lt(&zero) && rhs.lt(&zero) || lhs.gt(&zero) && rhs.gt(&zero)
+        }
+        Operator::Plus | Operator::Minus => lhs.gt(&zero),
+        _ => unreachable!(),
+    };
     // No need to check operator since knowing lhs sign is enough for subtraction and division cases also.
-    match (UPPER, lhs > &ScalarValue::new_zero(&lhs.data_type())?) {
+    match (UPPER, positive_sign) {
         (true, true) | (false, false) => ScalarValue::try_from(dt),
         (true, false) => {
             if lhs < rhs {
