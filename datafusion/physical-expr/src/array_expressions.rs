@@ -1124,7 +1124,8 @@ fn general_remove(
         match list_array_row {
             Some(list_array_row) => {
                 let indices = UInt32Array::from(vec![row_index as u32]);
-                let element_array_row = arrow::compute::take(element_array, &indices, None)?;
+                let element_array_row =
+                    arrow::compute::take(element_array, &indices, None)?;
 
                 let eq_array = match element_array_row.data_type() {
                     // arrow_ord::cmp::distinct does not support ListArray, so we need to compare it by loop
@@ -1139,7 +1140,6 @@ fn general_remove(
                             // compare  element by element the current row of list_array
                             .map(|row| row.map(|row| row.ne(&element_array_row_inner)))
                             .collect::<BooleanArray>()
-
                     }
                     _ => {
                         let from_arr = Scalar::new(element_array_row);
@@ -1153,19 +1153,22 @@ fn general_remove(
                     eq_array
                 } else {
                     let mut count = 0;
-                    eq_array.iter().map(|e| {
-                        // Keep first n `false` elements, and reverse other elements to `true`.
-                        if let Some(false) = e {
-                            if count < *n {
-                                count += 1;
-                                e
+                    eq_array
+                        .iter()
+                        .map(|e| {
+                            // Keep first n `false` elements, and reverse other elements to `true`.
+                            if let Some(false) = e {
+                                if count < *n {
+                                    count += 1;
+                                    e
+                                } else {
+                                    Some(true)
+                                }
                             } else {
-                                Some(true)
+                                e
                             }
-                        } else {
-                            e
-                        }
-                    }).collect::<BooleanArray>()
+                        })
+                        .collect::<BooleanArray>()
                 };
 
                 let filtered_array = arrow::compute::filter(&list_array_row, &eq_array)?;
