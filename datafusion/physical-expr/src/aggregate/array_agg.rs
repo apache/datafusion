@@ -34,10 +34,14 @@ use std::sync::Arc;
 /// ARRAY_AGG aggregate expression
 #[derive(Debug)]
 pub struct ArrayAgg {
+    /// Column name
     name: String,
+    /// The DataType for the input expression
     input_data_type: DataType,
+    /// The input expression
     expr: Arc<dyn PhysicalExpr>,
-    is_expr_nullable: bool,
+    /// If the input expression can have NULLs
+    nullable: bool,
 }
 
 impl ArrayAgg {
@@ -46,13 +50,13 @@ impl ArrayAgg {
         expr: Arc<dyn PhysicalExpr>,
         name: impl Into<String>,
         data_type: DataType,
-        is_expr_nullable: bool,
+        nullable: bool,
     ) -> Self {
         Self {
             name: name.into(),
-            expr,
             input_data_type: data_type,
-            is_expr_nullable,
+            expr,
+            nullable,
         }
     }
 }
@@ -67,7 +71,7 @@ impl AggregateExpr for ArrayAgg {
             &self.name,
             // This should be the same as return type of AggregateFunction::ArrayAgg
             Field::new("item", self.input_data_type.clone(), true),
-            self.is_expr_nullable,
+            self.nullable,
         ))
     }
 
@@ -81,7 +85,7 @@ impl AggregateExpr for ArrayAgg {
         Ok(vec![Field::new_list(
             format_state_name(&self.name, "array_agg"),
             Field::new("item", self.input_data_type.clone(), true),
-            self.is_expr_nullable,
+            self.nullable,
         )])
     }
 
