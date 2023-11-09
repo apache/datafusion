@@ -977,4 +977,26 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_statistics_with_constant_column() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics::new_unknown(&schema),
+            schema,
+        ));
+        // WHERE a = 10
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Eq,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
+        ));
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, input)?);
+        let filter_statistics = filter.statistics()?;
+        // First column is "a", and it is a column with only one value after the filter.
+        assert!(filter_statistics.column_statistics[0].is_singleton());
+
+        Ok(())
+    }
 }
