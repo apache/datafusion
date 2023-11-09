@@ -19,6 +19,7 @@
 
 use std::sync::Arc;
 
+use super::projection_pushdown::ProjectionPushdown;
 use crate::config::ConfigOptions;
 use crate::physical_optimizer::aggregate_statistics::AggregateStatistics;
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
@@ -107,6 +108,13 @@ impl PhysicalOptimizer {
             // into an `order by max(x) limit y`. In this case it will copy the limit value down
             // to the aggregation, allowing it to use only y number of accumulators.
             Arc::new(TopKAggregation::new()),
+            // The ProjectionPushdown rule tries to push projections towards
+            // the sources in the execution plan. As a result of this process,
+            // a projection can disappear if it reaches the source providers, and
+            // sequential projections can merge into one. Even if these two cases
+            // are not present, the load of executors such as join or union will be
+            // reduced by narrowing their input tables.
+            Arc::new(ProjectionPushdown::new()),
         ];
 
         Self::with_rules(rules)
