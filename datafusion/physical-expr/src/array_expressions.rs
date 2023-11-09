@@ -1085,89 +1085,132 @@ pub fn array_positions(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(res)
 }
 
-macro_rules! general_remove {
-    ($ARRAY:expr, $ELEMENT:expr, $MAX:expr, $ARRAY_TYPE:ident) => {{
-        let mut offsets: Vec<i32> = vec![0];
-        let mut values =
-            downcast_arg!(new_empty_array($ELEMENT.data_type()), $ARRAY_TYPE).clone();
+/// For each element of `list_array[i]`, replaces up to `arr_n[i]`  occurences
+/// of `from_array[i]`, `to_array[i]`.
+///
+/// The type of each **element** in `list_array` must be the same as the type of
+/// `from_array` and `to_array`. This function also handles nested arrays
+/// ([`ListArray`] of [`ListArray`]s)
+///
+/// For example, whn called  to replace a list array (where each element is a
+/// list of int32s, the second and third argument are int32 arrays, and the
+/// fourth argument is the number of occurrences to replace
+///
+/// ```text
+/// general_replace(
+///   [1, 2, 3, 2], 2, 10, 1    ==> [1, 10, 3, 2]   (only the first 2 is replaced)
+///   [4, 5, 6, 5], 5, 20, 2    ==> [4, 20, 6, 20]  (both 5s are replaced)
+/// )
+/// ```
+fn general_remove_v2(
+    list_array: &ListArray,
+    element_array: &ArrayRef,
+    arr_n: Vec<i64>,
+) -> Result<ArrayRef> {
+    // Build up the offsets for the final output array
+    let mut offsets: Vec<i32> = vec![0];
+    let data_type = list_array.value_type();
+    let mut new_values = vec![];
 
-        let element = downcast_arg!($ELEMENT, $ARRAY_TYPE);
-        for ((arr, el), max) in $ARRAY.iter().zip(element.iter()).zip($MAX.iter()) {
-            let last_offset: i32 = offsets.last().copied().ok_or_else(|| {
-                DataFusionError::Internal(format!("offsets should not be empty"))
-            })?;
-            match arr {
-                Some(arr) => {
-                    let child_array = downcast_arg!(arr, $ARRAY_TYPE);
-                    let mut counter = 0;
-                    let max = if max < Some(1) { 1 } else { max.unwrap() };
+    // n is the number of elements to remove in this row
+    for (row_index, (list_array_row, n)) in
+        list_array.iter().zip(arr_n.iter()).enumerate()
+    {
+        let last_offset: i32 = offsets
+            .last()
+            .copied()
+            .ok_or_else(|| internal_datafusion_err!("offsets should not be empty"))?;
 
-                    let filter_array = child_array
-                        .iter()
-                        .map(|element| {
-                            if counter != max && element == el {
-                                counter += 1;
-                                Some(false)
+        match list_array_row {
+            Some(list_array_row) => {
+                let indices = UInt32Array::from(vec![row_index as u32]);
+                let element_array_row = arrow::compute::take(element_array, &indices, None)?;
+
+                let eq_array = match element_array_row.data_type() {
+                    // arrow_ord::cmp::distinct does not support ListArray, so we need to compare it by loop
+                    DataType::List(_) => {
+                        // compare each element of the from array
+                        let element_array_row_inner =
+                            as_list_array(&element_array_row)?.value(0);
+                        let list_array_row_inner = as_list_array(&list_array_row)?;
+
+                        list_array_row_inner
+                            .iter()
+                            // compare  element by element the current row of list_array
+                            .map(|row| row.map(|row| row.ne(&element_array_row_inner)))
+                            .collect::<BooleanArray>()
+
+                    }
+                    _ => {
+                        let from_arr = Scalar::new(element_array_row);
+                        // use distinct so Null = Null is false
+                        arrow_ord::cmp::distinct(&list_array_row, &from_arr)?
+                    }
+                };
+
+                // We need to keep at most first n elements as `false`, which represent the elements to remove.
+                let filtered_array = if eq_array.false_count() < *n as usize {
+                    list_array_row
+                } else {
+                    println!("eq_array: {:?}", eq_array);
+                    let mut count = 0;
+                    let eq_array = eq_array.iter().map(|e| {
+                        // Keep first n `false` elements, and reverse other elements to `true`.
+                        if let Some(false) = e {
+                            if count < *n {
+                                count += 1;
+                                e
                             } else {
                                 Some(true)
                             }
-                        })
-                        .collect::<BooleanArray>();
+                        } else {
+                            e
+                        }
+                    }).collect::<BooleanArray>();
 
-                    let filtered_array = compute::filter(&child_array, &filter_array)?;
-                    values = downcast_arg!(
-                        compute::concat(&[&values, &filtered_array,])?.clone(),
-                        $ARRAY_TYPE
-                    )
-                    .clone();
-                    offsets.push(last_offset + filtered_array.len() as i32);
-                }
-                None => offsets.push(last_offset),
-            }
-        }
+                    println!("eq_array: {:?}", eq_array);
 
-        let field = Arc::new(Field::new("item", $ELEMENT.data_type().clone(), true));
-
-        Arc::new(ListArray::try_new(
-            field,
-            OffsetBuffer::new(offsets.into()),
-            Arc::new(values),
-            None,
-        )?)
-    }};
-}
-
-macro_rules! array_removement_function {
-    ($FUNC:ident, $MAX_FUNC:expr, $DOC:expr) => {
-        #[doc = $DOC]
-        pub fn $FUNC(args: &[ArrayRef]) -> Result<ArrayRef> {
-            let arr = as_list_array(&args[0])?;
-            let element = &args[1];
-            let max = $MAX_FUNC(args)?;
-
-            check_datatypes(stringify!($FUNC), &[arr.values(), element])?;
-            macro_rules! array_function {
-                ($ARRAY_TYPE:ident) => {
-                    general_remove!(arr, element, max, $ARRAY_TYPE)
+                    arrow::compute::filter(&list_array_row, &eq_array)?
                 };
+
+                offsets.push(last_offset + filtered_array.len() as i32);
+                new_values.push(filtered_array);
             }
-            let res = call_array_function!(arr.value_type(), true);
-
-            Ok(res)
+            None => {
+                // Null element results in a null row (no new offsets)
+                offsets.push(last_offset);
+            }
         }
+    }
+
+    let values = if new_values.is_empty() {
+        new_empty_array(&data_type)
+    } else {
+        let new_values: Vec<_> = new_values.iter().map(|a| a.as_ref()).collect();
+        arrow::compute::concat(&new_values)?
     };
+
+    Ok(Arc::new(ListArray::try_new(
+        Arc::new(Field::new("item", data_type, true)),
+        OffsetBuffer::new(offsets.into()),
+        values,
+        list_array.nulls().cloned(),
+    )?))
 }
 
-fn remove_one(args: &[ArrayRef]) -> Result<Int64Array> {
-    Ok(Int64Array::from_value(1, args[0].len()))
+pub fn array_remove_all_v2(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let arr_n = vec![i64::MAX; args[0].len()];
+    general_remove_v2(as_list_array(&args[0])?, &args[1], arr_n)
 }
 
-fn remove_n(args: &[ArrayRef]) -> Result<Int64Array> {
-    as_int64_array(&args[2]).cloned()
+pub fn array_remove_v2(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let arr_n = vec![1; args[0].len()];
+    general_remove_v2(as_list_array(&args[0])?, &args[1], arr_n)
 }
 
-fn remove_all(args: &[ArrayRef]) -> Result<Int64Array> {
-    Ok(Int64Array::from_value(i64::MAX, args[0].len()))
+pub fn array_remove_n_v2(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let arr_n = as_int64_array(&args[2])?.values().to_vec();
+    general_remove_v2(as_list_array(&args[0])?, &args[1], arr_n)
 }
 
 // array removement functions
