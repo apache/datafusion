@@ -47,7 +47,8 @@ use arrow::{
 use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 pub use datafusion_expr::FuncMonotonicity;
 use datafusion_expr::{
-    BuiltinScalarFunction, ColumnarValue, ScalarFunctionImplementation,
+    type_coercion::functions::data_types, BuiltinScalarFunction, ColumnarValue,
+    ScalarFunctionImplementation,
 };
 use std::ops::Neg;
 use std::sync::Arc;
@@ -64,6 +65,9 @@ pub fn create_physical_expr(
         .iter()
         .map(|e| e.data_type(input_schema))
         .collect::<Result<Vec<_>>>()?;
+
+    // verify that input data types is consistent with function's `TypeSignature`
+    data_types(&input_expr_types, &fun.signature())?;
 
     let data_type = fun.return_type(&input_expr_types)?;
 
@@ -2952,13 +2956,8 @@ mod tests {
                         "Builtin scalar function {fun} does not support empty arguments"
                     );
                 }
-                Err(DataFusionError::Plan(err)) => {
-                    if !err
-                        .contains("No function matches the given name and argument types")
-                    {
-                        return plan_err!(
-                            "Builtin scalar function {fun} didn't got the right error message with empty arguments");
-                    }
+                Err(DataFusionError::Plan(_)) => {
+                    // Continue the loop
                 }
                 Err(..) => {
                     return internal_err!(
