@@ -54,7 +54,7 @@ use datafusion_expr::{
     lower, lpad, ltrim, md5, nanvl, now, nullif, octet_length, pi, power, radians,
     random, regexp_match, regexp_replace, repeat, replace, reverse, right, round, rpad,
     rtrim, sha224, sha256, sha384, sha512, signum, sin, sinh, split_part, sqrt,
-    starts_with, string_to_array, strpos, substr, substring, tan, tanh, to_hex,
+    starts_with, string_to_array, strpos, struct_fun, substr, substring, tan, tanh, to_hex,
     to_timestamp_micros, to_timestamp_millis, to_timestamp_nanos, to_timestamp_seconds,
     translate, trim, trunc, upper, uuid,
     window_frame::regularize,
@@ -1657,9 +1657,7 @@ pub fn parse_expr(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                     parse_expr(&args[2], registry)?)),
-                _ => Err(proto_error(
-                    "Protobuf deserialization error: Unsupported scalar function",
-                )),
+                ScalarFunction::StructFun => Ok(struct_fun(parse_expr(&args[0], registry)?))
             }
         }
         ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode { fun_name, args }) => {

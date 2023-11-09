@@ -871,6 +871,8 @@ scalar_expr!(
 
 scalar_expr!(ArrowTypeof, arrow_typeof, val, "data type");
 
+scalar_expr!(Struct, struct_fun, val, "returns a vector of fields from the struct");
+
 /// Create a CASE WHEN statement with literal WHEN expressions for comparison to the base expression.
 pub fn case(expr: Expr) -> CaseBuilder {
     CaseBuilder::new(Some(Box::new(expr)), vec![], vec![], None)
