@@ -30,12 +30,12 @@ rust-version = "1.70"
 [dependencies]
 async-recursion = "1.0"
 chrono = { workspace = true }
-datafusion = { version = "32.0.0", path = "../core" }
-itertools = "0.11"
-object_store = "0.7.0"
+datafusion = { workspace = true }
+itertools = { workspace = true }
+object_store = { workspace = true }
 prost = "0.12"
 prost-types = "0.12"
-substrait = "0.18.0"
+substrait = "0.19.0"
 tokio = "1.17"
 
 [features]

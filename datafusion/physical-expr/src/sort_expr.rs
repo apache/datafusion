@@ -25,8 +25,8 @@ use crate::PhysicalExpr;
 
 use arrow::compute::kernels::sort::{SortColumn, SortOptions};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::plan_err;
-use datafusion_common::{DataFusionError, Result};
+use arrow_schema::Schema;
+use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
 /// Represents Sort operation for a column in a RecordBatch
@@ -66,7 +66,7 @@ impl PhysicalSortExpr {
         let array_to_sort = match value_to_sort {
             ColumnarValue::Array(array) => array,
             ColumnarValue::Scalar(scalar) => {
-                return plan_err!(
+                return exec_err!(
                     "Sort operation is not applicable to scalar value {scalar}"
                 );
             }
@@ -77,18 +77,26 @@ impl PhysicalSortExpr {
         })
     }
 
-    /// Check whether sort expression satisfies [`PhysicalSortRequirement`].
-    ///
-    /// If sort options is Some in `PhysicalSortRequirement`, `expr`
-    /// and `options` field are compared for equality.
-    ///
-    /// If sort options is None in `PhysicalSortRequirement`, only
-    /// `expr` is compared for equality.
-    pub fn satisfy(&self, requirement: &PhysicalSortRequirement) -> bool {
+    /// Checks whether this sort expression satisfies the given `requirement`.
+    /// If sort options are unspecified in `requirement`, only expressions are
+    /// compared for inequality.
+    pub fn satisfy(
+        &self,
+        requirement: &PhysicalSortRequirement,
+        schema: &Schema,
+    ) -> bool {
+        // If the column is not nullable, NULLS FIRST/LAST is not important.
+        let nullable = self.expr.nullable(schema).unwrap_or(true);
         self.expr.eq(&requirement.expr)
-            && requirement
-                .options
-                .map_or(true, |opts| self.options == opts)
+            && if nullable {
+                requirement
+                    .options
+                    .map_or(true, |opts| self.options == opts)
+            } else {
+                requirement
+                    .options
+                    .map_or(true, |opts| self.options.descending == opts.descending)
+            }
     }
 
     /// Returns a [`Display`]able list of `PhysicalSortExpr`.
@@ -248,11 +256,18 @@ fn to_str(options: &SortOptions) -> &str {
     }
 }
 
-///`LexOrdering` is a type alias for lexicographical ordering definition`Vec<PhysicalSortExpr>`
+///`LexOrdering` is an alias for the type `Vec<PhysicalSortExpr>`, which represents
+/// a lexicographical ordering.
 pub type LexOrdering = Vec<PhysicalSortExpr>;
 
-///`LexOrderingRef` is a type alias for lexicographical ordering reference &`[PhysicalSortExpr]`
+///`LexOrderingRef` is an alias for the type &`[PhysicalSortExpr]`, which represents
+/// a reference to a lexicographical ordering.
 pub type LexOrderingRef<'a> = &'a [PhysicalSortExpr];
 
-///`LexOrderingReq` is a type alias for lexicographical ordering requirement definition`Vec<PhysicalSortRequirement>`
-pub type LexOrderingReq = Vec<PhysicalSortRequirement>;
+///`LexRequirement` is an alias for the type `Vec<PhysicalSortRequirement>`, which
+/// represents a lexicographical ordering requirement.
+pub type LexRequirement = Vec<PhysicalSortRequirement>;
+
+///`LexRequirementRef` is an alias for the type &`[PhysicalSortRequirement]`, which
+/// represents a reference to a lexicographical ordering requirement.
+pub type LexRequirementRef<'a> = &'a [PhysicalSortRequirement];

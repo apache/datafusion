@@ -75,7 +75,7 @@ impl TopKAggregation {
             aggr.filter_expr().to_vec(),
             aggr.order_by_expr().to_vec(),
             aggr.input().clone(),
-            aggr.input_schema().clone(),
+            aggr.input_schema(),
         )
         .expect("Unable to copy Aggregate!")
         .with_limit(Some(limit));

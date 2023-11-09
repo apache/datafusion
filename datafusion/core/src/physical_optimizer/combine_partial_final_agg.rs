@@ -93,7 +93,7 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
                                             input_agg_exec.filter_expr().to_vec(),
                                             input_agg_exec.order_by_expr().to_vec(),
                                             input_agg_exec.input().clone(),
-                                            input_agg_exec.input_schema().clone(),
+                                            input_agg_exec.input_schema(),
                                         )
                                         .map(|combined_agg| {
                                             combined_agg.with_limit(agg_exec.limit())

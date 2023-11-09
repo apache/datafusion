@@ -325,18 +325,14 @@ fn function_to_name() -> &'static HashMap<BuiltinScalarFunction, &'static str> {
 impl BuiltinScalarFunction {
     /// an allowlist of functions to take zero arguments, so that they will get special treatment
     /// while executing.
+    #[deprecated(
+        since = "32.0.0",
+        note = "please use TypeSignature::supports_zero_argument instead"
+    )]
     pub fn supports_zero_argument(&self) -> bool {
-        matches!(
-            self,
-            BuiltinScalarFunction::Pi
-                | BuiltinScalarFunction::Random
-                | BuiltinScalarFunction::Now
-                | BuiltinScalarFunction::CurrentDate
-                | BuiltinScalarFunction::CurrentTime
-                | BuiltinScalarFunction::Uuid
-                | BuiltinScalarFunction::MakeArray
-        )
+        self.signature().type_signature.supports_zero_argument()
     }
+
     /// Returns the [Volatility] of the builtin function.
     pub fn volatility(&self) -> Volatility {
         match self {
@@ -494,7 +490,9 @@ impl BuiltinScalarFunction {
         // Note that this function *must* return the same type that the respective physical expression returns
         // or the execution panics.
 
-        if input_expr_types.is_empty() && !self.supports_zero_argument() {
+        if input_expr_types.is_empty()
+            && !self.signature().type_signature.supports_zero_argument()
+        {
             return plan_err!(
                 "{}",
                 utils::generate_signature_error_msg(
@@ -904,7 +902,8 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::Cardinality => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::MakeArray => {
-                Signature::variadic_any(self.volatility())
+                // 0 or more arguments of arbitrary type
+                Signature::one_of(vec![VariadicAny, Any(0)], self.volatility())
             }
             BuiltinScalarFunction::Struct => Signature::variadic(
                 struct_expressions::SUPPORTED_STRUCT_TYPES.to_vec(),
@@ -1622,7 +1621,8 @@ mod tests {
     // Test for BuiltinScalarFunction's Display and from_str() implementations.
     // For each variant in BuiltinScalarFunction, it converts the variant to a string
     // and then back to a variant. The test asserts that the original variant and
-    // the reconstructed variant are the same.
+    // the reconstructed variant are the same. This assertion is also necessary for
+    // function suggestion. See https://github.com/apache/arrow-datafusion/issues/8082
     fn test_display_and_from_str() {
         for (_, func_original) in name_to_function().iter() {
             let func_name = func_original.to_string();

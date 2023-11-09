@@ -2019,7 +2019,7 @@ SortPreservingMergeExec: [col0@0 ASC NULLS LAST]
 ------AggregateExec: mode=FinalPartitioned, gby=[col0@0 as col0, col1@1 as col1, col2@2 as col2], aggr=[LAST_VALUE(r.col1)]
 --------CoalesceBatchesExec: target_batch_size=8192
 ----------RepartitionExec: partitioning=Hash([col0@0, col1@1, col2@2], 4), input_partitions=4
-------------AggregateExec: mode=Partial, gby=[col0@0 as col0, col1@1 as col1, col2@2 as col2], aggr=[LAST_VALUE(r.col1)], ordering_mode=PartiallyOrdered
+------------AggregateExec: mode=Partial, gby=[col0@0 as col0, col1@1 as col1, col2@2 as col2], aggr=[LAST_VALUE(r.col1)], ordering_mode=PartiallySorted([0])
 --------------SortExec: expr=[col0@3 ASC NULLS LAST]
 ----------------CoalesceBatchesExec: target_batch_size=8192
 ------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(col0@0, col0@0)]
@@ -2118,7 +2118,7 @@ Projection: annotated_data_infinite2.a, annotated_data_infinite2.b, SUM(annotate
 ----TableScan: annotated_data_infinite2 projection=[a, b, c]
 physical_plan
 ProjectionExec: expr=[a@1 as a, b@0 as b, SUM(annotated_data_infinite2.c)@2 as summation1]
---AggregateExec: mode=Single, gby=[b@1 as b, a@0 as a], aggr=[SUM(annotated_data_infinite2.c)], ordering_mode=FullyOrdered
+--AggregateExec: mode=Single, gby=[b@1 as b, a@0 as a], aggr=[SUM(annotated_data_infinite2.c)], ordering_mode=Sorted
 ----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true
 
 
@@ -2149,7 +2149,7 @@ Projection: annotated_data_infinite2.a, annotated_data_infinite2.d, SUM(annotate
 ----TableScan: annotated_data_infinite2 projection=[a, c, d]
 physical_plan
 ProjectionExec: expr=[a@1 as a, d@0 as d, SUM(annotated_data_infinite2.c) ORDER BY [annotated_data_infinite2.a DESC NULLS FIRST]@2 as summation1]
---AggregateExec: mode=Single, gby=[d@2 as d, a@0 as a], aggr=[SUM(annotated_data_infinite2.c)], ordering_mode=PartiallyOrdered
+--AggregateExec: mode=Single, gby=[d@2 as d, a@0 as a], aggr=[SUM(annotated_data_infinite2.c)], ordering_mode=PartiallySorted([1])
 ----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST], has_header=true
 
 query III
@@ -2182,7 +2182,7 @@ Projection: annotated_data_infinite2.a, annotated_data_infinite2.b, FIRST_VALUE(
 ----TableScan: annotated_data_infinite2 projection=[a, b, c]
 physical_plan
 ProjectionExec: expr=[a@0 as a, b@1 as b, FIRST_VALUE(annotated_data_infinite2.c) ORDER BY [annotated_data_infinite2.a DESC NULLS FIRST]@2 as first_c]
---AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b], aggr=[FIRST_VALUE(annotated_data_infinite2.c)], ordering_mode=FullyOrdered
+--AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b], aggr=[FIRST_VALUE(annotated_data_infinite2.c)], ordering_mode=Sorted
 ----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true
 
 query III
@@ -2208,7 +2208,7 @@ Projection: annotated_data_infinite2.a, annotated_data_infinite2.b, LAST_VALUE(a
 ----TableScan: annotated_data_infinite2 projection=[a, b, c]
 physical_plan
 ProjectionExec: expr=[a@0 as a, b@1 as b, LAST_VALUE(annotated_data_infinite2.c) ORDER BY [annotated_data_infinite2.a DESC NULLS FIRST]@2 as last_c]
---AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b], aggr=[LAST_VALUE(annotated_data_infinite2.c)], ordering_mode=FullyOrdered
+--AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b], aggr=[LAST_VALUE(annotated_data_infinite2.c)], ordering_mode=Sorted
 ----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true
 
 query III
@@ -2235,7 +2235,7 @@ Projection: annotated_data_infinite2.a, annotated_data_infinite2.b, LAST_VALUE(a
 ----TableScan: annotated_data_infinite2 projection=[a, b, c]
 physical_plan
 ProjectionExec: expr=[a@0 as a, b@1 as b, LAST_VALUE(annotated_data_infinite2.c)@2 as last_c]
---AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b], aggr=[LAST_VALUE(annotated_data_infinite2.c)], ordering_mode=FullyOrdered
+--AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b], aggr=[LAST_VALUE(annotated_data_infinite2.c)], ordering_mode=Sorted
 ----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true
 
 query III
@@ -2354,9 +2354,9 @@ SELECT ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
   GROUP BY s.country
 
 # test_ordering_sensitive_aggregation4
-# If aggregators can work with bounded memory (FullyOrdered or PartiallyOrdered mode), we should append requirement to
+# If aggregators can work with bounded memory (Sorted or PartiallySorted mode), we should append requirement to
 # the existing ordering. This enables us to still work with bounded memory, and also satisfy aggregation requirement.
-# This test checks for whether we can satisfy aggregation requirement in FullyOrdered mode.
+# This test checks for whether we can satisfy aggregation requirement in Sorted mode.
 query TT
 EXPLAIN SELECT s.country, ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
         SUM(s.amount) AS sum1
@@ -2373,7 +2373,7 @@ Projection: s.country, ARRAY_AGG(s.amount) ORDER BY [s.amount DESC NULLS FIRST] 
 --------TableScan: sales_global projection=[country, amount]
 physical_plan
 ProjectionExec: expr=[country@0 as country, ARRAY_AGG(s.amount) ORDER BY [s.amount DESC NULLS FIRST]@1 as amounts, SUM(s.amount)@2 as sum1]
---AggregateExec: mode=Single, gby=[country@0 as country], aggr=[ARRAY_AGG(s.amount), SUM(s.amount)], ordering_mode=FullyOrdered
+--AggregateExec: mode=Single, gby=[country@0 as country], aggr=[ARRAY_AGG(s.amount), SUM(s.amount)], ordering_mode=Sorted
 ----SortExec: expr=[country@0 ASC NULLS LAST,amount@1 DESC]
 ------MemoryExec: partitions=1, partition_sizes=[1]
 
@@ -2390,9 +2390,9 @@ GRC [80.0, 30.0] 110
 TUR [100.0, 75.0] 175
 
 # test_ordering_sensitive_aggregation5
-# If aggregators can work with bounded memory (FullyOrdered or PartiallyOrdered mode), we should be append requirement to
+# If aggregators can work with bounded memory (Sorted or PartiallySorted mode), we should be append requirement to
 # the existing ordering. This enables us to still work with bounded memory, and also satisfy aggregation requirement.
-# This test checks for whether we can satisfy aggregation requirement in PartiallyOrdered mode.
+# This test checks for whether we can satisfy aggregation requirement in PartiallySorted mode.
 query TT
 EXPLAIN SELECT s.country, s.zip_code, ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
         SUM(s.amount) AS sum1
@@ -2409,7 +2409,7 @@ Projection: s.country, s.zip_code, ARRAY_AGG(s.amount) ORDER BY [s.amount DESC N
 --------TableScan: sales_global projection=[zip_code, country, amount]
 physical_plan
 ProjectionExec: expr=[country@0 as country, zip_code@1 as zip_code, ARRAY_AGG(s.amount) ORDER BY [s.amount DESC NULLS FIRST]@2 as amounts, SUM(s.amount)@3 as sum1]
---AggregateExec: mode=Single, gby=[country@1 as country, zip_code@0 as zip_code], aggr=[ARRAY_AGG(s.amount), SUM(s.amount)], ordering_mode=PartiallyOrdered
+--AggregateExec: mode=Single, gby=[country@1 as country, zip_code@0 as zip_code], aggr=[ARRAY_AGG(s.amount), SUM(s.amount)], ordering_mode=PartiallySorted([0])
 ----SortExec: expr=[country@1 ASC NULLS LAST,amount@2 DESC]
 ------MemoryExec: partitions=1, partition_sizes=[1]
 
@@ -2426,7 +2426,7 @@ GRC 0 [80.0, 30.0] 110
 TUR 1 [100.0, 75.0] 175
 
 # test_ordering_sensitive_aggregation6
-# If aggregators can work with bounded memory (FullyOrdered or PartiallyOrdered mode), we should be append requirement to
+# If aggregators can work with bounded memory (FullySorted or PartiallySorted mode), we should be append requirement to
 # the existing ordering. When group by expressions contain aggregation requirement, we shouldn't append redundant expression.
 # Hence in the final plan SortExec should be SortExec: expr=[country@0 DESC] not SortExec: expr=[country@0 ASC NULLS LAST,country@0 DESC]
 query TT
@@ -2445,7 +2445,7 @@ Projection: s.country, ARRAY_AGG(s.amount) ORDER BY [s.country DESC NULLS FIRST]
 --------TableScan: sales_global projection=[country, amount]
 physical_plan
 ProjectionExec: expr=[country@0 as country, ARRAY_AGG(s.amount) ORDER BY [s.country DESC NULLS FIRST]@1 as amounts, SUM(s.amount)@2 as sum1]
---AggregateExec: mode=Single, gby=[country@0 as country], aggr=[ARRAY_AGG(s.amount), SUM(s.amount)], ordering_mode=FullyOrdered
+--AggregateExec: mode=Single, gby=[country@0 as country], aggr=[ARRAY_AGG(s.amount), SUM(s.amount)], ordering_mode=Sorted
 ----SortExec: expr=[country@0 ASC NULLS LAST]
 ------MemoryExec: partitions=1, partition_sizes=[1]
 
@@ -2480,7 +2480,7 @@ Projection: s.country, ARRAY_AGG(s.amount) ORDER BY [s.country DESC NULLS FIRST,
 --------TableScan: sales_global projection=[country, amount]
 physical_plan
 ProjectionExec: expr=[country@0 as country, ARRAY_AGG(s.amount) ORDER BY [s.country DESC NULLS FIRST, s.amount DESC NULLS FIRST]@1 as amounts, SUM(s.amount)@2 as sum1]
---AggregateExec: mode=Single, gby=[country@0 as country], aggr=[ARRAY_AGG(s.amount), SUM(s.amount)], ordering_mode=FullyOrdered
+--AggregateExec: mode=Single, gby=[country@0 as country], aggr=[ARRAY_AGG(s.amount), SUM(s.amount)], ordering_mode=Sorted
 ----SortExec: expr=[country@0 ASC NULLS LAST,amount@1 DESC]
 ------MemoryExec: partitions=1, partition_sizes=[1]
 
@@ -3646,6 +3646,18 @@ GROUP BY d;
 0 4
 0 9
 
+query III rowsort
+SELECT d, FIRST_VALUE(c ORDER BY a DESC, c DESC) as first_a,
+  LAST_VALUE(c ORDER BY c DESC) as last_c
+FROM multiple_ordered_table
+GROUP BY d;
+----
+0 95 0
+1 90 4
+2 97 1
+3 99 15
+4 98 9
+
 query TT
 EXPLAIN SELECT c
 FROM multiple_ordered_table
@@ -3655,6 +3667,49 @@ logical_plan
 Sort: multiple_ordered_table.c ASC NULLS LAST
 --TableScan: multiple_ordered_table projection=[c]
 physical_plan CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], has_header=true
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+query TT
+EXPLAIN SELECT LAST_VALUE(l.d ORDER BY l.a) AS amount_usd
+FROM multiple_ordered_table AS l
+INNER JOIN (
+    SELECT *, ROW_NUMBER() OVER (ORDER BY r.a) as row_n FROM multiple_ordered_table AS r
+)
+ON l.d = r.d AND
+      l.a >= r.a - 10
+GROUP BY row_n
+ORDER BY row_n
+----
+logical_plan
+Projection: amount_usd
+--Sort: row_n ASC NULLS LAST
+----Projection: LAST_VALUE(l.d) ORDER BY [l.a ASC NULLS LAST] AS amount_usd, row_n
+------Aggregate: groupBy=[[row_n]], aggr=[[LAST_VALUE(l.d) ORDER BY [l.a ASC NULLS LAST]]]
+--------Projection: l.a, l.d, row_n
+----------Inner Join: l.d = r.d Filter: CAST(l.a AS Int64) >= CAST(r.a AS Int64) - Int64(10)
+------------SubqueryAlias: l
+--------------TableScan: multiple_ordered_table projection=[a, d]
+------------Projection: r.a, r.d, ROW_NUMBER() ORDER BY [r.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS row_n
+--------------WindowAggr: windowExpr=[[ROW_NUMBER() ORDER BY [r.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+----------------SubqueryAlias: r
+------------------TableScan: multiple_ordered_table projection=[a, d]
+physical_plan
+ProjectionExec: expr=[amount_usd@0 as amount_usd]
+--ProjectionExec: expr=[LAST_VALUE(l.d) ORDER BY [l.a ASC NULLS LAST]@1 as amount_usd, row_n@0 as row_n]
+----AggregateExec: mode=Single, gby=[row_n@2 as row_n], aggr=[LAST_VALUE(l.d)], ordering_mode=Sorted
+------ProjectionExec: expr=[a@0 as a, d@1 as d, row_n@4 as row_n]
+--------CoalesceBatchesExec: target_batch_size=2
+----------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(d@1, d@1)], filter=CAST(a@0 AS Int64) >= CAST(a@1 AS Int64) - 10
+------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true
+------------ProjectionExec: expr=[a@0 as a, d@1 as d, ROW_NUMBER() ORDER BY [r.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as row_n]
+--------------BoundedWindowAggExec: wdw=[ROW_NUMBER() ORDER BY [r.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "ROW_NUMBER() ORDER BY [r.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: CurrentRow }], mode=[Sorted]
+----------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true
+
+# reset partition number to 8.
+statement ok
+set datafusion.execution.target_partitions = 8;
 
 # Create an external table with primary key
 # column c
@@ -3685,11 +3740,11 @@ logical_plan
 Aggregate: groupBy=[[multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.b]], aggr=[[SUM(CAST(multiple_ordered_table_with_pk.d AS Int64))]]
 --TableScan: multiple_ordered_table_with_pk projection=[b, c, d]
 physical_plan
-AggregateExec: mode=FinalPartitioned, gby=[c@0 as c, b@1 as b], aggr=[SUM(multiple_ordered_table_with_pk.d)], ordering_mode=PartiallyOrdered
+AggregateExec: mode=FinalPartitioned, gby=[c@0 as c, b@1 as b], aggr=[SUM(multiple_ordered_table_with_pk.d)], ordering_mode=PartiallySorted([0])
 --SortExec: expr=[c@0 ASC NULLS LAST]
 ----CoalesceBatchesExec: target_batch_size=2
 ------RepartitionExec: partitioning=Hash([c@0, b@1], 8), input_partitions=8
---------AggregateExec: mode=Partial, gby=[c@1 as c, b@0 as b], aggr=[SUM(multiple_ordered_table_with_pk.d)], ordering_mode=PartiallyOrdered
+--------AggregateExec: mode=Partial, gby=[c@1 as c, b@0 as b], aggr=[SUM(multiple_ordered_table_with_pk.d)], ordering_mode=PartiallySorted([0])
 ----------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
 ------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[b, c, d], output_ordering=[c@1 ASC NULLS LAST], has_header=true
 
@@ -3726,10 +3781,68 @@ logical_plan
 Aggregate: groupBy=[[multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.b]], aggr=[[SUM(CAST(multiple_ordered_table_with_pk.d AS Int64))]]
 --TableScan: multiple_ordered_table_with_pk projection=[b, c, d]
 physical_plan
-AggregateExec: mode=FinalPartitioned, gby=[c@0 as c, b@1 as b], aggr=[SUM(multiple_ordered_table_with_pk.d)], ordering_mode=PartiallyOrdered
+AggregateExec: mode=FinalPartitioned, gby=[c@0 as c, b@1 as b], aggr=[SUM(multiple_ordered_table_with_pk.d)], ordering_mode=PartiallySorted([0])
 --SortExec: expr=[c@0 ASC NULLS LAST]
 ----CoalesceBatchesExec: target_batch_size=2
 ------RepartitionExec: partitioning=Hash([c@0, b@1], 8), input_partitions=8
---------AggregateExec: mode=Partial, gby=[c@1 as c, b@0 as b], aggr=[SUM(multiple_ordered_table_with_pk.d)], ordering_mode=PartiallyOrdered
+--------AggregateExec: mode=Partial, gby=[c@1 as c, b@0 as b], aggr=[SUM(multiple_ordered_table_with_pk.d)], ordering_mode=PartiallySorted([0])
 ----------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
 ------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[b, c, d], output_ordering=[c@1 ASC NULLS LAST], has_header=true
+
+# Tests for single distinct to group by optimization rule
+statement ok
+CREATE TABLE t(x int) AS VALUES (1), (2), (1);
+
+statement ok
+create table t1(x bigint,y int) as values (9223372036854775807,2), (9223372036854775806,2);
+
+query II
+SELECT SUM(DISTINCT x), MAX(DISTINCT x) from t GROUP BY x ORDER BY x;
+----
+1 1
+2 2
+
+query II
+SELECT MAX(DISTINCT x), SUM(DISTINCT x) from t GROUP BY x ORDER BY x;
+----
+1 1
+2 2
+
+query TT
+EXPLAIN SELECT SUM(DISTINCT CAST(x AS DOUBLE)), MAX(DISTINCT x) FROM t1 GROUP BY y;
+----
+logical_plan
+Projection: SUM(DISTINCT t1.x), MAX(DISTINCT t1.x)
+--Aggregate: groupBy=[[t1.y]], aggr=[[SUM(DISTINCT CAST(t1.x AS Float64)), MAX(DISTINCT t1.x)]]
+----TableScan: t1 projection=[x, y]
+physical_plan
+ProjectionExec: expr=[SUM(DISTINCT t1.x)@1 as SUM(DISTINCT t1.x), MAX(DISTINCT t1.x)@2 as MAX(DISTINCT t1.x)]
+--AggregateExec: mode=FinalPartitioned, gby=[y@0 as y], aggr=[SUM(DISTINCT t1.x), MAX(DISTINCT t1.x)]
+----CoalesceBatchesExec: target_batch_size=2
+------RepartitionExec: partitioning=Hash([y@0], 8), input_partitions=8
+--------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+----------AggregateExec: mode=Partial, gby=[y@1 as y], aggr=[SUM(DISTINCT t1.x), MAX(DISTINCT t1.x)]
+------------MemoryExec: partitions=1, partition_sizes=[1]
+
+query TT
+EXPLAIN SELECT SUM(DISTINCT CAST(x AS DOUBLE)), MAX(DISTINCT CAST(x AS DOUBLE)) FROM t1 GROUP BY y;
+----
+logical_plan
+Projection: SUM(DISTINCT t1.x), MAX(DISTINCT t1.x)
+--Aggregate: groupBy=[[t1.y]], aggr=[[SUM(alias1) AS SUM(DISTINCT t1.x), MAX(alias1) AS MAX(DISTINCT t1.x)]]
+----Aggregate: groupBy=[[t1.y, CAST(t1.x AS Float64)t1.x AS t1.x AS alias1]], aggr=[[]]
+------Projection: CAST(t1.x AS Float64) AS CAST(t1.x AS Float64)t1.x, t1.y
+--------TableScan: t1 projection=[x, y]
+physical_plan
+ProjectionExec: expr=[SUM(DISTINCT t1.x)@1 as SUM(DISTINCT t1.x), MAX(DISTINCT t1.x)@2 as MAX(DISTINCT t1.x)]
+--AggregateExec: mode=FinalPartitioned, gby=[y@0 as y], aggr=[SUM(DISTINCT t1.x), MAX(DISTINCT t1.x)]
+----CoalesceBatchesExec: target_batch_size=2
+------RepartitionExec: partitioning=Hash([y@0], 8), input_partitions=8
+--------AggregateExec: mode=Partial, gby=[y@0 as y], aggr=[SUM(DISTINCT t1.x), MAX(DISTINCT t1.x)]
+----------AggregateExec: mode=FinalPartitioned, gby=[y@0 as y, alias1@1 as alias1], aggr=[]
+------------CoalesceBatchesExec: target_batch_size=2
+--------------RepartitionExec: partitioning=Hash([y@0, alias1@1], 8), input_partitions=8
+----------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+------------------AggregateExec: mode=Partial, gby=[y@1 as y, CAST(t1.x AS Float64)t1.x@0 as alias1], aggr=[]
+--------------------ProjectionExec: expr=[CAST(x@0 AS Float64) as CAST(t1.x AS Float64)t1.x, y@1 as y]
+----------------------MemoryExec: partitions=1, partition_sizes=[1]

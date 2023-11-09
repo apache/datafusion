@@ -19,9 +19,9 @@
 name = "datafusion-physical-plan"
 description = "Physical (ExecutionPlan) implementations for DataFusion query engine"
 keywords = ["arrow", "query", "sql"]
+readme = "README.md"
 version = { workspace = true }
 edition = { workspace = true }
-readme = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
@@ -38,26 +38,26 @@ arrow = { workspace = true }
 arrow-array = { workspace = true }
 arrow-buffer = { workspace = true }
 arrow-schema = { workspace = true }
-async-trait = "0.1.41"
+async-trait = { workspace = true }
 chrono = { version = "0.4.23", default-features = false }
-datafusion-common = { path = "../common", version = "32.0.0", default-features = false }
-datafusion-execution = { path = "../execution", version = "32.0.0" }
-datafusion-expr = { path = "../expr", version = "32.0.0" }
-datafusion-physical-expr = { path = "../physical-expr", version = "32.0.0" }
-futures = "0.3"
+datafusion-common = { workspace = true }
+datafusion-execution = { workspace = true }
+datafusion-expr = { workspace = true }
+datafusion-physical-expr = { workspace = true }
+futures = { workspace = true }
 half = { version = "2.1", default-features = false }
 hashbrown = { version = "0.14", features = ["raw"] }
-indexmap = "2.0.0"
+indexmap = { workspace = true }
 itertools = { version = "0.11", features = ["use_std"] }
-log = "^0.4"
+log = { workspace = true }
 once_cell = "1.18.0"
-parking_lot = "0.12"
+parking_lot = { workspace = true }
 pin-project-lite = "^0.2.7"
-rand = "0.8"
+rand = { workspace = true }
 tokio = { version = "1.28", features = ["sync", "fs", "parking_lot"] }
 uuid = { version = "^1.2", features = ["v4"] }
 
 [dev-dependencies]
-rstest = "0.18.0"
+rstest = { workspace = true }
 termtree = "0.4.1"
 tokio = { version = "1.28", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }
