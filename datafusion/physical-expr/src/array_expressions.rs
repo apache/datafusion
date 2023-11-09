@@ -1229,7 +1229,7 @@ array_removement_function!(
 /// `from_array` and `to_array`. This function also handles nested arrays
 /// ([`ListArray`] of [`ListArray`]s)
 ///
-/// For example, whn called  to replace a list array (where each element is a
+/// For example, when called to replace a list array (where each element is a
 /// list of int32s, the second and third argument are int32 arrays, and the
 /// fourth argument is the number of occurrences to replace
 ///
@@ -1275,7 +1275,7 @@ fn general_replace(
 
                         list_array_row_inner
                             .iter()
-                            // compare  element by element the current row of list_array
+                            // compare element by element the current row of list_array
                             .map(|row| row.map(|row| row.eq(&from_array_row_inner)))
                             .collect::<BooleanArray>()
                     }
