@@ -2564,9 +2564,11 @@ mod tests {
                     result.lower().is_null() && case.2.lower().is_null()
                         || result.lower().le(case.2.lower())
                 );
+                println!("{:?}", result.upper().is_null());
+                println!("{:?}", case.2.upper().is_null());
                 assert!(
                     result.upper().is_null() && case.2.upper().is_null()
-                        || result.upper().ge(case.2.upper())
+                        || result.upper().ge(case.2.upper(),)
                 );
             } else {
                 assert_eq!(result, case.2);
