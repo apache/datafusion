@@ -494,11 +494,12 @@ pub fn get_window_mode(
     {
         let req = [partition_by_reqs.clone(), order_by_reqs].concat();
         let req = collapse_lex_req(req);
-        // println!("req  : {:?}", req);
+        // println!("window req  : {:?}", req);
         // for ordering in partition_by_eqs.oeq_class().iter(){
-        //     println!("ordering: {:?}", ordering);
+        //     println!("window ordering: {:?}", ordering);
         // }
         if partition_by_eqs.ordering_satisfy_requirement(&req) {
+            // println!("satisfied");
             // Window can be run with existing ordering
             let mode = if indices.len() == partitionby_exprs.len() {
                 PartitionSearchMode::Sorted

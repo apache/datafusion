@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
 
-use crate::expressions::Column;
+use crate::expressions::{Column, Literal};
 use crate::physical_expr::{deduplicate_physical_exprs, have_common_entries};
 use crate::sort_properties::{ExprOrdering, SortProperties};
 use crate::{
@@ -1448,28 +1448,37 @@ impl EquivalenceProperties {
                 }
             }
         }
-        let leading_orderings = self.get_leading_orderings(&[]);
-        let normalized_leading_orderings =
-            self.eq_group.normalize_sort_exprs(&leading_orderings);
-        let projected_leading_orderings = self
-            .project_ordering_helper(mapping, &normalized_leading_orderings)
-            .unwrap_or_default();
-        let normalized_leading_exprs = projected_leading_orderings
-            .into_iter()
-            .map(|sort_expr| sort_expr.expr)
-            .collect::<Vec<_>>();
+        // let leading_orderings = self.get_leading_orderings(&[]);
         let leading_ordering_exprs = orderings
             .iter()
             .flat_map(|ordering| ordering.first().map(|sort_expr| sort_expr.expr.clone()))
             .collect::<Vec<_>>();
+        // let normalized_leading_exprs = self
+        //     .eq_group
+        //     .normalize_exprs(leading_ordering_exprs.clone());
+        // let normalized_leading_exprs = normalized_leading_exprs
+        //     .into_iter()
+        //     .flat_map(|expr| self.eq_group.project_expr(mapping, &expr))
+        //     .collect::<Vec<_>>();
+        // let projected_leading_orderings = self
+        //     .project_ordering_helper(mapping, &normalized_leading_orderings)
+        //     .unwrap_or_default();
+        // let normalized_leading_exprs = projected_leading_orderings
+        //     .into_iter()
+        //     .map(|sort_expr| sort_expr.expr)
+        //     .collect::<Vec<_>>();
+        // let leading_ordering_exprs = orderings
+        //     .iter()
+        //     .flat_map(|ordering| ordering.first().map(|sort_expr| sort_expr.expr.clone()))
+        //     .collect::<Vec<_>>();
 
         if PRINT_ON {
-            println!("normalized_leading_exprs: {:?}", normalized_leading_exprs);
-            println!(
-                "normalized_leading_orderings: {:?}",
-                normalized_leading_orderings
-            );
-            println!("leading_ordering_exprs: {:?}", leading_ordering_exprs);
+            // println!("leading_ordering_exprs: {:?}", leading_ordering_exprs);
+            // println!("normalized_leading_exprs: {:?}", normalized_leading_exprs);
+            // println!(
+            //     "normalized_leading_orderings: {:?}",
+            //     normalized_leading_orderings
+            // );
         }
         orderings = orderings
             .into_iter()
@@ -1498,7 +1507,9 @@ impl EquivalenceProperties {
             })
             .collect();
         if PRINT_ON {
+            println!("mapping:{:?}", mapping);
             println!("leading_ordering_exprs: {:?}", leading_ordering_exprs);
+            // println!("normalized_leading_exprs: {:?}", normalized_leading_exprs);
             println!("self.constants: {:?}", self.constants);
             println!("self.eq_group: {:?}", self.eq_group);
             for ordering in &orderings {
@@ -1776,28 +1787,27 @@ fn update_ordering(
     mut node: ExprOrdering,
     eq_properties: &EquivalenceProperties,
 ) -> Result<Transformed<ExprOrdering>> {
+    // We have a Column, which is one of the two possible leaf node types:
+    let eq_group = &eq_properties.eq_group;
+    let normalized_expr = eq_group.normalize_expr(node.expr.clone());
+    let oeq_class = &eq_properties.normalized_oeq_class();
+    if eq_properties.is_expr_constant(&normalized_expr) {
+        node.state = SortProperties::Singleton;
+        return Ok(Transformed::Yes(node));
+    } else if let Some(options) = oeq_class.get_options(&normalized_expr) {
+        node.state = SortProperties::Ordered(options);
+        return Ok(Transformed::Yes(node));
+    }
     if !node.expr.children().is_empty() {
         // We have an intermediate (non-leaf) node, account for its children:
         node.state = node.expr.get_ordering(&node.children_states);
         Ok(Transformed::Yes(node))
-    } else if node.expr.as_any().is::<Column>() {
-        // We have a Column, which is one of the two possible leaf node types:
-        let eq_group = &eq_properties.eq_group;
-        let normalized_expr = eq_group.normalize_expr(node.expr.clone());
-        let oeq_class = &eq_properties.normalized_oeq_class();
-        if eq_properties.is_expr_constant(&normalized_expr) {
-            node.state = SortProperties::Singleton;
-            Ok(Transformed::Yes(node))
-        } else if let Some(options) = oeq_class.get_options(&normalized_expr) {
-            node.state = SortProperties::Ordered(options);
-            Ok(Transformed::Yes(node))
-        } else {
-            Ok(Transformed::No(node))
-        }
-    } else {
+    } else if node.expr.as_any().is::<Literal>() {
         // We have a Literal, which is the other possible leaf node type:
         node.state = node.expr.get_ordering(&[]);
         Ok(Transformed::Yes(node))
+    } else {
+        Ok(Transformed::No(node))
     }
 }
 
