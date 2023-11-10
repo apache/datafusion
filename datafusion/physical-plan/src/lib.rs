@@ -203,7 +203,23 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
             .collect()
     }
 
-    /// Get the [`EquivalenceProperties`] within the plan
+    /// Get the [`EquivalenceProperties`] within the plan.
+    ///
+    /// Equivalence properties tell DataFsion what columns are known to be
+    /// equal, during various optimization passes. By default, this returns " no
+    /// known equivalances" which is always correct, but may cause DataFusion to
+    /// unecessairly resort data.
+    ///
+    /// If this ExecutionPlan makes no changes to the schema of the rows flowing
+    /// through it or how columns withink each row relate to each other, it
+    /// should should return the equivalence properties of its input. For
+    /// example, since `FilterExec` may remove rows from its input, but does not
+    /// otherwise modify them, it preserves its input equivalece properties.
+    /// However, since `ProjectionExec` may calculate derived expressions, it
+    /// needs special handling.
+    ///
+    /// See also [`Self::maintains_input_order`] and [`Self::output_ordering`]
+    /// for related concepts.
     fn equivalence_properties(&self) -> EquivalenceProperties {
         EquivalenceProperties::new(self.schema())
     }
