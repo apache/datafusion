@@ -263,10 +263,29 @@ impl Display for Statistics {
             .iter()
             .enumerate()
             .map(|(i, cs)| {
-                format!(
-                    "(Column[{}]: Min={}, Max={}, Null={}, Distinct={})",
-                    i, cs.min_value, cs.max_value, cs.null_count, cs.distinct_count
-                )
+                let s = format!("(Col[{}]:", i);
+                let s = if cs.min_value != Precision::Absent {
+                    format!("{} Min={}", s, cs.min_value)
+                } else {
+                    s
+                };
+                let s = if cs.max_value != Precision::Absent {
+                    format!("{} Max={}", s, cs.max_value)
+                } else {
+                    s
+                };
+                let s = if cs.null_count != Precision::Absent {
+                    format!("{} Null={}", s, cs.null_count)
+                } else {
+                    s
+                };
+                let s = if cs.distinct_count != Precision::Absent {
+                    format!("{} Distinct={}", s, cs.distinct_count)
+                } else {
+                    s
+                };
+
+                s + ")"
             })
             .collect::<Vec<_>>()
             .join(",");
