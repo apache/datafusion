@@ -816,8 +816,9 @@ fn update_expr(
                 // Update the index of `column`:
                 Ok(Transformed::Yes(projected_exprs[column.index()].0.clone()))
             } else {
-                // Determine how to update `column` to accommodate `projected_exprs`:
+                // default to invalid, in case we can't find the relevant column
                 state = RewriteState::RewrittenInvalid;
+                // Determine how to update `column` to accommodate `projected_exprs`
                 projected_exprs
                     .iter()
                     .enumerate()
@@ -831,12 +832,14 @@ fn update_expr(
                             },
                         )
                     })
-                    .map_or_else(|_| Ok(Transformed::No(expr)), |c| Ok(Transformed::Yes(c)))
+                    .map_or_else(
+                        || Ok(Transformed::No(expr)),
+                        |c| Ok(Transformed::Yes(c)),
+                    )
             }
         });
 
     new_expr.map(|e| (state == RewriteState::RewrittenValid).then_some(e))
-    })
 }
 
 /// Creates a new [`ProjectionExec`] instance with the given child plan and
