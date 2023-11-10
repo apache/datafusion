@@ -80,7 +80,7 @@ fn is_single_distinct_agg(plan: &LogicalPlan) -> Result<bool> {
                 }) = expr
                 {
                     match filter {
-                        Some(_) => return Ok(false), 
+                        Some(_) => return Ok(false),
                         None => {
                             aggregate_count += 1;
                             if *distinct {
@@ -496,11 +496,7 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(
                 vec![col("a")],
-                vec![
-                    count(col("c")),
-                    max(col("c")),
-                    count_distinct(col("b")),
-                ],
+                vec![count(col("c")), max(col("c")), count_distinct(col("b"))],
             )?
             .build()?;
         // Should work
