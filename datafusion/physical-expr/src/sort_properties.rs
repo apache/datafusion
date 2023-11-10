@@ -22,8 +22,6 @@ use crate::{PhysicalExpr, PhysicalSortExpr};
 use arrow_schema::SortOptions;
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_common::Result;
-
-use crate::equivalence::EquivalenceGroup;
 use crate::expressions::Literal;
 use itertools::Itertools;
 
@@ -166,73 +164,6 @@ impl ExprOrdering {
             expr,
             state: SortProperties::Unordered,
             children_states: vec![SortProperties::Unordered; size],
-        }
-    }
-
-    pub fn new_construction(
-        expr: Arc<dyn PhysicalExpr>,
-        eq_group: &EquivalenceGroup,
-        leading_orderings: &[PhysicalSortExpr],
-        constant_exprs: &[Arc<dyn PhysicalExpr>],
-    ) -> Self {
-        let expr = eq_group.normalize_expr(expr);
-        // Search expr among leading orderings.
-        let mut state = SortProperties::Unordered;
-        for sort_expr in leading_orderings {
-            if expr.eq(&sort_expr.expr) {
-                state = SortProperties::Ordered(sort_expr.options);
-                break;
-            }
-        }
-        for constant_expr in constant_exprs {
-            if expr.eq(constant_expr) {
-                state = SortProperties::Singleton;
-                break;
-            }
-        }
-        if expr.as_any().is::<Literal>() {
-            state = SortProperties::Singleton;
-        }
-        if SortProperties::Unordered != state {
-            // If an ordered match or constant is found among leading orderings return early.
-            let size = expr.children().len();
-            return Self {
-                expr,
-                state,
-                children_states: vec![SortProperties::Unordered; size],
-            };
-        }
-
-        if expr.children().is_empty() {
-            // If no children exists, we cannot continue search
-            // TODO: Search among equivalent groups also.
-            Self {
-                expr,
-                state,
-                children_states: vec![],
-            }
-        } else {
-            let children = expr
-                .children()
-                .into_iter()
-                .map(|child| {
-                    ExprOrdering::new_construction(
-                        child,
-                        eq_group,
-                        leading_orderings,
-                        constant_exprs,
-                    )
-                })
-                .collect::<Vec<_>>();
-            let children_states = children
-                .into_iter()
-                .map(|item| item.state)
-                .collect::<Vec<_>>();
-            let expr_ordering = ExprOrdering::new(expr);
-            let ordering = expr_ordering.expr.get_ordering(&children_states);
-            let mut expr_ordering = expr_ordering.with_new_children(children_states);
-            expr_ordering.state = ordering;
-            expr_ordering
         }
     }
 

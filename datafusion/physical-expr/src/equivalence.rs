@@ -1249,17 +1249,10 @@ impl EquivalenceProperties {
         &self,
         mapping: &ProjectionMapping,
         ignored_exprs: &[Arc<dyn PhysicalExpr>],
-        constants: &[Arc<dyn PhysicalExpr>],
     ) -> Vec<Vec<PhysicalSortExpr>> {
         let mut new_orderings = vec![];
         let leading_orderings = self.get_leading_orderings(ignored_exprs);
         for (source, target) in mapping.iter() {
-            // let expr_ordering = ExprOrdering::new_construction(
-            //     source.clone(),
-            //     &self.eq_group,
-            //     &leading_orderings,
-            //     constants,
-            // );
             let expr_ordering = self.get_expr_ordering(source.clone());
             if PRINT_ON {
                 println!("expr_ordering: {expr_ordering:?}");
@@ -1360,10 +1353,8 @@ impl EquivalenceProperties {
         // valid after projection.
         let mut orderings = vec![vec![]];
         let mut ignored_exprs = vec![];
-        let mut constants = self.constants.clone();
         for sort_expr in ordering.iter() {
-            let new_orderings =
-                self.calc_ordered_exprs(mapping, &ignored_exprs, &constants);
+            let new_orderings = self.calc_ordered_exprs(mapping, &ignored_exprs);
             let mut projected_ignored_exprs = if let Some(ignored_exprs) = ignored_exprs
                 .iter()
                 .map(|expr| self.eq_group.project_expr(mapping, expr))
@@ -1428,7 +1419,6 @@ impl EquivalenceProperties {
             let leaves = self.eq_group.normalize_exprs(leaves);
             ignored_exprs.extend(leaves);
             ignored_exprs.push(sort_expr.expr.clone());
-            constants.push(sort_expr.expr.clone());
             self = self.add_constants(std::iter::once(sort_expr.expr.clone()));
             deduplicate_physical_exprs(&mut ignored_exprs);
             if PRINT_ON {
@@ -1453,63 +1443,17 @@ impl EquivalenceProperties {
             .iter()
             .flat_map(|ordering| ordering.first().map(|sort_expr| sort_expr.expr.clone()))
             .collect::<Vec<_>>();
-        // let normalized_leading_exprs = self
-        //     .eq_group
-        //     .normalize_exprs(leading_ordering_exprs.clone());
-        // let normalized_leading_exprs = normalized_leading_exprs
-        //     .into_iter()
-        //     .flat_map(|expr| self.eq_group.project_expr(mapping, &expr))
-        //     .collect::<Vec<_>>();
-        // let projected_leading_orderings = self
-        //     .project_ordering_helper(mapping, &normalized_leading_orderings)
-        //     .unwrap_or_default();
-        // let normalized_leading_exprs = projected_leading_orderings
-        //     .into_iter()
-        //     .map(|sort_expr| sort_expr.expr)
-        //     .collect::<Vec<_>>();
-        // let leading_ordering_exprs = orderings
-        //     .iter()
-        //     .flat_map(|ordering| ordering.first().map(|sort_expr| sort_expr.expr.clone()))
-        //     .collect::<Vec<_>>();
 
-        if PRINT_ON {
-            // println!("leading_ordering_exprs: {:?}", leading_ordering_exprs);
-            // println!("normalized_leading_exprs: {:?}", normalized_leading_exprs);
-            // println!(
-            //     "normalized_leading_orderings: {:?}",
-            //     normalized_leading_orderings
-            // );
-        }
         orderings = orderings
             .into_iter()
             .map(|ordering| {
                 let collapsed = collapse_lex_ordering(ordering, &leading_ordering_exprs);
-                let normalized = self.eq_group.normalize_sort_exprs(&collapsed);
-                // println!("normalized: {:?}", normalized);
-                // println!("normalized_leading_exprs: {:?}", normalized_leading_exprs);
-                // println!("leading_ordering_exprs: {:?}", leading_ordering_exprs);
-                normalized
-                    .into_iter()
-                    .enumerate()
-                    .flat_map(|(idx, sort_expr)| {
-                        if idx > 0
-                            && physical_exprs_contains(
-                                &leading_ordering_exprs,
-                                &sort_expr.expr,
-                            )
-                        {
-                            None
-                        } else {
-                            Some(sort_expr)
-                        }
-                    })
-                    .collect::<Vec<_>>()
+                self.eq_group.normalize_sort_exprs(&collapsed)
             })
             .collect();
         if PRINT_ON {
             println!("mapping:{:?}", mapping);
             println!("leading_ordering_exprs: {:?}", leading_ordering_exprs);
-            // println!("normalized_leading_exprs: {:?}", normalized_leading_exprs);
             println!("self.constants: {:?}", self.constants);
             println!("self.eq_group: {:?}", self.eq_group);
             for ordering in &orderings {
@@ -1523,7 +1467,7 @@ impl EquivalenceProperties {
     /// Projects the equivalences within according to `projection_mapping`
     /// and `output_schema`.
     pub fn project(
-        mut self,
+        &self,
         projection_mapping: &ProjectionMapping,
         output_schema: SchemaRef,
     ) -> Self {
