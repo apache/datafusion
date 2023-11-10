@@ -55,7 +55,7 @@ use datafusion_expr::{
     round, rpad, rtrim, sha224, sha256, sha384, sha512, signum, sin, sinh, split_part,
     sqrt, starts_with, strpos, substr, substring, tan, tanh, to_hex, to_timestamp_micros,
     to_timestamp_millis, to_timestamp_nanos, to_timestamp_seconds, translate, trim,
-    trunc, upper, uuid
+    trunc, upper, uuid,
     window_frame::regularize,
     AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction,
     Case, Cast, Expr, GetFieldAccess, GetIndexedField, GroupingSet,
