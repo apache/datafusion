@@ -2117,7 +2117,11 @@ impl ScalarValue {
         } else {
             Self::iter_to_array(values.iter().cloned()).unwrap()
         };
-        Arc::new(array_into_list_array(values))
+        if values.len() <= i32::MAX as usize {
+            Arc::new(array_into_list_array(values))
+        } else {
+            Arc::new(array_into_large_list_array(values))
+        }
     }
 
     /// Converts `Vec<ScalarValue>` where each element has type corresponding to
@@ -3620,10 +3624,12 @@ mod tests {
 
     #[test]
     fn iter_to_array_string_test() {
-        let arr1 =
-            array_into_list_array(Arc::new(StringArray::from(vec!["foo", "bar", "baz"])));
-        let arr2 =
-            array_into_list_array(Arc::new(StringArray::from(vec!["rust", "world"])));
+        let arr1 = array_into_list_array(Arc::new(StringArray::from(vec![
+            "foo", "bar", "baz",
+        ])));
+        let arr2 = array_into_list_array(Arc::new(StringArray::from(vec![
+            "rust", "world",
+        ])));
 
         let scalars = vec![
             ScalarValue::List(Arc::new(arr1)),

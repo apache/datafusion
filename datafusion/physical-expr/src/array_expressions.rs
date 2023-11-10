@@ -33,7 +33,9 @@ use datafusion_common::cast::{
     as_generic_list_array, as_generic_string_array, as_int64_array, as_list_array,
     as_null_array, as_string_array,
 };
-use datafusion_common::utils::{array_into_list_array, list_ndims};
+use datafusion_common::utils::{
+    array_into_large_list_array, array_into_list_array, list_ndims,
+};
 use datafusion_common::{
     exec_err, internal_err, not_impl_err, plan_err, DataFusionError, Result,
 };
@@ -350,11 +352,18 @@ pub fn make_array(arrays: &[ArrayRef]) -> Result<ArrayRef> {
         }
     }
 
+    let len = arrays.len();
     match data_type {
         // Either an empty array or all nulls:
         DataType::Null => {
             let array = new_null_array(&DataType::Null, arrays.len());
-            Ok(Arc::new(array_into_list_array(array)))
+            if len <= i32::MAX as usize {
+                Ok(Arc::new(array_into_list_array(array)))
+            } else if len <= i64::MAX as usize {
+                Ok(Arc::new(array_into_large_list_array(array)))
+            } else {
+                exec_err!("The number of elements {} in the array exceed the maximum number of elements supported by DataFusion",len)
+            }
         }
         data_type => array_array(arrays, data_type),
     }
@@ -1695,7 +1704,20 @@ pub fn flatten(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Array_length SQL function
 pub fn array_length(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let list_array = as_list_array(&args[0])?;
+    match &args[0].data_type() {
+        DataType::List(_) => _array_length_list::<i32>(args),
+        DataType::LargeList(_) => _array_length_list::<i64>(args),
+        _ => Err(DataFusionError::Internal(format!(
+            "array_length does not support type '{:?}'",
+            args[0].data_type()
+        ))),
+    }
+}
+
+/// array_length for List and LargeList
+fn _array_length_list<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let list_array = as_generic_list_array::<O>(&args[0])?;
+
     let dimension = if args.len() == 2 {
         as_int64_array(&args[1])?.clone()
     } else {
