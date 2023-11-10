@@ -252,19 +252,12 @@ fn collect_new_statistics(
                     ..
                 },
             )| {
-                let closed_interval = interval.close_bounds();
-                let (min_value, max_value) =
-                    if closed_interval.lower.value.eq(&closed_interval.upper.value) {
-                        (
-                            Precision::Exact(closed_interval.lower.value),
-                            Precision::Exact(closed_interval.upper.value),
-                        )
-                    } else {
-                        (
-                            Precision::Inexact(closed_interval.lower.value),
-                            Precision::Inexact(closed_interval.upper.value),
-                        )
-                    };
+                let (lower, upper) = interval.into_bounds();
+                let (min_value, max_value) = if lower.eq(&upper) {
+                    (Precision::Exact(lower), Precision::Exact(upper))
+                } else {
+                    (Precision::Inexact(lower), Precision::Inexact(upper))
+                };
                 ColumnStatistics {
                     null_count: match input_column_stats[idx].null_count.get_value() {
                         Some(nc) => Precision::Inexact(*nc),

@@ -480,10 +480,9 @@ impl Interval {
     pub fn mul<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
         let rhs = other.borrow();
 
-        let zero_point = Interval::try_new(
-            ScalarValue::new_zero(&self.get_datatype())?,
-            ScalarValue::new_zero(&self.get_datatype())?,
-        )?;
+        let zero = ScalarValue::new_zero(&self.get_datatype())?;
+        // We want 0 is approachable from both negative and positive sides.
+        let zero_point = Interval::try_new(prev_value(zero.clone()), next_value(zero))?;
         match (
             Interval::CERTAINLY_TRUE == self.contains(&zero_point)?,
             Interval::CERTAINLY_TRUE == rhs.contains(&zero_point)?,
@@ -511,12 +510,14 @@ impl Interval {
         let rhs = other.borrow();
 
         let zero = ScalarValue::new_zero(&self.get_datatype())?;
-        let zero_point = Interval::try_new(zero.clone(), zero.clone())?;
+        // We want 0 is approachable from both negative and positive sides.
+        let zero_point =
+            Interval::try_new(prev_value(zero.clone()), next_value(zero.clone()))?;
 
-        if rhs.contains(&zero_point)? == Interval::CERTAINLY_TRUE
         // The purpose is early exit with unbounded interval if rhs interval
         // is in the form of [some_negative, some_positive] or [0,0].
-            && !(rhs.lower.eq(&zero) ^ rhs.upper.eq(&zero))
+        if rhs.contains(&zero_point)? == Interval::CERTAINLY_TRUE
+            || (rhs.lower.eq(&zero) && rhs.upper.eq(&zero))
         {
             return Interval::make_unbounded(&get_result_type(
                 &self.get_datatype(),
@@ -530,7 +531,7 @@ impl Interval {
         // 2) We handle the case of rhs reaches 0 from both negative
         // and positive directions, so rhs can only contain zero as
         // edge point of the bound.
-        if Interval::CERTAINLY_TRUE == self.contains(&zero_point)? {
+        if self.contains(&zero_point)? == Interval::CERTAINLY_TRUE {
             div_helper_lhs_zero_inclusive(self, rhs, &zero_point)
         } else {
             // Only option is CERTAINLY_FALSE for rhs.
@@ -1032,38 +1033,17 @@ fn mul_helper_single_zero_inclusive(
     rhs: &Interval,
     zero_point: &Interval,
 ) -> Result<Interval> {
-    let inf = ScalarValue::try_from(get_result_type(
-        &lhs.get_datatype(),
-        &Operator::Multiply,
-        &rhs.get_datatype(),
-    )?)?;
-    if rhs.upper < zero_point.upper && !rhs.upper.is_null() {
+    if rhs.upper <= zero_point.lower && !rhs.upper.is_null() {
         // <-------=====0=====------->
         // <--======----0------------>
-        let lower = if lhs.upper.is_null() || rhs.lower.is_null() {
-            inf.clone()
-        } else {
-            mul_bounds::<false>(&lhs.upper, &rhs.lower)?
-        };
-        let upper = if lhs.lower.is_null() || rhs.lower.is_null() {
-            inf
-        } else {
-            mul_bounds::<true>(&lhs.lower, &rhs.lower)?
-        };
+        let lower = mul_bounds::<false>(&lhs.upper, &rhs.lower)?;
+        let upper = mul_bounds::<true>(&lhs.lower, &rhs.lower)?;
         Interval::try_new(lower, upper)
     } else {
         // <-------=====0=====------->
         // <------------0--======---->
-        let lower = if lhs.lower.is_null() || rhs.upper.is_null() {
-            inf.clone()
-        } else {
-            mul_bounds::<false>(&lhs.lower, &rhs.upper)?
-        };
-        let upper = if lhs.upper.is_null() || rhs.upper.is_null() {
-            inf
-        } else {
-            mul_bounds::<true>(&lhs.upper, &rhs.upper)?
-        };
+        let lower = mul_bounds::<false>(&lhs.lower, &rhs.upper)?;
+        let upper = mul_bounds::<true>(&lhs.upper, &rhs.upper)?;
         Interval::try_new(lower, upper)
     }
 }
@@ -1101,24 +1081,15 @@ fn mul_helper_zero_exclusive(
     rhs: &Interval,
     zero_point: &Interval,
 ) -> Result<Interval> {
-    let inf = ScalarValue::try_from(get_result_type(
-        &lhs.get_datatype(),
-        &Operator::Multiply,
-        &rhs.get_datatype(),
-    )?)?;
     match (
-        lhs.upper <= zero_point.upper && !lhs.upper.is_null(),
-        rhs.upper <= zero_point.upper && !rhs.upper.is_null(),
+        lhs.upper <= zero_point.lower && !lhs.upper.is_null(),
+        rhs.upper <= zero_point.lower && !rhs.upper.is_null(),
     ) {
         (true, true) => {
             // <--======----0------------>
             // <--======----0------------>
             let lower = mul_bounds::<false>(&lhs.upper, &rhs.upper)?;
-            let upper = if lhs.lower.is_null() || rhs.lower.is_null() {
-                inf
-            } else {
-                mul_bounds::<true>(&lhs.lower, &rhs.lower)?
-            };
+            let upper = mul_bounds::<true>(&lhs.lower, &rhs.lower)?;
             Ok(Interval::try_new(lower, upper)?)
         }
         (true, false) => {
@@ -1135,11 +1106,7 @@ fn mul_helper_zero_exclusive(
             // <------------0--======---->
             // <------------0--======---->
             let lower = mul_bounds::<false>(&lhs.lower, &rhs.lower)?;
-            let upper = if lhs.upper.is_null() || rhs.upper.is_null() {
-                inf
-            } else {
-                mul_bounds::<true>(&lhs.upper, &rhs.upper)?
-            };
+            let upper = mul_bounds::<true>(&lhs.upper, &rhs.upper)?;
             Ok(Interval::try_new(lower, upper)?)
         }
     }
@@ -1153,16 +1120,7 @@ fn mul_helper_zero_exclusive_opposite(
     lhs: &Interval,
     rhs: &Interval,
 ) -> Result<Interval> {
-    let inf = ScalarValue::try_from(get_result_type(
-        &lhs.get_datatype(),
-        &Operator::Multiply,
-        &rhs.get_datatype(),
-    )?)?;
-    let lower = if lhs.lower.is_null() || rhs.upper.is_null() {
-        inf
-    } else {
-        mul_bounds::<false>(&lhs.lower, &rhs.upper)?
-    };
+    let lower = mul_bounds::<false>(&lhs.lower, &rhs.upper)?;
     let upper = mul_bounds::<true>(&lhs.upper, &rhs.lower)?;
     Interval::try_new(lower, upper)
 }
@@ -1188,38 +1146,17 @@ fn div_helper_lhs_zero_inclusive(
     rhs: &Interval,
     zero_point: &Interval,
 ) -> Result<Interval> {
-    let inf = ScalarValue::try_from(get_result_type(
-        &lhs.get_datatype(),
-        &Operator::Divide,
-        &rhs.get_datatype(),
-    )?)?;
-    if rhs.upper < zero_point.upper && !rhs.upper.is_null() {
+    if rhs.upper <= zero_point.lower && !rhs.upper.is_null() {
         // <-------=====0=====------->
         // <--======----0------------>
-        let lower = if lhs.upper.is_null() {
-            inf.clone()
-        } else {
-            div_bounds::<false>(&lhs.upper, &rhs.upper)?
-        };
-        let upper = if lhs.lower.is_null() {
-            inf
-        } else {
-            div_bounds::<true>(&lhs.lower, &rhs.upper)?
-        };
+        let lower = div_bounds::<false>(&lhs.upper, &rhs.upper)?;
+        let upper = div_bounds::<true>(&lhs.lower, &rhs.upper)?;
         Interval::try_new(lower, upper)
     } else {
         // <-------=====0=====------->
         // <------------0--======---->
-        let lower = if lhs.lower.is_null() {
-            inf.clone()
-        } else {
-            div_bounds::<false>(&lhs.lower, &rhs.lower)?
-        };
-        let upper = if lhs.upper.is_null() {
-            inf
-        } else {
-            div_bounds::<true>(&lhs.upper, &rhs.lower)?
-        };
+        let lower = div_bounds::<false>(&lhs.lower, &rhs.lower)?;
+        let upper = div_bounds::<true>(&lhs.upper, &rhs.lower)?;
         Interval::try_new(lower, upper)
     }
 }
@@ -1257,45 +1194,28 @@ fn div_helper_zero_exclusive(
     rhs: &Interval,
     zero_point: &Interval,
 ) -> Result<Interval> {
-    let inf = ScalarValue::try_from(get_result_type(
-        &lhs.get_datatype(),
-        &Operator::Divide,
-        &rhs.get_datatype(),
-    )?)?;
     match (
-        lhs.upper <= zero_point.upper && !lhs.upper.is_null(),
-        rhs.upper <= zero_point.upper && !rhs.upper.is_null(),
+        lhs.upper <= zero_point.lower && !lhs.upper.is_null(),
+        rhs.upper <= zero_point.lower && !rhs.upper.is_null(),
     ) {
         (true, true) => {
             // <--======----0------------>
             // <--======----0------------>
             let lower = div_bounds::<false>(&lhs.upper, &rhs.lower)?;
-            let upper = if lhs.lower.is_null() {
-                inf
-            } else {
-                div_bounds::<true>(&lhs.lower, &rhs.upper)?
-            };
+            let upper = div_bounds::<true>(&lhs.lower, &rhs.upper)?;
             Ok(Interval::try_new(lower, upper)?)
         }
         (true, false) => {
             // <--======----0------------>
             // <------------0--======---->
-            let lower = if lhs.lower.is_null() {
-                inf
-            } else {
-                div_bounds::<false>(&lhs.lower, &rhs.lower)?
-            };
+            let lower = div_bounds::<false>(&lhs.lower, &rhs.lower)?;
             let upper = div_bounds::<true>(&lhs.upper, &rhs.upper)?;
             Ok(Interval::try_new(lower, upper)?)
         }
         (false, true) => {
             // <------------0--======---->
             // <--======----0------------>
-            let lower = if lhs.upper.is_null() {
-                inf
-            } else {
-                div_bounds::<false>(&lhs.upper, &rhs.upper)?
-            };
+            let lower = div_bounds::<false>(&lhs.upper, &rhs.upper)?;
             let upper = div_bounds::<true>(&lhs.lower, &rhs.lower)?;
             Ok(Interval::try_new(lower, upper)?)
         }
@@ -1303,11 +1223,7 @@ fn div_helper_zero_exclusive(
             // <------------0--======---->
             // <------------0--======---->
             let lower = div_bounds::<false>(&lhs.lower, &rhs.upper)?;
-            let upper = if lhs.upper.is_null() {
-                inf
-            } else {
-                div_bounds::<true>(&lhs.upper, &rhs.lower)?
-            };
+            let upper = div_bounds::<true>(&lhs.upper, &rhs.lower)?;
             Ok(Interval::try_new(lower, upper)?)
         }
     }
@@ -1360,7 +1276,6 @@ fn handle_overflow<const UPPER: bool>(
         Operator::Plus | Operator::Minus => lhs.gt(&zero),
         _ => unreachable!(),
     };
-    // No need to check operator since knowing lhs sign is enough for subtraction and division cases also.
     match (UPPER, positive_sign) {
         (true, true) | (false, false) => ScalarValue::try_from(dt),
         (true, false) => {
@@ -1686,16 +1601,16 @@ mod tests {
     use datafusion_common::{Result, ScalarValue};
 
     #[test]
-    fn test_next_previous_value() -> Result<()> {
+    fn test_next_prev_value() -> Result<()> {
         let zeros = vec![
             ScalarValue::new_zero(&DataType::UInt8)?,
             ScalarValue::new_zero(&DataType::UInt16)?,
             ScalarValue::new_zero(&DataType::UInt32)?,
             ScalarValue::new_zero(&DataType::UInt64)?,
             ScalarValue::new_zero(&DataType::Int8)?,
-            ScalarValue::new_zero(&DataType::Int8)?,
-            ScalarValue::new_zero(&DataType::Int8)?,
-            ScalarValue::new_zero(&DataType::Int8)?,
+            ScalarValue::new_zero(&DataType::Int16)?,
+            ScalarValue::new_zero(&DataType::Int32)?,
+            ScalarValue::new_zero(&DataType::Int64)?,
         ];
         let ones = vec![
             ScalarValue::new_one(&DataType::UInt8)?,
@@ -1703,9 +1618,9 @@ mod tests {
             ScalarValue::new_one(&DataType::UInt32)?,
             ScalarValue::new_one(&DataType::UInt64)?,
             ScalarValue::new_one(&DataType::Int8)?,
-            ScalarValue::new_one(&DataType::Int8)?,
-            ScalarValue::new_one(&DataType::Int8)?,
-            ScalarValue::new_one(&DataType::Int8)?,
+            ScalarValue::new_one(&DataType::Int16)?,
+            ScalarValue::new_one(&DataType::Int32)?,
+            ScalarValue::new_one(&DataType::Int64)?,
         ];
         zeros.into_iter().zip(ones).for_each(|(z, o)| {
             assert_eq!(next_value(z.clone()), o);
@@ -1761,9 +1676,11 @@ mod tests {
         min_max.into_iter().zip(inf).for_each(|((min, max), inf)| {
             assert_eq!(next_value(max.clone()), inf);
             assert_ne!(prev_value(max.clone()), max);
+            assert_ne!(prev_value(max.clone()), inf);
 
             assert_eq!(prev_value(min.clone()), inf);
             assert_ne!(next_value(min.clone()), min);
+            assert_ne!(next_value(min.clone()), inf);
 
             assert_eq!(next_value(inf.clone()), inf);
             assert_eq!(prev_value(inf.clone()), inf);
@@ -1777,6 +1694,7 @@ mod tests {
         use ScalarValue::*;
 
         let cases = vec![
+            // Boolean intervals:
             (
                 (Boolean(None), Boolean(Some(false))),
                 Boolean(Some(false)),
@@ -1792,6 +1710,7 @@ mod tests {
                 Boolean(Some(false)),
                 Boolean(Some(true)),
             ),
+            // Integer intervals:
             (
                 (UInt16(Some(u16::MAX)), UInt16(None)),
                 UInt16(Some(u16::MAX)),
@@ -1802,6 +1721,7 @@ mod tests {
                 Int16(None),
                 Int16(Some(-1000)),
             ),
+            // Floating point intervals:
             (
                 (Float32(Some(f32::MAX)), Float32(Some(f32::MAX))),
                 Float32(Some(f32::MAX)),
@@ -1828,7 +1748,7 @@ mod tests {
         }
 
         let invalid_intervals = vec![
-            (Float32(Some(f32::INFINITY)), Float32(Some(0_f32))),
+            (Float32(Some(f32::INFINITY)), Float32(Some(100_f32))),
             (Float64(Some(0_f64)), Float64(Some(f64::NEG_INFINITY))),
             (Boolean(Some(true)), Boolean(Some(false))),
             (Int32(Some(1000)), Int32(Some(-2000))),
@@ -1890,28 +1810,25 @@ mod tests {
                 Interval::try_new(Int64(Some(-1000_i64)), Int64(Some(1000_i64)))?,
                 Interval::try_new(Int64(None), Int64(Some(-1500_i64)))?,
             ),
+            (
+                Interval::try_new(
+                    next_value(Float32(Some(0.0))),
+                    next_value(Float32(Some(0.0))),
+                )?,
+                Interval::try_new(Float32(Some(0.0)), Float32(Some(0.0)))?,
+            ),
+            (
+                Interval::try_new(Float32(Some(-1.0)), Float32(Some(-1.0)))?,
+                Interval::try_new(
+                    prev_value(Float32(Some(-1.0))),
+                    prev_value(Float32(Some(-1.0))),
+                )?,
+            ),
         ];
         for (first, second) in exactly_gt_cases {
             assert_eq!(first.gt(second.clone())?, Interval::CERTAINLY_TRUE);
             assert_eq!(second.lt(first)?, Interval::CERTAINLY_TRUE);
         }
-        assert_eq!(
-            Interval::try_new(
-                next_value(Float32(Some(0.0))),
-                next_value(Float32(Some(0.0))),
-            )?
-            .gt(Interval::try_new(Float32(Some(0.0)), Float32(Some(0.0)),)?)?,
-            Interval::CERTAINLY_TRUE
-        );
-        assert_eq!(
-            Interval::try_new(Float32(Some(-1.0)), Float32(Some(-1.0)),)?.gt(
-                Interval::try_new(
-                    prev_value(Float32(Some(-1.0))),
-                    prev_value(Float32(Some(-1.0))),
-                )?
-            )?,
-            Interval::CERTAINLY_TRUE
-        );
 
         let possibly_gt_cases = vec![
             (
@@ -1930,22 +1847,19 @@ mod tests {
                 Interval::try_new(Int64(None), Int64(None))?,
                 Interval::try_new(Int64(None), Int64(None))?,
             ),
+            (
+                Interval::try_new(Float32(Some(0.0)), next_value(Float32(Some(0.0))))?,
+                Interval::try_new(Float32(Some(0.0)), Float32(Some(0.0)))?,
+            ),
+            (
+                Interval::try_new(Float32(Some(-1.0)), Float32(Some(-1.0)))?,
+                Interval::try_new(prev_value(Float32(Some(-1.0))), Float32(Some(-1.0)))?,
+            ),
         ];
         for (first, second) in possibly_gt_cases {
             assert_eq!(first.gt(second.clone())?, Interval::UNCERTAIN);
             assert_eq!(second.lt(first)?, Interval::UNCERTAIN);
         }
-        assert_eq!(
-            Interval::try_new(Float32(Some(0.0)), next_value(Float32(Some(0.0))),)?
-                .gt(Interval::try_new(Float32(Some(0.0)), Float32(Some(0.0)),)?,)?,
-            Interval::UNCERTAIN
-        );
-        assert_eq!(
-            Interval::try_new(Float32(Some(-1.0)), Float32(Some(-1.0)),)?.gt(
-                Interval::try_new(prev_value(Float32(Some(-1.0))), Float32(Some(-1.0)),)?,
-            )?,
-            Interval::UNCERTAIN
-        );
 
         let not_gt_cases = vec![
             (
@@ -1960,22 +1874,19 @@ mod tests {
                 Interval::try_new(Int64(None), Int64(Some(1000_i64)))?,
                 Interval::try_new(Int64(Some(1000_i64)), Int64(Some(1500_i64)))?,
             ),
+            (
+                Interval::try_new(prev_value(Float32(Some(0.0))), Float32(Some(0.0)))?,
+                Interval::try_new(Float32(Some(0.0)), Float32(Some(0.0)))?,
+            ),
+            (
+                Interval::try_new(Float32(Some(-1.0)), Float32(Some(-1.0)))?,
+                Interval::try_new(Float32(Some(-1.0)), next_value(Float32(Some(-1.0))))?,
+            ),
         ];
         for (first, second) in not_gt_cases {
             assert_eq!(first.gt(second.clone())?, Interval::CERTAINLY_FALSE);
             assert_eq!(second.lt(first)?, Interval::CERTAINLY_FALSE);
         }
-        assert_eq!(
-            Interval::try_new(prev_value(Float32(Some(0.0))), Float32(Some(0.0)),)?
-                .gt(Interval::try_new(Float32(Some(0.0)), Float32(Some(0.0)),)?,)?,
-            Interval::CERTAINLY_FALSE
-        );
-        assert_eq!(
-            Interval::try_new(Float32(Some(-1.0)), Float32(Some(-1.0)),)?.gt(
-                Interval::try_new(Float32(Some(-1.0)), next_value(Float32(Some(-1.0))),)?,
-            )?,
-            Interval::CERTAINLY_FALSE
-        );
 
         Ok(())
     }
@@ -2000,24 +1911,19 @@ mod tests {
                 Interval::try_new(Int64(Some(-1000_i64)), Int64(Some(1000_i64)))?,
                 Interval::try_new(Int64(None), Int64(Some(-1500_i64)))?,
             ),
+            (
+                Interval::try_new(Float32(Some(0.0)), Float32(Some(0.0)))?,
+                Interval::try_new(Float32(Some(0.0)), Float32(Some(0.0)))?,
+            ),
+            (
+                Interval::try_new(Float32(Some(-1.0)), next_value(Float32(Some(-1.0))))?,
+                Interval::try_new(prev_value(Float32(Some(-1.0))), Float32(Some(-1.0)))?,
+            ),
         ];
         for (first, second) in exactly_gteq_cases {
             assert_eq!(first.gt_eq(second.clone())?, Interval::CERTAINLY_TRUE);
             assert_eq!(second.lt_eq(first)?, Interval::CERTAINLY_TRUE);
         }
-        assert_eq!(
-            Interval::try_new(Float32(Some(0.0)), Float32(Some(0.0)),)?
-                .gt_eq(Interval::try_new(Float32(Some(0.0)), Float32(Some(0.0)),)?)?,
-            Interval::CERTAINLY_TRUE
-        );
-        assert_eq!(
-            Interval::try_new(Float32(Some(-1.0)), next_value(Float32(Some(-1.0))),)?
-                .gt_eq(Interval::try_new(
-                    prev_value(Float32(Some(-1.0))),
-                    Float32(Some(-1.0)),
-                )?)?,
-            Interval::CERTAINLY_TRUE
-        );
 
         let possibly_gteq_cases = vec![
             (
@@ -2036,25 +1942,22 @@ mod tests {
                 Interval::try_new(Int64(None), Int64(None))?,
                 Interval::try_new(Int64(None), Int64(None))?,
             ),
+            (
+                Interval::try_new(prev_value(Float32(Some(0.0))), Float32(Some(0.0)))?,
+                Interval::try_new(Float32(Some(0.0)), Float32(Some(0.0)))?,
+            ),
+            (
+                Interval::try_new(Float32(Some(-1.0)), Float32(Some(-1.0)))?,
+                Interval::try_new(
+                    prev_value(Float32(Some(-1.0))),
+                    next_value(Float32(Some(-1.0))),
+                )?,
+            ),
         ];
         for (first, second) in possibly_gteq_cases {
             assert_eq!(first.gt_eq(second.clone())?, Interval::UNCERTAIN);
             assert_eq!(second.lt_eq(first)?, Interval::UNCERTAIN);
         }
-        assert_eq!(
-            Interval::try_new(prev_value(Float32(Some(0.0))), Float32(Some(0.0)),)?
-                .gt_eq(Interval::try_new(Float32(Some(0.0)), Float32(Some(0.0)),)?,)?,
-            Interval::UNCERTAIN
-        );
-        assert_eq!(
-            Interval::try_new(Float32(Some(-1.0)), Float32(Some(-1.0)),)?.gt_eq(
-                Interval::try_new(
-                    prev_value(Float32(Some(-1.0))),
-                    next_value(Float32(Some(-1.0))),
-                )?,
-            )?,
-            Interval::UNCERTAIN
-        );
 
         let not_gteq_cases = vec![
             (
@@ -2069,28 +1972,25 @@ mod tests {
                 Interval::try_new(Int64(None), Int64(Some(1000_i64)))?,
                 Interval::try_new(Int64(Some(1001_i64)), Int64(Some(1500_i64)))?,
             ),
+            (
+                Interval::try_new(
+                    prev_value(Float32(Some(0.0))),
+                    prev_value(Float32(Some(0.0))),
+                )?,
+                Interval::try_new(Float32(Some(0.0)), Float32(Some(0.0)))?,
+            ),
+            (
+                Interval::try_new(Float32(Some(-1.0)), Float32(Some(-1.0)))?,
+                Interval::try_new(
+                    next_value(Float32(Some(-1.0))),
+                    next_value(Float32(Some(-1.0))),
+                )?,
+            ),
         ];
         for (first, second) in not_gteq_cases {
             assert_eq!(first.gt_eq(second.clone())?, Interval::CERTAINLY_FALSE);
             assert_eq!(second.lt_eq(first)?, Interval::CERTAINLY_FALSE);
         }
-        assert_eq!(
-            Interval::try_new(
-                prev_value(Float32(Some(0.0))),
-                prev_value(Float32(Some(0.0))),
-            )?
-            .gt_eq(Interval::try_new(Float32(Some(0.0)), Float32(Some(0.0)),)?,)?,
-            Interval::CERTAINLY_FALSE
-        );
-        assert_eq!(
-            Interval::try_new(Float32(Some(-1.0)), Float32(Some(-1.0)),)?.gt_eq(
-                Interval::try_new(
-                    next_value(Float32(Some(-1.0))),
-                    next_value(Float32(Some(-1.0))),
-                )?,
-            )?,
-            Interval::CERTAINLY_FALSE
-        );
 
         Ok(())
     }
@@ -2138,25 +2038,22 @@ mod tests {
                 Interval::try_new(Float32(Some(100.0)), Float32(Some(200.0)))?,
                 Interval::try_new(Float32(Some(0.0)), Float32(Some(1000.0)))?,
             ),
+            (
+                Interval::try_new(prev_value(Float32(Some(0.0))), Float32(Some(0.0)))?,
+                Interval::try_new(Float32(Some(0.0)), Float32(Some(0.0)))?,
+            ),
+            (
+                Interval::try_new(Float32(Some(-1.0)), Float32(Some(-1.0)))?,
+                Interval::try_new(
+                    prev_value(Float32(Some(-1.0))),
+                    next_value(Float32(Some(-1.0))),
+                )?,
+            ),
         ];
         for (first, second) in possibly_eq_cases {
             assert_eq!(first.equal(second.clone())?, Interval::UNCERTAIN);
             assert_eq!(second.equal(first)?, Interval::UNCERTAIN);
         }
-        assert_eq!(
-            Interval::try_new(prev_value(Float32(Some(0.0))), Float32(Some(0.0)),)?
-                .equal(Interval::try_new(Float32(Some(0.0)), Float32(Some(0.0)),)?,)?,
-            Interval::UNCERTAIN
-        );
-        assert_eq!(
-            Interval::try_new(Float32(Some(-1.0)), Float32(Some(-1.0)),)?.equal(
-                Interval::try_new(
-                    prev_value(Float32(Some(-1.0))),
-                    next_value(Float32(Some(-1.0))),
-                )?,
-            )?,
-            Interval::UNCERTAIN
-        );
 
         let not_eq_cases = vec![
             (
@@ -2171,28 +2068,25 @@ mod tests {
                 Interval::try_new(Int64(None), Int64(Some(1000_i64)))?,
                 Interval::try_new(Int64(Some(1001_i64)), Int64(Some(1500_i64)))?,
             ),
+            (
+                Interval::try_new(
+                    prev_value(Float32(Some(0.0))),
+                    prev_value(Float32(Some(0.0))),
+                )?,
+                Interval::try_new(Float32(Some(0.0)), Float32(Some(0.0)))?,
+            ),
+            (
+                Interval::try_new(Float32(Some(-1.0)), Float32(Some(-1.0)))?,
+                Interval::try_new(
+                    next_value(Float32(Some(-1.0))),
+                    next_value(Float32(Some(-1.0))),
+                )?,
+            ),
         ];
         for (first, second) in not_eq_cases {
             assert_eq!(first.equal(second.clone())?, Interval::CERTAINLY_FALSE);
             assert_eq!(second.equal(first)?, Interval::CERTAINLY_FALSE);
         }
-        assert_eq!(
-            Interval::try_new(
-                prev_value(Float32(Some(0.0))),
-                prev_value(Float32(Some(0.0))),
-            )?
-            .equal(Interval::try_new(Float32(Some(0.0)), Float32(Some(0.0)),)?,)?,
-            Interval::CERTAINLY_FALSE
-        );
-        assert_eq!(
-            Interval::try_new(Float32(Some(-1.0)), Float32(Some(-1.0)),)?.equal(
-                Interval::try_new(
-                    next_value(Float32(Some(-1.0))),
-                    next_value(Float32(Some(-1.0))),
-                )?,
-            )?,
-            Interval::CERTAINLY_FALSE
-        );
 
         Ok(())
     }
@@ -2511,6 +2405,24 @@ mod tests {
                 Interval::try_new(Int64(Some(-50_i64)), Int64(Some(500_i64)))?,
             ),
             (
+                Interval::try_new(Int64(Some(i64::MIN)), Int64(Some(i64::MIN)))?,
+                Interval::try_new(Int64(Some(-10)), Int64(Some(-10)))?,
+                Interval::try_new(
+                    Int64(Some(i64::MIN + 10)),
+                    Int64(Some(i64::MIN + 10)),
+                )?,
+            ),
+            (
+                Interval::try_new(Int64(Some(1)), Int64(Some(i64::MAX)))?,
+                Interval::try_new(Int64(Some(i64::MAX)), Int64(Some(i64::MAX)))?,
+                Interval::try_new(Int64(Some(1 - i64::MAX)), Int64(Some(0)))?,
+            ),
+            (
+                Interval::try_new(Int64(Some(i64::MIN)), Int64(Some(i64::MIN)))?,
+                Interval::try_new(Int64(Some(i64::MAX)), Int64(Some(i64::MAX)))?,
+                Interval::try_new(Int64(None), Int64(Some(i64::MIN)))?,
+            ),
+            (
                 Interval::try_new(Float64(Some(100_f64)), Float64(None))?,
                 Interval::try_new(Float64(None), Float64(Some(200_f64)))?,
                 Interval::try_new(Float64(Some(-100_f64)), Float64(None))?,
@@ -2521,40 +2433,22 @@ mod tests {
                 Interval::try_new(Float64(None), Float64(None))?,
             ),
             (
-                Interval::try_new(Float32(Some(f32::MAX)), Float32(Some(f32::MAX)))?,
-                Interval::try_new(Float32(Some(11_f32)), Float32(Some(11_f32)))?,
-                // Since rounding mode is down, the result would be much smaller than f32::MAX
-                // (f32::MAX = 3.4_028_235e38, the result is 3.4_028_233e38)
+                Interval::try_new(Int32(Some(i32::MAX)), Int32(Some(i32::MAX)))?,
+                Interval::try_new(Int32(Some(11)), Int32(Some(11)))?,
                 Interval::try_new(
-                    Float32(Some(340282330000000000000000000000000000000.0)),
-                    Float32(Some(f32::MAX)),
+                    Int32(Some(i32::MAX - 11)),
+                    Int32(Some(i32::MAX - 11)),
                 )?,
             ),
             (
                 Interval::try_new(Float32(Some(f32::MIN)), Float32(Some(f32::MIN)))?,
                 Interval::try_new(Float32(Some(-10_f32)), Float32(Some(10_f32)))?,
+                // Since rounding mode is up, the result would be much larger than f32::MIN
+                // (f32::MIN = -3.4_028_235e38, the result is -3.4_028_233e38)
                 Interval::try_new(
                     Float32(None),
                     Float32(Some(-340282330000000000000000000000000000000.0)),
                 )?,
-            ),
-            (
-                Interval::try_new(Float32(Some(f32::MIN)), Float32(Some(f32::MIN)))?,
-                Interval::try_new(Float32(Some(-10_f32)), Float32(Some(-10_f32)))?,
-                Interval::try_new(
-                    Float32(Some(f32::MIN)),
-                    Float32(Some(-340282330000000000000000000000000000000.0)),
-                )?,
-            ),
-            (
-                Interval::try_new(Float32(Some(1.0)), Float32(Some(f32::MAX)))?,
-                Interval::try_new(Float32(Some(f32::MAX)), Float32(Some(f32::MAX)))?,
-                Interval::try_new(Float32(Some(f32::MIN)), Float32(Some(0.0)))?,
-            ),
-            (
-                Interval::try_new(Float32(Some(f32::MIN)), Float32(Some(f32::MIN)))?,
-                Interval::try_new(Float32(Some(f32::MAX)), Float32(Some(f32::MAX)))?,
-                Interval::try_new(Float32(None), Float32(Some(f32::MIN)))?,
             ),
         ];
         for case in cases {
@@ -2564,8 +2458,6 @@ mod tests {
                     result.lower().is_null() && case.2.lower().is_null()
                         || result.lower().le(case.2.lower())
                 );
-                println!("{:?}", result.upper().is_null());
-                println!("{:?}", case.2.upper().is_null());
                 assert!(
                     result.upper().is_null() && case.2.upper().is_null()
                         || result.upper().ge(case.2.upper(),)
