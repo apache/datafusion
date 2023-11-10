@@ -1087,7 +1087,7 @@ mod tests {
 
         // Repartition should not preserve order, as there is no order to preserve
         let expected_plan = [
-            "SortPreservingRepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
             "  UnionExec",
             "    MemoryExec: partitions=1, partition_sizes=[0]",
             "    MemoryExec: partitions=1, partition_sizes=[0]",
