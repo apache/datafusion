@@ -24,7 +24,6 @@ use arrow::array::*;
 use arrow::buffer::OffsetBuffer;
 use arrow::compute;
 use arrow::datatypes::{DataType, Field, UInt64Type};
-use arrow::row::{RowConverter, SortField};
 use arrow_buffer::NullBuffer;
 
 use datafusion_common::cast::{
@@ -644,42 +643,48 @@ pub fn array_prepend(args: &[ArrayRef]) -> Result<ArrayRef> {
     let res = match arr.value_type() {
         DataType::List(_) => concat_internal(args)?,
         DataType::Null => return make_array(&[element.to_owned()]),
-        dt => {
-            let converter = RowConverter::new(vec![SortField::new(dt.clone())])?;
-            let r_rows = converter.convert_columns(&[element.clone()])?;
+        data_type => {
+            let mut new_values = vec![];
             let mut offsets = vec![0];
-            let mut new_arrays = vec![];
-            for (i, arr) in arr.iter().enumerate() {
-                let mut rows = converter.empty_rows(1, 1);
-                rows.push(r_rows.row(i));
-                if let Some(arr) = arr {
-                    let l_rows = converter.convert_columns(&[arr])?;
-                    for row in l_rows.iter() {
-                        rows.push(row);
-                    }
-                }
-                let last_offset: i32 = match offsets.last().copied() {
-                    Some(offset) => offset,
-                    None => return internal_err!("offsets should not be empty"),
+
+            let elem_data = element.to_data();
+            for (row_index, arr) in arr.iter().enumerate() {
+                let new_array = if let Some(arr) = arr {
+                    let original_data = arr.to_data();
+                    let capacity = Capacities::Array(original_data.len() + 1);
+                    let mut mutable = MutableArrayData::with_capacities(
+                        vec![&original_data, &elem_data],
+                        false,
+                        capacity,
+                    );
+                    mutable.extend(1, row_index, row_index + 1);
+                    mutable.extend(0, 0, original_data.len());
+                    let data = mutable.freeze();
+                    arrow_array::make_array(data)
+                } else {
+                    let capacity = Capacities::Array(1);
+                    let mut mutable = MutableArrayData::with_capacities(
+                        vec![&elem_data],
+                        false,
+                        capacity,
+                    );
+                    mutable.extend(0, row_index, row_index + 1);
+                    let data = mutable.freeze();
+                    arrow_array::make_array(data)
                 };
-                offsets.push(last_offset + rows.num_rows() as i32);
-                let arrays = converter.convert_rows(rows.iter())?;
-                let array = match arrays.get(0) {
-                    Some(array) => array.clone(),
-                    None => {
-                        return internal_err!(
-                            "array_append: failed to get value from rows"
-                        )
-                    }
-                };
-                new_arrays.push(array);
+                offsets.push(offsets[row_index] + new_array.len() as i32);
+                new_values.push(new_array);
             }
-            let field = Arc::new(Field::new("item", dt, true));
-            let offsets = OffsetBuffer::new(offsets.into());
-            let new_arrays_ref =
-                new_arrays.iter().map(|v| v.as_ref()).collect::<Vec<_>>();
-            let values = compute::concat(&new_arrays_ref)?;
-            Arc::new(ListArray::try_new(field, offsets, values, None)?)
+
+            let new_values: Vec<_> = new_values.iter().map(|a| a.as_ref()).collect();
+            let values = arrow::compute::concat(&new_values)?;
+
+            Arc::new(ListArray::try_new(
+                Arc::new(Field::new("item", data_type.to_owned(), true)),
+                OffsetBuffer::new(offsets.into()),
+                values,
+                None,
+            )?)
         }
     };
 
