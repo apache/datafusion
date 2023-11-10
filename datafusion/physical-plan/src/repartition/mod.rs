@@ -16,7 +16,7 @@
 // under the License.
 
 //! [`RepartitionExec`]  operator that maps N input partitions to M output
-//! partitions based on a ! partitioning scheme, optionally maintaining the order
+//! partitions based on a partitioning scheme, optionally maintaining the order
 //! of the input rows in the output.
 
 use std::pin::Pin;
@@ -281,7 +281,8 @@ impl BatchPartitioner {
 ///
 /// # Output Ordering
 ///
-/// The output rows may be reordered compared to the input, unless
+/// If more than one stream is being repartitioned, the output will be some
+/// arbitrary interleaving (and thus unordered) unless
 /// [`Self::with_preserve_order`] specifies otherwise.
 ///
 /// # Footnote
@@ -649,13 +650,14 @@ impl RepartitionExec {
     /// expensive at runtime, so should only be set if the output of this
     /// operator can take advantage of it.
     ///
-    /// If the input is not ordered, or has only one partition, no extra runtime
-    /// is incurred (and this node remains a `RepartitionExec`).
+    /// If the input is not ordered, or has only one partition, this is a no op,
+    /// and the node remains a `RepartitionExec`.
     pub fn with_preserve_order(mut self, preserve_order: bool) -> Self {
         self.preserve_order = preserve_order &&
                 // If the input isn't ordered, there is no ordering to preserve
                 self.input.output_ordering().is_some() &&
-                // if there is only one input partition, merging is required to maintain order
+                // if there is only one input partition, merging is not required
+                // to maintain order
                 self.input.output_partitioning().partition_count() > 1;
         self
     }
