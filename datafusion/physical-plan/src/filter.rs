@@ -199,6 +199,8 @@ impl ExecutionPlan for FilterExec {
         if !check_support(predicate, &schema) {
             // assume worst case, that the filter is highly unselective and
             // returns all the rows from its input
+            // tracking issue for making this configurable:
+            // https://github.com/apache/arrow-datafusion/issues/8133
             return Ok(input_stats.clone().into_inexact());
         }
 
