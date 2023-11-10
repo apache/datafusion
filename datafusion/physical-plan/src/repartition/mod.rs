@@ -24,21 +24,6 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::{any::Any, vec};
 
-use arrow::array::{ArrayRef, UInt64Builder};
-use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
-use futures::stream::Stream;
-use futures::{FutureExt, StreamExt};
-use hashbrown::HashMap;
-use log::trace;
-use parking_lot::Mutex;
-use tokio::task::JoinHandle;
-
-use datafusion_common::{not_impl_err, DataFusionError, Result};
-use datafusion_execution::memory_pool::MemoryConsumer;
-use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
-
 use crate::common::transpose;
 use crate::hash_utils::create_hashes;
 use crate::metrics::BaselineMetrics;
@@ -46,12 +31,27 @@ use crate::repartition::distributor_channels::{channels, partition_aware_channel
 use crate::sorts::streaming_merge;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning, Statistics};
 
+use self::distributor_channels::{DistributionReceiver, DistributionSender};
+
 use super::common::{AbortOnDropMany, AbortOnDropSingle, SharedMemoryReservation};
 use super::expressions::PhysicalSortExpr;
 use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream};
 
-use self::distributor_channels::{DistributionReceiver, DistributionSender};
+use arrow::array::{ArrayRef, UInt64Builder};
+use arrow::datatypes::SchemaRef;
+use arrow::record_batch::RecordBatch;
+use datafusion_common::{not_impl_err, DataFusionError, Result};
+use datafusion_execution::memory_pool::MemoryConsumer;
+use datafusion_execution::TaskContext;
+use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
+
+use futures::stream::Stream;
+use futures::{FutureExt, StreamExt};
+use hashbrown::HashMap;
+use log::trace;
+use parking_lot::Mutex;
+use tokio::task::JoinHandle;
 
 mod distributor_channels;
 
@@ -916,19 +916,7 @@ impl RecordBatchStream for PerPartitionStream {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-
-    use arrow::array::{ArrayRef, StringArray};
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::record_batch::RecordBatch;
-    use arrow_array::UInt32Array;
-    use futures::FutureExt;
-    use tokio::task::JoinHandle;
-
-    use datafusion_common::cast::as_string_array;
-    use datafusion_common::{assert_batches_sorted_eq, exec_err};
-    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
-
+    use super::*;
     use crate::{
         test::{
             assert_is_pending,
@@ -939,8 +927,16 @@ mod tests {
         },
         {collect, expressions::col, memory::MemoryExec},
     };
-
-    use super::*;
+    use arrow::array::{ArrayRef, StringArray};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
+    use arrow_array::UInt32Array;
+    use datafusion_common::cast::as_string_array;
+    use datafusion_common::{assert_batches_sorted_eq, exec_err};
+    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+    use futures::FutureExt;
+    use std::collections::HashSet;
+    use tokio::task::JoinHandle;
 
     #[tokio::test]
     async fn one_to_many_round_robin() -> Result<()> {
