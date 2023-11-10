@@ -199,13 +199,7 @@ impl ExecutionPlan for FilterExec {
         if !check_support(predicate, &schema) {
             // assume worst case, that the filter is highly selective and
             // returns all the rows from its input
-            let mut stats = input_stats.clone();
-            stats.num_rows = match stats.num_rows {
-                Precision::Exact(n) => Precision::Inexact(n),
-                Precision::Inexact(n) => Precision::Inexact(n),
-                Precision::Absent => Precision::Absent,
-            };
-            return Ok(stats);
+            return Ok(input_stats.clone().into_inexact());
         }
 
         let num_rows = input_stats.num_rows;
