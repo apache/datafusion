@@ -610,6 +610,35 @@ pub fn to_substrait_agg_measure(
                 }
             })
         }
+        Expr::AggregateUDF(expr::AggregateUDF{ fun, args, filter, order_by }) =>{
+            let sorts = if let Some(order_by) = order_by {
+                order_by.iter().map(|expr| to_substrait_sort_field(expr, schema, extension_info)).collect::<Result<Vec<_>>>()?
+            } else {
+                vec![]
+            };
+            let mut arguments: Vec<FunctionArgument> = vec![];
+            for arg in args {
+                arguments.push(FunctionArgument { arg_type: Some(ArgType::Value(to_substrait_rex(arg, schema, 0, extension_info)?)) });
+            }
+            let function_name = fun.name.to_lowercase();
+            let function_anchor = _register_function(function_name, extension_info);
+            Ok(Measure {
+                measure: Some(AggregateFunction {
+                    function_reference: function_anchor,
+                    arguments,
+                    sorts,
+                    output_type: None,
+                    invocation: AggregationInvocation::All as i32,
+                    phase: AggregationPhase::Unspecified as i32,
+                    args: vec![],
+                    options: vec![],
+                }),
+                filter: match filter {
+                    Some(f) => Some(to_substrait_rex(f, schema, 0, extension_info)?),
+                    None => None
+                }
+            })
+        },
         Expr::Alias(Alias{expr,..})=> {
             to_substrait_agg_measure(expr, schema, extension_info)
         }
