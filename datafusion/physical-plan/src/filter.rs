@@ -196,7 +196,9 @@ impl ExecutionPlan for FilterExec {
 
         let schema = self.schema();
         if !check_support(predicate, &schema) {
-            return Ok(Statistics::new_unknown(&schema));
+            // assume worst case, that the filter is highly selective and
+            // returns all the rows from its input
+            return self.input.statistics();
         }
         let input_stats = self.input.statistics()?;
 
