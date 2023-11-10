@@ -553,11 +553,55 @@ pub fn uuid(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     Ok(ColumnarValue::Array(Arc::new(array)))
 }
 
+/// OVERLAY(string1 PLACING string2 FROM integer FOR integer2)
+/// Replaces a substring of string1 with string2 starting at the integer bit
+/// pgsql overlay('Txxxxas' placing 'hom' from 2 for 4) → Thomas
+/// datafusion overlay('Txxxxas', 'hom', 2, 4) -> Thomas
+pub fn overlay<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let string_array = as_generic_string_array::<T>(&args[0])?;
+    let characters_array = as_generic_string_array::<T>(&args[1])?;
+    let pos_num = as_int64_array(&args[2])?;
+    let len_num = as_int64_array(&args[3])?;
+
+    let result = string_array
+        .iter()
+        .zip(characters_array.iter())
+        .zip(pos_num.iter())
+        .zip(len_num.iter())
+        .map(|(((string, characters), start_pos), len)| {
+            match (string, characters, start_pos, len) {
+                (Some(string), Some(characters), Some(start_pos), Some(len)) => {
+                    let string_len = string.chars().count();
+                    let characters_len = characters.chars().count();
+                    let replace_len = len.min(string_len as i64);
+                    let mut res = String::with_capacity(string_len.max(characters_len));
+
+                    //as sql replace index start from 1 while string index start from 0
+                    if start_pos > 1 && start_pos - 1 < string_len as i64 {
+                        let start = (start_pos - 1) as usize;
+                        res.push_str(&string[..start]);
+                    }
+                    res.push_str(characters);
+                    // if start + replace_len - 1 >= string_length, just to string end
+                    if start_pos + replace_len - 1 < string_len as i64 {
+                        let end = (start_pos + replace_len - 1) as usize;
+                        res.push_str(&string[end..]);
+                    }
+                    Ok(Some(res))
+                }
+                _ => Ok(None),
+            }
+        })
+        .collect::<Result<GenericStringArray<T>>>()?;
+    Ok(Arc::new(result) as ArrayRef)
+}
+
 #[cfg(test)]
 mod tests {
 
     use crate::string_expressions;
     use arrow::{array::Int32Array, datatypes::Int32Type};
+    use arrow_array::Int64Array;
 
     use super::*;
 
@@ -596,6 +640,23 @@ mod tests {
         let hex_value = as_string_array(&hex_value_arc)?;
         let expected = StringArray::from(vec![Some("ffffffffffffffff")]);
         assert_eq!(&expected, hex_value);
+
+        Ok(())
+    }
+
+    #[test]
+    fn to_overlay() -> Result<()> {
+        let string =
+            Arc::new(StringArray::from(vec!["123", "abcdefg", "xyz", "Txxxxas"]));
+        let replace_string =
+            Arc::new(StringArray::from(vec!["abc", "qwertyasdfg", "ijk", "hom"]));
+        let start = Arc::new(Int64Array::from(vec![4, 1, 1, 2])); // start
+        let end = Arc::new(Int64Array::from(vec![5, 7, 2, 4])); // replace len
+
+        let res = overlay::<i32>(&[string, replace_string, start, end]).unwrap();
+        let result = as_generic_string_array::<i32>(&res).unwrap();
+        let expected = StringArray::from(vec!["abc", "qwertyasdfg", "ijkz", "Thomas"]);
+        assert_eq!(&expected, result);
 
         Ok(())
     }

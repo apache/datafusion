@@ -21019,6 +21019,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "ArrayPopBack" => Ok(ScalarFunction::ArrayPopBack),
                     "StringToArray" => Ok(ScalarFunction::StringToArray),
                     "ToTimestampNanos" => Ok(ScalarFunction::ToTimestampNanos),
+                    "OverLay" => OK(ScalaFunction::OverLay),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }

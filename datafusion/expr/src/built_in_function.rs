@@ -288,6 +288,8 @@ pub enum BuiltinScalarFunction {
     RegexpMatch,
     /// arrow_typeof
     ArrowTypeof,
+    /// overlay
+    OverLay,
 }
 
 /// Maps the sql function name to `BuiltinScalarFunction`
@@ -449,6 +451,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Struct => Volatility::Immutable,
             BuiltinScalarFunction::FromUnixtime => Volatility::Immutable,
             BuiltinScalarFunction::ArrowTypeof => Volatility::Immutable,
+            BuiltinScalarFunction::OverLay => Volatility::Immutable,
 
             // Stable builtin functions
             BuiltinScalarFunction::Now => Volatility::Stable,
@@ -803,6 +806,10 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrowTypeof => Ok(Utf8),
 
             BuiltinScalarFunction::Abs => Ok(input_expr_types[0].clone()),
+
+            BuiltinScalarFunction::OverLay => {
+                utf8_to_str_type(&input_expr_types[0], "overlay")
+            }
 
             BuiltinScalarFunction::Acos
             | BuiltinScalarFunction::Asin
@@ -1248,7 +1255,13 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::ArrowTypeof => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::Abs => Signature::any(1, self.volatility()),
-
+            BuiltinScalarFunction::OverLay => Signature::one_of(
+                vec![
+                    Exact(vec![Utf8, Utf8, Int64, Int64]),
+                    Exact(vec![LargeUtf8, LargeUtf8, Int64, Int64]),
+                ],
+                self.volatility(),
+            ),
             BuiltinScalarFunction::Acos
             | BuiltinScalarFunction::Asin
             | BuiltinScalarFunction::Atan
@@ -1505,6 +1518,7 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
         ],
         BuiltinScalarFunction::Cardinality => &["cardinality"],
         BuiltinScalarFunction::MakeArray => &["make_array", "make_list"],
+        BuiltinScalarFunction::OverLay => &["overlay"],
 
         // struct functions
         BuiltinScalarFunction::Struct => &["struct"],

@@ -927,6 +927,17 @@ pub fn create_physical_fun(
         }),
         BuiltinScalarFunction::Upper => Arc::new(string_expressions::upper),
         BuiltinScalarFunction::Uuid => Arc::new(string_expressions::uuid),
+        BuiltinScalarFunction::OverLay => Arc::new(|args| match args[0].data_type() {
+            DataType::Utf8 => {
+                make_scalar_function(string_expressions::overlay::<i32>)(args)
+            }
+            DataType::LargeUtf8 => {
+                make_scalar_function(string_expressions::overlay::<i64>)(args)
+            }
+            other => Err(DataFusionError::Internal(format!(
+                "Unsupported data type {other:?} for function overlay",
+            ))),
+        }),
         _ => {
             return internal_err!(
                 "create_physical_fun: Unsupported scalar function {fun:?}"
