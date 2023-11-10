@@ -15,14 +15,29 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! The repartition operator maps N input partitions to M output partitions based on a
-//! partitioning scheme (according to flag `preserve_order` ordering can be preserved during
-//! repartitioning if its input is ordered).
+//! [`RepartitionExec`]  operator that maps N input partitions to M output
+//! partitions based on a ! partitioning scheme, optionally maintaining the order
+//! of the input rows in the output.
 
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::{any::Any, vec};
+
+use arrow::array::{ArrayRef, UInt64Builder};
+use arrow::datatypes::SchemaRef;
+use arrow::record_batch::RecordBatch;
+use futures::stream::Stream;
+use futures::{FutureExt, StreamExt};
+use hashbrown::HashMap;
+use log::trace;
+use parking_lot::Mutex;
+use tokio::task::JoinHandle;
+
+use datafusion_common::{not_impl_err, DataFusionError, Result};
+use datafusion_execution::memory_pool::MemoryConsumer;
+use datafusion_execution::TaskContext;
+use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 
 use crate::common::transpose;
 use crate::hash_utils::create_hashes;
@@ -31,27 +46,12 @@ use crate::repartition::distributor_channels::{channels, partition_aware_channel
 use crate::sorts::streaming_merge;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning, Statistics};
 
-use self::distributor_channels::{DistributionReceiver, DistributionSender};
-
 use super::common::{AbortOnDropMany, AbortOnDropSingle, SharedMemoryReservation};
 use super::expressions::PhysicalSortExpr;
 use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream};
 
-use arrow::array::{ArrayRef, UInt64Builder};
-use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
-use datafusion_common::{not_impl_err, DataFusionError, Result};
-use datafusion_execution::memory_pool::MemoryConsumer;
-use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
-
-use futures::stream::Stream;
-use futures::{FutureExt, StreamExt};
-use hashbrown::HashMap;
-use log::trace;
-use parking_lot::Mutex;
-use tokio::task::JoinHandle;
+use self::distributor_channels::{DistributionReceiver, DistributionSender};
 
 mod distributor_channels;
 
@@ -281,8 +281,8 @@ impl BatchPartitioner {
 ///
 /// # Output Ordering
 ///
-/// No guarantees are made about the order of the resulting
-/// partitions unless `preserve_order` is set.
+/// The output rows may be reordered compared to the input, unless
+/// [`Self::with_preserve_order`] specifies otherwise.
 ///
 /// # Footnote
 ///
@@ -644,10 +644,13 @@ impl RepartitionExec {
         })
     }
 
-
-    /// Set Order preserving flag, which controlls if this node is
-    /// `RepartitionExec` or `SortPreservingRepartitionExec`. If the input is
-    /// not ordered, or has only one partiton, remains a `RepartitionExec`.
+    /// Specify if this reparititoning operation should preserve the order of
+    /// rows from its input when producing output. Preserving order is more
+    /// expensive at runtime, so should only be set if the output of this
+    /// operator can take advantage of it.
+    ///
+    /// If the input is not ordered, or has only one partition, no extra runtime
+    /// is incurred (and this node remains a `RepartitionExec`).
     pub fn with_preserve_order(mut self, preserve_order: bool) -> Self {
         self.preserve_order = preserve_order &&
                 // If the input isn't ordered, there is no ordering to preserve
@@ -913,7 +916,19 @@ impl RecordBatchStream for PerPartitionStream {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::collections::HashSet;
+
+    use arrow::array::{ArrayRef, StringArray};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
+    use arrow_array::UInt32Array;
+    use futures::FutureExt;
+    use tokio::task::JoinHandle;
+
+    use datafusion_common::cast::as_string_array;
+    use datafusion_common::{assert_batches_sorted_eq, exec_err};
+    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+
     use crate::{
         test::{
             assert_is_pending,
@@ -924,16 +939,8 @@ mod tests {
         },
         {collect, expressions::col, memory::MemoryExec},
     };
-    use arrow::array::{ArrayRef, StringArray};
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::record_batch::RecordBatch;
-    use arrow_array::UInt32Array;
-    use datafusion_common::cast::as_string_array;
-    use datafusion_common::{assert_batches_sorted_eq, exec_err};
-    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
-    use futures::FutureExt;
-    use std::collections::HashSet;
-    use tokio::task::JoinHandle;
+
+    use super::*;
 
     #[tokio::test]
     async fn one_to_many_round_robin() -> Result<()> {
