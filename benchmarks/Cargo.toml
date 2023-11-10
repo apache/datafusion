@@ -41,7 +41,7 @@ futures = { workspace = true }
 log = { workspace = true }
 mimalloc = { version = "0.1", optional = true, default-features = false }
 num_cpus = { workspace = true }
-parquet = { workspace = true }
+parquet = { workspace = true, default-features = true }
 serde = { version = "1.0.136", features = ["derive"] }
 serde_json = { workspace = true }
 snmalloc-rs = { version = "0.3", optional = true }

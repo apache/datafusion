@@ -70,7 +70,11 @@ pub async fn get_statistics_with_limit(
         // files. This only applies when we know the number of rows. It also
         // currently ignores tables that have no statistics regarding the
         // number of rows.
-        if num_rows.get_value().unwrap_or(&usize::MIN) <= &limit.unwrap_or(usize::MAX) {
+        let conservative_num_rows = match num_rows {
+            Precision::Exact(nr) => nr,
+            _ => usize::MIN,
+        };
+        if conservative_num_rows <= limit.unwrap_or(usize::MAX) {
             while let Some(current) = all_files.next().await {
                 let (file, file_stats) = current?;
                 result_files.push(file);
