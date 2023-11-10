@@ -964,21 +964,21 @@ impl serde::Serialize for AliasNode {
         if self.expr.is_some() {
             len += 1;
         }
-        if !self.relation.is_empty() {
+        if !self.alias.is_empty() {
             len += 1;
         }
-        if !self.alias.is_empty() {
+        if !self.relation.is_empty() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.AliasNode", len)?;
         if let Some(v) = self.expr.as_ref() {
             struct_ser.serialize_field("expr", v)?;
         }
-        if !self.relation.is_empty() {
-            struct_ser.serialize_field("relation", &self.relation)?;
-        }
         if !self.alias.is_empty() {
             struct_ser.serialize_field("alias", &self.alias)?;
+        }
+        if !self.relation.is_empty() {
+            struct_ser.serialize_field("relation", &self.relation)?;
         }
         struct_ser.end()
     }
@@ -991,15 +991,15 @@ impl<'de> serde::Deserialize<'de> for AliasNode {
     {
         const FIELDS: &[&str] = &[
             "expr",
-            "relation",
             "alias",
+            "relation",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Expr,
-            Relation,
             Alias,
+            Relation,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -1022,8 +1022,8 @@ impl<'de> serde::Deserialize<'de> for AliasNode {
                     {
                         match value {
                             "expr" => Ok(GeneratedField::Expr),
-                            "relation" => Ok(GeneratedField::Relation),
                             "alias" => Ok(GeneratedField::Alias),
+                            "relation" => Ok(GeneratedField::Relation),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -1044,8 +1044,8 @@ impl<'de> serde::Deserialize<'de> for AliasNode {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut expr__ = None;
-                let mut relation__ = None;
                 let mut alias__ = None;
+                let mut relation__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Expr => {
@@ -1054,24 +1054,24 @@ impl<'de> serde::Deserialize<'de> for AliasNode {
                             }
                             expr__ = map_.next_value()?;
                         }
-                        GeneratedField::Relation => {
-                            if relation__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("relation"));
-                            }
-                            relation__ = Some(map_.next_value()?);
-                        }
                         GeneratedField::Alias => {
                             if alias__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("alias"));
                             }
                             alias__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::Relation => {
+                            if relation__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("relation"));
+                            }
+                            relation__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(AliasNode {
                     expr: expr__,
-                    relation: relation__.unwrap_or_default(),
                     alias: alias__.unwrap_or_default(),
+                    relation: relation__.unwrap_or_default(),
                 })
             }
         }

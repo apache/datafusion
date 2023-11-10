@@ -760,10 +760,10 @@ pub struct Not {
 pub struct AliasNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub expr: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
-    #[prost(message, repeated, tag = "2")]
-    pub relation: ::prost::alloc::vec::Vec<OwnedTableReference>,
-    #[prost(string, tag = "3")]
+    #[prost(string, tag = "2")]
     pub alias: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag = "3")]
+    pub relation: ::prost::alloc::vec::Vec<OwnedTableReference>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
