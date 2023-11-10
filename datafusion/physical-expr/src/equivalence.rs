@@ -1248,7 +1248,7 @@ impl EquivalenceProperties {
     fn calc_ordered_exprs(
         &self,
         mapping: &ProjectionMapping,
-    ) -> Vec<Vec<PhysicalSortExpr>> {
+    ) -> Vec<(Vec<PhysicalSortExpr>, bool)> {
         let mut new_orderings = vec![];
         let leading_orderings = self.get_leading_orderings(&self.constants);
         for (source, target) in mapping.iter() {
@@ -1272,6 +1272,7 @@ impl EquivalenceProperties {
                     options,
                 };
                 let new_ordering = vec![sort_expr.clone()];
+                let mut is_end = false;
                 if let Some(leaf_orderings) =
                     expr_ordering.leaf_orderings(&leading_orderings)
                 {
@@ -1290,12 +1291,14 @@ impl EquivalenceProperties {
                                 new_ordering.extend(suffix);
                                 let new_ordering =
                                     collapse_lex_ordering(new_ordering, &self.constants);
-                                if !new_orderings.contains(&new_ordering) {
-                                    new_orderings.push(new_ordering);
+                                if !new_orderings
+                                    .contains(&(new_ordering.clone(), is_end))
+                                {
+                                    new_orderings.push((new_ordering, is_end));
                                 }
                             }
-                            // new_ordering.extend(projected_leaf_orderings);
                         } else {
+                            is_end = true;
                             if PRINT_ON {
                                 println!(
                                     "send stop signal, expr_ordering: {:?}",
@@ -1305,6 +1308,7 @@ impl EquivalenceProperties {
                             // TODO: send stop signal.
                         }
                     } else {
+                        is_end = true;
                         if PRINT_ON {
                             println!(
                                 "send stop signal, expr_ordering: {:?}",
@@ -1315,8 +1319,8 @@ impl EquivalenceProperties {
                     }
                 }
                 let new_ordering = collapse_lex_ordering(new_ordering, &self.constants);
-                if !new_orderings.contains(&new_ordering) {
-                    new_orderings.push(new_ordering);
+                if !new_orderings.contains(&(new_ordering.clone(), is_end)) {
+                    new_orderings.push((new_ordering, is_end));
                 }
             }
         }
@@ -1324,8 +1328,8 @@ impl EquivalenceProperties {
             if let Some(projected_leading_ordering) =
                 self.project_ordering_helper(mapping, &[leading_ordering])
             {
-                if !new_orderings.contains(&projected_leading_ordering) {
-                    new_orderings.push(projected_leading_ordering);
+                if !new_orderings.contains(&(projected_leading_ordering.clone(), false)) {
+                    new_orderings.push((projected_leading_ordering, false));
                 }
             }
         }
@@ -1334,7 +1338,7 @@ impl EquivalenceProperties {
                 println!("new_ordering: {new_ordering:?}");
             }
         }
-        new_orderings.retain(|ordering| !ordering.is_empty());
+        new_orderings.retain(|(ordering, _is_end)| !ordering.is_empty());
         new_orderings
     }
 
@@ -1350,7 +1354,8 @@ impl EquivalenceProperties {
         // is [a ASC, b ASC, c ASC], and column b is not valid after projection,
         // the result should be [a ASC], not [a ASC, c ASC], even if column c is
         // valid after projection.
-        let mut orderings = vec![vec![]];
+        let mut orderings: Vec<(LexOrdering, bool)> = vec![(vec![], false)];
+        let mut completed_orderings_holder: Vec<LexOrdering> = vec![];
         for sort_expr in ordering.iter() {
             let new_orderings = self.calc_ordered_exprs(mapping);
             let mut projected_constants = if let Some(projected_constants) = self
@@ -1385,11 +1390,12 @@ impl EquivalenceProperties {
                 let relevant_indices = orderings
                     .iter()
                     .enumerate()
-                    .flat_map(|(idx, ordering)| {
+                    .flat_map(|(idx, (ordering, is_end))| {
                         if ordering_consists_of_ignored_exprs(
                             &projected_constants,
                             ordering,
-                        ) {
+                        ) && !*is_end
+                        {
                             Some(idx)
                         } else {
                             None
@@ -1410,8 +1416,9 @@ impl EquivalenceProperties {
 
                 for (iter_idx, ordering_idx) in new_indices.into_iter().enumerate() {
                     let mod_idx = iter_idx % new_orderings.len();
-                    let new_ordering = &new_orderings[mod_idx];
-                    orderings[ordering_idx].extend(new_ordering.to_vec());
+                    let (new_ordering, is_end) = &new_orderings[mod_idx];
+                    orderings[ordering_idx].0.extend(new_ordering.to_vec());
+                    orderings[ordering_idx].1 = *is_end;
                 }
             }
             self = self.add_constants(std::iter::once(sort_expr.expr.clone()));
@@ -1420,18 +1427,49 @@ impl EquivalenceProperties {
                     println!("updated ordering: {ordering:?}");
                 }
             }
-            orderings = orderings
+            if PRINT_ON {
+                println!("orderings:{:?}", orderings);
+            }
+            let (completed_orderings, continuing_orderings): (Vec<_>, Vec<_>) = orderings
+                .into_iter()
+                .partition(|(_ordering, is_end)| *is_end);
+            let continuing_orderings = continuing_orderings
+                .into_iter()
+                .map(|(ordering, _is_end)| ordering)
+                .collect::<Vec<_>>();
+            let completed_orderings = completed_orderings
+                .into_iter()
+                .map(|(ordering, _is_end)| ordering)
+                .collect::<Vec<_>>();
+            if PRINT_ON {
+                println!("continuing_orderings:{:?}", continuing_orderings);
+                println!("completed_orderings:{:?}", completed_orderings);
+            }
+            completed_orderings_holder.extend(completed_orderings);
+            let continuing_orderings = continuing_orderings
                 .into_iter()
                 .map(|ordering| self.eq_group.normalize_sort_exprs(&ordering))
                 .collect();
-            let oeq_class = OrderingEquivalenceClass::new(orderings);
-            orderings = oeq_class.orderings;
+            let oeq_class = OrderingEquivalenceClass::new(continuing_orderings);
+            orderings = oeq_class
+                .orderings
+                .into_iter()
+                .map(|ordering| (ordering, false))
+                .collect::<_>();
             if PRINT_ON {
                 for ordering in &orderings {
                     println!("updated ordering2: {ordering:?}");
                 }
             }
         }
+        let mut orderings = orderings
+            .into_iter()
+            .map(|(ordering, _is_end)| ordering)
+            .collect::<Vec<_>>();
+        orderings.extend(completed_orderings_holder);
+        let oeq_class = OrderingEquivalenceClass::new(orderings);
+        orderings = oeq_class.orderings;
+
         let leading_ordering_exprs = orderings
             .iter()
             .flat_map(|ordering| ordering.first().map(|sort_expr| sort_expr.expr.clone()))
