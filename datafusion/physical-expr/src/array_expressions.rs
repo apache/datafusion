@@ -1085,21 +1085,21 @@ pub fn array_positions(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(res)
 }
 
-/// For each element of `list_array[i]`, replaces up to `arr_n[i]`  occurences
-/// of `from_array[i]`, `to_array[i]`.
+/// For each element of `list_array[i]`, removed up to `arr_n[i]`  occurences
+/// of `element_array[i]`.
 ///
 /// The type of each **element** in `list_array` must be the same as the type of
-/// `from_array` and `to_array`. This function also handles nested arrays
+/// `element_array`. This function also handles nested arrays
 /// ([`ListArray`] of [`ListArray`]s)
 ///
-/// For example, whn called  to replace a list array (where each element is a
-/// list of int32s, the second and third argument are int32 arrays, and the
-/// fourth argument is the number of occurrences to replace
+/// For example, when called to remove a list array (where each element is a
+/// list of int32s, the second argument are int32 arrays, and the
+/// third argument is the number of occurrences to remove
 ///
 /// ```text
-/// general_replace(
-///   [1, 2, 3, 2], 2, 10, 1    ==> [1, 10, 3, 2]   (only the first 2 is replaced)
-///   [4, 5, 6, 5], 5, 20, 2    ==> [4, 20, 6, 20]  (both 5s are replaced)
+/// general_remove(
+///   [1, 2, 3, 2], 2, 1    ==> [1, 3, 2]   (only the first 2 is removed)
+///   [4, 5, 6, 5], 5, 2    ==> [4, 6]  (both 5s are removed)
 /// )
 /// ```
 fn general_remove(
@@ -1137,7 +1137,7 @@ fn general_remove(
 
                         list_array_row_inner
                             .iter()
-                            // compare  element by element the current row of list_array
+                            // compare element by element the current row of list_array
                             .map(|row| row.map(|row| row.ne(&element_array_row_inner)))
                             .collect::<BooleanArray>()
                     }
