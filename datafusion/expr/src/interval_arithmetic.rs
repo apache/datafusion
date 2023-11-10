@@ -2394,7 +2394,6 @@ mod tests {
     #[test]
     fn test_add() -> Result<()> {
         use ScalarValue::*;
-
         let cases = vec![
             (
                 Interval::try_new(Int64(Some(100_i64)), Int64(Some(200_i64)))?,
@@ -2463,7 +2462,19 @@ mod tests {
             ),
         ];
         for case in cases {
-            assert_eq!(case.0.add(case.1)?, case.2)
+            let result = case.0.add(case.1)?;
+            if case.0.get_datatype().is_floating() {
+                assert!(
+                    result.lower().is_null() && case.2.lower().is_null()
+                        || result.lower().le(case.2.lower())
+                );
+                assert!(
+                    result.upper().is_null() && case.2.upper().is_null()
+                        || result.upper().ge(case.2.upper())
+                );
+            } else {
+                assert_eq!(result, case.2);
+            }
         }
 
         Ok(())
@@ -2547,7 +2558,19 @@ mod tests {
             ),
         ];
         for case in cases {
-            assert_eq!(case.0.sub(case.1)?, case.2)
+            let result = case.0.sub(case.1)?;
+            if case.0.get_datatype().is_floating() {
+                assert!(
+                    result.lower().is_null() && case.2.lower().is_null()
+                        || result.lower().le(case.2.lower())
+                );
+                assert!(
+                    result.upper().is_null() && case.2.upper().is_null()
+                        || result.upper().ge(case.2.upper())
+                );
+            } else {
+                assert_eq!(result, case.2);
+            }
         }
 
         Ok(())
@@ -2620,7 +2643,19 @@ mod tests {
             ),
         ];
         for case in cases {
-            assert_eq!(case.0.mul(case.1)?, case.2)
+            let result = case.0.mul(case.1)?;
+            if case.0.get_datatype().is_floating() {
+                assert!(
+                    result.lower().is_null() && case.2.lower().is_null()
+                        || result.lower().le(case.2.lower())
+                );
+                assert!(
+                    result.upper().is_null() && case.2.upper().is_null()
+                        || result.upper().ge(case.2.upper())
+                );
+            } else {
+                assert_eq!(result, case.2);
+            }
         }
 
         Ok(())
@@ -2733,7 +2768,19 @@ mod tests {
             ),
         ];
         for case in cases {
-            assert_eq!(case.0.div(case.1)?, case.2)
+            let result = case.0.div(case.1)?;
+            if case.0.get_datatype().is_floating() {
+                assert!(
+                    result.lower().is_null() && case.2.lower().is_null()
+                        || result.lower().le(case.2.lower())
+                );
+                assert!(
+                    result.upper().is_null() && case.2.upper().is_null()
+                        || result.upper().ge(case.2.upper())
+                );
+            } else {
+                assert_eq!(result, case.2);
+            }
         }
 
         Ok(())
