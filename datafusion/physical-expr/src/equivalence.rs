@@ -176,7 +176,7 @@ impl ProjectionMapping {
     ///
     /// # Returns
     ///
-    /// An `Option` containing the projected lexicorgraphical ordering requirement.
+    /// An `Option` containing the projected lexicographical ordering requirement.
     /// If any of the given requirements is absent in the mapping, returns `None`.
     pub fn project_lex_reqs(&self, lex_req: LexRequirementRef) -> Option<LexRequirement> {
         lex_req

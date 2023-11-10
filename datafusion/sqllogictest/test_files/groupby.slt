@@ -3861,7 +3861,7 @@ LOCATION '../core/tests/data/timestamps.csv'
 query TT
 EXPLAIN SELECT date_bin('15 minutes', ts) as time_chunks
   FROM csv_with_timestamps
-  GROUP BY (date_bin('15 minutes', ts))
+  GROUP BY date_bin('15 minutes', ts)
   ORDER BY time_chunks DESC
   LIMIT 5
 ----
@@ -3885,7 +3885,7 @@ GlobalLimitExec: skip=0, fetch=5
 query P
 SELECT date_bin('15 minutes', ts) as time_chunks
   FROM csv_with_timestamps
-  GROUP BY (date_bin('15 minutes', ts))
+  GROUP BY date_bin('15 minutes', ts)
   ORDER BY time_chunks DESC
   LIMIT 5
 ----
