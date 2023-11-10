@@ -952,27 +952,17 @@ impl OneSideHashJoiner {
         Ok(())
     }
 
-    /// Prunes the internal buffer.
-    ///
-    /// Argument `probe_batch` is used to update the intervals of the sorted
-    /// filter expressions. The updated build interval determines the new length
-    /// of the build side. If there are rows to prune, they are removed from the
-    /// internal buffer.
+    /// Calculate_prune_length.
     ///
     /// # Arguments
     ///
-    /// * `schema` - The schema of the final output record batch
-    /// * `probe_batch` - Incoming RecordBatch of the probe side.
+    /// * `build_side_sorted_filter_expr` - Build side mutable sorted filter expression..
     /// * `probe_side_sorted_filter_expr` - Probe side mutable sorted filter expression.
-    /// * `join_type` - The type of join (e.g. inner, left, right, etc.).
-    /// * `column_indices` - A vector of column indices that specifies which columns from the
-    ///     build side should be included in the output.
     /// * `graph` - A mutable reference to the physical expression graph.
     ///
     /// # Returns
     ///
-    /// If there are rows to prune, returns the pruned build side record batch wrapped in an `Ok` variant.
-    /// Otherwise, returns `Ok(None)`.
+    /// A Result object that contains the pruning length.
     pub(crate) fn calculate_prune_length_with_probe_batch(
         &mut self,
         build_side_sorted_filter_expr: &mut SortedFilterExpr,
