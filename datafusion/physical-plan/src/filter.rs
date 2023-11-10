@@ -197,7 +197,7 @@ impl ExecutionPlan for FilterExec {
         let input_stats = self.input.statistics()?;
         let schema = self.schema();
         if !check_support(predicate, &schema) {
-            // assume worst case, that the filter is highly selective and
+            // assume worst case, that the filter is highly unselective and
             // returns all the rows from its input
             return Ok(input_stats.clone().into_inexact());
         }
