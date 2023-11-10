@@ -73,6 +73,11 @@ impl CastExpr {
     pub fn cast_type(&self) -> &DataType {
         &self.cast_type
     }
+
+    /// The cast options
+    pub fn cast_options(&self) -> &CastOptions<'static> {
+        &self.cast_options
+    }
 }
 
 impl fmt::Display for CastExpr {

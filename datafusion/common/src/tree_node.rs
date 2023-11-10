@@ -125,6 +125,17 @@ pub trait TreeNode: Sized {
         after_op.map_children(|node| node.transform_down(op))
     }
 
+    /// Convenience utils for writing optimizers rule: recursively apply the given 'op' to the node and all of its
+    /// children(Preorder Traversal) using a mutable function, `F`.
+    /// When the `op` does not apply to a given node, it is left unchanged.
+    fn transform_down_mut<F>(self, op: &mut F) -> Result<Self>
+    where
+        F: FnMut(Self) -> Result<Transformed<Self>>,
+    {
+        let after_op = op(self)?.into();
+        after_op.map_children(|node| node.transform_down_mut(op))
+    }
+
     /// Convenience utils for writing optimizers rule: recursively apply the given 'op' first to all of its
     /// children and then itself(Postorder Traversal).
     /// When the `op` does not apply to a given node, it is left unchanged.

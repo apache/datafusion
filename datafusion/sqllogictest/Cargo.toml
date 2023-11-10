@@ -46,7 +46,7 @@ object_store = { workspace = true }
 postgres-protocol = { version = "0.6.4", optional = true }
 postgres-types = { version = "0.2.4", optional = true }
 rust_decimal = { version = "1.27.0" }
-sqllogictest = "0.17.0"
+sqllogictest = "0.18.0"
 sqlparser = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }

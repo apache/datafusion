@@ -325,6 +325,11 @@ impl SymmetricHashJoinExec {
         self.null_equals_null
     }
 
+    /// Get partition mode
+    pub fn partition_mode(&self) -> StreamJoinPartitionMode {
+        self.mode
+    }
+
     /// Check if order information covers every column in the filter expression.
     pub fn check_if_order_information_available(&self) -> Result<bool> {
         if let Some(filter) = self.filter() {
