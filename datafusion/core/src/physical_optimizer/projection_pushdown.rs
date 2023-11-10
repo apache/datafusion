@@ -817,35 +817,25 @@ fn update_expr(
                 Ok(Transformed::Yes(projected_exprs[column.index()].0.clone()))
             } else {
                 // Determine how to update `column` to accommodate `projected_exprs`:
-                let new_col = projected_exprs.iter().enumerate().find_map(
-                    |(index, (projected_expr, alias))| {
+                state = RewriteState::RewrittenInvalid;
+                projected_exprs
+                    .iter()
+                    .enumerate()
+                    .find_map(|(index, (projected_expr, alias))| {
                         projected_expr.as_any().downcast_ref::<Column>().and_then(
                             |projected_column| {
-                                column
-                                    .name()
-                                    .eq(projected_column.name())
-                                    .then(|| Arc::new(Column::new(alias, index)) as _)
+                                column.name().eq(projected_column.name()).then(|| {
+                                    state = RewriteState::RewrittenValid;
+                                    Arc::new(Column::new(alias, index)) as _
+                                })
                             },
                         )
-                    },
-                );
-                if let Some(new_col) = new_col {
-                    state = RewriteState::RewrittenValid;
-                    Ok(Transformed::Yes(new_col))
-                } else {
-                    // didn't find a rewrite, stop trying
-                    state = RewriteState::RewrittenInvalid;
-                    Ok(Transformed::No(expr))
-                }
+                    })
+                    .map_or_else(|_| Ok(Transformed::No(expr)), |c| Ok(Transformed::Yes(c)))
             }
         });
 
-    new_expr.map(|new_expr| {
-        if state == RewriteState::RewrittenValid {
-            Some(new_expr)
-        } else {
-            None
-        }
+    new_expr.map(|e| (state == RewriteState::RewrittenValid).then_some(e))
     })
 }
 
