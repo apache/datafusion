@@ -108,6 +108,11 @@ impl ScalarFunctionExpr {
     pub fn return_type(&self) -> &DataType {
         &self.return_type
     }
+
+    /// Monotonicity information of the function
+    pub fn monotonicity(&self) -> &Option<FuncMonotonicity> {
+        &self.monotonicity
+    }
 }
 
 impl fmt::Display for ScalarFunctionExpr {
@@ -136,7 +141,10 @@ impl PhysicalExpr for ScalarFunctionExpr {
         let inputs = match (self.args.len(), self.name.parse::<BuiltinScalarFunction>()) {
             // MakeArray support zero argument but has the different behavior from the array with one null.
             (0, Ok(scalar_fun))
-                if scalar_fun.supports_zero_argument()
+                if scalar_fun
+                    .signature()
+                    .type_signature
+                    .supports_zero_argument()
                     && scalar_fun != BuiltinScalarFunction::MakeArray =>
             {
                 vec![ColumnarValue::create_null_array(batch.num_rows())]

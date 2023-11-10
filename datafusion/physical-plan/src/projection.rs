@@ -29,7 +29,6 @@ use std::task::{Context, Poll};
 use super::expressions::{Column, PhysicalSortExpr};
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream, Statistics};
-use crate::common::calculate_projection_mapping;
 use crate::{
     ColumnStatistics, DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr,
 };
@@ -42,11 +41,12 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::expressions::{Literal, UnKnownColumn};
 use datafusion_physical_expr::EquivalenceProperties;
 
+use datafusion_physical_expr::equivalence::ProjectionMapping;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
 /// Execution plan for a projection
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ProjectionExec {
     /// The projection expressions stored as tuples of (expression, output column name)
     pub(crate) expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
@@ -57,9 +57,8 @@ pub struct ProjectionExec {
     /// The output ordering
     output_ordering: Option<Vec<PhysicalSortExpr>>,
     /// The mapping used to normalize expressions like Partitioning and
-    /// PhysicalSortExpr. The key is the expression from the input schema
-    /// and the value is the expression from the output schema.
-    projection_mapping: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>,
+    /// PhysicalSortExpr that maps input to output
+    projection_mapping: ProjectionMapping,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
 }
@@ -94,7 +93,7 @@ impl ProjectionExec {
         ));
 
         // construct a map from the input expressions to the output expression of the Projection
-        let projection_mapping = calculate_projection_mapping(&expr, &input_schema)?;
+        let projection_mapping = ProjectionMapping::try_new(&expr, &input_schema)?;
 
         let input_eqs = input.equivalence_properties();
         let project_eqs = input_eqs.project(&projection_mapping, schema.clone());

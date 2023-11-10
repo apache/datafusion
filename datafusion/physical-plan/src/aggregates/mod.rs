@@ -25,7 +25,7 @@ use crate::aggregates::{
     no_grouping::AggregateStream, row_hash::GroupedHashAggregateStream,
     topk_stream::GroupedTopKAggregateStream,
 };
-use crate::common::calculate_projection_mapping;
+
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::windows::{
     get_ordered_partition_by_indices, get_window_mode, PartitionSearchMode,
@@ -60,6 +60,7 @@ mod topk;
 mod topk_stream;
 
 pub use datafusion_expr::AggregateFunction;
+use datafusion_physical_expr::equivalence::ProjectionMapping;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
 
 /// Hash aggregate modes
@@ -294,9 +295,8 @@ pub struct AggregateExec {
     /// expressions from protobuf for final aggregate.
     pub input_schema: SchemaRef,
     /// The mapping used to normalize expressions like Partitioning and
-    /// PhysicalSortExpr. The key is the expression from the input schema
-    /// and the value is the expression from the output schema.
-    projection_mapping: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>,
+    /// PhysicalSortExpr that maps input to output
+    projection_mapping: ProjectionMapping,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     required_input_ordering: Option<LexRequirement>,
@@ -535,7 +535,7 @@ impl AggregateExec {
 
         // construct a map from the input expression to the output expression of the Aggregation group by
         let projection_mapping =
-            calculate_projection_mapping(&group_by.expr, &input.schema())?;
+            ProjectionMapping::try_new(&group_by.expr, &input.schema())?;
 
         let required_input_ordering =
             (!new_requirement.is_empty()).then_some(new_requirement);
@@ -608,6 +608,11 @@ impl AggregateExec {
         self.input_schema.clone()
     }
 
+    /// number of rows soft limit of the AggregateExec
+    pub fn limit(&self) -> Option<usize> {
+        self.limit
+    }
+
     fn execute_typed(
         &self,
         partition: usize,
@@ -622,9 +627,11 @@ impl AggregateExec {
 
         // grouping by an expression that has a sort/limit upstream
         if let Some(limit) = self.limit {
-            return Ok(StreamType::GroupedPriorityQueue(
-                GroupedTopKAggregateStream::new(self, context, partition, limit)?,
-            ));
+            if !self.is_unordered_unfiltered_group_by_distinct() {
+                return Ok(StreamType::GroupedPriorityQueue(
+                    GroupedTopKAggregateStream::new(self, context, partition, limit)?,
+                ));
+            }
         }
 
         // grouping by something else and we need to just materialize all results
@@ -647,6 +654,39 @@ impl AggregateExec {
 
     pub fn group_by(&self) -> &PhysicalGroupBy {
         &self.group_by
+    }
+
+    /// true, if this Aggregate has a group-by with no required or explicit ordering,
+    /// no filtering and no aggregate expressions
+    /// This method qualifies the use of the LimitedDistinctAggregation rewrite rule
+    /// on an AggregateExec.
+    pub fn is_unordered_unfiltered_group_by_distinct(&self) -> bool {
+        // ensure there is a group by
+        if self.group_by().is_empty() {
+            return false;
+        }
+        // ensure there are no aggregate expressions
+        if !self.aggr_expr().is_empty() {
+            return false;
+        }
+        // ensure there are no filters on aggregate expressions; the above check
+        // may preclude this case
+        if self.filter_expr().iter().any(|e| e.is_some()) {
+            return false;
+        }
+        // ensure there are no order by expressions
+        if self.order_by_expr().iter().any(|e| e.is_some()) {
+            return false;
+        }
+        // ensure there is no output ordering; can this rule be relaxed?
+        if self.output_ordering().is_some() {
+            return false;
+        }
+        // ensure no ordering is required on the input
+        if self.required_input_ordering()[0].is_some() {
+            return false;
+        }
+        true
     }
 }
 
@@ -1171,6 +1211,7 @@ mod tests {
         AggregateExpr, EquivalenceProperties, PhysicalExpr, PhysicalSortExpr,
     };
 
+    use datafusion_execution::memory_pool::FairSpillPool;
     use futures::{FutureExt, Stream};
 
     // Generate a schema which consists of 5 columns (a, b, c, d, e)
@@ -1271,8 +1312,11 @@ mod tests {
     fn new_spill_ctx(batch_size: usize, max_memory: usize) -> Arc<TaskContext> {
         let session_config = SessionConfig::new().with_batch_size(batch_size);
         let runtime = Arc::new(
-            RuntimeEnv::new(RuntimeConfig::default().with_memory_limit(max_memory, 1.0))
-                .unwrap(),
+            RuntimeEnv::new(
+                RuntimeConfig::default()
+                    .with_memory_pool(Arc::new(FairSpillPool::new(max_memory))),
+            )
+            .unwrap(),
         );
         let task_ctx = TaskContext::default()
             .with_session_config(session_config)

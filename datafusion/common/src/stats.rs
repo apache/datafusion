@@ -279,9 +279,11 @@ pub struct ColumnStatistics {
 impl ColumnStatistics {
     /// Column contains a single non null value (e.g constant).
     pub fn is_singleton(&self) -> bool {
-        match (self.min_value.get_value(), self.max_value.get_value()) {
+        match (&self.min_value, &self.max_value) {
             // Min and max values are the same and not infinity.
-            (Some(min), Some(max)) => !min.is_null() && !max.is_null() && (min == max),
+            (Precision::Exact(min), Precision::Exact(max)) => {
+                !min.is_null() && !max.is_null() && (min == max)
+            }
             (_, _) => false,
         }
     }
