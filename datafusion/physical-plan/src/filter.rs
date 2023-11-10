@@ -205,7 +205,7 @@ impl ExecutionPlan for FilterExec {
                 Precision::Inexact(n) => Precision::Inexact(n),
                 Precision::Absent => Precision::Absent,
             };
-            return Ok(stats)
+            return Ok(stats);
         }
 
         let num_rows = input_stats.num_rows;
