@@ -194,13 +194,19 @@ impl ExecutionPlan for FilterExec {
     fn statistics(&self) -> Result<Statistics> {
         let predicate = self.predicate();
 
+        let input_stats = self.input.statistics()?;
         let schema = self.schema();
         if !check_support(predicate, &schema) {
             // assume worst case, that the filter is highly selective and
             // returns all the rows from its input
-            return self.input.statistics();
+            let mut stats = input_stats.clone();
+            stats.num_rows = match stats.num_rows {
+                Precision::Exact(n) => Precision::Inexact(n),
+                Precision::Inexact(n) => Precision::Inexact(n),
+                Precision::Absent => Precision::Absent,
+            };
+            return Ok(stats)
         }
-        let input_stats = self.input.statistics()?;
 
         let num_rows = input_stats.num_rows;
         let total_byte_size = input_stats.total_byte_size;
