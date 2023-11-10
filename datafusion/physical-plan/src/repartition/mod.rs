@@ -644,16 +644,16 @@ impl RepartitionExec {
         })
     }
 
-    /// Set Order preserving flag
+
+    /// Set Order preserving flag, which controlls if this node is
+    /// `RepartitionExec` or `SortPreservingRepartitionExec`. If the input is
+    /// not ordered, or has only one partiton, remains a `RepartitionExec`.
     pub fn with_preserve_order(mut self, preserve_order: bool) -> Self {
-        // Set "preserve order" mode only if the input partition count is larger than 1
-        // Because in these cases naive `RepartitionExec` cannot maintain ordering. Using
-        // `SortPreservingRepartitionExec` is necessity. However, when input partition number
-        // is 1, `RepartitionExec` can maintain ordering. In this case, we don't need to use
-        // `SortPreservingRepartitionExec` variant to maintain ordering.
-        if self.input.output_partitioning().partition_count() > 1 {
-            self.preserve_order = preserve_order
-        }
+        self.preserve_order = preserve_order &&
+                // If the input isn't ordered, there is no ordering to preserve
+                self.input.output_ordering().is_some() &&
+                // if there is only one input partition, merging is required to maintain order
+                self.input.output_partitioning().partition_count() > 1;
         self
     }
 
