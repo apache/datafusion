@@ -427,7 +427,7 @@ impl Optimizer {
 /// Returns an error if plans have different schemas.
 ///
 /// It ignores metadata and nullability.
-fn assert_schema_is_the_same(
+pub(crate) fn assert_schema_is_the_same(
     rule_name: &str,
     prev_plan: &LogicalPlan,
     new_plan: &LogicalPlan,

@@ -85,7 +85,7 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
                 on_expr,
                 sort_expr,
                 input,
-                ..
+                schema,
             })) => {
                 // Construct the aggregation expression to be used to fetch the selected expressions.
                 let aggr_expr = select_expr
@@ -124,9 +124,12 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
                     .fields()
                     .iter()
                     .skip(on_expr.len())
-                    .zip(select_expr.iter())
-                    .map(|(f, sel)| {
-                        Ok(col(f.qualified_column()).alias(sel.display_name()?))
+                    .zip(schema.fields().iter())
+                    .map(|(new_field, old_field)| {
+                        Ok(col(new_field.qualified_column()).alias_qualified(
+                            old_field.qualifier().cloned(),
+                            old_field.name(),
+                        ))
                     })
                     .collect::<Result<Vec<Expr>>>()?;
 
@@ -167,6 +170,29 @@ mod tests {
         let expected = "Aggregate: groupBy=[[test.a, test.b]], aggr=[[]]\
                             \n  Projection: test.a, test.b\
                             \n    TableScan: test";
+
+        assert_optimized_plan_eq(
+            Arc::new(ReplaceDistinctWithAggregate::new()),
+            &plan,
+            expected,
+        )
+    }
+
+    #[test]
+    fn replace_distinct_on() -> datafusion_common::Result<()> {
+        let table_scan = test_table_scan().unwrap();
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .distinct_on(
+                vec![col("a")],
+                vec![col("b")],
+                Some(vec![col("a").sort(false, true), col("c").sort(true, false)]),
+            )?
+            .build()?;
+
+        let expected = "Projection: FIRST_VALUE(test.b) ORDER BY [test.a DESC NULLS FIRST, test.c ASC NULLS LAST] AS b\
+        \n  Sort: test.a DESC NULLS FIRST\
+        \n    Aggregate: groupBy=[[test.a]], aggr=[[FIRST_VALUE(test.b) ORDER BY [test.a DESC NULLS FIRST, test.c ASC NULLS LAST]]]\
+        \n      TableScan: test";
 
         assert_optimized_plan_eq(
             Arc::new(ReplaceDistinctWithAggregate::new()),

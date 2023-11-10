@@ -171,7 +171,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .iter()
                 .filter(|select_expr| match select_expr {
                     Expr::AggregateFunction(_) | Expr::AggregateUDF(_) => false,
-                    Expr::Alias(Alias { expr, name: _ }) => !matches!(
+                    Expr::Alias(Alias { expr, name: _, .. }) => !matches!(
                         **expr,
                         Expr::AggregateFunction(_) | Expr::AggregateUDF(_)
                     ),
@@ -487,6 +487,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         .clone();
                     *expr = Expr::Alias(Alias {
                         expr: Box::new(new_expr),
+                        relation: None,
                         name: name.clone(),
                     });
                 }

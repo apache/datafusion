@@ -488,7 +488,8 @@ message Not {
 
 message AliasNode {
   LogicalExprNode expr = 1;
-  string alias = 2;
+  repeated OwnedTableReference relation = 2;
+  string alias = 3;
 }
 
 message BinaryExprNode {

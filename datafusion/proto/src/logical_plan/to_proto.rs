@@ -476,9 +476,17 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
             Expr::Column(c) => Self {
                 expr_type: Some(ExprType::Column(c.into())),
             },
-            Expr::Alias(Alias { expr, name, .. }) => {
+            Expr::Alias(Alias {
+                expr,
+                relation,
+                name,
+            }) => {
                 let alias = Box::new(protobuf::AliasNode {
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
+                    relation: relation
+                        .to_owned()
+                        .map(|r| vec![r.into()])
+                        .unwrap_or(vec![]),
                     alias: name.to_owned(),
                 });
                 Self {
