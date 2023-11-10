@@ -1248,10 +1248,9 @@ impl EquivalenceProperties {
     fn calc_ordered_exprs(
         &self,
         mapping: &ProjectionMapping,
-        ignored_exprs: &[Arc<dyn PhysicalExpr>],
     ) -> Vec<Vec<PhysicalSortExpr>> {
         let mut new_orderings = vec![];
-        let leading_orderings = self.get_leading_orderings(ignored_exprs);
+        let leading_orderings = self.get_leading_orderings(&self.constants);
         for (source, target) in mapping.iter() {
             let expr_ordering = self.get_expr_ordering(source.clone());
             if PRINT_ON {
@@ -1290,7 +1289,7 @@ impl EquivalenceProperties {
                                 let suffix = suffix.into_iter().cloned();
                                 new_ordering.extend(suffix);
                                 let new_ordering =
-                                    collapse_lex_ordering(new_ordering, ignored_exprs);
+                                    collapse_lex_ordering(new_ordering, &self.constants);
                                 if !new_orderings.contains(&new_ordering) {
                                     new_orderings.push(new_ordering);
                                 }
@@ -1315,7 +1314,7 @@ impl EquivalenceProperties {
                         // TODO: send stop signal.
                     }
                 }
-                let new_ordering = collapse_lex_ordering(new_ordering, ignored_exprs);
+                let new_ordering = collapse_lex_ordering(new_ordering, &self.constants);
                 if !new_orderings.contains(&new_ordering) {
                     new_orderings.push(new_ordering);
                 }
@@ -1352,25 +1351,25 @@ impl EquivalenceProperties {
         // the result should be [a ASC], not [a ASC, c ASC], even if column c is
         // valid after projection.
         let mut orderings = vec![vec![]];
-        let mut ignored_exprs = vec![];
         for sort_expr in ordering.iter() {
-            let new_orderings = self.calc_ordered_exprs(mapping, &ignored_exprs);
-            let mut projected_ignored_exprs = if let Some(ignored_exprs) = ignored_exprs
+            let new_orderings = self.calc_ordered_exprs(mapping);
+            let mut projected_constants = if let Some(projected_constants) = self
+                .constants
                 .iter()
                 .map(|expr| self.eq_group.project_expr(mapping, expr))
                 .collect::<Option<Vec<_>>>()
             {
-                ignored_exprs
+                projected_constants
             } else {
-                // At least one of the ignored_exprs cannot be projected. Hence continuing the iteration is not guaranteed to consider all referred columns.
+                // At least one of the constants cannot be projected. Hence continuing the iteration is not guaranteed to consider all referred columns.
                 // Stop iteration.
                 break;
             };
             for (source, target) in mapping.iter() {
-                if expr_consists_of_ignored_exprs(&ignored_exprs, source)
-                    && !physical_exprs_contains(&projected_ignored_exprs, source)
+                if expr_consists_of_ignored_exprs(&self.constants, source)
+                    && !physical_exprs_contains(&projected_constants, source)
                 {
-                    projected_ignored_exprs.push(target.clone());
+                    projected_constants.push(target.clone());
                 }
             }
 
@@ -1388,7 +1387,7 @@ impl EquivalenceProperties {
                     .enumerate()
                     .flat_map(|(idx, ordering)| {
                         if ordering_consists_of_ignored_exprs(
-                            &projected_ignored_exprs,
+                            &projected_constants,
                             ordering,
                         ) {
                             Some(idx)
@@ -1415,12 +1414,7 @@ impl EquivalenceProperties {
                     orderings[ordering_idx].extend(new_ordering.to_vec());
                 }
             }
-            let leaves = leaf_exprs(sort_expr.expr.clone());
-            let leaves = self.eq_group.normalize_exprs(leaves);
-            ignored_exprs.extend(leaves);
-            ignored_exprs.push(sort_expr.expr.clone());
             self = self.add_constants(std::iter::once(sort_expr.expr.clone()));
-            deduplicate_physical_exprs(&mut ignored_exprs);
             if PRINT_ON {
                 for ordering in &orderings {
                     println!("updated ordering: {ordering:?}");
@@ -1438,7 +1432,6 @@ impl EquivalenceProperties {
                 }
             }
         }
-        // let leading_orderings = self.get_leading_orderings(&[]);
         let leading_ordering_exprs = orderings
             .iter()
             .flat_map(|ordering| ordering.first().map(|sort_expr| sort_expr.expr.clone()))
@@ -1596,27 +1589,6 @@ fn ordering_consists_of_ignored_exprs(
     ordering
         .iter()
         .all(|sort_expr| expr_consists_of_ignored_exprs(ignored_exprs, &sort_expr.expr))
-}
-
-fn leaf_exprs(expr: Arc<dyn PhysicalExpr>) -> Vec<Arc<dyn PhysicalExpr>> {
-    let mut result = vec![];
-    leaf_exprs_helper(expr, &mut result);
-    result
-}
-
-fn leaf_exprs_helper(
-    expr: Arc<dyn PhysicalExpr>,
-    result: &mut Vec<Arc<dyn PhysicalExpr>>,
-) {
-    if expr.children().is_empty() {
-        if !physical_exprs_contains(result, &expr) {
-            result.push(expr);
-        }
-    } else {
-        expr.children()
-            .into_iter()
-            .for_each(|child| leaf_exprs_helper(child, result));
-    }
 }
 
 /// Calculate ordering equivalence properties for the given join operation.
