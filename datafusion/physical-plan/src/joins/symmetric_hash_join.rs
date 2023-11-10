@@ -952,7 +952,7 @@ impl OneSideHashJoiner {
         Ok(())
     }
 
-    /// Calculate_prune_length.
+    /// Calculate prune length.
     ///
     /// # Arguments
     ///
