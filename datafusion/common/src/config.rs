@@ -427,6 +427,11 @@ config_namespace! {
 config_namespace! {
     /// Options related to query optimization
     pub struct OptimizerOptions {
+        /// When set to true, the optimizer will push a limit operation into
+        /// grouped aggregations which have no aggregate expressions, as a soft limit,
+        /// emitting groups once the limit is reached, before all rows in the group are read.
+        pub enable_distinct_aggregation_soft_limit: bool, default = true
+
         /// When set to true, the physical plan optimizer will try to add round robin
         /// repartitioning to increase parallelism to leverage more CPU cores
         pub enable_round_robin_repartition: bool, default = true

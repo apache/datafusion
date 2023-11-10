@@ -181,23 +181,17 @@ pub fn as_timestamp_second_array(array: &dyn Array) -> Result<&TimestampSecondAr
 }
 
 // Downcast ArrayRef to IntervalYearMonthArray
-pub fn as_interval_ym_array(
-    array: &dyn Array,
-) -> Result<&IntervalYearMonthArray, DataFusionError> {
+pub fn as_interval_ym_array(array: &dyn Array) -> Result<&IntervalYearMonthArray> {
     Ok(downcast_value!(array, IntervalYearMonthArray))
 }
 
 // Downcast ArrayRef to IntervalDayTimeArray
-pub fn as_interval_dt_array(
-    array: &dyn Array,
-) -> Result<&IntervalDayTimeArray, DataFusionError> {
+pub fn as_interval_dt_array(array: &dyn Array) -> Result<&IntervalDayTimeArray> {
     Ok(downcast_value!(array, IntervalDayTimeArray))
 }
 
 // Downcast ArrayRef to IntervalMonthDayNanoArray
-pub fn as_interval_mdn_array(
-    array: &dyn Array,
-) -> Result<&IntervalMonthDayNanoArray, DataFusionError> {
+pub fn as_interval_mdn_array(array: &dyn Array) -> Result<&IntervalMonthDayNanoArray> {
     Ok(downcast_value!(array, IntervalMonthDayNanoArray))
 }
 

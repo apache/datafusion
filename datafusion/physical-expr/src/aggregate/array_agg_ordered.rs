@@ -48,10 +48,17 @@ use itertools::izip;
 /// and that can merge aggregations from multiple partitions.
 #[derive(Debug)]
 pub struct OrderSensitiveArrayAgg {
+    /// Column name
     name: String,
+    /// The DataType for the input expression
     input_data_type: DataType,
-    order_by_data_types: Vec<DataType>,
+    /// The input expression
     expr: Arc<dyn PhysicalExpr>,
+    /// If the input expression can have NULLs
+    nullable: bool,
+    /// Ordering data types
+    order_by_data_types: Vec<DataType>,
+    /// Ordering requirement
     ordering_req: LexOrdering,
 }
 
@@ -61,13 +68,15 @@ impl OrderSensitiveArrayAgg {
         expr: Arc<dyn PhysicalExpr>,
         name: impl Into<String>,
         input_data_type: DataType,
+        nullable: bool,
         order_by_data_types: Vec<DataType>,
         ordering_req: LexOrdering,
     ) -> Self {
         Self {
             name: name.into(),
-            expr,
             input_data_type,
+            expr,
+            nullable,
             order_by_data_types,
             ordering_req,
         }
@@ -82,8 +91,9 @@ impl AggregateExpr for OrderSensitiveArrayAgg {
     fn field(&self) -> Result<Field> {
         Ok(Field::new_list(
             &self.name,
+            // This should be the same as return type of AggregateFunction::ArrayAgg
             Field::new("item", self.input_data_type.clone(), true),
-            false,
+            self.nullable,
         ))
     }
 
@@ -99,13 +109,13 @@ impl AggregateExpr for OrderSensitiveArrayAgg {
         let mut fields = vec![Field::new_list(
             format_state_name(&self.name, "array_agg"),
             Field::new("item", self.input_data_type.clone(), true),
-            false,
+            self.nullable, // This should be the same as field()
         )];
         let orderings = ordering_fields(&self.ordering_req, &self.order_by_data_types);
         fields.push(Field::new_list(
             format_state_name(&self.name, "array_agg_orderings"),
             Field::new("item", DataType::Struct(Fields::from(orderings)), true),
-            false,
+            self.nullable,
         ));
         Ok(fields)
     }

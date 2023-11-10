@@ -294,6 +294,91 @@ query T
 SELECT c1 FROM aggregate_test_100 LIMIT 1 OFFSET 101
 ----
 
+#
+# global limit statistics test
+#
+
+statement ok
+CREATE TABLE IF NOT EXISTS t1 (a INT) AS VALUES(1),(2),(3),(4),(5),(6),(7),(8),(9),(10);
+
+# The aggregate does not need to be computed because the input statistics are exact and
+# the number of rows is less than the skip value (OFFSET).
+query TT
+EXPLAIN SELECT COUNT(*) FROM (SELECT a FROM t1 LIMIT 3 OFFSET 11);
+----
+logical_plan
+Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
+--Limit: skip=11, fetch=3
+----TableScan: t1 projection=[], fetch=14
+physical_plan
+ProjectionExec: expr=[0 as COUNT(*)]
+--EmptyExec: produce_one_row=true
+
+query I
+SELECT COUNT(*) FROM (SELECT a FROM t1 LIMIT 3 OFFSET 11);
+----
+0
+
+# The aggregate does not need to be computed because the input statistics are exact and
+# the number of rows is less than or equal to the the "fetch+skip" value (LIMIT+OFFSET).
+query TT
+EXPLAIN SELECT COUNT(*) FROM (SELECT a FROM t1 LIMIT 3 OFFSET 8);
+----
+logical_plan
+Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
+--Limit: skip=8, fetch=3
+----TableScan: t1 projection=[], fetch=11
+physical_plan
+ProjectionExec: expr=[2 as COUNT(*)]
+--EmptyExec: produce_one_row=true
+
+query I
+SELECT COUNT(*) FROM (SELECT a FROM t1 LIMIT 3 OFFSET 8);
+----
+2
+
+# The aggregate does not need to be computed because the input statistics are exact and
+# an OFFSET, but no LIMIT, is specified.
+query TT
+EXPLAIN SELECT COUNT(*) FROM (SELECT a FROM t1 OFFSET 8);
+----
+logical_plan
+Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
+--Limit: skip=8, fetch=None
+----TableScan: t1 projection=[]
+physical_plan
+ProjectionExec: expr=[2 as COUNT(*)]
+--EmptyExec: produce_one_row=true
+
+query I
+SELECT COUNT(*) FROM (SELECT a FROM t1 LIMIT 3 OFFSET 8);
+----
+2
+
+# The aggregate needs to be computed because the input statistics are inexact.
+query TT
+EXPLAIN SELECT COUNT(*) FROM (SELECT a FROM t1 WHERE a > 3 LIMIT 3 OFFSET 6);
+----
+logical_plan
+Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
+--Limit: skip=6, fetch=3
+----Filter: t1.a > Int32(3)
+------TableScan: t1 projection=[a]
+physical_plan
+AggregateExec: mode=Final, gby=[], aggr=[COUNT(*)]
+--CoalescePartitionsExec
+----AggregateExec: mode=Partial, gby=[], aggr=[COUNT(*)]
+------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+--------GlobalLimitExec: skip=6, fetch=3
+----------CoalesceBatchesExec: target_batch_size=8192
+------------FilterExec: a@0 > 3
+--------------MemoryExec: partitions=1, partition_sizes=[1]
+
+query I
+SELECT COUNT(*) FROM (SELECT a FROM t1 WHERE a > 3 LIMIT 3 OFFSET 6);
+----
+1
+
 ########
 # Clean up after the test
 ########
