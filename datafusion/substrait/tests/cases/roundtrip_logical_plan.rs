@@ -270,8 +270,26 @@ async fn select_distinct_two_fields() -> Result<()> {
 #[tokio::test]
 async fn simple_distinct_aggregate() -> Result<()> {
     test_alias(
-        "SELECT a, count(distinct b) FROM data group by a",
-        "SELECT a, count(b) FROM (SELECT a, b FROM data group by a, b) group by a",
+        "SELECT a, COUNT(DISTINCT b) FROM data GROUP BY a",
+        "SELECT a, COUNT(b) FROM (SELECT a, b FROM data GROUP BY a, b) GROUP BY a",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn select_distinct_aggregate_two_fields() -> Result<()> {
+    test_alias(
+        "SELECT a, COUNT(DISTINCT b), MAX(DISTINCT b) FROM data GROUP BY a",
+        "SELECT a, COUNT(b), MAX(b) FROM (SELECT a, b FROM data GROUP BY a, b) GROUP BY a",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn select_distinct_aggregate_and_no_distinct_aggregate() -> Result<()> {
+    test_alias(
+        "SELECT a, COUNT(DISTINCT b), COUNT(c) FROM data GROUP by a",
+        "SELECT a, COUNT(b), SUM(\"COUNT(data.c)\") FROM (SELECT a, b, COUNT(c) FROM data GROUP BY a, b) GROUP BY a",
     )
     .await
 }
