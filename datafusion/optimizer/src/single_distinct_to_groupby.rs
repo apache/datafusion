@@ -23,6 +23,10 @@ use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::Result;
+use datafusion_expr::aggregate_function::{
+    self,
+    AggregateFunction::{Count, Max, Min, Sum},
+};
 use datafusion_expr::{
     col,
     expr::AggregateFunction,
@@ -34,17 +38,19 @@ use hashbrown::HashSet;
 
 /// single distinct to group by optimizer rule
 ///  ```text
-///    SELECT F1(DISTINCT s),F2(DISTINCT s)
-///    ...
-///    GROUP BY k
+///    Before:
+///    SELECT a, COUNT(DINSTINCT b), COUNT(c)
+///    FROM t
+///    GROUP BY a
 ///
-///    Into
-///
-///    SELECT F1(alias1),F2(alias1)
+///    After:
+///    SELECT a, COUNT(alias1), SUM(alias2)
 ///    FROM (
-///      SELECT s as alias1, k ... GROUP BY s, k
+///      SELECT a, b as alias1, COUNT(c) as alias2
+///      FROM t
+///      GROUP BY a, b
 ///    )
-///    GROUP BY k
+///    GROUP BY a
 ///  ```
 #[derive(Default)]
 pub struct SingleDistinctToGroupBy {}
@@ -58,27 +64,31 @@ impl SingleDistinctToGroupBy {
     }
 }
 
-/// Check whether all aggregate exprs are distinct on a single field.
+/// Check whether all distinct aggregate exprs are distinct on a single field.
 fn is_single_distinct_agg(plan: &LogicalPlan) -> Result<bool> {
     match plan {
         LogicalPlan::Aggregate(Aggregate { aggr_expr, .. }) => {
             let mut fields_set = HashSet::new();
-            let mut distinct_count = 0;
+            let mut aggregate_count = 0;
             for expr in aggr_expr {
                 if let Expr::AggregateFunction(AggregateFunction {
-                    distinct, args, ..
+                    fun,
+                    distinct,
+                    args,
+                    ..
                 }) = expr
                 {
+                    aggregate_count += 1;
                     if *distinct {
-                        distinct_count += 1;
-                    }
-                    for e in args {
-                        fields_set.insert(e.canonical_name());
+                        for e in args {
+                            fields_set.insert(e.canonical_name());
+                        }
+                    } else if !matches!(fun, Count | Sum | Min | Max) {
+                        return Ok(false);
                     }
                 }
             }
-            let res = distinct_count == aggr_expr.len() && fields_set.len() == 1;
-            Ok(res)
+            Ok(fields_set.len() == 1 && aggregate_count == aggr_expr.len())
         }
         _ => Ok(false),
     }
@@ -87,6 +97,24 @@ fn is_single_distinct_agg(plan: &LogicalPlan) -> Result<bool> {
 /// Check if the first expr is [Expr::GroupingSet].
 fn contains_grouping_set(expr: &[Expr]) -> bool {
     matches!(expr.first(), Some(Expr::GroupingSet(_)))
+}
+
+/// Rewrite the aggregate function to two aggregate functions.
+fn aggregate_function_rewrite(
+    fun: &aggregate_function::AggregateFunction,
+) -> (
+    aggregate_function::AggregateFunction,
+    aggregate_function::AggregateFunction,
+) {
+    match fun {
+        Count => (Sum, Count),
+        Sum => (Sum, Sum),
+        Min => (Min, Min),
+        Max => (Max, Max),
+        _ => panic!(
+            "Not supported aggregate function in single distinct optimization rule"
+        ),
+    }
 }
 
 impl OptimizerRule for SingleDistinctToGroupBy {
@@ -151,7 +179,9 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                         .collect::<Vec<_>>();
 
                     // replace the distinct arg with alias
+                    let mut index = 1;
                     let mut group_fields_set = HashSet::new();
+                    let mut inner_aggr_exprs = vec![];
                     let outer_aggr_exprs = aggr_expr
                         .iter()
                         .map(|aggr_expr| match aggr_expr {
@@ -160,32 +190,69 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                 args,
                                 filter,
                                 order_by,
+                                distinct,
                                 ..
                             }) => {
                                 // is_single_distinct_agg ensure args.len=1
-                                if group_fields_set.insert(args[0].display_name()?) {
+                                if *distinct
+                                    && group_fields_set.insert(args[0].display_name()?)
+                                {
                                     inner_group_exprs.push(
                                         args[0].clone().alias(SINGLE_DISTINCT_ALIAS),
                                     );
                                 }
-                                Ok(Expr::AggregateFunction(AggregateFunction::new(
-                                    fun.clone(),
-                                    vec![col(SINGLE_DISTINCT_ALIAS)],
-                                    false, // intentional to remove distinct here
-                                    filter.clone(),
-                                    order_by.clone(),
-                                ))
-                                .alias(aggr_expr.display_name()?))
+
+                                let mut expr =
+                                    Expr::AggregateFunction(AggregateFunction::new(
+                                        fun.clone(),
+                                        vec![col(SINGLE_DISTINCT_ALIAS)],
+                                        false, // intentional to remove distinct here
+                                        filter.clone(),
+                                        order_by.clone(),
+                                    ))
+                                    .alias(aggr_expr.display_name()?);
+
+                                // if the aggregate function is not distinct, we need to rewrite it like two phase aggregation
+                                if !(*distinct) {
+                                    index += 1;
+                                    let alias_str = format!("alias{}", index);
+
+                                    let (out_fun, inner_fun) =
+                                        aggregate_function_rewrite(fun);
+                                    expr =
+                                        Expr::AggregateFunction(AggregateFunction::new(
+                                            out_fun,
+                                            vec![col(&alias_str)],
+                                            false,
+                                            filter.clone(),
+                                            order_by.clone(),
+                                        ));
+                                    let inner_expr =
+                                        Expr::AggregateFunction(AggregateFunction::new(
+                                            inner_fun,
+                                            args.clone(),
+                                            false,
+                                            filter.clone(),
+                                            order_by.clone(),
+                                        ))
+                                        .alias(&alias_str);
+                                    inner_aggr_exprs.push(inner_expr);
+                                }
+
+                                Ok(expr)
                             }
                             _ => Ok(aggr_expr.clone()),
                         })
                         .collect::<Result<Vec<_>>>()?;
+                    
+                    println!("inner_agg: {:?}", inner_aggr_exprs);
+                    println!("outer_agg: {:?}", outer_aggr_exprs);
 
                     // construct the inner AggrPlan
                     let inner_agg = LogicalPlan::Aggregate(Aggregate::try_new(
                         input.clone(),
                         inner_group_exprs,
-                        Vec::new(),
+                        inner_aggr_exprs,
                     )?);
 
                     Ok(Some(LogicalPlan::Aggregate(Aggregate::try_new(
