@@ -80,6 +80,7 @@ mod tests {
     use crate::dataframe::DataFrameWriteOptions;
     use crate::parquet::basic::Compression;
     use crate::test_util::parquet_test_data;
+    use tempfile::tempdir;
 
     use super::*;
 
@@ -137,6 +138,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(not(target_family = "windows"))]
     #[tokio::test]
     async fn read_from_different_file_extension() -> Result<()> {
         let ctx = SessionContext::new();
@@ -155,11 +157,29 @@ mod tests {
             ],
         )?)?;
 
+        let temp_dir = tempdir()?;
+        let temp_dir_path = temp_dir.path();
+        let path1 = temp_dir_path
+            .join("output1.parquet")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let path2 = temp_dir_path
+            .join("output2.parquet.snappy")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let path3 = temp_dir_path
+            .join("output3.parquet.snappy.parquet")
+            .to_str()
+            .unwrap()
+            .to_string();
+
         // Write the dataframe to a parquet file named 'output1.parquet'
         write_df
             .clone()
             .write_parquet(
-                "output1.parquet",
+                &path1,
                 DataFrameWriteOptions::new().with_single_file_output(true),
                 Some(
                     WriterProperties::builder()
@@ -173,7 +193,7 @@ mod tests {
         write_df
             .clone()
             .write_parquet(
-                "output2.parquet.snappy",
+                &path2,
                 DataFrameWriteOptions::new().with_single_file_output(true),
                 Some(
                     WriterProperties::builder()
@@ -186,7 +206,7 @@ mod tests {
         // Write the dataframe to a parquet file named 'output3.parquet.snappy.parquet'
         write_df
             .write_parquet(
-                "output3.parquet.snappy.parquet",
+                &path3,
                 DataFrameWriteOptions::new().with_single_file_output(true),
                 Some(
                     WriterProperties::builder()
@@ -199,7 +219,7 @@ mod tests {
         // Read the dataframe from 'output1.parquet' with the default file extension.
         let read_df = ctx
             .read_parquet(
-                "output1.parquet",
+                &path1,
                 ParquetReadOptions {
                     ..Default::default()
                 },
@@ -213,7 +233,7 @@ mod tests {
         // Read the dataframe from 'output2.parquet.snappy' with the correct file extension.
         let read_df = ctx
             .read_parquet(
-                "output2.parquet.snappy",
+                &path2,
                 ParquetReadOptions {
                     file_extension: "snappy",
                     ..Default::default()
@@ -227,7 +247,7 @@ mod tests {
         // Read the dataframe from 'output3.parquet.snappy.parquet' with the wrong file extension.
         let read_df = ctx
             .read_parquet(
-                "output2.parquet.snappy",
+                &path2,
                 ParquetReadOptions {
                     ..Default::default()
                 },
@@ -242,7 +262,7 @@ mod tests {
         // Read the dataframe from 'output3.parquet.snappy.parquet' with the correct file extension.
         let read_df = ctx
             .read_parquet(
-                "output3.parquet.snappy.parquet",
+                &path3,
                 ParquetReadOptions {
                     ..Default::default()
                 },
