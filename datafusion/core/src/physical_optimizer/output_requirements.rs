@@ -88,14 +88,14 @@ enum RuleMode {
 ///
 /// See [`OutputRequirements`] for more details
 #[derive(Debug)]
-struct OutputRequirementExec {
+pub(crate) struct OutputRequirementExec {
     input: Arc<dyn ExecutionPlan>,
     order_requirement: Option<LexRequirement>,
     dist_requirement: Distribution,
 }
 
 impl OutputRequirementExec {
-    fn new(
+    pub(crate) fn new(
         input: Arc<dyn ExecutionPlan>,
         requirements: Option<LexRequirement>,
         dist_requirement: Distribution,
@@ -107,7 +107,7 @@ impl OutputRequirementExec {
         }
     }
 
-    fn input(&self) -> Arc<dyn ExecutionPlan> {
+    pub(crate) fn input(&self) -> Arc<dyn ExecutionPlan> {
         self.input.clone()
     }
 }

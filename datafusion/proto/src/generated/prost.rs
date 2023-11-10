@@ -1486,7 +1486,7 @@ pub mod owned_table_reference {
 pub struct PhysicalPlanNode {
     #[prost(
         oneof = "physical_plan_node::PhysicalPlanType",
-        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23"
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24"
     )]
     pub physical_plan_type: ::core::option::Option<physical_plan_node::PhysicalPlanType>,
 }
@@ -1541,7 +1541,80 @@ pub mod physical_plan_node {
         NestedLoopJoin(::prost::alloc::boxed::Box<super::NestedLoopJoinExecNode>),
         #[prost(message, tag = "23")]
         Analyze(::prost::alloc::boxed::Box<super::AnalyzeExecNode>),
+        #[prost(message, tag = "24")]
+        JsonSink(::prost::alloc::boxed::Box<super::JsonSinkExecNode>),
     }
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PartitionColumn {
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "2")]
+    pub arrow_type: ::core::option::Option<ArrowType>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FileTypeWriterOptions {
+    #[prost(oneof = "file_type_writer_options::FileType", tags = "1")]
+    pub file_type: ::core::option::Option<file_type_writer_options::FileType>,
+}
+/// Nested message and enum types in `FileTypeWriterOptions`.
+pub mod file_type_writer_options {
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum FileType {
+        #[prost(message, tag = "1")]
+        JsonOptions(super::JsonWriterOptions),
+    }
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct JsonWriterOptions {
+    #[prost(enumeration = "CompressionTypeVariant", tag = "1")]
+    pub compression: i32,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FileSinkConfig {
+    #[prost(string, tag = "1")]
+    pub object_store_url: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag = "2")]
+    pub file_groups: ::prost::alloc::vec::Vec<PartitionedFile>,
+    #[prost(string, repeated, tag = "3")]
+    pub table_paths: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(message, optional, tag = "4")]
+    pub output_schema: ::core::option::Option<Schema>,
+    #[prost(message, repeated, tag = "5")]
+    pub table_partition_cols: ::prost::alloc::vec::Vec<PartitionColumn>,
+    #[prost(enumeration = "FileWriterMode", tag = "6")]
+    pub writer_mode: i32,
+    #[prost(bool, tag = "7")]
+    pub single_file_output: bool,
+    #[prost(bool, tag = "8")]
+    pub unbounded_input: bool,
+    #[prost(bool, tag = "9")]
+    pub overwrite: bool,
+    #[prost(message, optional, tag = "10")]
+    pub file_type_writer_options: ::core::option::Option<FileTypeWriterOptions>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct JsonSink {
+    #[prost(message, optional, tag = "1")]
+    pub config: ::core::option::Option<FileSinkConfig>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct JsonSinkExecNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(message, optional, tag = "2")]
+    pub sink: ::core::option::Option<JsonSink>,
+    #[prost(message, optional, tag = "3")]
+    pub sink_schema: ::core::option::Option<Schema>,
+    #[prost(message, optional, tag = "4")]
+    pub sort_order: ::core::option::Option<PhysicalSortExprNodeCollection>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -3072,6 +3145,70 @@ impl UnionMode {
         match value {
             "sparse" => Some(Self::Sparse),
             "dense" => Some(Self::Dense),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum FileWriterMode {
+    Append = 0,
+    Put = 1,
+    PutMultipart = 2,
+}
+impl FileWriterMode {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            FileWriterMode::Append => "APPEND",
+            FileWriterMode::Put => "PUT",
+            FileWriterMode::PutMultipart => "PUT_MULTIPART",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "APPEND" => Some(Self::Append),
+            "PUT" => Some(Self::Put),
+            "PUT_MULTIPART" => Some(Self::PutMultipart),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum CompressionTypeVariant {
+    Gzip = 0,
+    Bzip2 = 1,
+    Xz = 2,
+    Zstd = 3,
+    Uncompressed = 4,
+}
+impl CompressionTypeVariant {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            CompressionTypeVariant::Gzip => "GZIP",
+            CompressionTypeVariant::Bzip2 => "BZIP2",
+            CompressionTypeVariant::Xz => "XZ",
+            CompressionTypeVariant::Zstd => "ZSTD",
+            CompressionTypeVariant::Uncompressed => "UNCOMPRESSED",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "GZIP" => Some(Self::Gzip),
+            "BZIP2" => Some(Self::Bzip2),
+            "XZ" => Some(Self::Xz),
+            "ZSTD" => Some(Self::Zstd),
+            "UNCOMPRESSED" => Some(Self::Uncompressed),
             _ => None,
         }
     }

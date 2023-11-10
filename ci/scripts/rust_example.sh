@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+#
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -15,28 +17,19 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[package]
-name = "datafusion-substrait"
-description = "DataFusion Substrait Producer and Consumer"
-readme = "README.md"
-version = { workspace = true }
-edition = { workspace = true }
-homepage = { workspace = true }
-repository = { workspace = true }
-license = { workspace = true }
-authors = { workspace = true }
-rust-version = "1.70"
+set -ex
+cd datafusion-examples/examples/
+cargo fmt --all -- --check
 
-[dependencies]
-async-recursion = "1.0"
-chrono = { workspace = true }
-datafusion = { workspace = true }
-itertools = { workspace = true }
-object_store = { workspace = true }
-prost = "0.12"
-prost-types = "0.12"
-substrait = "0.19.0"
-tokio = "1.17"
-
-[features]
-protoc = ["substrait/protoc"]
+files=$(ls .)
+for filename in $files
+do
+  example_name=`basename $filename ".rs"`
+  # Skip tests that rely on external storage and flight
+  # todo: Currently, catalog.rs is placed in the external-dependence directory because there is a problem parsing
+  # the parquet file of the external parquet-test that it currently relies on.
+  # We will wait for this issue[https://github.com/apache/arrow-datafusion/issues/8041] to be resolved.
+  if [ ! -d $filename ]; then
+     cargo run --example $example_name
+  fi
+done
