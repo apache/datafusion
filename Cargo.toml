@@ -79,9 +79,9 @@ indexmap = "2.0.0"
 itertools = "0.11"
 log = "^0.4"
 num_cpus = "1.13.0"
-object_store = "0.7.0"
+object_store = { version = "0.7.0", default-features = false }
 parking_lot = "0.12"
-parquet = { version = "48.0.0", features = ["arrow", "async", "object_store"] }
+parquet = { version = "48.0.0", default-features = false, features = ["arrow", "async", "object_store"] }
 rand = "0.8"
 rstest = "0.18.0"
 serde_json = "1"

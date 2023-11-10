@@ -48,7 +48,8 @@ use hashbrown::HashSet;
 /// E.g. 1 -> [3, 6, 8] indicates that the column values map to rows 3, 6 and 8 for hash value 1
 /// As the key is a hash value, we need to check possible hash collisions in the probe stage
 /// During this stage it might be the case that a row is contained the same hashmap value,
-/// but the values don't match. Those are checked in the [equal_rows] macro
+/// but the values don't match. Those are checked in the [`equal_rows_arr`](crate::joins::hash_join::equal_rows_arr) method.
+///
 /// The indices (values) are stored in a separate chained list stored in the `Vec<u64>`.
 ///
 /// The first value (+1) is stored in the hashmap, whereas the next value is stored in array at the position value.
@@ -100,8 +101,6 @@ use hashbrown::HashSet;
 /// | 0 | 0 | 0 | 2 | 4 | <--- hash value 1 maps to 5,4,2 (which means indices values 4,3,1)
 /// ---------------------
 /// ```
-///
-///TODO: [speed up collision checks](https://github.com/apache/arrow-datafusion/issues/50)
 pub struct JoinHashMap {
     // Stores hash value to last row index
     pub map: RawTable<(u64, u64)>,

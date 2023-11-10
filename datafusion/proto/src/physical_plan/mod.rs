@@ -22,6 +22,7 @@ use std::sync::Arc;
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
+use datafusion::datasource::file_format::json::JsonSink;
 #[cfg(feature = "parquet")]
 use datafusion::datasource::physical_plan::ParquetExec;
 use datafusion::datasource::physical_plan::{AvroExec, CsvExec};
@@ -36,6 +37,7 @@ use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::explain::ExplainExec;
 use datafusion::physical_plan::expressions::{Column, PhysicalSortExpr};
 use datafusion::physical_plan::filter::FilterExec;
+use datafusion::physical_plan::insert::FileSinkExec;
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::{CrossJoinExec, NestedLoopJoinExec};
 use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
@@ -64,7 +66,9 @@ use crate::protobuf::physical_aggregate_expr_node::AggregateFunction;
 use crate::protobuf::physical_expr_node::ExprType;
 use crate::protobuf::physical_plan_node::PhysicalPlanType;
 use crate::protobuf::repartition_exec_node::PartitionMethod;
-use crate::protobuf::{self, window_agg_exec_node, PhysicalPlanNode};
+use crate::protobuf::{
+    self, window_agg_exec_node, PhysicalPlanNode, PhysicalSortExprNodeCollection,
+};
 use crate::{convert_required, into_required};
 
 use self::from_proto::parse_physical_window_expr;
@@ -782,7 +786,38 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     analyze.verbose,
                     analyze.show_statistics,
                     input,
-                    Arc::new(analyze.schema.as_ref().unwrap().try_into()?),
+                    Arc::new(convert_required!(analyze.schema)?),
+                )))
+            }
+            PhysicalPlanType::JsonSink(sink) => {
+                let input =
+                    into_physical_plan(&sink.input, registry, runtime, extension_codec)?;
+
+                let data_sink: JsonSink = sink
+                    .sink
+                    .as_ref()
+                    .ok_or_else(|| proto_error("Missing required field in protobuf"))?
+                    .try_into()?;
+                let sink_schema = convert_required!(sink.sink_schema)?;
+                let sort_order = sink
+                    .sort_order
+                    .as_ref()
+                    .map(|collection| {
+                        collection
+                            .physical_sort_expr_nodes
+                            .iter()
+                            .map(|proto| {
+                                parse_physical_sort_expr(proto, registry, &sink_schema)
+                                    .map(Into::into)
+                            })
+                            .collect::<Result<Vec<_>>>()
+                    })
+                    .transpose()?;
+                Ok(Arc::new(FileSinkExec::new(
+                    input,
+                    Arc::new(data_sink),
+                    Arc::new(sink_schema),
+                    sort_order,
                 )))
             }
         }
@@ -1413,6 +1448,48 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     },
                 ))),
             });
+        }
+
+        if let Some(exec) = plan.downcast_ref::<FileSinkExec>() {
+            let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
+                exec.input().to_owned(),
+                extension_codec,
+            )?;
+            let sort_order = match exec.sort_order() {
+                Some(requirements) => {
+                    let expr = requirements
+                        .iter()
+                        .map(|requirement| {
+                            let expr: PhysicalSortExpr = requirement.to_owned().into();
+                            let sort_expr = protobuf::PhysicalSortExprNode {
+                                expr: Some(Box::new(expr.expr.to_owned().try_into()?)),
+                                asc: !expr.options.descending,
+                                nulls_first: expr.options.nulls_first,
+                            };
+                            Ok(sort_expr)
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    Some(PhysicalSortExprNodeCollection {
+                        physical_sort_expr_nodes: expr,
+                    })
+                }
+                None => None,
+            };
+
+            if let Some(sink) = exec.sink().as_any().downcast_ref::<JsonSink>() {
+                return Ok(protobuf::PhysicalPlanNode {
+                    physical_plan_type: Some(PhysicalPlanType::JsonSink(Box::new(
+                        protobuf::JsonSinkExecNode {
+                            input: Some(Box::new(input)),
+                            sink: Some(sink.try_into()?),
+                            sink_schema: Some(exec.schema().as_ref().try_into()?),
+                            sort_order,
+                        },
+                    ))),
+                });
+            }
+
+            // If unknown DataSink then let extension handle it
         }
 
         let mut buf: Vec<u8> = vec![];

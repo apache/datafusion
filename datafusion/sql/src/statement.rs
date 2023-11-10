@@ -31,7 +31,7 @@ use arrow_schema::DataType;
 use datafusion_common::file_options::StatementOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    not_impl_err, plan_datafusion_err, plan_err, unqualified_field_not_found,
+    not_impl_err, plan_datafusion_err, plan_err, unqualified_field_not_found, Column,
     Constraints, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
     Result, SchemaReference, TableReference, ToDFSchema,
 };
@@ -970,8 +970,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         from: Option<TableWithJoins>,
         predicate_expr: Option<Expr>,
     ) -> Result<LogicalPlan> {
-        let table_name = match &table.relation {
-            TableFactor::Table { name, .. } => name.clone(),
+        let (table_name, table_alias) = match &table.relation {
+            TableFactor::Table { name, alias, .. } => (name.clone(), alias.clone()),
             _ => plan_err!("Cannot update non-table relation!")?,
         };
 
@@ -1047,7 +1047,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         // Cast to target column type, if necessary
                         expr.cast_to(field.data_type(), source.schema())?
                     }
-                    None => datafusion_expr::Expr::Column(field.qualified_column()),
+                    None => {
+                        // If the target table has an alias, use it to qualify the column name
+                        if let Some(alias) = &table_alias {
+                            datafusion_expr::Expr::Column(Column::new(
+                                Some(self.normalizer.normalize(alias.name.clone())),
+                                field.name(),
+                            ))
+                        } else {
+                            datafusion_expr::Expr::Column(field.qualified_column())
+                        }
+                    }
                 };
                 Ok(expr.alias(field.name()))
             })

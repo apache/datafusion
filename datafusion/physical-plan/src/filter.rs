@@ -252,13 +252,25 @@ fn collect_new_statistics(
                 },
             )| {
                 let closed_interval = interval.close_bounds();
+                let (min_value, max_value) =
+                    if closed_interval.lower.value.eq(&closed_interval.upper.value) {
+                        (
+                            Precision::Exact(closed_interval.lower.value),
+                            Precision::Exact(closed_interval.upper.value),
+                        )
+                    } else {
+                        (
+                            Precision::Inexact(closed_interval.lower.value),
+                            Precision::Inexact(closed_interval.upper.value),
+                        )
+                    };
                 ColumnStatistics {
                     null_count: match input_column_stats[idx].null_count.get_value() {
                         Some(nc) => Precision::Inexact(*nc),
                         None => Precision::Absent,
                     },
-                    max_value: Precision::Inexact(closed_interval.upper.value),
-                    min_value: Precision::Inexact(closed_interval.lower.value),
+                    max_value,
+                    min_value,
                     distinct_count: match distinct_count.get_value() {
                         Some(dc) => Precision::Inexact(*dc),
                         None => Precision::Absent,
@@ -960,6 +972,28 @@ mod tests {
         };
 
         assert_eq!(filter_statistics, expected_filter_statistics);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_statistics_with_constant_column() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics::new_unknown(&schema),
+            schema,
+        ));
+        // WHERE a = 10
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Eq,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
+        ));
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, input)?);
+        let filter_statistics = filter.statistics()?;
+        // First column is "a", and it is a column with only one value after the filter.
+        assert!(filter_statistics.column_statistics[0].is_singleton());
 
         Ok(())
     }
