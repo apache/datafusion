@@ -208,7 +208,7 @@ async fn simple_aggregate() -> Result<()> {
 
 #[tokio::test]
 async fn aggregate_distinct_with_having() -> Result<()> {
-    roundtrip("SELECT a, count(distinct b) FROM data GROUP BY a, c HAVING count(b) > 100")
+    roundtrip("SELECT a, count(distinct b), sum(distinct e) FROM data GROUP BY a, c HAVING count(b) > 100")
         .await
 }
 
@@ -263,6 +263,15 @@ async fn select_distinct_two_fields() -> Result<()> {
     test_alias(
         "SELECT distinct a, b FROM data",
         "SELECT a, b FROM data GROUP BY a, b",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn simple_distinct_aggregate() -> Result<()> {
+    test_alias(
+        "SELECT a, count(distinct b) FROM data group by a",
+        "SELECT a, count(b) FROM (SELECT a, b FROM data group by a, b) group by a",
     )
     .await
 }

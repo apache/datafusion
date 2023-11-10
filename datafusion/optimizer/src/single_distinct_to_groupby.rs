@@ -226,7 +226,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                             false,
                                             filter.clone(),
                                             order_by.clone(),
-                                        ));
+                                        )).alias(aggr_expr.display_name()?);
                                     let inner_expr =
                                         Expr::AggregateFunction(AggregateFunction::new(
                                             inner_fun,
@@ -245,9 +245,6 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                         })
                         .collect::<Result<Vec<_>>>()?;
                     
-                    println!("inner_agg: {:?}", inner_aggr_exprs);
-                    println!("outer_agg: {:?}", outer_aggr_exprs);
-
                     // construct the inner AggrPlan
                     let inner_agg = LogicalPlan::Aggregate(Aggregate::try_new(
                         input.clone(),
@@ -474,9 +471,10 @@ mod tests {
             )?
             .build()?;
 
-        // Do nothing
-        let expected = "Aggregate: groupBy=[[test.a]], aggr=[[COUNT(DISTINCT test.b), COUNT(test.c)]] [a:UInt32, COUNT(DISTINCT test.b):Int64;N, COUNT(test.c):Int64;N]\
-                            \n  TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
+        // Should work
+        let expected = "Aggregate: groupBy=[[test.a]], aggr=[[COUNT(alias1) AS COUNT(DISTINCT test.b), SUM(alias2) AS COUNT(test.c)]] [a:UInt32, COUNT(DISTINCT test.b):Int64;N, COUNT(test.c):Int64;N]\
+                            \n  Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[COUNT(test.c) AS alias2]] [a:UInt32, alias1:UInt32, alias2:Int64;N]\
+                            \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_equal(&plan, expected)
     }
