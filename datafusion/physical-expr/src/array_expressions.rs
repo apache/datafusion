@@ -24,6 +24,7 @@ use arrow::array::*;
 use arrow::buffer::OffsetBuffer;
 use arrow::compute;
 use arrow::datatypes::{DataType, Field, UInt64Type};
+use arrow::row::{RowConverter, SortField};
 use arrow_buffer::NullBuffer;
 
 use datafusion_common::cast::{
@@ -35,6 +36,7 @@ use datafusion_common::{
     DataFusionError, Result,
 };
 
+use hashbrown::HashSet;
 use itertools::Itertools;
 
 macro_rules! downcast_arg {
@@ -347,7 +349,7 @@ fn array_array(args: &[ArrayRef], data_type: DataType) -> Result<ArrayRef> {
                     let data_type = arrays[0].data_type();
                     let field = Arc::new(Field::new("item", data_type.to_owned(), true));
                     let elements = arrays.iter().map(|x| x.as_ref()).collect::<Vec<_>>();
-                    let values = arrow::compute::concat(elements.as_slice())?;
+                    let values = compute::concat(elements.as_slice())?;
                     let list_arr = ListArray::new(
                         field,
                         OffsetBuffer::from_lengths(array_lengths),
@@ -368,7 +370,7 @@ fn array_array(args: &[ArrayRef], data_type: DataType) -> Result<ArrayRef> {
                 .iter()
                 .map(|x| x as &dyn Array)
                 .collect::<Vec<_>>();
-            let values = arrow::compute::concat(elements.as_slice())?;
+            let values = compute::concat(elements.as_slice())?;
             let list_arr = ListArray::new(
                 field,
                 OffsetBuffer::from_lengths(list_array_lengths),
@@ -767,7 +769,7 @@ fn concat_internal(args: &[ArrayRef]) -> Result<ArrayRef> {
                 .collect::<Vec<&dyn Array>>();
 
             // Concatenated array on i-th row
-            let concated_array = arrow::compute::concat(elements.as_slice())?;
+            let concated_array = compute::concat(elements.as_slice())?;
             array_lengths.push(concated_array.len());
             arrays.push(concated_array);
             valid.append(true);
@@ -785,7 +787,7 @@ fn concat_internal(args: &[ArrayRef]) -> Result<ArrayRef> {
     let list_arr = ListArray::new(
         Arc::new(Field::new("item", data_type, true)),
         OffsetBuffer::from_lengths(array_lengths),
-        Arc::new(arrow::compute::concat(elements.as_slice())?),
+        Arc::new(compute::concat(elements.as_slice())?),
         Some(NullBuffer::new(buffer)),
     );
     Ok(Arc::new(list_arr))
@@ -879,7 +881,7 @@ fn general_repeat(array: &ArrayRef, count_array: &Int64Array) -> Result<ArrayRef
     }
 
     let new_values: Vec<_> = new_values.iter().map(|a| a.as_ref()).collect();
-    let values = arrow::compute::concat(&new_values)?;
+    let values = compute::concat(&new_values)?;
 
     Ok(Arc::new(ListArray::try_new(
         Arc::new(Field::new("item", data_type.to_owned(), true)),
@@ -947,7 +949,7 @@ fn general_list_repeat(
 
     let lengths = new_values.iter().map(|a| a.len()).collect::<Vec<_>>();
     let new_values: Vec<_> = new_values.iter().map(|a| a.as_ref()).collect();
-    let values = arrow::compute::concat(&new_values)?;
+    let values = compute::concat(&new_values)?;
 
     Ok(Arc::new(ListArray::try_new(
         Arc::new(Field::new("item", data_type.to_owned(), true)),
@@ -1796,6 +1798,61 @@ pub fn string_to_array<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef
 
     let list_array = list_builder.finish();
     Ok(Arc::new(list_array) as ArrayRef)
+}
+
+/// array_intersect SQL function
+pub fn array_intersect(args: &[ArrayRef]) -> Result<ArrayRef> {
+    assert_eq!(args.len(), 2);
+
+    let first_array = as_list_array(&args[0])?;
+    let second_array = as_list_array(&args[1])?;
+
+    if first_array.value_type() != second_array.value_type() {
+        return internal_err!("array_intersect is not implemented for '{first_array:?}' and '{second_array:?}'");
+    }
+    let dt = first_array.value_type().clone();
+
+    let mut offsets = vec![0];
+    let mut new_arrays = vec![];
+
+    let converter = RowConverter::new(vec![SortField::new(dt.clone())])?;
+    for (first_arr, second_arr) in first_array.iter().zip(second_array.iter()) {
+        if let (Some(first_arr), Some(second_arr)) = (first_arr, second_arr) {
+            let l_values = converter.convert_columns(&[first_arr])?;
+            let r_values = converter.convert_columns(&[second_arr])?;
+
+            let values_set: HashSet<_> = l_values.iter().collect();
+            let mut rows = Vec::with_capacity(r_values.num_rows());
+            for r_val in r_values.iter().sorted().dedup() {
+                if values_set.contains(&r_val) {
+                    rows.push(r_val);
+                }
+            }
+
+            let last_offset: i32 = match offsets.last().copied() {
+                Some(offset) => offset,
+                None => return internal_err!("offsets should not be empty"),
+            };
+            offsets.push(last_offset + rows.len() as i32);
+            let arrays = converter.convert_rows(rows)?;
+            let array = match arrays.get(0) {
+                Some(array) => array.clone(),
+                None => {
+                    return internal_err!(
+                        "array_intersect: failed to get array from rows"
+                    )
+                }
+            };
+            new_arrays.push(array);
+        }
+    }
+
+    let field = Arc::new(Field::new("item", dt, true));
+    let offsets = OffsetBuffer::new(offsets.into());
+    let new_arrays_ref = new_arrays.iter().map(|v| v.as_ref()).collect::<Vec<_>>();
+    let values = compute::concat(&new_arrays_ref)?;
+    let arr = Arc::new(ListArray::try_new(field, offsets, values, None)?);
+    Ok(arr)
 }
 
 #[cfg(test)]
