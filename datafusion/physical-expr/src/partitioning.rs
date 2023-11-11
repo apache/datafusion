@@ -26,7 +26,7 @@ use crate::{physical_exprs_equal, EquivalenceProperties, PhysicalExpr};
 ///
 /// When `executed`, `ExecutionPlan`s  produce one or more independent stream of
 /// data batches in parallel, referred to as partitions. The streams are Rust
-/// `aync` [`Stream`]s (a special kind of future). The number of output
+/// `async` [`Stream`]s (a special kind of future). The number of output
 /// partitions varies based on the input and the operation performed.
 ///
 /// For example, an `ExecutionPlan` that has output partitioning of 3 will
