@@ -64,7 +64,7 @@ use crate::{physical_exprs_equal, EquivalenceProperties, PhysicalExpr};
 /// ```
 ///
 /// It is common (but not required) that an `ExecutionPlan` has the same number
-/// of input partitions as output partitons. However, some plans have different
+/// of input partitions as output partitions. However, some plans have different
 /// numbers such as the `RepartitionExec` that redistributes batches from some
 /// number of inputs to some number of outputs
 ///
