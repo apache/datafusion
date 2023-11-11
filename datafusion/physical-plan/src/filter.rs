@@ -197,11 +197,15 @@ impl ExecutionPlan for FilterExec {
         let input_stats = self.input.statistics()?;
         let schema = self.schema();
         if !check_support(predicate, &schema) {
-            // assume worst case, that the filter is highly unselective and
-            // returns all the rows from its input
+            // assume filter selects 20% of rows if we cannot do anything smarter
             // tracking issue for making this configurable:
             // https://github.com/apache/arrow-datafusion/issues/8133
-            return Ok(input_stats.clone().into_inexact());
+            let selectivity = 0.2_f32;
+            let mut stats = input_stats.clone().into_inexact();
+            if let Precision::Inexact(n) = stats.num_rows {
+                stats.num_rows = Precision::Inexact((selectivity * n as f32) as usize);
+            }
+            return Ok(stats);
         }
 
         let num_rows = input_stats.num_rows;
