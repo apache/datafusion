@@ -743,6 +743,18 @@ pub(super) fn create_abs_function(
     }
 }
 
+/// abs() SQL function implementation
+pub fn abs_invoke(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 1 {
+        return internal_err!("abs function requires 1 argument, got {}", args.len());
+    }
+
+    let input_data_type = args[0].data_type();
+    let abs_fun = create_abs_function(input_data_type)?;
+
+    abs_fun(args)
+}
+
 #[cfg(test)]
 mod tests {
 
