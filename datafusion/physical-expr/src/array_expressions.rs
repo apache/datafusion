@@ -589,45 +589,32 @@ pub fn array_append(args: &[ArrayRef]) -> Result<ArrayRef> {
         DataType::List(_) => concat_internal(args)?,
         DataType::Null => return make_array(&[element.to_owned()]),
         data_type => {
-            let mut new_values = vec![];
             let mut offsets = vec![0];
-
+            let my_arr = arr.values();
+            let original_data = my_arr.to_data();
             let elem_data = element.to_data();
-            for (row_index, arr) in arr.iter().enumerate() {
-                let new_array = if let Some(arr) = arr {
-                    let original_data = arr.to_data();
-                    let capacity = Capacities::Array(original_data.len() + 1);
-                    let mut mutable = MutableArrayData::with_capacities(
-                        vec![&original_data, &elem_data],
-                        false,
-                        capacity,
-                    );
-                    mutable.extend(0, 0, original_data.len());
-                    mutable.extend(1, row_index, row_index + 1);
-                    let data = mutable.freeze();
-                    arrow_array::make_array(data)
-                } else {
-                    let capacity = Capacities::Array(1);
-                    let mut mutable = MutableArrayData::with_capacities(
-                        vec![&elem_data],
-                        false,
-                        capacity,
-                    );
-                    mutable.extend(0, row_index, row_index + 1);
-                    let data = mutable.freeze();
-                    arrow_array::make_array(data)
-                };
-                offsets.push(offsets[row_index] + new_array.len() as i32);
-                new_values.push(new_array);
+            let capacity = Capacities::Array(original_data.len() + elem_data.len());
+
+            let mut mutable = MutableArrayData::with_capacities(
+                vec![&original_data, &elem_data],
+                false,
+                capacity,
+            );
+
+            for (row_index, arr_w) in arr.offsets().windows(2).enumerate() {
+                let start = arr_w[0] as usize;
+                let end = arr_w[1] as usize;
+                mutable.extend(0, start, end);
+                mutable.extend(1, row_index, row_index + 1);
+                offsets.push(offsets[row_index] + (end - start + 1) as i32);
             }
 
-            let new_values: Vec<_> = new_values.iter().map(|a| a.as_ref()).collect();
-            let values = arrow::compute::concat(&new_values)?;
+            let data = mutable.freeze();
 
             Arc::new(ListArray::try_new(
                 Arc::new(Field::new("item", data_type.to_owned(), true)),
                 OffsetBuffer::new(offsets.into()),
-                values,
+                arrow_array::make_array(data),
                 None,
             )?)
         }
