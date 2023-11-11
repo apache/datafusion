@@ -183,6 +183,55 @@ AS VALUES
 ;
 
 statement ok
+CREATE TABLE array_intersect_table_1D
+AS VALUES
+  (make_array(1, 2), make_array(1), make_array(1,2,3), make_array(1,3), make_array(1,3,5), make_array(2,4,6,8,1,3)),
+  (make_array(11, 22), make_array(11), make_array(11,22,33), make_array(11,33), make_array(11,33,55), make_array(22,44,66,88,11,33))
+;
+
+statement ok
+CREATE TABLE array_intersect_table_1D_Float
+AS VALUES
+  (make_array(1.0, 2.0), make_array(1.0), make_array(1.0,2.0,3.0), make_array(1.0,3.0), make_array(1.11), make_array(2.22, 3.33)),
+  (make_array(3.0, 4.0, 5.0), make_array(2.0), make_array(1.0,2.0,3.0,4.0), make_array(2.0,5.0), make_array(2.22, 1.11), make_array(1.11, 3.33))
+;
+
+statement ok
+CREATE TABLE array_intersect_table_1D_Boolean
+AS VALUES
+  (make_array(true, true, true), make_array(false), make_array(true, true, false, true, false), make_array(true, false, true), make_array(false), make_array(true, false)),
+  (make_array(false, false, false), make_array(false), make_array(true, false, true), make_array(true, true), make_array(true, true), make_array(false,false,true))
+;
+
+statement ok
+CREATE TABLE array_intersect_table_1D_UTF8
+AS VALUES
+  (make_array('a', 'bc', 'def'), make_array('bc'), make_array('datafusion', 'rust', 'arrow'), make_array('rust', 'arrow'), make_array('rust', 'arrow', 'python'), make_array('data')),
+  (make_array('a', 'bc', 'def'), make_array('defg'), make_array('datafusion', 'rust', 'arrow'), make_array('datafusion', 'rust', 'arrow', 'python'), make_array('rust', 'arrow'), make_array('datafusion', 'rust', 'arrow'))
+;
+
+statement ok
+CREATE TABLE array_intersect_table_2D
+AS VALUES
+  (make_array([1,2]), make_array([1,3]), make_array([1,2,3], [4,5], [6,7]), make_array([4,5], [6,7])),
+  (make_array([3,4], [5]), make_array([3,4]), make_array([1,2,3,4], [5,6,7], [8,9,10]), make_array([1,2,3], [5,6,7], [8,9,10]))
+;
+
+statement ok
+CREATE TABLE array_intersect_table_2D_float
+AS VALUES
+  (make_array([1.0, 2.0, 3.0], [1.1, 2.2], [3.3]), make_array([1.1, 2.2], [3.3])),
+  (make_array([1.0, 2.0, 3.0], [1.1, 2.2], [3.3]), make_array([1.0], [1.1, 2.2], [3.3]))
+;
+
+statement ok
+CREATE TABLE array_intersect_table_3D
+AS VALUES
+  (make_array([[1,2]]), make_array([[1]])),
+  (make_array([[1,2]]), make_array([[1,2]]))
+;
+
+statement ok
 CREATE TABLE arrays_values_without_nulls
 AS VALUES
   (make_array(1, 2, 3, 4, 5, 6, 7, 8, 9, 10), 1, 1, ',', [2,3]),
@@ -1556,19 +1605,35 @@ select array_positions(column1, make_array(4, 5, 6)), array_positions(make_array
 
 # array_replace scalar function #1
 query ???
-select array_replace(make_array(1, 2, 3, 4), 2, 3), array_replace(make_array(1, 4, 4, 5, 4, 6, 7), 4, 0), array_replace(make_array(1, 2, 3), 4, 0);
+select
+  array_replace(make_array(1, 2, 3, 4), 2, 3),
+  array_replace(make_array(1, 4, 4, 5, 4, 6, 7), 4, 0),
+  array_replace(make_array(1, 2, 3), 4, 0);
 ----
 [1, 3, 3, 4] [1, 0, 4, 5, 4, 6, 7] [1, 2, 3]
 
 # array_replace scalar function #2 (element is list)
 query ??
-select array_replace(make_array([1, 2, 3], [4, 5, 6], [5, 5, 5], [4, 5, 6], [7, 8, 9]), [4, 5, 6], [1, 1, 1]), array_replace(make_array([1, 3, 2], [2, 3, 4], [2, 3, 4], [5, 3, 1], [1, 3, 2]), [2, 3, 4], [3, 1, 4]);
+select
+  array_replace(
+    make_array([1, 2, 3], [4, 5, 6], [5, 5, 5], [4, 5, 6], [7, 8, 9]),
+    [4, 5, 6],
+    [1, 1, 1]
+  ),
+  array_replace(
+    make_array([1, 3, 2], [2, 3, 4], [2, 3, 4], [5, 3, 1], [1, 3, 2]),
+    [2, 3, 4],
+    [3, 1, 4]
+  );
 ----
 [[1, 2, 3], [1, 1, 1], [5, 5, 5], [4, 5, 6], [7, 8, 9]] [[1, 3, 2], [3, 1, 4], [2, 3, 4], [5, 3, 1], [1, 3, 2]]
 
 # list_replace scalar function #3 (function alias `list_replace`)
 query ???
-select list_replace(make_array(1, 2, 3, 4), 2, 3), list_replace(make_array(1, 4, 4, 5, 4, 6, 7), 4, 0), list_replace(make_array(1, 2, 3), 4, 0);
+select list_replace(
+  make_array(1, 2, 3, 4), 2, 3),
+  list_replace(make_array(1, 4, 4, 5, 4, 6, 7), 4, 0),
+  list_replace(make_array(1, 2, 3), 4, 0);
 ----
 [1, 3, 3, 4] [1, 0, 4, 5, 4, 6, 7] [1, 2, 3]
 
@@ -1592,7 +1657,11 @@ select array_replace(column1, column2, column3) from nested_arrays_with_repeatin
 
 # array_replace scalar function with columns and scalars #1
 query ???
-select array_replace(make_array(1, 2, 2, 4, 5, 4, 4, 7, 7, 10, 7, 8), column2, column3), array_replace(column1, 1, column3), array_replace(column1, column2, 4) from arrays_with_repeating_elements;
+select
+  array_replace(make_array(1, 2, 2, 4, 5, 4, 4, 7, 7, 10, 7, 8), column2, column3),
+  array_replace(column1, 1, column3),
+  array_replace(column1, column2, 4)
+from arrays_with_repeating_elements;
 ----
 [1, 4, 2, 4, 5, 4, 4, 7, 7, 10, 7, 8] [4, 2, 1, 3, 2, 2, 1, 3, 2, 3] [1, 4, 1, 3, 2, 2, 1, 3, 2, 3]
 [1, 2, 2, 7, 5, 4, 4, 7, 7, 10, 7, 8] [4, 4, 5, 5, 6, 5, 5, 5, 4, 4] [4, 4, 5, 5, 6, 5, 5, 5, 4, 4]
@@ -1601,7 +1670,16 @@ select array_replace(make_array(1, 2, 2, 4, 5, 4, 4, 7, 7, 10, 7, 8), column2, c
 
 # array_replace scalar function with columns and scalars #2 (element is list)
 query ???
-select array_replace(make_array([1, 2, 3], [4, 5, 6], [4, 5, 6], [10, 11, 12], [13, 14, 15], [10, 11, 12], [10, 11, 12], [19, 20, 21], [19, 20, 21], [28, 29, 30], [19, 20, 21], [22, 23, 24]), column2, column3), array_replace(column1, make_array(1, 2, 3), column3), array_replace(column1, column2, make_array(11, 12, 13)) from nested_arrays_with_repeating_elements;
+select
+  array_replace(
+    make_array(
+      [1, 2, 3], [4, 5, 6], [4, 5, 6], [10, 11, 12], [13, 14, 15], [10, 11, 12], [10, 11, 12], [19, 20, 21], [19, 20, 21], [28, 29, 30], [19, 20, 21], [22, 23, 24]),
+      column2,
+      column3
+    ),
+  array_replace(column1, make_array(1, 2, 3), column3),
+  array_replace(column1, column2, make_array(11, 12, 13))
+from nested_arrays_with_repeating_elements;
 ----
 [[1, 2, 3], [10, 11, 12], [4, 5, 6], [10, 11, 12], [13, 14, 15], [10, 11, 12], [10, 11, 12], [19, 20, 21], [19, 20, 21], [28, 29, 30], [19, 20, 21], [22, 23, 24]] [[10, 11, 12], [4, 5, 6], [1, 2, 3], [7, 8, 9], [4, 5, 6], [4, 5, 6], [1, 2, 3], [7, 8, 9], [4, 5, 6], [7, 8, 9]] [[1, 2, 3], [11, 12, 13], [1, 2, 3], [7, 8, 9], [4, 5, 6], [4, 5, 6], [1, 2, 3], [7, 8, 9], [4, 5, 6], [7, 8, 9]]
 [[1, 2, 3], [4, 5, 6], [4, 5, 6], [19, 20, 21], [13, 14, 15], [10, 11, 12], [10, 11, 12], [19, 20, 21], [19, 20, 21], [28, 29, 30], [19, 20, 21], [22, 23, 24]] [[10, 11, 12], [10, 11, 12], [13, 14, 15], [13, 14, 15], [16, 17, 18], [13, 14, 15], [13, 14, 15], [13, 14, 15], [10, 11, 12], [10, 11, 12]] [[11, 12, 13], [10, 11, 12], [13, 14, 15], [13, 14, 15], [16, 17, 18], [13, 14, 15], [13, 14, 15], [13, 14, 15], [10, 11, 12], [10, 11, 12]]
@@ -1612,25 +1690,45 @@ select array_replace(make_array([1, 2, 3], [4, 5, 6], [4, 5, 6], [10, 11, 12], [
 
 # array_replace_n scalar function #1
 query ???
-select array_replace_n(make_array(1, 2, 3, 4), 2, 3, 2), array_replace_n(make_array(1, 4, 4, 5, 4, 6, 7), 4, 0, 2), array_replace_n(make_array(1, 2, 3), 4, 0, 3);
+select
+  array_replace_n(make_array(1, 2, 3, 4), 2, 3, 2),
+  array_replace_n(make_array(1, 4, 4, 5, 4, 6, 7), 4, 0, 2),
+  array_replace_n(make_array(1, 2, 3), 4, 0, 3);
 ----
 [1, 3, 3, 4] [1, 0, 0, 5, 4, 6, 7] [1, 2, 3]
 
 # array_replace_n scalar function #2 (element is list)
 query ??
-select array_replace_n(make_array([1, 2, 3], [4, 5, 6], [5, 5, 5], [4, 5, 6], [7, 8, 9]), [4, 5, 6], [1, 1, 1], 2), array_replace_n(make_array([1, 3, 2], [2, 3, 4], [2, 3, 4], [5, 3, 1], [1, 3, 2]), [2, 3, 4], [3, 1, 4], 2);
+select
+  array_replace_n(
+    make_array([1, 2, 3], [4, 5, 6], [5, 5, 5], [4, 5, 6], [7, 8, 9]),
+      [4, 5, 6],
+      [1, 1, 1],
+      2
+    ),
+  array_replace_n(
+    make_array([1, 3, 2], [2, 3, 4], [2, 3, 4], [5, 3, 1], [1, 3, 2]),
+    [2, 3, 4],
+    [3, 1, 4],
+    2
+  );
 ----
 [[1, 2, 3], [1, 1, 1], [5, 5, 5], [1, 1, 1], [7, 8, 9]] [[1, 3, 2], [3, 1, 4], [3, 1, 4], [5, 3, 1], [1, 3, 2]]
 
 # list_replace_n scalar function #3 (function alias `array_replace_n`)
 query ???
-select list_replace_n(make_array(1, 2, 3, 4), 2, 3, 2), list_replace_n(make_array(1, 4, 4, 5, 4, 6, 7), 4, 0, 2), list_replace_n(make_array(1, 2, 3), 4, 0, 3);
+select
+  list_replace_n(make_array(1, 2, 3, 4), 2, 3, 2),
+  list_replace_n(make_array(1, 4, 4, 5, 4, 6, 7), 4, 0, 2),
+  list_replace_n(make_array(1, 2, 3), 4, 0, 3);
 ----
 [1, 3, 3, 4] [1, 0, 0, 5, 4, 6, 7] [1, 2, 3]
 
 # array_replace_n scalar function with columns #1
 query ?
-select array_replace_n(column1, column2, column3, column4) from arrays_with_repeating_elements;
+select
+  array_replace_n(column1, column2, column3, column4)
+from arrays_with_repeating_elements;
 ----
 [1, 4, 1, 3, 4, 4, 1, 3, 2, 3]
 [7, 7, 5, 5, 6, 5, 5, 5, 4, 4]
@@ -1639,7 +1737,9 @@ select array_replace_n(column1, column2, column3, column4) from arrays_with_repe
 
 # array_replace_n scalar function with columns #2 (element is list)
 query ?
-select array_replace_n(column1, column2, column3, column4) from nested_arrays_with_repeating_elements;
+select
+  array_replace_n(column1, column2, column3, column4)
+from nested_arrays_with_repeating_elements;
 ----
 [[1, 2, 3], [10, 11, 12], [1, 2, 3], [7, 8, 9], [10, 11, 12], [10, 11, 12], [1, 2, 3], [7, 8, 9], [4, 5, 6], [7, 8, 9]]
 [[19, 20, 21], [19, 20, 21], [13, 14, 15], [13, 14, 15], [16, 17, 18], [13, 14, 15], [13, 14, 15], [13, 14, 15], [10, 11, 12], [10, 11, 12]]
@@ -1648,7 +1748,12 @@ select array_replace_n(column1, column2, column3, column4) from nested_arrays_wi
 
 # array_replace_n scalar function with columns and scalars #1
 query ????
-select array_replace_n(make_array(1, 2, 2, 4, 5, 4, 4, 7, 7, 10, 7, 8), column2, column3, column4), array_replace_n(column1, 1, column3, column4), array_replace_n(column1, column2, 4, column4), array_replace_n(column1, column2, column3, 2) from arrays_with_repeating_elements;
+select
+  array_replace_n(make_array(1, 2, 2, 4, 5, 4, 4, 7, 7, 10, 7, 8), column2, column3, column4),
+  array_replace_n(column1, 1, column3, column4),
+  array_replace_n(column1, column2, 4, column4),
+  array_replace_n(column1, column2, column3, 2)
+from arrays_with_repeating_elements;
 ----
 [1, 4, 4, 4, 5, 4, 4, 7, 7, 10, 7, 8] [4, 2, 4, 3, 2, 2, 4, 3, 2, 3] [1, 4, 1, 3, 4, 4, 1, 3, 2, 3] [1, 4, 1, 3, 4, 2, 1, 3, 2, 3]
 [1, 2, 2, 7, 5, 7, 4, 7, 7, 10, 7, 8] [4, 4, 5, 5, 6, 5, 5, 5, 4, 4] [4, 4, 5, 5, 6, 5, 5, 5, 4, 4] [7, 7, 5, 5, 6, 5, 5, 5, 4, 4]
@@ -1657,7 +1762,18 @@ select array_replace_n(make_array(1, 2, 2, 4, 5, 4, 4, 7, 7, 10, 7, 8), column2,
 
 # array_replace_n scalar function with columns and scalars #2 (element is list)
 query ????
-select array_replace_n(make_array([7, 8, 9], [2, 1, 3], [1, 5, 6], [10, 11, 12], [2, 1, 3], [7, 8, 9], [4, 5, 6]), column2, column3, column4), array_replace_n(column1, make_array(1, 2, 3), column3, column4), array_replace_n(column1, column2, make_array(11, 12, 13), column4), array_replace_n(column1, column2, column3, 2) from nested_arrays_with_repeating_elements;
+select
+  array_replace_n(
+    make_array(
+      [7, 8, 9], [2, 1, 3], [1, 5, 6], [10, 11, 12], [2, 1, 3], [7, 8, 9], [4, 5, 6]),
+      column2,
+      column3,
+      column4
+    ),
+    array_replace_n(column1, make_array(1, 2, 3), column3, column4),
+    array_replace_n(column1, column2, make_array(11, 12, 13), column4),
+    array_replace_n(column1, column2, column3, 2)
+from nested_arrays_with_repeating_elements;
 ----
 [[7, 8, 9], [2, 1, 3], [1, 5, 6], [10, 11, 12], [2, 1, 3], [7, 8, 9], [10, 11, 12]] [[10, 11, 12], [4, 5, 6], [10, 11, 12], [7, 8, 9], [4, 5, 6], [4, 5, 6], [10, 11, 12], [7, 8, 9], [4, 5, 6], [7, 8, 9]] [[1, 2, 3], [11, 12, 13], [1, 2, 3], [7, 8, 9], [11, 12, 13], [11, 12, 13], [1, 2, 3], [7, 8, 9], [4, 5, 6], [7, 8, 9]] [[1, 2, 3], [10, 11, 12], [1, 2, 3], [7, 8, 9], [10, 11, 12], [4, 5, 6], [1, 2, 3], [7, 8, 9], [4, 5, 6], [7, 8, 9]]
 [[7, 8, 9], [2, 1, 3], [1, 5, 6], [19, 20, 21], [2, 1, 3], [7, 8, 9], [4, 5, 6]] [[10, 11, 12], [10, 11, 12], [13, 14, 15], [13, 14, 15], [16, 17, 18], [13, 14, 15], [13, 14, 15], [13, 14, 15], [10, 11, 12], [10, 11, 12]] [[11, 12, 13], [11, 12, 13], [13, 14, 15], [13, 14, 15], [16, 17, 18], [13, 14, 15], [13, 14, 15], [13, 14, 15], [10, 11, 12], [10, 11, 12]] [[19, 20, 21], [19, 20, 21], [13, 14, 15], [13, 14, 15], [16, 17, 18], [13, 14, 15], [13, 14, 15], [13, 14, 15], [10, 11, 12], [10, 11, 12]]
@@ -1668,25 +1784,43 @@ select array_replace_n(make_array([7, 8, 9], [2, 1, 3], [1, 5, 6], [10, 11, 12],
 
 # array_replace_all scalar function #1
 query ???
-select array_replace_all(make_array(1, 2, 3, 4), 2, 3), array_replace_all(make_array(1, 4, 4, 5, 4, 6, 7), 4, 0), array_replace_all(make_array(1, 2, 3), 4, 0);
+select
+  array_replace_all(make_array(1, 2, 3, 4), 2, 3),
+  array_replace_all(make_array(1, 4, 4, 5, 4, 6, 7), 4, 0),
+  array_replace_all(make_array(1, 2, 3), 4, 0);
 ----
 [1, 3, 3, 4] [1, 0, 0, 5, 0, 6, 7] [1, 2, 3]
 
 # array_replace_all scalar function #2 (element is list)
 query ??
-select array_replace_all(make_array([1, 2, 3], [4, 5, 6], [5, 5, 5], [4, 5, 6], [7, 8, 9]), [4, 5, 6], [1, 1, 1]), array_replace_all(make_array([1, 3, 2], [2, 3, 4], [2, 3, 4], [5, 3, 1], [1, 3, 2]), [2, 3, 4], [3, 1, 4]);
+select
+  array_replace_all(
+    make_array([1, 2, 3], [4, 5, 6], [5, 5, 5], [4, 5, 6], [7, 8, 9]),
+    [4, 5, 6],
+    [1, 1, 1]
+  ),
+  array_replace_all(
+    make_array([1, 3, 2], [2, 3, 4], [2, 3, 4], [5, 3, 1], [1, 3, 2]),
+    [2, 3, 4],
+    [3, 1, 4]
+  );
 ----
 [[1, 2, 3], [1, 1, 1], [5, 5, 5], [1, 1, 1], [7, 8, 9]] [[1, 3, 2], [3, 1, 4], [3, 1, 4], [5, 3, 1], [1, 3, 2]]
 
 # list_replace_all scalar function #3 (function alias `array_replace_all`)
 query ???
-select list_replace_all(make_array(1, 2, 3, 4), 2, 3), list_replace_all(make_array(1, 4, 4, 5, 4, 6, 7), 4, 0), list_replace_all(make_array(1, 2, 3), 4, 0);
+select
+  list_replace_all(make_array(1, 2, 3, 4), 2, 3),
+  list_replace_all(make_array(1, 4, 4, 5, 4, 6, 7), 4, 0),
+  list_replace_all(make_array(1, 2, 3), 4, 0);
 ----
 [1, 3, 3, 4] [1, 0, 0, 5, 0, 6, 7] [1, 2, 3]
 
 # array_replace_all scalar function with columns #1
 query ?
-select array_replace_all(column1, column2, column3) from arrays_with_repeating_elements;
+select
+  array_replace_all(column1, column2, column3)
+from arrays_with_repeating_elements;
 ----
 [1, 4, 1, 3, 4, 4, 1, 3, 4, 3]
 [7, 7, 5, 5, 6, 5, 5, 5, 7, 7]
@@ -1695,7 +1829,9 @@ select array_replace_all(column1, column2, column3) from arrays_with_repeating_e
 
 # array_replace_all scalar function with columns #2 (element is list)
 query ?
-select array_replace_all(column1, column2, column3) from nested_arrays_with_repeating_elements;
+select
+  array_replace_all(column1, column2, column3)
+from nested_arrays_with_repeating_elements;
 ----
 [[1, 2, 3], [10, 11, 12], [1, 2, 3], [7, 8, 9], [10, 11, 12], [10, 11, 12], [1, 2, 3], [7, 8, 9], [10, 11, 12], [7, 8, 9]]
 [[19, 20, 21], [19, 20, 21], [13, 14, 15], [13, 14, 15], [16, 17, 18], [13, 14, 15], [13, 14, 15], [13, 14, 15], [19, 20, 21], [19, 20, 21]]
@@ -1704,7 +1840,11 @@ select array_replace_all(column1, column2, column3) from nested_arrays_with_repe
 
 # array_replace_all scalar function with columns and scalars #1
 query ???
-select array_replace_all(make_array(1, 2, 2, 4, 5, 4, 4, 7, 7, 10, 7, 8), column2, column3), array_replace_all(column1, 1, column3), array_replace_all(column1, column2, 4) from arrays_with_repeating_elements;
+select
+  array_replace_all(make_array(1, 2, 2, 4, 5, 4, 4, 7, 7, 10, 7, 8), column2, column3),
+  array_replace_all(column1, 1, column3),
+  array_replace_all(column1, column2, 4)
+from arrays_with_repeating_elements;
 ----
 [1, 4, 4, 4, 5, 4, 4, 7, 7, 10, 7, 8] [4, 2, 4, 3, 2, 2, 4, 3, 2, 3] [1, 4, 1, 3, 4, 4, 1, 3, 4, 3]
 [1, 2, 2, 7, 5, 7, 7, 7, 7, 10, 7, 8] [4, 4, 5, 5, 6, 5, 5, 5, 4, 4] [4, 4, 5, 5, 6, 5, 5, 5, 4, 4]
@@ -1713,7 +1853,15 @@ select array_replace_all(make_array(1, 2, 2, 4, 5, 4, 4, 7, 7, 10, 7, 8), column
 
 # array_replace_all scalar function with columns and scalars #2 (element is list)
 query ???
-select array_replace_all(make_array([1, 2, 3], [4, 5, 6], [4, 5, 6], [10, 11, 12], [13, 14, 15], [10, 11, 12], [10, 11, 12], [19, 20, 21], [19, 20, 21], [28, 29, 30], [19, 20, 21], [22, 23, 24]), column2, column3), array_replace_all(column1, make_array(1, 2, 3), column3), array_replace_all(column1, column2, make_array(11, 12, 13)) from nested_arrays_with_repeating_elements;
+select
+  array_replace_all(
+    make_array([1, 2, 3], [4, 5, 6], [4, 5, 6], [10, 11, 12], [13, 14, 15], [10, 11, 12], [10, 11, 12], [19, 20, 21], [19, 20, 21], [28, 29, 30], [19, 20, 21], [22, 23, 24]),
+    column2,
+    column3
+  ),
+  array_replace_all(column1, make_array(1, 2, 3), column3),
+  array_replace_all(column1, column2, make_array(11, 12, 13))
+from nested_arrays_with_repeating_elements;
 ----
 [[1, 2, 3], [10, 11, 12], [10, 11, 12], [10, 11, 12], [13, 14, 15], [10, 11, 12], [10, 11, 12], [19, 20, 21], [19, 20, 21], [28, 29, 30], [19, 20, 21], [22, 23, 24]] [[10, 11, 12], [4, 5, 6], [10, 11, 12], [7, 8, 9], [4, 5, 6], [4, 5, 6], [10, 11, 12], [7, 8, 9], [4, 5, 6], [7, 8, 9]] [[1, 2, 3], [11, 12, 13], [1, 2, 3], [7, 8, 9], [11, 12, 13], [11, 12, 13], [1, 2, 3], [7, 8, 9], [11, 12, 13], [7, 8, 9]]
 [[1, 2, 3], [4, 5, 6], [4, 5, 6], [19, 20, 21], [13, 14, 15], [19, 20, 21], [19, 20, 21], [19, 20, 21], [19, 20, 21], [28, 29, 30], [19, 20, 21], [22, 23, 24]] [[10, 11, 12], [10, 11, 12], [13, 14, 15], [13, 14, 15], [16, 17, 18], [13, 14, 15], [13, 14, 15], [13, 14, 15], [10, 11, 12], [10, 11, 12]] [[11, 12, 13], [11, 12, 13], [13, 14, 15], [13, 14, 15], [16, 17, 18], [13, 14, 15], [13, 14, 15], [13, 14, 15], [11, 12, 13], [11, 12, 13]]
@@ -2316,6 +2464,86 @@ select array_has_all(make_array(1,2,3), make_array(1,3)),
 ----
 true false true false false false true true false false true false true
 
+query ???
+select array_intersect(column1, column2),
+       array_intersect(column3, column4),
+       array_intersect(column5, column6)
+from array_intersect_table_1D;
+----
+[1] [1, 3] [1, 3]
+[11] [11, 33] [11, 33]
+
+query ???
+select array_intersect(column1, column2),
+       array_intersect(column3, column4),
+       array_intersect(column5, column6)
+from array_intersect_table_1D_Float;
+----
+[1.0] [1.0, 3.0] []
+[] [2.0] [1.11]
+
+query ???
+select array_intersect(column1, column2),
+       array_intersect(column3, column4),
+       array_intersect(column5, column6)
+from array_intersect_table_1D_Boolean;
+----
+[] [false, true] [false]
+[false] [true] [true]
+
+query ???
+select array_intersect(column1, column2),
+       array_intersect(column3, column4),
+       array_intersect(column5, column6)
+from array_intersect_table_1D_UTF8;
+----
+[bc] [arrow, rust] []
+[] [arrow, datafusion, rust] [arrow, rust]
+
+query ??
+select array_intersect(column1, column2),
+       array_intersect(column3, column4)
+from array_intersect_table_2D;
+----
+[] [[4, 5], [6, 7]]
+[[3, 4]] [[5, 6, 7], [8, 9, 10]]
+
+query ?
+select array_intersect(column1, column2)
+from array_intersect_table_2D_float;
+----
+[[1.1, 2.2], [3.3]]
+[[1.1, 2.2], [3.3]]
+
+query ?
+select array_intersect(column1, column2)
+from array_intersect_table_3D;
+----
+[]
+[[[1, 2]]]
+
+query ??????
+SELECT  array_intersect(make_array(1,2,3), make_array(2,3,4)),
+        array_intersect(make_array(1,3,5), make_array(2,4,6)),
+        array_intersect(make_array('aa','bb','cc'), make_array('cc','aa','dd')), 
+        array_intersect(make_array(true, false), make_array(true)),
+        array_intersect(make_array(1.1, 2.2, 3.3), make_array(2.2, 3.3, 4.4)),
+        array_intersect(make_array([1, 1], [2, 2], [3, 3]), make_array([2, 2], [3, 3], [4, 4]))
+;
+----
+[2, 3] [] [aa, cc] [true] [2.2, 3.3] [[2, 2], [3, 3]]
+
+query ??????
+SELECT  list_intersect(make_array(1,2,3), make_array(2,3,4)),
+        list_intersect(make_array(1,3,5), make_array(2,4,6)),
+        list_intersect(make_array('aa','bb','cc'), make_array('cc','aa','dd')), 
+        list_intersect(make_array(true, false), make_array(true)),
+        list_intersect(make_array(1.1, 2.2, 3.3), make_array(2.2, 3.3, 4.4)),
+        list_intersect(make_array([1, 1], [2, 2], [3, 3]), make_array([2, 2], [3, 3], [4, 4]))
+;
+----
+[2, 3] [] [aa, cc] [true] [2.2, 3.3] [[2, 2], [3, 3]]
+
 query BBBB
 select list_has_all(make_array(1,2,3), make_array(4,5,6)),
        list_has_all(make_array(1,2,3), make_array(1,2)),
@@ -2607,6 +2835,27 @@ drop table array_has_table_2D_float;
 
 statement ok
 drop table array_has_table_3D;
+
+statement ok
+drop table array_intersect_table_1D;
+
+statement ok
+drop table array_intersect_table_1D_Float;
+
+statement ok
+drop table array_intersect_table_1D_Boolean;
+
+statement ok
+drop table array_intersect_table_1D_UTF8;
+
+statement ok
+drop table array_intersect_table_2D;
+
+statement ok
+drop table array_intersect_table_2D_float;
+
+statement ok
+drop table array_intersect_table_3D;
 
 statement ok
 drop table arrays_values_without_nulls;
