@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`RepartitionExec`]  operator that maps N input partitions to M output
-//! partitions based on a partitioning scheme, optionally maintaining the order
-//! of the input rows in the output.
+//! This file implements the [`RepartitionExec`]  operator, which maps N input
+//! partitions to M output partitions based on a partitioning scheme, optionally
+//! maintaining the order of the input rows in the output.
 
 use std::pin::Pin;
 use std::sync::Arc;
