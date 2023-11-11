@@ -205,6 +205,10 @@ impl ExecutionPlan for FilterExec {
             if let Precision::Inexact(n) = stats.num_rows {
                 stats.num_rows = Precision::Inexact((selectivity * n as f32) as usize);
             }
+            if let Precision::Inexact(n) = stats.total_byte_size {
+                stats.total_byte_size =
+                    Precision::Inexact((selectivity * n as f32) as usize);
+            }
             return Ok(stats);
         }
 
