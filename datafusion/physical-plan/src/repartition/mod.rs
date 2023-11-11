@@ -1439,3 +1439,124 @@ mod tests {
         .unwrap()
     }
 }
+
+#[cfg(test)]
+mod test {
+    use arrow_schema::{DataType, Field, Schema, SortOptions};
+    use datafusion_physical_expr::expressions::col;
+    use crate::memory::MemoryExec;
+    use super::*;
+    use crate::union::UnionExec;
+
+    /// Asserts that the plan is as expected
+    ///
+    /// `$EXPECTED_PLAN_LINES`: input plan
+    /// `$PLAN`: the plan to optimized
+    ///
+    macro_rules! assert_plan {
+        ($EXPECTED_PLAN_LINES: expr,  $PLAN: expr) => {
+            let physical_plan = $PLAN;
+            let formatted = crate::displayable(&physical_plan).indent(true).to_string();
+            let actual: Vec<&str> = formatted.trim().lines().collect();
+
+            let expected_plan_lines: Vec<&str> = $EXPECTED_PLAN_LINES
+                .iter().map(|s| *s).collect();
+
+            assert_eq!(
+                expected_plan_lines, actual,
+                "\n**Original Plan Mismatch\n\nexpected:\n\n{expected_plan_lines:#?}\nactual:\n\n{actual:#?}\n\n"
+            );
+        };
+    }
+
+    #[tokio::test]
+    async fn test_preserve_order() -> Result<()> {
+        let schema = test_schema();
+        let sort_exprs = sort_exprs(&schema);
+        let source1 = sorted_memory_exec(&schema, sort_exprs.clone());
+        let source2 = sorted_memory_exec(&schema, sort_exprs);
+        // output has multiple partitions, and is sorted
+        let union = UnionExec::new(vec![source1, source2]);
+        let exec =             RepartitionExec::try_new(Arc::new(union), Partitioning::RoundRobinBatch(10))
+            .unwrap()
+            .with_preserve_order(true);
+
+        // Repartition should preserve order
+        let expected_plan = [
+            "SortPreservingRepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2, sort_exprs=c0@0 ASC",
+            "  UnionExec",
+            "    MemoryExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC",
+            "    MemoryExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC",
+        ];
+        assert_plan!(expected_plan, exec);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_preserve_order_one_partition() -> Result<()> {
+        let schema = test_schema();
+        let sort_exprs = sort_exprs(&schema);
+        let source = sorted_memory_exec(&schema, sort_exprs);
+        // output is sorted, but has only a single partition, so no need to sort
+        let exec =             RepartitionExec::try_new(source, Partitioning::RoundRobinBatch(10))
+            .unwrap()
+            .with_preserve_order(true);
+
+        // Repartition should not preserve order
+        let expected_plan = [
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "  MemoryExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC",
+        ];
+        assert_plan!(expected_plan, exec);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_preserve_order_input_not_sorted() -> Result<()> {
+        let schema = test_schema();
+        let source1 = memory_exec(&schema);
+        let source2 = memory_exec(&schema);
+        // output has multiple partitions, but is not sorted
+        let union = UnionExec::new(vec![source1, source2]);
+        let exec =             RepartitionExec::try_new(Arc::new(union), Partitioning::RoundRobinBatch(10))
+            .unwrap()
+            .with_preserve_order(true);
+
+        // Repartition should not preserve order, as there is no order to preserve
+        let expected_plan = [
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
+            "  UnionExec",
+            "    MemoryExec: partitions=1, partition_sizes=[0]",
+            "    MemoryExec: partitions=1, partition_sizes=[0]",
+        ];
+        assert_plan!(expected_plan, exec);
+        Ok(())
+    }
+
+    fn test_schema() -> Arc<Schema> {
+        Arc::new(Schema::new(vec![Field::new("c0", DataType::UInt32, false)]))
+    }
+
+    fn sort_exprs(schema: &Schema) -> Vec<PhysicalSortExpr> {
+        let options = SortOptions::default();
+        vec![PhysicalSortExpr {
+            expr: col("c0", schema).unwrap(),
+            options,
+        }]
+    }
+
+
+    fn memory_exec(schema: &SchemaRef) -> Arc<dyn ExecutionPlan> {
+        Arc::new(MemoryExec::try_new(&[vec![]], schema.clone(), None).unwrap())
+    }
+
+    fn sorted_memory_exec(schema: &SchemaRef, sort_exprs: Vec<PhysicalSortExpr>) -> Arc<dyn ExecutionPlan> {
+        Arc::new(
+            MemoryExec::try_new(&[vec![]], schema.clone(), None).unwrap()
+                .with_sort_information(vec![sort_exprs])
+        )
+    }
+
+
+
+}

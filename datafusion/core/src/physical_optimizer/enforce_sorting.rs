@@ -844,26 +844,6 @@ mod tests {
         };
     }
 
-    /// Asserts that the plan is as expected
-    ///
-    /// `$EXPECTED_PLAN_LINES`: input plan
-    /// `$PLAN`: the plan to optimized
-    ///
-    macro_rules! assert_plan {
-        ($EXPECTED_PLAN_LINES: expr,  $PLAN: expr) => {
-            let physical_plan = $PLAN;
-            let formatted = displayable(physical_plan.as_ref()).indent(true).to_string();
-            let actual: Vec<&str> = formatted.trim().lines().collect();
-
-            let expected_plan_lines: Vec<&str> = $EXPECTED_PLAN_LINES
-                .iter().map(|s| *s).collect();
-
-            assert_eq!(
-                expected_plan_lines, actual,
-                "\n**Original Plan Mismatch\n\nexpected:\n\n{expected_plan_lines:#?}\nactual:\n\n{actual:#?}\n\n"
-            );
-        };
-    }
 
     #[tokio::test]
     async fn test_remove_unnecessary_sort() -> Result<()> {
@@ -1071,28 +1051,6 @@ mod tests {
             "      MemoryExec: partitions=1, partition_sizes=[0]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_repartition_with_unecessary_preserve_order() -> Result<()> {
-        // ensures that if a RepartionExec is created by this pass
-        // it will not incorrectly keep sorting
-        let schema = create_test_schema()?;
-        let source1 = memory_exec(&schema);
-        let source2 = memory_exec(&schema);
-        // output has multiple partitions, but is not sorted, with 2 partitions
-        let union = union_exec(vec![source1, source2]);
-        let exec = spr_repartition_exec(union);
-
-        // Repartition should not preserve order, as there is no order to preserve
-        let expected_plan = [
-            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
-            "  UnionExec",
-            "    MemoryExec: partitions=1, partition_sizes=[0]",
-            "    MemoryExec: partitions=1, partition_sizes=[0]",
-        ];
-        assert_plan!(expected_plan, exec);
         Ok(())
     }
 
