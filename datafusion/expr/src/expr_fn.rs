@@ -715,6 +715,12 @@ nary_scalar_expr!(
     array,
     "returns an Arrow array using the specified input expressions."
 );
+scalar_expr!(
+    ArrayIntersect,
+    array_intersect,
+    first_array second_array,
+    "Returns an array of the elements in the intersection of array1 and array2."
+);
 
 // string functions
 scalar_expr!(Ascii, ascii, chr, "ASCII code value of the character");
@@ -870,6 +876,13 @@ scalar_expr!(
 );
 
 scalar_expr!(ArrowTypeof, arrow_typeof, val, "data type");
+
+scalar_expr!(
+    Struct,
+    struct_fun,
+    val,
+    "returns a vector of fields from the struct"
+);
 
 /// Create a CASE WHEN statement with literal WHEN expressions for comparison to the base expression.
 pub fn case(expr: Expr) -> CaseBuilder {
