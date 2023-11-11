@@ -2539,6 +2539,7 @@ pub enum ScalarFunction {
     ArrayPopBack = 116,
     StringToArray = 117,
     ToTimestampNanos = 118,
+    ArrayIntersect = 119,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2666,6 +2667,7 @@ impl ScalarFunction {
             ScalarFunction::ArrayPopBack => "ArrayPopBack",
             ScalarFunction::StringToArray => "StringToArray",
             ScalarFunction::ToTimestampNanos => "ToTimestampNanos",
+            ScalarFunction::ArrayIntersect => "ArrayIntersect",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2790,6 +2792,7 @@ impl ScalarFunction {
             "ArrayPopBack" => Some(Self::ArrayPopBack),
             "StringToArray" => Some(Self::StringToArray),
             "ToTimestampNanos" => Some(Self::ToTimestampNanos),
+            "ArrayIntersect" => Some(Self::ArrayIntersect),
             _ => None,
         }
     }

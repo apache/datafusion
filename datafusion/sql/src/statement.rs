@@ -1017,7 +1017,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 expr_to_columns(&filter_expr, &mut using_columns)?;
                 let filter_expr = normalize_col_with_schemas_and_ambiguity_check(
                     filter_expr,
-                    &[&[&scan.schema()]],
+                    &[&[scan.schema()]],
                     &[using_columns],
                 )?;
                 LogicalPlan::Filter(Filter::try_new(filter_expr, Arc::new(scan))?)

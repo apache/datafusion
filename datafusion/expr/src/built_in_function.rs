@@ -174,6 +174,8 @@ pub enum BuiltinScalarFunction {
     ArraySlice,
     /// array_to_string
     ArrayToString,
+    /// array_intersect
+    ArrayIntersect,
     /// cardinality
     Cardinality,
     /// construct an array from columns
@@ -398,6 +400,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Flatten => Volatility::Immutable,
             BuiltinScalarFunction::ArraySlice => Volatility::Immutable,
             BuiltinScalarFunction::ArrayToString => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayIntersect => Volatility::Immutable,
             BuiltinScalarFunction::Cardinality => Volatility::Immutable,
             BuiltinScalarFunction::MakeArray => Volatility::Immutable,
             BuiltinScalarFunction::Ascii => Volatility::Immutable,
@@ -577,6 +580,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayReplaceAll => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArraySlice => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayToString => Ok(Utf8),
+            BuiltinScalarFunction::ArrayIntersect => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::Cardinality => Ok(UInt64),
             BuiltinScalarFunction::MakeArray => match input_expr_types.len() {
                 0 => Ok(List(Arc::new(Field::new("item", Null, true)))),
@@ -880,6 +884,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayToString => {
                 Signature::variadic_any(self.volatility())
             }
+            BuiltinScalarFunction::ArrayIntersect => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::Cardinality => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::MakeArray => {
                 // 0 or more arguments of arbitrary type
@@ -1505,6 +1510,7 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
         ],
         BuiltinScalarFunction::Cardinality => &["cardinality"],
         BuiltinScalarFunction::MakeArray => &["make_array", "make_list"],
+        BuiltinScalarFunction::ArrayIntersect => &["array_intersect", "list_intersect"],
 
         // struct functions
         BuiltinScalarFunction::Struct => &["struct"],

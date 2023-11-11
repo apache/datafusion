@@ -229,7 +229,7 @@ impl ExecutionPlan for GlobalLimitExec {
                     let remaining_rows: usize = nr - skip;
                     let mut skip_some_rows_stats = Statistics {
                         num_rows: Precision::Exact(remaining_rows),
-                        column_statistics: col_stats.clone(),
+                        column_statistics: col_stats,
                         total_byte_size: Precision::Absent,
                     };
                     if !input_stats.num_rows.is_exact().unwrap_or(false) {
