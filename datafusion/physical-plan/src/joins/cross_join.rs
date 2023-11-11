@@ -344,7 +344,7 @@ fn build_batch(
         .iter()
         .map(|arr| {
             let scalar = ScalarValue::try_from_array(arr, left_index)?;
-            Ok(scalar.to_array_of_size(batch.num_rows()))
+            scalar.to_array_of_size(batch.num_rows())
         })
         .collect::<Result<Vec<_>>>()?;
 

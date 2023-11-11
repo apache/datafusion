@@ -750,7 +750,7 @@ fn cast_scalar_value(
     data_type: &DataType,
     cast_options: &CastOptions,
 ) -> Result<ScalarValue> {
-    let cast_array = cast_with_options(&value.to_array(), data_type, cast_options)?;
+    let cast_array = cast_with_options(&value.to_array()?, data_type, cast_options)?;
     ScalarValue::try_from_array(&cast_array, 0)
 }
 
