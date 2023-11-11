@@ -43,12 +43,12 @@ pub type DFSchemaRef = Arc<DFSchema>;
 /// qualified and some unqualified. A qualified field is a field that has a
 /// relation name associated with it.
 ///
-/// Unqualified fields must unique not only amongst themselves, but also must
+/// Unqualified fields must be unique not only amongst themselves, but also must
 /// have a distinct name from any qualified field names. This allows finding a
 /// qualified field by name to be possible, so long as there aren't multiple
 /// qualified fields with the same name.
 ///
-/// There is an alias to `Arc<DFSchema` named [DFSchemaRef].
+/// There is an alias to `Arc<DFSchema>` named [DFSchemaRef].
 ///
 /// # Creating qualified schemas
 ///
