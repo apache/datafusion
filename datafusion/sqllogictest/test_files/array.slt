@@ -183,6 +183,55 @@ AS VALUES
 ;
 
 statement ok
+CREATE TABLE array_intersect_table_1D
+AS VALUES
+  (make_array(1, 2), make_array(1), make_array(1,2,3), make_array(1,3), make_array(1,3,5), make_array(2,4,6,8,1,3)),
+  (make_array(11, 22), make_array(11), make_array(11,22,33), make_array(11,33), make_array(11,33,55), make_array(22,44,66,88,11,33))
+;
+
+statement ok
+CREATE TABLE array_intersect_table_1D_Float
+AS VALUES
+  (make_array(1.0, 2.0), make_array(1.0), make_array(1.0,2.0,3.0), make_array(1.0,3.0), make_array(1.11), make_array(2.22, 3.33)),
+  (make_array(3.0, 4.0, 5.0), make_array(2.0), make_array(1.0,2.0,3.0,4.0), make_array(2.0,5.0), make_array(2.22, 1.11), make_array(1.11, 3.33))
+;
+
+statement ok
+CREATE TABLE array_intersect_table_1D_Boolean
+AS VALUES
+  (make_array(true, true, true), make_array(false), make_array(true, true, false, true, false), make_array(true, false, true), make_array(false), make_array(true, false)),
+  (make_array(false, false, false), make_array(false), make_array(true, false, true), make_array(true, true), make_array(true, true), make_array(false,false,true))
+;
+
+statement ok
+CREATE TABLE array_intersect_table_1D_UTF8
+AS VALUES
+  (make_array('a', 'bc', 'def'), make_array('bc'), make_array('datafusion', 'rust', 'arrow'), make_array('rust', 'arrow'), make_array('rust', 'arrow', 'python'), make_array('data')),
+  (make_array('a', 'bc', 'def'), make_array('defg'), make_array('datafusion', 'rust', 'arrow'), make_array('datafusion', 'rust', 'arrow', 'python'), make_array('rust', 'arrow'), make_array('datafusion', 'rust', 'arrow'))
+;
+
+statement ok
+CREATE TABLE array_intersect_table_2D
+AS VALUES
+  (make_array([1,2]), make_array([1,3]), make_array([1,2,3], [4,5], [6,7]), make_array([4,5], [6,7])),
+  (make_array([3,4], [5]), make_array([3,4]), make_array([1,2,3,4], [5,6,7], [8,9,10]), make_array([1,2,3], [5,6,7], [8,9,10]))
+;
+
+statement ok
+CREATE TABLE array_intersect_table_2D_float
+AS VALUES
+  (make_array([1.0, 2.0, 3.0], [1.1, 2.2], [3.3]), make_array([1.1, 2.2], [3.3])),
+  (make_array([1.0, 2.0, 3.0], [1.1, 2.2], [3.3]), make_array([1.0], [1.1, 2.2], [3.3]))
+;
+
+statement ok
+CREATE TABLE array_intersect_table_3D
+AS VALUES
+  (make_array([[1,2]]), make_array([[1]])),
+  (make_array([[1,2]]), make_array([[1,2]]))
+;
+
+statement ok
 CREATE TABLE arrays_values_without_nulls
 AS VALUES
   (make_array(1, 2, 3, 4, 5, 6, 7, 8, 9, 10), 1, 1, ',', [2,3]),
@@ -2316,6 +2365,86 @@ select array_has_all(make_array(1,2,3), make_array(1,3)),
 ----
 true false true false false false true true false false true false true
 
+query ???
+select array_intersect(column1, column2),
+       array_intersect(column3, column4),
+       array_intersect(column5, column6)
+from array_intersect_table_1D;
+----
+[1] [1, 3] [1, 3]
+[11] [11, 33] [11, 33]
+
+query ???
+select array_intersect(column1, column2),
+       array_intersect(column3, column4),
+       array_intersect(column5, column6)
+from array_intersect_table_1D_Float;
+----
+[1.0] [1.0, 3.0] []
+[] [2.0] [1.11]
+
+query ???
+select array_intersect(column1, column2),
+       array_intersect(column3, column4),
+       array_intersect(column5, column6)
+from array_intersect_table_1D_Boolean;
+----
+[] [false, true] [false]
+[false] [true] [true]
+
+query ???
+select array_intersect(column1, column2),
+       array_intersect(column3, column4),
+       array_intersect(column5, column6)
+from array_intersect_table_1D_UTF8;
+----
+[bc] [arrow, rust] []
+[] [arrow, datafusion, rust] [arrow, rust]
+
+query ??
+select array_intersect(column1, column2),
+       array_intersect(column3, column4)
+from array_intersect_table_2D;
+----
+[] [[4, 5], [6, 7]]
+[[3, 4]] [[5, 6, 7], [8, 9, 10]]
+
+query ?
+select array_intersect(column1, column2)
+from array_intersect_table_2D_float;
+----
+[[1.1, 2.2], [3.3]]
+[[1.1, 2.2], [3.3]]
+
+query ?
+select array_intersect(column1, column2)
+from array_intersect_table_3D;
+----
+[]
+[[[1, 2]]]
+
+query ??????
+SELECT  array_intersect(make_array(1,2,3), make_array(2,3,4)),
+        array_intersect(make_array(1,3,5), make_array(2,4,6)),
+        array_intersect(make_array('aa','bb','cc'), make_array('cc','aa','dd')), 
+        array_intersect(make_array(true, false), make_array(true)),
+        array_intersect(make_array(1.1, 2.2, 3.3), make_array(2.2, 3.3, 4.4)),
+        array_intersect(make_array([1, 1], [2, 2], [3, 3]), make_array([2, 2], [3, 3], [4, 4]))
+;
+----
+[2, 3] [] [aa, cc] [true] [2.2, 3.3] [[2, 2], [3, 3]]
+
+query ??????
+SELECT  list_intersect(make_array(1,2,3), make_array(2,3,4)),
+        list_intersect(make_array(1,3,5), make_array(2,4,6)),
+        list_intersect(make_array('aa','bb','cc'), make_array('cc','aa','dd')), 
+        list_intersect(make_array(true, false), make_array(true)),
+        list_intersect(make_array(1.1, 2.2, 3.3), make_array(2.2, 3.3, 4.4)),
+        list_intersect(make_array([1, 1], [2, 2], [3, 3]), make_array([2, 2], [3, 3], [4, 4]))
+;
+----
+[2, 3] [] [aa, cc] [true] [2.2, 3.3] [[2, 2], [3, 3]]
+
 query BBBB
 select list_has_all(make_array(1,2,3), make_array(4,5,6)),
        list_has_all(make_array(1,2,3), make_array(1,2)),
@@ -2607,6 +2736,27 @@ drop table array_has_table_2D_float;
 
 statement ok
 drop table array_has_table_3D;
+
+statement ok
+drop table array_intersect_table_1D;
+
+statement ok
+drop table array_intersect_table_1D_Float;
+
+statement ok
+drop table array_intersect_table_1D_Boolean;
+
+statement ok
+drop table array_intersect_table_1D_UTF8;
+
+statement ok
+drop table array_intersect_table_2D;
+
+statement ok
+drop table array_intersect_table_2D_float;
+
+statement ok
+drop table array_intersect_table_3D;
 
 statement ok
 drop table arrays_values_without_nulls;

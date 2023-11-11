@@ -398,6 +398,9 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ArrayToString => Arc::new(|args| {
             make_scalar_function(array_expressions::array_to_string)(args)
         }),
+        BuiltinScalarFunction::ArrayIntersect => Arc::new(|args| {
+            make_scalar_function(array_expressions::array_intersect)(args)
+        }),
         BuiltinScalarFunction::Cardinality => {
             Arc::new(|args| make_scalar_function(array_expressions::cardinality)(args))
         }
