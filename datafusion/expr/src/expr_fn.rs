@@ -737,10 +737,9 @@ scalar_expr!(
     "Returns an array of the elements in the intersection of array1 and array2."
 );
 
-scalar_expr!(
+nary_scalar_expr!(
     Range,
     gen_range,
-    start stop step,
     "Returns a list of values in the range between start and stop with step."
 );
 
