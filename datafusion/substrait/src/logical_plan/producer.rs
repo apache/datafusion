@@ -1025,7 +1025,53 @@ pub fn to_substrait_rex(
             col_ref_offset,
             extension_info,
         ),
-        _ => not_impl_err!("Unsupported expression: {expr:?}"),
+        Expr::IsNull(arg) => {
+            let arguments: Vec<FunctionArgument> = vec![FunctionArgument {
+                arg_type: Some(ArgType::Value(to_substrait_rex(
+                    arg,
+                    schema,
+                    col_ref_offset,
+                    extension_info,
+                )?)),
+            }];
+
+            let function_name = "is_null".to_string();
+            let function_anchor = _register_function(function_name, extension_info);
+            Ok(Expression {
+                rex_type: Some(RexType::ScalarFunction(ScalarFunction {
+                    function_reference: function_anchor,
+                    arguments,
+                    output_type: None,
+                    args: vec![],
+                    options: vec![],
+                })),
+            })
+        }
+        Expr::IsNotNull(arg) => {
+            let arguments: Vec<FunctionArgument> = vec![FunctionArgument {
+                arg_type: Some(ArgType::Value(to_substrait_rex(
+                    arg,
+                    schema,
+                    col_ref_offset,
+                    extension_info,
+                )?)),
+            }];
+
+            let function_name = "is_not_null".to_string();
+            let function_anchor = _register_function(function_name, extension_info);
+            Ok(Expression {
+                rex_type: Some(RexType::ScalarFunction(ScalarFunction {
+                    function_reference: function_anchor,
+                    arguments,
+                    output_type: None,
+                    args: vec![],
+                    options: vec![],
+                })),
+            })
+        }
+        _ => {
+            not_impl_err!("Unsupported expression: {expr:?}")
+        }
     }
 }
 
