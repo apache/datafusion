@@ -2496,7 +2496,6 @@ Step can not be 0 (then the range will be nonsense.).
 - **end**: end of the range (not included)
 - **step**: increase by step (can not be 0)
 
-
 ## Struct Functions
 
 - [struct](#struct)
