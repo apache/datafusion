@@ -1102,25 +1102,21 @@ pub fn array_positions(args: &[ArrayRef]) -> Result<ArrayRef> {
 ///   [4, 5, 6, 5], 5, 2    ==> [4, 6]  (both 5s are removed)
 /// )
 /// ```
-fn general_remove(
-    list_array: &ListArray,
+fn general_remove<OffsetSize: OffsetSizeTrait>(
+    list_array: &GenericListArray<OffsetSize>,
     element_array: &ArrayRef,
     arr_n: Vec<i64>,
 ) -> Result<ArrayRef> {
-    // Build up the offsets for the final output array
-    let mut offsets: Vec<i32> = vec![0];
     let data_type = list_array.value_type();
     let mut new_values = vec![];
+    // Build up the offsets for the final output array
+    let mut offsets = Vec::<OffsetSize>::with_capacity(arr_n.len() + 1);
+    offsets.push(OffsetSize::zero());
 
     // n is the number of elements to remove in this row
     for (row_index, (list_array_row, n)) in
         list_array.iter().zip(arr_n.iter()).enumerate()
     {
-        let last_offset: i32 = offsets
-            .last()
-            .copied()
-            .ok_or_else(|| internal_datafusion_err!("offsets should not be empty"))?;
-
         match list_array_row {
             Some(list_array_row) => {
                 let indices = UInt32Array::from(vec![row_index as u32]);
@@ -1172,12 +1168,14 @@ fn general_remove(
                 };
 
                 let filtered_array = arrow::compute::filter(&list_array_row, &eq_array)?;
-                offsets.push(last_offset + filtered_array.len() as i32);
+                offsets.push(
+                    offsets[row_index] + OffsetSize::usize_as(filtered_array.len()),
+                );
                 new_values.push(filtered_array);
             }
             None => {
                 // Null element results in a null row (no new offsets)
-                offsets.push(last_offset);
+                offsets.push(offsets[row_index]);
             }
         }
     }
@@ -1189,7 +1187,7 @@ fn general_remove(
         arrow::compute::concat(&new_values)?
     };
 
-    Ok(Arc::new(ListArray::try_new(
+    Ok(Arc::new(GenericListArray::<OffsetSize>::try_new(
         Arc::new(Field::new("item", data_type, true)),
         OffsetBuffer::new(offsets.into()),
         values,
@@ -1197,19 +1195,37 @@ fn general_remove(
     )?))
 }
 
+fn array_remove_internal(
+    array: &ArrayRef,
+    element_array: &ArrayRef,
+    arr_n: Vec<i64>,
+) -> Result<ArrayRef> {
+    match array.data_type() {
+        DataType::List(_) => {
+            let list_array = array.as_list::<i32>();
+            general_remove::<i32>(list_array, element_array, arr_n)
+        }
+        DataType::LargeList(_) => {
+            let list_array = array.as_list::<i64>();
+            general_remove::<i64>(list_array, element_array, arr_n)
+        }
+        _ => internal_err!("array_remove_all expects a list array"),
+    }
+}
+
 pub fn array_remove_all(args: &[ArrayRef]) -> Result<ArrayRef> {
     let arr_n = vec![i64::MAX; args[0].len()];
-    general_remove(as_list_array(&args[0])?, &args[1], arr_n)
+    array_remove_internal(&args[0], &args[1], arr_n)
 }
 
 pub fn array_remove(args: &[ArrayRef]) -> Result<ArrayRef> {
     let arr_n = vec![1; args[0].len()];
-    general_remove(as_list_array(&args[0])?, &args[1], arr_n)
+    array_remove_internal(&args[0], &args[1], arr_n)
 }
 
 pub fn array_remove_n(args: &[ArrayRef]) -> Result<ArrayRef> {
     let arr_n = as_int64_array(&args[2])?.values().to_vec();
-    general_remove(as_list_array(&args[0])?, &args[1], arr_n)
+    array_remove_internal(&args[0], &args[1], arr_n)
 }
 
 /// For each element of `list_array[i]`, replaces up to `arr_n[i]`  occurences
@@ -2924,64 +2940,5 @@ mod tests {
         let arr2 = make_array(&args).expect("failed to initialize function array");
 
         make_array(&[arr1, arr2]).expect("failed to initialize function array")
-    }
-
-    fn return_array_with_repeating_elements() -> ArrayRef {
-        // Returns: [3, 1, 2, 3, 2, 3]
-        let args = [
-            Arc::new(Int64Array::from(vec![Some(3)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(2)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(3)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(2)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(3)])) as ArrayRef,
-        ];
-        make_array(&args).expect("failed to initialize function array")
-    }
-
-    fn return_nested_array_with_repeating_elements() -> ArrayRef {
-        // Returns: [[1, 2, 3, 4], [5, 6, 7, 8], [1, 2, 3, 4], [9, 10, 11, 12], [5, 6, 7, 8]]
-        let args = [
-            Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(2)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(3)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(4)])) as ArrayRef,
-        ];
-        let arr1 = make_array(&args).expect("failed to initialize function array");
-
-        let args = [
-            Arc::new(Int64Array::from(vec![Some(5)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(6)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(7)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(8)])) as ArrayRef,
-        ];
-        let arr2 = make_array(&args).expect("failed to initialize function array");
-
-        let args = [
-            Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(2)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(3)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(4)])) as ArrayRef,
-        ];
-        let arr3 = make_array(&args).expect("failed to initialize function array");
-
-        let args = [
-            Arc::new(Int64Array::from(vec![Some(9)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(10)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(11)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(12)])) as ArrayRef,
-        ];
-        let arr4 = make_array(&args).expect("failed to initialize function array");
-
-        let args = [
-            Arc::new(Int64Array::from(vec![Some(5)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(6)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(7)])) as ArrayRef,
-            Arc::new(Int64Array::from(vec![Some(8)])) as ArrayRef,
-        ];
-        let arr5 = make_array(&args).expect("failed to initialize function array");
-
-        make_array(&[arr1, arr2, arr3, arr4, arr5])
-            .expect("failed to initialize function array")
     }
 }
