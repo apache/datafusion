@@ -18,29 +18,25 @@
 //! Defines physical expressions that can evaluated at runtime during query execution
 
 use crate::aggregate::utils::down_cast_any_ref;
-use crate::expressions::format_state_name;
+use crate::expressions::{format_state_name, Literal};
 use crate::{AggregateExpr, PhysicalExpr};
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field};
-use arrow_array::Array;
+use arrow_array::OffsetSizeTrait;
 use datafusion_common::cast::as_generic_string_array;
-use datafusion_common::Result;
-use datafusion_common::ScalarValue;
+use datafusion_common::{not_impl_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 use std::any::Any;
+use std::marker::PhantomData;
 use std::sync::Arc;
-// use arrow::array::OffsetSizeTrait;
 
 /// STRING_AGG aggregate expression
 #[derive(Debug)]
 pub struct StringAgg {
-    /// Column name
     name: String,
-    /// The DataType for the input expression
-    input_data_type: DataType,
-    /// The input expression
+    data_type: DataType,
     expr: Arc<dyn PhysicalExpr>,
-    /// If the input expression can have NULLs
+    delimiter: Arc<dyn PhysicalExpr>,
     nullable: bool,
 }
 
@@ -48,15 +44,16 @@ impl StringAgg {
     /// Create a new StringAgg aggregate function
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
+        delimiter: Arc<dyn PhysicalExpr>,
         name: impl Into<String>,
         data_type: DataType,
-        nullable: bool,
     ) -> Self {
         Self {
             name: name.into(),
-            input_data_type: data_type,
+            data_type,
+            delimiter,
             expr,
-            nullable,
+            nullable: true,
         }
     }
 }
@@ -69,29 +66,42 @@ impl AggregateExpr for StringAgg {
     fn field(&self) -> Result<Field> {
         Ok(Field::new(
             &self.name,
-            self.input_data_type.clone(),
+            self.data_type.clone(),
             self.nullable,
         ))
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(StringAggAccumulator::new(
-            self.expr.clone(),
-            &self.input_data_type,
-        )))
+        if let Some(delimiter) = self.delimiter.as_any().downcast_ref::<Literal>() {
+            if let ScalarValue::Utf8(Some(delimiter)) = delimiter.value() {
+                match self.data_type {
+                    DataType::Utf8 => {
+                        return Ok(Box::new(StringAggAccumulator::<i32>::new(delimiter)));
+                    }
+                    DataType::LargeUtf8 => {
+                        return Ok(Box::new(StringAggAccumulator::<i64>::new(delimiter)));
+                    }
+                    _ => {
+                        return not_impl_err!(
+                            "StringAgg separator only support literal string"
+                        )
+                    }
+                };
+            }
+        }
+        not_impl_err!("StringAgg separator only support literal string")
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![Field::new(
             format_state_name(&self.name, "string_agg"),
-            self.input_data_type.clone(),
+            self.data_type.clone(),
             self.nullable,
         )])
     }
 
-
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        vec![self.expr.clone()]
+        vec![self.expr.clone(), self.delimiter.clone()]
     }
 
     fn name(&self) -> &str {
@@ -105,46 +115,44 @@ impl PartialEq<dyn Any> for StringAgg {
             .downcast_ref::<Self>()
             .map(|x| {
                 self.name == x.name
-                    && self.input_data_type == x.input_data_type
+                    && self.data_type == x.data_type
                     && self.expr.eq(&x.expr)
+                    && self.delimiter.eq(&x.delimiter)
             })
             .unwrap_or(false)
     }
 }
 
 #[derive(Debug)]
-pub(crate) struct StringAggAccumulator {
+pub(crate) struct StringAggAccumulator<T: OffsetSizeTrait> {
     values: String,
-    datatype: DataType,
+    sep: String,
+    phantom: PhantomData<T>,
 }
 
-impl StringAggAccumulator {
-    pub fn new(
-        expr: Arc<dyn PhysicalExpr>,
-        datatype: &DataType,
-    ) -> Self {
+impl<T: OffsetSizeTrait> StringAggAccumulator<T> {
+    pub fn new(sep: &str) -> Self {
         Self {
             values: String::new(),
-            datatype: datatype.clone(),
+            sep: sep.to_string(),
+            phantom: PhantomData,
         }
     }
 }
 
-impl Accumulator for StringAggAccumulator {
+impl<T: OffsetSizeTrait> Accumulator for StringAggAccumulator<T> {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        // use match to select utf8 or largeutf8
-        let string_aggay = as_generic_string_array::<i32>(&values[0])?;
-        for i in 0..string_aggay.len() {
-            self.values.push_str(string_aggay.value(i));
-        }
+        let string_array: Vec<_> = as_generic_string_array::<T>(&values[0])?
+            .iter()
+            .filter_map(|v| v.as_ref().map(ToString::to_string))
+            .collect();
+        self.values
+            .push_str(string_array.join(self.sep.as_str()).as_str());
         Ok(())
     }
 
     fn merge_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let string_aggay = as_generic_string_array::<i32>(&values[0])?;
-        for i in 0..string_aggay.len() {
-            self.values.push_str(string_aggay.value(i));
-        }
+        self.update_batch(values)?;
         Ok(())
     }
 
@@ -153,7 +161,7 @@ impl Accumulator for StringAggAccumulator {
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
-        Ok(ScalarValue::Utf8(Some(self.values.clone())))
+        Ok(ScalarValue::LargeUtf8(Some(self.values.clone())))
     }
 
     fn size(&self) -> usize {
@@ -161,36 +169,30 @@ impl Accumulator for StringAggAccumulator {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::expressions::col;
     use crate::expressions::tests::aggregate;
     use arrow::array::ArrayRef;
-    use arrow::array::Int32Array;
     use arrow::datatypes::*;
     use arrow::record_batch::RecordBatch;
-    use arrow_array::Array;
-    use arrow_array::ListArray;
-    use arrow_buffer::OffsetBuffer;
+    use arrow_array::LargeStringArray;
+    use arrow_array::StringArray;
     use datafusion_common::DataFusionError;
     use datafusion_common::Result;
 
     macro_rules! test_op {
-        ($ARRAY:expr, $DATATYPE:expr, $OP:ident, $EXPECTED:expr) => {
-            test_op!($ARRAY, $DATATYPE, $OP, $EXPECTED, $EXPECTED.data_type())
-        };
-        ($ARRAY:expr, $DATATYPE:expr, $OP:ident, $EXPECTED:expr, $EXPECTED_DATATYPE:expr) => {{
+        ($ARRAY:expr, $DATATYPE:expr, $OP:ident, $EXPECTED:expr, $EXPECTED_DATATYPE:expr, $SEP:expr) => {{
             let schema = Schema::new(vec![Field::new("a", $DATATYPE, true)]);
 
             let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![$ARRAY])?;
 
             let agg = Arc::new(<$OP>::new(
                 col("a", &schema)?,
-                "bla".to_string(),
+                $SEP,
+                "str".to_string(),
                 $EXPECTED_DATATYPE,
-                true,
             ));
             let actual = aggregate(&batch, agg)?;
             let expected = ScalarValue::from($EXPECTED);
@@ -202,18 +204,25 @@ mod tests {
     }
 
     #[test]
-    fn array_agg_i32() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
+    fn string_agg_utf8() -> Result<()> {
+        let a: ArrayRef = Arc::new(StringArray::from(vec!["h", "e", "l", "l", "o"]));
+        let list = ScalarValue::LargeUtf8(Some("h,e,l,l,o".to_owned()));
+        let sep = Arc::new(Literal::new(ScalarValue::Utf8(Some(",".to_owned()))));
+        test_op!(a, DataType::Utf8, StringAgg, list, DataType::Utf8, sep)
+    }
 
-        let list = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
-            Some(1),
-            Some(2),
-            Some(3),
-            Some(4),
-            Some(5),
-        ])]);
-        let list = ScalarValue::List(Arc::new(list));
-
-        test_op!(a, DataType::Int32, StringAgg, list, DataType::Int32)
+    #[test]
+    fn string_agg_largeutf8() -> Result<()> {
+        let a: ArrayRef = Arc::new(LargeStringArray::from(vec!["h", "e", "l", "l", "o"]));
+        let list = ScalarValue::LargeUtf8(Some("h,e,l,l,o".to_owned()));
+        let sep = Arc::new(Literal::new(ScalarValue::Utf8(Some(",".to_owned()))));
+        test_op!(
+            a,
+            DataType::LargeUtf8,
+            StringAgg,
+            list,
+            DataType::LargeUtf8,
+            sep
+        )
     }
 }

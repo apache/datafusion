@@ -298,6 +298,7 @@ pub fn coerce_types(
         | AggregateFunction::FirstValue
         | AggregateFunction::LastValue => Ok(input_types.to_vec()),
         AggregateFunction::Grouping => Ok(vec![input_types[0].clone()]),
+        AggregateFunction::StringAgg => Ok(vec![LargeUtf8, input_types[0].clone()]),
     }
 }
 
