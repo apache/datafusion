@@ -1296,7 +1296,9 @@ pub fn parse_expr(
                 .collect::<Result<Vec<_>, _>>()?,
             in_list.negated,
         ))),
-        ExprType::Wildcard(_) => Ok(Expr::Wildcard),
+        ExprType::Wildcard(protobuf::Wildcard { qualifier }) => Ok(Expr::Wildcard {
+            qualifier: qualifier.clone(),
+        }),
         ExprType::ScalarFunction(expr) => {
             let scalar_function = protobuf::ScalarFunction::try_from(expr.fun)
                 .map_err(|_| Error::unknown("ScalarFunction", expr.fun))?;

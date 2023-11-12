@@ -239,7 +239,7 @@ where
                 };
                 arg.clone().into_array(expansion_len)
             })
-            .collect::<Vec<ArrayRef>>();
+            .collect::<Result<Vec<_>>>()?;
 
         let result = (inner)(&args);
 
@@ -937,7 +937,7 @@ mod tests {
             match expected {
                 Ok(expected) => {
                     let result = expr.evaluate(&batch)?;
-                    let result = result.into_array(batch.num_rows());
+                    let result = result.into_array(batch.num_rows()).expect("Failed to convert to array");
                     let result = result.as_any().downcast_ref::<$ARRAY_TYPE>().unwrap();
 
                     // value is correct
@@ -2906,7 +2906,10 @@ mod tests {
 
         // evaluate works
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), columns)?;
-        let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
 
         // downcast works
         let result = as_list_array(&result)?;
@@ -2945,7 +2948,10 @@ mod tests {
 
         // evaluate works
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), columns)?;
-        let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
 
         // downcast works
         let result = as_list_array(&result)?;
@@ -3017,8 +3023,11 @@ mod tests {
         let adapter_func = make_scalar_function(dummy_function);
 
         let scalar_arg = ColumnarValue::Scalar(ScalarValue::Int64(Some(1)));
-        let array_arg =
-            ColumnarValue::Array(ScalarValue::Int64(Some(1)).to_array_of_size(5));
+        let array_arg = ColumnarValue::Array(
+            ScalarValue::Int64(Some(1))
+                .to_array_of_size(5)
+                .expect("Failed to convert to array of size"),
+        );
         let result = unpack_uint64_array(adapter_func(&[array_arg, scalar_arg]))?;
         assert_eq!(result, vec![5, 5]);
 
@@ -3030,8 +3039,11 @@ mod tests {
         let adapter_func = make_scalar_function_with_hints(dummy_function, vec![]);
 
         let scalar_arg = ColumnarValue::Scalar(ScalarValue::Int64(Some(1)));
-        let array_arg =
-            ColumnarValue::Array(ScalarValue::Int64(Some(1)).to_array_of_size(5));
+        let array_arg = ColumnarValue::Array(
+            ScalarValue::Int64(Some(1))
+                .to_array_of_size(5)
+                .expect("Failed to convert to array of size"),
+        );
         let result = unpack_uint64_array(adapter_func(&[array_arg, scalar_arg]))?;
         assert_eq!(result, vec![5, 5]);
 
@@ -3046,8 +3058,11 @@ mod tests {
         );
 
         let scalar_arg = ColumnarValue::Scalar(ScalarValue::Int64(Some(1)));
-        let array_arg =
-            ColumnarValue::Array(ScalarValue::Int64(Some(1)).to_array_of_size(5));
+        let array_arg = ColumnarValue::Array(
+            ScalarValue::Int64(Some(1))
+                .to_array_of_size(5)
+                .expect("Failed to convert to array of size"),
+        );
         let result = unpack_uint64_array(adapter_func(&[array_arg, scalar_arg]))?;
         assert_eq!(result, vec![5, 1]);
 
@@ -3056,8 +3071,11 @@ mod tests {
 
     #[test]
     fn test_make_scalar_function_with_hints_on_arrays() -> Result<()> {
-        let array_arg =
-            ColumnarValue::Array(ScalarValue::Int64(Some(1)).to_array_of_size(5));
+        let array_arg = ColumnarValue::Array(
+            ScalarValue::Int64(Some(1))
+                .to_array_of_size(5)
+                .expect("Failed to convert to array of size"),
+        );
         let adapter_func = make_scalar_function_with_hints(
             dummy_function,
             vec![Hint::Pad, Hint::AcceptsSingular],
@@ -3077,8 +3095,11 @@ mod tests {
         );
 
         let scalar_arg = ColumnarValue::Scalar(ScalarValue::Int64(Some(1)));
-        let array_arg =
-            ColumnarValue::Array(ScalarValue::Int64(Some(1)).to_array_of_size(5));
+        let array_arg = ColumnarValue::Array(
+            ScalarValue::Int64(Some(1))
+                .to_array_of_size(5)
+                .expect("Failed to convert to array of size"),
+        );
         let result = unpack_uint64_array(adapter_func(&[
             array_arg,
             scalar_arg.clone(),
@@ -3097,8 +3118,11 @@ mod tests {
         );
 
         let scalar_arg = ColumnarValue::Scalar(ScalarValue::Int64(Some(1)));
-        let array_arg =
-            ColumnarValue::Array(ScalarValue::Int64(Some(1)).to_array_of_size(5));
+        let array_arg = ColumnarValue::Array(
+            ScalarValue::Int64(Some(1))
+                .to_array_of_size(5)
+                .expect("Failed to convert to array of size"),
+        );
         let result = unpack_uint64_array(adapter_func(&[
             array_arg.clone(),
             scalar_arg.clone(),
@@ -3125,8 +3149,11 @@ mod tests {
         );
 
         let scalar_arg = ColumnarValue::Scalar(ScalarValue::Int64(Some(1)));
-        let array_arg =
-            ColumnarValue::Array(ScalarValue::Int64(Some(1)).to_array_of_size(5));
+        let array_arg = ColumnarValue::Array(
+            ScalarValue::Int64(Some(1))
+                .to_array_of_size(5)
+                .expect("Failed to convert to array of size"),
+        );
         let result = unpack_uint64_array(adapter_func(&[array_arg, scalar_arg]))?;
         assert_eq!(result, vec![5, 1]);
 

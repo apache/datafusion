@@ -703,11 +703,11 @@ fn remove_corresponding_sort_from_sub_plan(
         } else if let Some(repartition) = plan.as_any().downcast_ref::<RepartitionExec>()
         {
             Arc::new(
+                // By default, RepartitionExec does not preserve order
                 RepartitionExec::try_new(
                     children.swap_remove(0),
                     repartition.partitioning().clone(),
-                )?
-                .with_preserve_order(false),
+                )?,
             )
         } else {
             plan.clone().with_new_children(children)?

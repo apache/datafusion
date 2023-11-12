@@ -157,13 +157,13 @@ impl ExprSchemable for Expr {
                     plan_datafusion_err!("Placeholder type could not be resolved")
                 })
             }
-            Expr::Wildcard => {
+            Expr::Wildcard { qualifier } => {
                 // Wildcard do not really have a type and do not appear in projections
-                Ok(DataType::Null)
+                match qualifier {
+                    Some(_) => internal_err!("QualifiedWildcard expressions are not valid in a logical query plan"),
+                    None => Ok(DataType::Null)
+                }
             }
-            Expr::QualifiedWildcard { .. } => internal_err!(
-                "QualifiedWildcard expressions are not valid in a logical query plan"
-            ),
             Expr::GroupingSet(_) => {
                 // grouping sets do not really have a type and do not appear in projections
                 Ok(DataType::Null)
@@ -270,11 +270,8 @@ impl ExprSchemable for Expr {
             | Expr::SimilarTo(Like { expr, pattern, .. }) => {
                 Ok(expr.nullable(input_schema)? || pattern.nullable(input_schema)?)
             }
-            Expr::Wildcard => internal_err!(
+            Expr::Wildcard { .. } => internal_err!(
                 "Wildcard expressions are not valid in a logical query plan"
-            ),
-            Expr::QualifiedWildcard { .. } => internal_err!(
-                "QualifiedWildcard expressions are not valid in a logical query plan"
             ),
             Expr::GetIndexedField(GetIndexedField { expr, field }) => {
                 field_for_index(expr, field, input_schema).map(|x| x.is_nullable())

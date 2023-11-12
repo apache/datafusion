@@ -34,14 +34,14 @@ pub(crate) fn apply(
         (ColumnarValue::Array(left), ColumnarValue::Array(right)) => {
             Ok(ColumnarValue::Array(f(&left.as_ref(), &right.as_ref())?))
         }
-        (ColumnarValue::Scalar(left), ColumnarValue::Array(right)) => {
-            Ok(ColumnarValue::Array(f(&left.to_scalar(), &right.as_ref())?))
-        }
-        (ColumnarValue::Array(left), ColumnarValue::Scalar(right)) => {
-            Ok(ColumnarValue::Array(f(&left.as_ref(), &right.to_scalar())?))
-        }
+        (ColumnarValue::Scalar(left), ColumnarValue::Array(right)) => Ok(
+            ColumnarValue::Array(f(&left.to_scalar()?, &right.as_ref())?),
+        ),
+        (ColumnarValue::Array(left), ColumnarValue::Scalar(right)) => Ok(
+            ColumnarValue::Array(f(&left.as_ref(), &right.to_scalar()?)?),
+        ),
         (ColumnarValue::Scalar(left), ColumnarValue::Scalar(right)) => {
-            let array = f(&left.to_scalar(), &right.to_scalar())?;
+            let array = f(&left.to_scalar()?, &right.to_scalar()?)?;
             let scalar = ScalarValue::try_from_array(array.as_ref(), 0)?;
             Ok(ColumnarValue::Scalar(scalar))
         }

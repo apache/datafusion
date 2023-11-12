@@ -569,8 +569,8 @@ pub mod logical_expr_node {
         Negative(::prost::alloc::boxed::Box<super::NegativeNode>),
         #[prost(message, tag = "14")]
         InList(::prost::alloc::boxed::Box<super::InListNode>),
-        #[prost(bool, tag = "15")]
-        Wildcard(bool),
+        #[prost(message, tag = "15")]
+        Wildcard(super::Wildcard),
         #[prost(message, tag = "16")]
         ScalarFunction(super::ScalarFunctionNode),
         #[prost(message, tag = "17")]
@@ -613,6 +613,12 @@ pub mod logical_expr_node {
         #[prost(message, tag = "34")]
         Placeholder(super::PlaceholderNode),
     }
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Wildcard {
+    #[prost(string, optional, tag = "1")]
+    pub qualifier: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
