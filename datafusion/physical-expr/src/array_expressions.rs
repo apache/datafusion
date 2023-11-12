@@ -695,6 +695,22 @@ pub fn gen_range(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(arr)
 }
 
+pub fn array_pop_front(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let list_array = as_list_array(&args[0])?;
+    let key: Vec<_> = list_array.iter().map(|x| x.map_or(0, |_arr| 2)).collect();
+    let extra_key: Vec<_> = list_array
+        .iter()
+        .map(|x| x.map_or(0, |arr| arr.len() as i64))
+        .collect();
+
+    define_array_slice(
+        list_array,
+        &Int64Array::from(key),
+        &Int64Array::from(extra_key),
+        false,
+    )
+}
+
 /// Array_append SQL function
 pub fn array_append(args: &[ArrayRef]) -> Result<ArrayRef> {
     let list_array = as_list_array(&args[0])?;
