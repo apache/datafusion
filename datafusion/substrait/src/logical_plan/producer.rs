@@ -588,8 +588,7 @@ pub fn to_substrait_agg_measure(
             for arg in args {
                 arguments.push(FunctionArgument { arg_type: Some(ArgType::Value(to_substrait_rex(arg, schema, 0, extension_info)?)) });
             }
-            let function_name = fun.to_string().to_lowercase();
-            let function_anchor = _register_function(function_name, extension_info);
+            let function_anchor = _register_function(fun.to_string(), extension_info);
             Ok(Measure {
                 measure: Some(AggregateFunction {
                     function_reference: function_anchor,
@@ -620,8 +619,7 @@ pub fn to_substrait_agg_measure(
             for arg in args {
                 arguments.push(FunctionArgument { arg_type: Some(ArgType::Value(to_substrait_rex(arg, schema, 0, extension_info)?)) });
             }
-            let function_name = fun.name.to_lowercase();
-            let function_anchor = _register_function(function_name, extension_info);
+            let function_anchor = _register_function(fun.name.clone(), extension_info);
             Ok(Measure {
                 measure: Some(AggregateFunction {
                     function_reference: function_anchor,
@@ -732,8 +730,8 @@ pub fn make_binary_op_scalar_func(
         HashMap<String, u32>,
     ),
 ) -> Expression {
-    let function_name = operator_to_name(op).to_string().to_lowercase();
-    let function_anchor = _register_function(function_name, extension_info);
+    let function_anchor =
+        _register_function(operator_to_name(op).to_string(), extension_info);
     Expression {
         rex_type: Some(RexType::ScalarFunction(ScalarFunction {
             function_reference: function_anchor,
@@ -836,8 +834,7 @@ pub fn to_substrait_rex(
                     )?)),
                 });
             }
-            let function_name = fun.to_string().to_lowercase();
-            let function_anchor = _register_function(function_name, extension_info);
+            let function_anchor = _register_function(fun.to_string(), extension_info);
             Ok(Expression {
                 rex_type: Some(RexType::ScalarFunction(ScalarFunction {
                     function_reference: function_anchor,
@@ -1002,8 +999,7 @@ pub fn to_substrait_rex(
             window_frame,
         }) => {
             // function reference
-            let function_name = fun.to_string().to_lowercase();
-            let function_anchor = _register_function(function_name, extension_info);
+            let function_anchor = _register_function(fun.to_string(), extension_info);
             // arguments
             let mut arguments: Vec<FunctionArgument> = vec![];
             for arg in args {
