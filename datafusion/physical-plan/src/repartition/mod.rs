@@ -15,14 +15,29 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! The repartition operator maps N input partitions to M output partitions based on a
-//! partitioning scheme (according to flag `preserve_order` ordering can be preserved during
-//! repartitioning if its input is ordered).
+//! This file implements the [`RepartitionExec`]  operator, which maps N input
+//! partitions to M output partitions based on a partitioning scheme, optionally
+//! maintaining the order of the input rows in the output.
 
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::{any::Any, vec};
+
+use arrow::array::{ArrayRef, UInt64Builder};
+use arrow::datatypes::SchemaRef;
+use arrow::record_batch::RecordBatch;
+use futures::stream::Stream;
+use futures::{FutureExt, StreamExt};
+use hashbrown::HashMap;
+use log::trace;
+use parking_lot::Mutex;
+use tokio::task::JoinHandle;
+
+use datafusion_common::{not_impl_err, DataFusionError, Result};
+use datafusion_execution::memory_pool::MemoryConsumer;
+use datafusion_execution::TaskContext;
+use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 
 use crate::common::transpose;
 use crate::hash_utils::create_hashes;
@@ -31,27 +46,12 @@ use crate::repartition::distributor_channels::{channels, partition_aware_channel
 use crate::sorts::streaming_merge;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning, Statistics};
 
-use self::distributor_channels::{DistributionReceiver, DistributionSender};
-
 use super::common::{AbortOnDropMany, AbortOnDropSingle, SharedMemoryReservation};
 use super::expressions::PhysicalSortExpr;
 use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream};
 
-use arrow::array::{ArrayRef, UInt64Builder};
-use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
-use datafusion_common::{not_impl_err, DataFusionError, Result};
-use datafusion_execution::memory_pool::MemoryConsumer;
-use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
-
-use futures::stream::Stream;
-use futures::{FutureExt, StreamExt};
-use hashbrown::HashMap;
-use log::trace;
-use parking_lot::Mutex;
-use tokio::task::JoinHandle;
+use self::distributor_channels::{DistributionReceiver, DistributionSender};
 
 mod distributor_channels;
 
@@ -279,8 +279,9 @@ impl BatchPartitioner {
 ///
 /// # Output Ordering
 ///
-/// No guarantees are made about the order of the resulting
-/// partitions unless `preserve_order` is set.
+/// If more than one stream is being repartitioned, the output will be some
+/// arbitrary interleaving (and thus unordered) unless
+/// [`Self::with_preserve_order`] specifies otherwise.
 ///
 /// # Footnote
 ///
@@ -425,9 +426,12 @@ impl ExecutionPlan for RepartitionExec {
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let repartition =
-            RepartitionExec::try_new(children.swap_remove(0), self.partitioning.clone());
-        repartition.map(|r| Arc::new(r.with_preserve_order(self.preserve_order)) as _)
+        let mut repartition =
+            RepartitionExec::try_new(children.swap_remove(0), self.partitioning.clone())?;
+        if self.preserve_order {
+            repartition = repartition.with_preserve_order();
+        }
+        Ok(Arc::new(repartition))
     }
 
     /// Specifies whether this plan generates an infinite stream of records.
@@ -625,7 +629,9 @@ impl ExecutionPlan for RepartitionExec {
 }
 
 impl RepartitionExec {
-    /// Create a new RepartitionExec
+    /// Create a new RepartitionExec, that produces output `partitioning`, and
+    /// does not preserve the order of the input (see [`Self::with_preserve_order`]
+    /// for more details)
     pub fn try_new(
         input: Arc<dyn ExecutionPlan>,
         partitioning: Partitioning,
@@ -642,16 +648,20 @@ impl RepartitionExec {
         })
     }
 
-    /// Set Order preserving flag
-    pub fn with_preserve_order(mut self, preserve_order: bool) -> Self {
-        // Set "preserve order" mode only if the input partition count is larger than 1
-        // Because in these cases naive `RepartitionExec` cannot maintain ordering. Using
-        // `SortPreservingRepartitionExec` is necessity. However, when input partition number
-        // is 1, `RepartitionExec` can maintain ordering. In this case, we don't need to use
-        // `SortPreservingRepartitionExec` variant to maintain ordering.
-        if self.input.output_partitioning().partition_count() > 1 {
-            self.preserve_order = preserve_order
-        }
+    /// Specify if this reparititoning operation should preserve the order of
+    /// rows from its input when producing output. Preserving order is more
+    /// expensive at runtime, so should only be set if the output of this
+    /// operator can take advantage of it.
+    ///
+    /// If the input is not ordered, or has only one partition, this is a no op,
+    /// and the node remains a `RepartitionExec`.
+    pub fn with_preserve_order(mut self) -> Self {
+        self.preserve_order =
+                // If the input isn't ordered, there is no ordering to preserve
+                self.input.output_ordering().is_some() &&
+                // if there is only one input partition, merging is not required
+                // to maintain order
+                self.input.output_partitioning().partition_count() > 1;
         self
     }
 
@@ -911,7 +921,19 @@ impl RecordBatchStream for PerPartitionStream {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::collections::HashSet;
+
+    use arrow::array::{ArrayRef, StringArray};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
+    use arrow_array::UInt32Array;
+    use futures::FutureExt;
+    use tokio::task::JoinHandle;
+
+    use datafusion_common::cast::as_string_array;
+    use datafusion_common::{assert_batches_sorted_eq, exec_err};
+    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+
     use crate::{
         test::{
             assert_is_pending,
@@ -922,16 +944,8 @@ mod tests {
         },
         {collect, expressions::col, memory::MemoryExec},
     };
-    use arrow::array::{ArrayRef, StringArray};
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::record_batch::RecordBatch;
-    use arrow_array::UInt32Array;
-    use datafusion_common::cast::as_string_array;
-    use datafusion_common::{assert_batches_sorted_eq, exec_err};
-    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
-    use futures::FutureExt;
-    use std::collections::HashSet;
-    use tokio::task::JoinHandle;
+
+    use super::*;
 
     #[tokio::test]
     async fn one_to_many_round_robin() -> Result<()> {
@@ -1430,5 +1444,131 @@ mod tests {
             vec![Arc::new(UInt32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8]))],
         )
         .unwrap()
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use arrow_schema::{DataType, Field, Schema, SortOptions};
+
+    use datafusion_physical_expr::expressions::col;
+
+    use crate::memory::MemoryExec;
+    use crate::union::UnionExec;
+
+    use super::*;
+
+    /// Asserts that the plan is as expected
+    ///
+    /// `$EXPECTED_PLAN_LINES`: input plan
+    /// `$PLAN`: the plan to optimized
+    ///
+    macro_rules! assert_plan {
+        ($EXPECTED_PLAN_LINES: expr,  $PLAN: expr) => {
+            let physical_plan = $PLAN;
+            let formatted = crate::displayable(&physical_plan).indent(true).to_string();
+            let actual: Vec<&str> = formatted.trim().lines().collect();
+
+            let expected_plan_lines: Vec<&str> = $EXPECTED_PLAN_LINES
+                .iter().map(|s| *s).collect();
+
+            assert_eq!(
+                expected_plan_lines, actual,
+                "\n**Original Plan Mismatch\n\nexpected:\n\n{expected_plan_lines:#?}\nactual:\n\n{actual:#?}\n\n"
+            );
+        };
+    }
+
+    #[tokio::test]
+    async fn test_preserve_order() -> Result<()> {
+        let schema = test_schema();
+        let sort_exprs = sort_exprs(&schema);
+        let source1 = sorted_memory_exec(&schema, sort_exprs.clone());
+        let source2 = sorted_memory_exec(&schema, sort_exprs);
+        // output has multiple partitions, and is sorted
+        let union = UnionExec::new(vec![source1, source2]);
+        let exec =
+            RepartitionExec::try_new(Arc::new(union), Partitioning::RoundRobinBatch(10))
+                .unwrap()
+                .with_preserve_order();
+
+        // Repartition should preserve order
+        let expected_plan = [
+            "SortPreservingRepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2, sort_exprs=c0@0 ASC",
+            "  UnionExec",
+            "    MemoryExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC",
+            "    MemoryExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC",
+        ];
+        assert_plan!(expected_plan, exec);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_preserve_order_one_partition() -> Result<()> {
+        let schema = test_schema();
+        let sort_exprs = sort_exprs(&schema);
+        let source = sorted_memory_exec(&schema, sort_exprs);
+        // output is sorted, but has only a single partition, so no need to sort
+        let exec = RepartitionExec::try_new(source, Partitioning::RoundRobinBatch(10))
+            .unwrap()
+            .with_preserve_order();
+
+        // Repartition should not preserve order
+        let expected_plan = [
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "  MemoryExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC",
+        ];
+        assert_plan!(expected_plan, exec);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_preserve_order_input_not_sorted() -> Result<()> {
+        let schema = test_schema();
+        let source1 = memory_exec(&schema);
+        let source2 = memory_exec(&schema);
+        // output has multiple partitions, but is not sorted
+        let union = UnionExec::new(vec![source1, source2]);
+        let exec =
+            RepartitionExec::try_new(Arc::new(union), Partitioning::RoundRobinBatch(10))
+                .unwrap()
+                .with_preserve_order();
+
+        // Repartition should not preserve order, as there is no order to preserve
+        let expected_plan = [
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
+            "  UnionExec",
+            "    MemoryExec: partitions=1, partition_sizes=[0]",
+            "    MemoryExec: partitions=1, partition_sizes=[0]",
+        ];
+        assert_plan!(expected_plan, exec);
+        Ok(())
+    }
+
+    fn test_schema() -> Arc<Schema> {
+        Arc::new(Schema::new(vec![Field::new("c0", DataType::UInt32, false)]))
+    }
+
+    fn sort_exprs(schema: &Schema) -> Vec<PhysicalSortExpr> {
+        let options = SortOptions::default();
+        vec![PhysicalSortExpr {
+            expr: col("c0", schema).unwrap(),
+            options,
+        }]
+    }
+
+    fn memory_exec(schema: &SchemaRef) -> Arc<dyn ExecutionPlan> {
+        Arc::new(MemoryExec::try_new(&[vec![]], schema.clone(), None).unwrap())
+    }
+
+    fn sorted_memory_exec(
+        schema: &SchemaRef,
+        sort_exprs: Vec<PhysicalSortExpr>,
+    ) -> Arc<dyn ExecutionPlan> {
+        Arc::new(
+            MemoryExec::try_new(&[vec![]], schema.clone(), None)
+                .unwrap()
+                .with_sort_information(vec![sort_exprs]),
+        )
     }
 }
