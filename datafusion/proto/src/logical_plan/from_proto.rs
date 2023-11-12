@@ -66,7 +66,7 @@ use datafusion_expr::{
     WindowFrameUnits,
 };
 use datafusion_expr::{
-    array_empty, array_pop_back,
+    array_empty, array_pop_back, array_pop_front,
     expr::{Alias, Placeholder},
 };
 use std::sync::Arc;
