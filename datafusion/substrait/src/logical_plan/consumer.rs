@@ -679,7 +679,7 @@ pub async fn from_substrait_agg_func(
 
     let Some(function_name) = extensions.get(&f.function_reference) else {
         return plan_err!(
-            "Aggregated function not registered: function anchor = {:?}",
+            "Aggregate function not registered: function anchor = {:?}",
             f.function_reference
         );
     };
