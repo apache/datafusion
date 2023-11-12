@@ -588,8 +588,7 @@ pub fn to_substrait_agg_measure(
             for arg in args {
                 arguments.push(FunctionArgument { arg_type: Some(ArgType::Value(to_substrait_rex(arg, schema, 0, extension_info)?)) });
             }
-            let function_name = fun.to_string().to_lowercase();
-            let function_anchor = _register_function(function_name, extension_info);
+            let function_anchor = _register_function(fun.to_string(), extension_info);
             Ok(Measure {
                 measure: Some(AggregateFunction {
                     function_reference: function_anchor,
@@ -610,6 +609,34 @@ pub fn to_substrait_agg_measure(
                 }
             })
         }
+        Expr::AggregateUDF(expr::AggregateUDF{ fun, args, filter, order_by }) =>{
+            let sorts = if let Some(order_by) = order_by {
+                order_by.iter().map(|expr| to_substrait_sort_field(expr, schema, extension_info)).collect::<Result<Vec<_>>>()?
+            } else {
+                vec![]
+            };
+            let mut arguments: Vec<FunctionArgument> = vec![];
+            for arg in args {
+                arguments.push(FunctionArgument { arg_type: Some(ArgType::Value(to_substrait_rex(arg, schema, 0, extension_info)?)) });
+            }
+            let function_anchor = _register_function(fun.name.clone(), extension_info);
+            Ok(Measure {
+                measure: Some(AggregateFunction {
+                    function_reference: function_anchor,
+                    arguments,
+                    sorts,
+                    output_type: None,
+                    invocation: AggregationInvocation::All as i32,
+                    phase: AggregationPhase::Unspecified as i32,
+                    args: vec![],
+                    options: vec![],
+                }),
+                filter: match filter {
+                    Some(f) => Some(to_substrait_rex(f, schema, 0, extension_info)?),
+                    None => None
+                }
+            })
+        },
         Expr::Alias(Alias{expr,..})=> {
             to_substrait_agg_measure(expr, schema, extension_info)
         }
@@ -703,8 +730,8 @@ pub fn make_binary_op_scalar_func(
         HashMap<String, u32>,
     ),
 ) -> Expression {
-    let function_name = operator_to_name(op).to_string().to_lowercase();
-    let function_anchor = _register_function(function_name, extension_info);
+    let function_anchor =
+        _register_function(operator_to_name(op).to_string(), extension_info);
     Expression {
         rex_type: Some(RexType::ScalarFunction(ScalarFunction {
             function_reference: function_anchor,
@@ -807,8 +834,7 @@ pub fn to_substrait_rex(
                     )?)),
                 });
             }
-            let function_name = fun.to_string().to_lowercase();
-            let function_anchor = _register_function(function_name, extension_info);
+            let function_anchor = _register_function(fun.to_string(), extension_info);
             Ok(Expression {
                 rex_type: Some(RexType::ScalarFunction(ScalarFunction {
                     function_reference: function_anchor,
@@ -973,8 +999,7 @@ pub fn to_substrait_rex(
             window_frame,
         }) => {
             // function reference
-            let function_name = fun.to_string().to_lowercase();
-            let function_anchor = _register_function(function_name, extension_info);
+            let function_anchor = _register_function(fun.to_string(), extension_info);
             // arguments
             let mut arguments: Vec<FunctionArgument> = vec![];
             for arg in args {
