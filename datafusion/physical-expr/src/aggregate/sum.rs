@@ -112,7 +112,7 @@ impl AggregateExpr for Sum {
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![Field::new(
             format_state_name(&self.name, "sum"),
-            self.return_type.clone(),
+            self.data_type.clone(),
             self.nullable,
         )])
     }
