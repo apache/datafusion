@@ -6,7 +6,7 @@
 // "License"); you may not use this file except in compliance
 // with the License.  You may obtain a copy of the License at
 //
-//http://www.apache.org/licenses/LICENSE-2.0
+//   http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing,
 // software distributed under the License is distributed on an
@@ -17,93 +17,92 @@
 
 //! Interval arithmetic library
 
+use std::borrow::Borrow;
+use std::fmt::{self, Display, Formatter};
+use std::ops::{AddAssign, SubAssign};
+
 use crate::type_coercion::binary::get_result_type;
 use crate::Operator;
+
 use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::DataType;
 use arrow_array::ArrowNativeTypeOp;
 use datafusion_common::rounding::{alter_fp_rounding_mode, next_down, next_up};
-use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
-
-use std::borrow::Borrow;
-use std::fmt;
-use std::fmt::{Display, Formatter};
-use std::ops::{AddAssign, SubAssign};
+use datafusion_common::{
+    internal_err, not_impl_err, DataFusionError, Result, ScalarValue,
+};
 
 /// The `Interval` type represents a closed interval used for computing
 /// reliable bounds for mathematical expressions.
 ///
-/// Features:
+/// Conventions:
 ///
-/// 1. **Closed Bounds**: The interval always encompasses its endpoints.
+/// 1. **Closed bounds**: The interval always encompasses its endpoints. We
+///    accommodate operations resulting in open intervals by incrementing or
+///    decrementing the interval endpoint value to its successor/predecessor.
 ///
-/// 2. **Unbounded Endpoints**: If the `lower` or `upper` bounds are indeterminate,
+/// 2. **Unbounded endpoints**: If the `lower` or `upper` bounds are indeterminate,
 ///    they are labeled as *unbounded*. This is represented using a `NULL`.
 ///
-/// 3. **Overflow Handling**: If after certain operations, the `lower` or `upper`
-///    bounds exceed their limits, they either become unbounded or they are fixed to
-///    the maximum/minimum value of the datatype, depending on the direction of the
-///    bound overflowed, opting for the safer choice.
+/// 3. **Overflow handling**: If the `lower` or `upper` endpoints exceed their
+///    limits after any operation, they either become unbounded or they are fixed
+///    to the maximum/minimum value of the datatype, depending on the direction
+///    of the overflowing endpoint, opting for the safer choice.
 ///  
-/// 4. **Float Special Cases**: For floating-point numbers:
-///    - `inf` values are converted to `NULL` while constructing an interval
-///      to ensure consistency, as floats have their own maximum values.
-///    - NaN (Not a Number) values are interpreted as unbounded.
+/// 4. **Floating-point special cases**:
+///    - `INF` values are converted to `NULL`s while constructing an interval to
+///      ensure consistency, with other data types.
+///    - `NaN` (Not a Number) results are conservatively result in unbounded
+///       endpoints.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Interval {
     lower: ScalarValue,
     upper: ScalarValue,
 }
 
-/// Handles the NaN and INF foating point values.
+/// This macro handles the `NaN` and `INF` floating point values.
 ///
-/// - NaN values are always converted to unbounded i.e. `null` values.
-///
-/// - When the bound is a lower bound, and if the value is NEG_INF,
-/// it becomes `null`. If the value is INF, then it becomes maximum
-/// representable number within that floating datatype. We cannot
-/// assign `null` for a lower bound in that case since it would be interpreted
-/// as NEG_INF.
-///
-/// /// - When the bound is an upper bound, and if the value is INF,
-/// it becomes `null`. If the value is NEG_INF, then it becomes minimum
-/// representable number within that floating datatype. We cannot
-/// assign `null` for an upper bound in that case since it would be interpreted
-/// as INF.
+/// - `NaN` values are always converted to unbounded i.e. `NULL` values.
+/// - For lower bounds:
+///     - A `NEG_INF` value is converted to a `NULL`.
+///     - An `INF` value is conservatively converted to the maximum representable
+///       number for the floating-point type in question. In this case, converting
+///       to `NULL` doesn't make sense as it would be interpreted as a `NEG_INF`.
+/// - For upper bounds:
+///     - An `INF` value is converted to a `NULL`.
+///     - An `NEG_INF` value is conservatively converted to the minimum representable
+///       number for the floating-point type in question. In this case, converting
+///       to `NULL` doesn't make sense as it would be interpreted as an `INF`.
 macro_rules! handle_float_intervals {
-    ($scalar_value:ident, $primitive_type:ident, $lower:expr, $upper:expr) => {{
+    ($scalar_type:ident, $primitive_type:ident, $lower:expr, $upper:expr) => {{
         let lower = match $lower {
-            ScalarValue::$scalar_value(Some(l_val))
+            ScalarValue::$scalar_type(Some(l_val))
                 if l_val == $primitive_type::NEG_INFINITY || l_val.is_nan() =>
             {
-                ScalarValue::$scalar_value(None)
+                ScalarValue::$scalar_type(None)
             }
-            ScalarValue::$scalar_value(Some(l_val))
+            ScalarValue::$scalar_type(Some(l_val))
                 if l_val == $primitive_type::INFINITY =>
             {
-                ScalarValue::$scalar_value(Some($primitive_type::MAX))
+                ScalarValue::$scalar_type(Some($primitive_type::MAX))
             }
-            ScalarValue::$scalar_value(Some(l_val)) => {
-                ScalarValue::$scalar_value(Some(l_val))
-            }
-            _ => ScalarValue::$scalar_value(None),
+            value @ ScalarValue::$scalar_type(Some(_)) => value,
+            _ => ScalarValue::$scalar_type(None),
         };
 
         let upper = match $upper {
-            ScalarValue::$scalar_value(Some(r_val))
+            ScalarValue::$scalar_type(Some(r_val))
                 if r_val == $primitive_type::INFINITY || r_val.is_nan() =>
             {
-                ScalarValue::$scalar_value(None)
+                ScalarValue::$scalar_type(None)
             }
-            ScalarValue::$scalar_value(Some(r_val))
+            ScalarValue::$scalar_type(Some(r_val))
                 if r_val == $primitive_type::NEG_INFINITY =>
             {
-                ScalarValue::$scalar_value(Some($primitive_type::MIN))
+                ScalarValue::$scalar_type(Some($primitive_type::MIN))
             }
-            ScalarValue::$scalar_value(Some(r_val)) => {
-                ScalarValue::$scalar_value(Some(r_val))
-            }
-            _ => ScalarValue::$scalar_value(None),
+            value @ ScalarValue::$scalar_type(Some(_)) => value,
+            _ => ScalarValue::$scalar_type(None),
         };
 
         Interval { lower, upper }
@@ -115,70 +114,77 @@ impl Interval {
     ///
     /// # Notes
     ///
-    /// - **Boolean Intervals**:
-    ///   - Unboundedness (`NULL`) for boolean values is interpreted as `false` for lower and `true` for upper bounds.
-    ///
-    /// - **Floating Point Intervals**:
-    ///   - Floating-point values with `NaN`, `Inf`, or `-Inf` are represented as `NULL` within the interval.
-    pub fn try_new(lower: ScalarValue, upper: ScalarValue) -> Result<Interval> {
+    /// This constructor creates intervals in a "canonical" form where:
+    /// - **Boolean intervals**:
+    ///   - Unboundedness (`NULL`) for boolean endpoints is converted to `false`
+    ///     for lower and `true` for upper bounds.
+    /// - **Floating-point intervals**:
+    ///   - Floating-point endpoints with `NaN`, `INF`, or `NEG_INF` are converted
+    ///     to `NULL`s.
+    pub fn try_new(lower: ScalarValue, upper: ScalarValue) -> Result<Self> {
         if lower.data_type() != upper.data_type() {
             return internal_err!(
-                "Interval bounds must be in the same datatype to create a valid Interval"
+                "Bounds must have the same datatype to create a valid interval"
             );
         }
 
         let interval = if let ScalarValue::Boolean(lower_bool) = lower {
-            let upper_bool = if let ScalarValue::Boolean(upper_bool) = upper {
-                upper_bool
-            } else {
-                // We are sure that upper and lower bounds have same type.
+            let ScalarValue::Boolean(upper_bool) = upper else {
+                // We are sure that upper and lower bounds have the same type.
                 unreachable!();
             };
-            // Handle boolean type:
-            // Cast `None` to `Some(false)` for lower bound
-            let standardized_lower =
-                ScalarValue::Boolean(Some(lower_bool.unwrap_or(false)));
-            // Cast `None` to `Some(true)` for upper bound
-            let standardized_upper =
-                ScalarValue::Boolean(Some(upper_bool.unwrap_or(true)));
-            Interval {
-                lower: standardized_lower,
-                upper: standardized_upper,
+            // Standardize boolean interval endpoints:
+            Self {
+                lower: ScalarValue::Boolean(Some(lower_bool.unwrap_or(false))),
+                upper: ScalarValue::Boolean(Some(upper_bool.unwrap_or(true))),
             }
         }
-        // Handle risky floating point values:
-        else if let ScalarValue::Float32(Some(_)) = lower {
+        // Standardize floating-point endpoints:
+        else if lower.data_type() == DataType::Float32 {
             handle_float_intervals!(Float32, f32, lower, upper)
-        } else if let ScalarValue::Float64(Some(_)) = lower {
+        } else if lower.data_type() == DataType::Float64 {
             handle_float_intervals!(Float64, f64, lower, upper)
         } else {
-            // Others:
-            Interval { lower, upper }
+            // Other data types do not require standardization:
+            Self { lower, upper }
         };
 
-        if interval.lower <= interval.upper
+        if interval.lower.is_null()
             || interval.upper.is_null()
-            || interval.lower.is_null()
+            || interval.lower <= interval.upper
         {
             Ok(interval)
         } else {
-            Err(DataFusionError::Internal(format!(
-                "Interval's lower bound {:?} is greater than the upper bound {:?}",
-                interval.lower, interval.upper
-            )))
+            internal_err!(
+                "Interval's lower bound {} is greater than the upper bound {}",
+                interval.lower,
+                interval.upper
+            )
         }
     }
 
-    /// Creates an unbounded interval from both sides if the datatype supported.
-    pub fn make_unbounded(data_type: &DataType) -> Result<Interval> {
-        let inf = ScalarValue::try_from(data_type)?;
-        Interval::try_new(inf.clone(), inf)
+    /// Convenience function to create a new `Interval` from the given (optional)
+    /// bounds. Absence of either endpoint indicates unboundedness on that side.
+    /// See [`Interval::try_new`] for more details.
+    pub fn make<T>(lower: Option<T>, upper: Option<T>) -> Result<Self>
+    where
+        ScalarValue: From<Option<T>>,
+    {
+        Self::try_new(ScalarValue::from(lower), ScalarValue::from(upper))
     }
 
+    /// Creates an unbounded interval from both sides if the datatype supported.
+    pub fn make_unbounded(data_type: &DataType) -> Result<Self> {
+        let unbounded_endpoint = ScalarValue::try_from(data_type)?;
+        Self::try_new(unbounded_endpoint.clone(), unbounded_endpoint)
+    }
+
+    /// Returns a reference to the lower bound.
     pub fn lower(&self) -> &ScalarValue {
         &self.lower
     }
 
+    /// Returns a reference to the upper bound.
     pub fn upper(&self) -> &ScalarValue {
         &self.upper
     }
@@ -190,11 +196,12 @@ impl Interval {
     }
 
     /// This function returns the data type of this interval.
-    pub fn get_datatype(&self) -> DataType {
+    pub fn data_type(&self) -> DataType {
         let lower_type = self.lower.data_type();
         let upper_type = self.upper.data_type();
 
-        // There must be no way to create an interval having different types.
+        // There must be no way to create an interval whose endpoints have
+        // different types.
         assert!(
             lower_type == upper_type,
             "Interval bounds have different types: {lower_type} != {upper_type}"
@@ -207,151 +214,126 @@ impl Interval {
         &self,
         data_type: &DataType,
         cast_options: &CastOptions,
-    ) -> Result<Interval> {
-        Interval::try_new(
+    ) -> Result<Self> {
+        Self::try_new(
             cast_scalar_value(&self.lower, data_type, cast_options)?,
             cast_scalar_value(&self.upper, data_type, cast_options)?,
         )
     }
 
-    pub const CERTAINLY_FALSE: Interval = Interval {
+    pub const CERTAINLY_FALSE: Self = Self {
         lower: ScalarValue::Boolean(Some(false)),
         upper: ScalarValue::Boolean(Some(false)),
     };
 
-    pub const UNCERTAIN: Interval = Interval {
+    pub const UNCERTAIN: Self = Self {
         lower: ScalarValue::Boolean(Some(false)),
         upper: ScalarValue::Boolean(Some(true)),
     };
 
-    pub const CERTAINLY_TRUE: Interval = Interval {
+    pub const CERTAINLY_TRUE: Self = Self {
         lower: ScalarValue::Boolean(Some(true)),
         upper: ScalarValue::Boolean(Some(true)),
     };
 
     /// Decide if this interval is certainly greater than, possibly greater than,
-    /// or can't be greater than `other` by returning [true, true],
-    /// [false, true] or [false, false] respectively.
-    pub(crate) fn gt<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
+    /// or can't be greater than `other` by returning `[true, true]`,
+    /// `[false, true]` or `[false, false]` respectively.
+    pub(crate) fn gt<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
-        if get_result_type(&self.get_datatype(), &Operator::Gt, &rhs.get_datatype())
-            .is_err()
-        {
-            return internal_err!(
-                "Interval datatypes must be compatible to be compared, lhs:{} , rhs:{}",
-                self.get_datatype(),
-                rhs.get_datatype()
-            );
-        }
-
-        let (lower, upper) = if !(self.upper.is_null() || rhs.lower.is_null())
+        if get_result_type(&self.data_type(), &Operator::Gt, &rhs.data_type()).is_err() {
+            internal_err!(
+                "Interval datatypes must be compatible to be compared, lhs:{}, rhs:{}",
+                self.data_type(),
+                rhs.data_type()
+            )
+        } else if !(self.upper.is_null() || rhs.lower.is_null())
             && self.upper <= rhs.lower
         {
-            // Values in this interval are certainly less than or
-            // equal to those in the given interval.
-            (false, false)
+            // Values in this interval are certainly less than or equal to
+            // those in the given interval.
+            Ok(Self::CERTAINLY_FALSE)
         } else if !(self.lower.is_null() || rhs.upper.is_null())
             && (self.lower > rhs.upper)
         {
-            // Values in this interval are certainly greater
-            // than those in the  given interval.
-            (true, true)
+            // Values in this interval are certainly greater than those in the
+            // given interval.
+            Ok(Self::CERTAINLY_TRUE)
         } else {
             // All outcomes are possible.
-            (false, true)
-        };
-
-        Ok(Interval {
-            lower: ScalarValue::from(lower),
-            upper: ScalarValue::from(upper),
-        })
+            Ok(Self::UNCERTAIN)
+        }
     }
 
-    /// Decide if this interval is certainly greater than or equal to, possibly greater than
-    /// or equal to, or can't be greater than or equal to `other` by returning [true, true],
-    /// [false, true] or [false, false] respectively.
-    pub(crate) fn gt_eq<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
+    /// Decide if this interval is certainly greater than or equal to, possibly
+    /// greater than or equal to, or can't be greater than or equal to `other`
+    /// by returning `[true, true]`, `[false, true]` or `[false, false]` respectively.
+    pub(crate) fn gt_eq<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
-        if get_result_type(&self.get_datatype(), &Operator::GtEq, &rhs.get_datatype())
-            .is_err()
+        if get_result_type(&self.data_type(), &Operator::GtEq, &rhs.data_type()).is_err()
         {
-            return internal_err!(
-                "Interval datatypes must be compatible to be compared, lhs:{} , rhs:{}",
-                self.get_datatype(),
-                rhs.get_datatype()
-            );
-        };
-
-        let (lower, upper) = if !(self.lower.is_null() || rhs.upper.is_null())
+            internal_err!(
+                "Interval datatypes must be compatible to be compared, lhs:{}, rhs:{}",
+                self.data_type(),
+                rhs.data_type()
+            )
+        } else if !(self.lower.is_null() || rhs.upper.is_null())
             && self.lower >= rhs.upper
         {
-            // Values in this interval are certainly greater than or
-            // equal to those in the given interval.
-            (true, true)
+            // Values in this interval are certainly greater than or equal to
+            // those in the given interval.
+            Ok(Self::CERTAINLY_TRUE)
         } else if !(self.upper.is_null() || rhs.lower.is_null())
             && (self.upper < rhs.lower)
         {
-            // Values in this interval are certainly less
-            // than those in the given interval.
-            (false, false)
+            // Values in this interval are certainly less than those in the
+            // given interval.
+            Ok(Self::CERTAINLY_FALSE)
         } else {
             // All outcomes are possible.
-            (false, true)
-        };
-
-        Ok(Interval {
-            lower: ScalarValue::from(lower),
-            upper: ScalarValue::from(upper),
-        })
+            Ok(Self::UNCERTAIN)
+        }
     }
 
-    /// Decide if this interval is certainly less than, possibly less than,
-    /// or can't be less than `other` by returning [true, true],
-    /// [false, true] or [false, false] respectively.
-    pub(crate) fn lt<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
+    /// Decide if this interval is certainly less than, possibly less than, or
+    /// can't be less than `other` by returning `[true, true]`, `[false, true]`
+    /// or `[false, false]` respectively.
+    pub(crate) fn lt<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         other.borrow().gt(self)
     }
 
     /// Decide if this interval is certainly less than or equal to, possibly
-    /// less than or equal to, or can't be less than or equal to `other` by returning
-    /// [true, true], [false, true] or [false, false] respectively.
-    pub(crate) fn lt_eq<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
+    /// less than or equal to, or can't be less than or equal to `other` by
+    /// returning `[true, true]`, `[false, true]` or `[false, false]` respectively.
+    pub(crate) fn lt_eq<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         other.borrow().gt_eq(self)
     }
 
-    /// Decide if this interval is certainly equal to, possibly equal to,
-    /// or can't be equal to `other` by returning [true, true],
-    /// [false, true] or [false, false] respectively.
-    pub(crate) fn equal<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
+    /// Decide if this interval is certainly equal to, possibly equal to, or
+    /// can't be equal to `other` by returning `[true, true]`, `[false, true]`
+    /// or `[false, false]` respectively.
+    pub(crate) fn equal<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
-        if get_result_type(&self.get_datatype(), &Operator::Eq, &rhs.get_datatype())
-            .is_err()
-        {
-            return internal_err!(
-                "Interval datatypes must be compatible to be checked equality, lhs:{} , rhs:{}",self.get_datatype(), rhs.get_datatype()
-            );
-        };
-
-        let (lower, upper) = if !self.lower.is_null()
+        if get_result_type(&self.data_type(), &Operator::Eq, &rhs.data_type()).is_err() {
+            internal_err!(
+                "Interval datatypes must be compatible to be checked equality, lhs:{}, rhs:{}", self.data_type(), rhs.data_type()
+            )
+        } else if !self.lower.is_null()
             && (self.lower == self.upper)
             && (rhs.lower == rhs.upper)
             && (self.lower == rhs.lower)
         {
-            (true, true)
+            Ok(Self::CERTAINLY_TRUE)
         } else if self.intersect(rhs)?.is_none() {
-            (false, false)
+            Ok(Self::CERTAINLY_FALSE)
         } else {
-            (false, true)
-        };
-
-        Ok(Interval {
-            lower: ScalarValue::from(lower),
-            upper: ScalarValue::from(upper),
-        })
+            Ok(Self::UNCERTAIN)
+        }
     }
 
-    /// Compute the logical conjunction of this (boolean) interval with the given boolean interval.
-    pub(crate) fn and<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
+    /// Compute the logical conjunction of this (boolean) interval with the
+    /// given boolean interval.
+    pub(crate) fn and<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
         match (&self.lower, &self.upper, &rhs.lower, &rhs.upper) {
             (
@@ -363,7 +345,7 @@ impl Interval {
                 let lower = self_lower && other_lower;
                 let upper = self_upper && other_upper;
 
-                Ok(Interval {
+                Ok(Self {
                     lower: ScalarValue::Boolean(Some(lower)),
                     upper: ScalarValue::Boolean(Some(upper)),
                 })
@@ -374,38 +356,32 @@ impl Interval {
 
     /// Compute the logical negation of this (boolean) interval.
     pub(crate) fn not(&self) -> Result<Self> {
-        if self.get_datatype().ne(&DataType::Boolean) {
-            return internal_err!(
-                "Cannot apply logical negation to non-boolean interval"
-            );
-        }
-        if self == &Interval::CERTAINLY_TRUE {
-            Ok(Interval::CERTAINLY_FALSE)
-        } else if self == &Interval::CERTAINLY_FALSE {
-            Ok(Interval::CERTAINLY_TRUE)
+        if self.data_type().ne(&DataType::Boolean) {
+            internal_err!("Cannot apply logical negation to non-boolean interval")
+        } else if self == &Self::CERTAINLY_TRUE {
+            Ok(Self::CERTAINLY_FALSE)
+        } else if self == &Self::CERTAINLY_FALSE {
+            Ok(Self::CERTAINLY_TRUE)
         } else {
-            Ok(Interval::UNCERTAIN)
+            Ok(Self::UNCERTAIN)
         }
     }
 
-    /// Compute the intersection of the interval with the given interval.
-    /// If the intersection is empty, return None.
-    pub fn intersect<T: Borrow<Interval>>(&self, other: T) -> Result<Option<Interval>> {
+    /// Compute the intersection of this interval with the given interval.
+    /// If the intersection is empty, return `None`.
+    pub fn intersect<T: Borrow<Self>>(&self, other: T) -> Result<Option<Self>> {
         let rhs = other.borrow();
-        if get_result_type(&self.get_datatype(), &Operator::Gt, &rhs.get_datatype())
-            .is_err()
-        {
+        if get_result_type(&self.data_type(), &Operator::Gt, &rhs.data_type()).is_err() {
             return internal_err!(
-                "Interval datatypes must be compatible to check intersection, lhs:{} , rhs:{}",self.get_datatype(), rhs.get_datatype()
+                "Interval datatypes must be compatible to check intersection, lhs:{}, rhs:{}", self.data_type(), rhs.data_type()
             );
         };
 
-        // If it is evident that the result is an empty interval,
-        // do not make any calculation and directly return None.
+        // If it is evident that the result is an empty interval, short-circuit
+        // and directly return `None`.
         if (!(self.lower.is_null() || rhs.upper.is_null()) && self.lower > rhs.upper)
             || (!(self.upper.is_null() || rhs.lower.is_null()) && self.upper < rhs.lower)
         {
-            // This None value signals an empty interval.
             return Ok(None);
         }
 
@@ -418,74 +394,73 @@ impl Interval {
             "Result of the intersection of two intervals cannot be an invalid interval"
         );
 
-        Ok(Some(Interval { lower, upper }))
+        Ok(Some(Self { lower, upper }))
     }
 
-    /// Decide if this interval is certainly contains, possibly contains,
-    /// or can't contain `other` by returning [true, true],
-    /// [false, true] or [false, false] respectively.
+    /// Decide if this interval is certainly contains, possibly contains, or
+    /// can't contain `other` by returning `[true, true]`, `[false, true]` or
+    /// `[false, false]` respectively.
     pub fn contains<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
-        if get_result_type(&self.get_datatype(), &Operator::Eq, &rhs.get_datatype())
-            .is_err()
-        {
+        if get_result_type(&self.data_type(), &Operator::Eq, &rhs.data_type()).is_err() {
             return internal_err!(
-                "Interval datatypes must be compatible to check containment, lhs:{} , rhs:{}",self.get_datatype(), rhs.get_datatype()
+                "Interval datatypes must be compatible to check containment, lhs:{}, rhs:{}", self.data_type(), rhs.data_type()
             );
         };
 
-        Ok(match self.intersect(other.borrow())? {
+        match self.intersect(rhs)? {
             Some(intersection) => {
-                if &intersection == other.borrow() {
-                    Interval::CERTAINLY_TRUE
+                if &intersection == rhs {
+                    Ok(Self::CERTAINLY_TRUE)
                 } else {
-                    Interval::UNCERTAIN
+                    Ok(Self::UNCERTAIN)
                 }
             }
-            None => Interval::CERTAINLY_FALSE,
-        })
+            None => Ok(Self::CERTAINLY_FALSE),
+        }
     }
 
-    /// Add the given interval (`other`) to this interval. Say we have
-    /// intervals [a1, b1] and [a2, b2], then their sum is [a1 + a2, b1 + b2].
-    /// Note that this represents all possible values the sum can take if
-    /// one can choose single values arbitrarily from each of the operands.
-    pub fn add<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
+    /// Add the given interval (`other`) to this interval. Say we have intervals
+    /// `[a1, b1]` and `[a2, b2]`, then their sum is `[a1 + a2, b1 + b2]`. Note
+    /// that this represents all possible values the sum can take if one can
+    /// choose single values arbitrarily from each of the operands.
+    pub fn add<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
 
-        Interval::try_new(
+        Self::try_new(
             add_bounds::<false>(&self.lower, &rhs.lower)?,
             add_bounds::<true>(&self.upper, &rhs.upper)?,
         )
     }
 
     /// Subtract the given interval (`other`) from this interval. Say we have
-    /// intervals [a1, b1] and [a2, b2], then their sum is [a1 - b2, b1 - a2].
-    /// Note that this represents all possible values the difference can take
-    /// if one can choose single values arbitrarily from each of the operands.
-    pub fn sub<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
+    /// intervals `[a1, b1]` and `[a2, b2]`, then their difference is
+    /// `[a1 - b2, b1 - a2]`. Note that this represents all possible values the
+    /// difference can take if one can choose single values arbitrarily from
+    /// each of the operands.
+    pub fn sub<T: Borrow<Interval>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
 
-        Interval::try_new(
+        Self::try_new(
             sub_bounds::<false>(&self.lower, &rhs.upper)?,
             sub_bounds::<true>(&self.upper, &rhs.lower)?,
         )
     }
 
     /// Multiply the given interval (`other`) with this interval. Say we have
-    /// intervals [a1, b1] and [a2, b2], then their multiplication is
-    /// [min(a1*a2, a1*b2, b1*a2, b1*b2), max(a1*a2, a1*b2, b1*a2, b1*b2)].
-    /// Note that this represents all possible values the multiplication can take
-    /// if one can choose single values arbitrarily from each of the operands.
-    pub fn mul<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
+    /// intervals `[a1, b1]` and `[a2, b2]`, then their product is `[min(a1 * a2,
+    /// a1 * b2, b1 * a2, b1 * b2), max(a1 * a2, a1 * b2, b1 * a2, b1 * b2)]`.
+    /// Note that this represents all possible values the product can take if
+    /// one can choose single values arbitrarily from each of the operands.
+    pub fn mul<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
 
-        let zero = ScalarValue::new_zero(&self.get_datatype())?;
+        let zero = ScalarValue::new_zero(&self.data_type())?;
         // We want 0 is approachable from both negative and positive sides.
-        let zero_point = Interval::try_new(prev_value(zero.clone()), next_value(zero))?;
+        let zero_point = Self::try_new(prev_value(zero.clone()), next_value(zero))?;
         match (
-            Interval::CERTAINLY_TRUE == self.contains(&zero_point)?,
-            Interval::CERTAINLY_TRUE == rhs.contains(&zero_point)?,
+            Self::CERTAINLY_TRUE == self.contains(&zero_point)?,
+            Self::CERTAINLY_TRUE == rhs.contains(&zero_point)?,
         ) {
             // Since the parameter of contains function is a singleton,
             // it is impossible to have an UNCERTAIN case.
@@ -499,39 +474,36 @@ impl Interval {
         }
     }
 
-    /// Divide this interval by the given interval (`other`). Say we have
-    /// intervals [a1, b1] and [a2, b2], then their division is
-    /// [a1, b1]*[1/b2, 1/a2] if 0 ∉ [a2, b2], [-Inf, +Inf] otherwise.
-    /// Note that this represents all possible values the division can take
-    /// if one can choose single values arbitrarily from each of the operands.
-    /// TODO: Once the interval sets are supported, cases where divisor contains 0
-    /// give an interval set, not the all space.
-    pub fn div<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
+    /// Divide this interval by the given interval (`other`). Say we have intervals
+    /// `[a1, b1]` and `[a2, b2]`, then their division is `[a1, b1] * [1 / b2, 1 / a2]`
+    /// if `0 ∉ [a2, b2]` and `[NEG_INF, INF]` otherwise. Note that this represents
+    /// all possible values the quotient can take if one can choose single values
+    /// arbitrarily from each of the operands.
+    ///
+    /// **TODO**: Once interval sets are supported, cases where the divisor contains
+    ///           0 should result in an interval set, not the universal set.
+    pub fn div<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
 
-        let zero = ScalarValue::new_zero(&self.get_datatype())?;
+        let zero = ScalarValue::new_zero(&self.data_type())?;
         // We want 0 is approachable from both negative and positive sides.
         let zero_point =
-            Interval::try_new(prev_value(zero.clone()), next_value(zero.clone()))?;
+            Self::try_new(prev_value(zero.clone()), next_value(zero.clone()))?;
 
         // The purpose is early exit with unbounded interval if rhs interval
         // is in the form of [some_negative, some_positive] or [0,0].
-        if rhs.contains(&zero_point)? == Interval::CERTAINLY_TRUE
+        if rhs.contains(&zero_point)? == Self::CERTAINLY_TRUE
             || (rhs.lower.eq(&zero) && rhs.upper.eq(&zero))
         {
-            return Interval::make_unbounded(&get_result_type(
-                &self.get_datatype(),
-                &Operator::Divide,
-                &rhs.get_datatype(),
-            )?);
+            get_result_type(&self.data_type(), &Operator::Divide, &rhs.data_type())
+                .and_then(|data_type| Self::make_unbounded(&data_type))
         }
-
         // 1) Since the parameter of contains function is a singleton,
         // it is impossible to have an UNCERTAIN case.
         // 2) We handle the case of rhs reaches 0 from both negative
         // and positive directions, so rhs can only contain zero as
         // edge point of the bound.
-        if self.contains(&zero_point)? == Interval::CERTAINLY_TRUE {
+        else if self.contains(&zero_point)? == Self::CERTAINLY_TRUE {
             div_helper_lhs_zero_inclusive(self, rhs, &zero_point)
         } else {
             // Only option is CERTAINLY_FALSE for rhs.
@@ -546,7 +518,7 @@ impl Interval {
     ///   implemented yet, or
     /// - An overflow occurs during the calculation.
     pub fn cardinality(&self) -> Option<u64> {
-        let data_type = self.get_datatype();
+        let data_type = self.data_type();
         if data_type.is_integer() {
             self.upper.distance(&self.lower).map(|diff| diff as u64)
         }
@@ -560,8 +532,8 @@ impl Interval {
                     ScalarValue::Float32(Some(lower)),
                     ScalarValue::Float32(Some(upper)),
                 ) => {
-                    // Negative numbers are sorted in the reverse order.
-                    // To always have a positive difference after the subtraction,
+                    // Negative numbers are sorted in the reverse order. To
+                    // always have a positive difference after the subtraction,
                     // we perform following transformation:
                     let lower_bits = lower.to_bits() as i32;
                     let upper_bits = upper.to_bits() as i32;
@@ -603,7 +575,7 @@ impl Interval {
 
 impl Default for Interval {
     fn default() -> Self {
-        Interval {
+        Self {
             lower: ScalarValue::Null,
             upper: ScalarValue::Null,
         }
@@ -616,6 +588,7 @@ impl Display for Interval {
     }
 }
 
+/// Applies the given binary operator the `lhs` and `rhs` arguments.
 pub fn apply_operator(op: &Operator, lhs: &Interval, rhs: &Interval) -> Result<Interval> {
     match *op {
         Operator::Eq => lhs.equal(rhs),
@@ -629,10 +602,7 @@ pub fn apply_operator(op: &Operator, lhs: &Interval, rhs: &Interval) -> Result<I
         Operator::Minus => lhs.sub(rhs),
         Operator::Multiply => lhs.mul(rhs),
         Operator::Divide => lhs.div(rhs),
-        _ => Err(DataFusionError::Internal(format!(
-            "Interval arithmetic does not support the operator {}",
-            op
-        ))),
+        _ => internal_err!("Interval arithmetic does not support the operator {op}"),
     }
 }
 
@@ -648,13 +618,13 @@ fn add_bounds<const UPPER: bool>(
         return ScalarValue::try_from(dt);
     }
 
-    Ok(match lhs.data_type() {
+    match lhs.data_type() {
         DataType::Float64 | DataType::Float32 => {
             alter_fp_rounding_mode::<UPPER, _>(lhs, rhs, |lhs, rhs| lhs.add_checked(rhs))
         }
         _ => lhs.add_checked(rhs),
     }
-    .unwrap_or(handle_overflow::<UPPER>(lhs, rhs, Operator::Plus, dt)?))
+    .or_else(|_| handle_overflow::<UPPER>(lhs, rhs, Operator::Plus, dt))
 }
 
 // Cannot be used other than add method of intervals since
@@ -669,7 +639,7 @@ fn sub_bounds<const UPPER: bool>(
         return ScalarValue::try_from(dt);
     }
 
-    Ok(match lhs.data_type() {
+    match lhs.data_type() {
         DataType::Float64 | DataType::Float32 => {
             alter_fp_rounding_mode::<UPPER, _>(lhs, rhs, |lhs, rhs| lhs.sub_checked(rhs))
         }
@@ -677,7 +647,7 @@ fn sub_bounds<const UPPER: bool>(
     }
     // We cannot represent the overflow cases.
     // Set the bound as unbounded.
-    .unwrap_or(handle_overflow::<UPPER>(lhs, rhs, Operator::Minus, dt)?))
+    .or_else(|_| handle_overflow::<UPPER>(lhs, rhs, Operator::Minus, dt))
 }
 
 // Cannot be used other than add method of intervals since
@@ -692,7 +662,7 @@ fn mul_bounds<const UPPER: bool>(
         return ScalarValue::try_from(dt);
     }
 
-    Ok(match lhs.data_type() {
+    match lhs.data_type() {
         DataType::Float64 | DataType::Float32 => {
             alter_fp_rounding_mode::<UPPER, _>(lhs, rhs, |lhs, rhs| lhs.mul_checked(rhs))
         }
@@ -700,7 +670,7 @@ fn mul_bounds<const UPPER: bool>(
     }
     // We cannot represent the overflow cases.
     // Set the bound as unbounded.
-    .unwrap_or(handle_overflow::<UPPER>(lhs, rhs, Operator::Multiply, dt)?))
+    .or_else(|_| handle_overflow::<UPPER>(lhs, rhs, Operator::Multiply, dt))
 }
 
 // Cannot be used other than add method of intervals since
@@ -718,7 +688,7 @@ fn div_bounds<const UPPER: bool>(
         return Ok(zero);
     }
 
-    Ok(match lhs.data_type() {
+    match lhs.data_type() {
         DataType::Float64 | DataType::Float32 => {
             alter_fp_rounding_mode::<UPPER, _>(lhs, rhs, |lhs, rhs| lhs.div(rhs))
         }
@@ -726,7 +696,7 @@ fn div_bounds<const UPPER: bool>(
     }
     // We cannot represent the overflow cases.
     // Set the bound as unbounded.
-    .unwrap_or(handle_overflow::<UPPER>(lhs, rhs, Operator::Divide, dt)?))
+    .or_else(|_| handle_overflow::<UPPER>(lhs, rhs, Operator::Divide, dt))
 }
 
 macro_rules! value_transition {
@@ -773,13 +743,15 @@ macro_rules! value_transition {
     };
 }
 
-// It should remain private since it may malform the intervals if used randomly.
+// This function should remain private since it may corrupt the an interval if
+// used without caution.
 fn next_value(value: ScalarValue) -> ScalarValue {
     use ScalarValue::*;
     value_transition!(MAX, true, value)
 }
 
-// It should remain private since it may malform the intervals if used randomly.
+// This function should remain private since it may corrupt the an interval if
+// used without caution.
 fn prev_value(value: ScalarValue) -> ScalarValue {
     use ScalarValue::*;
     value_transition!(MIN, false, value)
@@ -793,25 +765,25 @@ macro_rules! impl_OneTrait{
 }
 impl_OneTrait! {u8, u16, u32, u64, i8, i16, i32, i64, i128}
 
-/// This function either increments or decrements its argument, depending on the `INC` value.
-/// If `true`, it increments; otherwise it decrements the argument.
+/// This function either increments or decrements its argument, depending on
+/// the `INC` value (where a `true` value corresponds to the increment).
 fn increment_decrement<const INC: bool, T: OneTrait + SubAssign + AddAssign>(
-    mut val: T,
+    mut value: T,
 ) -> T {
     if INC {
-        val.add_assign(T::one());
+        value.add_assign(T::one());
     } else {
-        val.sub_assign(T::one());
+        value.sub_assign(T::one());
     }
-    val
+    value
 }
 
-/// This function returns the next/previous value depending on the `ADD` value.
+/// This function returns the next/previous value depending on the `INC` value.
 /// If `true`, it returns the next value; otherwise it returns the previous value.
 fn next_value_helper<const INC: bool>(value: ScalarValue) -> ScalarValue {
     use ScalarValue::*;
     match value {
-        // f32/64::-Inf/Inf and f32/64::NaN values should not emerge at this point.
+        // f32/f64::NEG_INF/INF and f32/f64::NaN values should not emerge at this point.
         Float32(Some(val)) => {
             assert!(val.is_finite(), "Non-standardized floating point usage");
             Float32(Some(if INC { next_up(val) } else { next_down(val) }))
@@ -862,26 +834,20 @@ fn next_value_helper<const INC: bool>(value: ScalarValue) -> ScalarValue {
     }
 }
 
-/// Returns the greater one of two interval bounds.
-/// This function assumes that arguments are lower bounds.
-/// Hence null represents -inf.
+/// Returns the greater of the given interval bounds. Assumes that a `NULL`
+/// value represents `NEG_INF`.
 fn max_of_bounds(first: &ScalarValue, second: &ScalarValue) -> ScalarValue {
-    if first.is_null() {
-        second.clone()
-    } else if second.is_null() || first >= second {
+    if !first.is_null() && (second.is_null() || first >= second) {
         first.clone()
     } else {
         second.clone()
     }
 }
 
-/// Returns the smaller one of two interval bounds.
-/// This function assumes that arguments are upper bounds.
-/// Hence null represents +inf.
+/// Returns the lesser of the given interval bounds. Assumes that a `NULL`
+/// value represents `INF`.
 fn min_of_bounds(first: &ScalarValue, second: &ScalarValue) -> ScalarValue {
-    if first.is_null() {
-        second.clone()
-    } else if second.is_null() || first <= second {
+    if !first.is_null() && (second.is_null() || first <= second) {
         first.clone()
     } else {
         second.clone()
@@ -996,7 +962,7 @@ fn mul_helper_multi_zero_inclusive(lhs: &Interval, rhs: &Interval) -> Result<Int
         || rhs.lower.is_null()
         || rhs.upper.is_null()
     {
-        return Interval::make_unbounded(&lhs.get_datatype());
+        return Interval::make_unbounded(&lhs.data_type());
     }
     // Since unbounded cases are handled above, we can safely
     // use the utility functions here to eliminate code duplication.
@@ -1274,7 +1240,11 @@ fn handle_overflow<const UPPER: bool>(
             lhs.lt(&zero) && rhs.lt(&zero) || lhs.gt(&zero) && rhs.gt(&zero)
         }
         Operator::Plus | Operator::Minus => lhs.gt(&zero),
-        _ => unreachable!(),
+        _ => {
+            return not_impl_err!(
+                "Operation {op} is not supported by the interval library"
+            )
+        }
     };
     match (UPPER, positive_sign) {
         (true, true) | (false, false) => ScalarValue::try_from(dt),
@@ -1395,7 +1365,7 @@ impl NullableInterval {
         match self {
             Self::Null { datatype } => Ok(datatype.clone()),
             Self::MaybeNull { values } | Self::NotNull { values } => {
-                Ok(values.get_datatype())
+                Ok(values.data_type())
             }
         }
     }
@@ -2357,7 +2327,7 @@ mod tests {
         ];
         for case in cases {
             let result = case.0.add(case.1)?;
-            if case.0.get_datatype().is_floating() {
+            if case.0.data_type().is_floating() {
                 assert!(
                     result.lower().is_null() && case.2.lower().is_null()
                         || result.lower().le(case.2.lower())
@@ -2453,7 +2423,7 @@ mod tests {
         ];
         for case in cases {
             let result = case.0.sub(case.1)?;
-            if case.0.get_datatype().is_floating() {
+            if case.0.data_type().is_floating() {
                 assert!(
                     result.lower().is_null() && case.2.lower().is_null()
                         || result.lower().le(case.2.lower())
@@ -2538,7 +2508,7 @@ mod tests {
         ];
         for case in cases {
             let result = case.0.mul(case.1)?;
-            if case.0.get_datatype().is_floating() {
+            if case.0.data_type().is_floating() {
                 assert!(
                     result.lower().is_null() && case.2.lower().is_null()
                         || result.lower().le(case.2.lower())
@@ -2663,7 +2633,7 @@ mod tests {
         ];
         for case in cases {
             let result = case.0.div(case.1)?;
-            if case.0.get_datatype().is_floating() {
+            if case.0.data_type().is_floating() {
                 assert!(
                     result.lower().is_null() && case.2.lower().is_null()
                         || result.lower().le(case.2.lower())

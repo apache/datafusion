@@ -226,7 +226,7 @@ pub fn propagate_arithmetic(
     right_child: &Interval,
 ) -> Result<Option<Vec<Interval>>> {
     let inverse_op = get_inverse_op(*op)?;
-    match (left_child.get_datatype(), right_child.get_datatype()) {
+    match (left_child.data_type(), right_child.data_type()) {
         // If we have a child whose type is a time interval (i.e. DataType::Interval), we need special handling
         // since timestamp differencing results in a Duration type.
         (DataType::Timestamp(..), DataType::Interval(_)) => {
@@ -764,7 +764,7 @@ mod tests {
 
                 // Calculated bounds are relaxed by 1 to cover all strict and
                 // and non-strict comparison cases since we have only closed bounds.
-                let one = ScalarValue::new_one(&expected.get_datatype()).unwrap();
+                let one = ScalarValue::new_one(&expected.data_type()).unwrap();
                 assert!(
                     calculated_interval_node.lower()
                         <= &expected.lower().add(&one).unwrap(),

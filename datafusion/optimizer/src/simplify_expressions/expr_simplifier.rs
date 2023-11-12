@@ -21,9 +21,11 @@ use std::ops::Not;
 
 use super::or_in_list_simplifier::OrInListSimplifier;
 use super::utils::*;
-
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
+use crate::simplify_expressions::guarantees::GuaranteeRewriter;
 use crate::simplify_expressions::regex::simplify_regex_expr;
+use crate::simplify_expressions::SimplifyInfo;
+
 use arrow::{
     array::new_null_array,
     datatypes::{DataType, Field, Schema},
@@ -46,10 +48,6 @@ use datafusion_expr::{
     interval_arithmetic::NullableInterval,
 };
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
-
-use crate::simplify_expressions::SimplifyInfo;
-
-use crate::simplify_expressions::guarantees::GuaranteeRewriter;
 
 /// This structure handles API for expression simplification
 pub struct ExprSimplifier<S> {
@@ -209,8 +207,8 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     ///        col("x"),
     ///        NullableInterval::NotNull {
     ///            values: Interval::try_new(
-    ///            ScalarValue::Int64(Some(3)),
-    ///            ScalarValue::Int64(Some(5)),
+    ///                ScalarValue::Int64(Some(3)),
+    ///                ScalarValue::Int64(Some(5)),
     ///        ).unwrap()
     ///        }
     ///    ),
