@@ -1560,6 +1560,7 @@ from_unixtime(expression)
 - [string_to_array](#string_to_array)
 - [string_to_list](#string_to_list)
 - [trim_array](#trim_array)
+- [range](#range)
 
 ### `array_append`
 
@@ -2480,6 +2481,21 @@ trim_array(array, n)
 - **array**: Array expression.
   Can be a constant, column, or function, and any combination of array operators.
 - **n**: Element to trim the array.
+
+### `range`
+
+Returns an Arrow array between start and stop with step. `SELECT range(2, 10, 3) -> [2, 5, 8]`
+
+The range start..end contains all values with start <= x < end. It is empty if start >= end.
+
+Step can not be 0 (then the range will be nonsense.).
+
+#### Arguments
+
+- **start**: start of the range
+- **end**: end of the range (not included)
+- **step**: increase by step (can not be 0)
+
 
 ## Struct Functions
 
