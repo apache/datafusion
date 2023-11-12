@@ -126,7 +126,7 @@ fn generate_projection_expr(
             ));
         }
     } else {
-        exprs.push(Expr::Wildcard);
+        exprs.push(Expr::Wildcard { qualifier: None });
     }
     Ok(exprs)
 }

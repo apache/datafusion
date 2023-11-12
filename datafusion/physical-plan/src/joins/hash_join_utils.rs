@@ -607,7 +607,7 @@ pub fn update_filter_expr_interval(
         .origin_sorted_expr()
         .expr
         .evaluate(batch)?
-        .into_array(1);
+        .into_array(1)?;
     // Convert the array to a ScalarValue:
     let value = ScalarValue::try_from_array(&array, 0)?;
     // Create a ScalarValue representing positive or negative infinity for the same data type:

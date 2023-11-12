@@ -1300,11 +1300,16 @@ pub fn project(
     for e in expr {
         let e = e.into();
         match e {
-            Expr::Wildcard => {
+            Expr::Wildcard { qualifier: None } => {
                 projected_expr.extend(expand_wildcard(input_schema, &plan, None)?)
             }
-            Expr::QualifiedWildcard { ref qualifier } => projected_expr
-                .extend(expand_qualified_wildcard(qualifier, input_schema, None)?),
+            Expr::Wildcard {
+                qualifier: Some(qualifier),
+            } => projected_expr.extend(expand_qualified_wildcard(
+                &qualifier,
+                input_schema,
+                None,
+            )?),
             _ => projected_expr
                 .push(columnize_expr(normalize_col(e, &plan)?, input_schema)),
         }
@@ -1603,7 +1608,7 @@ mod tests {
 
         let plan = table_scan(Some("t1"), &employee_schema(), None)?
             .join_using(t2, JoinType::Inner, vec!["id"])?
-            .project(vec![Expr::Wildcard])?
+            .project(vec![Expr::Wildcard { qualifier: None }])?
             .build()?;
 
         // id column should only show up once in projection

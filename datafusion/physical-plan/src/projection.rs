@@ -310,8 +310,10 @@ impl ProjectionStream {
         let arrays = self
             .expr
             .iter()
-            .map(|expr| expr.evaluate(batch))
-            .map(|r| r.map(|v| v.into_array(batch.num_rows())))
+            .map(|expr| {
+                expr.evaluate(batch)
+                    .and_then(|v| v.into_array(batch.num_rows()))
+            })
             .collect::<Result<Vec<_>>>()?;
 
         if arrays.is_empty() {

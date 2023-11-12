@@ -968,8 +968,10 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::InList(expr)),
                 }
             }
-            Expr::Wildcard => Self {
-                expr_type: Some(ExprType::Wildcard(true)),
+            Expr::Wildcard { qualifier } => Self {
+                expr_type: Some(ExprType::Wildcard(protobuf::Wildcard {
+                    qualifier: qualifier.clone(),
+                })),
             },
             Expr::ScalarSubquery(_)
             | Expr::InSubquery(_)
@@ -1060,11 +1062,6 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     })),
                 }
             }
-
-            Expr::QualifiedWildcard { .. } => return Err(Error::General(
-                "Proto serialization error: Expr::QualifiedWildcard { .. } not supported"
-                    .to_string(),
-            )),
         };
 
         Ok(expr_node)
@@ -1489,6 +1486,7 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::ArrayReplaceAll => Self::ArrayReplaceAll,
             BuiltinScalarFunction::ArraySlice => Self::ArraySlice,
             BuiltinScalarFunction::ArrayToString => Self::ArrayToString,
+            BuiltinScalarFunction::ArrayIntersect => Self::ArrayIntersect,
             BuiltinScalarFunction::Cardinality => Self::Cardinality,
             BuiltinScalarFunction::MakeArray => Self::Array,
             BuiltinScalarFunction::NullIf => Self::NullIf,

@@ -98,7 +98,7 @@ impl WindowAggState {
     }
 
     pub fn new(out_type: &DataType) -> Result<Self> {
-        let empty_out_col = ScalarValue::try_from(out_type)?.to_array_of_size(0);
+        let empty_out_col = ScalarValue::try_from(out_type)?.to_array_of_size(0)?;
         Ok(Self {
             window_frame_range: Range { start: 0, end: 0 },
             window_frame_ctx: None,

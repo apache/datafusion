@@ -929,14 +929,12 @@ fn add_roundrobin_on_top(
         // - Preserving ordering is not helpful in terms of satisfying ordering requirements
         // - Usage of order preserving variants is not desirable
         // (determined by flag `config.optimizer.bounded_order_preserving_variants`)
-        let should_preserve_ordering = input.output_ordering().is_some();
-
         let partitioning = Partitioning::RoundRobinBatch(n_target);
-        let repartition = RepartitionExec::try_new(input, partitioning)?;
-        let new_plan = Arc::new(repartition.with_preserve_order(should_preserve_ordering))
-            as Arc<dyn ExecutionPlan>;
+        let repartition =
+            RepartitionExec::try_new(input, partitioning)?.with_preserve_order();
 
         // update distribution onward with new operator
+        let new_plan = Arc::new(repartition) as Arc<dyn ExecutionPlan>;
         update_distribution_onward(new_plan.clone(), dist_onward, input_idx);
         Ok(new_plan)
     } else {
@@ -999,7 +997,6 @@ fn add_hash_on_top(
         //   requirements.
         // - Usage of order preserving variants is not desirable (per the flag
         //   `config.optimizer.bounded_order_preserving_variants`).
-        let should_preserve_ordering = input.output_ordering().is_some();
         let mut new_plan = if repartition_beneficial_stats {
             // Since hashing benefits from partitioning, add a round-robin repartition
             // before it:
@@ -1008,9 +1005,10 @@ fn add_hash_on_top(
             input
         };
         let partitioning = Partitioning::Hash(hash_exprs, n_target);
-        let repartition = RepartitionExec::try_new(new_plan, partitioning)?;
-        new_plan =
-            Arc::new(repartition.with_preserve_order(should_preserve_ordering)) as _;
+        let repartition = RepartitionExec::try_new(new_plan, partitioning)?
+            // preserve any ordering if possible
+            .with_preserve_order();
+        new_plan = Arc::new(repartition) as _;
 
         // update distribution onward with new operator
         update_distribution_onward(new_plan.clone(), dist_onward, input_idx);
@@ -1159,11 +1157,11 @@ fn replace_order_preserving_variants_helper(
     if let Some(repartition) = exec_tree.plan.as_any().downcast_ref::<RepartitionExec>() {
         if repartition.preserve_order() {
             return Ok(Arc::new(
+                // new RepartitionExec don't preserve order
                 RepartitionExec::try_new(
                     updated_children.swap_remove(0),
                     repartition.partitioning().clone(),
-                )?
-                .with_preserve_order(false),
+                )?,
             ));
         }
     }
