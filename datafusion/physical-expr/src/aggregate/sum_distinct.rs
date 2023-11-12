@@ -59,7 +59,7 @@ impl DistinctSum {
         Self {
             name,
             data_type,
-            return_type, 
+            return_type,
             exprs,
         }
     }
