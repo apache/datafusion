@@ -34,20 +34,19 @@ use crate::execution_props::ExecutionProps;
 use crate::sort_properties::SortProperties;
 use crate::{
     array_expressions, conditional_expressions, datetime_expressions,
-    expressions::{cast_column, nullif_func},
-    math_expressions, string_expressions, struct_expressions, PhysicalExpr,
-    ScalarFunctionExpr,
+    expressions::nullif_func, math_expressions, string_expressions, struct_expressions,
+    PhysicalExpr, ScalarFunctionExpr,
 };
 use arrow::{
     array::ArrayRef,
     compute::kernels::length::{bit_length, length},
-    datatypes::TimeUnit,
     datatypes::{DataType, Int32Type, Int64Type, Schema},
 };
 use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 pub use datafusion_expr::FuncMonotonicity;
 use datafusion_expr::{
-    BuiltinScalarFunction, ColumnarValue, ScalarFunctionImplementation,
+    type_coercion::functions::data_types, BuiltinScalarFunction, ColumnarValue,
+    ScalarFunctionImplementation,
 };
 use std::ops::Neg;
 use std::sync::Arc;
@@ -65,145 +64,13 @@ pub fn create_physical_expr(
         .map(|e| e.data_type(input_schema))
         .collect::<Result<Vec<_>>>()?;
 
+    // verify that input data types is consistent with function's `TypeSignature`
+    data_types(&input_expr_types, &fun.signature())?;
+
     let data_type = fun.return_type(&input_expr_types)?;
 
-    let fun_expr: ScalarFunctionImplementation = match fun {
-        // These functions need args and input schema to pick an implementation
-        // Unlike the string functions, which actually figure out the function to use with each array,
-        // here we return either a cast fn or string timestamp translation based on the expression data type
-        // so we don't have to pay a per-array/batch cost.
-        BuiltinScalarFunction::ToTimestamp => {
-            Arc::new(match input_phy_exprs[0].data_type(input_schema) {
-                Ok(DataType::Int64) => |col_values: &[ColumnarValue]| {
-                    cast_column(
-                        &col_values[0],
-                        &DataType::Timestamp(TimeUnit::Second, None),
-                        None,
-                    )
-                },
-                Ok(DataType::Timestamp(_, None)) => |col_values: &[ColumnarValue]| {
-                    cast_column(
-                        &col_values[0],
-                        &DataType::Timestamp(TimeUnit::Nanosecond, None),
-                        None,
-                    )
-                },
-                Ok(DataType::Utf8) => datetime_expressions::to_timestamp,
-                other => {
-                    return internal_err!(
-                        "Unsupported data type {other:?} for function to_timestamp"
-                    );
-                }
-            })
-        }
-        BuiltinScalarFunction::ToTimestampMillis => {
-            Arc::new(match input_phy_exprs[0].data_type(input_schema) {
-                Ok(DataType::Int64) | Ok(DataType::Timestamp(_, None)) => {
-                    |col_values: &[ColumnarValue]| {
-                        cast_column(
-                            &col_values[0],
-                            &DataType::Timestamp(TimeUnit::Millisecond, None),
-                            None,
-                        )
-                    }
-                }
-                Ok(DataType::Utf8) => datetime_expressions::to_timestamp_millis,
-                other => {
-                    return internal_err!(
-                        "Unsupported data type {other:?} for function to_timestamp_millis"
-                    );
-                }
-            })
-        }
-        BuiltinScalarFunction::ToTimestampMicros => {
-            Arc::new(match input_phy_exprs[0].data_type(input_schema) {
-                Ok(DataType::Int64) | Ok(DataType::Timestamp(_, None)) => {
-                    |col_values: &[ColumnarValue]| {
-                        cast_column(
-                            &col_values[0],
-                            &DataType::Timestamp(TimeUnit::Microsecond, None),
-                            None,
-                        )
-                    }
-                }
-                Ok(DataType::Utf8) => datetime_expressions::to_timestamp_micros,
-                other => {
-                    return internal_err!(
-                        "Unsupported data type {other:?} for function to_timestamp_micros"
-                    );
-                }
-            })
-        }
-        BuiltinScalarFunction::ToTimestampNanos => {
-            Arc::new(match input_phy_exprs[0].data_type(input_schema) {
-                Ok(DataType::Int64) | Ok(DataType::Timestamp(_, None)) => {
-                    |col_values: &[ColumnarValue]| {
-                        cast_column(
-                            &col_values[0],
-                            &DataType::Timestamp(TimeUnit::Nanosecond, None),
-                            None,
-                        )
-                    }
-                }
-                Ok(DataType::Utf8) => datetime_expressions::to_timestamp_nanos,
-                other => {
-                    return internal_err!(
-                        "Unsupported data type {other:?} for function to_timestamp_nanos"
-                    );
-                }
-            })
-        }
-        BuiltinScalarFunction::ToTimestampSeconds => Arc::new({
-            match input_phy_exprs[0].data_type(input_schema) {
-                Ok(DataType::Int64) | Ok(DataType::Timestamp(_, None)) => {
-                    |col_values: &[ColumnarValue]| {
-                        cast_column(
-                            &col_values[0],
-                            &DataType::Timestamp(TimeUnit::Second, None),
-                            None,
-                        )
-                    }
-                }
-                Ok(DataType::Utf8) => datetime_expressions::to_timestamp_seconds,
-                other => {
-                    return internal_err!(
-                        "Unsupported data type {other:?} for function to_timestamp_seconds"
-                    );
-                }
-            }
-        }),
-        BuiltinScalarFunction::FromUnixtime => Arc::new({
-            match input_phy_exprs[0].data_type(input_schema) {
-                Ok(DataType::Int64) => |col_values: &[ColumnarValue]| {
-                    cast_column(
-                        &col_values[0],
-                        &DataType::Timestamp(TimeUnit::Second, None),
-                        None,
-                    )
-                },
-                other => {
-                    return internal_err!(
-                        "Unsupported data type {other:?} for function from_unixtime"
-                    );
-                }
-            }
-        }),
-        BuiltinScalarFunction::ArrowTypeof => {
-            let input_data_type = input_phy_exprs[0].data_type(input_schema)?;
-            Arc::new(move |_| {
-                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(format!(
-                    "{input_data_type}"
-                )))))
-            })
-        }
-        BuiltinScalarFunction::Abs => {
-            let input_data_type = input_phy_exprs[0].data_type(input_schema)?;
-            let abs_fun = math_expressions::create_abs_function(&input_data_type)?;
-            Arc::new(move |args| make_scalar_function(abs_fun)(args))
-        }
-        // These don't need args and input schema
-        _ => create_physical_fun(fun, execution_props)?,
-    };
+    let fun_expr: ScalarFunctionImplementation =
+        create_physical_fun(fun, execution_props)?;
 
     let monotonicity = fun.monotonicity();
 
@@ -372,7 +239,7 @@ where
                 };
                 arg.clone().into_array(expansion_len)
             })
-            .collect::<Vec<ArrayRef>>();
+            .collect::<Result<Vec<_>>>()?;
 
         let result = (inner)(&args);
 
@@ -393,6 +260,9 @@ pub fn create_physical_fun(
 ) -> Result<ScalarFunctionImplementation> {
     Ok(match fun {
         // math functions
+        BuiltinScalarFunction::Abs => {
+            Arc::new(|args| make_scalar_function(math_expressions::abs_invoke)(args))
+        }
         BuiltinScalarFunction::Acos => Arc::new(math_expressions::acos),
         BuiltinScalarFunction::Asin => Arc::new(math_expressions::asin),
         BuiltinScalarFunction::Atan => Arc::new(math_expressions::atan),
@@ -528,6 +398,9 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ArrayToString => Arc::new(|args| {
             make_scalar_function(array_expressions::array_to_string)(args)
         }),
+        BuiltinScalarFunction::ArrayIntersect => Arc::new(|args| {
+            make_scalar_function(array_expressions::array_intersect)(args)
+        }),
         BuiltinScalarFunction::Cardinality => {
             Arc::new(|args| make_scalar_function(array_expressions::cardinality)(args))
         }
@@ -620,6 +493,24 @@ pub fn create_physical_fun(
             Arc::new(datetime_expressions::make_current_time(
                 execution_props.query_execution_start_time,
             ))
+        }
+        BuiltinScalarFunction::ToTimestamp => {
+            Arc::new(datetime_expressions::to_timestamp_invoke)
+        }
+        BuiltinScalarFunction::ToTimestampMillis => {
+            Arc::new(datetime_expressions::to_timestamp_millis_invoke)
+        }
+        BuiltinScalarFunction::ToTimestampMicros => {
+            Arc::new(datetime_expressions::to_timestamp_micros_invoke)
+        }
+        BuiltinScalarFunction::ToTimestampNanos => {
+            Arc::new(datetime_expressions::to_timestamp_nanos_invoke)
+        }
+        BuiltinScalarFunction::ToTimestampSeconds => {
+            Arc::new(datetime_expressions::to_timestamp_seconds_invoke)
+        }
+        BuiltinScalarFunction::FromUnixtime => {
+            Arc::new(datetime_expressions::from_unixtime_invoke)
         }
         BuiltinScalarFunction::InitCap => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
@@ -923,11 +814,19 @@ pub fn create_physical_fun(
         }),
         BuiltinScalarFunction::Upper => Arc::new(string_expressions::upper),
         BuiltinScalarFunction::Uuid => Arc::new(string_expressions::uuid),
-        _ => {
-            return internal_err!(
-                "create_physical_fun: Unsupported scalar function {fun:?}"
-            );
-        }
+        BuiltinScalarFunction::ArrowTypeof => Arc::new(move |args| {
+            if args.len() != 1 {
+                return internal_err!(
+                    "arrow_typeof function requires 1 arguments, got {}",
+                    args.len()
+                );
+            }
+
+            let input_data_type = args[0].data_type();
+            Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(format!(
+                "{input_data_type}"
+            )))))
+        }),
     })
 }
 
@@ -1038,7 +937,7 @@ mod tests {
             match expected {
                 Ok(expected) => {
                     let result = expr.evaluate(&batch)?;
-                    let result = result.into_array(batch.num_rows());
+                    let result = result.into_array(batch.num_rows()).expect("Failed to convert to array");
                     let result = result.as_any().downcast_ref::<$ARRAY_TYPE>().unwrap();
 
                     // value is correct
@@ -2952,13 +2851,8 @@ mod tests {
                         "Builtin scalar function {fun} does not support empty arguments"
                     );
                 }
-                Err(DataFusionError::Plan(err)) => {
-                    if !err
-                        .contains("No function matches the given name and argument types")
-                    {
-                        return plan_err!(
-                            "Builtin scalar function {fun} didn't got the right error message with empty arguments");
-                    }
+                Err(DataFusionError::Plan(_)) => {
+                    // Continue the loop
                 }
                 Err(..) => {
                     return internal_err!(
@@ -3012,7 +2906,10 @@ mod tests {
 
         // evaluate works
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), columns)?;
-        let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
 
         // downcast works
         let result = as_list_array(&result)?;
@@ -3051,7 +2948,10 @@ mod tests {
 
         // evaluate works
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), columns)?;
-        let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
 
         // downcast works
         let result = as_list_array(&result)?;
@@ -3123,8 +3023,11 @@ mod tests {
         let adapter_func = make_scalar_function(dummy_function);
 
         let scalar_arg = ColumnarValue::Scalar(ScalarValue::Int64(Some(1)));
-        let array_arg =
-            ColumnarValue::Array(ScalarValue::Int64(Some(1)).to_array_of_size(5));
+        let array_arg = ColumnarValue::Array(
+            ScalarValue::Int64(Some(1))
+                .to_array_of_size(5)
+                .expect("Failed to convert to array of size"),
+        );
         let result = unpack_uint64_array(adapter_func(&[array_arg, scalar_arg]))?;
         assert_eq!(result, vec![5, 5]);
 
@@ -3136,8 +3039,11 @@ mod tests {
         let adapter_func = make_scalar_function_with_hints(dummy_function, vec![]);
 
         let scalar_arg = ColumnarValue::Scalar(ScalarValue::Int64(Some(1)));
-        let array_arg =
-            ColumnarValue::Array(ScalarValue::Int64(Some(1)).to_array_of_size(5));
+        let array_arg = ColumnarValue::Array(
+            ScalarValue::Int64(Some(1))
+                .to_array_of_size(5)
+                .expect("Failed to convert to array of size"),
+        );
         let result = unpack_uint64_array(adapter_func(&[array_arg, scalar_arg]))?;
         assert_eq!(result, vec![5, 5]);
 
@@ -3152,8 +3058,11 @@ mod tests {
         );
 
         let scalar_arg = ColumnarValue::Scalar(ScalarValue::Int64(Some(1)));
-        let array_arg =
-            ColumnarValue::Array(ScalarValue::Int64(Some(1)).to_array_of_size(5));
+        let array_arg = ColumnarValue::Array(
+            ScalarValue::Int64(Some(1))
+                .to_array_of_size(5)
+                .expect("Failed to convert to array of size"),
+        );
         let result = unpack_uint64_array(adapter_func(&[array_arg, scalar_arg]))?;
         assert_eq!(result, vec![5, 1]);
 
@@ -3162,8 +3071,11 @@ mod tests {
 
     #[test]
     fn test_make_scalar_function_with_hints_on_arrays() -> Result<()> {
-        let array_arg =
-            ColumnarValue::Array(ScalarValue::Int64(Some(1)).to_array_of_size(5));
+        let array_arg = ColumnarValue::Array(
+            ScalarValue::Int64(Some(1))
+                .to_array_of_size(5)
+                .expect("Failed to convert to array of size"),
+        );
         let adapter_func = make_scalar_function_with_hints(
             dummy_function,
             vec![Hint::Pad, Hint::AcceptsSingular],
@@ -3183,8 +3095,11 @@ mod tests {
         );
 
         let scalar_arg = ColumnarValue::Scalar(ScalarValue::Int64(Some(1)));
-        let array_arg =
-            ColumnarValue::Array(ScalarValue::Int64(Some(1)).to_array_of_size(5));
+        let array_arg = ColumnarValue::Array(
+            ScalarValue::Int64(Some(1))
+                .to_array_of_size(5)
+                .expect("Failed to convert to array of size"),
+        );
         let result = unpack_uint64_array(adapter_func(&[
             array_arg,
             scalar_arg.clone(),
@@ -3203,8 +3118,11 @@ mod tests {
         );
 
         let scalar_arg = ColumnarValue::Scalar(ScalarValue::Int64(Some(1)));
-        let array_arg =
-            ColumnarValue::Array(ScalarValue::Int64(Some(1)).to_array_of_size(5));
+        let array_arg = ColumnarValue::Array(
+            ScalarValue::Int64(Some(1))
+                .to_array_of_size(5)
+                .expect("Failed to convert to array of size"),
+        );
         let result = unpack_uint64_array(adapter_func(&[
             array_arg.clone(),
             scalar_arg.clone(),
@@ -3231,8 +3149,11 @@ mod tests {
         );
 
         let scalar_arg = ColumnarValue::Scalar(ScalarValue::Int64(Some(1)));
-        let array_arg =
-            ColumnarValue::Array(ScalarValue::Int64(Some(1)).to_array_of_size(5));
+        let array_arg = ColumnarValue::Array(
+            ScalarValue::Int64(Some(1))
+                .to_array_of_size(5)
+                .expect("Failed to convert to array of size"),
+        );
         let result = unpack_uint64_array(adapter_func(&[array_arg, scalar_arg]))?;
         assert_eq!(result, vec![5, 1]);
 

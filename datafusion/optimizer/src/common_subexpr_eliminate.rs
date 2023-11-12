@@ -514,7 +514,7 @@ impl ExprMask {
                 | Expr::ScalarVariable(..)
                 | Expr::Alias(..)
                 | Expr::Sort { .. }
-                | Expr::Wildcard
+                | Expr::Wildcard { .. }
         );
 
         let is_aggr = matches!(

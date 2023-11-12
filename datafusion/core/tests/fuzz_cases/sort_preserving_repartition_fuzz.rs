@@ -140,7 +140,7 @@ mod sp_repartition_fuzz_tests {
         Arc::new(
             RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(2))
                 .unwrap()
-                .with_preserve_order(true),
+                .with_preserve_order(),
         )
     }
 
@@ -159,7 +159,7 @@ mod sp_repartition_fuzz_tests {
         Arc::new(
             RepartitionExec::try_new(input, Partitioning::Hash(hash_expr, 2))
                 .unwrap()
-                .with_preserve_order(true),
+                .with_preserve_order(),
         )
     }
 

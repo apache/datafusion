@@ -32,7 +32,7 @@ logical_plan
 CopyTo: format=parquet output_url=test_files/scratch/copy/table single_file_output=false options: (compression 'zstd(10)')
 --TableScan: source_table projection=[col1, col2]
 physical_plan
-InsertExec: sink=ParquetSink(writer_mode=PutMultipart, file_groups=[])
+FileSinkExec: sink=ParquetSink(writer_mode=PutMultipart, file_groups=[])
 --MemoryExec: partitions=1, partition_sizes=[1]
 
 # Error case

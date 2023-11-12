@@ -23,7 +23,8 @@ use crate::expr::{
 };
 use crate::field_util::GetFieldAccessSchema;
 use crate::type_coercion::binary::get_result_type;
-use crate::{LogicalPlan, Projection, Subquery};
+use crate::type_coercion::functions::data_types;
+use crate::{utils, LogicalPlan, Projection, Subquery};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{
@@ -89,12 +90,24 @@ impl ExprSchemable for Expr {
                 Ok((fun.return_type)(&data_types)?.as_ref().clone())
             }
             Expr::ScalarFunction(ScalarFunction { fun, args }) => {
-                let data_types = args
+                let arg_data_types = args
                     .iter()
                     .map(|e| e.get_type(schema))
                     .collect::<Result<Vec<_>>>()?;
 
-                fun.return_type(&data_types)
+                // verify that input data types is consistent with function's `TypeSignature`
+                data_types(&arg_data_types, &fun.signature()).map_err(|_| {
+                    plan_datafusion_err!(
+                        "{}",
+                        utils::generate_signature_error_msg(
+                            &format!("{fun}"),
+                            fun.signature(),
+                            &arg_data_types,
+                        )
+                    )
+                })?;
+
+                fun.return_type(&arg_data_types)
             }
             Expr::WindowFunction(WindowFunction { fun, args, .. }) => {
                 let data_types = args
@@ -144,13 +157,13 @@ impl ExprSchemable for Expr {
                     plan_datafusion_err!("Placeholder type could not be resolved")
                 })
             }
-            Expr::Wildcard => {
+            Expr::Wildcard { qualifier } => {
                 // Wildcard do not really have a type and do not appear in projections
-                Ok(DataType::Null)
+                match qualifier {
+                    Some(_) => internal_err!("QualifiedWildcard expressions are not valid in a logical query plan"),
+                    None => Ok(DataType::Null)
+                }
             }
-            Expr::QualifiedWildcard { .. } => internal_err!(
-                "QualifiedWildcard expressions are not valid in a logical query plan"
-            ),
             Expr::GroupingSet(_) => {
                 // grouping sets do not really have a type and do not appear in projections
                 Ok(DataType::Null)
@@ -257,11 +270,8 @@ impl ExprSchemable for Expr {
             | Expr::SimilarTo(Like { expr, pattern, .. }) => {
                 Ok(expr.nullable(input_schema)? || pattern.nullable(input_schema)?)
             }
-            Expr::Wildcard => internal_err!(
+            Expr::Wildcard { .. } => internal_err!(
                 "Wildcard expressions are not valid in a logical query plan"
-            ),
-            Expr::QualifiedWildcard { .. } => internal_err!(
-                "QualifiedWildcard expressions are not valid in a logical query plan"
             ),
             Expr::GetIndexedField(GetIndexedField { expr, field }) => {
                 field_for_index(expr, field, input_schema).map(|x| x.is_nullable())
