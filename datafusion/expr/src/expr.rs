@@ -166,16 +166,12 @@ pub enum Expr {
     InSubquery(InSubquery),
     /// Scalar subquery
     ScalarSubquery(Subquery),
-    /// Represents a reference to all available fields.
+    /// Represents a reference to all available fields in a specific schema,
+    /// with an optional (schema) qualifier.
     ///
     /// This expr has to be resolved to a list of columns before translating logical
     /// plan into physical plan.
-    Wildcard,
-    /// Represents a reference to all available fields in a specific schema.
-    ///    
-    /// This expr has to be resolved to a list of columns before translating logical
-    /// plan into physical plan.
-    QualifiedWildcard { qualifier: String },
+    Wildcard { qualifier: Option<String> },
     /// List of grouping set expressions. Only valid in the context of an aggregate
     /// GROUP BY expression list
     GroupingSet(GroupingSet),
@@ -729,7 +725,6 @@ impl Expr {
             Expr::Negative(..) => "Negative",
             Expr::Not(..) => "Not",
             Expr::Placeholder(_) => "Placeholder",
-            Expr::QualifiedWildcard { .. } => "QualifiedWildcard",
             Expr::ScalarFunction(..) => "ScalarFunction",
             Expr::ScalarSubquery { .. } => "ScalarSubquery",
             Expr::ScalarUDF(..) => "ScalarUDF",
@@ -737,7 +732,7 @@ impl Expr {
             Expr::Sort { .. } => "Sort",
             Expr::TryCast { .. } => "TryCast",
             Expr::WindowFunction { .. } => "WindowFunction",
-            Expr::Wildcard => "Wildcard",
+            Expr::Wildcard { .. } => "Wildcard",
         }
     }
 
@@ -1292,8 +1287,10 @@ impl fmt::Display for Expr {
                     write!(f, "{expr} IN ([{}])", expr_vec_fmt!(list))
                 }
             }
-            Expr::Wildcard => write!(f, "*"),
-            Expr::QualifiedWildcard { qualifier } => write!(f, "{qualifier}.*"),
+            Expr::Wildcard { qualifier } => match qualifier {
+                Some(qualifier) => write!(f, "{qualifier}.*"),
+                None => write!(f, "*"),
+            },
             Expr::GetIndexedField(GetIndexedField { field, expr }) => match field {
                 GetFieldAccess::NamedStructField { name } => {
                     write!(f, "({expr})[{name}]")
@@ -1613,10 +1610,12 @@ fn create_name(e: &Expr) -> Result<String> {
         Expr::Sort { .. } => {
             internal_err!("Create name does not support sort expression")
         }
-        Expr::Wildcard => Ok("*".to_string()),
-        Expr::QualifiedWildcard { .. } => {
-            internal_err!("Create name does not support qualified wildcard")
-        }
+        Expr::Wildcard { qualifier } => match qualifier {
+            Some(qualifier) => internal_err!(
+                "Create name does not support qualified wildcard, got {qualifier}"
+            ),
+            None => Ok("*".to_string()),
+        },
         Expr::Placeholder(Placeholder { id, .. }) => Ok((*id).to_string()),
     }
 }

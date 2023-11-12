@@ -120,8 +120,7 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
             | Expr::AggregateFunction { .. }
             | Expr::Sort { .. }
             | Expr::WindowFunction { .. }
-            | Expr::Wildcard
-            | Expr::QualifiedWildcard { .. }
+            | Expr::Wildcard { .. }
             | Expr::Placeholder(_) => {
                 is_applicable = false;
                 VisitRecursion::Stop
