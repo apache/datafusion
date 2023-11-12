@@ -146,6 +146,9 @@ impl<T: OffsetSizeTrait> Accumulator for StringAggAccumulator<T> {
             .iter()
             .filter_map(|v| v.as_ref().map(ToString::to_string))
             .collect();
+        if self.values.len() > 0 {
+            self.values.push_str(self.sep.as_str());
+        }
         self.values
             .push_str(string_array.join(self.sep.as_str()).as_str());
         Ok(())
