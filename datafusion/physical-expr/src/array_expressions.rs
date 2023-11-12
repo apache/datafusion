@@ -564,13 +564,30 @@ pub fn array_slice(args: &[ArrayRef]) -> Result<ArrayRef> {
     define_array_slice(list_array, key, extra_key, false)
 }
 
+fn general_array_pop(
+    list_array: &GenericListArray<i32>,
+    from_back: bool,
+) -> Result<(Vec<i64>, Vec<i64>)> {
+    if from_back {
+        let key = vec![0; list_array.len()];
+        let extra_key: Vec<_> = list_array
+            .iter()
+            .map(|x| x.map_or(0, |arr| arr.len() as i64 - 1))
+            .collect();
+        Ok((key, extra_key))
+    } else {
+        let key: Vec<_> = list_array.iter().map(|x| x.map_or(0, |_arr| 2)).collect();
+        let extra_key: Vec<_> = list_array
+            .iter()
+            .map(|x| x.map_or(0, |arr| arr.len() as i64))
+            .collect();
+        Ok((key, extra_key))
+    }
+}
+
 pub fn array_pop_back(args: &[ArrayRef]) -> Result<ArrayRef> {
     let list_array = as_list_array(&args[0])?;
-    let key = vec![0; list_array.len()];
-    let extra_key: Vec<_> = list_array
-        .iter()
-        .map(|x| x.map_or(0, |arr| arr.len() as i64 - 1))
-        .collect();
+    let (key, extra_key) = general_array_pop(list_array, true)?;
 
     define_array_slice(
         list_array,
@@ -697,11 +714,7 @@ pub fn gen_range(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 pub fn array_pop_front(args: &[ArrayRef]) -> Result<ArrayRef> {
     let list_array = as_list_array(&args[0])?;
-    let key: Vec<_> = list_array.iter().map(|x| x.map_or(0, |_arr| 2)).collect();
-    let extra_key: Vec<_> = list_array
-        .iter()
-        .map(|x| x.map_or(0, |arr| arr.len() as i64))
-        .collect();
+    let (key, extra_key) = general_array_pop(list_array, false)?;
 
     define_array_slice(
         list_array,
