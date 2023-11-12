@@ -253,6 +253,7 @@ pub struct ListingOptions {
     pub format: Arc<dyn FileFormat>,
     /// The expected partition column names in the folder structure.
     /// See [Self::with_table_partition_cols] for details
+    /// TODO this maybe LogicalType
     pub table_partition_cols: Vec<(String, DataType)>,
     /// Set true to try to guess statistics from the files.
     /// This can add a lot of overhead as it will usually require files
@@ -2012,7 +2013,7 @@ mod tests {
         let scan_plan = LogicalPlanBuilder::scan("source", source, None)?.build()?;
         // Create an insert plan to insert the source data into the initial table
         let insert_into_table =
-            LogicalPlanBuilder::insert_into(scan_plan, "t", &schema, false)?.build()?;
+            LogicalPlanBuilder::insert_into(scan_plan, "t", &schema.into(), false)?.build()?;
         // Create a physical plan from the insert plan
         let plan = session_ctx
             .state()
@@ -2227,7 +2228,7 @@ mod tests {
         // Therefore, we will have 8 partitions in the final plan.
         // Create an insert plan to insert the source data into the initial table
         let insert_into_table =
-            LogicalPlanBuilder::insert_into(scan_plan, "t", &schema, false)?.build()?;
+            LogicalPlanBuilder::insert_into(scan_plan, "t", &schema.into(), false)?.build()?;
         // Create a physical plan from the insert plan
         let plan = session_ctx
             .state()

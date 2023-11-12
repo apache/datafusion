@@ -17,10 +17,9 @@
 //! This module provides logic for displaying LogicalPlans in various styles
 
 use crate::LogicalPlan;
-use arrow::datatypes::Schema;
 use datafusion_common::display::GraphvizBuilder;
 use datafusion_common::tree_node::{TreeNodeVisitor, VisitRecursion};
-use datafusion_common::DataFusionError;
+use datafusion_common::{DataFusionError, DFSchema};
 use std::fmt;
 
 /// Formats plans with a single line per node. For example:
@@ -64,7 +63,7 @@ impl<'a, 'b> TreeNodeVisitor for IndentVisitor<'a, 'b> {
             write!(
                 self.f,
                 " {}",
-                display_schema(&plan.schema().as_ref().to_owned().into())
+                display_schema(plan.schema().as_ref())
             )?;
         }
 
@@ -99,8 +98,8 @@ impl<'a, 'b> TreeNodeVisitor for IndentVisitor<'a, 'b> {
 ///      format!("{}", display_schema(&schema))
 ///  );
 /// ```
-pub fn display_schema(schema: &Schema) -> impl fmt::Display + '_ {
-    struct Wrapper<'a>(&'a Schema);
+pub fn display_schema(schema: &DFSchema) -> impl fmt::Display + '_ {
+    struct Wrapper<'a>(&'a DFSchema);
 
     impl<'a> fmt::Display for Wrapper<'a> {
         fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -185,7 +184,7 @@ impl<'a, 'b> TreeNodeVisitor for GraphvizVisitor<'a, 'b> {
             format!(
                 r"{}\nSchema: {}",
                 plan.display(),
-                display_schema(&plan.schema().as_ref().to_owned().into())
+                display_schema(plan.schema().as_ref())
             )
         } else {
             format!("{}", plan.display())
@@ -222,20 +221,21 @@ impl<'a, 'b> TreeNodeVisitor for GraphvizVisitor<'a, 'b> {
 #[cfg(test)]
 mod tests {
     use arrow::datatypes::{DataType, Field};
+    use datafusion_common::{DFField, logical_type::LogicalType};
 
     use super::*;
 
     #[test]
     fn test_display_empty_schema() {
-        let schema = Schema::empty();
+        let schema = DFSchema::empty();
         assert_eq!("[]", format!("{}", display_schema(&schema)));
     }
 
     #[test]
     fn test_display_schema() {
-        let schema = Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new("first_name", DataType::Utf8, true),
+        let schema = DFSchema::new(vec![
+            DFField::new_unqualified("id", LogicalType::Int32, false),
+            DFField::new_unqualified("first_name", LogicalType::Utf8, true),
         ]);
 
         assert_eq!(

@@ -20,11 +20,10 @@
 //!
 //! [`Expr`]: crate::prelude::Expr
 use std::collections::HashSet;
-use std::convert::TryFrom;
 use std::sync::Arc;
 
 use crate::{
-    common::{Column, DFSchema},
+    common::Column,
     error::{DataFusionError, Result},
     logical_expr::Operator,
     physical_plan::{ColumnarValue, PhysicalExpr},
@@ -487,13 +486,8 @@ impl<'a> PruningExpressionBuilder<'a> {
                 }
             };
 
-        let df_schema = DFSchema::try_from(schema.clone())?;
-        let (column_expr, correct_operator, scalar_expr) = rewrite_expr_to_prunable(
-            column_expr,
-            correct_operator,
-            scalar_expr,
-            df_schema,
-        )?;
+        let (column_expr, correct_operator, scalar_expr) =
+            rewrite_expr_to_prunable(column_expr, correct_operator, scalar_expr, schema)?;
         let column = columns.iter().next().unwrap().clone();
         let field = match schema.column_with_name(column.name()) {
             Some((_, f)) => f,
@@ -547,7 +541,7 @@ fn rewrite_expr_to_prunable(
     column_expr: &PhysicalExprRef,
     op: Operator,
     scalar_expr: &PhysicalExprRef,
-    schema: DFSchema,
+    arrow_schema: &Schema,
 ) -> Result<(PhysicalExprRef, Operator, PhysicalExprRef)> {
     if !is_compare_op(op) {
         return plan_err!("rewrite_expr_to_prunable only support compare expression");
@@ -563,11 +557,10 @@ fn rewrite_expr_to_prunable(
         Ok((column_expr.clone(), op, scalar_expr.clone()))
     } else if let Some(cast) = column_expr_any.downcast_ref::<phys_expr::CastExpr>() {
         // `cast(col) op lit()`
-        let arrow_schema: SchemaRef = schema.clone().into();
-        let from_type = cast.expr().data_type(&arrow_schema)?;
+        let from_type = cast.expr().data_type(arrow_schema)?;
         verify_support_type_for_prune(&from_type, cast.cast_type())?;
         let (left, op, right) =
-            rewrite_expr_to_prunable(cast.expr(), op, scalar_expr, schema)?;
+            rewrite_expr_to_prunable(cast.expr(), op, scalar_expr, arrow_schema)?;
         let left = Arc::new(phys_expr::CastExpr::new(
             left,
             cast.cast_type().clone(),
@@ -578,11 +571,10 @@ fn rewrite_expr_to_prunable(
         column_expr_any.downcast_ref::<phys_expr::TryCastExpr>()
     {
         // `try_cast(col) op lit()`
-        let arrow_schema: SchemaRef = schema.clone().into();
-        let from_type = try_cast.expr().data_type(&arrow_schema)?;
+        let from_type = try_cast.expr().data_type(arrow_schema)?;
         verify_support_type_for_prune(&from_type, try_cast.cast_type())?;
         let (left, op, right) =
-            rewrite_expr_to_prunable(try_cast.expr(), op, scalar_expr, schema)?;
+            rewrite_expr_to_prunable(try_cast.expr(), op, scalar_expr, arrow_schema)?;
         let left = Arc::new(phys_expr::TryCastExpr::new(
             left,
             try_cast.cast_type().clone(),
@@ -591,7 +583,7 @@ fn rewrite_expr_to_prunable(
     } else if let Some(neg) = column_expr_any.downcast_ref::<phys_expr::NegativeExpr>() {
         // `-col > lit()`  --> `col < -lit()`
         let (left, op, right) =
-            rewrite_expr_to_prunable(neg.arg(), op, scalar_expr, schema)?;
+            rewrite_expr_to_prunable(neg.arg(), op, scalar_expr, arrow_schema)?;
         let right = Arc::new(phys_expr::NegativeExpr::new(right));
         Ok((left, reverse_operator(op)?, right))
     } else if let Some(not) = column_expr_any.downcast_ref::<phys_expr::NotExpr>() {
@@ -2390,20 +2382,15 @@ mod tests {
     #[test]
     fn test_rewrite_expr_to_prunable() {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
-        let df_schema = DFSchema::try_from(schema.clone()).unwrap();
 
         // column op lit
         let left_input = col("a");
         let left_input = logical2physical(&left_input, &schema);
         let right_input = lit(ScalarValue::Int32(Some(12)));
         let right_input = logical2physical(&right_input, &schema);
-        let (result_left, _, result_right) = rewrite_expr_to_prunable(
-            &left_input,
-            Operator::Eq,
-            &right_input,
-            df_schema.clone(),
-        )
-        .unwrap();
+        let (result_left, _, result_right) =
+            rewrite_expr_to_prunable(&left_input, Operator::Eq, &right_input, &schema)
+                .unwrap();
         assert_eq!(result_left.to_string(), left_input.to_string());
         assert_eq!(result_right.to_string(), right_input.to_string());
 
@@ -2412,13 +2399,9 @@ mod tests {
         let left_input = logical2physical(&left_input, &schema);
         let right_input = lit(ScalarValue::Decimal128(Some(12), 20, 3));
         let right_input = logical2physical(&right_input, &schema);
-        let (result_left, _, result_right) = rewrite_expr_to_prunable(
-            &left_input,
-            Operator::Gt,
-            &right_input,
-            df_schema.clone(),
-        )
-        .unwrap();
+        let (result_left, _, result_right) =
+            rewrite_expr_to_prunable(&left_input, Operator::Gt, &right_input, &schema)
+                .unwrap();
         assert_eq!(result_left.to_string(), left_input.to_string());
         assert_eq!(result_right.to_string(), right_input.to_string());
 
@@ -2428,7 +2411,7 @@ mod tests {
         let right_input = lit(ScalarValue::Int64(Some(12)));
         let right_input = logical2physical(&right_input, &schema);
         let (result_left, _, result_right) =
-            rewrite_expr_to_prunable(&left_input, Operator::Gt, &right_input, df_schema)
+            rewrite_expr_to_prunable(&left_input, Operator::Gt, &right_input, &schema)
                 .unwrap();
         assert_eq!(result_left.to_string(), left_input.to_string());
         assert_eq!(result_right.to_string(), right_input.to_string());
@@ -2441,17 +2424,12 @@ mod tests {
         // cast string value to numeric value
         // this cast is not supported
         let schema = Schema::new(vec![Field::new("a", DataType::Utf8, true)]);
-        let df_schema = DFSchema::try_from(schema.clone()).unwrap();
         let left_input = cast(col("a"), DataType::Int64);
         let left_input = logical2physical(&left_input, &schema);
         let right_input = lit(ScalarValue::Int64(Some(12)));
         let right_input = logical2physical(&right_input, &schema);
-        let result = rewrite_expr_to_prunable(
-            &left_input,
-            Operator::Gt,
-            &right_input,
-            df_schema.clone(),
-        );
+        let result =
+            rewrite_expr_to_prunable(&left_input, Operator::Gt, &right_input, &schema);
         assert!(result.is_err());
 
         // other expr
@@ -2460,7 +2438,7 @@ mod tests {
         let right_input = lit(ScalarValue::Int64(Some(12)));
         let right_input = logical2physical(&right_input, &schema);
         let result =
-            rewrite_expr_to_prunable(&left_input, Operator::Gt, &right_input, df_schema);
+            rewrite_expr_to_prunable(&left_input, Operator::Gt, &right_input, &schema);
         assert!(result.is_err());
         // TODO: add other negative test for other case and op
     }
