@@ -239,8 +239,6 @@ impl CommonSubexprEliminate {
 
         if affected_id.is_empty() {
             // Alias aggregation expressions if they have changed
-            // TODO: This should be handled in `build_recover_project_plan` once qualified aliases
-            // are implemented
             let new_aggr_expr = new_aggr_expr
                 .iter()
                 .zip(aggr_expr.iter())
