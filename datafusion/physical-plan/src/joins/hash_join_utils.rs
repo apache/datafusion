@@ -109,6 +109,7 @@ pub struct JoinHashMap {
 }
 
 impl JoinHashMap {
+    #[cfg(test)]
     pub(crate) fn new(map: RawTable<(u64, u64)>, next: Vec<u64>) -> Self {
         Self { map, next }
     }
