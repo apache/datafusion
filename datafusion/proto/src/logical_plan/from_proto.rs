@@ -1151,6 +1151,11 @@ pub fn parse_expr(
         }
         ExprType::Alias(alias) => Ok(Expr::Alias(Alias::new(
             parse_required_expr(alias.expr.as_deref(), registry, "expr")?,
+            alias
+                .relation
+                .first()
+                .map(|r| OwnedTableReference::try_from(r.clone()))
+                .transpose()?,
             alias.alias.clone(),
         ))),
         ExprType::IsNullExpr(is_null) => Ok(Expr::IsNull(Box::new(parse_required_expr(

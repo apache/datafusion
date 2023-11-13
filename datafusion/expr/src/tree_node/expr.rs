@@ -157,9 +157,11 @@ impl TreeNode for Expr {
         let mut transform = transform;
 
         Ok(match self {
-            Expr::Alias(Alias { expr, name, .. }) => {
-                Expr::Alias(Alias::new(transform(*expr)?, name))
-            }
+            Expr::Alias(Alias {
+                expr,
+                relation,
+                name,
+            }) => Expr::Alias(Alias::new(transform(*expr)?, relation, name)),
             Expr::Column(_) => self,
             Expr::OuterReferenceColumn(_, _) => self,
             Expr::Exists { .. } => self,

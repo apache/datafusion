@@ -800,9 +800,11 @@ pub fn columnize_expr(e: Expr, input_schema: &DFSchema) -> Expr {
     match e {
         Expr::Column(_) => e,
         Expr::OuterReferenceColumn(_, _) => e,
-        Expr::Alias(Alias { expr, name, .. }) => {
-            columnize_expr(*expr, input_schema).alias(name)
-        }
+        Expr::Alias(Alias {
+            expr,
+            relation,
+            name,
+        }) => columnize_expr(*expr, input_schema).alias_qualified(relation, name),
         Expr::Cast(Cast { expr, data_type }) => Expr::Cast(Cast {
             expr: Box::new(columnize_expr(*expr, input_schema)),
             data_type,
