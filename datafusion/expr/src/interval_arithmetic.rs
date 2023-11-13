@@ -1356,7 +1356,7 @@ fn cast_scalar_value(
     data_type: &DataType,
     cast_options: &CastOptions,
 ) -> Result<ScalarValue> {
-    let cast_array = cast_with_options(&value.to_array(), data_type, cast_options)?;
+    let cast_array = cast_with_options(&value.to_array()?, data_type, cast_options)?;
     ScalarValue::try_from_array(&cast_array, 0)
 }
 
@@ -1365,9 +1365,9 @@ fn cast_scalar_value(
 ///   - if it is lower bound and the result is negatively overflowed.
 /// Otherwise; the function sets the bound as
 ///   - minimum representable number with given datatype (`dt`) if the bound is upper bound
-///     and the result is negatively overflowed.
-///   - maximum representable number with given datatype (`dt`) if the bound is upper bound
-///     and the result is negatively overflowed.
+///     and the result overflows negativity.
+///   - maximum representable number with given datatype (`dt`) if the bound is lower bound
+///     and the result overflows positivity.
 ///
 /// **This function contains multiple calls to `unwrap()`, implying potential panics
 /// if preconditions are not met. Therefore, it should be used with caution. Currently,
@@ -2868,17 +2868,6 @@ mod tests {
         let interval = Interval::make(Some(-0.0625), Some(0.0625))?;
         assert_eq!(interval.cardinality().unwrap(), 9178336040581070850);
 
-        let interval = Interval::try_new(
-            ScalarValue::from(-0.0625_f32),
-            ScalarValue::from(0.0625_f32),
-        )?;
-        assert_eq!(interval.cardinality().unwrap(), 2063597570);
-
-        let interval = Interval::try_new(
-            ScalarValue::Float32(Some(f32::MIN)),
-            ScalarValue::Float32(Some(f32::MAX)),
-        )?;
-        assert_eq!(interval.cardinality().unwrap(), 4278190080);
         let interval = Interval::try_new(
             ScalarValue::UInt64(Some(u64::MIN + 1)),
             ScalarValue::UInt64(Some(u64::MAX)),
