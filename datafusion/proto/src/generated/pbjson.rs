@@ -20934,9 +20934,13 @@ impl serde::Serialize for ScalarFunction {
             Self::StringToArray => "StringToArray",
             Self::ToTimestampNanos => "ToTimestampNanos",
             Self::ArrayIntersect => "ArrayIntersect",
+<<<<<<< HEAD
             Self::ArrayUnion => "ArrayUnion",
             Self::OverLay => "OverLay",
+=======
+>>>>>>> 9c191723f (regenerate proto)
             Self::Range => "Range",
+            Self::ArrayUnion => "ArrayUnion",
         };
         serializer.serialize_str(variant)
     }
@@ -21068,9 +21072,13 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "StringToArray",
             "ToTimestampNanos",
             "ArrayIntersect",
+<<<<<<< HEAD
             "ArrayUnion",
             "OverLay",
+=======
+>>>>>>> 9c191723f (regenerate proto)
             "Range",
+            "ArrayUnion",
         ];
 
         struct GeneratedVisitor;
@@ -21234,6 +21242,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "ArrayUnion" => Ok(ScalarFunction::ArrayUnion),
                     "OverLay" => Ok(ScalarFunction::OverLay),
                     "Range" => Ok(ScalarFunction::Range),
+                    "ArrayUnion" => Ok(ScalarFunction::ArrayUnion),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }
