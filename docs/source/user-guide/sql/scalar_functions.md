@@ -635,6 +635,7 @@ nullif(expression1, expression2)
 - [trim](#trim)
 - [upper](#upper)
 - [uuid](#uuid)
+- [overlay](#overlay)
 
 ### `ascii`
 
@@ -1119,6 +1120,21 @@ Returns UUID v4 string value which is unique per row.
 ```
 uuid()
 ```
+
+### `overlay`
+
+Returns the string which is replaced by another string from the specified position and specified count length
+
+```
+overlay(str PLACING substr FROM pos [FOR count])
+```
+
+#### Arguments
+
+- **str**: String expression to operate on.
+- **substr**: the string to replace part of str.
+- **pos**: the start position to replace of str.
+- **count**: the count of characters to be replaced from start position of str.If not specified, will use substr length instead.
 
 ## Binary String Functions
 
