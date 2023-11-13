@@ -258,6 +258,7 @@ insert into table_without_values(name, id) values(4, 'zoo');
 statement error Error during planning: Column count doesn't match insert query!
 insert into table_without_values(id) values(4, 'zoo');
 
+# insert NULL values for the missing column (name)
 query IT
 insert into table_without_values(id) values(4);
 ----
@@ -288,11 +289,13 @@ insert into table_without_values values(2, NULL);
 ----
 1
 
+# insert NULL values for the missing column (field2)
 query II
 insert into table_without_values(field1) values(3);
 ----
 1
 
+# insert NULL values for the missing column (field1), but column is non-nullable
 statement error Execution error: Invalid batch column at '0' has null but schema specifies non-nullable
 insert into table_without_values(field2) values(300);
 
