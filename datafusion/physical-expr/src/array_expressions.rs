@@ -25,6 +25,7 @@ use arrow::buffer::OffsetBuffer;
 use arrow::compute;
 use arrow::datatypes::{DataType, Field, UInt64Type};
 use arrow::row::{RowConverter, SortField};
+use arrow_array::types::Int64Type;
 use arrow_buffer::NullBuffer;
 
 use arrow_schema::FieldRef;
@@ -992,6 +993,56 @@ macro_rules! position {
     }};
 }
 
+fn general_position<OffsetSize: OffsetSizeTrait>(
+    list_array: &GenericListArray<OffsetSize>,
+    element_array: &ArrayRef,
+    from_array: &Int64Array,
+    arr_n: Vec<i64>,
+) -> Result<ArrayRef> {
+    let mut data = vec![];
+
+    for (row_index, (list_array_row, n)) in
+        list_array.iter().zip(arr_n.iter()).enumerate()
+    {
+        if let Some(list_array_row) = list_array_row {
+            let indices = UInt32Array::from(vec![row_index as u32]);
+            let element_array_row = arrow::compute::take(element_array, &indices, None)?;
+            // Compute all positions in list_row_array (that is itself an
+            // array) that are equal to `from_array_row`
+            let eq_array = match element_array_row.data_type() {
+                // arrow_ord::cmp::eq does not support ListArray, so we need to compare it by loop
+                DataType::List(_) => {
+                    // compare each element of the from array
+                    let element_array_row_inner =
+                        as_list_array(&element_array_row)?.value(0);
+                    let list_array_row_inner = as_list_array(&list_array_row)?;
+
+                    list_array_row_inner
+                        .iter()
+                        // compare element by element the current row of list_array
+                        .map(|row| row.map(|row| row.eq(&element_array_row_inner)))
+                        .collect::<BooleanArray>()
+                }
+                _ => {
+                    let element_arr = Scalar::new(element_array_row);
+                    // use not_distinct so NULL = NULL
+                    arrow_ord::cmp::not_distinct(&list_array_row, &element_arr)?
+                }
+            };
+            
+            // Collect `true`s in 1-indexed positions
+            let indexes = eq_array.iter().positions(|e| e == Some(true)).map(|index| Some(index as u64 + 1)).collect::<Vec<_>>();
+            data.push(Some(indexes));
+        } else {
+            data.push(None);
+        }
+    }
+
+    Ok(Arc::new(ListArray::from_iter_primitive::<UInt64Type, _, _>(data)))
+
+    // Ok(Arc::new(Int64Array::from(vec![Some(1)])))
+}
+
 /// Array_position SQL function
 pub fn array_position(args: &[ArrayRef]) -> Result<ArrayRef> {
     let arr = as_list_array(&args[0])?;
@@ -1000,7 +1051,8 @@ pub fn array_position(args: &[ArrayRef]) -> Result<ArrayRef> {
     let index = if args.len() == 3 {
         as_int64_array(&args[2])?.clone()
     } else {
-        Int64Array::from_value(0, arr.len())
+        return general_position::<i32>(arr, element, &Int64Array::from_value(1, arr.len()), vec![1; arr.len()])
+        // Int64Array::from_value(0, arr.len())
     };
 
     check_datatypes("array_position", &[arr.values(), element])?;
