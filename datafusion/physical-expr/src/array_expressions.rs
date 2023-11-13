@@ -996,15 +996,15 @@ macro_rules! position {
 fn general_position<OffsetSize: OffsetSizeTrait>(
     list_array: &GenericListArray<OffsetSize>,
     element_array: &ArrayRef,
-    from_array: Vec<usize>, // 0-indexed
-    n_array: Vec<usize>,
+    arr_from: Vec<usize>, // 0-indexed
+    arr_n: Vec<i64>,
 ) -> Result<ArrayRef> {
-    let mut data = Vec::with_capacity(n_array.len());
+    let mut data = Vec::with_capacity(arr_n.len());
 
     for (row_index, ((list_array_row, &from), &n)) in list_array
         .iter()
-        .zip(from_array.iter())
-        .zip(n_array.iter())
+        .zip(arr_from.iter())
+        .zip(arr_n.iter())
         .enumerate()
     {
         if let Some(list_array_row) = list_array_row {
@@ -1039,7 +1039,7 @@ fn general_position<OffsetSize: OffsetSizeTrait>(
                 .skip(from)
                 .positions(|e| e == Some(true))
                 .map(|index| Some(index as u64 + 1))
-                .take(n)
+                .take(n as usize)
                 .collect::<Vec<_>>();
 
             data.push(Some(indexes));
@@ -1060,75 +1060,18 @@ pub fn array_position(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     // handle incorrect from_array only 1 to n is accept.
 
-    let index = if args.len() == 3 {
-        as_int64_array(&args[2])?.clone()
+    let arr_n = if args.len() == 3 {
+        as_int64_array(&args[2])?.values().to_vec()
     } else {
-        return general_position::<i32>(
-            arr,
-            element,
-            vec![0; arr.len()],
-            vec![1; arr.len()],
-        );
+        vec![1; arr.len()]
     };
 
-    check_datatypes("array_position", &[arr.values(), element])?;
-    macro_rules! array_function {
-        ($ARRAY_TYPE:ident) => {
-            position!(arr, element, index, $ARRAY_TYPE)
-        };
-    }
-    let res = call_array_function!(arr.value_type(), true);
-
-    Ok(Arc::new(res))
-}
-
-macro_rules! positions {
-    ($ARRAY:expr, $ELEMENT:expr, $ARRAY_TYPE:ident) => {{
-        let element = downcast_arg!($ELEMENT, $ARRAY_TYPE);
-        let mut offsets: Vec<i32> = vec![0];
-        let mut values =
-            downcast_arg!(new_empty_array(&DataType::UInt64), UInt64Array).clone();
-        for comp in $ARRAY
-            .iter()
-            .zip(element.iter())
-            .map(|(arr, el)| match arr {
-                Some(arr) => {
-                    let child_array = downcast_arg!(arr, $ARRAY_TYPE);
-                    let res = child_array
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, x)| *x == el)
-                        .flat_map(|(i, _)| Some((i + 1) as u64))
-                        .collect::<UInt64Array>();
-
-                    Ok(res)
-                }
-                None => Ok(downcast_arg!(
-                    new_empty_array(&DataType::UInt64),
-                    UInt64Array
-                )
-                .clone()),
-            })
-            .collect::<Result<Vec<UInt64Array>>>()?
-        {
-            let last_offset: i32 = offsets.last().copied().ok_or_else(|| {
-                DataFusionError::Internal(format!("offsets should not be empty",))
-            })?;
-            values =
-                downcast_arg!(compute::concat(&[&values, &comp,])?.clone(), UInt64Array)
-                    .clone();
-            offsets.push(last_offset + comp.len() as i32);
-        }
-
-        let field = Arc::new(Field::new("item", DataType::UInt64, true));
-
-        Arc::new(ListArray::try_new(
-            field,
-            OffsetBuffer::new(offsets.into()),
-            Arc::new(values),
-            None,
-        )?)
-    }};
+    general_position::<i32>(
+        arr,
+        element,
+        vec![0; arr.len()],
+        arr_n,
+    )
 }
 
 /// Array_positions SQL function
@@ -1142,7 +1085,7 @@ pub fn array_positions(args: &[ArrayRef]) -> Result<ArrayRef> {
         arr,
         element,
         vec![0; arr.len()],
-        vec![usize::MAX; arr.len()],
+        vec![i64::MAX; arr.len()],
     )
 }
 
