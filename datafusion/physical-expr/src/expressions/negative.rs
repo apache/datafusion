@@ -241,14 +241,9 @@ mod tests {
         let negative_expr = NegativeExpr {
             arg: Arc::new(Column::new("a", 0)),
         };
-        let original_child_interval =
-            Interval::try_new(ScalarValue::Int32(Some(-2)), ScalarValue::Int32(Some(3)))?;
-        let negative_expr_interval =
-            Interval::try_new(ScalarValue::Int32(Some(0)), ScalarValue::Int32(Some(4)))?;
-        let after_propagation = Some(vec![Interval::try_new(
-            ScalarValue::Int32(Some(-2)),
-            ScalarValue::Int32(Some(0)),
-        )?]);
+        let original_child_interval = Interval::make(Some(-2), Some(3))?;
+        let negative_expr_interval = Interval::make(Some(0), Some(4))?;
+        let after_propagation = Some(vec![Interval::make(Some(-2), Some(0))?]);
         assert_eq!(
             negative_expr.propagate_constraints(
                 &negative_expr_interval,

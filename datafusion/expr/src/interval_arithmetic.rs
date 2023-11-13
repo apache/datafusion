@@ -26,11 +26,10 @@ use crate::Operator;
 
 use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::DataType;
+use arrow::datatypes::{IntervalUnit, TimeUnit};
 use arrow_array::ArrowNativeTypeOp;
 use datafusion_common::rounding::{alter_fp_rounding_mode, next_down, next_up};
-use datafusion_common::{
-    internal_err, not_impl_err, DataFusionError, Result, ScalarValue,
-};
+use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 
 /// The `Interval` type represents a closed interval used for computing
 /// reliable bounds for mathematical expressions.
@@ -128,7 +127,27 @@ impl Interval {
             );
         }
 
-        let interval = if let ScalarValue::Boolean(lower_bool) = lower {
+        let interval = Self::new(lower, upper);
+
+        if interval.lower.is_null()
+            || interval.upper.is_null()
+            || interval.lower <= interval.upper
+        {
+            Ok(interval)
+        } else {
+            internal_err!(
+                "Interval's lower bound {} is greater than the upper bound {}",
+                interval.lower,
+                interval.upper
+            )
+        }
+    }
+
+    /// Used for internal usage. Responsible for standardizing booleans
+    /// and floating-point values without making constraint checks.
+    /// For details, see `Interval::try_new`.
+    fn new(lower: ScalarValue, upper: ScalarValue) -> Self {
+        if let ScalarValue::Boolean(lower_bool) = lower {
             let ScalarValue::Boolean(upper_bool) = upper else {
                 // We are sure that upper and lower bounds have the same type.
                 unreachable!();
@@ -147,19 +166,6 @@ impl Interval {
         } else {
             // Other data types do not require standardization:
             Self { lower, upper }
-        };
-
-        if interval.lower.is_null()
-            || interval.upper.is_null()
-            || interval.lower <= interval.upper
-        {
-            Ok(interval)
-        } else {
-            internal_err!(
-                "Interval's lower bound {} is greater than the upper bound {}",
-                interval.lower,
-                interval.upper
-            )
         }
     }
 
@@ -176,7 +182,7 @@ impl Interval {
     /// Creates an unbounded interval from both sides if the datatype supported.
     pub fn make_unbounded(data_type: &DataType) -> Result<Self> {
         let unbounded_endpoint = ScalarValue::try_from(data_type)?;
-        Self::try_new(unbounded_endpoint.clone(), unbounded_endpoint)
+        Ok(Self::new(unbounded_endpoint.clone(), unbounded_endpoint))
     }
 
     /// Returns a reference to the lower bound.
@@ -428,10 +434,10 @@ impl Interval {
         let rhs = other.borrow();
         let dt = get_result_type(&self.data_type(), &Operator::Plus, &rhs.data_type())?;
 
-        Self::try_new(
-            add_bounds::<false>(&dt, &self.lower, &rhs.lower)?,
-            add_bounds::<true>(&dt, &self.upper, &rhs.upper)?,
-        )
+        Ok(Self::new(
+            add_bounds::<false>(&dt, &self.lower, &rhs.lower),
+            add_bounds::<true>(&dt, &self.upper, &rhs.upper),
+        ))
     }
 
     /// Subtract the given interval (`other`) from this interval. Say we have
@@ -443,10 +449,10 @@ impl Interval {
         let rhs = other.borrow();
         let dt = get_result_type(&self.data_type(), &Operator::Minus, &rhs.data_type())?;
 
-        Self::try_new(
-            sub_bounds::<false>(&dt, &self.lower, &rhs.upper)?,
-            sub_bounds::<true>(&dt, &self.upper, &rhs.lower)?,
-        )
+        Ok(Self::new(
+            sub_bounds::<false>(&dt, &self.lower, &rhs.upper),
+            sub_bounds::<true>(&dt, &self.upper, &rhs.lower),
+        ))
     }
 
     /// Multiply the given interval (`other`) with this interval. Say we have
@@ -459,27 +465,33 @@ impl Interval {
         let dt =
             get_result_type(&self.data_type(), &Operator::Multiply, &rhs.data_type())?;
 
-        let zero = ScalarValue::new_zero(&self.data_type())?;
+        let zero = ScalarValue::new_zero(&dt)?;
         // We want 0 is approachable from both negative and positive sides.
-        let zero_point = Self::try_new(prev_value(zero.clone()), next_value(zero))?;
-        match (
-            Self::CERTAINLY_TRUE == self.contains(&zero_point)?,
-            Self::CERTAINLY_TRUE == rhs.contains(&zero_point)?,
-        ) {
-            // Since the parameter of contains function is a singleton,
-            // it is impossible to have an UNCERTAIN case.
-            (true, true) => mul_helper_multi_zero_inclusive(&dt, self, rhs),
-            // only option is CERTAINLY_FALSE for rhs
-            (true, false) => {
-                mul_helper_single_zero_inclusive(&dt, self, rhs, &zero_point)
-            }
-            // only option is CERTAINLY_FALSE for lhs
-            (false, true) => {
-                mul_helper_single_zero_inclusive(&dt, rhs, self, &zero_point)
-            }
-            // only option is CERTAINLY_FALSE for both sides
-            (false, false) => mul_helper_zero_exclusive(&dt, self, rhs, &zero_point),
-        }
+        let zero_point = match &dt {
+            DataType::Float32 => Self::make(Some(-0.0_f32), Some(0.0_f32))?,
+            DataType::Float64 => Self::make(Some(-0.0_f64), Some(0.0_f64))?,
+            _ => Self::new(prev_value(zero.clone()), next_value(zero.clone())),
+        };
+        Ok(
+            match (
+                Self::CERTAINLY_TRUE == self.contains(&zero_point)?,
+                Self::CERTAINLY_TRUE == rhs.contains(&zero_point)?,
+            ) {
+                // Since the parameter of contains function is a singleton,
+                // it is impossible to have an UNCERTAIN case.
+                (true, true) => mul_helper_multi_zero_inclusive(&dt, self, rhs),
+                // only option is CERTAINLY_FALSE for rhs
+                (true, false) => {
+                    mul_helper_single_zero_inclusive(&dt, self, rhs, &zero_point)
+                }
+                // only option is CERTAINLY_FALSE for lhs
+                (false, true) => {
+                    mul_helper_single_zero_inclusive(&dt, rhs, self, &zero_point)
+                }
+                // only option is CERTAINLY_FALSE for both sides
+                (false, false) => mul_helper_zero_exclusive(&dt, self, rhs, &zero_point),
+            },
+        )
     }
 
     /// Divide this interval by the given interval (`other`). Say we have intervals
@@ -494,10 +506,13 @@ impl Interval {
         let rhs = other.borrow();
         let dt = get_result_type(&self.data_type(), &Operator::Divide, &rhs.data_type())?;
 
-        let zero = ScalarValue::new_zero(&self.data_type())?;
+        let zero = ScalarValue::new_zero(&dt)?;
         // We want 0 is approachable from both negative and positive sides.
-        let zero_point =
-            Self::try_new(prev_value(zero.clone()), next_value(zero.clone()))?;
+        let zero_point = match &dt {
+            DataType::Float32 => Self::make(Some(-0.0_f32), Some(0.0_f32))?,
+            DataType::Float64 => Self::make(Some(-0.0_f64), Some(0.0_f64))?,
+            _ => Self::new(prev_value(zero.clone()), next_value(zero.clone())),
+        };
 
         // The purpose is early exit with unbounded interval if rhs interval
         // is in the form of [some_negative, some_positive] or [0,0].
@@ -512,10 +527,10 @@ impl Interval {
         // and positive directions, so rhs can only contain zero as
         // edge point of the bound.
         else if self.contains(&zero_point)? == Self::CERTAINLY_TRUE {
-            div_helper_lhs_zero_inclusive(&dt, self, rhs, &zero_point)
+            Ok(div_helper_lhs_zero_inclusive(&dt, self, rhs, &zero_point))
         } else {
             // Only option is CERTAINLY_FALSE for rhs.
-            div_helper_zero_exclusive(&dt, self, rhs, &zero_point)
+            Ok(div_helper_zero_exclusive(&dt, self, rhs, &zero_point))
         }
     }
 
@@ -536,20 +551,22 @@ impl Interval {
         // https://stackoverflow.com/questions/8875064/how-many-distinct-floating-point-numbers-in-a-specific-range
         else if data_type.is_floating() {
             match (&self.lower, &self.upper) {
+                // - Negative numbers are sorted in the reverse order. To
+                // always have a positive difference after the subtraction,
+                // we perform following transformation:
                 (
                     ScalarValue::Float32(Some(lower)),
                     ScalarValue::Float32(Some(upper)),
                 ) => {
-                    // Negative numbers are sorted in the reverse order. To
-                    // always have a positive difference after the subtraction,
-                    // we perform following transformation:
+                    // - Use i64 to avoid overflow.
                     let lower_bits = lower.to_bits() as i32;
                     let upper_bits = upper.to_bits() as i32;
                     let transformed_lower =
                         lower_bits ^ ((lower_bits >> 31) & 0x7fffffff);
                     let transformed_upper =
                         upper_bits ^ ((upper_bits >> 31) & 0x7fffffff);
-                    let Ok(count) = transformed_upper.sub_checked(transformed_lower)
+                    let Ok(count) =
+                        (transformed_upper as i64).sub_checked(transformed_lower as i64)
                     else {
                         return None;
                     };
@@ -559,13 +576,15 @@ impl Interval {
                     ScalarValue::Float64(Some(lower)),
                     ScalarValue::Float64(Some(upper)),
                 ) => {
+                    // - Use i128 to avoid overflow.
                     let lower_bits = lower.to_bits() as i64;
                     let upper_bits = upper.to_bits() as i64;
                     let transformed_lower =
                         lower_bits ^ ((lower_bits >> 63) & 0x7fffffffffffffff);
                     let transformed_upper =
                         upper_bits ^ ((upper_bits >> 63) & 0x7fffffffffffffff);
-                    let Ok(count) = transformed_upper.sub_checked(transformed_lower)
+                    let Ok(count) = (transformed_upper as i128)
+                        .sub_checked(transformed_lower as i128)
                     else {
                         return None;
                     };
@@ -577,7 +596,7 @@ impl Interval {
             // Cardinality calculations are not implemented for this data type yet:
             None
         }
-        .map(|result| (result + 1))
+        .map(|result| result + 1)
     }
 }
 
@@ -614,38 +633,48 @@ pub fn apply_operator(op: &Operator, lhs: &Interval, rhs: &Interval) -> Result<I
     }
 }
 
-// Cannot be used other than add method of intervals since
-// it may return non-standardized interval bounds.
+/// Helper function used for adding the end-point values of intervals.
+///
+/// **Caution:** This function contains multiple calls to `unwrap()`, and may
+/// return non-standardized interval bounds. Therefore, it should be used
+/// with caution. Currently, it is used in contexts where the `DataType`
+/// (`dt`) is validated prior to calling this function, and the following
+/// interval creation is standardized with `Interval::try_new`.
 fn add_bounds<const UPPER: bool>(
     dt: &DataType,
     lhs: &ScalarValue,
     rhs: &ScalarValue,
-) -> Result<ScalarValue> {
+) -> ScalarValue {
     if lhs.is_null() || rhs.is_null() {
-        return ScalarValue::try_from(dt);
+        return ScalarValue::try_from(dt).unwrap();
     }
 
-    match lhs.data_type() {
+    match dt {
         DataType::Float64 | DataType::Float32 => {
             alter_fp_rounding_mode::<UPPER, _>(lhs, rhs, |lhs, rhs| lhs.add_checked(rhs))
         }
         _ => lhs.add_checked(rhs),
     }
-    .or_else(|_| handle_overflow::<UPPER>(dt, Operator::Plus, lhs, rhs))
+    .unwrap_or_else(|_| handle_overflow::<UPPER>(dt, Operator::Plus, lhs, rhs))
 }
 
-// Cannot be used other than add method of intervals since
-// it may return non-standardized interval bounds.
+/// Helper function used for subtracting the end-point values of intervals.
+///
+/// **Caution:** This function contains multiple calls to `unwrap()`, and may
+/// return non-standardized interval bounds. Therefore, it should be used
+/// with caution. Currently, it is used in contexts where the `DataType`
+/// (`dt`) is validated prior to calling this function, and the following
+/// interval creation is standardized with `Interval::try_new`.
 fn sub_bounds<const UPPER: bool>(
     dt: &DataType,
     lhs: &ScalarValue,
     rhs: &ScalarValue,
-) -> Result<ScalarValue> {
+) -> ScalarValue {
     if lhs.is_null() || rhs.is_null() {
-        return ScalarValue::try_from(dt);
+        return ScalarValue::try_from(dt).unwrap();
     }
 
-    match lhs.data_type() {
+    match dt {
         DataType::Float64 | DataType::Float32 => {
             alter_fp_rounding_mode::<UPPER, _>(lhs, rhs, |lhs, rhs| lhs.sub_checked(rhs))
         }
@@ -653,21 +682,26 @@ fn sub_bounds<const UPPER: bool>(
     }
     // We cannot represent the overflow cases.
     // Set the bound as unbounded.
-    .or_else(|_| handle_overflow::<UPPER>(dt, Operator::Minus, lhs, rhs))
+    .unwrap_or_else(|_| handle_overflow::<UPPER>(dt, Operator::Minus, lhs, rhs))
 }
 
-// Cannot be used other than add method of intervals since
-// it may return non-standardized interval bounds.
+/// Helper function used for multiplying the end-point values of intervals.
+///
+/// **Caution:** This function contains multiple calls to `unwrap()`, and may
+/// return non-standardized interval bounds. Therefore, it should be used
+/// with caution. Currently, it is used in contexts where the `DataType`
+/// (`dt`) is validated prior to calling this function, and the following
+/// interval creation is standardized with `Interval::try_new`.
 fn mul_bounds<const UPPER: bool>(
     dt: &DataType,
     lhs: &ScalarValue,
     rhs: &ScalarValue,
-) -> Result<ScalarValue> {
+) -> ScalarValue {
     if lhs.is_null() || rhs.is_null() {
-        return ScalarValue::try_from(dt);
+        return ScalarValue::try_from(dt).unwrap();
     }
 
-    match lhs.data_type() {
+    match dt {
         DataType::Float64 | DataType::Float32 => {
             alter_fp_rounding_mode::<UPPER, _>(lhs, rhs, |lhs, rhs| lhs.mul_checked(rhs))
         }
@@ -675,25 +709,30 @@ fn mul_bounds<const UPPER: bool>(
     }
     // We cannot represent the overflow cases.
     // Set the bound as unbounded.
-    .or_else(|_| handle_overflow::<UPPER>(dt, Operator::Multiply, lhs, rhs))
+    .unwrap_or_else(|_| handle_overflow::<UPPER>(dt, Operator::Multiply, lhs, rhs))
 }
 
-// Cannot be used other than add method of intervals since
-// it may return non-standardized interval bounds.
+/// Helper function used for dividing the end-point values of intervals.
+///
+/// **Caution:** This function contains multiple calls to `unwrap()`, and may
+/// return non-standardized interval bounds. Therefore, it should be used
+/// with caution. Currently, it is used in contexts where the `DataType`
+/// (`dt`) is validated prior to calling this function, and the following
+/// interval creation is standardized with `Interval::try_new`.
 fn div_bounds<const UPPER: bool>(
     dt: &DataType,
     lhs: &ScalarValue,
     rhs: &ScalarValue,
-) -> Result<ScalarValue> {
-    let zero = ScalarValue::new_zero(dt)?;
+) -> ScalarValue {
+    let zero = ScalarValue::new_zero(dt).unwrap();
 
     if lhs.is_null() || rhs.eq(&zero) {
-        return ScalarValue::try_from(dt);
+        return ScalarValue::try_from(dt).unwrap();
     } else if rhs.is_null() {
-        return Ok(zero);
+        return zero;
     }
 
-    match lhs.data_type() {
+    match dt {
         DataType::Float64 | DataType::Float32 => {
             alter_fp_rounding_mode::<UPPER, _>(lhs, rhs, |lhs, rhs| lhs.div(rhs))
         }
@@ -701,7 +740,7 @@ fn div_bounds<const UPPER: bool>(
     }
     // We cannot represent the overflow cases.
     // Set the bound as unbounded.
-    .or_else(|_| handle_overflow::<UPPER>(dt, Operator::Divide, lhs, rhs))
+    .unwrap_or_else(|_| handle_overflow::<UPPER>(dt, Operator::Divide, lhs, rhs))
 }
 
 macro_rules! value_transition {
@@ -724,6 +763,9 @@ macro_rules! value_transition {
             DurationMicrosecond(Some(value)) if value == i64::$bound => {
                 DurationMicrosecond(None)
             }
+            DurationNanosecond(Some(value)) if value == i64::$bound => {
+                DurationNanosecond(None)
+            }
             TimestampSecond(Some(value), tz) if value == i64::$bound => {
                 TimestampSecond(None, tz)
             }
@@ -744,6 +786,57 @@ macro_rules! value_transition {
                 IntervalMonthDayNano(None)
             }
             _ => next_value_helper::<$direction>($value),
+        }
+    };
+}
+
+macro_rules! get_extreme_value {
+    ($extreme:ident, $value:expr) => {
+        match $value {
+            DataType::UInt8 => ScalarValue::UInt8(Some(u8::$extreme)),
+            DataType::UInt16 => ScalarValue::UInt16(Some(u16::$extreme)),
+            DataType::UInt32 => ScalarValue::UInt32(Some(u32::$extreme)),
+            DataType::UInt64 => ScalarValue::UInt64(Some(u64::$extreme)),
+            DataType::Int8 => ScalarValue::Int8(Some(i8::$extreme)),
+            DataType::Int16 => ScalarValue::Int16(Some(i16::$extreme)),
+            DataType::Int32 => ScalarValue::Int32(Some(i32::$extreme)),
+            DataType::Int64 => ScalarValue::Int64(Some(i64::$extreme)),
+            DataType::Float32 => ScalarValue::Float32(Some(f32::$extreme)),
+            DataType::Float64 => ScalarValue::Float64(Some(f64::$extreme)),
+            DataType::Duration(TimeUnit::Second) => {
+                ScalarValue::DurationSecond(Some(i64::$extreme))
+            }
+            DataType::Duration(TimeUnit::Millisecond) => {
+                ScalarValue::DurationMillisecond(Some(i64::$extreme))
+            }
+            DataType::Duration(TimeUnit::Microsecond) => {
+                ScalarValue::DurationMicrosecond(Some(i64::$extreme))
+            }
+            DataType::Duration(TimeUnit::Nanosecond) => {
+                ScalarValue::DurationNanosecond(Some(i64::$extreme))
+            }
+            DataType::Timestamp(TimeUnit::Second, _) => {
+                ScalarValue::TimestampSecond(Some(i64::$extreme), None)
+            }
+            DataType::Timestamp(TimeUnit::Millisecond, _) => {
+                ScalarValue::TimestampMillisecond(Some(i64::$extreme), None)
+            }
+            DataType::Timestamp(TimeUnit::Microsecond, _) => {
+                ScalarValue::TimestampMicrosecond(Some(i64::$extreme), None)
+            }
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                ScalarValue::TimestampNanosecond(Some(i64::$extreme), None)
+            }
+            DataType::Interval(IntervalUnit::YearMonth) => {
+                ScalarValue::IntervalYearMonth(Some(i32::$extreme))
+            }
+            DataType::Interval(IntervalUnit::DayTime) => {
+                ScalarValue::IntervalDayTime(Some(i64::$extreme))
+            }
+            DataType::Interval(IntervalUnit::MonthDayNano) => {
+                ScalarValue::IntervalMonthDayNano(Some(i128::$extreme))
+            }
+            _ => unreachable!(),
         }
     };
 }
@@ -813,6 +906,9 @@ fn next_value_helper<const INC: bool>(value: ScalarValue) -> ScalarValue {
         }
         DurationMicrosecond(Some(val)) => {
             DurationMicrosecond(Some(increment_decrement::<INC, i64>(val)))
+        }
+        DurationNanosecond(Some(val)) => {
+            DurationNanosecond(Some(increment_decrement::<INC, i64>(val)))
         }
         TimestampSecond(Some(val), tz) => {
             TimestampSecond(Some(increment_decrement::<INC, i64>(val)), tz)
@@ -963,29 +1059,34 @@ pub fn satisfy_comparison(
 ///
 /// right: <-------=====0=====------->
 /// ```
+///
+/// **Caution:** This function contains multiple calls to `unwrap()`. Therefore,
+/// it should be used with caution. Currently, it is used in contexts where the
+/// `DataType` (`dt`) is validated prior to calling this function.
 fn mul_helper_multi_zero_inclusive(
     dt: &DataType,
     lhs: &Interval,
     rhs: &Interval,
-) -> Result<Interval> {
+) -> Interval {
     if lhs.lower.is_null()
         || lhs.upper.is_null()
         || rhs.lower.is_null()
         || rhs.upper.is_null()
     {
-        return Interval::make_unbounded(dt);
+        return Interval::make_unbounded(dt).unwrap();
     }
     // Since unbounded cases are handled above, we can safely
     // use the utility functions here to eliminate code duplication.
     let lower = min_of_bounds(
-        &mul_bounds::<false>(dt, &lhs.lower, &rhs.upper)?,
-        &mul_bounds::<false>(dt, &rhs.lower, &lhs.upper)?,
+        &mul_bounds::<false>(dt, &lhs.lower, &rhs.upper),
+        &mul_bounds::<false>(dt, &rhs.lower, &lhs.upper),
     );
     let upper = max_of_bounds(
-        &mul_bounds::<true>(dt, &lhs.upper, &rhs.upper)?,
-        &mul_bounds::<true>(dt, &lhs.lower, &rhs.lower)?,
+        &mul_bounds::<true>(dt, &lhs.upper, &rhs.upper),
+        &mul_bounds::<true>(dt, &lhs.lower, &rhs.lower),
     );
-    Interval::try_new(lower, upper)
+    // There is no possibility to create an invalid interval.
+    Interval::new(lower, upper)
 }
 
 /// Multiplies two intervals when only left-hand side interval contains zero.
@@ -1007,24 +1108,29 @@ fn mul_helper_multi_zero_inclusive(
 ///
 /// right: <------------0--======---->
 /// ``` text
+///
+/// **Caution:** This function contains multiple calls to `unwrap()`. Therefore,
+/// it should be used with caution. Currently, it is used in contexts where the
+/// `DataType` (`dt`) is validated prior to calling this function.
 fn mul_helper_single_zero_inclusive(
     dt: &DataType,
     lhs: &Interval,
     rhs: &Interval,
     zero_point: &Interval,
-) -> Result<Interval> {
+) -> Interval {
+    // With the following interval bounds, there is no possibility to create an invalid interval.
     if rhs.upper <= zero_point.lower && !rhs.upper.is_null() {
         // <-------=====0=====------->
         // <--======----0------------>
-        let lower = mul_bounds::<false>(dt, &lhs.upper, &rhs.lower)?;
-        let upper = mul_bounds::<true>(dt, &lhs.lower, &rhs.lower)?;
-        Interval::try_new(lower, upper)
+        let lower = mul_bounds::<false>(dt, &lhs.upper, &rhs.lower);
+        let upper = mul_bounds::<true>(dt, &lhs.lower, &rhs.lower);
+        Interval::new(lower, upper)
     } else {
         // <-------=====0=====------->
         // <------------0--======---->
-        let lower = mul_bounds::<false>(dt, &lhs.lower, &rhs.upper)?;
-        let upper = mul_bounds::<true>(dt, &lhs.upper, &rhs.upper)?;
-        Interval::try_new(lower, upper)
+        let lower = mul_bounds::<false>(dt, &lhs.lower, &rhs.upper);
+        let upper = mul_bounds::<true>(dt, &lhs.upper, &rhs.upper);
+        Interval::new(lower, upper)
     }
 }
 
@@ -1058,43 +1164,48 @@ fn mul_helper_single_zero_inclusive(
 ///
 /// right: <------------0--======---->
 /// ``` text
+///
+/// **Caution:** This function contains multiple calls to `unwrap()`. Therefore,
+/// it should be used with caution. Currently, it is used in contexts where the
+/// `DataType` (`dt`) is validated prior to calling this function.
 fn mul_helper_zero_exclusive(
     dt: &DataType,
     lhs: &Interval,
     rhs: &Interval,
     zero_point: &Interval,
-) -> Result<Interval> {
+) -> Interval {
     match (
         lhs.upper <= zero_point.lower && !lhs.upper.is_null(),
         rhs.upper <= zero_point.lower && !rhs.upper.is_null(),
     ) {
+        // With the following interval bounds, there is no possibility to create an invalid interval.
         (true, true) => {
             // <--======----0------------>
             // <--======----0------------>
-            let lower = mul_bounds::<false>(dt, &lhs.upper, &rhs.upper)?;
-            let upper = mul_bounds::<true>(dt, &lhs.lower, &rhs.lower)?;
-            Interval::try_new(lower, upper)
+            let lower = mul_bounds::<false>(dt, &lhs.upper, &rhs.upper);
+            let upper = mul_bounds::<true>(dt, &lhs.lower, &rhs.lower);
+            Interval::new(lower, upper)
         }
         (true, false) => {
             // <--======----0------------>
             // <------------0--======---->
-            let lower = mul_bounds::<false>(dt, &lhs.lower, &rhs.upper)?;
-            let upper = mul_bounds::<true>(dt, &lhs.upper, &rhs.lower)?;
-            Interval::try_new(lower, upper)
+            let lower = mul_bounds::<false>(dt, &lhs.lower, &rhs.upper);
+            let upper = mul_bounds::<true>(dt, &lhs.upper, &rhs.lower);
+            Interval::new(lower, upper)
         }
         (false, true) => {
             // <------------0--======---->
             // <--======----0------------>
-            let lower = mul_bounds::<false>(dt, &rhs.lower, &lhs.upper)?;
-            let upper = mul_bounds::<true>(dt, &rhs.upper, &lhs.lower)?;
-            Interval::try_new(lower, upper)
+            let lower = mul_bounds::<false>(dt, &rhs.lower, &lhs.upper);
+            let upper = mul_bounds::<true>(dt, &rhs.upper, &lhs.lower);
+            Interval::new(lower, upper)
         }
         (false, false) => {
             // <------------0--======---->
             // <------------0--======---->
-            let lower = mul_bounds::<false>(dt, &lhs.lower, &rhs.lower)?;
-            let upper = mul_bounds::<true>(dt, &lhs.upper, &rhs.upper)?;
-            Interval::try_new(lower, upper)
+            let lower = mul_bounds::<false>(dt, &lhs.lower, &rhs.lower);
+            let upper = mul_bounds::<true>(dt, &lhs.upper, &rhs.upper);
+            Interval::new(lower, upper)
         }
     }
 }
@@ -1118,24 +1229,29 @@ fn mul_helper_zero_exclusive(
 ///
 /// right: <------------0--======---->
 /// ```
+///
+/// **Caution:** This function contains multiple calls to `unwrap()`. Therefore,
+/// it should be used with caution. Currently, it is used in contexts where the
+/// `DataType` (`dt`) is validated prior to calling this function.
 fn div_helper_lhs_zero_inclusive(
     dt: &DataType,
     lhs: &Interval,
     rhs: &Interval,
     zero_point: &Interval,
-) -> Result<Interval> {
+) -> Interval {
+    // With the following interval bounds, there is no possibility to create an invalid interval.
     if rhs.upper <= zero_point.lower && !rhs.upper.is_null() {
         // <-------=====0=====------->
         // <--======----0------------>
-        let lower = div_bounds::<false>(dt, &lhs.upper, &rhs.upper)?;
-        let upper = div_bounds::<true>(dt, &lhs.lower, &rhs.upper)?;
-        Interval::try_new(lower, upper)
+        let lower = div_bounds::<false>(dt, &lhs.upper, &rhs.upper);
+        let upper = div_bounds::<true>(dt, &lhs.lower, &rhs.upper);
+        Interval::new(lower, upper)
     } else {
         // <-------=====0=====------->
         // <------------0--======---->
-        let lower = div_bounds::<false>(dt, &lhs.lower, &rhs.lower)?;
-        let upper = div_bounds::<true>(dt, &lhs.upper, &rhs.lower)?;
-        Interval::try_new(lower, upper)
+        let lower = div_bounds::<false>(dt, &lhs.lower, &rhs.lower);
+        let upper = div_bounds::<true>(dt, &lhs.upper, &rhs.lower);
+        Interval::new(lower, upper)
     }
 }
 
@@ -1170,43 +1286,48 @@ fn div_helper_lhs_zero_inclusive(
 ///
 /// right: <------------0--======---->
 /// ``` text
+///
+/// **Caution:** This function contains multiple calls to `unwrap()`. Therefore,
+/// it should be used with caution. Currently, it is used in contexts where the
+/// `DataType` (`dt`) is validated prior to calling this function.
 fn div_helper_zero_exclusive(
     dt: &DataType,
     lhs: &Interval,
     rhs: &Interval,
     zero_point: &Interval,
-) -> Result<Interval> {
+) -> Interval {
     match (
         lhs.upper <= zero_point.lower && !lhs.upper.is_null(),
         rhs.upper <= zero_point.lower && !rhs.upper.is_null(),
     ) {
+        // With the following interval bounds, there is no possibility to create an invalid interval.
         (true, true) => {
             // <--======----0------------>
             // <--======----0------------>
-            let lower = div_bounds::<false>(dt, &lhs.upper, &rhs.lower)?;
-            let upper = div_bounds::<true>(dt, &lhs.lower, &rhs.upper)?;
-            Interval::try_new(lower, upper)
+            let lower = div_bounds::<false>(dt, &lhs.upper, &rhs.lower);
+            let upper = div_bounds::<true>(dt, &lhs.lower, &rhs.upper);
+            Interval::new(lower, upper)
         }
         (true, false) => {
             // <--======----0------------>
             // <------------0--======---->
-            let lower = div_bounds::<false>(dt, &lhs.lower, &rhs.lower)?;
-            let upper = div_bounds::<true>(dt, &lhs.upper, &rhs.upper)?;
-            Interval::try_new(lower, upper)
+            let lower = div_bounds::<false>(dt, &lhs.lower, &rhs.lower);
+            let upper = div_bounds::<true>(dt, &lhs.upper, &rhs.upper);
+            Interval::new(lower, upper)
         }
         (false, true) => {
             // <------------0--======---->
             // <--======----0------------>
-            let lower = div_bounds::<false>(dt, &lhs.upper, &rhs.upper)?;
-            let upper = div_bounds::<true>(dt, &lhs.lower, &rhs.lower)?;
-            Interval::try_new(lower, upper)
+            let lower = div_bounds::<false>(dt, &lhs.upper, &rhs.upper);
+            let upper = div_bounds::<true>(dt, &lhs.lower, &rhs.lower);
+            Interval::new(lower, upper)
         }
         (false, false) => {
             // <------------0--======---->
             // <------------0--======---->
-            let lower = div_bounds::<false>(dt, &lhs.lower, &rhs.upper)?;
-            let upper = div_bounds::<true>(dt, &lhs.upper, &rhs.lower)?;
-            Interval::try_new(lower, upper)
+            let lower = div_bounds::<false>(dt, &lhs.lower, &rhs.upper);
+            let upper = div_bounds::<true>(dt, &lhs.upper, &rhs.lower);
+            Interval::new(lower, upper)
         }
     }
 }
@@ -1239,44 +1360,44 @@ fn cast_scalar_value(
     ScalarValue::try_from_array(&cast_array, 0)
 }
 
-/// Since we cannot represent the overflow cases, this function
-/// sets the bound as unbounded for positive upper bounds and negative lower bounds,
-/// For other cases, select the one that narrows the most.
-/// TODO: When ScalarValue supports such methods like ScalarValue::max(data_type) and
-/// ScalarValue::min(data_type), we can even narrow more.
+/// Since we cannot represent the overflow cases, this function sets the bound as **unbounded**
+///   - if it is upper bound and the result is positively overflowed.
+///   - if it is lower bound and the result is negatively overflowed.
+/// Otherwise; the function sets the bound as
+///   - minimum representable number with given datatype (`dt`) if the bound is upper bound
+///     and the result is negatively overflowed.
+///   - maximum representable number with given datatype (`dt`) if the bound is upper bound
+///     and the result is negatively overflowed.
+///
+/// **This function contains multiple calls to `unwrap()`, implying potential panics
+/// if preconditions are not met. Therefore, it should be used with caution. Currently,
+/// it is used in contexts where the `DataType` (`dt`) is validated prior to calling
+/// this function. Ensure that `dt` is valid for `ScalarValue::new_zero` and `ScalarValue::try_from`,
+/// and `op` is supported by interval library.**
 fn handle_overflow<const UPPER: bool>(
     dt: &DataType,
     op: Operator,
     lhs: &ScalarValue,
     rhs: &ScalarValue,
-) -> Result<ScalarValue> {
-    let zero = ScalarValue::new_zero(dt)?;
+) -> ScalarValue {
+    let zero = ScalarValue::new_zero(dt).unwrap();
     let positive_sign = match op {
         Operator::Multiply | Operator::Divide => {
             lhs.lt(&zero) && rhs.lt(&zero) || lhs.gt(&zero) && rhs.gt(&zero)
         }
-        Operator::Plus | Operator::Minus => lhs.gt(&zero),
+        Operator::Plus => lhs.ge(&zero),
+        Operator::Minus => lhs.ge(rhs),
         _ => {
-            return not_impl_err!(
-                "Operation {op} is not supported by the interval library"
-            )
+            unreachable!()
         }
     };
     match (UPPER, positive_sign) {
-        (true, true) | (false, false) => ScalarValue::try_from(dt),
+        (true, true) | (false, false) => ScalarValue::try_from(dt).unwrap(),
         (true, false) => {
-            if lhs < rhs {
-                Ok(lhs.clone())
-            } else {
-                Ok(rhs.clone())
-            }
+            get_extreme_value!(MIN, dt)
         }
         (false, true) => {
-            if lhs > rhs {
-                Ok(lhs.clone())
-            } else {
-                Ok(rhs.clone())
-            }
+            get_extreme_value!(MAX, dt)
         }
     }
 }
@@ -2436,6 +2557,16 @@ mod tests {
                     Float32(Some(-340282330000000000000000000000000000000.0)),
                 )?,
             ),
+            (
+                Interval::try_new(UInt32(Some(2)), UInt32(Some(10)))?,
+                Interval::try_new(UInt32(Some(4)), UInt32(Some(6)))?,
+                Interval::try_new(UInt32(None), UInt32(Some(6)))?,
+            ),
+            (
+                Interval::try_new(UInt32(Some(2)), UInt32(Some(10)))?,
+                Interval::try_new(UInt32(Some(20)), UInt32(Some(30)))?,
+                Interval::try_new(UInt32(None), UInt32(Some(0)))?,
+            ),
         ];
         for case in cases {
             let result = case.0.sub(case.1)?;
@@ -2520,6 +2651,21 @@ mod tests {
                 Interval::try_new(Float32(Some(f32::MIN)), Float32(Some(f32::MIN)))?,
                 Interval::try_new(Float32(Some(f32::MAX)), Float32(Some(f32::MAX)))?,
                 Interval::try_new(Float32(None), Float32(Some(f32::MIN)))?,
+            ),
+            (
+                Interval::try_new(Float32(Some(0.0)), Float32(Some(0.0)))?,
+                Interval::try_new(Float32(Some(f32::MAX)), Float32(None))?,
+                Interval::try_new(Float32(Some(0.0)), Float32(None))?,
+            ),
+            (
+                Interval::try_new(Float32(Some(-0.0)), Float32(Some(0.0)))?,
+                Interval::try_new(Float32(Some(f32::MAX)), Float32(None))?,
+                Interval::try_new(Float32(None), Float32(None))?,
+            ),
+            (
+                Interval::try_new(Float32(Some(-0.0)), Float32(Some(0.0)))?,
+                Interval::try_new(Float32(None), Float32(Some(0.0)))?,
+                Interval::try_new(Float32(None), Float32(None))?,
             ),
         ];
         for case in cases {
@@ -2646,6 +2792,26 @@ mod tests {
                 Interval::try_new(Float32(Some(10.0)), Float32(Some(20.0)))?,
                 Interval::try_new(Float32(Some(-0.4)), Float32(Some(0.2)))?,
             ),
+            (
+                Interval::try_new(Float32(Some(0.0)), Float32(Some(0.0)))?,
+                Interval::try_new(Float32(Some(f32::MAX)), Float32(None))?,
+                Interval::try_new(Float32(Some(0.0)), Float32(Some(0.0)))?,
+            ),
+            (
+                Interval::try_new(Float32(Some(-0.0)), Float32(Some(0.0)))?,
+                Interval::try_new(Float32(Some(f32::MAX)), Float32(None))?,
+                Interval::try_new(Float32(Some(-0.0)), Float32(Some(0.0)))?,
+            ),
+            (
+                Interval::try_new(Float32(Some(-0.0)), Float32(Some(0.0)))?,
+                Interval::try_new(Float32(None), Float32(Some(-0.0)))?,
+                Interval::try_new(Float32(None), Float32(None))?,
+            ),
+            (
+                Interval::try_new(Float32(Some(-0.0)), Float32(Some(-0.0)))?,
+                Interval::try_new(Float32(None), Float32(Some(-0.0)))?,
+                Interval::try_new(Float32(Some(0.0)), Float32(None))?,
+            ),
         ];
         for case in cases {
             let result = case.0.div(case.1)?;
@@ -2674,20 +2840,20 @@ mod tests {
         let distinct_f64 = 4503599627370497;
         let distinct_f32 = 8388609;
         let intervals = [
-            Interval::try_new(ScalarValue::from(0.25), ScalarValue::from(0.50))?,
-            Interval::try_new(ScalarValue::from(0.5), ScalarValue::from(1.0))?,
-            Interval::try_new(ScalarValue::from(1.0), ScalarValue::from(2.0))?,
-            Interval::try_new(ScalarValue::from(32.0), ScalarValue::from(64.0))?,
-            Interval::try_new(ScalarValue::from(-0.50), ScalarValue::from(-0.25))?,
-            Interval::try_new(ScalarValue::from(-32.0), ScalarValue::from(-16.0))?,
+            Interval::make(Some(0.25_f64), Some(0.50_f64))?,
+            Interval::make(Some(0.5_f64), Some(1.0_f64))?,
+            Interval::make(Some(1.0_f64), Some(2.0_f64))?,
+            Interval::make(Some(32.0_f64), Some(64.0_f64))?,
+            Interval::make(Some(-0.50_f64), Some(-0.25_f64))?,
+            Interval::make(Some(-32.0_f64), Some(-16.0_f64))?,
         ];
         for interval in intervals {
             assert_eq!(interval.cardinality().unwrap(), distinct_f64);
         }
 
         let intervals = [
-            Interval::try_new(ScalarValue::from(0.25_f32), ScalarValue::from(0.50_f32))?,
-            Interval::try_new(ScalarValue::from(-1_f32), ScalarValue::from(-0.5_f32))?,
+            Interval::make(Some(0.25_f32), Some(0.50_f32))?,
+            Interval::make(Some(-1_f32), Some(-0.5_f32))?,
         ];
         for interval in intervals {
             assert_eq!(interval.cardinality().unwrap(), distinct_f32);
@@ -2699,8 +2865,7 @@ mod tests {
         // the following intervals include such subnormal points, we cannot use
         // a simple powers-of-two type formula for our expectations. Therefore,
         // we manually supply the actual expected cardinality.
-        let interval =
-            Interval::try_new(ScalarValue::from(-0.0625), ScalarValue::from(0.0625))?;
+        let interval = Interval::make(Some(-0.0625), Some(0.0625))?;
         assert_eq!(interval.cardinality().unwrap(), 9178336040581070850);
 
         let interval = Interval::try_new(
@@ -2708,6 +2873,22 @@ mod tests {
             ScalarValue::from(0.0625_f32),
         )?;
         assert_eq!(interval.cardinality().unwrap(), 2063597570);
+
+        let interval = Interval::try_new(
+            ScalarValue::Float32(Some(f32::MIN)),
+            ScalarValue::Float32(Some(f32::MAX)),
+        )?;
+        assert_eq!(interval.cardinality().unwrap(), 4278190080);
+        let interval = Interval::try_new(
+            ScalarValue::UInt64(Some(u64::MIN + 1)),
+            ScalarValue::UInt64(Some(u64::MAX)),
+        )?;
+        assert_eq!(interval.cardinality().unwrap(), u64::MAX);
+        let interval = Interval::try_new(
+            ScalarValue::Int64(Some(i64::MIN + 1)),
+            ScalarValue::Int64(Some(i64::MAX)),
+        )?;
+        assert_eq!(interval.cardinality().unwrap(), u64::MAX);
 
         Ok(())
     }
@@ -2979,9 +3160,7 @@ mod tests {
 
     #[test]
     fn test_interval_display() {
-        let interval =
-            Interval::try_new(ScalarValue::from(0.25_f32), ScalarValue::from(0.50_f32))
-                .unwrap();
+        let interval = Interval::make(Some(0.25_f32), Some(0.50_f32)).unwrap();
         assert_eq!(format!("{}", interval), "[0.25, 0.5]");
 
         let interval = Interval::try_new(

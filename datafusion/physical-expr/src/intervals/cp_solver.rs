@@ -870,12 +870,9 @@ mod tests {
                 ScalarValue::Int32(Some(10)),
                 ScalarValue::Int32(Some(20)),
             )?,
-            Interval::try_new(ScalarValue::Int32(Some(100)), ScalarValue::Int32(None))?,
-            Interval::try_new(
-                ScalarValue::Int32(Some(10)),
-                ScalarValue::Int32(Some(20)),
-            )?,
-            Interval::try_new(ScalarValue::Int32(Some(100)), ScalarValue::Int32(None))?,
+            Interval::make(Some(100), None)?,
+            Interval::make(Some(10), Some(20))?,
+            Interval::make(Some(100), None)?,
             PropagationResult::Infeasible,
         )
     }
