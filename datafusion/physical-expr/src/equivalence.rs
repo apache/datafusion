@@ -22,8 +22,8 @@ use std::sync::Arc;
 use crate::expressions::Column;
 use crate::sort_properties::{ExprOrdering, SortProperties};
 use crate::{
-    physical_exprs_bag_equal, physical_exprs_contains, LexOrdering,
-    LexOrderingRef, LexRequirement, LexRequirementRef, PhysicalExpr, PhysicalSortExpr,
+    physical_exprs_bag_equal, physical_exprs_contains, LexOrdering, LexOrderingRef,
+    LexRequirement, LexRequirementRef, PhysicalExpr, PhysicalSortExpr,
     PhysicalSortRequirement,
 };
 
