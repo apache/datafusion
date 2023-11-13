@@ -305,8 +305,8 @@ impl PhysicalExpr for BinaryExpr {
 
         // if both arrays or both literals - extract arrays and continue execution
         let (left, right) = (
-            lhs.into_array(batch.num_rows()),
-            rhs.into_array(batch.num_rows()),
+            lhs.into_array(batch.num_rows())?,
+            rhs.into_array(batch.num_rows())?,
         );
         self.evaluate_with_resolved_args(left, &left_data_type, right, &right_data_type)
             .map(ColumnarValue::Array)
@@ -602,7 +602,10 @@ mod tests {
         let batch =
             RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])?;
 
-        let result = lt.evaluate(&batch)?.into_array(batch.num_rows());
+        let result = lt
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
         assert_eq!(result.len(), 5);
 
         let expected = [false, false, true, true, true];
@@ -646,7 +649,10 @@ mod tests {
 
         assert_eq!("a@0 < b@1 OR a@0 = b@1", format!("{expr}"));
 
-        let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
         assert_eq!(result.len(), 5);
 
         let expected = [true, true, false, true, false];
@@ -690,7 +696,7 @@ mod tests {
             assert_eq!(expression.data_type(&schema)?, $C_TYPE);
 
             // compute
-            let result = expression.evaluate(&batch)?.into_array(batch.num_rows());
+            let result = expression.evaluate(&batch)?.into_array(batch.num_rows()).expect("Failed to convert to array");
 
             // verify that the array's data_type is correct
             assert_eq!(*result.data_type(), $C_TYPE);
@@ -2143,7 +2149,10 @@ mod tests {
         let arithmetic_op =
             binary_op(col("a", &schema)?, op, col("b", &schema)?, &schema)?;
         let batch = RecordBatch::try_new(schema, data)?;
-        let result = arithmetic_op.evaluate(&batch)?.into_array(batch.num_rows());
+        let result = arithmetic_op
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
 
         assert_eq!(result.as_ref(), &expected);
         Ok(())
@@ -2159,7 +2168,10 @@ mod tests {
         let lit = Arc::new(Literal::new(literal));
         let arithmetic_op = binary_op(col("a", &schema)?, op, lit, &schema)?;
         let batch = RecordBatch::try_new(schema, data)?;
-        let result = arithmetic_op.evaluate(&batch)?.into_array(batch.num_rows());
+        let result = arithmetic_op
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
 
         assert_eq!(&result, &expected);
         Ok(())
@@ -2175,7 +2187,10 @@ mod tests {
         let op = binary_op(col("a", schema)?, op, col("b", schema)?, schema)?;
         let data: Vec<ArrayRef> = vec![left.clone(), right.clone()];
         let batch = RecordBatch::try_new(schema.clone(), data)?;
-        let result = op.evaluate(&batch)?.into_array(batch.num_rows());
+        let result = op
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
 
         assert_eq!(result.as_ref(), &expected);
         Ok(())
@@ -2192,7 +2207,10 @@ mod tests {
         let scalar = lit(scalar.clone());
         let op = binary_op(scalar, op, col("a", schema)?, schema)?;
         let batch = RecordBatch::try_new(Arc::clone(schema), vec![Arc::clone(arr)])?;
-        let result = op.evaluate(&batch)?.into_array(batch.num_rows());
+        let result = op
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
         assert_eq!(result.as_ref(), expected);
 
         Ok(())
@@ -2209,7 +2227,10 @@ mod tests {
         let scalar = lit(scalar.clone());
         let op = binary_op(col("a", schema)?, op, scalar, schema)?;
         let batch = RecordBatch::try_new(Arc::clone(schema), vec![Arc::clone(arr)])?;
-        let result = op.evaluate(&batch)?.into_array(batch.num_rows());
+        let result = op
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
         assert_eq!(result.as_ref(), expected);
 
         Ok(())
@@ -2781,7 +2802,8 @@ mod tests {
         let result = expr
             .evaluate(&batch)
             .expect("evaluation")
-            .into_array(batch.num_rows());
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
 
         let expected: Int32Array = input
             .into_iter()
@@ -3260,7 +3282,10 @@ mod tests {
         let arithmetic_op = binary_op(col("a", schema)?, op, col("b", schema)?, schema)?;
         let data: Vec<ArrayRef> = vec![left.clone(), right.clone()];
         let batch = RecordBatch::try_new(schema.clone(), data)?;
-        let result = arithmetic_op.evaluate(&batch)?.into_array(batch.num_rows());
+        let result = arithmetic_op
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
 
         assert_eq!(result.as_ref(), expected.as_ref());
         Ok(())

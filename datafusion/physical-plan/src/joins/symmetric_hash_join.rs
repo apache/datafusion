@@ -627,7 +627,9 @@ impl Stream for SymmetricHashJoinStream {
 /// # Returns
 ///
 /// A [Result] object that contains the pruning length. The function will return
-/// an error if there is an issue evaluating the build side filter expression.
+/// an error if
+/// - there is an issue evaluating the build side filter expression;
+/// - there is an issue converting the build side filter expression into an array
 fn determine_prune_length(
     buffer: &RecordBatch,
     build_side_filter_expr: &SortedFilterExpr,
@@ -638,7 +640,7 @@ fn determine_prune_length(
     let batch_arr = origin_sorted_expr
         .expr
         .evaluate(buffer)?
-        .into_array(buffer.num_rows());
+        .into_array(buffer.num_rows())?;
 
     // Get the lower or upper interval based on the sort direction
     let target = if origin_sorted_expr.options.descending {
@@ -953,27 +955,17 @@ impl OneSideHashJoiner {
         Ok(())
     }
 
-    /// Prunes the internal buffer.
-    ///
-    /// Argument `probe_batch` is used to update the intervals of the sorted
-    /// filter expressions. The updated build interval determines the new length
-    /// of the build side. If there are rows to prune, they are removed from the
-    /// internal buffer.
+    /// Calculate prune length.
     ///
     /// # Arguments
     ///
-    /// * `schema` - The schema of the final output record batch
-    /// * `probe_batch` - Incoming RecordBatch of the probe side.
+    /// * `build_side_sorted_filter_expr` - Build side mutable sorted filter expression..
     /// * `probe_side_sorted_filter_expr` - Probe side mutable sorted filter expression.
-    /// * `join_type` - The type of join (e.g. inner, left, right, etc.).
-    /// * `column_indices` - A vector of column indices that specifies which columns from the
-    ///     build side should be included in the output.
     /// * `graph` - A mutable reference to the physical expression graph.
     ///
     /// # Returns
     ///
-    /// If there are rows to prune, returns the pruned build side record batch wrapped in an `Ok` variant.
-    /// Otherwise, returns `Ok(None)`.
+    /// A Result object that contains the pruning length.
     pub(crate) fn calculate_prune_length_with_probe_batch(
         &mut self,
         build_side_sorted_filter_expr: &mut SortedFilterExpr,

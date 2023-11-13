@@ -257,7 +257,44 @@ impl Statistics {
 
 impl Display for Statistics {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Rows={}, Bytes={}", self.num_rows, self.total_byte_size)?;
+        // string of column statistics
+        let column_stats = self
+            .column_statistics
+            .iter()
+            .enumerate()
+            .map(|(i, cs)| {
+                let s = format!("(Col[{}]:", i);
+                let s = if cs.min_value != Precision::Absent {
+                    format!("{} Min={}", s, cs.min_value)
+                } else {
+                    s
+                };
+                let s = if cs.max_value != Precision::Absent {
+                    format!("{} Max={}", s, cs.max_value)
+                } else {
+                    s
+                };
+                let s = if cs.null_count != Precision::Absent {
+                    format!("{} Null={}", s, cs.null_count)
+                } else {
+                    s
+                };
+                let s = if cs.distinct_count != Precision::Absent {
+                    format!("{} Distinct={}", s, cs.distinct_count)
+                } else {
+                    s
+                };
+
+                s + ")"
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+
+        write!(
+            f,
+            "Rows={}, Bytes={}, [{}]",
+            self.num_rows, self.total_byte_size, column_stats
+        )?;
 
         Ok(())
     }

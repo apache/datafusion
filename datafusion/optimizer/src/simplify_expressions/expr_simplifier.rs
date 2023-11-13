@@ -345,8 +345,7 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::WindowFunction { .. }
             | Expr::Sort { .. }
             | Expr::GroupingSet(_)
-            | Expr::Wildcard
-            | Expr::QualifiedWildcard { .. }
+            | Expr::Wildcard { .. }
             | Expr::Placeholder(_) => false,
             Expr::ScalarFunction(ScalarFunction { fun, .. }) => {
                 Self::volatility_ok(fun.volatility())

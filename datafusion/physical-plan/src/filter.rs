@@ -194,11 +194,23 @@ impl ExecutionPlan for FilterExec {
     fn statistics(&self) -> Result<Statistics> {
         let predicate = self.predicate();
 
+        let input_stats = self.input.statistics()?;
         let schema = self.schema();
         if !check_support(predicate, &schema) {
-            return Ok(Statistics::new_unknown(&schema));
+            // assume filter selects 20% of rows if we cannot do anything smarter
+            // tracking issue for making this configurable:
+            // https://github.com/apache/arrow-datafusion/issues/8133
+            let selectivity = 0.2_f32;
+            let mut stats = input_stats.clone().into_inexact();
+            if let Precision::Inexact(n) = stats.num_rows {
+                stats.num_rows = Precision::Inexact((selectivity * n as f32) as usize);
+            }
+            if let Precision::Inexact(n) = stats.total_byte_size {
+                stats.total_byte_size =
+                    Precision::Inexact((selectivity * n as f32) as usize);
+            }
+            return Ok(stats);
         }
-        let input_stats = self.input.statistics()?;
 
         let num_rows = input_stats.num_rows;
         let total_byte_size = input_stats.total_byte_size;
@@ -294,7 +306,7 @@ pub(crate) fn batch_filter(
 ) -> Result<RecordBatch> {
     predicate
         .evaluate(batch)
-        .map(|v| v.into_array(batch.num_rows()))
+        .and_then(|v| v.into_array(batch.num_rows()))
         .and_then(|array| {
             Ok(as_boolean_array(&array)?)
                 // apply filter array to record batch

@@ -198,7 +198,7 @@ mod tests {
             let expected = &paste!{[<$DATA_TY Array>]::from(arr_expected)};
             let batch =
                 RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(input)])?;
-            let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
+            let result = expr.evaluate(&batch)?.into_array(batch.num_rows()).expect("Failed to convert to array");
             let result =
                 as_primitive_array(&result).expect(format!("failed to downcast to {:?}Array", $DATA_TY).as_str());
             assert_eq!(result, expected);

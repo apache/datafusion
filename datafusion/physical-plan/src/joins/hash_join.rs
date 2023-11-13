@@ -713,7 +713,7 @@ where
     // evaluate the keys
     let keys_values = on
         .iter()
-        .map(|c| Ok(c.evaluate(batch)?.into_array(batch.num_rows())))
+        .map(|c| c.evaluate(batch)?.into_array(batch.num_rows()))
         .collect::<Result<Vec<_>>>()?;
 
     // calculate the hash values
@@ -857,13 +857,13 @@ pub fn build_equal_condition_join_indices<T: JoinHashMapType>(
 ) -> Result<(UInt64Array, UInt32Array)> {
     let keys_values = probe_on
         .iter()
-        .map(|c| Ok(c.evaluate(probe_batch)?.into_array(probe_batch.num_rows())))
+        .map(|c| c.evaluate(probe_batch)?.into_array(probe_batch.num_rows()))
         .collect::<Result<Vec<_>>>()?;
     let build_join_values = build_on
         .iter()
         .map(|c| {
-            Ok(c.evaluate(build_input_buffer)?
-                .into_array(build_input_buffer.num_rows()))
+            c.evaluate(build_input_buffer)?
+                .into_array(build_input_buffer.num_rows())
         })
         .collect::<Result<Vec<_>>>()?;
     hashes_buffer.clear();
