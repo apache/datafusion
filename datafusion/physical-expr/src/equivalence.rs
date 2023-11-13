@@ -84,7 +84,7 @@ impl EquivalenceClass {
         physical_exprs_contains(&self.inner, expr)
     }
 
-    /// Returns true if this equivalence class has any entries in common with other
+    /// Returns true if this equivalence class has any entries in common with `other`
     pub fn contains_any(&self, other: &Self) -> bool {
         self.inner.iter().any(|e| other.contains(e))
     }
