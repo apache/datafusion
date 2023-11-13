@@ -426,10 +426,11 @@ impl Interval {
     /// choose single values arbitrarily from each of the operands.
     pub fn add<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
+        let dt = get_result_type(&self.data_type(), &Operator::Plus, &rhs.data_type())?;
 
         Self::try_new(
-            add_bounds::<false>(&self.lower, &rhs.lower)?,
-            add_bounds::<true>(&self.upper, &rhs.upper)?,
+            add_bounds::<false>(&dt, &self.lower, &rhs.lower)?,
+            add_bounds::<true>(&dt, &self.upper, &rhs.upper)?,
         )
     }
 
@@ -440,10 +441,11 @@ impl Interval {
     /// each of the operands.
     pub fn sub<T: Borrow<Interval>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
+        let dt = get_result_type(&self.data_type(), &Operator::Minus, &rhs.data_type())?;
 
         Self::try_new(
-            sub_bounds::<false>(&self.lower, &rhs.upper)?,
-            sub_bounds::<true>(&self.upper, &rhs.lower)?,
+            sub_bounds::<false>(&dt, &self.lower, &rhs.upper)?,
+            sub_bounds::<true>(&dt, &self.upper, &rhs.lower)?,
         )
     }
 
@@ -454,6 +456,8 @@ impl Interval {
     /// one can choose single values arbitrarily from each of the operands.
     pub fn mul<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
+        let dt =
+            get_result_type(&self.data_type(), &Operator::Multiply, &rhs.data_type())?;
 
         let zero = ScalarValue::new_zero(&self.data_type())?;
         // We want 0 is approachable from both negative and positive sides.
@@ -464,13 +468,17 @@ impl Interval {
         ) {
             // Since the parameter of contains function is a singleton,
             // it is impossible to have an UNCERTAIN case.
-            (true, true) => mul_helper_multi_zero_inclusive(self, rhs),
+            (true, true) => mul_helper_multi_zero_inclusive(&dt, self, rhs),
             // only option is CERTAINLY_FALSE for rhs
-            (true, false) => mul_helper_single_zero_inclusive(self, rhs, &zero_point),
+            (true, false) => {
+                mul_helper_single_zero_inclusive(&dt, self, rhs, &zero_point)
+            }
             // only option is CERTAINLY_FALSE for lhs
-            (false, true) => mul_helper_single_zero_inclusive(rhs, self, &zero_point),
+            (false, true) => {
+                mul_helper_single_zero_inclusive(&dt, rhs, self, &zero_point)
+            }
             // only option is CERTAINLY_FALSE for both sides
-            (false, false) => mul_helper_zero_exclusive(self, rhs, &zero_point),
+            (false, false) => mul_helper_zero_exclusive(&dt, self, rhs, &zero_point),
         }
     }
 
@@ -484,6 +492,7 @@ impl Interval {
     ///           0 should result in an interval set, not the universal set.
     pub fn div<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
+        let dt = get_result_type(&self.data_type(), &Operator::Divide, &rhs.data_type())?;
 
         let zero = ScalarValue::new_zero(&self.data_type())?;
         // We want 0 is approachable from both negative and positive sides.
@@ -495,8 +504,7 @@ impl Interval {
         if rhs.contains(&zero_point)? == Self::CERTAINLY_TRUE
             || (rhs.lower.eq(&zero) && rhs.upper.eq(&zero))
         {
-            get_result_type(&self.data_type(), &Operator::Divide, &rhs.data_type())
-                .and_then(|data_type| Self::make_unbounded(&data_type))
+            Self::make_unbounded(&dt)
         }
         // 1) Since the parameter of contains function is a singleton,
         // it is impossible to have an UNCERTAIN case.
@@ -504,10 +512,10 @@ impl Interval {
         // and positive directions, so rhs can only contain zero as
         // edge point of the bound.
         else if self.contains(&zero_point)? == Self::CERTAINLY_TRUE {
-            div_helper_lhs_zero_inclusive(self, rhs, &zero_point)
+            div_helper_lhs_zero_inclusive(&dt, self, rhs, &zero_point)
         } else {
             // Only option is CERTAINLY_FALSE for rhs.
-            div_helper_zero_exclusive(self, rhs, &zero_point)
+            div_helper_zero_exclusive(&dt, self, rhs, &zero_point)
         }
     }
 
@@ -609,11 +617,10 @@ pub fn apply_operator(op: &Operator, lhs: &Interval, rhs: &Interval) -> Result<I
 // Cannot be used other than add method of intervals since
 // it may return non-standardized interval bounds.
 fn add_bounds<const UPPER: bool>(
+    dt: &DataType,
     lhs: &ScalarValue,
     rhs: &ScalarValue,
 ) -> Result<ScalarValue> {
-    let dt = get_result_type(&lhs.data_type(), &Operator::Plus, &rhs.data_type())?;
-
     if lhs.is_null() || rhs.is_null() {
         return ScalarValue::try_from(dt);
     }
@@ -624,17 +631,16 @@ fn add_bounds<const UPPER: bool>(
         }
         _ => lhs.add_checked(rhs),
     }
-    .or_else(|_| handle_overflow::<UPPER>(lhs, rhs, Operator::Plus, dt))
+    .or_else(|_| handle_overflow::<UPPER>(dt, Operator::Plus, lhs, rhs))
 }
 
 // Cannot be used other than add method of intervals since
 // it may return non-standardized interval bounds.
 fn sub_bounds<const UPPER: bool>(
+    dt: &DataType,
     lhs: &ScalarValue,
     rhs: &ScalarValue,
 ) -> Result<ScalarValue> {
-    let dt = get_result_type(&lhs.data_type(), &Operator::Minus, &rhs.data_type())?;
-
     if lhs.is_null() || rhs.is_null() {
         return ScalarValue::try_from(dt);
     }
@@ -647,17 +653,16 @@ fn sub_bounds<const UPPER: bool>(
     }
     // We cannot represent the overflow cases.
     // Set the bound as unbounded.
-    .or_else(|_| handle_overflow::<UPPER>(lhs, rhs, Operator::Minus, dt))
+    .or_else(|_| handle_overflow::<UPPER>(dt, Operator::Minus, lhs, rhs))
 }
 
 // Cannot be used other than add method of intervals since
 // it may return non-standardized interval bounds.
 fn mul_bounds<const UPPER: bool>(
+    dt: &DataType,
     lhs: &ScalarValue,
     rhs: &ScalarValue,
 ) -> Result<ScalarValue> {
-    let dt = get_result_type(&lhs.data_type(), &Operator::Multiply, &rhs.data_type())?;
-
     if lhs.is_null() || rhs.is_null() {
         return ScalarValue::try_from(dt);
     }
@@ -670,17 +675,17 @@ fn mul_bounds<const UPPER: bool>(
     }
     // We cannot represent the overflow cases.
     // Set the bound as unbounded.
-    .or_else(|_| handle_overflow::<UPPER>(lhs, rhs, Operator::Multiply, dt))
+    .or_else(|_| handle_overflow::<UPPER>(dt, Operator::Multiply, lhs, rhs))
 }
 
 // Cannot be used other than add method of intervals since
 // it may return non-standardized interval bounds.
 fn div_bounds<const UPPER: bool>(
+    dt: &DataType,
     lhs: &ScalarValue,
     rhs: &ScalarValue,
 ) -> Result<ScalarValue> {
-    let dt = get_result_type(&lhs.data_type(), &Operator::Divide, &rhs.data_type())?;
-    let zero = ScalarValue::new_zero(&dt)?;
+    let zero = ScalarValue::new_zero(dt)?;
 
     if lhs.is_null() || rhs.eq(&zero) {
         return ScalarValue::try_from(dt);
@@ -696,7 +701,7 @@ fn div_bounds<const UPPER: bool>(
     }
     // We cannot represent the overflow cases.
     // Set the bound as unbounded.
-    .or_else(|_| handle_overflow::<UPPER>(lhs, rhs, Operator::Divide, dt))
+    .or_else(|_| handle_overflow::<UPPER>(dt, Operator::Divide, lhs, rhs))
 }
 
 macro_rules! value_transition {
@@ -946,43 +951,51 @@ pub fn satisfy_comparison(
     }
 }
 
-/// Multiplies two intervals that both include zero.
+/// Multiplies two intervals that both contain zero.
 ///
-/// This function takes in two intervals (`lhs` and `rhs`) as arguments and returns their product.
-/// It is specifically designed to handle intervals that both contain zero within their range.
-/// Returns an error if the multiplication of bounds fails.
+/// This function takes in two intervals (`lhs` and `rhs`) as arguments and
+/// returns their product (whose data type is known to be `dt`). It is
+/// specifically designed to handle intervals that contain zero within their
+/// ranges. Returns an error if the multiplication of bounds fails.
+///
 /// ```text
 /// left:  <-------=====0=====------->
 ///
 /// right: <-------=====0=====------->
 /// ```
-fn mul_helper_multi_zero_inclusive(lhs: &Interval, rhs: &Interval) -> Result<Interval> {
+fn mul_helper_multi_zero_inclusive(
+    dt: &DataType,
+    lhs: &Interval,
+    rhs: &Interval,
+) -> Result<Interval> {
     if lhs.lower.is_null()
         || lhs.upper.is_null()
         || rhs.lower.is_null()
         || rhs.upper.is_null()
     {
-        return Interval::make_unbounded(&lhs.data_type());
+        return Interval::make_unbounded(dt);
     }
     // Since unbounded cases are handled above, we can safely
     // use the utility functions here to eliminate code duplication.
     let lower = min_of_bounds(
-        &mul_bounds::<false>(&lhs.lower, &rhs.upper)?,
-        &mul_bounds::<false>(&rhs.lower, &lhs.upper)?,
+        &mul_bounds::<false>(dt, &lhs.lower, &rhs.upper)?,
+        &mul_bounds::<false>(dt, &rhs.lower, &lhs.upper)?,
     );
     let upper = max_of_bounds(
-        &mul_bounds::<true>(&lhs.upper, &rhs.upper)?,
-        &mul_bounds::<true>(&lhs.lower, &rhs.lower)?,
+        &mul_bounds::<true>(dt, &lhs.upper, &rhs.upper)?,
+        &mul_bounds::<true>(dt, &lhs.lower, &rhs.lower)?,
     );
     Interval::try_new(lower, upper)
 }
 
-/// Multiplies two intervals where only left-hand side interval includes zero.
+/// Multiplies two intervals when only left-hand side interval contains zero.
 ///
-/// This function calculates the product of two intervals (`lhs` and `rhs`), when only lhs
-/// contains zero within its range. The interval not containing zero, i.e. rhs, can either be
-/// on the left side or right side of zero. Returns an error if the multiplication of bounds
-/// fails or if there is a problem with determining the result type.
+/// This function takes in two intervals (`lhs` and `rhs`) as arguments and
+/// returns their product (whose data type is known to be `dt`). This function
+/// serves as a subroutine that handles the specific case when only `lhs` contains
+/// zero within its range. The interval not containing zero, i.e. rhs, can lie
+/// on either side of zero. Returns an error if the multiplication of bounds fails.
+///
 /// ``` text
 /// left:  <-------=====0=====------->
 ///
@@ -995,6 +1008,7 @@ fn mul_helper_multi_zero_inclusive(lhs: &Interval, rhs: &Interval) -> Result<Int
 /// right: <------------0--======---->
 /// ``` text
 fn mul_helper_single_zero_inclusive(
+    dt: &DataType,
     lhs: &Interval,
     rhs: &Interval,
     zero_point: &Interval,
@@ -1002,23 +1016,25 @@ fn mul_helper_single_zero_inclusive(
     if rhs.upper <= zero_point.lower && !rhs.upper.is_null() {
         // <-------=====0=====------->
         // <--======----0------------>
-        let lower = mul_bounds::<false>(&lhs.upper, &rhs.lower)?;
-        let upper = mul_bounds::<true>(&lhs.lower, &rhs.lower)?;
+        let lower = mul_bounds::<false>(dt, &lhs.upper, &rhs.lower)?;
+        let upper = mul_bounds::<true>(dt, &lhs.lower, &rhs.lower)?;
         Interval::try_new(lower, upper)
     } else {
         // <-------=====0=====------->
         // <------------0--======---->
-        let lower = mul_bounds::<false>(&lhs.lower, &rhs.upper)?;
-        let upper = mul_bounds::<true>(&lhs.upper, &rhs.upper)?;
+        let lower = mul_bounds::<false>(dt, &lhs.lower, &rhs.upper)?;
+        let upper = mul_bounds::<true>(dt, &lhs.upper, &rhs.upper)?;
         Interval::try_new(lower, upper)
     }
 }
 
-/// Multiplies two intervals where neither of them includes zero.
+/// Multiplies two intervals when neither of them contains zero.
 ///
-/// This function calculates the product of two intervals (`lhs` and `rhs`), when none of
-/// the intervals includes zero. Returns an error if the multiplication of bounds
-/// fails or if there is a problem with determining the result type.
+/// This function takes in two intervals (`lhs` and `rhs`) as arguments and
+/// returns their product (whose data type is known to be `dt`). It is
+/// specifically designed to handle intervals that do not contain zero within
+/// their ranges. Returns an error if the multiplication of bounds fails.
+///
 /// ``` text
 /// left:  <--======----0------------>
 ///
@@ -1043,6 +1059,7 @@ fn mul_helper_single_zero_inclusive(
 /// right: <------------0--======---->
 /// ``` text
 fn mul_helper_zero_exclusive(
+    dt: &DataType,
     lhs: &Interval,
     rhs: &Interval,
     zero_point: &Interval,
@@ -1054,48 +1071,42 @@ fn mul_helper_zero_exclusive(
         (true, true) => {
             // <--======----0------------>
             // <--======----0------------>
-            let lower = mul_bounds::<false>(&lhs.upper, &rhs.upper)?;
-            let upper = mul_bounds::<true>(&lhs.lower, &rhs.lower)?;
-            Ok(Interval::try_new(lower, upper)?)
+            let lower = mul_bounds::<false>(dt, &lhs.upper, &rhs.upper)?;
+            let upper = mul_bounds::<true>(dt, &lhs.lower, &rhs.lower)?;
+            Interval::try_new(lower, upper)
         }
         (true, false) => {
             // <--======----0------------>
             // <------------0--======---->
-            mul_helper_zero_exclusive_opposite(lhs, rhs)
+            let lower = mul_bounds::<false>(dt, &lhs.lower, &rhs.upper)?;
+            let upper = mul_bounds::<true>(dt, &lhs.upper, &rhs.lower)?;
+            Interval::try_new(lower, upper)
         }
         (false, true) => {
             // <------------0--======---->
             // <--======----0------------>
-            mul_helper_zero_exclusive_opposite(rhs, lhs)
+            let lower = mul_bounds::<false>(dt, &rhs.lower, &lhs.upper)?;
+            let upper = mul_bounds::<true>(dt, &rhs.upper, &lhs.lower)?;
+            Interval::try_new(lower, upper)
         }
         (false, false) => {
             // <------------0--======---->
             // <------------0--======---->
-            let lower = mul_bounds::<false>(&lhs.lower, &rhs.lower)?;
-            let upper = mul_bounds::<true>(&lhs.upper, &rhs.upper)?;
-            Ok(Interval::try_new(lower, upper)?)
+            let lower = mul_bounds::<false>(dt, &lhs.lower, &rhs.lower)?;
+            let upper = mul_bounds::<true>(dt, &lhs.upper, &rhs.upper)?;
+            Interval::try_new(lower, upper)
         }
     }
 }
 
-/// ```text
-// <--======----0------------>
-// <------------0--======---->
-/// ```
-fn mul_helper_zero_exclusive_opposite(
-    lhs: &Interval,
-    rhs: &Interval,
-) -> Result<Interval> {
-    let lower = mul_bounds::<false>(&lhs.lower, &rhs.upper)?;
-    let upper = mul_bounds::<true>(&lhs.upper, &rhs.lower)?;
-    Interval::try_new(lower, upper)
-}
-
-/// Divides left-hand side interval by right-hand side interval when left-hand side includes zero.
+/// Divides the left-hand side interval by the right-hand side interval when
+/// the former contains zero.
 ///
-/// This function calculates the divison of two intervals (`lhs` and `rhs`), when lhs of
-/// the intervals includes zero. Returns an error if the division of bounds fails or
-/// if there is a problem with determining the result type.
+/// This function takes in two intervals (`lhs` and `rhs`) as arguments and
+/// returns their quotient (whose data type is known to be `dt`). This function
+/// serves as a subroutine that handles the specific case when only `lhs` contains
+/// zero within its range. Returns an error if the division of bounds fails.
+///
 /// ``` text
 /// left:  <-------=====0=====------->
 ///
@@ -1108,6 +1119,7 @@ fn mul_helper_zero_exclusive_opposite(
 /// right: <------------0--======---->
 /// ```
 fn div_helper_lhs_zero_inclusive(
+    dt: &DataType,
     lhs: &Interval,
     rhs: &Interval,
     zero_point: &Interval,
@@ -1115,23 +1127,26 @@ fn div_helper_lhs_zero_inclusive(
     if rhs.upper <= zero_point.lower && !rhs.upper.is_null() {
         // <-------=====0=====------->
         // <--======----0------------>
-        let lower = div_bounds::<false>(&lhs.upper, &rhs.upper)?;
-        let upper = div_bounds::<true>(&lhs.lower, &rhs.upper)?;
+        let lower = div_bounds::<false>(dt, &lhs.upper, &rhs.upper)?;
+        let upper = div_bounds::<true>(dt, &lhs.lower, &rhs.upper)?;
         Interval::try_new(lower, upper)
     } else {
         // <-------=====0=====------->
         // <------------0--======---->
-        let lower = div_bounds::<false>(&lhs.lower, &rhs.lower)?;
-        let upper = div_bounds::<true>(&lhs.upper, &rhs.lower)?;
+        let lower = div_bounds::<false>(dt, &lhs.lower, &rhs.lower)?;
+        let upper = div_bounds::<true>(dt, &lhs.upper, &rhs.lower)?;
         Interval::try_new(lower, upper)
     }
 }
 
-/// Divides left-hand side interval by right-hand side interval when left-hand side includes zero.
+/// Divides the left-hand side interval by the right-hand side interval when
+/// neither interval contains zero.
 ///
-/// This function calculates the divison of two intervals (`lhs` and `rhs`), when lhs of
-/// the intervals includes zero. Returns an error if the division of bounds fails or
-/// if there is a problem with determining the result type.
+/// This function takes in two intervals (`lhs` and `rhs`) as arguments and
+/// returns their quotient (whose data type is known to be `dt`). It is
+/// specifically designed to handle intervals that do not contain zero within
+/// their ranges. Returns an error if the division of bounds fails.
+///
 /// ``` text
 /// left:  <--======----0------------>
 ///
@@ -1156,6 +1171,7 @@ fn div_helper_lhs_zero_inclusive(
 /// right: <------------0--======---->
 /// ``` text
 fn div_helper_zero_exclusive(
+    dt: &DataType,
     lhs: &Interval,
     rhs: &Interval,
     zero_point: &Interval,
@@ -1167,30 +1183,30 @@ fn div_helper_zero_exclusive(
         (true, true) => {
             // <--======----0------------>
             // <--======----0------------>
-            let lower = div_bounds::<false>(&lhs.upper, &rhs.lower)?;
-            let upper = div_bounds::<true>(&lhs.lower, &rhs.upper)?;
-            Ok(Interval::try_new(lower, upper)?)
+            let lower = div_bounds::<false>(dt, &lhs.upper, &rhs.lower)?;
+            let upper = div_bounds::<true>(dt, &lhs.lower, &rhs.upper)?;
+            Interval::try_new(lower, upper)
         }
         (true, false) => {
             // <--======----0------------>
             // <------------0--======---->
-            let lower = div_bounds::<false>(&lhs.lower, &rhs.lower)?;
-            let upper = div_bounds::<true>(&lhs.upper, &rhs.upper)?;
-            Ok(Interval::try_new(lower, upper)?)
+            let lower = div_bounds::<false>(dt, &lhs.lower, &rhs.lower)?;
+            let upper = div_bounds::<true>(dt, &lhs.upper, &rhs.upper)?;
+            Interval::try_new(lower, upper)
         }
         (false, true) => {
             // <------------0--======---->
             // <--======----0------------>
-            let lower = div_bounds::<false>(&lhs.upper, &rhs.upper)?;
-            let upper = div_bounds::<true>(&lhs.lower, &rhs.lower)?;
-            Ok(Interval::try_new(lower, upper)?)
+            let lower = div_bounds::<false>(dt, &lhs.upper, &rhs.upper)?;
+            let upper = div_bounds::<true>(dt, &lhs.lower, &rhs.lower)?;
+            Interval::try_new(lower, upper)
         }
         (false, false) => {
             // <------------0--======---->
             // <------------0--======---->
-            let lower = div_bounds::<false>(&lhs.lower, &rhs.upper)?;
-            let upper = div_bounds::<true>(&lhs.upper, &rhs.lower)?;
-            Ok(Interval::try_new(lower, upper)?)
+            let lower = div_bounds::<false>(dt, &lhs.lower, &rhs.upper)?;
+            let upper = div_bounds::<true>(dt, &lhs.upper, &rhs.lower)?;
+            Interval::try_new(lower, upper)
         }
     }
 }
@@ -1229,12 +1245,12 @@ fn cast_scalar_value(
 /// TODO: When ScalarValue supports such methods like ScalarValue::max(data_type) and
 /// ScalarValue::min(data_type), we can even narrow more.
 fn handle_overflow<const UPPER: bool>(
+    dt: &DataType,
+    op: Operator,
     lhs: &ScalarValue,
     rhs: &ScalarValue,
-    op: Operator,
-    dt: DataType,
 ) -> Result<ScalarValue> {
-    let zero = ScalarValue::new_zero(&dt)?;
+    let zero = ScalarValue::new_zero(dt)?;
     let positive_sign = match op {
         Operator::Multiply | Operator::Divide => {
             lhs.lt(&zero) && rhs.lt(&zero) || lhs.gt(&zero) && rhs.gt(&zero)
