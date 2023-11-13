@@ -468,14 +468,17 @@ insert into table_without_values(name, id) values(4, 'zoo');
 statement error Error during planning: Column count doesn't match insert query!
 insert into table_without_values(id) values(4, 'zoo');
 
-statement error Error during planning: Inserting query must have the same schema with the table.
+query IT
 insert into table_without_values(id) values(4);
+----
+1
 
 query IT rowsort
 select * from table_without_values;
 ----
 1 foo
 2 bar
+4 NULL
 
 statement ok
 drop table table_without_values;
@@ -498,6 +501,14 @@ insert into table_without_values values(2, NULL);
 ----
 1
 
+query II
+insert into table_without_values(field1) values(3);
+----
+1
+
+statement error Execution error: Invalid batch column at '0' has null but schema specifies non-nullable
+insert into table_without_values(field2) values(300);
+
 statement error Execution error: Invalid batch column at '0' has null but schema specifies non-nullable
 insert into table_without_values values(NULL, 300);
 
@@ -509,6 +520,7 @@ select * from table_without_values;
 ----
 1 100
 2 NULL
+3 NULL
 
 statement ok
 drop table table_without_values;
