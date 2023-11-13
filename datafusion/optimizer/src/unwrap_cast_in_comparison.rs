@@ -1089,8 +1089,12 @@ mod tests {
                 // Verify that calling the arrow
                 // cast kernel yields the same results
                 // input array
-                let literal_array = literal.to_array_of_size(1);
-                let expected_array = expected_value.to_array_of_size(1);
+                let literal_array = literal
+                    .to_array_of_size(1)
+                    .expect("Failed to convert to array of size");
+                let expected_array = expected_value
+                    .to_array_of_size(1)
+                    .expect("Failed to convert to array of size");
                 let cast_array = cast_with_options(
                     &literal_array,
                     &target_type,

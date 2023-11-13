@@ -364,9 +364,8 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         Expr::Sort { .. } => {
             internal_err!("Create physical name does not support sort expression")
         }
-        Expr::Wildcard => internal_err!("Create physical name does not support wildcard"),
-        Expr::QualifiedWildcard { .. } => {
-            internal_err!("Create physical name does not support qualified wildcard")
+        Expr::Wildcard { .. } => {
+            internal_err!("Create physical name does not support wildcard")
         }
         Expr::Placeholder(_) => {
             internal_err!("Create physical name does not support placeholder")

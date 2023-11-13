@@ -28,7 +28,7 @@ use crate::Operator;
 use crate::{aggregate_function, ExprSchemable};
 use arrow::datatypes::DataType;
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{internal_err, DFSchema};
+use datafusion_common::{internal_err, DFSchema, OwnedTableReference};
 use datafusion_common::{plan_err, Column, DataFusionError, Result, ScalarValue};
 use std::collections::HashSet;
 use std::fmt;
@@ -166,16 +166,12 @@ pub enum Expr {
     InSubquery(InSubquery),
     /// Scalar subquery
     ScalarSubquery(Subquery),
-    /// Represents a reference to all available fields.
+    /// Represents a reference to all available fields in a specific schema,
+    /// with an optional (schema) qualifier.
     ///
     /// This expr has to be resolved to a list of columns before translating logical
     /// plan into physical plan.
-    Wildcard,
-    /// Represents a reference to all available fields in a specific schema.
-    ///    
-    /// This expr has to be resolved to a list of columns before translating logical
-    /// plan into physical plan.
-    QualifiedWildcard { qualifier: String },
+    Wildcard { qualifier: Option<String> },
     /// List of grouping set expressions. Only valid in the context of an aggregate
     /// GROUP BY expression list
     GroupingSet(GroupingSet),
@@ -191,13 +187,20 @@ pub enum Expr {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Alias {
     pub expr: Box<Expr>,
+    pub relation: Option<OwnedTableReference>,
     pub name: String,
 }
 
 impl Alias {
-    pub fn new(expr: Expr, name: impl Into<String>) -> Self {
+    /// Create an alias with an optional schema/field qualifier.
+    pub fn new(
+        expr: Expr,
+        relation: Option<impl Into<OwnedTableReference>>,
+        name: impl Into<String>,
+    ) -> Self {
         Self {
             expr: Box::new(expr),
+            relation: relation.map(|r| r.into()),
             name: name.into(),
         }
     }
@@ -729,7 +732,6 @@ impl Expr {
             Expr::Negative(..) => "Negative",
             Expr::Not(..) => "Not",
             Expr::Placeholder(_) => "Placeholder",
-            Expr::QualifiedWildcard { .. } => "QualifiedWildcard",
             Expr::ScalarFunction(..) => "ScalarFunction",
             Expr::ScalarSubquery { .. } => "ScalarSubquery",
             Expr::ScalarUDF(..) => "ScalarUDF",
@@ -737,7 +739,7 @@ impl Expr {
             Expr::Sort { .. } => "Sort",
             Expr::TryCast { .. } => "TryCast",
             Expr::WindowFunction { .. } => "WindowFunction",
-            Expr::Wildcard => "Wildcard",
+            Expr::Wildcard { .. } => "Wildcard",
         }
     }
 
@@ -849,7 +851,27 @@ impl Expr {
                 asc,
                 nulls_first,
             }) => Expr::Sort(Sort::new(Box::new(expr.alias(name)), asc, nulls_first)),
-            _ => Expr::Alias(Alias::new(self, name.into())),
+            _ => Expr::Alias(Alias::new(self, None::<&str>, name.into())),
+        }
+    }
+
+    /// Return `self AS name` alias expression with a specific qualifier
+    pub fn alias_qualified(
+        self,
+        relation: Option<impl Into<OwnedTableReference>>,
+        name: impl Into<String>,
+    ) -> Expr {
+        match self {
+            Expr::Sort(Sort {
+                expr,
+                asc,
+                nulls_first,
+            }) => Expr::Sort(Sort::new(
+                Box::new(expr.alias_qualified(relation, name)),
+                asc,
+                nulls_first,
+            )),
+            _ => Expr::Alias(Alias::new(self, relation, name.into())),
         }
     }
 
@@ -1292,8 +1314,10 @@ impl fmt::Display for Expr {
                     write!(f, "{expr} IN ([{}])", expr_vec_fmt!(list))
                 }
             }
-            Expr::Wildcard => write!(f, "*"),
-            Expr::QualifiedWildcard { qualifier } => write!(f, "{qualifier}.*"),
+            Expr::Wildcard { qualifier } => match qualifier {
+                Some(qualifier) => write!(f, "{qualifier}.*"),
+                None => write!(f, "*"),
+            },
             Expr::GetIndexedField(GetIndexedField { field, expr }) => match field {
                 GetFieldAccess::NamedStructField { name } => {
                     write!(f, "({expr})[{name}]")
@@ -1613,10 +1637,12 @@ fn create_name(e: &Expr) -> Result<String> {
         Expr::Sort { .. } => {
             internal_err!("Create name does not support sort expression")
         }
-        Expr::Wildcard => Ok("*".to_string()),
-        Expr::QualifiedWildcard { .. } => {
-            internal_err!("Create name does not support qualified wildcard")
-        }
+        Expr::Wildcard { qualifier } => match qualifier {
+            Some(qualifier) => internal_err!(
+                "Create name does not support qualified wildcard, got {qualifier}"
+            ),
+            None => Ok("*".to_string()),
+        },
         Expr::Placeholder(Placeholder { id, .. }) => Ok((*id).to_string()),
     }
 }
