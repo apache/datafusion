@@ -58,7 +58,7 @@ impl EquivalenceClass {
     }
 
     // Create a new equivalence class from a pre-existing `Vec`
-    pub fn new_from_vec(inner: Vec<Arc<dyn PhysicalExpr>>) -> Self {
+    pub fn new(inner: Vec<Arc<dyn PhysicalExpr>>) -> Self {
         Self { exprs: inner }
     }
 
@@ -273,10 +273,8 @@ impl EquivalenceGroup {
             (None, None) => {
                 // None of the expressions is among existing classes.
                 // Create a new equivalence class and extend the group.
-                self.classes.push(EquivalenceClass::new_from_vec(vec![
-                    left.clone(),
-                    right.clone(),
-                ]));
+                self.classes
+                    .push(EquivalenceClass::new(vec![left.clone(), right.clone()]));
             }
         }
     }
@@ -475,7 +473,7 @@ impl EquivalenceGroup {
                 .iter()
                 .filter_map(|expr| self.project_expr(mapping, expr))
                 .collect::<Vec<_>>();
-            (new_class.len() > 1).then_some(EquivalenceClass::new_from_vec(new_class))
+            (new_class.len() > 1).then_some(EquivalenceClass::new(new_class))
         });
         // TODO: Convert the algorithm below to a version that uses `HashMap`.
         //       once `Arc<dyn PhysicalExpr>` can be stored in `HashMap`.
@@ -498,7 +496,7 @@ impl EquivalenceGroup {
         let new_classes = new_classes
             .into_iter()
             .filter_map(|(_, values)| (values.len() > 1).then_some(values))
-            .map(EquivalenceClass::new_from_vec);
+            .map(EquivalenceClass::new);
 
         let classes = projected_classes.chain(new_classes).collect();
         Self::new(classes)
@@ -1945,12 +1943,12 @@ mod tests {
             let entries = entries
                 .into_iter()
                 .map(|entry| entry.into_iter().map(lit).collect::<Vec<_>>())
-                .map(EquivalenceClass::new_from_vec)
+                .map(EquivalenceClass::new)
                 .collect::<Vec<_>>();
             let expected = expected
                 .into_iter()
                 .map(|entry| entry.into_iter().map(lit).collect::<Vec<_>>())
-                .map(EquivalenceClass::new_from_vec)
+                .map(EquivalenceClass::new)
                 .collect::<Vec<_>>();
             let mut eq_groups = EquivalenceGroup::new(entries.clone());
             eq_groups.bridge_classes();
@@ -1970,16 +1968,16 @@ mod tests {
     #[test]
     fn test_remove_redundant_entries_eq_group() -> Result<()> {
         let entries = vec![
-            EquivalenceClass::new_from_vec(vec![lit(1), lit(1), lit(2)]),
+            EquivalenceClass::new(vec![lit(1), lit(1), lit(2)]),
             // This group is meaningless should be removed
-            EquivalenceClass::new_from_vec(vec![lit(3), lit(3)]),
-            EquivalenceClass::new_from_vec(vec![lit(4), lit(5), lit(6)]),
+            EquivalenceClass::new(vec![lit(3), lit(3)]),
+            EquivalenceClass::new(vec![lit(4), lit(5), lit(6)]),
         ];
         // Given equivalences classes are not in succinct form.
         // Expected form is the most plain representation that is functionally same.
         let expected = vec![
-            EquivalenceClass::new_from_vec(vec![lit(1), lit(2)]),
-            EquivalenceClass::new_from_vec(vec![lit(4), lit(5), lit(6)]),
+            EquivalenceClass::new(vec![lit(1), lit(2)]),
+            EquivalenceClass::new(vec![lit(4), lit(5), lit(6)]),
         ];
         let mut eq_groups = EquivalenceGroup::new(entries);
         eq_groups.remove_redundant_entries();
@@ -2732,11 +2730,9 @@ mod tests {
             Arc::new(Literal::new(ScalarValue::Int32(Some(1)))) as Arc<dyn PhysicalExpr>;
         let col_b_expr = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
 
-        let cls1 =
-            EquivalenceClass::new_from_vec(vec![lit_true.clone(), lit_false.clone()]);
-        let cls2 =
-            EquivalenceClass::new_from_vec(vec![lit_true.clone(), col_b_expr.clone()]);
-        let cls3 = EquivalenceClass::new_from_vec(vec![lit2.clone(), lit1.clone()]);
+        let cls1 = EquivalenceClass::new(vec![lit_true.clone(), lit_false.clone()]);
+        let cls2 = EquivalenceClass::new(vec![lit_true.clone(), col_b_expr.clone()]);
+        let cls3 = EquivalenceClass::new(vec![lit2.clone(), lit1.clone()]);
 
         // lit_true is common
         assert!(cls1.contains_any(&cls2));
