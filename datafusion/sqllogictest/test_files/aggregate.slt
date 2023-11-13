@@ -3002,15 +3002,10 @@ SELECT STRING_AGG('a', ',')
 ----
 a
 
-# TODO: deal with NULL
-statement error
-SELECT STRING_AGG(NULL,',')
-
-statement error
-STRING_AGG('a', NULL)
-
-statement error
-STRING_AGG(NULL,NULL)
+query TTTT
+SELECT STRING_AGG('a',','), STRING_AGG('a', NULL), STRING_AGG(NULL, ','), STRING_AGG(NULL, NULL)
+----
+a a NULL NULL
 
 statement ok
 CREATE TABLE strings(g INTEGER, x VARCHAR, y VARCHAR)
@@ -3031,8 +3026,7 @@ SELECT g, STRING_AGG(x,'|') FROM strings GROUP BY g ORDER BY g
 query T
 SELECT STRING_AGG(x,',') FROM strings WHERE g > 100
 ----
-(empty)
-
+NULL
 
 query T
 WITH my_data as (
@@ -3044,7 +3038,6 @@ SELECT string_agg(my_column,', ') as my_string_agg
 FROM my_data
 ----
 text1, text1, text1
-
 
 query T
 WITH my_data as (

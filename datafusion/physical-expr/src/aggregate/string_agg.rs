@@ -73,23 +73,36 @@ impl AggregateExpr for StringAgg {
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         if let Some(delimiter) = self.delimiter.as_any().downcast_ref::<Literal>() {
-            if let ScalarValue::Utf8(Some(delimiter)) = delimiter.value() {
-                match self.data_type {
-                    DataType::Utf8 => {
-                        return Ok(Box::new(StringAggAccumulator::<i32>::new(delimiter)));
-                    }
-                    DataType::LargeUtf8 => {
-                        return Ok(Box::new(StringAggAccumulator::<i64>::new(delimiter)));
-                    }
-                    _ => {
-                        return not_impl_err!(
-                            "StringAgg separator only support literal string"
-                        )
-                    }
-                };
+            match (self.data_type.clone(), delimiter.value()) {
+                (DataType::Utf8, ScalarValue::Utf8(Some(delimiter)))
+                | (DataType::Utf8, ScalarValue::LargeUtf8(Some(delimiter))) => {
+                    return Ok(Box::new(StringAggAccumulator::<i32>::new(delimiter)));
+                }
+                (DataType::LargeUtf8, ScalarValue::Utf8(Some(delimiter)))
+                | (DataType::LargeUtf8, ScalarValue::LargeUtf8(Some(delimiter))) => {
+                    return Ok(Box::new(StringAggAccumulator::<i64>::new(delimiter)));
+                }
+                (DataType::Utf8, ScalarValue::Null) => {
+                    return Ok(Box::new(StringAggAccumulator::<i32>::new("")))
+                }
+                (DataType::LargeUtf8, ScalarValue::Null) => {
+                    return Ok(Box::new(StringAggAccumulator::<i64>::new("")))
+                }
+                (_, _) => {
+                    return not_impl_err!(
+                        "StringAgg not support for {}: {} with delimiter {}",
+                        self.name,
+                        self.data_type,
+                        delimiter.value()
+                    )
+                }
             }
         }
-        not_impl_err!("StringAgg separator only support literal string")
+        not_impl_err!(
+            "StringAgg not support for {}: {} with no Literal delimiter",
+            self.name,
+            self.data_type
+        )
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
@@ -125,7 +138,7 @@ impl PartialEq<dyn Any> for StringAgg {
 
 #[derive(Debug)]
 pub(crate) struct StringAggAccumulator<T: OffsetSizeTrait> {
-    values: String,
+    values: Option<String>,
     sep: String,
     phantom: PhantomData<T>,
 }
@@ -133,7 +146,7 @@ pub(crate) struct StringAggAccumulator<T: OffsetSizeTrait> {
 impl<T: OffsetSizeTrait> StringAggAccumulator<T> {
     pub fn new(sep: &str) -> Self {
         Self {
-            values: String::new(),
+            values: None,
             sep: sep.to_string(),
             phantom: PhantomData,
         }
@@ -146,11 +159,14 @@ impl<T: OffsetSizeTrait> Accumulator for StringAggAccumulator<T> {
             .iter()
             .filter_map(|v| v.as_ref().map(ToString::to_string))
             .collect();
-        if self.values.len() > 0 {
-            self.values.push_str(self.sep.as_str());
+        let s = string_array.join(self.sep.as_str());
+        if s.len() > 0 {
+            let v = self.values.get_or_insert("".to_string());
+            if v.len() > 0 {
+                v.push_str(self.sep.as_str());
+            }
+            v.push_str(s.as_str());
         }
-        self.values
-            .push_str(string_array.join(self.sep.as_str()).as_str());
         Ok(())
     }
 
@@ -164,7 +180,7 @@ impl<T: OffsetSizeTrait> Accumulator for StringAggAccumulator<T> {
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
-        Ok(ScalarValue::LargeUtf8(Some(self.values.clone())))
+        Ok(ScalarValue::LargeUtf8(self.values.clone()))
     }
 
     fn size(&self) -> usize {

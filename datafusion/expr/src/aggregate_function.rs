@@ -303,8 +303,7 @@ impl AggregateFunction {
             AggregateFunction::FirstValue | AggregateFunction::LastValue => {
                 Ok(coerced_data_types[0].clone())
             }
-            // TODO
-            AggregateFunction::StringAgg => Ok(DataType::Utf8),
+            AggregateFunction::StringAgg => Ok(DataType::LargeUtf8),
         }
     }
 }
