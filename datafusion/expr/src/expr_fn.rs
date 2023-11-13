@@ -1177,7 +1177,8 @@ mod test {
         test_nary_scalar_expr!(MakeArray, array, input);
 
         test_unary_scalar_expr!(ArrowTypeof, arrow_typeof);
-        test_nary_scalar_expr!(OverLay, overlay, string, characters, from, len);
+        test_nary_scalar_expr!(OverLay, overlay, string, characters, position, len);
+        test_nary_scalar_expr!(OverLay, overlay, string, characters, position);
     }
 
     #[test]
