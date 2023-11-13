@@ -73,22 +73,15 @@ impl AggregateExpr for StringAgg {
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         if let Some(delimiter) = self.delimiter.as_any().downcast_ref::<Literal>() {
-            match (self.data_type.clone(), delimiter.value()) {
-                (DataType::Utf8, ScalarValue::Utf8(Some(delimiter)))
-                | (DataType::Utf8, ScalarValue::LargeUtf8(Some(delimiter))) => {
-                    return Ok(Box::new(StringAggAccumulator::<i32>::new(delimiter)));
-                }
-                (DataType::LargeUtf8, ScalarValue::Utf8(Some(delimiter)))
-                | (DataType::LargeUtf8, ScalarValue::LargeUtf8(Some(delimiter))) => {
+            match delimiter.value() {
+                ScalarValue::Utf8(Some(delimiter))
+                | ScalarValue::LargeUtf8(Some(delimiter)) => {
                     return Ok(Box::new(StringAggAccumulator::<i64>::new(delimiter)));
                 }
-                (DataType::Utf8, ScalarValue::Null) => {
-                    return Ok(Box::new(StringAggAccumulator::<i32>::new("")))
+                ScalarValue::Null => {
+                    return Ok(Box::new(StringAggAccumulator::<i64>::new("")));
                 }
-                (DataType::LargeUtf8, ScalarValue::Null) => {
-                    return Ok(Box::new(StringAggAccumulator::<i64>::new("")))
-                }
-                (_, _) => {
+                _ => {
                     return not_impl_err!(
                         "StringAgg not support for {}: {} with delimiter {}",
                         self.name,
@@ -160,9 +153,9 @@ impl<T: OffsetSizeTrait> Accumulator for StringAggAccumulator<T> {
             .filter_map(|v| v.as_ref().map(ToString::to_string))
             .collect();
         let s = string_array.join(self.sep.as_str());
-        if s.len() > 0 {
+        if !s.is_empty() {
             let v = self.values.get_or_insert("".to_string());
-            if v.len() > 0 {
+            if !v.is_empty() {
                 v.push_str(self.sep.as_str());
             }
             v.push_str(s.as_str());
@@ -191,57 +184,76 @@ impl<T: OffsetSizeTrait> Accumulator for StringAggAccumulator<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::col;
     use crate::expressions::tests::aggregate;
+    use crate::expressions::{col, create_aggregate_expr, try_cast};
     use arrow::array::ArrayRef;
     use arrow::datatypes::*;
     use arrow::record_batch::RecordBatch;
     use arrow_array::LargeStringArray;
     use arrow_array::StringArray;
-    use datafusion_common::DataFusionError;
-    use datafusion_common::Result;
+    use datafusion_expr::type_coercion::aggregates::coerce_types;
+    use datafusion_expr::AggregateFunction;
 
-    macro_rules! test_op {
-        ($ARRAY:expr, $DATATYPE:expr, $OP:ident, $EXPECTED:expr, $EXPECTED_DATATYPE:expr, $SEP:expr) => {{
-            let schema = Schema::new(vec![Field::new("a", $DATATYPE, true)]);
+    fn assert_string_aggregate(
+        array: ArrayRef,
+        function: AggregateFunction,
+        distinct: bool,
+        expected: ScalarValue,
+        delimiter: String,
+    ) {
+        let data_type = array.data_type();
+        let sig = function.signature();
+        let coerced =
+            coerce_types(&function, &[data_type.clone(), DataType::Utf8], &sig).unwrap();
 
-            let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![$ARRAY])?;
+        let input_schema = Schema::new(vec![Field::new("a", data_type.clone(), true)]);
+        let batch =
+            RecordBatch::try_new(Arc::new(input_schema.clone()), vec![array]).unwrap();
 
-            let agg = Arc::new(<$OP>::new(
-                col("a", &schema)?,
-                $SEP,
-                "str".to_string(),
-                $EXPECTED_DATATYPE,
-            ));
-            let actual = aggregate(&batch, agg)?;
-            let expected = ScalarValue::from($EXPECTED);
-
-            assert_eq!(expected, actual);
-
-            Ok(()) as Result<(), DataFusionError>
-        }};
-    }
-
-    #[test]
-    fn string_agg_utf8() -> Result<()> {
-        let a: ArrayRef = Arc::new(StringArray::from(vec!["h", "e", "l", "l", "o"]));
-        let list = ScalarValue::LargeUtf8(Some("h,e,l,l,o".to_owned()));
-        let sep = Arc::new(Literal::new(ScalarValue::Utf8(Some(",".to_owned()))));
-        test_op!(a, DataType::Utf8, StringAgg, list, DataType::Utf8, sep)
-    }
-
-    #[test]
-    fn string_agg_largeutf8() -> Result<()> {
-        let a: ArrayRef = Arc::new(LargeStringArray::from(vec!["h", "e", "l", "l", "o"]));
-        let list = ScalarValue::LargeUtf8(Some("h,e,l,l,o".to_owned()));
-        let sep = Arc::new(Literal::new(ScalarValue::Utf8(Some(",".to_owned()))));
-        test_op!(
-            a,
-            DataType::LargeUtf8,
-            StringAgg,
-            list,
-            DataType::LargeUtf8,
-            sep
+        let input = try_cast(
+            col("a", &input_schema).unwrap(),
+            &input_schema,
+            coerced[0].clone(),
         )
+        .unwrap();
+
+        let delimiter = Arc::new(Literal::new(ScalarValue::Utf8(Some(delimiter))));
+        let schema = Schema::new(vec![Field::new("a", coerced[0].clone(), true)]);
+        let agg = create_aggregate_expr(
+            &function,
+            distinct,
+            &[input, delimiter],
+            &[],
+            &schema,
+            "agg",
+        )
+        .unwrap();
+
+        let result = aggregate(&batch, agg).unwrap();
+        assert_eq!(expected, result);
+    }
+
+    #[test]
+    fn string_agg_utf8() {
+        let a: ArrayRef = Arc::new(StringArray::from(vec!["h", "e", "l", "l", "o"]));
+        assert_string_aggregate(
+            a,
+            AggregateFunction::StringAgg,
+            false,
+            ScalarValue::LargeUtf8(Some("h,e,l,l,o".to_owned())),
+            ",".to_owned(),
+        );
+    }
+
+    #[test]
+    fn string_agg_largeutf8() {
+        let a: ArrayRef = Arc::new(LargeStringArray::from(vec!["h", "e", "l", "l", "o"]));
+        assert_string_aggregate(
+            a,
+            AggregateFunction::StringAgg,
+            false,
+            ScalarValue::LargeUtf8(Some("h|e|l|l|o".to_owned())),
+            "|".to_owned(),
+        );
     }
 }
