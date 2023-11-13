@@ -77,8 +77,7 @@ impl TreeNode for Expr {
             | Expr::Literal(_)
             | Expr::Exists { .. }
             | Expr::ScalarSubquery(_)
-            | Expr::Wildcard
-            | Expr::QualifiedWildcard { .. }
+            | Expr::Wildcard {..}
             | Expr::Placeholder (_) => vec![],
             Expr::BinaryExpr(BinaryExpr { left, right, .. }) => {
                 vec![left.as_ref().clone(), right.as_ref().clone()]
@@ -350,10 +349,7 @@ impl TreeNode for Expr {
                 transform_vec(list, &mut transform)?,
                 negated,
             )),
-            Expr::Wildcard => Expr::Wildcard,
-            Expr::QualifiedWildcard { qualifier } => {
-                Expr::QualifiedWildcard { qualifier }
-            }
+            Expr::Wildcard { qualifier } => Expr::Wildcard { qualifier },
             Expr::GetIndexedField(GetIndexedField { expr, field }) => {
                 Expr::GetIndexedField(GetIndexedField::new(
                     transform_boxed(expr, &mut transform)?,

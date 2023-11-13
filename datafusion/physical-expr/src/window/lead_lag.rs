@@ -139,6 +139,7 @@ fn create_empty_array(
     let array = value
         .as_ref()
         .map(|scalar| scalar.to_array_of_size(size))
+        .transpose()?
         .unwrap_or_else(|| new_null_array(data_type, size));
     if array.data_type() != data_type {
         cast(&array, data_type).map_err(DataFusionError::ArrowError)
