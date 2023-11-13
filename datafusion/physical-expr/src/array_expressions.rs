@@ -37,7 +37,6 @@ use datafusion_common::{
     DataFusionError, Result,
 };
 
-use hashbrown::HashSet;
 use itertools::Itertools;
 use std::collections::HashSet;
 
