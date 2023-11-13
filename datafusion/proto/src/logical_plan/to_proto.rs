@@ -476,9 +476,17 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
             Expr::Column(c) => Self {
                 expr_type: Some(ExprType::Column(c.into())),
             },
-            Expr::Alias(Alias { expr, name, .. }) => {
+            Expr::Alias(Alias {
+                expr,
+                relation,
+                name,
+            }) => {
                 let alias = Box::new(protobuf::AliasNode {
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
+                    relation: relation
+                        .to_owned()
+                        .map(|r| vec![r.into()])
+                        .unwrap_or(vec![]),
                     alias: name.to_owned(),
                 });
                 Self {
@@ -960,8 +968,10 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::InList(expr)),
                 }
             }
-            Expr::Wildcard => Self {
-                expr_type: Some(ExprType::Wildcard(true)),
+            Expr::Wildcard { qualifier } => Self {
+                expr_type: Some(ExprType::Wildcard(protobuf::Wildcard {
+                    qualifier: qualifier.clone(),
+                })),
             },
             Expr::ScalarSubquery(_)
             | Expr::InSubquery(_)
@@ -1052,11 +1062,6 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     })),
                 }
             }
-
-            Expr::QualifiedWildcard { .. } => return Err(Error::General(
-                "Proto serialization error: Expr::QualifiedWildcard { .. } not supported"
-                    .to_string(),
-            )),
         };
 
         Ok(expr_node)
@@ -1481,6 +1486,7 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::ArrayReplaceAll => Self::ArrayReplaceAll,
             BuiltinScalarFunction::ArraySlice => Self::ArraySlice,
             BuiltinScalarFunction::ArrayToString => Self::ArrayToString,
+            BuiltinScalarFunction::ArrayIntersect => Self::ArrayIntersect,
             BuiltinScalarFunction::ArrayUnion => Self::ArrayUnion,
             BuiltinScalarFunction::Cardinality => Self::Cardinality,
             BuiltinScalarFunction::MakeArray => Self::Array,

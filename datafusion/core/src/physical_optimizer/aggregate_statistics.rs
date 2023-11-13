@@ -241,7 +241,7 @@ fn take_optimizable_max(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::sync::Arc;
 
     use super::*;
@@ -334,7 +334,7 @@ mod tests {
     }
 
     /// Describe the type of aggregate being tested
-    enum TestAggregate {
+    pub(crate) enum TestAggregate {
         /// Testing COUNT(*) type aggregates
         CountStar,
 
@@ -343,7 +343,7 @@ mod tests {
     }
 
     impl TestAggregate {
-        fn new_count_star() -> Self {
+        pub(crate) fn new_count_star() -> Self {
             Self::CountStar
         }
 
@@ -352,7 +352,7 @@ mod tests {
         }
 
         /// Return appropriate expr depending if COUNT is for col or table (*)
-        fn count_expr(&self) -> Arc<dyn AggregateExpr> {
+        pub(crate) fn count_expr(&self) -> Arc<dyn AggregateExpr> {
             Arc::new(Count::new(
                 self.column(),
                 self.column_name(),

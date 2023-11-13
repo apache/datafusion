@@ -28,14 +28,12 @@ use crate::signature::TIMEZONE_WILDCARD;
 use crate::type_coercion::binary::get_wider_type;
 use crate::type_coercion::functions::data_types;
 use crate::{
-    conditional_expressions, struct_expressions, utils, FuncMonotonicity, Signature,
+    conditional_expressions, struct_expressions, FuncMonotonicity, Signature,
     TypeSignature, Volatility,
 };
 
 use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
-use datafusion_common::{
-    internal_err, plan_datafusion_err, plan_err, DataFusionError, Result,
-};
+use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
 
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
@@ -176,6 +174,8 @@ pub enum BuiltinScalarFunction {
     ArraySlice,
     /// array_to_string
     ArrayToString,
+    /// array_intersect
+    ArrayIntersect,
     /// array_union
     ArrayUnion,
     /// cardinality
@@ -402,6 +402,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Flatten => Volatility::Immutable,
             BuiltinScalarFunction::ArraySlice => Volatility::Immutable,
             BuiltinScalarFunction::ArrayToString => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayIntersect => Volatility::Immutable,
             BuiltinScalarFunction::ArrayUnion => Volatility::Immutable,
             BuiltinScalarFunction::Cardinality => Volatility::Immutable,
             BuiltinScalarFunction::MakeArray => Volatility::Immutable,
@@ -486,37 +487,19 @@ impl BuiltinScalarFunction {
     }
 
     /// Returns the output [`DataType`] of this function
+    ///
+    /// This method should be invoked only after `input_expr_types` have been validated
+    /// against the function's `TypeSignature` using `type_coercion::functions::data_types()`.
+    ///
+    /// This method will:
+    /// 1. Perform additional checks on `input_expr_types` that are beyond the scope of `TypeSignature` validation.
+    /// 2. Deduce the output `DataType` based on the provided `input_expr_types`.
     pub fn return_type(self, input_expr_types: &[DataType]) -> Result<DataType> {
         use DataType::*;
         use TimeUnit::*;
 
         // Note that this function *must* return the same type that the respective physical expression returns
         // or the execution panics.
-
-        if input_expr_types.is_empty()
-            && !self.signature().type_signature.supports_zero_argument()
-        {
-            return plan_err!(
-                "{}",
-                utils::generate_signature_error_msg(
-                    &format!("{self}"),
-                    self.signature(),
-                    input_expr_types
-                )
-            );
-        }
-
-        // verify that this is a valid set of data types for this function
-        data_types(input_expr_types, &self.signature()).map_err(|_| {
-            plan_datafusion_err!(
-                "{}",
-                utils::generate_signature_error_msg(
-                    &format!("{self}"),
-                    self.signature(),
-                    input_expr_types,
-                )
-            )
-        })?;
 
         // the return type of the built in function.
         // Some built-in functions' return type depends on the incoming type.
@@ -600,6 +583,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayReplaceAll => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArraySlice => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayToString => Ok(Utf8),
+            BuiltinScalarFunction::ArrayIntersect => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayUnion => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::Cardinality => Ok(UInt64),
             BuiltinScalarFunction::MakeArray => match input_expr_types.len() {
@@ -904,6 +888,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayToString => {
                 Signature::variadic_any(self.volatility())
             }
+            BuiltinScalarFunction::ArrayIntersect => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::ArrayUnion => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::Cardinality => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::MakeArray => {
@@ -1531,6 +1516,7 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
         BuiltinScalarFunction::ArrayUnion => &["array_union", "list_union"],
         BuiltinScalarFunction::Cardinality => &["cardinality"],
         BuiltinScalarFunction::MakeArray => &["make_array", "make_list"],
+        BuiltinScalarFunction::ArrayIntersect => &["array_intersect", "list_intersect"],
 
         // struct functions
         BuiltinScalarFunction::Struct => &["struct"],
@@ -1627,7 +1613,8 @@ mod tests {
     // Test for BuiltinScalarFunction's Display and from_str() implementations.
     // For each variant in BuiltinScalarFunction, it converts the variant to a string
     // and then back to a variant. The test asserts that the original variant and
-    // the reconstructed variant are the same.
+    // the reconstructed variant are the same. This assertion is also necessary for
+    // function suggestion. See https://github.com/apache/arrow-datafusion/issues/8082
     fn test_display_and_from_str() {
         for (_, func_original) in name_to_function().iter() {
             let func_name = func_original.to_string();

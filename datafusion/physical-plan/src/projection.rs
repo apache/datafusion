@@ -46,7 +46,7 @@ use futures::stream::{Stream, StreamExt};
 use log::trace;
 
 /// Execution plan for a projection
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ProjectionExec {
     /// The projection expressions stored as tuples of (expression, output column name)
     pub(crate) expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
@@ -310,8 +310,10 @@ impl ProjectionStream {
         let arrays = self
             .expr
             .iter()
-            .map(|expr| expr.evaluate(batch))
-            .map(|r| r.map(|v| v.into_array(batch.num_rows())))
+            .map(|expr| {
+                expr.evaluate(batch)
+                    .and_then(|v| v.into_array(batch.num_rows()))
+            })
             .collect::<Result<Vec<_>>>()?;
 
         if arrays.is_empty() {
