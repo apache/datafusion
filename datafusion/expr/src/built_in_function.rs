@@ -1264,6 +1264,8 @@ impl BuiltinScalarFunction {
                 vec![
                     Exact(vec![Utf8, Utf8, Int64, Int64]),
                     Exact(vec![LargeUtf8, LargeUtf8, Int64, Int64]),
+                    Exact(vec![Utf8, Utf8, Int64]),
+                    Exact(vec![LargeUtf8, LargeUtf8, Int64]),
                 ],
                 self.volatility(),
             ),

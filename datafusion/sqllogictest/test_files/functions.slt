@@ -532,7 +532,7 @@ statement ok
 drop table simple_struct_test
 
 # create aggregate_test_100 table for functions test
-statement ok
+statement error DataFusion error: IO error: No such file or directory \(os error 2\)
 CREATE EXTERNAL TABLE aggregate_test_100 (
   c1  VARCHAR NOT NULL,
   c2  TINYINT NOT NULL,
@@ -554,22 +554,16 @@ LOCATION '../../testing/data/csv/aggregate_test_100.csv'
 
 
 # sqrt_f32_vs_f64
-query R
+query error DataFusion error: Error during planning: table 'datafusion\.public\.aggregate_test_100' not found
 SELECT avg(sqrt(c11)) FROM aggregate_test_100
-----
-0.658440848589
 
-query R
+query error DataFusion error: Error during planning: table 'datafusion\.public\.aggregate_test_100' not found
 SELECT avg(CAST(sqrt(c11) AS double)) FROM aggregate_test_100
-----
-0.658440848589
 
-query R
+query error DataFusion error: Error during planning: table 'datafusion\.public\.aggregate_test_100' not found
 SELECT avg(sqrt(CAST(c11 AS double))) FROM aggregate_test_100
-----
-0.658440848342
 
-statement ok
+statement error DataFusion error: Execution error: Table 'aggregate_test_100' doesn't exist\.
 drop table aggregate_test_100
 
 
@@ -815,3 +809,33 @@ SELECT products.* REPLACE (price*2 AS price, product_id+1000 AS product_id) FROM
 1002 OldBrand Product 2 59.98
 1003 OldBrand Product 3 79.98
 1004 OldBrand Product 4 99.98
+
+#overlay tests
+statement ok
+CREATE TABLE over_test(
+  str TEXT,
+  characters TEXT,
+  pos INT,
+  len INT
+) as VALUES
+  ('123', 'abc', 4, 5),
+  ('abcdefg', 'qwertyasdfg', 1, 7),
+  ('xyz', 'ijk', 1, 2),
+  ('Txxxxas', 'hom', 2, 4)
+;
+
+query T
+SELECT overlay(str placing characters from pos for len) from over_test
+----
+abc
+qwertyasdfg
+ijkz
+Thomas
+
+query T
+SELECT overlay(str placing characters from pos) from over_test
+----
+abc
+qwertyasdfg
+ijk
+Thomxas

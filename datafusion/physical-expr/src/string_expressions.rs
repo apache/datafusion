@@ -558,42 +558,89 @@ pub fn uuid(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 /// pgsql overlay('Txxxxas' placing 'hom' from 2 for 4) → Thomas
 /// datafusion overlay('Txxxxas', 'hom', 2, 4) -> Thomas
 pub fn overlay<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let string_array = as_generic_string_array::<T>(&args[0])?;
-    let characters_array = as_generic_string_array::<T>(&args[1])?;
-    let pos_num = as_int64_array(&args[2])?;
-    let len_num = as_int64_array(&args[3])?;
+    match args.len() {
+        3 => {
+            let string_array = as_generic_string_array::<T>(&args[0])?;
+            let characters_array = as_generic_string_array::<T>(&args[1])?;
+            let pos_num = as_int64_array(&args[2])?;
 
-    let result = string_array
-        .iter()
-        .zip(characters_array.iter())
-        .zip(pos_num.iter())
-        .zip(len_num.iter())
-        .map(|(((string, characters), start_pos), len)| {
-            match (string, characters, start_pos, len) {
-                (Some(string), Some(characters), Some(start_pos), Some(len)) => {
-                    let string_len = string.chars().count();
-                    let characters_len = characters.chars().count();
-                    let replace_len = len.min(string_len as i64);
-                    let mut res = String::with_capacity(string_len.max(characters_len));
+            let result = string_array
+                .iter()
+                .zip(characters_array.iter())
+                .zip(pos_num.iter())
+                .map(|((string, characters), start_pos)| {
+                    match (string, characters, start_pos) {
+                        (Some(string), Some(characters), Some(start_pos)) => {
+                            let string_len = string.chars().count();
+                            let characters_len = characters.chars().count();
+                            let replace_len = characters_len as i64;
+                            let mut res =
+                                String::with_capacity(string_len.max(characters_len));
 
-                    //as sql replace index start from 1 while string index start from 0
-                    if start_pos > 1 && start_pos - 1 < string_len as i64 {
-                        let start = (start_pos - 1) as usize;
-                        res.push_str(&string[..start]);
+                            //as sql replace index start from 1 while string index start from 0
+                            if start_pos > 1 && start_pos - 1 < string_len as i64 {
+                                let start = (start_pos - 1) as usize;
+                                res.push_str(&string[..start]);
+                            }
+                            res.push_str(characters);
+                            // if start + replace_len - 1 >= string_length, just to string end
+                            if start_pos + replace_len - 1 < string_len as i64 {
+                                let end = (start_pos + replace_len - 1) as usize;
+                                res.push_str(&string[end..]);
+                            }
+                            Ok(Some(res))
+                        }
+                        _ => Ok(None),
                     }
-                    res.push_str(characters);
-                    // if start + replace_len - 1 >= string_length, just to string end
-                    if start_pos + replace_len - 1 < string_len as i64 {
-                        let end = (start_pos + replace_len - 1) as usize;
-                        res.push_str(&string[end..]);
+                })
+                .collect::<Result<GenericStringArray<T>>>()?;
+            Ok(Arc::new(result) as ArrayRef)
+        }
+        4 => {
+            let string_array = as_generic_string_array::<T>(&args[0])?;
+            let characters_array = as_generic_string_array::<T>(&args[1])?;
+            let pos_num = as_int64_array(&args[2])?;
+            let len_num = as_int64_array(&args[3])?;
+
+            let result = string_array
+                .iter()
+                .zip(characters_array.iter())
+                .zip(pos_num.iter())
+                .zip(len_num.iter())
+                .map(|(((string, characters), start_pos), len)| {
+                    match (string, characters, start_pos, len) {
+                        (Some(string), Some(characters), Some(start_pos), Some(len)) => {
+                            let string_len = string.chars().count();
+                            let characters_len = characters.chars().count();
+                            let replace_len = len.min(string_len as i64);
+                            let mut res =
+                                String::with_capacity(string_len.max(characters_len));
+
+                            //as sql replace index start from 1 while string index start from 0
+                            if start_pos > 1 && start_pos - 1 < string_len as i64 {
+                                let start = (start_pos - 1) as usize;
+                                res.push_str(&string[..start]);
+                            }
+                            res.push_str(characters);
+                            // if start + replace_len - 1 >= string_length, just to string end
+                            if start_pos + replace_len - 1 < string_len as i64 {
+                                let end = (start_pos + replace_len - 1) as usize;
+                                res.push_str(&string[end..]);
+                            }
+                            Ok(Some(res))
+                        }
+                        _ => Ok(None),
                     }
-                    Ok(Some(res))
-                }
-                _ => Ok(None),
-            }
-        })
-        .collect::<Result<GenericStringArray<T>>>()?;
-    Ok(Arc::new(result) as ArrayRef)
+                })
+                .collect::<Result<GenericStringArray<T>>>()?;
+            Ok(Arc::new(result) as ArrayRef)
+        }
+        other => {
+            internal_err!(
+                "overlay was called with {other} arguments. It requires 3 or 4."
+            )
+        }
+    }
 }
 
 #[cfg(test)]
