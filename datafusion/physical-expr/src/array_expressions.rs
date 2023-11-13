@@ -665,6 +665,9 @@ pub fn gen_range(args: &[ArrayRef]) -> Result<ArrayRef> {
         let stop = stop.unwrap_or(0);
         let start = start_array.as_ref().map(|arr| arr.value(idx)).unwrap_or(0);
         let step = step_array.as_ref().map(|arr| arr.value(idx)).unwrap_or(1);
+        if step == 0 {
+            return exec_err!("step can't be 0 for function range(start [, stop, step]");
+        }
         let value = (start..stop).step_by(step as usize);
         values.extend(value);
         offsets.push(values.len() as i32);
