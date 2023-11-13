@@ -556,7 +556,7 @@ pub fn uuid(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 /// OVERLAY(string1 PLACING string2 FROM integer FOR integer2)
 /// Replaces a substring of string1 with string2 starting at the integer bit
 /// pgsql overlay('Txxxxas' placing 'hom' from 2 for 4) → Thomas
-/// datafusion overlay('Txxxxas', 'hom', 2, 4) -> Thomas
+/// overlay('Txxxxas' placing 'hom' from 2) -> Thomxas, without for option, str2's len is instead
 pub fn overlay<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args.len() {
         3 => {
