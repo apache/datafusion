@@ -635,6 +635,7 @@ enum ScalarFunction {
   StringToArray = 117;
   ToTimestampNanos = 118;
   ArrayIntersect = 119;
+  ArrayUnion = 120;
 }
 
 message ScalarFunctionNode {
