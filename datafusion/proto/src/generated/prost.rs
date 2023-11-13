@@ -1423,7 +1423,7 @@ pub struct OptimizedPhysicalPlanType {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PlanType {
-    #[prost(oneof = "plan_type::PlanTypeEnum", tags = "1, 7, 8, 2, 3, 4, 5, 6")]
+    #[prost(oneof = "plan_type::PlanTypeEnum", tags = "1, 7, 8, 2, 3, 4, 9, 5, 6, 10")]
     pub plan_type_enum: ::core::option::Option<plan_type::PlanTypeEnum>,
 }
 /// Nested message and enum types in `PlanType`.
@@ -1443,10 +1443,14 @@ pub mod plan_type {
         FinalLogicalPlan(super::EmptyMessage),
         #[prost(message, tag = "4")]
         InitialPhysicalPlan(super::EmptyMessage),
+        #[prost(message, tag = "9")]
+        InitialPhysicalPlanWithStats(super::EmptyMessage),
         #[prost(message, tag = "5")]
         OptimizedPhysicalPlan(super::OptimizedPhysicalPlanType),
         #[prost(message, tag = "6")]
         FinalPhysicalPlan(super::EmptyMessage),
+        #[prost(message, tag = "10")]
+        FinalPhysicalPlanWithStats(super::EmptyMessage),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
