@@ -149,6 +149,19 @@ pub trait TreeNode: Sized {
         Ok(new_node)
     }
 
+    /// Convenience utils for writing optimizers rule: recursively apply the given 'op' first to all of its
+    /// children and then itself(Postorder Traversal) using a mutable function, `F`.
+    /// When the `op` does not apply to a given node, it is left unchanged.
+    fn transform_up_mut<F>(self, op: &mut F) -> Result<Self>
+    where
+        F: FnMut(Self) -> Result<Transformed<Self>>,
+    {
+        let after_op_children = self.map_children(|node| node.transform_up_mut(op))?;
+
+        let new_node = op(after_op_children)?.into();
+        Ok(new_node)
+    }
+
     /// Transform the tree node using the given [TreeNodeRewriter]
     /// It performs a depth first walk of an node and its children.
     ///

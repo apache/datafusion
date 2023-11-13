@@ -336,7 +336,7 @@ impl PartitionColumnProjector {
                     &mut self.key_buffer_cache,
                     partition_value.as_ref(),
                     file_batch.num_rows(),
-                ),
+                )?,
             )
         }
 
@@ -396,11 +396,11 @@ fn create_dict_array<T>(
     dict_val: &ScalarValue,
     len: usize,
     data_type: DataType,
-) -> ArrayRef
+) -> Result<ArrayRef>
 where
     T: ArrowNativeType,
 {
-    let dict_vals = dict_val.to_array();
+    let dict_vals = dict_val.to_array()?;
 
     let sliced_key_buffer = buffer_gen.get_buffer(len);
 
@@ -409,16 +409,16 @@ where
         .len(len)
         .add_buffer(sliced_key_buffer);
     builder = builder.add_child_data(dict_vals.to_data());
-    Arc::new(DictionaryArray::<UInt16Type>::from(
+    Ok(Arc::new(DictionaryArray::<UInt16Type>::from(
         builder.build().unwrap(),
-    ))
+    )))
 }
 
 fn create_output_array(
     key_buffer_cache: &mut ZeroBufferGenerators,
     val: &ScalarValue,
     len: usize,
-) -> ArrayRef {
+) -> Result<ArrayRef> {
     if let ScalarValue::Dictionary(key_type, dict_val) = &val {
         match key_type.as_ref() {
             DataType::Int8 => {
