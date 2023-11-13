@@ -1070,8 +1070,10 @@ message PlanType {
     OptimizedLogicalPlanType OptimizedLogicalPlan = 2;
     EmptyMessage FinalLogicalPlan = 3;
     EmptyMessage InitialPhysicalPlan = 4;
+    EmptyMessage InitialPhysicalPlanWithStats = 9;
     OptimizedPhysicalPlanType OptimizedPhysicalPlan = 5;
     EmptyMessage FinalPhysicalPlan = 6;
+    EmptyMessage FinalPhysicalPlanWithStats = 10;
   }
 }
 
