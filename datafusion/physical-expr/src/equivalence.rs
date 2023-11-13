@@ -313,9 +313,7 @@ impl EquivalenceGroup {
                 }
             }
             if self.classes[idx].len() > start_size {
-                if self.classes[idx].len() > start_size {
-                    continue;
-                }
+                continue;
             }
             idx += 1;
         }
