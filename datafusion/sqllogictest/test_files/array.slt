@@ -1919,6 +1919,101 @@ select array_to_string(make_array(), ',')
 ----
 (empty)
 
+
+## array_union (aliases: `list_union`)
+
+# array_union scalar function #1
+query ?
+select array_union([1, 2, 3, 4], [5, 6, 3, 4]);
+----
+[1, 2, 3, 4, 5, 6]
+
+# array_union scalar function #2
+query ?
+select array_union([1, 2, 3, 4], [5, 6, 7, 8]);
+----
+[1, 2, 3, 4, 5, 6, 7, 8]
+
+# array_union scalar function #3
+query ?
+select array_union([1,2,3], []);
+----
+[1, 2, 3]
+
+# array_union scalar function #4
+query ?
+select array_union([1, 2, 3, 4], [5, 4]);
+----
+[1, 2, 3, 4, 5]
+
+# array_union scalar function #5
+statement ok
+CREATE TABLE arrays_with_repeating_elements_for_union
+AS VALUES
+  ([1], [2]),
+  ([2, 3], [3]),
+  ([3], [3, 4])
+;
+
+query ?
+select array_union(column1, column2) from arrays_with_repeating_elements_for_union;
+----
+[1, 2]
+[2, 3]
+[3, 4]
+
+statement ok
+drop table arrays_with_repeating_elements_for_union;
+
+# array_union scalar function #6
+query ?
+select array_union([], []);
+----
+NULL
+
+# array_union scalar function #7
+query ?
+select array_union([[null]], []);
+----
+[[]]
+
+# array_union scalar function #8
+query ?
+select array_union([null], [null]);
+----
+[]
+
+# array_union scalar function #9
+query ?
+select array_union(null, []);
+----
+NULL
+
+# array_union scalar function #10
+query ?
+select array_union(null, null);
+----
+NULL
+
+# array_union scalar function #11
+query ?
+select array_union([1.2, 3.0], [1.2, 3.0, 5.7]);
+----
+[1.2, 3.0, 5.7]
+
+# array_union scalar function #12
+query ?
+select array_union(['hello'], ['hello','datafusion']);
+----
+[hello, datafusion]
+
+
+
+
+
+
+
+
 # list_to_string scalar function #4 (function alias `array_to_string`)
 query TTT
 select list_to_string(['h', 'e', 'l', 'l', 'o'], ','), list_to_string([1, 2, 3, 4, 5], '-'), list_to_string([1.0, 2.0, 3.0], '|');

@@ -176,6 +176,8 @@ pub enum BuiltinScalarFunction {
     ArrayToString,
     /// array_intersect
     ArrayIntersect,
+    /// array_union
+    ArrayUnion,
     /// cardinality
     Cardinality,
     /// construct an array from columns
@@ -401,6 +403,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArraySlice => Volatility::Immutable,
             BuiltinScalarFunction::ArrayToString => Volatility::Immutable,
             BuiltinScalarFunction::ArrayIntersect => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayUnion => Volatility::Immutable,
             BuiltinScalarFunction::Cardinality => Volatility::Immutable,
             BuiltinScalarFunction::MakeArray => Volatility::Immutable,
             BuiltinScalarFunction::Ascii => Volatility::Immutable,
@@ -581,6 +584,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArraySlice => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayToString => Ok(Utf8),
             BuiltinScalarFunction::ArrayIntersect => Ok(input_expr_types[0].clone()),
+            BuiltinScalarFunction::ArrayUnion => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::Cardinality => Ok(UInt64),
             BuiltinScalarFunction::MakeArray => match input_expr_types.len() {
                 0 => Ok(List(Arc::new(Field::new("item", Null, true)))),
@@ -885,6 +889,7 @@ impl BuiltinScalarFunction {
                 Signature::variadic_any(self.volatility())
             }
             BuiltinScalarFunction::ArrayIntersect => Signature::any(2, self.volatility()),
+            BuiltinScalarFunction::ArrayUnion => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::Cardinality => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::MakeArray => {
                 // 0 or more arguments of arbitrary type
@@ -1508,6 +1513,7 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
             "array_join",
             "list_join",
         ],
+        BuiltinScalarFunction::ArrayUnion => &["array_union", "list_union"],
         BuiltinScalarFunction::Cardinality => &["cardinality"],
         BuiltinScalarFunction::MakeArray => &["make_array", "make_list"],
         BuiltinScalarFunction::ArrayIntersect => &["array_intersect", "list_intersect"],

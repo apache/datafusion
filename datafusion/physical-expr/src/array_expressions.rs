@@ -27,6 +27,7 @@ use arrow::datatypes::{DataType, Field, UInt64Type};
 use arrow::row::{RowConverter, SortField};
 use arrow_buffer::NullBuffer;
 
+use arrow_schema::FieldRef;
 use datafusion_common::cast::{
     as_generic_string_array, as_int64_array, as_list_array, as_string_array,
 };
@@ -36,8 +37,8 @@ use datafusion_common::{
     DataFusionError, Result,
 };
 
-use hashbrown::HashSet;
 use itertools::Itertools;
+use std::collections::HashSet;
 
 macro_rules! downcast_arg {
     ($ARG:expr, $ARRAY_TYPE:ident) => {{
@@ -1380,6 +1381,86 @@ macro_rules! to_string {
         }
         Ok($ARG)
     }};
+}
+
+fn union_generic_lists<OffsetSize: OffsetSizeTrait>(
+    l: &GenericListArray<OffsetSize>,
+    r: &GenericListArray<OffsetSize>,
+    field: &FieldRef,
+) -> Result<GenericListArray<OffsetSize>> {
+    let converter = RowConverter::new(vec![SortField::new(l.value_type().clone())])?;
+
+    let nulls = NullBuffer::union(l.nulls(), r.nulls());
+    let l_values = l.values().clone();
+    let r_values = r.values().clone();
+    let l_values = converter.convert_columns(&[l_values])?;
+    let r_values = converter.convert_columns(&[r_values])?;
+
+    // Might be worth adding an upstream OffsetBufferBuilder
+    let mut offsets = Vec::<OffsetSize>::with_capacity(l.len() + 1);
+    offsets.push(OffsetSize::usize_as(0));
+    let mut rows = Vec::with_capacity(l_values.num_rows() + r_values.num_rows());
+    let mut dedup = HashSet::new();
+    for (l_w, r_w) in l.offsets().windows(2).zip(r.offsets().windows(2)) {
+        let l_slice = l_w[0].as_usize()..l_w[1].as_usize();
+        let r_slice = r_w[0].as_usize()..r_w[1].as_usize();
+        for i in l_slice {
+            let left_row = l_values.row(i);
+            if dedup.insert(left_row) {
+                rows.push(left_row);
+            }
+        }
+        for i in r_slice {
+            let right_row = r_values.row(i);
+            if dedup.insert(right_row) {
+                rows.push(right_row);
+            }
+        }
+        offsets.push(OffsetSize::usize_as(rows.len()));
+        dedup.clear();
+    }
+
+    let values = converter.convert_rows(rows)?;
+    let offsets = OffsetBuffer::new(offsets.into());
+    let result = values[0].clone();
+    Ok(GenericListArray::<OffsetSize>::new(
+        field.clone(),
+        offsets,
+        result,
+        nulls,
+    ))
+}
+
+/// Array_union SQL function
+pub fn array_union(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 2 {
+        return exec_err!("array_union needs two arguments");
+    }
+    let array1 = &args[0];
+    let array2 = &args[1];
+    match (array1.data_type(), array2.data_type()) {
+        (DataType::Null, _) => Ok(array2.clone()),
+        (_, DataType::Null) => Ok(array1.clone()),
+        (DataType::List(field_ref), DataType::List(_)) => {
+            check_datatypes("array_union", &[&array1, &array2])?;
+            let list1 = array1.as_list::<i32>();
+            let list2 = array2.as_list::<i32>();
+            let result = union_generic_lists::<i32>(list1, list2, field_ref)?;
+            Ok(Arc::new(result))
+        }
+        (DataType::LargeList(field_ref), DataType::LargeList(_)) => {
+            check_datatypes("array_union", &[&array1, &array2])?;
+            let list1 = array1.as_list::<i64>();
+            let list2 = array2.as_list::<i64>();
+            let result = union_generic_lists::<i64>(list1, list2, field_ref)?;
+            Ok(Arc::new(result))
+        }
+        _ => {
+            internal_err!(
+                "array_union only support list with offsets of type int32 and int64"
+            )
+        }
+    }
 }
 
 /// Array_to_string SQL function
