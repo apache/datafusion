@@ -1894,13 +1894,14 @@ impl DefaultPhysicalPlanner {
                     .await
                 {
                     Ok(input) => {
+                        // This plan will includes statistics if show_statistics is on
                         stringified_plans.push(
                             displayable(input.as_ref())
                                 .set_show_statistics(config.show_statistics)
                                 .to_stringified(e.verbose, InitialPhysicalPlan),
                         );
 
-                        // Add plan with stats for verbose case even if show_statistics is false
+                        // If the show_statisitcs is off, add another line to show statsitics in the case of explain verbose
                         if e.verbose && !config.show_statistics {
                             stringified_plans.push(
                                 displayable(input.as_ref())
@@ -1926,13 +1927,14 @@ impl DefaultPhysicalPlanner {
                             },
                         ) {
                             Ok(input) => {
+                                // This plan will includes statistics if show_statistics is on
                                 stringified_plans.push(
                                     displayable(input.as_ref())
                                         .set_show_statistics(config.show_statistics)
                                         .to_stringified(e.verbose, FinalPhysicalPlan),
                                 );
 
-                                // Add plan with stats for verbose case even if show_statistics is false
+                                // If the show_statisitcs is off, add another line to show statsitics in the case of explain verbose
                                 if e.verbose && !config.show_statistics {
                                     stringified_plans.push(
                                         displayable(input.as_ref())

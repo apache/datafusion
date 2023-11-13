@@ -24,7 +24,8 @@ use crate::protobuf::{
     arrow_type::ArrowTypeEnum,
     plan_type::PlanTypeEnum::{
         AnalyzedLogicalPlan, FinalAnalyzedLogicalPlan, FinalLogicalPlan,
-        FinalPhysicalPlan, InitialLogicalPlan, InitialPhysicalPlan, OptimizedLogicalPlan,
+        FinalPhysicalPlan, FinalPhysicalPlanWithStats, InitialLogicalPlan,
+        InitialPhysicalPlan, InitialPhysicalPlanWithStats, OptimizedLogicalPlan,
         OptimizedPhysicalPlan,
     },
     AnalyzedLogicalPlanType, CubeNode, EmptyMessage, GroupingSetNode, LogicalExprList,
@@ -352,11 +353,12 @@ impl From<&StringifiedPlan> for protobuf::StringifiedPlan {
                 PlanType::FinalPhysicalPlan => Some(protobuf::PlanType {
                     plan_type_enum: Some(FinalPhysicalPlan(EmptyMessage {})),
                 }),
-                // Make it `todo` to avoid breaking clippy
-                // We do not want to add proto plan type for these two becasue they are just the same as
-                // InitialPhysicalPlan and FinalPhysicalPlan
-                datafusion_expr::PlanType::InitialPhysicalPlanWithStats
-                | datafusion_expr::PlanType::FinalPhysicalPlanWithStats => todo!(),
+                PlanType::InitialPhysicalPlanWithStats => Some(protobuf::PlanType {
+                    plan_type_enum: Some(InitialPhysicalPlanWithStats(EmptyMessage {})),
+                }),
+                PlanType::FinalPhysicalPlanWithStats => Some(protobuf::PlanType {
+                    plan_type_enum: Some(FinalPhysicalPlanWithStats(EmptyMessage {})),
+                }),
             },
             plan: stringified_plan.plan.to_string(),
         }
