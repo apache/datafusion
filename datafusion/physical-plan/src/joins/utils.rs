@@ -778,7 +778,7 @@ pub(crate) fn apply_join_filter_to_indices(
     let filter_result = filter
         .expression()
         .evaluate(&intermediate_batch)?
-        .into_array(intermediate_batch.num_rows());
+        .into_array(intermediate_batch.num_rows())?;
     let mask = as_boolean_array(&filter_result)?;
 
     let left_filtered = compute::filter(&build_indices, mask)?;
