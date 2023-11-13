@@ -996,13 +996,16 @@ macro_rules! position {
 fn general_position<OffsetSize: OffsetSizeTrait>(
     list_array: &GenericListArray<OffsetSize>,
     element_array: &ArrayRef,
-    from_array: &Int64Array,
-    arr_n: Vec<i64>,
+    from_array: Vec<usize>, // 0-indexed
+    n_array: Vec<usize>,
 ) -> Result<ArrayRef> {
-    let mut data = vec![];
+    let mut data = Vec::with_capacity(n_array.len());
 
-    for (row_index, (list_array_row, n)) in
-        list_array.iter().zip(arr_n.iter()).enumerate()
+    for (row_index, ((list_array_row, &from), &n)) in list_array
+        .iter()
+        .zip(from_array.iter())
+        .zip(n_array.iter())
+        .enumerate()
     {
         if let Some(list_array_row) = list_array_row {
             let indices = UInt32Array::from(vec![row_index as u32]);
@@ -1029,18 +1032,25 @@ fn general_position<OffsetSize: OffsetSizeTrait>(
                     arrow_ord::cmp::not_distinct(&list_array_row, &element_arr)?
                 }
             };
-            
+
             // Collect `true`s in 1-indexed positions
-            let indexes = eq_array.iter().positions(|e| e == Some(true)).map(|index| Some(index as u64 + 1)).collect::<Vec<_>>();
+            let indexes = eq_array
+                .iter()
+                .skip(from)
+                .positions(|e| e == Some(true))
+                .map(|index| Some(index as u64 + 1))
+                .take(n)
+                .collect::<Vec<_>>();
+
             data.push(Some(indexes));
         } else {
             data.push(None);
         }
     }
 
-    Ok(Arc::new(ListArray::from_iter_primitive::<UInt64Type, _, _>(data)))
-
-    // Ok(Arc::new(Int64Array::from(vec![Some(1)])))
+    Ok(Arc::new(
+        ListArray::from_iter_primitive::<UInt64Type, _, _>(data),
+    ))
 }
 
 /// Array_position SQL function
@@ -1048,11 +1058,17 @@ pub fn array_position(args: &[ArrayRef]) -> Result<ArrayRef> {
     let arr = as_list_array(&args[0])?;
     let element = &args[1];
 
+    // handle incorrect from_array only 1 to n is accept.
+
     let index = if args.len() == 3 {
         as_int64_array(&args[2])?.clone()
     } else {
-        return general_position::<i32>(arr, element, &Int64Array::from_value(1, arr.len()), vec![1; arr.len()])
-        // Int64Array::from_value(0, arr.len())
+        return general_position::<i32>(
+            arr,
+            element,
+            vec![0; arr.len()],
+            vec![1; arr.len()],
+        );
     };
 
     check_datatypes("array_position", &[arr.values(), element])?;
@@ -1121,14 +1137,13 @@ pub fn array_positions(args: &[ArrayRef]) -> Result<ArrayRef> {
     let element = &args[1];
 
     check_datatypes("array_positions", &[arr.values(), element])?;
-    macro_rules! array_function {
-        ($ARRAY_TYPE:ident) => {
-            positions!(arr, element, $ARRAY_TYPE)
-        };
-    }
-    let res = call_array_function!(arr.value_type(), true);
 
-    Ok(res)
+    general_position::<i32>(
+        arr,
+        element,
+        vec![0; arr.len()],
+        vec![usize::MAX; arr.len()],
+    )
 }
 
 /// For each element of `list_array[i]`, removed up to `arr_n[i]`  occurences

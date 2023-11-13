@@ -568,8 +568,8 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayLength => Ok(UInt64),
             BuiltinScalarFunction::ArrayNdims => Ok(UInt64),
             BuiltinScalarFunction::ArrayPopBack => Ok(input_expr_types[0].clone()),
-            BuiltinScalarFunction::ArrayPosition => Ok(UInt64),
-            BuiltinScalarFunction::ArrayPositions => {
+            BuiltinScalarFunction::ArrayPosition
+            | BuiltinScalarFunction::ArrayPositions => {
                 Ok(List(Arc::new(Field::new("item", UInt64, true))))
             }
             BuiltinScalarFunction::ArrayPrepend => Ok(input_expr_types[1].clone()),
