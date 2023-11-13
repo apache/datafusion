@@ -22,12 +22,10 @@ use crate::expressions::{format_state_name, Literal};
 use crate::{AggregateExpr, PhysicalExpr};
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field};
-use arrow_array::OffsetSizeTrait;
 use datafusion_common::cast::as_generic_string_array;
 use datafusion_common::{not_impl_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 use std::any::Any;
-use std::marker::PhantomData;
 use std::sync::Arc;
 
 /// STRING_AGG aggregate expression
@@ -76,10 +74,10 @@ impl AggregateExpr for StringAgg {
             match delimiter.value() {
                 ScalarValue::Utf8(Some(delimiter))
                 | ScalarValue::LargeUtf8(Some(delimiter)) => {
-                    return Ok(Box::new(StringAggAccumulator::<i64>::new(delimiter)));
+                    return Ok(Box::new(StringAggAccumulator::new(delimiter)));
                 }
                 ScalarValue::Null => {
-                    return Ok(Box::new(StringAggAccumulator::<i64>::new("")));
+                    return Ok(Box::new(StringAggAccumulator::new("")));
                 }
                 _ => {
                     return not_impl_err!(
@@ -130,33 +128,31 @@ impl PartialEq<dyn Any> for StringAgg {
 }
 
 #[derive(Debug)]
-pub(crate) struct StringAggAccumulator<T: OffsetSizeTrait> {
+pub(crate) struct StringAggAccumulator {
     values: Option<String>,
-    sep: String,
-    phantom: PhantomData<T>,
+    delimiter: String,
 }
 
-impl<T: OffsetSizeTrait> StringAggAccumulator<T> {
-    pub fn new(sep: &str) -> Self {
+impl StringAggAccumulator {
+    pub fn new(delimiter: &str) -> Self {
         Self {
             values: None,
-            sep: sep.to_string(),
-            phantom: PhantomData,
+            delimiter: delimiter.to_string(),
         }
     }
 }
 
-impl<T: OffsetSizeTrait> Accumulator for StringAggAccumulator<T> {
+impl Accumulator for StringAggAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let string_array: Vec<_> = as_generic_string_array::<T>(&values[0])?
+        let string_array: Vec<_> = as_generic_string_array::<i64>(&values[0])?
             .iter()
             .filter_map(|v| v.as_ref().map(ToString::to_string))
             .collect();
-        let s = string_array.join(self.sep.as_str());
+        let s = string_array.join(self.delimiter.as_str());
         if !s.is_empty() {
             let v = self.values.get_or_insert("".to_string());
             if !v.is_empty() {
-                v.push_str(self.sep.as_str());
+                v.push_str(self.delimiter.as_str());
             }
             v.push_str(s.as_str());
         }
@@ -177,7 +173,9 @@ impl<T: OffsetSizeTrait> Accumulator for StringAggAccumulator<T> {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of::<Self>()
+        std::mem::size_of_val(self)
+            + self.values.as_ref().map(|v| v.capacity()).unwrap_or(0)
+            + self.delimiter.capacity()
     }
 }
 
