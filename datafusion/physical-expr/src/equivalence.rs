@@ -42,90 +42,94 @@ use indexmap::IndexMap;
 /// equality conditions in filters.
 #[derive(Debug, Clone)]
 pub struct EquivalenceClass {
-    inner: Vec<Arc<dyn PhysicalExpr>>,
+    exprs: Vec<Arc<dyn PhysicalExpr>>,
 }
 
 impl PartialEq for EquivalenceClass {
     fn eq(&self, other: &Self) -> bool {
-        physical_exprs_equal(&self.inner, &other.inner)
+        physical_exprs_equal(&self.exprs, &other.exprs)
     }
 }
 
 impl EquivalenceClass {
     /// Create a new empty equivalence class
     pub fn new_empty() -> Self {
-        Self { inner: vec![] }
+        Self { exprs: vec![] }
     }
 
     // Create a new equivalence class from a pre-existing `Vec`
     pub fn new_from_vec(inner: Vec<Arc<dyn PhysicalExpr>>) -> Self {
-        Self { inner }
+        Self { exprs: inner }
     }
 
+    /// Return the inner vector of expressions
+    pub fn into_inner(self) -> Vec<Arc<dyn PhysicalExpr>> {
+        self.exprs
+    }
     /// Return the "canonical" expression for this class (the first element)
     /// if any
     fn canonical_expr(&self) -> Option<Arc<dyn PhysicalExpr>> {
-        self.inner.first().cloned()
+        self.exprs.first().cloned()
     }
 
     /// Insert the expression into this class, meaning it is known to be equal to
     /// all other expressions in this class
     pub fn push(&mut self, expr: Arc<dyn PhysicalExpr>) {
-        self.inner.push(expr);
+        self.exprs.push(expr);
     }
 
     /// Inserts all the expressions from other into this class
     pub fn extend(&mut self, other: Self) {
-        self.inner.extend(other.inner);
+        self.exprs.extend(other.exprs);
     }
 
     /// Returns true if this equivalence class contains t expression
     pub fn contains(&self, expr: &Arc<dyn PhysicalExpr>) -> bool {
-        physical_exprs_contains(&self.inner, expr)
+        physical_exprs_contains(&self.exprs, expr)
     }
 
     /// Returns true if this equivalence class has any entries in common with other
     pub fn contains_any(&self, other: &Self) -> bool {
-        self.inner.iter().any(|e| other.contains(e))
+        self.exprs.iter().any(|e| other.contains(e))
     }
 
     /// return the number of items in this class
     pub fn len(&self) -> usize {
-        self.inner.len()
+        self.exprs.len()
     }
 
     /// return true if this class is empty
     pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
+        self.exprs.is_empty()
     }
 
     /// Removes all duplicated exprs in this class
     // TODO should we deduplicate on insert?
     fn deduplicate(&mut self) {
-        deduplicate_physical_exprs(&mut self.inner);
+        deduplicate_physical_exprs(&mut self.exprs);
     }
 
     /// Iterate over all elements in this class
     pub fn iter(&self) -> impl Iterator<Item = &Arc<dyn PhysicalExpr>> {
-        self.inner.iter()
+        self.exprs.iter()
     }
 
     /// Return a new equivalence class that have the specified offset added to
     /// each expression (used when schemas are appended such as in joins)
     pub fn with_offset(&self, offset: usize) -> Self {
         let new_inner = self
-            .inner
+            .exprs
             .iter()
             .cloned()
             .map(|e| add_offset_to_expr(e, offset))
             .collect();
-        Self { inner: new_inner }
+        Self { exprs: new_inner }
     }
 
     /// Returns true if other is equal in the sense
     /// of bags (multi-sets), disregarding their orderings.
     pub fn eq_bag(&self, other: &Self) -> bool {
-        physical_exprs_bag_equal(&self.inner, &other.inner)
+        physical_exprs_bag_equal(&self.exprs, &other.exprs)
     }
 }
 
