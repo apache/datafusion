@@ -167,7 +167,8 @@ impl ExprOrdering {
         }
     }
 
-    pub fn leaf_orderings(
+    // Returns either all of the leaves ordering or `None`.
+    pub fn leaves_orderings(
         &self,
         leading_orderings: &[PhysicalSortExpr],
     ) -> Option<Vec<PhysicalSortExpr>> {
