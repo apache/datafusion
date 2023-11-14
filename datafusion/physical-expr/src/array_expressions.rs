@@ -643,6 +643,20 @@ fn general_append_and_prepend(
     )?))
 }
 
+/// Generates an array of integers from start to stop with a given step.
+///
+/// This function takes 1 to 3 ArrayRefs as arguments, representing start, stop, and step values.
+/// It returns a `Result<ArrayRef>` representing the resulting ListArray after the operation.
+///
+/// # Arguments
+///
+/// * `args` - An array of 1 to 3 ArrayRefs representing start, stop, and step(step value can not be zero.) values.
+///    
+/// # Examples
+///
+/// gen_range(3) => [0, 1, 2]
+/// gen_range(1, 4) => [1, 2, 3]
+/// gen_range(1, 7, 2) => [1, 3, 5]
 pub fn gen_range(args: &[ArrayRef]) -> Result<ArrayRef> {
     let (start_array, stop_array, step_array) = match args.len() {
         1 => (None, as_int64_array(&args[0])?, None),
