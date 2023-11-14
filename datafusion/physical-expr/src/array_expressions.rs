@@ -25,7 +25,6 @@ use arrow::buffer::OffsetBuffer;
 use arrow::compute;
 use arrow::datatypes::{DataType, Field, UInt64Type};
 use arrow::row::{RowConverter, SortField};
-use arrow_array::types::Int64Type;
 use arrow_buffer::NullBuffer;
 
 use arrow_schema::FieldRef;
@@ -34,7 +33,7 @@ use datafusion_common::cast::{
 };
 use datafusion_common::utils::array_into_list_array;
 use datafusion_common::{
-    exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err,
+    internal_datafusion_err, internal_err, not_impl_err, plan_err,
     DataFusionError, Result,
 };
 
@@ -1110,30 +1109,6 @@ fn general_positions<OffsetSize: OffsetSizeTrait>(
         if let Some(list_array_row) = list_array_row {
             let eq_array =
                 compare_element_to_list(&list_array_row, element_array, row_index, true)?;
-            // let indices = UInt32Array::from(vec![row_index as u32]);
-            // let element_array_row = arrow::compute::take(element_array, &indices, None)?;
-            // // Compute all positions in list_row_array (that is itself an
-            // // array) that are equal to `from_array_row`
-            // let eq_array = match element_array_row.data_type() {
-            //     // arrow_ord::cmp::eq does not support ListArray, so we need to compare it by loop
-            //     DataType::List(_) => {
-            //         // compare each element of the from array
-            //         let element_array_row_inner =
-            //             as_list_array(&element_array_row)?.value(0);
-            //         let list_array_row_inner = as_list_array(&list_array_row)?;
-
-            //         list_array_row_inner
-            //             .iter()
-            //             // compare element by element the current row of list_array
-            //             .map(|row| row.map(|row| row.eq(&element_array_row_inner)))
-            //             .collect::<BooleanArray>()
-            //     }
-            //     _ => {
-            //         let element_arr = Scalar::new(element_array_row);
-            //         // use not_distinct so NULL = NULL
-            //         arrow_ord::cmp::not_distinct(&list_array_row, &element_arr)?
-            //     }
-            // };
 
             // Collect `true`s in 1-indexed positions
             let indexes = eq_array
@@ -1371,30 +1346,14 @@ fn general_replace(
 
         match list_array_row {
             Some(list_array_row) => {
-                let indices = UInt32Array::from(vec![row_index as u32]);
-                let from_array_row = arrow::compute::take(from_array, &indices, None)?;
                 // Compute all positions in list_row_array (that is itself an
                 // array) that are equal to `from_array_row`
-                let eq_array = match from_array_row.data_type() {
-                    // arrow_ord::cmp::eq does not support ListArray, so we need to compare it by loop
-                    DataType::List(_) => {
-                        // compare each element of the from array
-                        let from_array_row_inner =
-                            as_list_array(&from_array_row)?.value(0);
-                        let list_array_row_inner = as_list_array(&list_array_row)?;
-
-                        list_array_row_inner
-                            .iter()
-                            // compare element by element the current row of list_array
-                            .map(|row| row.map(|row| row.eq(&from_array_row_inner)))
-                            .collect::<BooleanArray>()
-                    }
-                    _ => {
-                        let from_arr = Scalar::new(from_array_row);
-                        // use not_distinct so NULL = NULL
-                        arrow_ord::cmp::not_distinct(&list_array_row, &from_arr)?
-                    }
-                };
+                let eq_array = compare_element_to_list(
+                    &list_array_row,
+                    &from_array,
+                    row_index,
+                    true,
+                )?;
 
                 // Use MutableArrayData to build the replaced array
                 let original_data = list_array_row.to_data();
