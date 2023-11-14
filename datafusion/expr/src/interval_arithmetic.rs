@@ -593,7 +593,7 @@ impl Interval {
                     let upper_bits = map_floating_point_order!(upper.to_bits(), u64);
 
                     let count = upper_bits - lower_bits;
-                    Some(count as u64)
+                    Some(count)
                 }
                 _ => None,
             }
