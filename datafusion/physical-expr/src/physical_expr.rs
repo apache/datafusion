@@ -228,14 +228,6 @@ pub fn physical_exprs_contains(
         .any(|physical_expr| physical_expr.eq(expr))
 }
 
-/// Checks whether the given slices have any common entries.
-pub fn have_common_entries(
-    lhs: &[Arc<dyn PhysicalExpr>],
-    rhs: &[Arc<dyn PhysicalExpr>],
-) -> bool {
-    lhs.iter().any(|expr| physical_exprs_contains(rhs, expr))
-}
-
 /// Checks whether the given physical expression slices are equal.
 pub fn physical_exprs_equal(
     lhs: &[Arc<dyn PhysicalExpr>],
@@ -293,8 +285,8 @@ mod tests {
 
     use crate::expressions::{Column, Literal};
     use crate::physical_expr::{
-        deduplicate_physical_exprs, have_common_entries, physical_exprs_bag_equal,
-        physical_exprs_contains, physical_exprs_equal, PhysicalExpr,
+        deduplicate_physical_exprs, physical_exprs_bag_equal, physical_exprs_contains,
+        physical_exprs_equal, PhysicalExpr,
     };
 
     use datafusion_common::ScalarValue;
@@ -332,29 +324,6 @@ mod tests {
         // below expressions are not inside physical_exprs
         assert!(!physical_exprs_contains(&physical_exprs, &col_c_expr));
         assert!(!physical_exprs_contains(&physical_exprs, &lit1));
-    }
-
-    #[test]
-    fn test_have_common_entries() {
-        let lit_true = Arc::new(Literal::new(ScalarValue::Boolean(Some(true))))
-            as Arc<dyn PhysicalExpr>;
-        let lit_false = Arc::new(Literal::new(ScalarValue::Boolean(Some(false))))
-            as Arc<dyn PhysicalExpr>;
-        let lit2 =
-            Arc::new(Literal::new(ScalarValue::Int32(Some(2)))) as Arc<dyn PhysicalExpr>;
-        let lit1 =
-            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))) as Arc<dyn PhysicalExpr>;
-        let col_b_expr = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
-
-        let vec1 = vec![lit_true.clone(), lit_false.clone()];
-        let vec2 = vec![lit_true.clone(), col_b_expr.clone()];
-        let vec3 = vec![lit2.clone(), lit1.clone()];
-
-        // lit_true is common
-        assert!(have_common_entries(&vec1, &vec2));
-        // there is no common entry
-        assert!(!have_common_entries(&vec1, &vec3));
-        assert!(!have_common_entries(&vec2, &vec3));
     }
 
     #[test]
