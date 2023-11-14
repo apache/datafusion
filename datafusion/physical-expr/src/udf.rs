@@ -16,6 +16,7 @@
 // under the License.
 
 //! UDF support
+use crate::utils::extract_constant_args;
 use crate::{PhysicalExpr, ScalarFunctionExpr};
 use arrow::datatypes::Schema;
 use datafusion_common::Result;
@@ -33,21 +34,14 @@ pub fn create_physical_expr(
         .iter()
         .map(|e| e.data_type(input_schema))
         .collect::<Result<Vec<_>>>()?;
-
-    let mut literals = vec![];
-    input_phy_exprs.iter().enumerate().for_each(|(i, expr)| {
-        if let Some(literal) = expr.as_any().downcast_ref::<crate::expressions::Literal>()
-        {
-            literals.push((i, literal.value().clone()));
-        }
-    });
+    let constant_args = extract_constant_args(input_phy_exprs);
 
     Ok(Arc::new(ScalarFunctionExpr::new(
         &fun.name,
         fun.fun.clone(),
         input_phy_exprs.to_vec(),
         fun.return_type
-            .infer(&input_exprs_types, &literals)?
+            .infer(&input_exprs_types, &constant_args)?
             .as_ref(),
         None,
     )))

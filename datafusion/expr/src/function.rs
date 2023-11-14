@@ -36,12 +36,15 @@ use strum::IntoEnumIterator;
 pub type ScalarFunctionImplementation =
     Arc<dyn Fn(&[ColumnarValue]) -> Result<ColumnarValue> + Send + Sync>;
 
+/// Constant argument, (arg index, constant value).
+pub type ConstantArg = (usize, ScalarValue);
+
 /// Factory that returns the functions's return type given the input argument types and constant arguments
 pub trait ReturnTypeFactory: Send + Sync {
     fn infer(
         &self,
-        data_types: &[DataType],
-        literals: &[(usize, ScalarValue)],
+        input_types: &[DataType],
+        constant_args: &[ConstantArg],
     ) -> Result<Arc<DataType>>;
 }
 
@@ -52,10 +55,10 @@ pub type ReturnTypeFunction =
 impl ReturnTypeFactory for ReturnTypeFunction {
     fn infer(
         &self,
-        data_types: &[DataType],
-        _literals: &[(usize, ScalarValue)],
+        input_types: &[DataType],
+        _constant_args: &[ConstantArg],
     ) -> Result<Arc<DataType>> {
-        self(data_types)
+        self(input_types)
     }
 }
 

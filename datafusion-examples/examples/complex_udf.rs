@@ -27,7 +27,7 @@ use datafusion::{
 use datafusion::error::Result;
 use datafusion::prelude::*;
 use datafusion_common::ScalarValue;
-use datafusion_expr::function::ReturnTypeFactory;
+use datafusion_expr::function::{ConstantArg, ReturnTypeFactory};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionImplementation, ScalarUDF, Signature,
 };
@@ -87,11 +87,11 @@ async fn main() -> Result<()> {
     impl ReturnTypeFactory for ReturnType {
         fn infer(
             &self,
-            data_types: &[DataType],
-            literals: &[(usize, ScalarValue)],
+            input_types: &[DataType],
+            constant_args: &[ConstantArg],
         ) -> Result<Arc<DataType>> {
-            assert_eq!(literals.len(), 1);
-            let (idx, val) = &literals[0];
+            assert_eq!(constant_args.len(), 1);
+            let (idx, val) = &constant_args[0];
             assert_eq!(idx, &2);
 
             let take_idx = match val {
@@ -99,7 +99,7 @@ async fn main() -> Result<()> {
                 _ => unreachable!(),
             };
 
-            Ok(Arc::new(data_types[take_idx].clone()))
+            Ok(Arc::new(input_types[take_idx].clone()))
         }
     }
 
