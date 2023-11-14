@@ -28,7 +28,7 @@ use crate::Operator;
 use crate::{aggregate_function, ExprSchemable};
 use arrow::datatypes::DataType;
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{internal_err, DFSchema};
+use datafusion_common::{internal_err, DFSchema, OwnedTableReference};
 use datafusion_common::{plan_err, Column, DataFusionError, Result, ScalarValue};
 use std::collections::HashSet;
 use std::fmt;
@@ -187,13 +187,20 @@ pub enum Expr {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Alias {
     pub expr: Box<Expr>,
+    pub relation: Option<OwnedTableReference>,
     pub name: String,
 }
 
 impl Alias {
-    pub fn new(expr: Expr, name: impl Into<String>) -> Self {
+    /// Create an alias with an optional schema/field qualifier.
+    pub fn new(
+        expr: Expr,
+        relation: Option<impl Into<OwnedTableReference>>,
+        name: impl Into<String>,
+    ) -> Self {
         Self {
             expr: Box::new(expr),
+            relation: relation.map(|r| r.into()),
             name: name.into(),
         }
     }
@@ -844,7 +851,27 @@ impl Expr {
                 asc,
                 nulls_first,
             }) => Expr::Sort(Sort::new(Box::new(expr.alias(name)), asc, nulls_first)),
-            _ => Expr::Alias(Alias::new(self, name.into())),
+            _ => Expr::Alias(Alias::new(self, None::<&str>, name.into())),
+        }
+    }
+
+    /// Return `self AS name` alias expression with a specific qualifier
+    pub fn alias_qualified(
+        self,
+        relation: Option<impl Into<OwnedTableReference>>,
+        name: impl Into<String>,
+    ) -> Expr {
+        match self {
+            Expr::Sort(Sort {
+                expr,
+                asc,
+                nulls_first,
+            }) => Expr::Sort(Sort::new(
+                Box::new(expr.alias_qualified(relation, name)),
+                asc,
+                nulls_first,
+            )),
+            _ => Expr::Alias(Alias::new(self, relation, name.into())),
         }
     }
 

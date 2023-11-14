@@ -38,7 +38,7 @@ pub struct DfSchema {
 pub struct LogicalPlanNode {
     #[prost(
         oneof = "logical_plan_node::LogicalPlanType",
-        tags = "1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27"
+        tags = "1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28"
     )]
     pub logical_plan_type: ::core::option::Option<logical_plan_node::LogicalPlanType>,
 }
@@ -99,6 +99,8 @@ pub mod logical_plan_node {
         Prepare(::prost::alloc::boxed::Box<super::PrepareNode>),
         #[prost(message, tag = "27")]
         DropView(super::DropViewNode),
+        #[prost(message, tag = "28")]
+        DistinctOn(::prost::alloc::boxed::Box<super::DistinctOnNode>),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -483,6 +485,18 @@ pub struct DistinctNode {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DistinctOnNode {
+    #[prost(message, repeated, tag = "1")]
+    pub on_expr: ::prost::alloc::vec::Vec<LogicalExprNode>,
+    #[prost(message, repeated, tag = "2")]
+    pub select_expr: ::prost::alloc::vec::Vec<LogicalExprNode>,
+    #[prost(message, repeated, tag = "3")]
+    pub sort_expr: ::prost::alloc::vec::Vec<LogicalExprNode>,
+    #[prost(message, optional, boxed, tag = "4")]
+    pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct UnionNode {
     #[prost(message, repeated, tag = "1")]
     pub inputs: ::prost::alloc::vec::Vec<LogicalPlanNode>,
@@ -754,6 +768,8 @@ pub struct AliasNode {
     pub expr: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
     #[prost(string, tag = "2")]
     pub alias: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag = "3")]
+    pub relation: ::prost::alloc::vec::Vec<OwnedTableReference>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1407,7 +1423,7 @@ pub struct OptimizedPhysicalPlanType {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PlanType {
-    #[prost(oneof = "plan_type::PlanTypeEnum", tags = "1, 7, 8, 2, 3, 4, 5, 6")]
+    #[prost(oneof = "plan_type::PlanTypeEnum", tags = "1, 7, 8, 2, 3, 4, 9, 5, 6, 10")]
     pub plan_type_enum: ::core::option::Option<plan_type::PlanTypeEnum>,
 }
 /// Nested message and enum types in `PlanType`.
@@ -1427,10 +1443,14 @@ pub mod plan_type {
         FinalLogicalPlan(super::EmptyMessage),
         #[prost(message, tag = "4")]
         InitialPhysicalPlan(super::EmptyMessage),
+        #[prost(message, tag = "9")]
+        InitialPhysicalPlanWithStats(super::EmptyMessage),
         #[prost(message, tag = "5")]
         OptimizedPhysicalPlan(super::OptimizedPhysicalPlanType),
         #[prost(message, tag = "6")]
         FinalPhysicalPlan(super::EmptyMessage),
+        #[prost(message, tag = "10")]
+        FinalPhysicalPlanWithStats(super::EmptyMessage),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -2546,6 +2566,7 @@ pub enum ScalarFunction {
     StringToArray = 117,
     ToTimestampNanos = 118,
     ArrayIntersect = 119,
+    ArrayUnion = 120,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2674,6 +2695,7 @@ impl ScalarFunction {
             ScalarFunction::StringToArray => "StringToArray",
             ScalarFunction::ToTimestampNanos => "ToTimestampNanos",
             ScalarFunction::ArrayIntersect => "ArrayIntersect",
+            ScalarFunction::ArrayUnion => "ArrayUnion",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2799,6 +2821,7 @@ impl ScalarFunction {
             "StringToArray" => Some(Self::StringToArray),
             "ToTimestampNanos" => Some(Self::ToTimestampNanos),
             "ArrayIntersect" => Some(Self::ArrayIntersect),
+            "ArrayUnion" => Some(Self::ArrayUnion),
             _ => None,
         }
     }

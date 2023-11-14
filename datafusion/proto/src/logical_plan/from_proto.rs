@@ -19,7 +19,8 @@ use crate::protobuf::{
     self,
     plan_type::PlanTypeEnum::{
         AnalyzedLogicalPlan, FinalAnalyzedLogicalPlan, FinalLogicalPlan,
-        FinalPhysicalPlan, InitialLogicalPlan, InitialPhysicalPlan, OptimizedLogicalPlan,
+        FinalPhysicalPlan, FinalPhysicalPlanWithStats, InitialLogicalPlan,
+        InitialPhysicalPlan, InitialPhysicalPlanWithStats, OptimizedLogicalPlan,
         OptimizedPhysicalPlan,
     },
     AnalyzedLogicalPlanType, CubeNode, GroupingSetNode, OptimizedLogicalPlanType,
@@ -406,12 +407,14 @@ impl From<&protobuf::StringifiedPlan> for StringifiedPlan {
                 }
                 FinalLogicalPlan(_) => PlanType::FinalLogicalPlan,
                 InitialPhysicalPlan(_) => PlanType::InitialPhysicalPlan,
+                InitialPhysicalPlanWithStats(_) => PlanType::InitialPhysicalPlanWithStats,
                 OptimizedPhysicalPlan(OptimizedPhysicalPlanType { optimizer_name }) => {
                     PlanType::OptimizedPhysicalPlan {
                         optimizer_name: optimizer_name.clone(),
                     }
                 }
                 FinalPhysicalPlan(_) => PlanType::FinalPhysicalPlan,
+                FinalPhysicalPlanWithStats(_) => PlanType::FinalPhysicalPlanWithStats,
             },
             plan: Arc::new(stringified_plan.plan.clone()),
         }
@@ -484,6 +487,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ArraySlice => Self::ArraySlice,
             ScalarFunction::ArrayToString => Self::ArrayToString,
             ScalarFunction::ArrayIntersect => Self::ArrayIntersect,
+            ScalarFunction::ArrayUnion => Self::ArrayUnion,
             ScalarFunction::Cardinality => Self::Cardinality,
             ScalarFunction::Array => Self::MakeArray,
             ScalarFunction::NullIf => Self::NullIf,
@@ -1151,6 +1155,11 @@ pub fn parse_expr(
         }
         ExprType::Alias(alias) => Ok(Expr::Alias(Alias::new(
             parse_required_expr(alias.expr.as_deref(), registry, "expr")?,
+            alias
+                .relation
+                .first()
+                .map(|r| OwnedTableReference::try_from(r.clone()))
+                .transpose()?,
             alias.alias.clone(),
         ))),
         ExprType::IsNullExpr(is_null) => Ok(Expr::IsNull(Box::new(parse_required_expr(
@@ -1419,6 +1428,12 @@ pub fn parse_expr(
                 ScalarFunction::ArrayNdims => {
                     Ok(array_ndims(parse_expr(&args[0], registry)?))
                 }
+                ScalarFunction::ArrayUnion => Ok(array(
+                    args.to_owned()
+                        .iter()
+                        .map(|expr| parse_expr(expr, registry))
+                        .collect::<Result<Vec<_>, _>>()?,
+                )),
                 ScalarFunction::Sqrt => Ok(sqrt(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Cbrt => Ok(cbrt(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Sin => Ok(sin(parse_expr(&args[0], registry)?)),

@@ -305,6 +305,13 @@ impl ExprSchemable for Expr {
                 self.nullable(input_schema)?,
             )
             .with_metadata(self.metadata(input_schema)?)),
+            Expr::Alias(Alias { relation, name, .. }) => Ok(DFField::new(
+                relation.clone(),
+                name,
+                self.get_type(input_schema)?,
+                self.nullable(input_schema)?,
+            )
+            .with_metadata(self.metadata(input_schema)?)),
             _ => Ok(DFField::new_unqualified(
                 &self.display_name()?,
                 self.get_type(input_schema)?,
