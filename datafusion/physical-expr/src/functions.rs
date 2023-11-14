@@ -81,6 +81,21 @@ pub fn create_physical_expr(
                         None,
                     )
                 },
+                Ok(DataType::Float64) => |col_values: &[ColumnarValue]| {
+                    if let ColumnarValue::Scalar(ScalarValue::Float64(Some(float_ts))) = &col_values[0] {
+                        cast_column(
+                            &ColumnarValue::Scalar(ScalarValue::Int64(Some((float_ts * 1_000_000_000 as f64).trunc() as i64))),
+                            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+                            None,
+                        )
+                    } else {
+                        cast_column(
+                            &col_values[0],
+                            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+                            None,
+                        )
+                    }
+                },
                 Ok(DataType::Timestamp(_, None)) => |col_values: &[ColumnarValue]| {
                     cast_column(
                         &col_values[0],

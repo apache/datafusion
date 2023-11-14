@@ -970,6 +970,7 @@ impl BuiltinScalarFunction {
                 1,
                 vec![
                     Int64,
+                    Float64,
                     Timestamp(Nanosecond, None),
                     Timestamp(Microsecond, None),
                     Timestamp(Millisecond, None),

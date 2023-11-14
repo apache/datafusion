@@ -291,6 +291,35 @@ SELECT COUNT(*) FROM ts_data_secs where ts > to_timestamp_seconds('2020-09-08T12
 ----
 2
 
+
+# to_timestamp float inputs
+
+query P
+SELECT to_timestamp(1.1);
+----
+1970-01-01T00:00:01.100
+
+query P
+SELECT to_timestamp(-1.1);
+----
+1969-12-31T23:59:58.900
+
+query P
+SELECT to_timestamp(0.0);
+----
+1970-01-01T00:00:00
+
+query P
+SELECT to_timestamp(1.23456789);
+----
+1970-01-01T00:00:01.234567890
+
+query P
+SELECT to_timestamp(123456789.123456789);
+----
+1973-11-29T21:33:09.123456784
+
+
 # from_unixtime
 
 # 1599566400 is '2020-09-08T12:00:00+00:00'
