@@ -18,8 +18,8 @@
 use super::{Between, Expr, Like};
 use crate::expr::{
     AggregateFunction, AggregateUDF, Alias, BinaryExpr, Cast, GetFieldAccess,
-    GetIndexedField, InList, InSubquery, Placeholder, ScalarFunction, ScalarUDF, Sort,
-    TryCast, WindowFunction,
+    GetIndexedField, InList, InSubquery, Placeholder, ScalarFunction,
+    ScalarFunctionDefinition, ScalarUDF, Sort, TryCast, WindowFunction,
 };
 use crate::field_util::GetFieldAccessSchema;
 use crate::type_coercion::binary::get_result_type;
@@ -89,25 +89,39 @@ impl ExprSchemable for Expr {
                     .collect::<Result<Vec<_>>>()?;
                 Ok((fun.return_type)(&data_types)?.as_ref().clone())
             }
-            Expr::ScalarFunction(ScalarFunction { fun, args }) => {
-                let arg_data_types = args
-                    .iter()
-                    .map(|e| e.get_type(schema))
-                    .collect::<Result<Vec<_>>>()?;
+            Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
+                match func_def {
+                    ScalarFunctionDefinition::BuiltIn(fun) => {
+                        let arg_data_types = args
+                            .iter()
+                            .map(|e| e.get_type(schema))
+                            .collect::<Result<Vec<_>>>()?;
 
-                // verify that input data types is consistent with function's `TypeSignature`
-                data_types(&arg_data_types, &fun.signature()).map_err(|_| {
-                    plan_datafusion_err!(
-                        "{}",
-                        utils::generate_signature_error_msg(
-                            &format!("{fun}"),
-                            fun.signature(),
-                            &arg_data_types,
-                        )
-                    )
-                })?;
+                        // verify that input data types is consistent with function's `TypeSignature`
+                        data_types(&arg_data_types, &fun.signature()).map_err(|_| {
+                            plan_datafusion_err!(
+                                "{}",
+                                utils::generate_signature_error_msg(
+                                    &format!("{fun}"),
+                                    fun.signature(),
+                                    &arg_data_types,
+                                )
+                            )
+                        })?;
 
-                fun.return_type(&arg_data_types)
+                        fun.return_type(&arg_data_types)
+                    }
+                    ScalarFunctionDefinition::UDF(fun) => {
+                        let data_types = args
+                            .iter()
+                            .map(|e| e.get_type(schema))
+                            .collect::<Result<Vec<_>>>()?;
+                        Ok((fun.return_type)(&data_types)?.as_ref().clone())
+                    }
+                    ScalarFunctionDefinition::Name(_) => {
+                        return internal_err!("Function Expr in string representation should be resolved during planning")
+                    }
+                }
             }
             Expr::WindowFunction(WindowFunction { fun, args, .. }) => {
                 let data_types = args
