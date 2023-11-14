@@ -23,8 +23,8 @@
 
 use arrow::{
     array::{
-        Array, ArrayRef, BooleanArray, GenericStringArray, Int32Array, OffsetSizeTrait,
-        StringArray,
+        Array, ArrayRef, BooleanArray, GenericStringArray, Int32Array, Int64Array,
+        OffsetSizeTrait, StringArray,
     },
     datatypes::{ArrowNativeType, ArrowPrimitiveType, DataType},
 };
@@ -36,6 +36,7 @@ use datafusion_common::{
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
+use edit_distance::edit_distance;
 use std::iter;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -643,6 +644,31 @@ pub fn overlay<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
+///Returns the Levenshtein distance between the two given strings
+/// LEVENSHTEIN('kitten', 'sitting') = 3
+pub fn levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 2 {
+        return Err(DataFusionError::Internal(format!(
+            "levenshtein function requires two arguments, got {}",
+            args.len()
+        )));
+    }
+    let str1_array = as_generic_string_array::<T>(&args[0])?;
+    let str2_array = as_generic_string_array::<T>(&args[1])?;
+    let result = str1_array
+        .iter()
+        .zip(str2_array.iter())
+        .map(|(string1, string2)| match (string1, string2) {
+            (Some(string1), Some(string2)) => {
+                Some(edit_distance(string1, string2) as i64)
+            }
+            _ => None,
+        })
+        .collect::<Int64Array>();
+
+    Ok(Arc::new(result) as ArrayRef)
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -703,6 +729,21 @@ mod tests {
         let res = overlay::<i32>(&[string, replace_string, start, end]).unwrap();
         let result = as_generic_string_array::<i32>(&res).unwrap();
         let expected = StringArray::from(vec!["abc", "qwertyasdfg", "ijkz", "Thomas"]);
+        assert_eq!(&expected, result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn to_levenshtein() -> Result<()> {
+        let string1_array =
+            Arc::new(StringArray::from(vec!["123", "abc", "xyz", "kitten"]));
+        let string2_array =
+            Arc::new(StringArray::from(vec!["321", "def", "zyx", "sitting"]));
+        let res = levenshtein::<i32>(&[string1_array, string2_array]).unwrap();
+        let result =
+            as_int64_array(&res).expect("failed to initialized function levenshtein");
+        let expected = Int64Array::from(vec![2, 3, 2, 3]);
         assert_eq!(&expected, result);
 
         Ok(())

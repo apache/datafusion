@@ -15137,7 +15137,7 @@ impl<'de> serde::Deserialize<'de> for PartiallySortedPartitionSearchMode {
                             if columns__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("columns"));
                             }
-                            columns__ = 
+                            columns__ =
                                 Some(map_.next_value::<Vec<::pbjson::private::NumberDeserialize<_>>>()?
                                     .into_iter().map(|x| x.0).collect())
                             ;
@@ -19866,7 +19866,7 @@ impl<'de> serde::Deserialize<'de> for PrimaryKeyConstraint {
                             if indices__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("indices"));
                             }
-                            indices__ = 
+                            indices__ =
                                 Some(map_.next_value::<Vec<::pbjson::private::NumberDeserialize<_>>>()?
                                     .into_iter().map(|x| x.0).collect())
                             ;
@@ -20936,6 +20936,7 @@ impl serde::Serialize for ScalarFunction {
             Self::ArrayIntersect => "ArrayIntersect",
             Self::ArrayUnion => "ArrayUnion",
             Self::OverLay => "OverLay",
+            Self::Levenshtein => "Levenshtein",
         };
         serializer.serialize_str(variant)
     }
@@ -21069,6 +21070,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "ArrayIntersect",
             "ArrayUnion",
             "OverLay",
+            "Levenshtein",
         ];
 
         struct GeneratedVisitor;
@@ -21231,6 +21233,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "ArrayIntersect" => Ok(ScalarFunction::ArrayIntersect),
                     "ArrayUnion" => Ok(ScalarFunction::ArrayUnion),
                     "OverLay" => Ok(ScalarFunction::OverLay),
+                    "Levenshtein" => Ok(ScalarFunction::Levenshtein),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }
@@ -21451,7 +21454,7 @@ impl<'de> serde::Deserialize<'de> for ScalarListValue {
                             if ipc_message__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("ipcMessage"));
                             }
-                            ipc_message__ = 
+                            ipc_message__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -21459,7 +21462,7 @@ impl<'de> serde::Deserialize<'de> for ScalarListValue {
                             if arrow_data__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("arrowData"));
                             }
-                            arrow_data__ = 
+                            arrow_data__ =
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -24893,7 +24896,7 @@ impl<'de> serde::Deserialize<'de> for UniqueConstraint {
                             if indices__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("indices"));
                             }
-                            indices__ = 
+                            indices__ =
                                 Some(map_.next_value::<Vec<::pbjson::private::NumberDeserialize<_>>>()?
                                     .into_iter().map(|x| x.0).collect())
                             ;
