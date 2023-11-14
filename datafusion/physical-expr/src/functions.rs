@@ -87,7 +87,7 @@ pub fn create_physical_expr(
                     {
                         cast_column(
                             &ColumnarValue::Scalar(ScalarValue::Int64(Some(
-                                (float_ts * 1_000_000_000 as f64).trunc() as i64,
+                                (float_ts * 1_000_000_000_f64).trunc() as i64,
                             ))),
                             &DataType::Timestamp(TimeUnit::Nanosecond, None),
                             None,
