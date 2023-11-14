@@ -20,7 +20,7 @@
 use std::any::Any;
 use std::fmt::Formatter;
 use std::fs::{File, OpenOptions};
-use std::io::{BufReader, Read, Write};
+use std::io::BufReader;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -59,9 +59,11 @@ impl TableProviderFactory for StreamTableFactory {
         let schema: SchemaRef = Arc::new(cmd.schema.as_ref().into());
         let location = cmd.location.clone();
         let encoding = cmd.file_type.parse()?;
+
         let config = StreamConfig::new_file(schema, location.into())
             .with_encoding(encoding)
-            .with_order(cmd.order_exprs.clone());
+            .with_order(cmd.order_exprs.clone())
+            .with_header(cmd.has_header);
 
         Ok(Arc::new(StreamTable(Arc::new(config))))
     }
@@ -74,41 +76,6 @@ pub enum StreamEncoding {
     Csv,
     /// Newline-delimited JSON records
     Json,
-}
-
-impl StreamEncoding {
-    fn reader<R: Read + 'static>(
-        &self,
-        schema: SchemaRef,
-        read: R,
-    ) -> Result<Box<dyn RecordBatchReader>> {
-        match self {
-            StreamEncoding::Csv => Ok(Box::new(
-                arrow::csv::ReaderBuilder::new(schema).build(read)?,
-            )),
-            StreamEncoding::Json => {
-                let reader = arrow::json::ReaderBuilder::new(schema)
-                    .build(BufReader::new(read))?;
-
-                Ok(Box::new(reader))
-            }
-        }
-    }
-
-    fn writer<W: Write + 'static>(&self, write: W) -> Result<Box<dyn RecordBatchWriter>> {
-        match self {
-            StreamEncoding::Csv => {
-                let writer = arrow::csv::WriterBuilder::new()
-                    .with_header(false)
-                    .build(write);
-
-                Ok(Box::new(writer))
-            }
-            StreamEncoding::Json => {
-                Ok(Box::new(arrow::json::LineDelimitedWriter::new(write)))
-            }
-        }
-    }
 }
 
 impl FromStr for StreamEncoding {
@@ -129,6 +96,7 @@ pub struct StreamConfig {
     schema: SchemaRef,
     location: PathBuf,
     encoding: StreamEncoding,
+    header: bool,
     order: Vec<Vec<Expr>>,
 }
 
@@ -140,6 +108,7 @@ impl StreamConfig {
             location,
             encoding: StreamEncoding::Csv,
             order: vec![],
+            header: false,
         }
     }
 
@@ -149,10 +118,54 @@ impl StreamConfig {
         self
     }
 
+    /// Specify whether the file has a header (only applicable for [`StreamEncoding::Csv`])
+    pub fn with_header(mut self, header: bool) -> Self {
+        self.header = header;
+        self
+    }
+
     /// Specify an encoding for the stream
     pub fn with_encoding(mut self, encoding: StreamEncoding) -> Self {
         self.encoding = encoding;
         self
+    }
+
+    fn reader(&self) -> Result<Box<dyn RecordBatchReader>> {
+        let file = File::open(&self.location)?;
+        let schema = self.schema.clone();
+        match &self.encoding {
+            StreamEncoding::Csv => {
+                let reader = arrow::csv::ReaderBuilder::new(schema)
+                    .with_header(self.header)
+                    .build(file)?;
+
+                Ok(Box::new(reader))
+            }
+            StreamEncoding::Json => {
+                let reader = arrow::json::ReaderBuilder::new(schema)
+                    .build(BufReader::new(file))?;
+
+                Ok(Box::new(reader))
+            }
+        }
+    }
+
+    fn writer(&self) -> Result<Box<dyn RecordBatchWriter>> {
+        match &self.encoding {
+            StreamEncoding::Csv => {
+                let header = self.header && !self.location.exists();
+                let file = OpenOptions::new().write(true).open(&self.location)?;
+                let writer = arrow::csv::WriterBuilder::new()
+                    .with_header(header)
+                    .build(file);
+
+                Ok(Box::new(writer))
+            }
+            StreamEncoding::Json => {
+                let file = OpenOptions::new().write(true).open(&self.location)?;
+                Ok(Box::new(arrow::json::LineDelimitedWriter::new(file)))
+            }
+        }
     }
 }
 
@@ -177,7 +190,7 @@ impl TableProvider for StreamTable {
     }
 
     fn table_type(&self) -> TableType {
-        TableType::Temporary
+        TableType::Base
     }
 
     async fn scan(
@@ -242,8 +255,7 @@ impl PartitionStream for StreamRead {
         let mut builder = RecordBatchReceiverStreamBuilder::new(schema, 2);
         let tx = builder.tx();
         builder.spawn_blocking(move || {
-            let file = File::open(&config.location)?;
-            let reader = config.encoding.reader(config.schema.clone(), file)?;
+            let reader = config.reader()?;
             for b in reader {
                 if tx.blocking_send(b.map_err(Into::into)).is_err() {
                     break;
@@ -283,9 +295,8 @@ impl DataSink for StreamWrite {
         let (sender, mut receiver) = tokio::sync::mpsc::channel::<RecordBatch>(2);
         // Note: FIFO Files support poll so this could use AsyncFd
         let write = AbortOnDropSingle::new(spawn_blocking(move || {
-            let file = OpenOptions::new().write(true).open(&config.location)?;
             let mut count = 0_u64;
-            let mut writer = config.encoding.writer(file)?;
+            let mut writer = config.writer()?;
             while let Some(batch) = receiver.blocking_recv() {
                 count += batch.num_rows() as u64;
                 writer.write(&batch)?;

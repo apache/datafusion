@@ -241,7 +241,14 @@ impl TableProviderFactory for DefaultTableFactory {
         state: &SessionState,
         cmd: &CreateExternalTable,
     ) -> Result<Arc<dyn TableProvider>> {
-        match cmd.unbounded {
+        let mut unbounded = cmd.unbounded;
+        for (k, v) in &cmd.options {
+            if k.eq_ignore_ascii_case("unbounded") && v.eq_ignore_ascii_case("true") {
+                unbounded = true
+            }
+        }
+
+        match unbounded {
             true => self.stream.create(state, cmd).await,
             false => self.listing.create(state, cmd).await,
         }
