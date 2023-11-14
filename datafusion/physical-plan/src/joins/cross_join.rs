@@ -27,23 +27,22 @@ use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::DisplayAs;
 use crate::{
     coalesce_batches::concat_batches, coalesce_partitions::CoalescePartitionsExec,
-    ColumnStatistics, DisplayFormatType, Distribution, EquivalenceProperties,
-    ExecutionPlan, Partitioning, PhysicalSortExpr, RecordBatchStream,
-    SendableRecordBatchStream, Statistics,
+    ColumnStatistics, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
+    PhysicalSortExpr, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
 use arrow::datatypes::{Fields, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_array::RecordBatchOptions;
 use datafusion_common::stats::Precision;
-use datafusion_common::{plan_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{plan_err, DataFusionError, JoinType, Result, ScalarValue};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::equivalence::join_equivalence_properties;
+use datafusion_physical_expr::EquivalenceProperties;
 
 use async_trait::async_trait;
-use datafusion_physical_expr::equivalence::cross_join_equivalence_properties;
-use futures::{ready, StreamExt};
-use futures::{Stream, TryStreamExt};
+use futures::{ready, Stream, StreamExt, TryStreamExt};
 
 /// Data of the left side
 type JoinLeftData = (RecordBatch, MemoryReservation);
@@ -106,12 +105,11 @@ async fn load_left_input(
     reservation: MemoryReservation,
 ) -> Result<JoinLeftData> {
     // merge all left parts into a single stream
-    let merge = {
-        if left.output_partitioning().partition_count() != 1 {
-            Arc::new(CoalescePartitionsExec::new(left.clone()))
-        } else {
-            left.clone()
-        }
+    let left_schema = left.schema();
+    let merge = if left.output_partitioning().partition_count() != 1 {
+        Arc::new(CoalescePartitionsExec::new(left))
+    } else {
+        left
     };
     let stream = merge.execute(0, context)?;
 
@@ -136,7 +134,7 @@ async fn load_left_input(
         )
         .await?;
 
-    let merged_batch = concat_batches(&left.schema(), &batches, num_rows)?;
+    let merged_batch = concat_batches(&left_schema, &batches, num_rows)?;
 
     Ok((merged_batch, reservation))
 }
@@ -217,12 +215,14 @@ impl ExecutionPlan for CrossJoinExec {
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
-        let left_columns_len = self.left.schema().fields.len();
-        cross_join_equivalence_properties(
+        join_equivalence_properties(
             self.left.equivalence_properties(),
             self.right.equivalence_properties(),
-            left_columns_len,
+            &JoinType::Full,
             self.schema(),
+            &[false, false],
+            None,
+            &[],
         )
     }
 
@@ -344,7 +344,7 @@ fn build_batch(
         .iter()
         .map(|arr| {
             let scalar = ScalarValue::try_from_array(arr, left_index)?;
-            Ok(scalar.to_array_of_size(batch.num_rows()))
+            scalar.to_array_of_size(batch.num_rows())
         })
         .collect::<Result<Vec<_>>>()?;
 

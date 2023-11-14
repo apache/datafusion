@@ -25,11 +25,16 @@ use arrow::{
     datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
+use arrow_array::builder::{Int64Builder, StringBuilder};
 use datafusion::datasource::MemTable;
 use datafusion::error::Result;
+use datafusion_common::DataFusionError;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
+use rand_distr::Distribution;
+use rand_distr::{Normal, Pareto};
+use std::fmt::Write;
 use std::sync::Arc;
 
 /// create an in-memory table given the partition len, array len, and batch size,
@@ -155,4 +160,84 @@ pub fn create_record_batches(
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>()
+}
+
+/// Create time series data with `partition_cnt` partitions and `sample_cnt` rows per partition
+/// in ascending order, if `asc` is true, otherwise randomly sampled using a Pareto distribution
+#[allow(dead_code)]
+pub(crate) fn make_data(
+    partition_cnt: i32,
+    sample_cnt: i32,
+    asc: bool,
+) -> Result<(Arc<Schema>, Vec<Vec<RecordBatch>>), DataFusionError> {
+    // constants observed from trace data
+    let simultaneous_group_cnt = 2000;
+    let fitted_shape = 12f64;
+    let fitted_scale = 5f64;
+    let mean = 0.1;
+    let stddev = 1.1;
+    let pareto = Pareto::new(fitted_scale, fitted_shape).unwrap();
+    let normal = Normal::new(mean, stddev).unwrap();
+    let mut rng = rand::rngs::SmallRng::from_seed([0; 32]);
+
+    // populate data
+    let schema = test_schema();
+    let mut partitions = vec![];
+    let mut cur_time = 16909000000000i64;
+    for _ in 0..partition_cnt {
+        let mut id_builder = StringBuilder::new();
+        let mut ts_builder = Int64Builder::new();
+        let gen_id = |rng: &mut rand::rngs::SmallRng| {
+            rng.gen::<[u8; 16]>()
+                .iter()
+                .fold(String::new(), |mut output, b| {
+                    let _ = write!(output, "{b:02X}");
+                    output
+                })
+        };
+        let gen_sample_cnt =
+            |mut rng: &mut rand::rngs::SmallRng| pareto.sample(&mut rng).ceil() as u32;
+        let mut group_ids = (0..simultaneous_group_cnt)
+            .map(|_| gen_id(&mut rng))
+            .collect::<Vec<_>>();
+        let mut group_sample_cnts = (0..simultaneous_group_cnt)
+            .map(|_| gen_sample_cnt(&mut rng))
+            .collect::<Vec<_>>();
+        for _ in 0..sample_cnt {
+            let random_index = rng.gen_range(0..simultaneous_group_cnt);
+            let trace_id = &mut group_ids[random_index];
+            let sample_cnt = &mut group_sample_cnts[random_index];
+            *sample_cnt -= 1;
+            if *sample_cnt == 0 {
+                *trace_id = gen_id(&mut rng);
+                *sample_cnt = gen_sample_cnt(&mut rng);
+            }
+
+            id_builder.append_value(trace_id);
+            ts_builder.append_value(cur_time);
+
+            if asc {
+                cur_time += 1;
+            } else {
+                let samp: f64 = normal.sample(&mut rng);
+                let samp = samp.round();
+                cur_time += samp as i64;
+            }
+        }
+
+        // convert to MemTable
+        let id_col = Arc::new(id_builder.finish());
+        let ts_col = Arc::new(ts_builder.finish());
+        let batch = RecordBatch::try_new(schema.clone(), vec![id_col, ts_col])?;
+        partitions.push(vec![batch]);
+    }
+    Ok((schema, partitions))
+}
+
+/// The Schema used by make_data
+fn test_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("trace_id", DataType::Utf8, false),
+        Field::new("timestamp_ms", DataType::Int64, false),
+    ]))
 }

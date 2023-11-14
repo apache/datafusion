@@ -635,6 +635,7 @@ nullif(expression1, expression2)
 - [trim](#trim)
 - [upper](#upper)
 - [uuid](#uuid)
+- [overlay](#overlay)
 
 ### `ascii`
 
@@ -1120,6 +1121,22 @@ Returns UUID v4 string value which is unique per row.
 uuid()
 ```
 
+### `overlay`
+
+Returns the string which is replaced by another string from the specified position and specified count length.
+For example, `overlay('Txxxxas' placing 'hom' from 2 for 4) → Thomas`
+
+```
+overlay(str PLACING substr FROM pos [FOR count])
+```
+
+#### Arguments
+
+- **str**: String expression to operate on.
+- **substr**: the string to replace part of str.
+- **pos**: the start position to replace of str.
+- **count**: the count of characters to be replaced from start position of str. If not specified, will use substr length instead.
+
 ## Binary String Functions
 
 - [decode](#decode)
@@ -1391,10 +1408,11 @@ extract(field FROM source)
 
 ### `to_timestamp`
 
-Converts a value to RFC3339 nanosecond timestamp format (`YYYY-MM-DDT00:00:00Z`).
-Supports timestamp, integer, and unsigned integer types as input.
-Integers and unsigned integers are parsed as Unix second timestamps and
-return the corresponding RFC3339 timestamp.
+Converts a value to a timestamp (`YYYY-MM-DDT00:00:00Z`).
+Supports strings, integer, and unsigned integer types as input.
+Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
+Integers and unsigned integers are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`)
+return the corresponding timestamp.
 
 ```
 to_timestamp(expression)
@@ -1407,10 +1425,11 @@ to_timestamp(expression)
 
 ### `to_timestamp_millis`
 
-Converts a value to RFC3339 millisecond timestamp format (`YYYY-MM-DDT00:00:00.000Z`).
-Supports timestamp, integer, and unsigned integer types as input.
-Integers and unsigned integers are parsed as Unix nanosecond timestamps and
-return the corresponding RFC3339 timestamp.
+Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000Z`).
+Supports strings, integer, and unsigned integer types as input.
+Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
+Integers and unsigned integers are interpreted as milliseconds since the unix epoch (`1970-01-01T00:00:00Z`)
+return the corresponding timestamp.
 
 ```
 to_timestamp_millis(expression)
@@ -1423,10 +1442,11 @@ to_timestamp_millis(expression)
 
 ### `to_timestamp_micros`
 
-Converts a value to RFC3339 microsecond timestamp format (`YYYY-MM-DDT00:00:00.000000Z`).
-Supports timestamp, integer, and unsigned integer types as input.
-Integers and unsigned integers are parsed as Unix nanosecond timestamps and
-return the corresponding RFC3339 timestamp.
+Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000Z`).
+Supports strings, integer, and unsigned integer types as input.
+Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
+Integers and unsigned integers are interpreted as microseconds since the unix epoch (`1970-01-01T00:00:00Z`)
+return the corresponding timestamp.
 
 ```
 to_timestamp_nanos(expression)
@@ -1434,10 +1454,11 @@ to_timestamp_nanos(expression)
 
 ### `to_timestamp_nanos`
 
-Converts a value to RFC3339 nanosecond timestamp format (`YYYY-MM-DDT00:00:00.000000000Z`).
-Supports timestamp, integer, and unsigned integer types as input.
-Integers and unsigned integers are parsed as Unix nanosecond timestamps and
-return the corresponding RFC3339 timestamp.
+Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000000Z`).
+Supports strings, integer, and unsigned integer types as input.
+Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
+Integers and unsigned integers are interpreted as nanoseconds since the unix epoch (`1970-01-01T00:00:00Z`)
+return the corresponding timestamp.
 
 ```
 to_timestamp_nanos(expression)
@@ -1450,10 +1471,11 @@ to_timestamp_nanos(expression)
 
 ### `to_timestamp_seconds`
 
-Converts a value to RFC3339 second timestamp format (`YYYY-MM-DDT00:00:00Z`).
-Supports timestamp, integer, and unsigned integer types as input.
-Integers and unsigned integers are parsed as Unix nanosecond timestamps and
-return the corresponding RFC3339 timestamp.
+Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000Z`).
+Supports strings, integer, and unsigned integer types as input.
+Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
+Integers and unsigned integers are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`)
+return the corresponding timestamp.
 
 ```
 to_timestamp_seconds(expression)
@@ -1467,8 +1489,8 @@ to_timestamp_seconds(expression)
 ### `from_unixtime`
 
 Converts an integer to RFC3339 timestamp format (`YYYY-MM-DDT00:00:00.000000000Z`).
-Input is parsed as a Unix nanosecond timestamp and returns the corresponding
-RFC3339 timestamp.
+Integers and unsigned integers are interpreted as nanoseconds since the unix epoch (`1970-01-01T00:00:00Z`)
+return the corresponding timestamp.
 
 ```
 from_unixtime(expression)
@@ -2205,6 +2227,44 @@ array_to_string(array, delimiter)
 - array_join
 - list_join
 - list_to_string
+
+### `array_union`
+
+Returns an array of elements that are present in both arrays (all elements from both arrays) with out duplicates.
+
+```
+array_union(array1, array2)
+```
+
+#### Arguments
+
+- **array1**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```
+❯ select array_union([1, 2, 3, 4], [5, 6, 3, 4]);
++----------------------------------------------------+
+| array_union([1, 2, 3, 4], [5, 6, 3, 4]);           |
++----------------------------------------------------+
+| [1, 2, 3, 4, 5, 6]                                 |
++----------------------------------------------------+
+❯ select array_union([1, 2, 3, 4], [5, 6, 7, 8]);
++----------------------------------------------------+
+| array_union([1, 2, 3, 4], [5, 6, 7, 8]);           |
++----------------------------------------------------+
+| [1, 2, 3, 4, 5, 6]                                 |
++----------------------------------------------------+
+```
+
+---
+
+#### Aliases
+
+- list_union
 
 ### `cardinality`
 

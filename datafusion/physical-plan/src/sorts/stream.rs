@@ -118,7 +118,7 @@ impl RowCursorStream {
         let cols = self
             .column_expressions
             .iter()
-            .map(|expr| Ok(expr.evaluate(batch)?.into_array(batch.num_rows())))
+            .map(|expr| expr.evaluate(batch)?.into_array(batch.num_rows()))
             .collect::<Result<Vec<_>>>()?;
 
         let rows = self.converter.convert_columns(&cols)?;
@@ -181,7 +181,7 @@ impl<T: CursorArray> FieldCursorStream<T> {
 
     fn convert_batch(&mut self, batch: &RecordBatch) -> Result<ArrayValues<T::Values>> {
         let value = self.sort.expr.evaluate(batch)?;
-        let array = value.into_array(batch.num_rows());
+        let array = value.into_array(batch.num_rows())?;
         let array = array.as_any().downcast_ref::<T>().expect("field values");
         Ok(ArrayValues::new(self.sort.options, array))
     }

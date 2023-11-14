@@ -405,7 +405,7 @@ macro_rules! get_min_max_values {
             .flatten()
             // column either didn't have statistics at all or didn't have min/max values
             .or_else(|| Some(null_scalar.clone()))
-            .map(|s| s.to_array())
+            .and_then(|s| s.to_array().ok())
     }}
 }
 
@@ -425,7 +425,7 @@ macro_rules! get_null_count_values {
             },
         );
 
-        Some(value.to_array())
+        value.to_array().ok()
     }};
 }
 

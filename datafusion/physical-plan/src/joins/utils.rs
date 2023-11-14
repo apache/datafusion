@@ -40,12 +40,12 @@ use datafusion_common::{
     plan_datafusion_err, plan_err, DataFusionError, JoinSide, JoinType, Result,
     SharedResult,
 };
+use datafusion_physical_expr::equivalence::add_offset_to_expr;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::intervals::{ExprIntervalGraph, Interval, IntervalBound};
 use datafusion_physical_expr::utils::merge_vectors;
 use datafusion_physical_expr::{
-    add_offset_to_expr, add_offset_to_lex_ordering, LexOrdering, LexOrderingRef,
-    PhysicalExpr, PhysicalSortExpr,
+    LexOrdering, LexOrderingRef, PhysicalExpr, PhysicalSortExpr,
 };
 
 use futures::future::{BoxFuture, Shared};
@@ -91,8 +91,8 @@ fn check_join_set_is_valid(
 
     if !left_missing.is_empty() | !right_missing.is_empty() {
         return plan_err!(
-                "The left or right side of the join does not have all columns on \"on\": \nMissing on the left: {left_missing:?}\nMissing on the right: {right_missing:?}"
-            );
+            "The left or right side of the join does not have all columns on \"on\": \nMissing on the left: {left_missing:?}\nMissing on the right: {right_missing:?}"
+        );
     };
 
     Ok(())
@@ -133,7 +133,7 @@ pub fn adjust_right_output_partitioning(
             let new_exprs = exprs
                 .into_iter()
                 .map(|expr| add_offset_to_expr(expr, left_columns_len))
-                .collect::<Vec<_>>();
+                .collect();
             Partitioning::Hash(new_exprs, size)
         }
     }
@@ -169,23 +169,22 @@ pub fn calculate_join_output_ordering(
     maintains_input_order: &[bool],
     probe_side: Option<JoinSide>,
 ) -> Option<LexOrdering> {
-    // All joins have 2 children:
-    assert_eq!(maintains_input_order.len(), 2);
-    let left_maintains = maintains_input_order[0];
-    let right_maintains = maintains_input_order[1];
     let mut right_ordering = match join_type {
         // In the case below, right ordering should be offseted with the left
         // side length, since we append the right table to the left table.
         JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
-            add_offset_to_lex_ordering(right_ordering, left_columns_len)
+            right_ordering
+                .iter()
+                .map(|sort_expr| PhysicalSortExpr {
+                    expr: add_offset_to_expr(sort_expr.expr.clone(), left_columns_len),
+                    options: sort_expr.options,
+                })
+                .collect()
         }
         _ => right_ordering.to_vec(),
     };
-    let output_ordering = match (left_maintains, right_maintains) {
-        (true, true) => {
-            unreachable!("Cannot maintain ordering of both sides");
-        }
-        (true, false) => {
+    let output_ordering = match maintains_input_order {
+        [true, false] => {
             // Special case, we can prefix ordering of right side with the ordering of left side.
             if join_type == JoinType::Inner && probe_side == Some(JoinSide::Left) {
                 replace_on_columns_of_right_ordering(
@@ -198,7 +197,7 @@ pub fn calculate_join_output_ordering(
                 left_ordering.to_vec()
             }
         }
-        (false, true) => {
+        [false, true] => {
             // Special case, we can prefix ordering of left side with the ordering of right side.
             if join_type == JoinType::Inner && probe_side == Some(JoinSide::Right) {
                 replace_on_columns_of_right_ordering(
@@ -212,13 +211,15 @@ pub fn calculate_join_output_ordering(
             }
         }
         // Doesn't maintain ordering, output ordering is None.
-        (false, false) => return None,
+        [false, false] => return None,
+        [true, true] => unreachable!("Cannot maintain ordering of both sides"),
+        _ => unreachable!("Join operators can not have more than two children"),
     };
     (!output_ordering.is_empty()).then_some(output_ordering)
 }
 
 /// Information about the index and placement (left or right) of the columns
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ColumnIndex {
     /// Index of the column
     pub index: usize,
@@ -777,7 +778,7 @@ pub(crate) fn apply_join_filter_to_indices(
     let filter_result = filter
         .expression()
         .evaluate(&intermediate_batch)?
-        .into_array(intermediate_batch.num_rows());
+        .into_array(intermediate_batch.num_rows())?;
     let mask = as_boolean_array(&filter_result)?;
 
     let left_filtered = compute::filter(&build_indices, mask)?;

@@ -40,6 +40,8 @@ pub struct DistinctArrayAgg {
     input_data_type: DataType,
     /// The input expression
     expr: Arc<dyn PhysicalExpr>,
+    /// If the input expression can have NULLs
+    nullable: bool,
 }
 
 impl DistinctArrayAgg {
@@ -48,12 +50,14 @@ impl DistinctArrayAgg {
         expr: Arc<dyn PhysicalExpr>,
         name: impl Into<String>,
         input_data_type: DataType,
+        nullable: bool,
     ) -> Self {
         let name = name.into();
         Self {
             name,
-            expr,
             input_data_type,
+            expr,
+            nullable,
         }
     }
 }
@@ -67,8 +71,9 @@ impl AggregateExpr for DistinctArrayAgg {
     fn field(&self) -> Result<Field> {
         Ok(Field::new_list(
             &self.name,
+            // This should be the same as return type of AggregateFunction::ArrayAgg
             Field::new("item", self.input_data_type.clone(), true),
-            false,
+            self.nullable,
         ))
     }
 
@@ -82,7 +87,7 @@ impl AggregateExpr for DistinctArrayAgg {
         Ok(vec![Field::new_list(
             format_state_name(&self.name, "distinct_array_agg"),
             Field::new("item", self.input_data_type.clone(), true),
-            false,
+            self.nullable,
         )])
     }
 
@@ -185,7 +190,7 @@ mod tests {
     use arrow_array::types::Int32Type;
     use arrow_array::{Array, ListArray};
     use arrow_buffer::OffsetBuffer;
-    use datafusion_common::utils::wrap_into_list_array;
+    use datafusion_common::utils::array_into_list_array;
     use datafusion_common::{internal_err, DataFusionError};
 
     // arrow::compute::sort cann't sort ListArray directly, so we need to sort the inner primitive array and wrap it back into ListArray.
@@ -201,7 +206,7 @@ mod tests {
         };
 
         let arr = arrow::compute::sort(&arr, None).unwrap();
-        let list_arr = wrap_into_list_array(arr);
+        let list_arr = array_into_list_array(arr);
         ScalarValue::List(Arc::new(list_arr))
     }
 
@@ -238,6 +243,7 @@ mod tests {
             col("a", &schema)?,
             "bla".to_string(),
             datatype,
+            true,
         ));
         let actual = aggregate(&batch, agg)?;
 
@@ -255,6 +261,7 @@ mod tests {
             col("a", &schema)?,
             "bla".to_string(),
             datatype,
+            true,
         ));
 
         let mut accum1 = agg.create_accumulator()?;

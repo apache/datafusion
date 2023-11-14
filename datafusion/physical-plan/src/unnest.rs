@@ -23,9 +23,8 @@ use std::{any::Any, sync::Arc};
 
 use super::DisplayAs;
 use crate::{
-    expressions::Column, DisplayFormatType, Distribution, EquivalenceProperties,
-    ExecutionPlan, Partitioning, PhysicalExpr, PhysicalSortExpr, RecordBatchStream,
-    SendableRecordBatchStream,
+    expressions::Column, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
+    PhysicalExpr, PhysicalSortExpr, RecordBatchStream, SendableRecordBatchStream,
 };
 
 use arrow::array::{
@@ -136,10 +135,6 @@ impl ExecutionPlan for UnnestExec {
         None
     }
 
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        self.input.equivalence_properties()
-    }
-
     fn execute(
         &self,
         partition: usize,
@@ -247,7 +242,7 @@ fn build_batch(
     column: &Column,
     options: &UnnestOptions,
 ) -> Result<RecordBatch> {
-    let list_array = column.evaluate(batch)?.into_array(batch.num_rows());
+    let list_array = column.evaluate(batch)?.into_array(batch.num_rows())?;
     match list_array.data_type() {
         DataType::List(_) => {
             let list_array = list_array.as_any().downcast_ref::<ListArray>().unwrap();

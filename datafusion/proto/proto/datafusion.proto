@@ -73,6 +73,7 @@ message LogicalPlanNode {
     CustomTableScanNode custom_scan = 25;
     PrepareNode prepare = 26;
     DropViewNode drop_view = 27;
+    DistinctOnNode distinct_on = 28;
   }
 }
 
@@ -308,6 +309,13 @@ message DistinctNode {
   LogicalPlanNode input = 1;
 }
 
+message DistinctOnNode {
+  repeated LogicalExprNode on_expr = 1;
+  repeated LogicalExprNode select_expr = 2;
+  repeated LogicalExprNode sort_expr = 3;
+  LogicalPlanNode input = 4;
+}
+
 message UnionNode {
   repeated LogicalPlanNode inputs = 1;
 }
@@ -363,7 +371,7 @@ message LogicalExprNode {
     SortExprNode sort = 12;
     NegativeNode negative = 13;
     InListNode in_list = 14;
-    bool wildcard = 15;
+    Wildcard wildcard = 15;
     ScalarFunctionNode scalar_function = 16;
     TryCastNode try_cast = 17;
 
@@ -397,6 +405,10 @@ message LogicalExprNode {
     PlaceholderNode placeholder = 34;
 
   }
+}
+
+message Wildcard {
+  optional string qualifier = 1;
 }
 
 message PlaceholderNode {
@@ -481,6 +493,7 @@ message Not {
 message AliasNode {
   LogicalExprNode expr = 1;
   string alias = 2;
+  repeated OwnedTableReference relation = 3;
 }
 
 message BinaryExprNode {
@@ -621,6 +634,9 @@ enum ScalarFunction {
   ArrayPopBack = 116;
   StringToArray = 117;
   ToTimestampNanos = 118;
+  ArrayIntersect = 119;
+  ArrayUnion = 120;
+  OverLay = 121;
 }
 
 message ScalarFunctionNode {
@@ -1070,8 +1086,10 @@ message PlanType {
     OptimizedLogicalPlanType OptimizedLogicalPlan = 2;
     EmptyMessage FinalLogicalPlan = 3;
     EmptyMessage InitialPhysicalPlan = 4;
+    EmptyMessage InitialPhysicalPlanWithStats = 9;
     OptimizedPhysicalPlanType OptimizedPhysicalPlan = 5;
     EmptyMessage FinalPhysicalPlan = 6;
+    EmptyMessage FinalPhysicalPlanWithStats = 10;
   }
 }
 
@@ -1130,7 +1148,61 @@ message PhysicalPlanNode {
     SortPreservingMergeExecNode sort_preserving_merge = 21;
     NestedLoopJoinExecNode nested_loop_join = 22;
     AnalyzeExecNode analyze = 23;
+    JsonSinkExecNode json_sink = 24;
   }
+}
+
+enum FileWriterMode {
+  APPEND = 0;
+  PUT = 1;
+  PUT_MULTIPART = 2;
+}
+
+enum CompressionTypeVariant {
+  GZIP = 0;
+  BZIP2 = 1;
+  XZ = 2;
+  ZSTD = 3;
+  UNCOMPRESSED = 4;
+}
+
+message PartitionColumn {
+  string name = 1;
+  ArrowType arrow_type = 2;
+}
+
+message FileTypeWriterOptions {
+  oneof FileType {
+    JsonWriterOptions json_options = 1;
+  }
+}
+
+message JsonWriterOptions {
+  CompressionTypeVariant compression = 1;
+}
+
+message FileSinkConfig {
+  string object_store_url = 1;
+  repeated PartitionedFile file_groups = 2;
+  repeated string table_paths = 3;
+  Schema output_schema = 4;
+  repeated PartitionColumn table_partition_cols = 5;
+  FileWriterMode writer_mode = 6;
+  bool single_file_output = 7;
+  bool unbounded_input = 8;
+  bool overwrite = 9;
+  FileTypeWriterOptions file_type_writer_options = 10;
+}
+
+message JsonSink {
+  FileSinkConfig config = 1;
+}
+
+message JsonSinkExecNode {
+  PhysicalPlanNode input = 1;
+  JsonSink sink = 2;
+  Schema sink_schema = 3;
+  PhysicalSortExprNodeCollection sort_order = 4;
 }
 
 message PhysicalExtensionNode {
