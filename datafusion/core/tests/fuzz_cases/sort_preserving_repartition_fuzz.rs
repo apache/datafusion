@@ -17,31 +17,35 @@
 
 #[cfg(test)]
 mod sp_repartition_fuzz_tests {
+    use std::sync::Arc;
+
     use arrow::compute::{concat_batches, lexsort, SortColumn};
     use arrow_array::{ArrayRef, Int64Array, RecordBatch, UInt64Array};
     use arrow_schema::{DataType, Field, Schema, SchemaRef, SortOptions};
-    use datafusion::physical_plan::memory::MemoryExec;
-    use datafusion::physical_plan::repartition::RepartitionExec;
-    use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-    use datafusion::physical_plan::{collect, ExecutionPlan, Partitioning};
+
+    use datafusion::physical_plan::{
+        collect,
+        memory::MemoryExec,
+        metrics::{BaselineMetrics, ExecutionPlanMetricsSet},
+        repartition::RepartitionExec,
+        sorts::sort_preserving_merge::SortPreservingMergeExec,
+        sorts::streaming_merge::streaming_merge,
+        stream::RecordBatchStreamAdapter,
+        ExecutionPlan, Partitioning,
+    };
     use datafusion::prelude::SessionContext;
     use datafusion_common::Result;
-    use datafusion_execution::config::SessionConfig;
-    use datafusion_execution::memory_pool::MemoryConsumer;
-    use datafusion_execution::SendableRecordBatchStream;
-    use datafusion_physical_expr::expressions::{col, Column};
+    use datafusion_execution::{
+        config::SessionConfig, memory_pool::MemoryConsumer, SendableRecordBatchStream,
+    };
     use datafusion_physical_expr::{
+        expressions::{col, Column},
         EquivalenceProperties, PhysicalExpr, PhysicalSortExpr,
     };
-    use datafusion_physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
-    use datafusion_physical_plan::sorts::streaming_merge::streaming_merge;
-    use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
-    use itertools::izip;
-    use rand::rngs::StdRng;
-    use rand::seq::SliceRandom;
-    use rand::{Rng, SeedableRng};
-    use std::sync::Arc;
     use test_utils::add_empty_batches;
+
+    use itertools::izip;
+    use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
 
     // Generate a schema which consists of 6 columns (a, b, c, d, e, f)
     fn create_test_schema() -> Result<SchemaRef> {

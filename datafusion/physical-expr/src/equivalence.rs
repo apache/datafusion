@@ -459,7 +459,7 @@ impl EquivalenceGroup {
 
 /// This function constructs a duplicate-free `LexOrderingReq` by filtering out
 /// duplicate entries that have same physical expression inside. For example,
-/// `vec![a Some(Asc), a Some(Desc)]` collapses to `vec![a Some(Asc)]`.
+/// `vec![a Some(ASC), a Some(DESC)]` collapses to `vec![a Some(ASC)]`.
 pub fn collapse_lex_req(input: LexRequirement) -> LexRequirement {
     let mut output = Vec::<PhysicalSortRequirement>::new();
     for item in input {
@@ -472,7 +472,7 @@ pub fn collapse_lex_req(input: LexRequirement) -> LexRequirement {
 
 /// This function constructs a duplicate-free `LexOrdering` by filtering out
 /// duplicate entries that have same physical expression inside. For example,
-/// `vec![a Asc, a Desc]` collapses to `vec![a Asc]`.
+/// `vec![a ASC, a DESC]` collapses to `vec![a ASC]`.
 pub fn collapse_lex_ordering(input: LexOrdering) -> LexOrdering {
     let mut output = Vec::<PhysicalSortExpr>::new();
     for item in input {
@@ -591,11 +591,8 @@ impl OrderingEquivalenceClass {
     /// Returns the concatenation of all the orderings. This enables merge
     /// operations to preserve all equivalent orderings simultaneously.
     pub fn output_ordering(&self) -> Option<LexOrdering> {
-        let output_ordering = self
-            .orderings
-            .iter()
-            .flat_map(|ordering| ordering.to_vec())
-            .collect::<Vec<_>>();
+        let output_ordering =
+            self.orderings.iter().flatten().cloned().collect::<Vec<_>>();
         let output_ordering = collapse_lex_ordering(output_ordering);
         (!output_ordering.is_empty()).then_some(output_ordering)
     }
