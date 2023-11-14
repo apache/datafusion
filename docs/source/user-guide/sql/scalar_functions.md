@@ -1392,8 +1392,8 @@ extract(field FROM source)
 ### `to_timestamp`
 
 Converts a value to RFC3339 nanosecond timestamp format (`YYYY-MM-DDT00:00:00Z`).
-Supports timestamp, integer, and unsigned integer types as input.
-Integers and unsigned integers are parsed as Unix second timestamps and
+Supports timestamp, integer, unsigned integer, and double types as input.
+Integers, unsigned integers, and doubles are parsed as Unix second timestamps and
 return the corresponding RFC3339 timestamp.
 
 ```
