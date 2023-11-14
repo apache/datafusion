@@ -588,11 +588,8 @@ impl OrderingEquivalenceClass {
         }
     }
 
-    /// Gets the concatenated version of the all orderings.
-    /// if orderings are [a ASC, b ASC] and [c ASC, d ASC]
-    /// Returns [a ASC, b ASC, c ASC, d ASC].
-    /// This ensures that during during merging
-    /// [a ASC, b ASC] and [c ASC, d ASC] are still valid.
+    /// Returns the concatenation of all the orderings. This enables merge
+    /// operations to preserve all equivalent orderings simultaneously.
     pub fn output_ordering(&self) -> Option<LexOrdering> {
         let output_ordering = self
             .orderings
