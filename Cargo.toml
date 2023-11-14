@@ -51,7 +51,7 @@ version = "33.0.0"
 [workspace.dependencies]
 arrow = { version = "~48.0.1", features = ["prettyprint"] }
 arrow-array = { version = "~48.0.1", default-features = false, features = ["chrono-tz"] }
-arrow-buffer = { version = "~48.0.1", default-features = false }
+arrow-buffer = { version = "~49.0.0", default-features = false }
 arrow-flight = { version = "~48.0.1", features = ["flight-sql-experimental"] }
 arrow-ord = { version = "~48.0.1", default-features = false }
 arrow-schema = { version = "~48.0.1", default-features = false }
