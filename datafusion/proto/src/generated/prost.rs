@@ -2568,6 +2568,7 @@ pub enum ScalarFunction {
     ArrayIntersect = 119,
     ArrayUnion = 120,
     OverLay = 121,
+    Range = 122,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2698,6 +2699,7 @@ impl ScalarFunction {
             ScalarFunction::ArrayIntersect => "ArrayIntersect",
             ScalarFunction::ArrayUnion => "ArrayUnion",
             ScalarFunction::OverLay => "OverLay",
+            ScalarFunction::Range => "Range",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2825,6 +2827,7 @@ impl ScalarFunction {
             "ArrayIntersect" => Some(Self::ArrayIntersect),
             "ArrayUnion" => Some(Self::ArrayUnion),
             "OverLay" => Some(Self::OverLay),
+            "Range" => Some(Self::Range),
             _ => None,
         }
     }
