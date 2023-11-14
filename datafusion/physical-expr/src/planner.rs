@@ -448,3 +448,37 @@ pub fn create_physical_expr(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow_array::{ArrayRef, BooleanArray, RecordBatch, StringArray};
+    use arrow_schema::{DataType, Field, Schema};
+    use datafusion_common::{DFSchema, Result};
+    use datafusion_expr::{col, left, Literal};
+
+    #[test]
+    fn test_create_physical_expr_scalar_input_output() -> Result<()> {
+        let expr = col("letter").eq(left("APACHE".lit(), 1i64.lit()));
+
+        let schema = Schema::new(vec![Field::new("letter", DataType::Utf8, false)]);
+        let df_schema = DFSchema::try_from_qualified_schema("data", &schema)?;
+        let p = create_physical_expr(&expr, &df_schema, &schema, &ExecutionProps::new())?;
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(StringArray::from_iter_values(vec![
+                "A", "B", "C", "D",
+            ]))],
+        )?;
+        let result = p.evaluate(&batch)?;
+        let result = result.into_array(4).expect("Failed to convert to array");
+
+        assert_eq!(
+            &result,
+            &(Arc::new(BooleanArray::from(vec![true, false, false, false,])) as ArrayRef)
+        );
+
+        Ok(())
+    }
+}

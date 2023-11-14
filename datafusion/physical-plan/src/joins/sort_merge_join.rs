@@ -37,9 +37,8 @@ use crate::joins::utils::{
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use crate::{
-    metrics, DisplayAs, DisplayFormatType, Distribution, EquivalenceProperties,
-    ExecutionPlan, Partitioning, PhysicalExpr, RecordBatchStream,
-    SendableRecordBatchStream, Statistics,
+    metrics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
+    PhysicalExpr, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
 use arrow::array::*;
@@ -52,11 +51,9 @@ use datafusion_common::{
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{OrderingEquivalenceProperties, PhysicalSortRequirement};
+use datafusion_physical_expr::equivalence::join_equivalence_properties;
+use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortRequirement};
 
-use datafusion_physical_expr::equivalence::{
-    combine_join_equivalence_properties, combine_join_ordering_equivalence_properties,
-};
 use futures::{Stream, StreamExt};
 
 /// join execution plan executes partitions in parallel and combines them into a set of
@@ -285,26 +282,14 @@ impl ExecutionPlan for SortMergeJoinExec {
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
-        let left_columns_len = self.left.schema().fields.len();
-        combine_join_equivalence_properties(
-            self.join_type,
+        join_equivalence_properties(
             self.left.equivalence_properties(),
             self.right.equivalence_properties(),
-            left_columns_len,
-            self.on(),
-            self.schema(),
-        )
-    }
-
-    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        combine_join_ordering_equivalence_properties(
             &self.join_type,
-            &self.left.ordering_equivalence_properties(),
-            &self.right.ordering_equivalence_properties(),
             self.schema(),
             &self.maintains_input_order(),
             Some(Self::probe_side(&self.join_type)),
-            self.equivalence_properties(),
+            self.on(),
         )
     }
 

@@ -19,9 +19,9 @@
 name = "datafusion-execution"
 description = "Execution configuration support for DataFusion query engine"
 keywords = ["arrow", "query", "sql"]
+readme = "README.md"
 version = { workspace = true }
 edition = { workspace = true }
-readme = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
@@ -35,14 +35,14 @@ path = "src/lib.rs"
 [dependencies]
 arrow = { workspace = true }
 chrono = { version = "0.4", default-features = false }
-dashmap = "5.4.0"
-datafusion-common = { path = "../common", version = "32.0.0" }
-datafusion-expr = { path = "../expr", version = "32.0.0" }
-futures = "0.3"
+dashmap = { workspace = true }
+datafusion-common = { workspace = true }
+datafusion-expr = { workspace = true }
+futures = { workspace = true }
 hashbrown = { version = "0.14", features = ["raw"] }
-log = "^0.4"
-object_store = "0.7.0"
-parking_lot = "0.12"
-rand = "0.8"
-tempfile = "3"
-url = "2.2"
+log = { workspace = true }
+object_store = { workspace = true }
+parking_lot = { workspace = true }
+rand = { workspace = true }
+tempfile = { workspace = true }
+url = { workspace = true }

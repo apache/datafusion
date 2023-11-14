@@ -19,6 +19,7 @@ use async_recursion::async_recursion;
 use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
 use datafusion::common::{not_impl_err, DFField, DFSchema, DFSchemaRef};
 
+use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::{
     aggregate_function, window_function::find_df_window_func, BinaryExpr,
     BuiltinScalarFunction, Case, Expr, LogicalPlan, Operator,
@@ -78,6 +79,10 @@ enum ScalarFunctionType {
     Like,
     /// [Expr::Like] Case insensitive operator counterpart of `Like`
     ILike,
+    /// [Expr::IsNull]
+    IsNull,
+    /// [Expr::IsNotNull]
+    IsNotNull,
 }
 
 pub fn name_to_op(name: &str) -> Result<Operator> {
@@ -126,6 +131,8 @@ fn scalar_function_type_from_str(name: &str) -> Result<ScalarFunctionType> {
         "not" => Ok(ScalarFunctionType::Not),
         "like" => Ok(ScalarFunctionType::Like),
         "ilike" => Ok(ScalarFunctionType::ILike),
+        "is_null" => Ok(ScalarFunctionType::IsNull),
+        "is_not_null" => Ok(ScalarFunctionType::IsNotNull),
         others => not_impl_err!("Unsupported function name: {others:?}"),
     }
 }
@@ -177,7 +184,7 @@ fn split_eq_and_noneq_join_predicate_with_nulls_equality(
 
 /// Convert Substrait Plan to DataFusion DataFrame
 pub async fn from_substrait_plan(
-    ctx: &mut SessionContext,
+    ctx: &SessionContext,
     plan: &Plan,
 ) -> Result<LogicalPlan> {
     // Register function extension
@@ -219,7 +226,7 @@ pub async fn from_substrait_plan(
 /// Convert Substrait Rel to DataFusion DataFrame
 #[async_recursion]
 pub async fn from_substrait_rel(
-    ctx: &mut SessionContext,
+    ctx: &SessionContext,
     rel: &Rel,
     extensions: &HashMap<u32, &String>,
 ) -> Result<LogicalPlan> {
@@ -359,6 +366,7 @@ pub async fn from_substrait_rel(
                                 _ => false,
                             };
                             from_substrait_agg_func(
+                                ctx,
                                 f,
                                 input.schema(),
                                 extensions,
@@ -654,6 +662,7 @@ pub async fn from_substriat_func_args(
 
 /// Convert Substrait AggregateFunction to DataFusion Expr
 pub async fn from_substrait_agg_func(
+    ctx: &SessionContext,
     f: &AggregateFunction,
     input_schema: &DFSchema,
     extensions: &HashMap<u32, &String>,
@@ -674,23 +683,37 @@ pub async fn from_substrait_agg_func(
         args.push(arg_expr?.as_ref().clone());
     }
 
-    let fun = match extensions.get(&f.function_reference) {
-        Some(function_name) => {
-            aggregate_function::AggregateFunction::from_str(function_name)
-        }
-        None => not_impl_err!(
-            "Aggregated function not found: function anchor = {:?}",
+    let Some(function_name) = extensions.get(&f.function_reference) else {
+        return plan_err!(
+            "Aggregate function not registered: function anchor = {:?}",
             f.function_reference
-        ),
+        );
     };
 
-    Ok(Arc::new(Expr::AggregateFunction(expr::AggregateFunction {
-        fun: fun.unwrap(),
-        args,
-        distinct,
-        filter,
-        order_by,
-    })))
+    // try udaf first, then built-in aggr fn.
+    if let Ok(fun) = ctx.udaf(function_name) {
+        Ok(Arc::new(Expr::AggregateUDF(expr::AggregateUDF {
+            fun,
+            args,
+            filter,
+            order_by,
+        })))
+    } else if let Ok(fun) = aggregate_function::AggregateFunction::from_str(function_name)
+    {
+        Ok(Arc::new(Expr::AggregateFunction(expr::AggregateFunction {
+            fun,
+            args,
+            distinct,
+            filter,
+            order_by,
+        })))
+    } else {
+        not_impl_err!(
+            "Aggregated function {} is not supported: function anchor = {:?}",
+            function_name,
+            f.function_reference
+        )
+    }
 }
 
 /// Convert Substrait Rex to DataFusion Expr
@@ -879,6 +902,42 @@ pub async fn from_substrait_rex(
                 }
                 ScalarFunctionType::ILike => {
                     make_datafusion_like(true, f, input_schema, extensions).await
+                }
+                ScalarFunctionType::IsNull => {
+                    let arg = f.arguments.first().ok_or_else(|| {
+                        DataFusionError::Substrait(
+                            "expect one argument for `IS NULL` expr".to_string(),
+                        )
+                    })?;
+                    match &arg.arg_type {
+                        Some(ArgType::Value(e)) => {
+                            let expr = from_substrait_rex(e, input_schema, extensions)
+                                .await?
+                                .as_ref()
+                                .clone();
+                            Ok(Arc::new(Expr::IsNull(Box::new(expr))))
+                        }
+                        _ => not_impl_err!("Invalid arguments for IS NULL expression"),
+                    }
+                }
+                ScalarFunctionType::IsNotNull => {
+                    let arg = f.arguments.first().ok_or_else(|| {
+                        DataFusionError::Substrait(
+                            "expect one argument for `IS NOT NULL` expr".to_string(),
+                        )
+                    })?;
+                    match &arg.arg_type {
+                        Some(ArgType::Value(e)) => {
+                            let expr = from_substrait_rex(e, input_schema, extensions)
+                                .await?
+                                .as_ref()
+                                .clone();
+                            Ok(Arc::new(Expr::IsNotNull(Box::new(expr))))
+                        }
+                        _ => {
+                            not_impl_err!("Invalid arguments for IS NOT NULL expression")
+                        }
+                    }
                 }
             }
         }

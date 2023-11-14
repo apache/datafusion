@@ -40,9 +40,7 @@ use crate::physical_plan::{
 use arrow::json::ReaderBuilder;
 use arrow::{datatypes::SchemaRef, json};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{
-    ordering_equivalence_properties_helper, LexOrdering, OrderingEquivalenceProperties,
-};
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
 use bytes::{Buf, Bytes};
 use futures::{ready, stream, StreamExt, TryStreamExt};
@@ -122,8 +120,8 @@ impl ExecutionPlan for NdJsonExec {
             .map(|ordering| ordering.as_slice())
     }
 
-    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        ordering_equivalence_properties_helper(
+    fn equivalence_properties(&self) -> EquivalenceProperties {
+        EquivalenceProperties::new_with_orderings(
             self.schema(),
             &self.projected_output_ordering,
         )

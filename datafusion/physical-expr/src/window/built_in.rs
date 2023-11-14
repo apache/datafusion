@@ -21,22 +21,19 @@ use std::any::Any;
 use std::ops::Range;
 use std::sync::Arc;
 
-use super::BuiltInWindowFunctionExpr;
-use super::WindowExpr;
-use crate::equivalence::OrderingEquivalenceBuilder;
+use super::{BuiltInWindowFunctionExpr, WindowExpr};
 use crate::expressions::PhysicalSortExpr;
-use crate::utils::{convert_to_expr, get_indices_of_matching_exprs};
 use crate::window::window_expr::{get_orderby_values, WindowFn};
 use crate::window::{PartitionBatches, PartitionWindowAggStates, WindowState};
 use crate::{reverse_order_bys, EquivalenceProperties, PhysicalExpr};
+
 use arrow::array::{new_empty_array, ArrayRef};
 use arrow::compute::SortOptions;
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::evaluate_partition_ranges;
 use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::window_state::WindowAggState;
-use datafusion_expr::window_state::WindowFrameContext;
+use datafusion_expr::window_state::{WindowAggState, WindowFrameContext};
 use datafusion_expr::WindowFrame;
 
 /// A window expr that takes the form of a [`BuiltInWindowFunctionExpr`].
@@ -75,16 +72,12 @@ impl BuiltInWindowExpr {
     /// If `self.expr` doesn't have an ordering, ordering equivalence properties
     /// are not updated. Otherwise, ordering equivalence properties are updated
     /// by the ordering of `self.expr`.
-    pub fn add_equal_orderings<F: FnOnce() -> EquivalenceProperties>(
-        &self,
-        builder: &mut OrderingEquivalenceBuilder,
-        equal_properties: F,
-    ) {
-        let schema = builder.schema();
+    pub fn add_equal_orderings(&self, eq_properties: &mut EquivalenceProperties) {
+        let schema = eq_properties.schema();
         if let Some(fn_res_ordering) = self.expr.get_result_ordering(schema) {
             if self.partition_by.is_empty() {
                 // In the absence of a PARTITION BY, ordering of `self.expr` is global:
-                builder.add_equal_conditions(vec![fn_res_ordering]);
+                eq_properties.add_new_orderings([vec![fn_res_ordering]]);
             } else {
                 // If we have a PARTITION BY, built-in functions can not introduce
                 // a global ordering unless the existing ordering is compatible
@@ -92,23 +85,11 @@ impl BuiltInWindowExpr {
                 // expressions and existing ordering expressions are equal (w.r.t.
                 // set equality), we can prefix the ordering of `self.expr` with
                 // the existing ordering.
-                let existing_ordering = builder.existing_ordering();
-                let existing_ordering_exprs = convert_to_expr(existing_ordering);
-                // Get indices of the PARTITION BY expressions among input ordering expressions:
-                let pb_indices = get_indices_of_matching_exprs(
-                    &self.partition_by,
-                    &existing_ordering_exprs,
-                    equal_properties,
-                );
-                // Existing ordering should match exactly with PARTITION BY expressions.
-                // There should be no missing/extra entries in the existing ordering.
-                // Otherwise, prefixing wouldn't work.
-                if pb_indices.len() == self.partition_by.len()
-                    && pb_indices.len() == existing_ordering.len()
-                {
-                    let mut new_ordering = existing_ordering.to_vec();
-                    new_ordering.push(fn_res_ordering);
-                    builder.add_equal_conditions(new_ordering);
+                let (mut ordering, _) =
+                    eq_properties.find_longest_permutation(&self.partition_by);
+                if ordering.len() == self.partition_by.len() {
+                    ordering.push(fn_res_ordering);
+                    eq_properties.add_new_orderings([ordering]);
                 }
             }
         }

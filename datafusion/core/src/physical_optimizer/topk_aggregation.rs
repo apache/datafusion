@@ -75,7 +75,7 @@ impl TopKAggregation {
             aggr.filter_expr().to_vec(),
             aggr.order_by_expr().to_vec(),
             aggr.input().clone(),
-            aggr.input_schema().clone(),
+            aggr.input_schema(),
         )
         .expect("Unable to copy Aggregate!")
         .with_limit(Some(limit));
@@ -118,23 +118,12 @@ impl TopKAggregation {
             }
             Ok(Transformed::No(plan))
         };
-        let child = transform_down_mut(child.clone(), &mut closure).ok()?;
+        let child = child.clone().transform_down_mut(&mut closure).ok()?;
         let sort = SortExec::new(sort.expr().to_vec(), child)
             .with_fetch(sort.fetch())
             .with_preserve_partitioning(sort.preserve_partitioning());
         Some(Arc::new(sort))
     }
-}
-
-fn transform_down_mut<F>(
-    me: Arc<dyn ExecutionPlan>,
-    op: &mut F,
-) -> Result<Arc<dyn ExecutionPlan>>
-where
-    F: FnMut(Arc<dyn ExecutionPlan>) -> Result<Transformed<Arc<dyn ExecutionPlan>>>,
-{
-    let after_op = op(me)?.into();
-    after_op.map_children(|node| transform_down_mut(node, op))
 }
 
 impl Default for TopKAggregation {

@@ -129,6 +129,12 @@ fn exact_roundtrip_linearized_binary_expr() {
 }
 
 #[test]
+fn roundtrip_qualified_alias() {
+    let qual_alias = col("c1").alias_qualified(Some("my_table"), "my_column");
+    assert_eq!(qual_alias, roundtrip_expr(&qual_alias));
+}
+
+#[test]
 fn roundtrip_deeply_nested_binary_expr() {
     // We need more stack space so this doesn't overflow in dev builds
     std::thread::Builder::new()

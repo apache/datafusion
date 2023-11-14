@@ -82,18 +82,18 @@ pub enum Volatility {
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeSignature {
-    /// arbitrary number of arguments of an common type out of a list of valid types.
+    /// One or more arguments of an common type out of a list of valid types.
     ///
     /// # Examples
     /// A function such as `concat` is `Variadic(vec![DataType::Utf8, DataType::LargeUtf8])`
     Variadic(Vec<DataType>),
-    /// arbitrary number of arguments of an arbitrary but equal type.
+    /// One or more arguments of an arbitrary but equal type.
     /// DataFusion attempts to coerce all argument types to match the first argument's type
     ///
     /// # Examples
     /// A function such as `array` is `VariadicEqual`
     VariadicEqual,
-    /// arbitrary number of arguments with arbitrary types
+    /// One or more arguments with arbitrary types
     VariadicAny,
     /// fixed number of arguments of an arbitrary but equal type out of a list of valid types.
     ///
@@ -101,12 +101,17 @@ pub enum TypeSignature {
     /// 1. A function of one argument of f64 is `Uniform(1, vec![DataType::Float64])`
     /// 2. A function of one argument of f64 or f32 is `Uniform(1, vec![DataType::Float32, DataType::Float64])`
     Uniform(usize, Vec<DataType>),
-    /// exact number of arguments of an exact type
+    /// Exact number of arguments of an exact type
     Exact(Vec<DataType>),
-    /// fixed number of arguments of arbitrary types
+    /// Fixed number of arguments of arbitrary types
+    /// If a function takes 0 argument, its `TypeSignature` should be `Any(0)`
     Any(usize),
     /// Matches exactly one of a list of [`TypeSignature`]s. Coercion is attempted to match
     /// the signatures in order, and stops after the first success, if any.
+    ///
+    /// # Examples
+    /// Function `make_array` takes 0 or more arguments with arbitrary types, its `TypeSignature`
+    /// is `OneOf(vec![Any(0), VariadicAny])`.
     OneOf(Vec<TypeSignature>),
 }
 
@@ -149,6 +154,18 @@ impl TypeSignature {
             .map(|t| t.to_string())
             .collect::<Vec<String>>()
             .join(delimiter)
+    }
+
+    /// Check whether 0 input argument is valid for given `TypeSignature`
+    pub fn supports_zero_argument(&self) -> bool {
+        match &self {
+            TypeSignature::Exact(vec) => vec.is_empty(),
+            TypeSignature::Uniform(0, _) | TypeSignature::Any(0) => true,
+            TypeSignature::OneOf(types) => types
+                .iter()
+                .any(|type_sig| type_sig.supports_zero_argument()),
+            _ => false,
+        }
     }
 }
 
@@ -234,3 +251,51 @@ impl Signature {
 /// - `Some(true)` indicates that the function is monotonically increasing w.r.t. the argument in question.
 /// - Some(false) indicates that the function is monotonically decreasing w.r.t. the argument in question.
 pub type FuncMonotonicity = Vec<Option<bool>>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn supports_zero_argument_tests() {
+        // Testing `TypeSignature`s which supports 0 arg
+        let positive_cases = vec![
+            TypeSignature::Exact(vec![]),
+            TypeSignature::Uniform(0, vec![DataType::Float64]),
+            TypeSignature::Any(0),
+            TypeSignature::OneOf(vec![
+                TypeSignature::Exact(vec![DataType::Int8]),
+                TypeSignature::Any(0),
+                TypeSignature::Uniform(1, vec![DataType::Int8]),
+            ]),
+        ];
+
+        for case in positive_cases {
+            assert!(
+                case.supports_zero_argument(),
+                "Expected {:?} to support zero arguments",
+                case
+            );
+        }
+
+        // Testing `TypeSignature`s which doesn't support 0 arg
+        let negative_cases = vec![
+            TypeSignature::Exact(vec![DataType::Utf8]),
+            TypeSignature::Uniform(1, vec![DataType::Float64]),
+            TypeSignature::Any(1),
+            TypeSignature::VariadicAny,
+            TypeSignature::OneOf(vec![
+                TypeSignature::Exact(vec![DataType::Int8]),
+                TypeSignature::Uniform(1, vec![DataType::Int8]),
+            ]),
+        ];
+
+        for case in negative_cases {
+            assert!(
+                !case.supports_zero_argument(),
+                "Expected {:?} not to support zero arguments",
+                case
+            );
+        }
+    }
+}

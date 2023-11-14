@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use datafusion::arrow::array::ArrayRef;
+use datafusion::physical_plan::Accumulator;
+use datafusion::scalar::ScalarValue;
 use datafusion_substrait::logical_plan::{
     consumer::from_substrait_plan, producer::to_substrait_plan,
 };
@@ -28,7 +31,9 @@ use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::SessionState;
 use datafusion::execution::registry::SerializerRegistry;
 use datafusion::execution::runtime_env::RuntimeEnv;
-use datafusion::logical_expr::{Extension, LogicalPlan, UserDefinedLogicalNode};
+use datafusion::logical_expr::{
+    Extension, LogicalPlan, UserDefinedLogicalNode, Volatility,
+};
 use datafusion::optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST;
 use datafusion::prelude::*;
 
@@ -312,6 +317,16 @@ async fn simple_scalar_function_pow() -> Result<()> {
 #[tokio::test]
 async fn simple_scalar_function_substr() -> Result<()> {
     roundtrip("SELECT * FROM data WHERE a = SUBSTR('datafusion', 0, 3)").await
+}
+
+#[tokio::test]
+async fn simple_scalar_function_is_null() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE a IS NULL").await
+}
+
+#[tokio::test]
+async fn simple_scalar_function_is_not_null() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE a IS NOT NULL").await
 }
 
 #[tokio::test]
@@ -606,7 +621,7 @@ async fn new_test_grammar() -> Result<()> {
 
 #[tokio::test]
 async fn extension_logical_plan() -> Result<()> {
-    let mut ctx = create_context().await?;
+    let ctx = create_context().await?;
     let validation_bytes = "MockUserDefinedLogicalPlan".as_bytes().to_vec();
     let ext_plan = LogicalPlan::Extension(Extension {
         node: Arc::new(MockUserDefinedLogicalPlan {
@@ -617,13 +632,63 @@ async fn extension_logical_plan() -> Result<()> {
     });
 
     let proto = to_substrait_plan(&ext_plan, &ctx)?;
-    let plan2 = from_substrait_plan(&mut ctx, &proto).await?;
+    let plan2 = from_substrait_plan(&ctx, &proto).await?;
 
     let plan1str = format!("{ext_plan:?}");
     let plan2str = format!("{plan2:?}");
     assert_eq!(plan1str, plan2str);
 
     Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_aggregate_udf() -> Result<()> {
+    #[derive(Debug)]
+    struct Dummy {}
+
+    impl Accumulator for Dummy {
+        fn state(&self) -> datafusion::error::Result<Vec<ScalarValue>> {
+            Ok(vec![])
+        }
+
+        fn update_batch(
+            &mut self,
+            _values: &[ArrayRef],
+        ) -> datafusion::error::Result<()> {
+            Ok(())
+        }
+
+        fn merge_batch(&mut self, _states: &[ArrayRef]) -> datafusion::error::Result<()> {
+            Ok(())
+        }
+
+        fn evaluate(&self) -> datafusion::error::Result<ScalarValue> {
+            Ok(ScalarValue::Float64(None))
+        }
+
+        fn size(&self) -> usize {
+            std::mem::size_of_val(self)
+        }
+    }
+
+    let dummy_agg = create_udaf(
+        // the name; used to represent it in plan descriptions and in the registry, to use in SQL.
+        "dummy_agg",
+        // the input type; DataFusion guarantees that the first entry of `values` in `update` has this type.
+        vec![DataType::Int64],
+        // the return type; DataFusion expects this to match the type returned by `evaluate`.
+        Arc::new(DataType::Int64),
+        Volatility::Immutable,
+        // This is the accumulator factory; DataFusion uses it to create new accumulators.
+        Arc::new(|_| Ok(Box::new(Dummy {}))),
+        // This is the description of the state. `state()` must match the types here.
+        Arc::new(vec![DataType::Float64, DataType::UInt32]),
+    );
+
+    let ctx = create_context().await?;
+    ctx.register_udaf(dummy_agg);
+
+    roundtrip_with_ctx("select dummy_agg(a) from data", ctx).await
 }
 
 fn check_post_join_filters(rel: &Rel) -> Result<()> {
@@ -712,11 +777,11 @@ async fn verify_post_join_filter_value(proto: Box<Plan>) -> Result<()> {
 }
 
 async fn assert_expected_plan(sql: &str, expected_plan_str: &str) -> Result<()> {
-    let mut ctx = create_context().await?;
+    let ctx = create_context().await?;
     let df = ctx.sql(sql).await?;
     let plan = df.into_optimized_plan()?;
     let proto = to_substrait_plan(&plan, &ctx)?;
-    let plan2 = from_substrait_plan(&mut ctx, &proto).await?;
+    let plan2 = from_substrait_plan(&ctx, &proto).await?;
     let plan2 = ctx.state().optimize(&plan2)?;
     let plan2str = format!("{plan2:?}");
     assert_eq!(expected_plan_str, &plan2str);
@@ -724,11 +789,11 @@ async fn assert_expected_plan(sql: &str, expected_plan_str: &str) -> Result<()> 
 }
 
 async fn roundtrip_fill_na(sql: &str) -> Result<()> {
-    let mut ctx = create_context().await?;
+    let ctx = create_context().await?;
     let df = ctx.sql(sql).await?;
     let plan1 = df.into_optimized_plan()?;
     let proto = to_substrait_plan(&plan1, &ctx)?;
-    let plan2 = from_substrait_plan(&mut ctx, &proto).await?;
+    let plan2 = from_substrait_plan(&ctx, &proto).await?;
     let plan2 = ctx.state().optimize(&plan2)?;
 
     // Format plan string and replace all None's with 0
@@ -743,15 +808,15 @@ async fn test_alias(sql_with_alias: &str, sql_no_alias: &str) -> Result<()> {
     // Since we ignore the SubqueryAlias in the producer, the result should be
     // the same as producing a Substrait plan from the same query without aliases
     // sql_with_alias -> substrait -> logical plan = sql_no_alias -> substrait -> logical plan
-    let mut ctx = create_context().await?;
+    let ctx = create_context().await?;
 
     let df_a = ctx.sql(sql_with_alias).await?;
     let proto_a = to_substrait_plan(&df_a.into_optimized_plan()?, &ctx)?;
-    let plan_with_alias = from_substrait_plan(&mut ctx, &proto_a).await?;
+    let plan_with_alias = from_substrait_plan(&ctx, &proto_a).await?;
 
     let df = ctx.sql(sql_no_alias).await?;
     let proto = to_substrait_plan(&df.into_optimized_plan()?, &ctx)?;
-    let plan = from_substrait_plan(&mut ctx, &proto).await?;
+    let plan = from_substrait_plan(&ctx, &proto).await?;
 
     println!("{plan_with_alias:#?}");
     println!("{plan:#?}");
@@ -762,12 +827,11 @@ async fn test_alias(sql_with_alias: &str, sql_no_alias: &str) -> Result<()> {
     Ok(())
 }
 
-async fn roundtrip(sql: &str) -> Result<()> {
-    let mut ctx = create_context().await?;
+async fn roundtrip_with_ctx(sql: &str, ctx: SessionContext) -> Result<()> {
     let df = ctx.sql(sql).await?;
     let plan = df.into_optimized_plan()?;
     let proto = to_substrait_plan(&plan, &ctx)?;
-    let plan2 = from_substrait_plan(&mut ctx, &proto).await?;
+    let plan2 = from_substrait_plan(&ctx, &proto).await?;
     let plan2 = ctx.state().optimize(&plan2)?;
 
     println!("{plan:#?}");
@@ -779,12 +843,16 @@ async fn roundtrip(sql: &str) -> Result<()> {
     Ok(())
 }
 
+async fn roundtrip(sql: &str) -> Result<()> {
+    roundtrip_with_ctx(sql, create_context().await?).await
+}
+
 async fn roundtrip_verify_post_join_filter(sql: &str) -> Result<()> {
-    let mut ctx = create_context().await?;
+    let ctx = create_context().await?;
     let df = ctx.sql(sql).await?;
     let plan = df.into_optimized_plan()?;
     let proto = to_substrait_plan(&plan, &ctx)?;
-    let plan2 = from_substrait_plan(&mut ctx, &proto).await?;
+    let plan2 = from_substrait_plan(&ctx, &proto).await?;
     let plan2 = ctx.state().optimize(&plan2)?;
 
     println!("{plan:#?}");
@@ -799,11 +867,11 @@ async fn roundtrip_verify_post_join_filter(sql: &str) -> Result<()> {
 }
 
 async fn roundtrip_all_types(sql: &str) -> Result<()> {
-    let mut ctx = create_all_type_context().await?;
+    let ctx = create_all_type_context().await?;
     let df = ctx.sql(sql).await?;
     let plan = df.into_optimized_plan()?;
     let proto = to_substrait_plan(&plan, &ctx)?;
-    let plan2 = from_substrait_plan(&mut ctx, &proto).await?;
+    let plan2 = from_substrait_plan(&ctx, &proto).await?;
     let plan2 = ctx.state().optimize(&plan2)?;
 
     println!("{plan:#?}");

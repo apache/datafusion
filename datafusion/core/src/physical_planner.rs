@@ -364,9 +364,8 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         Expr::Sort { .. } => {
             internal_err!("Create physical name does not support sort expression")
         }
-        Expr::Wildcard => internal_err!("Create physical name does not support wildcard"),
-        Expr::QualifiedWildcard { .. } => {
-            internal_err!("Create physical name does not support qualified wildcard")
+        Expr::Wildcard { .. } => {
+            internal_err!("Create physical name does not support wildcard")
         }
         Expr::Placeholder(_) => {
             internal_err!("Create physical name does not support placeholder")
@@ -1894,11 +1893,24 @@ impl DefaultPhysicalPlanner {
                     .await
                 {
                     Ok(input) => {
+                        // This plan will includes statistics if show_statistics is on
                         stringified_plans.push(
                             displayable(input.as_ref())
                                 .set_show_statistics(config.show_statistics)
                                 .to_stringified(e.verbose, InitialPhysicalPlan),
                         );
+
+                        // If the show_statisitcs is off, add another line to show statsitics in the case of explain verbose
+                        if e.verbose && !config.show_statistics {
+                            stringified_plans.push(
+                                displayable(input.as_ref())
+                                    .set_show_statistics(true)
+                                    .to_stringified(
+                                        e.verbose,
+                                        InitialPhysicalPlanWithStats,
+                                    ),
+                            );
+                        }
 
                         match self.optimize_internal(
                             input,
@@ -1913,11 +1925,26 @@ impl DefaultPhysicalPlanner {
                                 );
                             },
                         ) {
-                            Ok(input) => stringified_plans.push(
-                                displayable(input.as_ref())
-                                    .set_show_statistics(config.show_statistics)
-                                    .to_stringified(e.verbose, FinalPhysicalPlan),
-                            ),
+                            Ok(input) => {
+                                // This plan will includes statistics if show_statistics is on
+                                stringified_plans.push(
+                                    displayable(input.as_ref())
+                                        .set_show_statistics(config.show_statistics)
+                                        .to_stringified(e.verbose, FinalPhysicalPlan),
+                                );
+
+                                // If the show_statisitcs is off, add another line to show statsitics in the case of explain verbose
+                                if e.verbose && !config.show_statistics {
+                                    stringified_plans.push(
+                                        displayable(input.as_ref())
+                                            .set_show_statistics(true)
+                                            .to_stringified(
+                                                e.verbose,
+                                                FinalPhysicalPlanWithStats,
+                                            ),
+                                    );
+                                }
+                            }
                             Err(DataFusionError::Context(optimizer_name, e)) => {
                                 let plan_type = OptimizedPhysicalPlan { optimizer_name };
                                 stringified_plans
