@@ -27,7 +27,6 @@ use crate::{
     catalog::{CatalogList, MemoryCatalogList},
     datasource::{
         listing::{ListingOptions, ListingTable},
-        listing_table_factory::ListingTableFactory,
         provider::TableProviderFactory,
     },
     datasource::{MemTable, ViewTable},
@@ -111,6 +110,7 @@ use datafusion_sql::planner::object_name_to_table_reference;
 use uuid::Uuid;
 
 // backwards compatibility
+use crate::datasource::provider::DefaultTableFactory;
 use crate::execution::options::ArrowReadOptions;
 pub use datafusion_execution::config::SessionConfig;
 pub use datafusion_execution::TaskContext;
@@ -1285,12 +1285,12 @@ impl SessionState {
         let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
             HashMap::new();
         #[cfg(feature = "parquet")]
-        table_factories.insert("PARQUET".into(), Arc::new(ListingTableFactory::new()));
-        table_factories.insert("CSV".into(), Arc::new(ListingTableFactory::new()));
-        table_factories.insert("JSON".into(), Arc::new(ListingTableFactory::new()));
-        table_factories.insert("NDJSON".into(), Arc::new(ListingTableFactory::new()));
-        table_factories.insert("AVRO".into(), Arc::new(ListingTableFactory::new()));
-        table_factories.insert("ARROW".into(), Arc::new(ListingTableFactory::new()));
+        table_factories.insert("PARQUET".into(), Arc::new(DefaultTableFactory::new()));
+        table_factories.insert("CSV".into(), Arc::new(DefaultTableFactory::new()));
+        table_factories.insert("JSON".into(), Arc::new(DefaultTableFactory::new()));
+        table_factories.insert("NDJSON".into(), Arc::new(DefaultTableFactory::new()));
+        table_factories.insert("AVRO".into(), Arc::new(DefaultTableFactory::new()));
+        table_factories.insert("ARROW".into(), Arc::new(DefaultTableFactory::new()));
 
         if config.create_default_catalog_and_schema() {
             let default_catalog = MemoryCatalogProvider::new();

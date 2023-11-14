@@ -46,7 +46,7 @@ use crate::datasource::{create_ordering, TableProvider};
 use crate::execution::context::SessionState;
 
 /// A [`TableProviderFactory`] for [`StreamTable`]
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct StreamTableFactory {}
 
 #[async_trait]

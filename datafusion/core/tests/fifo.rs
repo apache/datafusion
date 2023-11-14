@@ -20,7 +20,6 @@
 #[cfg(target_family = "unix")]
 #[cfg(test)]
 mod unix_test {
-    use std::collections::HashMap;
     use std::fs::{File, OpenOptions};
     use std::io::Write;
     use std::path::PathBuf;
@@ -36,15 +35,13 @@ mod unix_test {
     use tempfile::TempDir;
     use tokio::task::{spawn_blocking, JoinHandle};
 
-    use datafusion::datasource::stream::{StreamConfig, StreamTable, StreamTableFactory};
+    use datafusion::datasource::stream::{StreamConfig, StreamTable};
     use datafusion::datasource::TableProvider;
-    use datafusion::execution::context::SessionState;
     use datafusion::{
         prelude::{CsvReadOptions, SessionConfig, SessionContext},
         test_util::{aggr_test_schema, arrow_test_data},
     };
     use datafusion_common::{exec_err, DataFusionError, Result};
-    use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_expr::Expr;
 
     /// Makes a TableProvider for a fifo file
@@ -261,16 +258,8 @@ mod unix_test {
     #[tokio::test]
     async fn test_sql_insert_into_fifo() -> Result<()> {
         // create local execution context
-        let runtime = Arc::new(RuntimeEnv::default());
         let config = SessionConfig::new().with_batch_size(TEST_BATCH_SIZE);
-        let mut state = SessionState::new_with_config_rt(config, runtime);
-        let mut factories = HashMap::with_capacity(1);
-        factories.insert(
-            "CSV".to_string(),
-            Arc::new(StreamTableFactory::default()) as _,
-        );
-        *state.table_factories_mut() = factories;
-        let ctx = SessionContext::new_with_state(state);
+        let ctx = SessionContext::new_with_config(config);
 
         // Create a new temporary FIFO file
         let tmp_dir = TempDir::new()?;
