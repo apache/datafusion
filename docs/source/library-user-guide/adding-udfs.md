@@ -212,8 +212,8 @@ let smooth_it = create_udwf(
 
 The `create_udwf` has five arguments to check:
 
-- The first argument is the name of the function. This is the name that will be used in SQL queries. 
-- **The second argument** is the `DataType` of input array (attention: this is not a list of arrays). I.e. in this case, the function accepts  `Float64` as argument.
+- The first argument is the name of the function. This is the name that will be used in SQL queries.
+- **The second argument** is the `DataType` of input array (attention: this is not a list of arrays). I.e. in this case, the function accepts `Float64` as argument.
 - The third argument is the return type of the function. I.e. in this case, the function returns an `Float64`.
 - The fourth argument is the volatility of the function. In short, this is used to determine if the function's performance can be optimized in some situations. In this case, the function is `Immutable` because it always returns the same value for the same input. A random number generator would be `Volatile` because it returns a different value for the same input.
 - **The fifth argument** is the function implementation. This is the function that we defined above.
@@ -432,5 +432,3 @@ Then, we can query like below:
 ```rust
 let df = ctx.sql("SELECT geo_mean(a) FROM t").await?;
 ```
-
-
