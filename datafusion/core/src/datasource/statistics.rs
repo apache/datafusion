@@ -83,10 +83,9 @@ pub async fn get_statistics_with_limit(
                 // counts across all the files in question. If any file does not
                 // provide any information or provides an inexact value, we demote
                 // the statistic precision to inexact.
-                num_rows = add_row_stats(file_stats.num_rows, num_rows);
+                num_rows = num_rows.add(&file_stats.num_rows);
 
-                total_byte_size =
-                    add_row_stats(file_stats.total_byte_size, total_byte_size);
+                total_byte_size = total_byte_size.add(&file_stats.total_byte_size);
 
                 (null_counts, max_values, min_values) = multiunzip(
                     izip!(
@@ -108,9 +107,9 @@ pub async fn get_statistics_with_limit(
                             min_value,
                         )| {
                             (
-                                add_row_stats(file_nc, null_count),
-                                set_max_if_greater(file_max, max_value),
-                                set_min_if_lesser(file_min, min_value),
+                                file_nc.add(&null_count),
+                                file_max.max(&max_value),
+                                file_min.min(&min_value),
                             )
                         },
                     ),
@@ -160,17 +159,6 @@ pub(crate) fn create_max_min_accs(
     (max_values, min_values)
 }
 
-fn add_row_stats(
-    file_num_rows: Precision<usize>,
-    num_rows: Precision<usize>,
-) -> Precision<usize> {
-    match (file_num_rows, &num_rows) {
-        (Precision::Absent, _) => num_rows.to_inexact(),
-        (lhs, Precision::Absent) => lhs.to_inexact(),
-        (lhs, rhs) => lhs.add(rhs),
-    }
-}
-
 pub(crate) fn get_col_stats_vec(
     null_counts: Vec<Precision<usize>>,
     max_values: Vec<Precision<ScalarValue>>,
@@ -210,50 +198,4 @@ pub(crate) fn get_col_stats(
             }
         })
         .collect()
-}
-
-/// If the given value is numerically greater than the original maximum value,
-/// return the new maximum value with appropriate exactness information.
-fn set_max_if_greater(
-    max_nominee: Precision<ScalarValue>,
-    max_values: Precision<ScalarValue>,
-) -> Precision<ScalarValue> {
-    match (&max_values, &max_nominee) {
-        (Precision::Exact(val1), Precision::Exact(val2)) if val1 < val2 => max_nominee,
-        (Precision::Exact(val1), Precision::Inexact(val2))
-        | (Precision::Inexact(val1), Precision::Inexact(val2))
-        | (Precision::Inexact(val1), Precision::Exact(val2))
-            if val1 < val2 =>
-        {
-            max_nominee.to_inexact()
-        }
-        (Precision::Exact(_), Precision::Absent) => max_values.to_inexact(),
-        (Precision::Absent, Precision::Exact(_)) => max_nominee.to_inexact(),
-        (Precision::Absent, Precision::Inexact(_)) => max_nominee,
-        (Precision::Absent, Precision::Absent) => Precision::Absent,
-        _ => max_values,
-    }
-}
-
-/// If the given value is numerically lesser than the original minimum value,
-/// return the new minimum value with appropriate exactness information.
-fn set_min_if_lesser(
-    min_nominee: Precision<ScalarValue>,
-    min_values: Precision<ScalarValue>,
-) -> Precision<ScalarValue> {
-    match (&min_values, &min_nominee) {
-        (Precision::Exact(val1), Precision::Exact(val2)) if val1 > val2 => min_nominee,
-        (Precision::Exact(val1), Precision::Inexact(val2))
-        | (Precision::Inexact(val1), Precision::Inexact(val2))
-        | (Precision::Inexact(val1), Precision::Exact(val2))
-            if val1 > val2 =>
-        {
-            min_nominee.to_inexact()
-        }
-        (Precision::Exact(_), Precision::Absent) => min_values.to_inexact(),
-        (Precision::Absent, Precision::Exact(_)) => min_nominee.to_inexact(),
-        (Precision::Absent, Precision::Inexact(_)) => min_nominee,
-        (Precision::Absent, Precision::Absent) => Precision::Absent,
-        _ => min_values,
-    }
 }
