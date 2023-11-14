@@ -1015,9 +1015,9 @@ mod tests {
     use datafusion_common::stats::Precision;
     use datafusion_common::{assert_contains, GetExt, ScalarValue};
     use datafusion_expr::{BinaryExpr, LogicalPlanBuilder, Operator};
+    use datafusion_physical_expr::PhysicalSortExpr;
     use rstest::*;
     use tempfile::TempDir;
-    use datafusion_physical_expr::PhysicalSortExpr;
 
     /// It creates dummy file and checks if it can create unbounded input executors.
     async fn unbounded_table_helper(
