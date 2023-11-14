@@ -17,14 +17,21 @@
 
 //! TableProvider for stream sources, such as FIFO files
 
-use crate::datasource::provider::TableProviderFactory;
-use crate::datasource::TableProvider;
-use crate::execution::context::SessionState;
-use arrow::csv::{ReaderBuilder, WriterBuilder};
-use arrow_array::RecordBatch;
+use std::any::Any;
+use std::fmt::Formatter;
+use std::fs::{File, OpenOptions};
+use std::io::{BufReader, Read, Write};
+use std::path::PathBuf;
+use std::str::FromStr;
+use std::sync::Arc;
+
+use arrow_array::{RecordBatch, RecordBatchReader, RecordBatchWriter};
 use arrow_schema::SchemaRef;
 use async_trait::async_trait;
-use datafusion_common::Result;
+use futures::StreamExt;
+use tokio::task::spawn_blocking;
+
+use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::{CreateExternalTable, Expr, TableType};
 use datafusion_physical_expr::LexOrdering;
@@ -34,13 +41,10 @@ use datafusion_physical_plan::metrics::MetricsSet;
 use datafusion_physical_plan::stream::RecordBatchReceiverStreamBuilder;
 use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
-use futures::StreamExt;
-use std::any::Any;
-use std::fmt::Formatter;
-use std::fs::{File, OpenOptions};
-use std::path::PathBuf;
-use std::sync::Arc;
-use tokio::task::spawn_blocking;
+
+use crate::datasource::provider::TableProviderFactory;
+use crate::datasource::TableProvider;
+use crate::execution::context::SessionState;
 
 /// A [`TableProviderFactory`] for [`StreamTable`]
 #[derive(Default)]
@@ -55,11 +59,67 @@ impl TableProviderFactory for StreamTableFactory {
     ) -> Result<Arc<dyn TableProvider>> {
         let schema: SchemaRef = Arc::new(cmd.schema.as_ref().into());
         let location = cmd.location.clone();
-        Ok(Arc::new(StreamTable(Arc::new(StreamConfig {
-            schema,
-            sort: None, // TODO
-            location: location.into(),
-        }))))
+        let encoding = cmd.file_type.parse()?;
+        let config =
+            StreamConfig::new_file(schema, location.into()).with_encoding(encoding);
+
+        Ok(Arc::new(StreamTable(Arc::new(config))))
+    }
+}
+
+/// The data encoding for [`StreamTable`]
+#[derive(Debug, Clone)]
+pub enum StreamEncoding {
+    /// CSV records
+    Csv,
+    /// Newline-delimited JSON records
+    Json,
+}
+
+impl StreamEncoding {
+    fn reader<R: Read + 'static>(
+        &self,
+        schema: SchemaRef,
+        read: R,
+    ) -> Result<Box<dyn RecordBatchReader>> {
+        match self {
+            StreamEncoding::Csv => Ok(Box::new(
+                arrow::csv::ReaderBuilder::new(schema).build(read)?,
+            )),
+            StreamEncoding::Json => {
+                let reader = arrow::json::ReaderBuilder::new(schema)
+                    .build(BufReader::new(read))?;
+
+                Ok(Box::new(reader))
+            }
+        }
+    }
+
+    fn writer<W: Write + 'static>(&self, write: W) -> Result<Box<dyn RecordBatchWriter>> {
+        match self {
+            StreamEncoding::Csv => {
+                let writer = arrow::csv::WriterBuilder::new()
+                    .with_header(false)
+                    .build(write);
+
+                Ok(Box::new(writer))
+            }
+            StreamEncoding::Json => {
+                Ok(Box::new(arrow::json::LineDelimitedWriter::new(write)))
+            }
+        }
+    }
+}
+
+impl FromStr for StreamEncoding {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "csv" => Ok(Self::Csv),
+            "json" => Ok(Self::Json),
+            _ => plan_err!("Unrecognised StreamEncoding {}", s),
+        }
     }
 }
 
@@ -68,6 +128,7 @@ impl TableProviderFactory for StreamTableFactory {
 pub struct StreamConfig {
     schema: SchemaRef,
     location: PathBuf,
+    encoding: StreamEncoding,
     sort: Option<LexOrdering>,
 }
 
@@ -77,6 +138,7 @@ impl StreamConfig {
         Self {
             schema,
             location,
+            encoding: StreamEncoding::Csv,
             sort: None,
         }
     }
@@ -84,6 +146,12 @@ impl StreamConfig {
     /// Specify a sort order for the stream
     pub fn with_sort(mut self, sort: Option<LexOrdering>) -> Self {
         self.sort = sort;
+        self
+    }
+
+    /// Specify an encoding for the stream
+    pub fn with_encoding(mut self, encoding: StreamEncoding) -> Self {
+        self.encoding = encoding;
         self
     }
 }
@@ -160,7 +228,7 @@ impl PartitionStream for StreamRead {
         let tx = builder.tx();
         builder.spawn_blocking(move || {
             let file = File::open(&config.location)?;
-            let reader = ReaderBuilder::new(config.schema.clone()).build(file)?;
+            let reader = config.encoding.reader(config.schema.clone(), file)?;
             for b in reader {
                 if tx.blocking_send(b.map_err(Into::into)).is_err() {
                     break;
@@ -202,7 +270,7 @@ impl DataSink for StreamWrite {
         let write = AbortOnDropSingle::new(spawn_blocking(move || {
             let file = OpenOptions::new().write(true).open(&config.location)?;
             let mut count = 0_u64;
-            let mut writer = WriterBuilder::new().with_header(false).build(file);
+            let mut writer = config.encoding.writer(file)?;
             while let Some(batch) = receiver.blocking_recv() {
                 count += batch.num_rows() as u64;
                 writer.write(&batch)?;
