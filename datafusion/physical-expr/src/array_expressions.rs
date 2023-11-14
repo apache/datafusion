@@ -26,7 +26,7 @@ use arrow::buffer::OffsetBuffer;
 use arrow::compute;
 use arrow::datatypes::{DataType, Field, UInt64Type};
 use arrow::row::{RowConverter, SortField};
-use arrow_buffer::NullBuffer;
+use arrow_buffer::{NullBuffer, ScalarBuffer};
 
 use arrow_schema::FieldRef;
 use datafusion_common::cast::{
@@ -254,7 +254,7 @@ macro_rules! call_array_function {
 }
 
 /// Convert one or more [`ArrayRef`] of the same type into a
-/// `ListArray`
+/// `ListArray` or 'LargeListArray' depending on the offset size.
 ///
 /// # Example (non nested)
 ///
@@ -293,7 +293,10 @@ macro_rules! call_array_function {
 /// └──────────────┘   └──────────────┘        └─────────────────────────────┘
 ///      col1               col2                         output
 /// ```
-fn array_array(args: &[ArrayRef], data_type: DataType) -> Result<ArrayRef> {
+fn array_array<O: OffsetSizeTrait>(
+    args: &[ArrayRef],
+    data_type: DataType,
+) -> Result<ArrayRef> {
     // do not accept 0 arguments.
     if args.is_empty() {
         return plan_err!("Array requires at least one argument");
@@ -310,8 +313,9 @@ fn array_array(args: &[ArrayRef], data_type: DataType) -> Result<ArrayRef> {
         total_len += arg_data.len();
         data.push(arg_data);
     }
-    let mut offsets = Vec::with_capacity(total_len);
-    offsets.push(0);
+
+    let mut offsets: Vec<O> = Vec::with_capacity(total_len);
+    offsets.push(O::from_usize(0).unwrap());
 
     let capacity = Capacities::Array(total_len);
     let data_ref = data.iter().collect::<Vec<_>>();
@@ -329,13 +333,13 @@ fn array_array(args: &[ArrayRef], data_type: DataType) -> Result<ArrayRef> {
                 mutable.extend_nulls(1);
             }
         }
-        offsets.push(mutable.len() as i32);
+        offsets.push(O::from_usize(mutable.len()).unwrap());
     }
-
     let data = mutable.freeze();
-    Ok(Arc::new(ListArray::try_new(
+
+    Ok(Arc::new(GenericListArray::<O>::try_new(
         Arc::new(Field::new("item", data_type, true)),
-        OffsetBuffer::new(offsets.into()),
+        OffsetBuffer::new(ScalarBuffer::from(offsets)),
         arrow_array::make_array(data),
         None,
     )?))
@@ -365,7 +369,15 @@ pub fn make_array(arrays: &[ArrayRef]) -> Result<ArrayRef> {
                 exec_err!("The number of elements {} in the array exceed the maximum number of elements supported by DataFusion",len)
             }
         }
-        data_type => array_array(arrays, data_type),
+        data_type => {
+            if len <= i32::MAX as usize {
+                array_array::<i32>(arrays, data_type)
+            } else if len <= i64::MAX as usize {
+                array_array::<i64>(arrays, data_type)
+            } else {
+                exec_err!("The number of elements {} in the array exceed the maximum number of elements supported by DataFusion",len)
+            }
+        }
     }
 }
 
