@@ -2278,6 +2278,27 @@ CREATE TABLE exchange_rates (
     (3, '2022-01-02 12:00:00'::timestamp, 'TRY', 'USD', 0.11),
     (4, '2022-01-03 10:00:00'::timestamp, 'EUR', 'USD', 1.12)
 
+# test count and count distinct  group by date_bin/date_part
+query error
+select date_bin(interval '1 minute', ts) as bin, count(distinct currency_from) as count from exchange_rates group by bin;
+
+query error
+select date_part('year', ts) as year, count(distinct currency_from) as count from exchange_rates group by year;
+
+query PI
+select date_bin(interval '1 minute', ts) as bin, count(currency_from) as count from exchange_rates group by bin;
+----
+2022-01-01T06:00:00 1
+2022-01-01T08:00:00 1
+2022-01-01T11:30:00 1
+2022-01-02T12:00:00 1
+2022-01-03T10:00:00 1
+
+query RI
+select date_part('year', ts) as year, count(currency_from) as count from exchange_rates group by year;
+----
+2022 5
+
 # test_ordering_sensitive_aggregation
 # ordering sensitive requirement should add a SortExec in the final plan. To satisfy amount ASC
 # in the aggregation
