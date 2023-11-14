@@ -3863,29 +3863,29 @@ WITH HEADER ROW
 LOCATION '../../testing/data/csv/aggregate_test_100.csv'
 
 query TIIII
-SELECT c1, count(distinct c2), min(distinct c2), count(c3), max(c4) FROM aggregate_test_100 GROUP BY c1 ORDER BY c1;
+SELECT c1, count(distinct c2), min(distinct c2), min(c3), max(c4) FROM aggregate_test_100 GROUP BY c1 ORDER BY c1;
 ----
-a 5 1 21 32064
-b 5 1 19 25286
-c 5 1 21 29106
-d 5 1 18 31106
-e 5 1 21 32514
+a 5 1 -101 32064
+b 5 1 -117 25286
+c 5 1 -117 29106
+d 5 1 -99 31106
+e 5 1 -95 32514
 
 query TT
-EXPLAIN SELECT c1, count(distinct c2), min(distinct c2), count(c3), max(c4) FROM aggregate_test_100 GROUP BY c1 ORDER BY c1;
+EXPLAIN SELECT c1, count(distinct c2), min(distinct c2), sum(c3), max(c4) FROM aggregate_test_100 GROUP BY c1 ORDER BY c1;
 ----
 logical_plan
 Sort: aggregate_test_100.c1 ASC NULLS LAST
---Aggregate: groupBy=[[aggregate_test_100.c1]], aggr=[[COUNT(alias1) AS COUNT(DISTINCT aggregate_test_100.c2), MIN(alias1) AS MIN(DISTINCT aggregate_test_100.c2), SUM(alias2) AS COUNT(aggregate_test_100.c3), MAX(alias3) AS MAX(aggregate_test_100.c4)]]
-----Aggregate: groupBy=[[aggregate_test_100.c1, aggregate_test_100.c2 AS alias1]], aggr=[[COUNT(aggregate_test_100.c3) AS alias2, MAX(aggregate_test_100.c4) AS alias3]]
+--Aggregate: groupBy=[[aggregate_test_100.c1]], aggr=[[COUNT(alias1) AS COUNT(DISTINCT aggregate_test_100.c2), MIN(alias1) AS MIN(DISTINCT aggregate_test_100.c2), SUM(alias2) AS SUM(aggregate_test_100.c3), MAX(alias3) AS MAX(aggregate_test_100.c4)]]
+----Aggregate: groupBy=[[aggregate_test_100.c1, aggregate_test_100.c2 AS alias1]], aggr=[[SUM(CAST(aggregate_test_100.c3 AS Int64)) AS alias2, MAX(aggregate_test_100.c4) AS alias3]]
 ------TableScan: aggregate_test_100 projection=[c1, c2, c3, c4]
 physical_plan
 SortPreservingMergeExec: [c1@0 ASC NULLS LAST]
 --SortExec: expr=[c1@0 ASC NULLS LAST]
-----AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[COUNT(DISTINCT aggregate_test_100.c2), MIN(DISTINCT aggregate_test_100.c2), COUNT(aggregate_test_100.c3), MAX(aggregate_test_100.c4)]
+----AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[COUNT(DISTINCT aggregate_test_100.c2), MIN(DISTINCT aggregate_test_100.c2), SUM(aggregate_test_100.c3), MAX(aggregate_test_100.c4)]
 ------CoalesceBatchesExec: target_batch_size=2
 --------RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8
-----------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[COUNT(DISTINCT aggregate_test_100.c2), MIN(DISTINCT aggregate_test_100.c2), COUNT(aggregate_test_100.c3), MAX(aggregate_test_100.c4)]
+----------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[COUNT(DISTINCT aggregate_test_100.c2), MIN(DISTINCT aggregate_test_100.c2), SUM(aggregate_test_100.c3), MAX(aggregate_test_100.c4)]
 ------------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1, alias1@1 as alias1], aggr=[alias2, alias3]
 --------------CoalesceBatchesExec: target_batch_size=2
 ----------------RepartitionExec: partitioning=Hash([c1@0, alias1@1], 8), input_partitions=8
