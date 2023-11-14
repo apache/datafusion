@@ -277,7 +277,6 @@ fn collect_new_statistics(
                         )
                     };
                 ColumnStatistics {
-                    // simplify:
                     null_count: input_column_stats[idx].null_count.clone().to_inexact(),
                     max_value,
                     min_value,
