@@ -178,6 +178,8 @@ pub enum BuiltinScalarFunction {
     ArrayIntersect,
     /// array_union
     ArrayUnion,
+    /// array_except
+    ArrayExcept,
     /// cardinality
     Cardinality,
     /// construct an array from columns
@@ -390,6 +392,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayHas => Volatility::Immutable,
             BuiltinScalarFunction::ArrayDims => Volatility::Immutable,
             BuiltinScalarFunction::ArrayElement => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayExcept => Volatility::Immutable,
             BuiltinScalarFunction::ArrayLength => Volatility::Immutable,
             BuiltinScalarFunction::ArrayNdims => Volatility::Immutable,
             BuiltinScalarFunction::ArrayPopBack => Volatility::Immutable,
@@ -594,6 +597,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Range => {
                 Ok(List(Arc::new(Field::new("item", Int64, true))))
             }
+            BuiltinScalarFunction::ArrayExcept => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::Cardinality => Ok(UInt64),
             BuiltinScalarFunction::MakeArray => match input_expr_types.len() {
                 0 => Ok(List(Arc::new(Field::new("item", Null, true)))),
@@ -875,6 +879,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayDims => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayEmpty => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayElement => Signature::any(2, self.volatility()),
+            BuiltinScalarFunction::ArrayExcept => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::Flatten => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayHasAll
             | BuiltinScalarFunction::ArrayHasAny
@@ -1504,6 +1509,7 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
             "list_element",
             "list_extract",
         ],
+        BuiltinScalarFunction::ArrayExcept => &["array_except", "list_except"],
         BuiltinScalarFunction::Flatten => &["flatten"],
         BuiltinScalarFunction::ArrayHasAll => &["array_has_all", "list_has_all"],
         BuiltinScalarFunction::ArrayHasAny => &["array_has_any", "list_has_any"],
