@@ -219,7 +219,7 @@ pub trait TableProviderFactory: Sync + Send {
 
 /// The default [`TableProviderFactory`]
 ///
-/// If [`CreateExternalTable`] is unbounded calls [`ListingTableFactory::create`],
+/// If [`CreateExternalTable`] is unbounded calls [`StreamTableFactory::create`],
 /// otherwise calls [`ListingTableFactory::create`]
 #[derive(Debug, Default)]
 pub struct DefaultTableFactory {
