@@ -133,7 +133,7 @@ impl EquivalenceGroup {
     }
 
     /// Returns an iterator over the equivalence classes in this group.
-    fn iter(&self) -> impl Iterator<Item = &EquivalenceClass> {
+    pub fn iter(&self) -> impl Iterator<Item = &EquivalenceClass> {
         self.classes.iter()
     }
 
@@ -470,6 +470,19 @@ pub fn collapse_lex_req(input: LexRequirement) -> LexRequirement {
     output
 }
 
+/// This function constructs a duplicate-free `LexOrdering` by filtering out
+/// duplicate entries that have same physical expression inside. For example,
+/// `vec![a Asc, a Desc]` collapses to `vec![a Asc]`.
+pub fn collapse_lex_ordering(input: LexOrdering) -> LexOrdering {
+    let mut output = Vec::<PhysicalSortExpr>::new();
+    for item in input {
+        if !output.iter().any(|req| req.expr.eq(&item.expr)) {
+            output.push(item);
+        }
+    }
+    output
+}
+
 /// An `OrderingEquivalenceClass` object keeps track of different alternative
 /// orderings than can describe a schema. For example, consider the following table:
 ///
@@ -575,10 +588,19 @@ impl OrderingEquivalenceClass {
         }
     }
 
-    /// Gets the first ordering entry in this ordering equivalence class.
-    /// This is one of the many valid orderings (if there are multiple).
+    /// Gets the concatenated version of the all orderings.
+    /// if orderings are [a ASC, b ASC] and [c ASC, d ASC]
+    /// Returns [a ASC, b ASC, c ASC, d ASC].
+    /// This ensures that during during merging
+    /// [a ASC, b ASC] and [c ASC, d ASC] are still valid.
     pub fn output_ordering(&self) -> Option<LexOrdering> {
-        self.orderings.first().cloned()
+        let output_ordering = self
+            .orderings
+            .iter()
+            .flat_map(|ordering| ordering.to_vec())
+            .collect::<Vec<_>>();
+        let output_ordering = collapse_lex_ordering(output_ordering);
+        (!output_ordering.is_empty()).then_some(output_ordering)
     }
 
     // Append orderings in `other` to all existing orderings in this equivalence
@@ -731,6 +753,11 @@ impl EquivalenceProperties {
     /// Returns a reference to the equivalence group within.
     pub fn eq_group(&self) -> &EquivalenceGroup {
         &self.eq_group
+    }
+
+    /// Returns a reference to the constant expressions
+    pub fn constants(&self) -> &[Arc<dyn PhysicalExpr>] {
+        &self.constants
     }
 
     /// Returns the normalized version of the ordering equivalence class within.
