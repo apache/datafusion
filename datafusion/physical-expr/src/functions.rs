@@ -407,7 +407,9 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::MakeArray => {
             Arc::new(|args| make_scalar_function(array_expressions::make_array)(args))
         }
-
+        BuiltinScalarFunction::ArrayUnion => {
+            Arc::new(|args| make_scalar_function(array_expressions::array_union)(args))
+        }
         // struct functions
         BuiltinScalarFunction::Struct => Arc::new(struct_expressions::struct_expr),
 
