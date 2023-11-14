@@ -2267,6 +2267,44 @@ array_union(array1, array2)
 
 - list_union
 
+### `array_except`
+
+Returns an array of the elements that appear in the first array but not in the second.
+
+```
+array_except(array1, array2)
+```
+
+#### Arguments
+
+- **array1**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```
+❯ select array_except([1, 2, 3, 4], [5, 6, 3, 4]);
++----------------------------------------------------+
+| array_union([1, 2, 3, 4], [5, 6, 3, 4]);           |
++----------------------------------------------------+
+| [1, 2]                                 |
++----------------------------------------------------+
+❯ select array_union([1, 2, 3, 4], [3, 4, 5, 6]);
++----------------------------------------------------+
+| array_union([1, 2, 3, 4], [3, 4, 5, 6]);           |
++----------------------------------------------------+
+| [3, 4]                                 |
++----------------------------------------------------+
+```
+
+---
+
+#### Aliases
+
+- list_except
+
 ### `cardinality`
 
 Returns the total number of elements in the array.

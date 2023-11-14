@@ -39,7 +39,6 @@ use datafusion_common::{
 };
 
 use itertools::Itertools;
-use std::collections::HashSet;
 
 macro_rules! downcast_arg {
     ($ARG:expr, $ARRAY_TYPE:ident) => {{
