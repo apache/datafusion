@@ -143,9 +143,11 @@ impl Interval {
         }
     }
 
-    /// Used for internal usage. Responsible for standardizing booleans
-    /// and floating-point values without making constraint checks.
-    /// For details, see `Interval::try_new`.
+    /// Only for internal usage. Responsible for standardizing booleans and
+    /// floating-point values, as well as fixing NaNs. It doesn't validate
+    /// the given bounds for ordering, or verify that they have the same data
+    /// type. For its user-facing counterpart and more details, see
+    /// [`Interval::try_new`].
     fn new(lower: ScalarValue, upper: ScalarValue) -> Self {
         if let ScalarValue::Boolean(lower_bool) = lower {
             let ScalarValue::Boolean(upper_bool) = upper else {
@@ -171,7 +173,7 @@ impl Interval {
 
     /// Convenience function to create a new `Interval` from the given (optional)
     /// bounds. Absence of either endpoint indicates unboundedness on that side.
-    /// See [`Interval::try_new`] for more details.
+    /// See [`Interval::try_new`] for more information.
     pub fn make<T>(lower: Option<T>, upper: Option<T>) -> Result<Self>
     where
         ScalarValue: From<Option<T>>,
@@ -183,6 +185,16 @@ impl Interval {
     pub fn make_unbounded(data_type: &DataType) -> Result<Self> {
         let unbounded_endpoint = ScalarValue::try_from(data_type)?;
         Ok(Self::new(unbounded_endpoint.clone(), unbounded_endpoint))
+    }
+
+    /// Only for internal usage. Creates a new `Interval` from the given bounds.
+    /// It doesn't validate the given bounds for ordering. For its user-facing
+    /// counterpart, see [`Interval::make`].
+    fn make_private<T>(lower: Option<T>, upper: Option<T>) -> Self
+    where
+        ScalarValue: From<Option<T>>,
+    {
+        Self::new(ScalarValue::from(lower), ScalarValue::from(upper))
     }
 
     /// Returns a reference to the lower bound.
@@ -466,32 +478,31 @@ impl Interval {
             get_result_type(&self.data_type(), &Operator::Multiply, &rhs.data_type())?;
 
         let zero = ScalarValue::new_zero(&dt)?;
-        // We want 0 is approachable from both negative and positive sides.
+        // We want 0 to be approachable from both negative and positive sides.
         let zero_point = match &dt {
-            DataType::Float32 => Self::make(Some(-0.0_f32), Some(0.0_f32))?,
-            DataType::Float64 => Self::make(Some(-0.0_f64), Some(0.0_f64))?,
+            DataType::Float32 => Self::make_private(Some(-0.0_f32), Some(0.0_f32)),
+            DataType::Float64 => Self::make_private(Some(-0.0_f64), Some(0.0_f64)),
             _ => Self::new(prev_value(zero.clone()), next_value(zero.clone())),
         };
-        Ok(
-            match (
-                Self::CERTAINLY_TRUE == self.contains(&zero_point)?,
-                Self::CERTAINLY_TRUE == rhs.contains(&zero_point)?,
-            ) {
-                // Since the parameter of contains function is a singleton,
-                // it is impossible to have an UNCERTAIN case.
-                (true, true) => mul_helper_multi_zero_inclusive(&dt, self, rhs),
-                // only option is CERTAINLY_FALSE for rhs
-                (true, false) => {
-                    mul_helper_single_zero_inclusive(&dt, self, rhs, &zero_point)
-                }
-                // only option is CERTAINLY_FALSE for lhs
-                (false, true) => {
-                    mul_helper_single_zero_inclusive(&dt, rhs, self, &zero_point)
-                }
-                // only option is CERTAINLY_FALSE for both sides
-                (false, false) => mul_helper_zero_exclusive(&dt, self, rhs, &zero_point),
-            },
-        )
+        let result = match (
+            Self::CERTAINLY_TRUE == self.contains(&zero_point)?,
+            Self::CERTAINLY_TRUE == rhs.contains(&zero_point)?,
+        ) {
+            // Since the parameter of contains function is a singleton,
+            // it is impossible to have an UNCERTAIN case.
+            (true, true) => mul_helper_multi_zero_inclusive(&dt, self, rhs),
+            // only option is CERTAINLY_FALSE for rhs
+            (true, false) => {
+                mul_helper_single_zero_inclusive(&dt, self, rhs, &zero_point)
+            }
+            // only option is CERTAINLY_FALSE for lhs
+            (false, true) => {
+                mul_helper_single_zero_inclusive(&dt, rhs, self, &zero_point)
+            }
+            // only option is CERTAINLY_FALSE for both sides
+            (false, false) => mul_helper_zero_exclusive(&dt, self, rhs, &zero_point),
+        };
+        Ok(result)
     }
 
     /// Divide this interval by the given interval (`other`). Say we have intervals
@@ -507,10 +518,10 @@ impl Interval {
         let dt = get_result_type(&self.data_type(), &Operator::Divide, &rhs.data_type())?;
 
         let zero = ScalarValue::new_zero(&dt)?;
-        // We want 0 is approachable from both negative and positive sides.
+        // We want 0 to be approachable from both negative and positive sides.
         let zero_point = match &dt {
-            DataType::Float32 => Self::make(Some(-0.0_f32), Some(0.0_f32))?,
-            DataType::Float64 => Self::make(Some(-0.0_f64), Some(0.0_f64))?,
+            DataType::Float32 => Self::make_private(Some(-0.0_f32), Some(0.0_f32)),
+            DataType::Float64 => Self::make_private(Some(-0.0_f64), Some(0.0_f64)),
             _ => Self::new(prev_value(zero.clone()), next_value(zero.clone())),
         };
 
