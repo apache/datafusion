@@ -838,6 +838,11 @@ nary_scalar_expr!(
     "concatenates several strings, placing a seperator between each one"
 );
 nary_scalar_expr!(Concat, concat_expr, "concatenates several strings");
+nary_scalar_expr!(
+    OverLay,
+    overlay,
+    "replace the substring of string that starts at the start'th character and extends for count characters with new substring"
+);
 
 // date functions
 scalar_expr!(DatePart, date_part, part date, "extracts a subfield from the date");
@@ -1174,6 +1179,8 @@ mod test {
         test_nary_scalar_expr!(MakeArray, array, input);
 
         test_unary_scalar_expr!(ArrowTypeof, arrow_typeof);
+        test_nary_scalar_expr!(OverLay, overlay, string, characters, position, len);
+        test_nary_scalar_expr!(OverLay, overlay, string, characters, position);
     }
 
     #[test]

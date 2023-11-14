@@ -20935,6 +20935,7 @@ impl serde::Serialize for ScalarFunction {
             Self::ToTimestampNanos => "ToTimestampNanos",
             Self::ArrayIntersect => "ArrayIntersect",
             Self::ArrayUnion => "ArrayUnion",
+            Self::OverLay => "OverLay",
         };
         serializer.serialize_str(variant)
     }
@@ -21067,6 +21068,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "ToTimestampNanos",
             "ArrayIntersect",
             "ArrayUnion",
+            "OverLay",
         ];
 
         struct GeneratedVisitor;
@@ -21228,6 +21230,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "ToTimestampNanos" => Ok(ScalarFunction::ToTimestampNanos),
                     "ArrayIntersect" => Ok(ScalarFunction::ArrayIntersect),
                     "ArrayUnion" => Ok(ScalarFunction::ArrayUnion),
+                    "OverLay" => Ok(ScalarFunction::OverLay),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }
