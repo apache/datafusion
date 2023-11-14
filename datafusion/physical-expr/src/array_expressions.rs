@@ -33,8 +33,8 @@ use datafusion_common::cast::{
 };
 use datafusion_common::utils::array_into_list_array;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, not_impl_err, plan_err,
-    DataFusionError, Result,
+    exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err, DataFusionError,
+    Result,
 };
 
 use itertools::Itertools;
@@ -1128,42 +1128,6 @@ fn general_positions<OffsetSize: OffsetSizeTrait>(
     ))
 }
 
-/// Array_position SQL function
-pub fn array_position(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let arr = as_list_array(&args[0])?;
-    let element = &args[1];
-
-    // handle incorrect from_array only 1 to n is accept.
-
-    let arr_n = if args.len() == 3 {
-        as_int64_array(&args[2])?.values().to_vec()
-    } else {
-        vec![1; arr.len()]
-    };
-
-    general_position::<i32>(
-        arr,
-        element,
-        vec![0; arr.len()],
-        arr_n,
-    )
-}
-
-/// Array_positions SQL function
-pub fn array_positions(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let arr = as_list_array(&args[0])?;
-    let element = &args[1];
-
-    check_datatypes("array_positions", &[arr.values(), element])?;
-
-    general_position::<i32>(
-        arr,
-        element,
-        vec![0; arr.len()],
-        vec![i64::MAX; arr.len()],
-    )
-}
-
 /// For each element of `list_array[i]`, removed up to `arr_n[i]`  occurences
 /// of `element_array[i]`.
 ///
@@ -1198,30 +1162,12 @@ fn general_remove<OffsetSize: OffsetSizeTrait>(
     {
         match list_array_row {
             Some(list_array_row) => {
-                let indices = UInt32Array::from(vec![row_index as u32]);
-                let element_array_row =
-                    arrow::compute::take(element_array, &indices, None)?;
-
-                let eq_array = match element_array_row.data_type() {
-                    // arrow_ord::cmp::distinct does not support ListArray, so we need to compare it by loop
-                    DataType::List(_) => {
-                        // compare each element of the from array
-                        let element_array_row_inner =
-                            as_list_array(&element_array_row)?.value(0);
-                        let list_array_row_inner = as_list_array(&list_array_row)?;
-
-                        list_array_row_inner
-                            .iter()
-                            // compare element by element the current row of list_array
-                            .map(|row| row.map(|row| row.ne(&element_array_row_inner)))
-                            .collect::<BooleanArray>()
-                    }
-                    _ => {
-                        let from_arr = Scalar::new(element_array_row);
-                        // use distinct so Null = Null is false
-                        arrow_ord::cmp::distinct(&list_array_row, &from_arr)?
-                    }
-                };
+                let eq_array = compare_element_to_list(
+                    &list_array_row,
+                    element_array,
+                    row_index,
+                    false,
+                )?;
 
                 // We need to keep at most first n elements as `false`, which represent the elements to remove.
                 let eq_array = if eq_array.false_count() < *n as usize {
