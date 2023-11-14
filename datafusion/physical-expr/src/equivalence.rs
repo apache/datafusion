@@ -441,22 +441,24 @@ impl EquivalenceGroup {
         mapping: &ProjectionMapping,
         expr: &Arc<dyn PhysicalExpr>,
     ) -> Option<Arc<dyn PhysicalExpr>> {
-        for (source, target) in mapping.iter() {
-            // If we match the source, we can project. For example, if we have the mapping
-            // (a as a1, a + c) `a` projects to `a1`, and `binary_expr(a+b)` projects to `col(a+b)`.
-            if source.eq(expr) {
-                return Some(target.clone());
-            }
-        }
-        for (source, target) in mapping.iter() {
-            // If we match an equivalent expression to source,
-            // then we can project. For example, if we have the mapping
-            // (a as a1, a + c) and the equivalence class (a, b), expression `b` projects to `a1`.
-            if self
-                .get_equivalence_class(source)
-                .map_or(false, |group| physical_exprs_contains(group, expr))
-            {
-                return Some(target.clone());
+        // First, we try to project expressions with an exact match. If we are
+        // unable to do this, we consult equivalence classes.
+        if let Some(target) = mapping.target_expr(expr) {
+            // If we match the source, we can project directly:
+            return Some(target);
+        } else {
+            // If the given expression is not inside the mapping, try to project
+            // expressions considering the equivalence classes.
+            for (source, target) in mapping.iter() {
+                // If we match an equivalent expression to source,
+                // then we can project. For example, if we have the mapping
+                // (a as a1, a + c) and the equivalence class (a, b), expression `b` projects to `a1`.
+                if self
+                    .get_equivalence_class(source)
+                    .map_or(false, |group| physical_exprs_contains(group, expr))
+                {
+                    return Some(target.clone());
+                }
             }
         }
         // Project a non-leaf expression by projecting its children.
@@ -1771,9 +1773,11 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::expressions::{col, lit, BinaryExpr, Column, Literal};
-    use crate::physical_expr::{physical_exprs_bag_equal, physical_exprs_equal};
 
+    use crate::execution_props::ExecutionProps;
+    use crate::expressions::{col, lit, BinaryExpr, Column, Literal};
+    use crate::functions::create_physical_expr;
+    use crate::physical_expr::{physical_exprs_bag_equal, physical_exprs_equal};
     use arrow::compute::{lexsort_to_indices, SortColumn};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_array::{ArrayRef, Float64Array, RecordBatch, UInt32Array};
@@ -1781,8 +1785,6 @@ mod tests {
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{BuiltinScalarFunction, Operator};
 
-    use crate::execution_props::ExecutionProps;
-    use crate::functions::create_physical_expr;
     use itertools::{izip, Itertools};
     use rand::rngs::StdRng;
     use rand::seq::SliceRandom;
