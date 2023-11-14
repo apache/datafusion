@@ -994,7 +994,10 @@ but these operators always return a <code class="docutils literal notranslate"><
 <tr class="row-even"><td><p>make_array(value1, [value2 [, …]])</p></td>
 <td><p>Returns an Arrow array using the specified input expressions. <code class="docutils literal notranslate"><span class="pre">make_array(1,</span> <span class="pre">2,</span> <span class="pre">3)</span> <span class="pre">-&gt;</span> <span class="pre">[1,</span> <span class="pre">2,</span> <span class="pre">3]</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p>trim_array(array, n)</p></td>
+<tr class="row-odd"><td><p>range(start [, stop, step])</p></td>
+<td><p>Returns an Arrow array between start and stop with step. <code class="docutils literal notranslate"><span class="pre">SELECT</span> <span class="pre">range(2,</span> <span class="pre">10,</span> <span class="pre">3)</span> <span class="pre">-&gt;</span> <span class="pre">[2,</span> <span class="pre">5,</span> <span class="pre">8]</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p>trim_array(array, n)</p></td>
 <td><p>Deprecated</p></td>
 </tr>
 </tbody>
