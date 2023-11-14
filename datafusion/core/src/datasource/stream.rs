@@ -34,7 +34,6 @@ use tokio::task::spawn_blocking;
 use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::{CreateExternalTable, Expr, TableType};
-use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_plan::common::AbortOnDropSingle;
 use datafusion_physical_plan::insert::{DataSink, FileSinkExec};
 use datafusion_physical_plan::metrics::MetricsSet;
@@ -43,7 +42,7 @@ use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
 use crate::datasource::provider::TableProviderFactory;
-use crate::datasource::TableProvider;
+use crate::datasource::{create_ordering, TableProvider};
 use crate::execution::context::SessionState;
 
 /// A [`TableProviderFactory`] for [`StreamTable`]
@@ -60,8 +59,9 @@ impl TableProviderFactory for StreamTableFactory {
         let schema: SchemaRef = Arc::new(cmd.schema.as_ref().into());
         let location = cmd.location.clone();
         let encoding = cmd.file_type.parse()?;
-        let config =
-            StreamConfig::new_file(schema, location.into()).with_encoding(encoding);
+        let config = StreamConfig::new_file(schema, location.into())
+            .with_encoding(encoding)
+            .with_order(cmd.order_exprs.clone());
 
         Ok(Arc::new(StreamTable(Arc::new(config))))
     }
@@ -129,7 +129,7 @@ pub struct StreamConfig {
     schema: SchemaRef,
     location: PathBuf,
     encoding: StreamEncoding,
-    sort: Option<LexOrdering>,
+    order: Vec<Vec<Expr>>,
 }
 
 impl StreamConfig {
@@ -139,13 +139,13 @@ impl StreamConfig {
             schema,
             location,
             encoding: StreamEncoding::Csv,
-            sort: None,
+            order: vec![],
         }
     }
 
     /// Specify a sort order for the stream
-    pub fn with_sort(mut self, sort: Option<LexOrdering>) -> Self {
-        self.sort = sort;
+    pub fn with_order(mut self, order: Vec<Vec<Expr>>) -> Self {
+        self.order = order;
         self
     }
 
@@ -187,11 +187,19 @@ impl TableProvider for StreamTable {
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let projected_schema = match projection {
+            Some(p) => {
+                let projected = self.0.schema.project(p)?;
+                create_ordering(&projected, &self.0.order)?
+            }
+            None => create_ordering(self.0.schema.as_ref(), &self.0.order)?,
+        };
+
         Ok(Arc::new(StreamingTableExec::try_new(
             self.0.schema.clone(),
             vec![Arc::new(StreamRead(self.0.clone())) as _],
             projection,
-            self.0.sort.clone(),
+            projected_schema,
             true,
         )?))
     }
@@ -202,8 +210,15 @@ impl TableProvider for StreamTable {
         input: Arc<dyn ExecutionPlan>,
         _overwrite: bool,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let sort = self.0.sort.as_ref();
-        let ordering = sort.map(|o| o.iter().map(|e| e.clone().into()).collect());
+        let ordering = match self.0.order.first() {
+            Some(x) => {
+                let schema = self.0.schema.as_ref();
+                let orders = create_ordering(schema, std::slice::from_ref(x))?;
+                let ordering = orders.into_iter().next().unwrap();
+                Some(ordering.into_iter().map(Into::into).collect())
+            }
+            None => None,
+        };
 
         Ok(Arc::new(FileSinkExec::new(
             input,

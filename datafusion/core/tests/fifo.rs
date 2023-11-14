@@ -29,7 +29,7 @@ mod unix_test {
     use arrow::array::Array;
     use arrow::csv::ReaderBuilder;
     use arrow::datatypes::{DataType, Field, Schema};
-    use arrow_schema::{SchemaRef, SortOptions};
+    use arrow_schema::SchemaRef;
     use futures::StreamExt;
     use nix::sys::stat;
     use nix::unistd;
@@ -40,21 +40,20 @@ mod unix_test {
     use datafusion::datasource::TableProvider;
     use datafusion::execution::context::SessionState;
     use datafusion::{
-        physical_plan,
         prelude::{CsvReadOptions, SessionConfig, SessionContext},
         test_util::{aggr_test_schema, arrow_test_data},
     };
     use datafusion_common::{exec_err, DataFusionError, Result};
     use datafusion_execution::runtime_env::RuntimeEnv;
-    use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
+    use datafusion_expr::Expr;
 
     /// Makes a TableProvider for a fifo file
     fn fifo_table(
         schema: SchemaRef,
         path: impl Into<PathBuf>,
-        sort: Option<LexOrdering>,
+        sort: Vec<Vec<Expr>>,
     ) -> Arc<dyn TableProvider> {
-        let config = StreamConfig::new_file(schema, path.into()).with_sort(sort);
+        let config = StreamConfig::new_file(schema, path.into()).with_order(sort);
         Arc::new(StreamTable::new(Arc::new(config)))
     }
 
@@ -119,7 +118,7 @@ mod unix_test {
         ]));
 
         // Create a file with bounded or unbounded flag.
-        let provider = fifo_table(schema, fifo_path, None);
+        let provider = fifo_table(schema, fifo_path, vec![]);
         ctx.register_table("left", provider).unwrap();
 
         // Register right table
@@ -197,13 +196,7 @@ mod unix_test {
         ]));
 
         // Specify the ordering:
-        let order = Some(vec![PhysicalSortExpr {
-            expr: physical_plan::expressions::col("a1", schema.as_ref())?,
-            options: SortOptions {
-                descending: false,
-                nulls_first: false,
-            },
-        }]);
+        let order = vec![vec![datafusion_expr::col("a1").sort(true, false)]];
 
         // Set unbounded sorted files read configuration
         let provider = fifo_table(schema.clone(), left_fifo, order.clone());

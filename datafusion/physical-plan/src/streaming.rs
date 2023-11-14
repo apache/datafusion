@@ -28,7 +28,10 @@ use crate::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr::{
+    ordering_equivalence_properties_helper, LexOrdering, OrderingEquivalenceProperties,
+    PhysicalSortExpr,
+};
 
 use async_trait::async_trait;
 use futures::stream::StreamExt;
@@ -48,7 +51,7 @@ pub struct StreamingTableExec {
     partitions: Vec<Arc<dyn PartitionStream>>,
     projection: Option<Arc<[usize]>>,
     projected_schema: SchemaRef,
-    projected_output_ordering: Option<LexOrdering>,
+    projected_output_ordering: Vec<LexOrdering>,
     infinite: bool,
 }
 
@@ -58,7 +61,7 @@ impl StreamingTableExec {
         schema: SchemaRef,
         partitions: Vec<Arc<dyn PartitionStream>>,
         projection: Option<&Vec<usize>>,
-        projected_output_ordering: Option<LexOrdering>,
+        projected_output_ordering: impl IntoIterator<Item = LexOrdering>,
         infinite: bool,
     ) -> Result<Self> {
         for x in partitions.iter() {
@@ -81,7 +84,7 @@ impl StreamingTableExec {
             partitions,
             projected_schema,
             projection: projection.cloned().map(Into::into),
-            projected_output_ordering,
+            projected_output_ordering: projected_output_ordering.into_iter().collect(),
             infinite,
         })
     }
@@ -118,7 +121,7 @@ impl DisplayAs for StreamingTableExec {
                 }
 
                 self.projected_output_ordering
-                    .as_deref()
+                    .first()
                     .map_or(Ok(()), |ordering| {
                         if !ordering.is_empty() {
                             write!(
@@ -153,7 +156,16 @@ impl ExecutionPlan for StreamingTableExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.projected_output_ordering.as_deref()
+        self.projected_output_ordering
+            .first()
+            .map(|ordering| ordering.as_slice())
+    }
+
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+        ordering_equivalence_properties_helper(
+            self.schema(),
+            &self.projected_output_ordering,
+        )
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

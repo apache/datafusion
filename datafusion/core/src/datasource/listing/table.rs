@@ -26,6 +26,7 @@ use super::PartitionedFile;
 #[cfg(feature = "parquet")]
 use crate::datasource::file_format::parquet::ParquetFormat;
 use crate::datasource::{
+    create_ordering,
     file_format::{
         arrow::ArrowFormat,
         avro::AvroFormat,
@@ -40,7 +41,6 @@ use crate::datasource::{
     TableProvider, TableType,
 };
 use crate::logical_expr::TableProviderFilterPushDown;
-use crate::physical_plan;
 use crate::{
     error::{DataFusionError, Result},
     execution::context::SessionState,
@@ -48,7 +48,6 @@ use crate::{
     physical_plan::{empty::EmptyExec, ExecutionPlan, Statistics},
 };
 
-use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
 use arrow_schema::Schema;
 use datafusion_common::{
@@ -57,10 +56,9 @@ use datafusion_common::{
 };
 use datafusion_execution::cache::cache_manager::FileStatisticsCache;
 use datafusion_execution::cache::cache_unit::DefaultFileStatisticsCache;
-use datafusion_expr::expr::Sort;
 use datafusion_optimizer::utils::conjunction;
 use datafusion_physical_expr::{
-    create_physical_expr, LexOrdering, PhysicalSortExpr, PhysicalSortRequirement,
+    create_physical_expr, LexOrdering, PhysicalSortRequirement,
 };
 
 use async_trait::async_trait;
@@ -677,34 +675,7 @@ impl ListingTable {
 
     /// If file_sort_order is specified, creates the appropriate physical expressions
     fn try_create_output_ordering(&self) -> Result<Vec<LexOrdering>> {
-        let mut all_sort_orders = vec![];
-
-        for exprs in &self.options.file_sort_order {
-            // Construct PhsyicalSortExpr objects from Expr objects:
-            let sort_exprs = exprs
-                .iter()
-                .map(|expr| {
-                    if let Expr::Sort(Sort { expr, asc, nulls_first }) = expr {
-                        if let Expr::Column(col) = expr.as_ref() {
-                            let expr = physical_plan::expressions::col(&col.name, self.table_schema.as_ref())?;
-                            Ok(PhysicalSortExpr {
-                                expr,
-                                options: SortOptions {
-                                    descending: !asc,
-                                    nulls_first: *nulls_first,
-                                },
-                            })
-                        } else {
-                            plan_err!("Expected single column references in output_ordering, got {expr}")
-                        }
-                    } else {
-                        plan_err!("Expected Expr::Sort in output_ordering, but got {expr}")
-                    }
-                })
-                .collect::<Result<Vec<_>>>()?;
-            all_sort_orders.push(sort_exprs);
-        }
-        Ok(all_sort_orders)
+        create_ordering(&self.table_schema, &self.options.file_sort_order)
     }
 }
 
