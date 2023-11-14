@@ -29,6 +29,7 @@ pub mod memory;
 pub mod physical_plan;
 pub mod provider;
 mod statistics;
+pub mod stream;
 pub mod streaming;
 pub mod view;
 

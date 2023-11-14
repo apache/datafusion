@@ -20,13 +20,23 @@
 #[cfg(target_family = "unix")]
 #[cfg(test)]
 mod unix_test {
+    use std::collections::HashMap;
+    use std::fs::{File, OpenOptions};
+    use std::io::Write;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
     use arrow::array::Array;
-    use arrow::csv::{ReaderBuilder, WriterBuilder};
+    use arrow::csv::ReaderBuilder;
     use arrow::datatypes::{DataType, Field, Schema};
-    use arrow_array::RecordBatch;
     use arrow_schema::{SchemaRef, SortOptions};
-    use async_trait::async_trait;
-    use datafusion::datasource::provider::TableProviderFactory;
+    use futures::StreamExt;
+    use nix::sys::stat;
+    use nix::unistd;
+    use tempfile::TempDir;
+    use tokio::task::{spawn_blocking, JoinHandle};
+
+    use datafusion::datasource::stream::{StreamConfig, StreamTable, StreamTableFactory};
     use datafusion::datasource::TableProvider;
     use datafusion::execution::context::SessionState;
     use datafusion::{
@@ -36,174 +46,7 @@ mod unix_test {
     };
     use datafusion_common::{exec_err, DataFusionError, Result};
     use datafusion_execution::runtime_env::RuntimeEnv;
-    use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-    use datafusion_expr::{CreateExternalTable, Expr, TableType};
     use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
-    use datafusion_physical_plan::common::AbortOnDropSingle;
-    use datafusion_physical_plan::insert::{DataSink, FileSinkExec};
-    use datafusion_physical_plan::metrics::MetricsSet;
-    use datafusion_physical_plan::stream::RecordBatchReceiverStreamBuilder;
-    use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
-    use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
-    use futures::StreamExt;
-    use nix::sys::stat;
-    use nix::unistd;
-    use std::any::Any;
-    use std::collections::HashMap;
-    use std::fmt::Formatter;
-    use std::fs::{File, OpenOptions};
-    use std::io::Write;
-    use std::path::PathBuf;
-    use std::sync::Arc;
-    use tempfile::TempDir;
-    use tokio::task::{spawn_blocking, JoinHandle};
-
-    #[derive(Default)]
-    struct FifoFactory {}
-
-    #[async_trait]
-    impl TableProviderFactory for FifoFactory {
-        async fn create(
-            &self,
-            _state: &SessionState,
-            cmd: &CreateExternalTable,
-        ) -> Result<Arc<dyn TableProvider>> {
-            let schema: SchemaRef = Arc::new(cmd.schema.as_ref().into());
-            let location = cmd.location.clone();
-            Ok(fifo_table(schema, location, None))
-        }
-    }
-
-    #[derive(Debug)]
-    struct FifoConfig {
-        schema: SchemaRef,
-        location: PathBuf,
-        sort: Option<LexOrdering>,
-    }
-
-    struct FifoTable(Arc<FifoConfig>);
-
-    #[async_trait]
-    impl TableProvider for FifoTable {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
-        fn schema(&self) -> SchemaRef {
-            self.0.schema.clone()
-        }
-
-        fn table_type(&self) -> TableType {
-            TableType::Temporary
-        }
-
-        async fn scan(
-            &self,
-            _state: &SessionState,
-            projection: Option<&Vec<usize>>,
-            _filters: &[Expr],
-            _limit: Option<usize>,
-        ) -> Result<Arc<dyn ExecutionPlan>> {
-            Ok(Arc::new(StreamingTableExec::try_new(
-                self.0.schema.clone(),
-                vec![Arc::new(FifoRead(self.0.clone())) as _],
-                projection,
-                self.0.sort.clone(),
-                true,
-            )?))
-        }
-
-        async fn insert_into(
-            &self,
-            _state: &SessionState,
-            input: Arc<dyn ExecutionPlan>,
-            _overwrite: bool,
-        ) -> Result<Arc<dyn ExecutionPlan>> {
-            let sort = self.0.sort.as_ref();
-            let ordering = sort.map(|o| o.iter().map(|e| e.clone().into()).collect());
-
-            Ok(Arc::new(FileSinkExec::new(
-                input,
-                Arc::new(FifoWrite(self.0.clone())),
-                self.0.schema.clone(),
-                ordering,
-            )))
-        }
-    }
-
-    struct FifoRead(Arc<FifoConfig>);
-
-    impl PartitionStream for FifoRead {
-        fn schema(&self) -> &SchemaRef {
-            &self.0.schema
-        }
-
-        fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
-            let config = self.0.clone();
-            let schema = self.0.schema.clone();
-            let mut builder = RecordBatchReceiverStreamBuilder::new(schema, 2);
-            let tx = builder.tx();
-            builder.spawn_blocking(move || {
-                let file = File::open(&config.location)?;
-                let reader = ReaderBuilder::new(config.schema.clone()).build(file)?;
-                for b in reader {
-                    if tx.blocking_send(b.map_err(Into::into)).is_err() {
-                        break;
-                    }
-                }
-                Ok(())
-            });
-            builder.build()
-        }
-    }
-
-    #[derive(Debug)]
-    struct FifoWrite(Arc<FifoConfig>);
-
-    impl DisplayAs for FifoWrite {
-        fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
-            write!(f, "{self:?}")
-        }
-    }
-
-    #[async_trait]
-    impl DataSink for FifoWrite {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
-        fn metrics(&self) -> Option<MetricsSet> {
-            None
-        }
-
-        async fn write_all(
-            &self,
-            mut data: SendableRecordBatchStream,
-            _context: &Arc<TaskContext>,
-        ) -> Result<u64> {
-            let config = self.0.clone();
-            let (sender, mut receiver) = tokio::sync::mpsc::channel::<RecordBatch>(2);
-            // Note: FIFO Files support poll so this could use AsyncFd
-            let write = AbortOnDropSingle::new(spawn_blocking(move || {
-                let file = OpenOptions::new().write(true).open(&config.location)?;
-                let mut count = 0_u64;
-                let mut writer = WriterBuilder::new().with_header(false).build(file);
-                while let Some(batch) = receiver.blocking_recv() {
-                    count += batch.num_rows() as u64;
-                    writer.write(&batch)?;
-                }
-                Ok(count)
-            }));
-
-            while let Some(b) = data.next().await.transpose()? {
-                if sender.send(b).await.is_err() {
-                    break;
-                }
-            }
-            drop(sender);
-            write.await.unwrap()
-        }
-    }
 
     /// Makes a TableProvider for a fifo file
     fn fifo_table(
@@ -211,11 +54,8 @@ mod unix_test {
         path: impl Into<PathBuf>,
         sort: Option<LexOrdering>,
     ) -> Arc<dyn TableProvider> {
-        Arc::new(FifoTable(Arc::new(FifoConfig {
-            schema,
-            sort,
-            location: path.into(),
-        })))
+        let config = StreamConfig::new_file(schema, path.into()).with_sort(sort);
+        Arc::new(StreamTable::new(Arc::new(config)))
     }
 
     // !  For the sake of the test, do not alter the numbers. !
@@ -432,7 +272,10 @@ mod unix_test {
         let config = SessionConfig::new().with_batch_size(TEST_BATCH_SIZE);
         let mut state = SessionState::new_with_config_rt(config, runtime);
         let mut factories = HashMap::with_capacity(1);
-        factories.insert("CSV".to_string(), Arc::new(FifoFactory::default()) as _);
+        factories.insert(
+            "CSV".to_string(),
+            Arc::new(StreamTableFactory::default()) as _,
+        );
         *state.table_factories_mut() = factories;
         let ctx = SessionContext::new_with_state(state);
 
