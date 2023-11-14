@@ -1123,7 +1123,8 @@ uuid()
 
 ### `overlay`
 
-Returns the string which is replaced by another string from the specified position and specified count length
+Returns the string which is replaced by another string from the specified position and specified count length.
+For example, `overlay('Txxxxas' placing 'hom' from 2 for 4) → Thomas`
 
 ```
 overlay(str PLACING substr FROM pos [FOR count])
@@ -1134,7 +1135,7 @@ overlay(str PLACING substr FROM pos [FOR count])
 - **str**: String expression to operate on.
 - **substr**: the string to replace part of str.
 - **pos**: the start position to replace of str.
-- **count**: the count of characters to be replaced from start position of str.If not specified, will use substr length instead.
+- **count**: the count of characters to be replaced from start position of str. If not specified, will use substr length instead.
 
 ## Binary String Functions
 

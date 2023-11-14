@@ -827,7 +827,11 @@ CREATE TABLE over_test(
   ('123', 'abc', 4, 5),
   ('abcdefg', 'qwertyasdfg', 1, 7),
   ('xyz', 'ijk', 1, 2),
-  ('Txxxxas', 'hom', 2, 4)
+  ('Txxxxas', 'hom', 2, 4),
+  (NULL, 'hom', 2, 4),
+  ('Txxxxas', 'hom', NULL, 4),
+  ('Txxxxas', 'hom', 2, NULL),
+  ('Txxxxas', NULL, 2, 4)
 ;
 
 query T
@@ -837,6 +841,10 @@ abc
 qwertyasdfg
 ijkz
 Thomas
+NULL
+NULL
+NULL
+NULL
 
 query T
 SELECT overlay(str placing characters from pos) from over_test
@@ -845,3 +853,7 @@ abc
 qwertyasdfg
 ijk
 Thomxas
+NULL
+NULL
+Thomxas
+NULL
