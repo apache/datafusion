@@ -27,7 +27,6 @@ use crate::Operator;
 use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::DataType;
 use arrow::datatypes::{IntervalUnit, TimeUnit};
-use arrow_array::ArrowNativeTypeOp;
 use datafusion_common::rounding::{alter_fp_rounding_mode, next_down, next_up};
 use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 
@@ -105,6 +104,28 @@ macro_rules! handle_float_intervals {
         };
 
         Interval { lower, upper }
+    }};
+}
+
+/// Ordering floating-point numbers according to their binary representations
+/// contradicts with their natural ordering. Therefore, we map their binary
+/// representations as following:
+///
+/// Floating-point number orderings after unsigned integer transmutation:
+/// 0...1...2...3...MAX,-0...-1...-2...-MAX
+/// We map them to be ordered in this way:
+/// -MAX...-2...-1...-0,0...1...2...3...MAX
+macro_rules! map_floating_point_order {
+    ($value:expr, $ty:ty) => {{
+        let num_bits = std::mem::size_of::<$ty>() * 8;
+        let sign_bit = 1 << (num_bits - 1);
+        if $value & sign_bit == sign_bit {
+            // Negative numbers:
+            !$value
+        } else {
+            // Positive numbers:
+            $value | sign_bit
+        }
     }};
 }
 
@@ -488,18 +509,13 @@ impl Interval {
             Self::CERTAINLY_TRUE == self.contains(&zero_point)?,
             Self::CERTAINLY_TRUE == rhs.contains(&zero_point)?,
         ) {
-            // Since the parameter of contains function is a singleton,
-            // it is impossible to have an UNCERTAIN case.
             (true, true) => mul_helper_multi_zero_inclusive(&dt, self, rhs),
-            // only option is CERTAINLY_FALSE for rhs
             (true, false) => {
                 mul_helper_single_zero_inclusive(&dt, self, rhs, &zero_point)
             }
-            // only option is CERTAINLY_FALSE for lhs
             (false, true) => {
                 mul_helper_single_zero_inclusive(&dt, rhs, self, &zero_point)
             }
-            // only option is CERTAINLY_FALSE for both sides
             (false, false) => mul_helper_zero_exclusive(&dt, self, rhs, &zero_point),
         };
         Ok(result)
@@ -532,15 +548,12 @@ impl Interval {
         {
             Self::make_unbounded(&dt)
         }
-        // 1) Since the parameter of contains function is a singleton,
-        // it is impossible to have an UNCERTAIN case.
-        // 2) We handle the case of rhs reaches 0 from both negative
+        // We handle the case of rhs reaches 0 from both negative
         // and positive directions, so rhs can only contain zero as
         // edge point of the bound.
         else if self.contains(&zero_point)? == Self::CERTAINLY_TRUE {
             Ok(div_helper_lhs_zero_inclusive(&dt, self, rhs, &zero_point))
         } else {
-            // Only option is CERTAINLY_FALSE for rhs.
             Ok(div_helper_zero_exclusive(&dt, self, rhs, &zero_point))
         }
     }
@@ -550,55 +563,36 @@ impl Interval {
     /// - The interval is unbounded from either side, or
     /// - Cardinality calculations for the datatype in question is not
     ///   implemented yet, or
-    /// - An overflow occurs during the calculation.
+    /// - An overflow occurs during the calculation: Overflow can only
+    /// happen when calculated cardinality does not fit in `u64`
+    /// (e.g. [u64::MIN, u64::MAX], n bits cannot represent 2^n).
     pub fn cardinality(&self) -> Option<u64> {
         let data_type = self.data_type();
         if data_type.is_integer() {
             self.upper.distance(&self.lower).map(|diff| diff as u64)
-        }
-        // Ordering floating-point numbers according to their binary representations
-        // coincide with their natural ordering. Therefore, we can consider their
-        // binary representations as "indices" and subtract them. For details, see:
-        // https://stackoverflow.com/questions/8875064/how-many-distinct-floating-point-numbers-in-a-specific-range
-        else if data_type.is_floating() {
+        } else if data_type.is_floating() {
+            // Negative numbers are sorted in the reverse order. To
+            // always have a positive difference after the subtraction,
+            // we perform following transformation:
             match (&self.lower, &self.upper) {
-                // - Negative numbers are sorted in the reverse order. To
-                // always have a positive difference after the subtraction,
-                // we perform following transformation:
                 (
                     ScalarValue::Float32(Some(lower)),
                     ScalarValue::Float32(Some(upper)),
                 ) => {
-                    // - Use i64 to avoid overflow.
-                    let lower_bits = lower.to_bits() as i32;
-                    let upper_bits = upper.to_bits() as i32;
-                    let transformed_lower =
-                        lower_bits ^ ((lower_bits >> 31) & 0x7fffffff);
-                    let transformed_upper =
-                        upper_bits ^ ((upper_bits >> 31) & 0x7fffffff);
-                    let Ok(count) =
-                        (transformed_upper as i64).sub_checked(transformed_lower as i64)
-                    else {
-                        return None;
-                    };
+                    let lower_bits = map_floating_point_order!(lower.to_bits(), u32);
+                    let upper_bits = map_floating_point_order!(upper.to_bits(), u32);
+
+                    let count = upper_bits - lower_bits;
                     Some(count as u64)
                 }
                 (
                     ScalarValue::Float64(Some(lower)),
                     ScalarValue::Float64(Some(upper)),
                 ) => {
-                    // - Use i128 to avoid overflow.
-                    let lower_bits = lower.to_bits() as i64;
-                    let upper_bits = upper.to_bits() as i64;
-                    let transformed_lower =
-                        lower_bits ^ ((lower_bits >> 63) & 0x7fffffffffffffff);
-                    let transformed_upper =
-                        upper_bits ^ ((upper_bits >> 63) & 0x7fffffffffffffff);
-                    let Ok(count) = (transformed_upper as i128)
-                        .sub_checked(transformed_lower as i128)
-                    else {
-                        return None;
-                    };
+                    let lower_bits = map_floating_point_order!(lower.to_bits(), u64);
+                    let upper_bits = map_floating_point_order!(upper.to_bits(), u64);
+
+                    let count = upper_bits - lower_bits;
                     Some(count as u64)
                 }
                 _ => None,
@@ -1118,7 +1112,7 @@ fn mul_helper_multi_zero_inclusive(
 /// left:  <-------=====0=====------->
 ///
 /// right: <------------0--======---->
-/// ``` text
+/// ```
 ///
 /// **Caution:** This function contains multiple calls to `unwrap()`. Therefore,
 /// it should be used with caution. Currently, it is used in contexts where the
@@ -1174,7 +1168,7 @@ fn mul_helper_single_zero_inclusive(
 /// left:  <------------0--======---->
 ///
 /// right: <------------0--======---->
-/// ``` text
+/// ```
 ///
 /// **Caution:** This function contains multiple calls to `unwrap()`. Therefore,
 /// it should be used with caution. Currently, it is used in contexts where the
@@ -1296,7 +1290,7 @@ fn div_helper_lhs_zero_inclusive(
 /// left:  <------------0--======---->
 ///
 /// right: <------------0--======---->
-/// ``` text
+/// ```
 ///
 /// **Caution:** This function contains multiple calls to `unwrap()`. Therefore,
 /// it should be used with caution. Currently, it is used in contexts where the
@@ -2884,11 +2878,18 @@ mod tests {
             ScalarValue::UInt64(Some(u64::MAX)),
         )?;
         assert_eq!(interval.cardinality().unwrap(), u64::MAX);
+
         let interval = Interval::try_new(
             ScalarValue::Int64(Some(i64::MIN + 1)),
             ScalarValue::Int64(Some(i64::MAX)),
         )?;
         assert_eq!(interval.cardinality().unwrap(), u64::MAX);
+
+        let interval = Interval::try_new(
+            ScalarValue::Float32(Some(-0.0_f32)),
+            ScalarValue::Float32(Some(0.0_f32)),
+        )?;
+        assert_eq!(interval.cardinality().unwrap(), 2);
 
         Ok(())
     }
