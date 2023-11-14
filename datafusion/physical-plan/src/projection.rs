@@ -209,8 +209,6 @@ impl ExecutionPlan for ProjectionExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         trace!("Start ProjectionExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
-        // println!("proj self.input.equivalence_properties():{:?}", self.input.equivalence_properties());
-        // println!("proj self.equivalence_properties():{:?}", self.equivalence_properties());
         Ok(Box::pin(ProjectionStream {
             schema: self.schema.clone(),
             expr: self.expr.iter().map(|x| x.0.clone()).collect(),
