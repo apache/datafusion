@@ -1141,13 +1141,14 @@ overlay(str PLACING substr FROM pos [FOR count])
 ### `levenshtein`
 
 Returns the Levenshtein distance between the two given strings.
-For example, `levenshtein('kitten', 'sitting') = 3` 
+For example, `levenshtein('kitten', 'sitting') = 3`
 
 ```
 levenshtein(str1, str2)
 ```
 
 #### Arguments
+
 - **str1**: String expression to compute Levenshtein distance with str2.
 - **str2**: String expression to compute Levenshtein distance with str1.
 
