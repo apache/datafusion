@@ -130,19 +130,21 @@ impl StreamConfig {
         self
     }
 
-    fn reader(&self) -> Result<Box<dyn RecordBatchReader>> {
+    fn reader(&self, batch_size: usize) -> Result<Box<dyn RecordBatchReader>> {
         let file = File::open(&self.location)?;
         let schema = self.schema.clone();
         match &self.encoding {
             StreamEncoding::Csv => {
                 let reader = arrow::csv::ReaderBuilder::new(schema)
                     .with_header(self.header)
+                    .with_batch_size(batch_size)
                     .build(file)?;
 
                 Ok(Box::new(reader))
             }
             StreamEncoding::Json => {
                 let reader = arrow::json::ReaderBuilder::new(schema)
+                    .with_batch_size(batch_size)
                     .build(BufReader::new(file))?;
 
                 Ok(Box::new(reader))
@@ -249,13 +251,14 @@ impl PartitionStream for StreamRead {
         &self.0.schema
     }
 
-    fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+    fn execute(&self, ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
         let config = self.0.clone();
         let schema = self.0.schema.clone();
+        let batch_size = ctx.session_config().batch_size();
         let mut builder = RecordBatchReceiverStreamBuilder::new(schema, 2);
         let tx = builder.tx();
         builder.spawn_blocking(move || {
-            let reader = config.reader()?;
+            let reader = config.reader(batch_size)?;
             for b in reader {
                 if tx.blocking_send(b.map_err(Into::into)).is_err() {
                     break;
