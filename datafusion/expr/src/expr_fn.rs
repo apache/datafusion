@@ -590,6 +590,13 @@ scalar_expr!(
     "returns the array without the last element."
 );
 
+scalar_expr!(
+    ArrayPopFront,
+    array_pop_front,
+    array,
+    "returns the array without the first element."
+);
+
 nary_scalar_expr!(ArrayConcat, array_concat, "concatenates arrays.");
 scalar_expr!(
     ArrayHas,
@@ -1166,6 +1173,7 @@ mod test {
         test_scalar_expr!(FromUnixtime, from_unixtime, unixtime);
 
         test_scalar_expr!(ArrayAppend, array_append, array, element);
+        test_scalar_expr!(ArrayPopFront, array_pop_front, array);
         test_scalar_expr!(ArrayPopBack, array_pop_back, array);
         test_unary_scalar_expr!(ArrayDims, array_dims);
         test_scalar_expr!(ArrayLength, array_length, array, dimension);

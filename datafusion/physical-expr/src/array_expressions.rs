@@ -636,13 +636,33 @@ pub fn array_slice(args: &[ArrayRef]) -> Result<ArrayRef> {
     define_array_slice(list_array, key, extra_key, false)
 }
 
+fn general_array_pop(
+    list_array: &GenericListArray<i32>,
+    from_back: bool,
+) -> Result<(Vec<i64>, Vec<i64>)> {
+    if from_back {
+        let key = vec![0; list_array.len()];
+        // Atttetion: `arr.len() - 1` in extra key defines the last element position (position = index + 1, not inclusive) we want in the new array.
+        let extra_key: Vec<_> = list_array
+            .iter()
+            .map(|x| x.map_or(0, |arr| arr.len() as i64 - 1))
+            .collect();
+        Ok((key, extra_key))
+    } else {
+        // Atttetion: 2 in the `key`` defines the first element position (position = index + 1) we want in the new array.
+        // We only handle two cases of the first element index: if the old array has any elements, starts from 2 (index + 1), or starts from initial.
+        let key: Vec<_> = list_array.iter().map(|x| x.map_or(0, |_| 2)).collect();
+        let extra_key: Vec<_> = list_array
+            .iter()
+            .map(|x| x.map_or(0, |arr| arr.len() as i64))
+            .collect();
+        Ok((key, extra_key))
+    }
+}
+
 pub fn array_pop_back(args: &[ArrayRef]) -> Result<ArrayRef> {
     let list_array = as_list_array(&args[0])?;
-    let key = vec![0; list_array.len()];
-    let extra_key: Vec<_> = list_array
-        .iter()
-        .map(|x| x.map_or(0, |arr| arr.len() as i64 - 1))
-        .collect();
+    let (key, extra_key) = general_array_pop(list_array, true)?;
 
     define_array_slice(
         list_array,
@@ -765,6 +785,18 @@ pub fn gen_range(args: &[ArrayRef]) -> Result<ArrayRef> {
         None,
     )?);
     Ok(arr)
+}
+
+pub fn array_pop_front(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let list_array = as_list_array(&args[0])?;
+    let (key, extra_key) = general_array_pop(list_array, false)?;
+
+    define_array_slice(
+        list_array,
+        &Int64Array::from(key),
+        &Int64Array::from(extra_key),
+        false,
+    )
 }
 
 /// Array_append SQL function
