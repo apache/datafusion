@@ -3396,6 +3396,21 @@ WITH ORDER (a ASC, b ASC)
 WITH ORDER (c ASC)
 LOCATION '../core/tests/data/window_2.csv';
 
+# Create an unbounded source where there is multiple orderings.
+statement ok
+CREATE UNBOUNDED EXTERNAL TABLE multiple_ordered_table_inf (
+  a0 INTEGER,
+  a INTEGER,
+  b INTEGER,
+  c INTEGER,
+  d INTEGER
+)
+STORED AS CSV
+WITH HEADER ROW
+WITH ORDER (a ASC, b ASC)
+WITH ORDER (c ASC)
+LOCATION '../core/tests/data/window_2.csv';
+
 # All of the window execs in the physical plan should work in the
 # sorted mode.
 query TT
@@ -3477,3 +3492,33 @@ query II
 select sum(1) over() x, sum(1) over () y
 ----
 1 1
+
+statement ok
+set datafusion.execution.target_partitions = 2;
+
+# source is ordered by [a ASC, b ASC], [c ASC]
+# after sort preserving repartition and sort preserving merge
+# we should still have the orderings [a ASC, b ASC], [c ASC].
+query TT
+EXPLAIN SELECT *,
+       AVG(d) OVER sliding_window AS avg_d
+FROM multiple_ordered_table_inf
+WINDOW sliding_window AS (
+    PARTITION BY d
+	ORDER BY a RANGE 10 PRECEDING
+)
+ORDER BY c
+----
+logical_plan
+Sort: multiple_ordered_table_inf.c ASC NULLS LAST
+--Projection: multiple_ordered_table_inf.a0, multiple_ordered_table_inf.a, multiple_ordered_table_inf.b, multiple_ordered_table_inf.c, multiple_ordered_table_inf.d, AVG(multiple_ordered_table_inf.d) PARTITION BY [multiple_ordered_table_inf.d] ORDER BY [multiple_ordered_table_inf.a ASC NULLS LAST] RANGE BETWEEN 10 PRECEDING AND CURRENT ROW AS avg_d
+----WindowAggr: windowExpr=[[AVG(CAST(multiple_ordered_table_inf.d AS Float64)) PARTITION BY [multiple_ordered_table_inf.d] ORDER BY [multiple_ordered_table_inf.a ASC NULLS LAST] RANGE BETWEEN 10 PRECEDING AND CURRENT ROW]]
+------TableScan: multiple_ordered_table_inf projection=[a0, a, b, c, d]
+physical_plan
+SortPreservingMergeExec: [c@3 ASC NULLS LAST]
+--ProjectionExec: expr=[a0@0 as a0, a@1 as a, b@2 as b, c@3 as c, d@4 as d, AVG(multiple_ordered_table_inf.d) PARTITION BY [multiple_ordered_table_inf.d] ORDER BY [multiple_ordered_table_inf.a ASC NULLS LAST] RANGE BETWEEN 10 PRECEDING AND CURRENT ROW@5 as avg_d]
+----BoundedWindowAggExec: wdw=[AVG(multiple_ordered_table_inf.d) PARTITION BY [multiple_ordered_table_inf.d] ORDER BY [multiple_ordered_table_inf.a ASC NULLS LAST] RANGE BETWEEN 10 PRECEDING AND CURRENT ROW: Ok(Field { name: "AVG(multiple_ordered_table_inf.d) PARTITION BY [multiple_ordered_table_inf.d] ORDER BY [multiple_ordered_table_inf.a ASC NULLS LAST] RANGE BETWEEN 10 PRECEDING AND CURRENT ROW", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(10)), end_bound: CurrentRow }], mode=[Linear]
+------CoalesceBatchesExec: target_batch_size=4096
+--------SortPreservingRepartitionExec: partitioning=Hash([d@4], 2), input_partitions=2, sort_exprs=a@1 ASC NULLS LAST,b@2 ASC NULLS LAST
+----------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], infinite_source=true, output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST], has_header=true
