@@ -181,11 +181,14 @@ mod sp_repartition_fuzz_tests {
 
         // Fill columns based on equivalence groups
         for eq_group in eq_properties.eq_group().iter() {
-            let representative_array =
-                get_representative_arr(eq_group, &schema_vec, schema.clone())
-                    .unwrap_or_else(|| generate_random_array(n_elem, n_distinct));
+            let representative_array = get_representative_arr(
+                &eq_group.clone().into_vec(),
+                &schema_vec,
+                schema.clone(),
+            )
+            .unwrap_or_else(|| generate_random_array(n_elem, n_distinct));
 
-            for expr in eq_group {
+            for expr in eq_group.iter() {
                 let col = expr.as_any().downcast_ref::<Column>().unwrap();
                 let (idx, _field) = schema.column_with_name(col.name()).unwrap();
                 schema_vec[idx] = Some(representative_array.clone());
