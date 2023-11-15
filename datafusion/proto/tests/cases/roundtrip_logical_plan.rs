@@ -19,10 +19,10 @@ use std::collections::HashMap;
 use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
 
-use arrow::array::ArrayRef;
+use arrow::array::{ArrayRef, FixedSizeListArray};
 use arrow::datatypes::{
-    DataType, Field, Fields, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
-    Schema, SchemaRef, TimeUnit, UnionFields, UnionMode,
+    DataType, Field, Fields, Int32Type, IntervalDayTimeType, IntervalMonthDayNanoType,
+    IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields, UnionMode,
 };
 
 use prost::Message;
@@ -690,6 +690,14 @@ fn round_trip_scalar_values() {
             ],
             &DataType::List(new_arc_field("item", DataType::Float32, true)),
         )),
+        ScalarValue::FixedSizeList(Arc::new(FixedSizeListArray::from_iter_primitive::<
+            Int32Type,
+            _,
+            _,
+        >(
+            vec![Some(vec![Some(1), Some(2), Some(3)])],
+            3,
+        ))),
         ScalarValue::Dictionary(
             Box::new(DataType::Int32),
             Box::new(ScalarValue::Utf8(Some("foo".into()))),
