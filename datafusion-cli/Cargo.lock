@@ -1248,7 +1248,6 @@ dependencies = [
  "chrono",
  "datafusion-common",
  "datafusion-expr",
- "edit-distance",
  "half",
  "hashbrown 0.14.2",
  "hex",
