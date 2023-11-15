@@ -39,6 +39,7 @@ use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 use std::iter;
 use std::sync::Arc;
+use blake2::digest::generic_array::GenericArray;
 use uuid::Uuid;
 
 /// applies a unary expression to `args[0]` that is expected to be downcastable to
@@ -655,18 +656,39 @@ pub fn levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
     let str1_array = as_generic_string_array::<T>(&args[0])?;
     let str2_array = as_generic_string_array::<T>(&args[1])?;
-    let result = str1_array
-        .iter()
-        .zip(str2_array.iter())
-        .map(|(string1, string2)| match (string1, string2) {
-            (Some(string1), Some(string2)) => {
-                Some(datafusion_strsim::levenshtein(string1, string2) as i64)
-            }
-            _ => None,
-        })
-        .collect::<Int64Array>();
-
-    Ok(Arc::new(result) as ArrayRef)
+    match args[0].data_type() {
+        DataType::Utf8 => {
+            let result = str1_array
+                .iter()
+                .zip(str2_array.iter())
+                .map(|(string1, string2)| match (string1, string2) {
+                    (Some(string1), Some(string2)) => {
+                        Some(datafusion_strsim::levenshtein(string1, string2) as i32)
+                    }
+                    _ => None,
+                })
+                .collect::<Int32Array>();
+            Ok(Arc::new(result) as ArrayRef)
+        }
+        DataType::LargeUtf8 => {
+            let result = str1_array
+                .iter()
+                .zip(str2_array.iter())
+                .map(|(string1, string2)| match (string1, string2) {
+                    (Some(string1), Some(string2)) => {
+                        Some(datafusion_strsim::levenshtein(string1, string2) as i64)
+                    }
+                    _ => None,
+                })
+                .collect::<Int64Array>();
+            Ok(Arc::new(result) as ArrayRef)
+        }
+        other => {
+            internal_err!(
+                "levenshtein was called with {other} datatype arguments. It requires Utf8 or LargeUtf8."
+            )
+        }
+    }
 }
 
 #[cfg(test)]
@@ -675,6 +697,7 @@ mod tests {
     use crate::string_expressions;
     use arrow::{array::Int32Array, datatypes::Int32Type};
     use arrow_array::Int64Array;
+    use datafusion_common::cast::as_int32_array;
 
     use super::*;
 
@@ -742,8 +765,8 @@ mod tests {
             Arc::new(StringArray::from(vec!["321", "def", "zyx", "sitting"]));
         let res = levenshtein::<i32>(&[string1_array, string2_array]).unwrap();
         let result =
-            as_int64_array(&res).expect("failed to initialized function levenshtein");
-        let expected = Int64Array::from(vec![2, 3, 2, 3]);
+            as_int32_array(&res).expect("failed to initialized function levenshtein");
+        let expected = Int32Array::from(vec![2, 3, 2, 3]);
         assert_eq!(&expected, result);
 
         Ok(())

@@ -863,13 +863,13 @@ SELECT levenshtein('kitten', 'sitting')
 ----
 3
 
-query ?
-SELECT levenshtein(NULL, 'sitting')
+query I
+SELECT levenshtein('kitten', NULL)
 ----
 NULL
 
 query ?
-SELECT levenshtein('kitten', NULL)
+SELECT levenshtein(NULL, 'sitting')
 ----
 NULL
 
