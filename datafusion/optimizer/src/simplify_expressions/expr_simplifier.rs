@@ -349,7 +349,7 @@ impl<'a> ConstEvaluator<'a> {
                 Self::volatility_ok(fun.volatility())
             }
             Expr::ScalarUDF(expr::ScalarUDF { fun, .. }) => {
-                Self::volatility_ok(fun.signature.volatility)
+                Self::volatility_ok(fun.signature().volatility)
             }
             Expr::Literal(_)
             | Expr::BinaryExpr { .. }
