@@ -30,7 +30,7 @@ use crate::PhysicalExpr;
 use arrow_schema::DataType;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::interval_arithmetic::{
-    apply_operator, equalize_intervals, satisfy_comparison, Interval,
+    apply_operator, satisfy_comparison, Interval,
 };
 use datafusion_expr::Operator;
 
@@ -328,7 +328,9 @@ pub fn propagate_comparison(
         Ok(None)
     } else {
         match op {
-            Operator::Eq => equalize_intervals(left_child, right_child),
+            Operator::Eq => left_child.intersect(right_child).map(|result| {
+                result.map(|intersection| vec![intersection.clone(), intersection])
+            }),
             Operator::Lt => satisfy_comparison(left_child, right_child, false, false),
             Operator::LtEq => satisfy_comparison(left_child, right_child, true, false),
             Operator::Gt => satisfy_comparison(left_child, right_child, false, true),
