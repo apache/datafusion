@@ -405,7 +405,7 @@ fn get_aggregate_search_mode(
     aggr_expr: &mut [Arc<dyn AggregateExpr>],
     order_by_expr: &mut [Option<LexOrdering>],
     ordering_req: &mut Vec<PhysicalSortExpr>,
-) -> Result<PartitionSearchMode> {
+) -> PartitionSearchMode {
     let groupby_exprs = group_by
         .expr
         .iter()
@@ -413,11 +413,11 @@ fn get_aggregate_search_mode(
         .collect::<Vec<_>>();
     let mut partition_search_mode = PartitionSearchMode::Linear;
     if !group_by.is_single() || groupby_exprs.is_empty() {
-        return Ok(partition_search_mode);
+        return partition_search_mode;
     }
 
     if let Some((should_reverse, mode)) =
-        get_window_mode(&groupby_exprs, ordering_req, input)?
+        get_window_mode(&groupby_exprs, ordering_req, input)
     {
         let all_reversible = aggr_expr
             .iter()
@@ -437,7 +437,7 @@ fn get_aggregate_search_mode(
         }
         partition_search_mode = mode;
     }
-    Ok(partition_search_mode)
+    partition_search_mode
 }
 
 /// Check whether group by expression contains all of the expression inside `requirement`
@@ -513,7 +513,7 @@ impl AggregateExec {
             &mut aggr_expr,
             &mut order_by_expr,
             &mut ordering_req,
-        )?;
+        );
 
         // Get GROUP BY expressions:
         let groupby_exprs = group_by.input_exprs();
