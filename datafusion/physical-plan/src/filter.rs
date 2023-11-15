@@ -277,16 +277,10 @@ fn collect_new_statistics(
                         )
                     };
                 ColumnStatistics {
-                    null_count: match input_column_stats[idx].null_count.get_value() {
-                        Some(nc) => Precision::Inexact(*nc),
-                        None => Precision::Absent,
-                    },
+                    null_count: input_column_stats[idx].null_count.clone().to_inexact(),
                     max_value,
                     min_value,
-                    distinct_count: match distinct_count.get_value() {
-                        Some(dc) => Precision::Inexact(*dc),
-                        None => Precision::Absent,
-                    },
+                    distinct_count: distinct_count.to_inexact(),
                 }
             },
         )
