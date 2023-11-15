@@ -23,7 +23,10 @@ mod unix_test {
     use std::fs::{File, OpenOptions};
     use std::io::Write;
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
+    use std::thread;
+    use std::time::{Duration, Instant};
 
     use arrow::array::Array;
     use arrow::csv::ReaderBuilder;
@@ -50,8 +53,70 @@ mod unix_test {
         path: impl Into<PathBuf>,
         sort: Vec<Vec<Expr>>,
     ) -> Arc<dyn TableProvider> {
-        let config = StreamConfig::new_file(schema, path.into()).with_order(sort);
+        let config = StreamConfig::new_file(schema, path.into())
+            .with_order(sort)
+            .with_batch_size(TEST_BATCH_SIZE)
+            .with_header(true);
         Arc::new(StreamTable::new(Arc::new(config)))
+    }
+
+    fn create_fifo_file(tmp_dir: &TempDir, file_name: &str) -> Result<PathBuf> {
+        let file_path = tmp_dir.path().join(file_name);
+        // Simulate an infinite environment via a FIFO file
+        if let Err(e) = unistd::mkfifo(&file_path, stat::Mode::S_IRWXU) {
+            exec_err!("{}", e)
+        } else {
+            Ok(file_path)
+        }
+    }
+
+    fn write_to_fifo(
+        mut file: &File,
+        line: &str,
+        ref_time: Instant,
+        broken_pipe_timeout: Duration,
+    ) -> Result<()> {
+        // We need to handle broken pipe error until the reader is ready. This
+        // is why we use a timeout to limit the wait duration for the reader.
+        // If the error is different than broken pipe, we fail immediately.
+        while let Err(e) = file.write_all(line.as_bytes()) {
+            if e.raw_os_error().unwrap() == 32 {
+                let interval = Instant::now().duration_since(ref_time);
+                if interval < broken_pipe_timeout {
+                    thread::sleep(Duration::from_millis(100));
+                    continue;
+                }
+            }
+            return exec_err!("{}", e);
+        }
+        Ok(())
+    }
+
+    fn create_writing_thread(
+        file_path: PathBuf,
+        header: String,
+        lines: Vec<String>,
+        waiting_lock: Arc<AtomicBool>,
+        wait_until: usize,
+    ) -> JoinHandle<()> {
+        // Timeout for a long period of BrokenPipe error
+        let broken_pipe_timeout = Duration::from_secs(10);
+        let sa = file_path.clone();
+        // Spawn a new thread to write to the FIFO file
+        spawn_blocking(move || {
+            let file = OpenOptions::new().write(true).open(sa).unwrap();
+            // Reference time to use when deciding to fail the test
+            let execution_start = Instant::now();
+            write_to_fifo(&file, &header, execution_start, broken_pipe_timeout).unwrap();
+            for (cnt, line) in lines.iter().enumerate() {
+                while waiting_lock.load(Ordering::SeqCst) && cnt > wait_until {
+                    thread::sleep(Duration::from_millis(50));
+                }
+                write_to_fifo(&file, &line, execution_start, broken_pipe_timeout)
+                    .unwrap();
+            }
+            drop(file);
+        })
     }
 
     // !  For the sake of the test, do not alter the numbers. !
@@ -64,30 +129,21 @@ mod unix_test {
     // incremental execution.
     const TEST_JOIN_RATIO: f64 = 0.01;
 
-    fn create_fifo_file(tmp_dir: &TempDir, file_name: &str) -> Result<PathBuf> {
-        let file_path = tmp_dir.path().join(file_name);
-        // Simulate an infinite environment via a FIFO file
-        if let Err(e) = unistd::mkfifo(&file_path, stat::Mode::S_IRWXU) {
-            exec_err!("{}", e)
-        } else {
-            Ok(file_path)
-        }
-    }
-
     // This test provides a relatively realistic end-to-end scenario where
     // we swap join sides to accommodate a FIFO source.
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn unbounded_file_with_swapped_join() -> Result<()> {
         // Create session context
         let config = SessionConfig::new()
             .with_batch_size(TEST_BATCH_SIZE)
             .with_collect_statistics(false)
             .with_target_partitions(1);
-
         let ctx = SessionContext::new_with_config(config);
+        // To make unbounded deterministic
+        let waiting = Arc::new(AtomicBool::new(true));
         // Create a new temporary FIFO file
         let tmp_dir = TempDir::new()?;
-        let fifo_path = create_fifo_file(&tmp_dir, "fifo_file.csv")?;
+        let fifo_path = create_fifo_file(&tmp_dir, "fifo_unbounded.csv")?;
         // Execution can calculated at least one RecordBatch after the number of
         // "joinable_lines_length" lines are read.
         let joinable_lines_length =
@@ -106,7 +162,13 @@ mod unix_test {
             .map(|(a1, a2)| format!("{a1},{a2}\n"))
             .collect::<Vec<_>>();
         // Create writing threads for the left and right FIFO files
-        let task = create_writing_thread(fifo_path.clone(), lines);
+        let task = create_writing_thread(
+            fifo_path.clone(),
+            "a1,a2\n".to_owned(),
+            lines,
+            waiting.clone(),
+            joinable_lines_length * 2,
+        );
 
         // Data Schema
         let schema = Arc::new(Schema::new(vec![
@@ -114,7 +176,6 @@ mod unix_test {
             Field::new("a2", DataType::UInt32, false),
         ]));
 
-        // Create a file with bounded or unbounded flag.
         let provider = fifo_table(schema, fifo_path, vec![]);
         ctx.register_table("left", provider).unwrap();
 
@@ -130,7 +191,9 @@ mod unix_test {
         // Execute the query
         let df = ctx.sql("SELECT t1.a2, t2.c1, t2.c4, t2.c5 FROM left as t1 JOIN right as t2 ON t1.a1 = t2.c1").await?;
         let mut stream = df.execute_stream().await?;
-        while (stream.next().await).is_some() {}
+        while (stream.next().await).is_some() {
+            waiting.store(false, Ordering::SeqCst);
+        }
         task.await.unwrap();
         Ok(())
     }
@@ -140,16 +203,6 @@ mod unix_test {
         LeftUnmatched,
         RightUnmatched,
         Equal,
-    }
-
-    fn create_writing_thread(file_path: PathBuf, lines: Vec<String>) -> JoinHandle<()> {
-        spawn_blocking(move || {
-            let mut file = OpenOptions::new().write(true).open(file_path).unwrap();
-            for line in &lines {
-                file.write_all(line.as_bytes()).unwrap()
-            }
-            file.flush().unwrap();
-        })
     }
 
     // This test provides a relatively realistic end-to-end scenario where
@@ -163,6 +216,8 @@ mod unix_test {
             .set_bool("datafusion.execution.coalesce_batches", false)
             .with_target_partitions(1);
         let ctx = SessionContext::new_with_config(config);
+        // Tasks
+        let mut tasks: Vec<JoinHandle<()>> = vec![];
 
         // Join filter
         let a1_iter = 0..TEST_DATA_SIZE;
@@ -179,12 +234,24 @@ mod unix_test {
         let left_fifo = create_fifo_file(&tmp_dir, "left.csv")?;
         // Create a FIFO file for the right input source.
         let right_fifo = create_fifo_file(&tmp_dir, "right.csv")?;
+        // Create a mutex for tracking if the right input source is waiting for data.
+        let waiting = Arc::new(AtomicBool::new(true));
 
         // Create writing threads for the left and right FIFO files
-        let tasks = vec![
-            create_writing_thread(left_fifo.clone(), lines.clone()),
-            create_writing_thread(right_fifo.clone(), lines.clone()),
-        ];
+        tasks.push(create_writing_thread(
+            left_fifo.clone(),
+            "a1,a2\n".to_owned(),
+            lines.clone(),
+            waiting.clone(),
+            TEST_BATCH_SIZE,
+        ));
+        tasks.push(create_writing_thread(
+            right_fifo.clone(),
+            "a1,a2\n".to_owned(),
+            lines.clone(),
+            waiting.clone(),
+            TEST_BATCH_SIZE,
+        ));
 
         // Create schema
         let schema = Arc::new(Schema::new(vec![
@@ -221,6 +288,7 @@ mod unix_test {
         let mut operations = vec![];
         // Partial.
         while let Some(Ok(batch)) = stream.next().await {
+            waiting.store(false, Ordering::SeqCst);
             let left_unmatched = batch.column(2).null_count();
             let right_unmatched = batch.column(0).null_count();
             let op = if left_unmatched == 0 && right_unmatched == 0 {
@@ -257,10 +325,12 @@ mod unix_test {
     /// It tests the INSERT INTO functionality.
     #[tokio::test]
     async fn test_sql_insert_into_fifo() -> Result<()> {
+        // To make unbounded deterministic
+        let waiting = Arc::new(AtomicBool::new(true));
+        let waiting_thread = waiting.clone();
         // create local execution context
         let config = SessionConfig::new().with_batch_size(TEST_BATCH_SIZE);
         let ctx = SessionContext::new_with_config(config);
-
         // Create a new temporary FIFO file
         let tmp_dir = TempDir::new()?;
         let source_fifo_path = create_fifo_file(&tmp_dir, "source.csv")?;
@@ -274,9 +344,12 @@ mod unix_test {
         // thread. This approach ensures that the pipeline remains unbroken.
         tasks.push(create_writing_thread(
             source_fifo_path_thread,
+            "a1,a2\n".to_owned(),
             (0..TEST_DATA_SIZE)
                 .map(|_| "a,1\n".to_string())
                 .collect::<Vec<_>>(),
+            waiting,
+            TEST_BATCH_SIZE,
         ));
         // Create a new temporary FIFO file
         let sink_fifo_path = create_fifo_file(&tmp_dir, "sink.csv")?;
@@ -298,37 +371,30 @@ mod unix_test {
                 .map_err(|e| DataFusionError::Internal(e.to_string()))
                 .unwrap();
 
-            let mut remaining = TEST_DATA_SIZE;
-
-            while let Some(Ok(b)) = reader.next() {
-                remaining = remaining.checked_sub(b.num_rows()).unwrap();
-                if remaining == 0 {
-                    break;
-                }
+            while let Some(Ok(_)) = reader.next() {
+                waiting_thread.store(false, Ordering::SeqCst);
             }
         }));
         // register second csv file with the SQL (create an empty file if not found)
         ctx.sql(&format!(
-            "CREATE EXTERNAL TABLE source_table (
+            "CREATE UNBOUNDED EXTERNAL TABLE source_table (
                 a1  VARCHAR NOT NULL,
                 a2  INT NOT NULL
             )
             STORED AS CSV
             WITH HEADER ROW
-            OPTIONS ('UNBOUNDED' 'TRUE')
             LOCATION '{source_display_fifo_path}'"
         ))
         .await?;
 
         // register csv file with the SQL
         ctx.sql(&format!(
-            "CREATE EXTERNAL TABLE sink_table (
+            "CREATE UNBOUNDED EXTERNAL TABLE sink_table (
                 a1  VARCHAR NOT NULL,
                 a2  INT NOT NULL
             )
             STORED AS CSV
             WITH HEADER ROW
-            OPTIONS ('UNBOUNDED' 'TRUE')
             LOCATION '{sink_display_fifo_path}'"
         ))
         .await?;
@@ -338,7 +404,7 @@ mod unix_test {
             .await?;
 
         // Start execution
-        let _ = df.collect().await.unwrap();
+        df.collect().await?;
         futures::future::try_join_all(tasks).await.unwrap();
         Ok(())
     }
