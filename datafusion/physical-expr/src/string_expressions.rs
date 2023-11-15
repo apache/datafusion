@@ -28,6 +28,7 @@ use arrow::{
     },
     datatypes::{ArrowNativeType, ArrowPrimitiveType, DataType},
 };
+use blake2::digest::generic_array::GenericArray;
 use datafusion_common::utils::datafusion_strsim;
 use datafusion_common::{
     cast::{
@@ -35,7 +36,6 @@ use datafusion_common::{
     },
     exec_err, ScalarValue,
 };
-use blake2::digest::generic_array::GenericArray;
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 use std::iter;
