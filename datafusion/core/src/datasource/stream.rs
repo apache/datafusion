@@ -104,6 +104,12 @@ pub struct StreamConfig {
 
 impl StreamConfig {
     /// Stream data from the file at `location`
+    ///
+    /// * Data will be read sequentially from the provided `location`
+    /// * New data will be appended to the end of the file
+    ///
+    /// The encoding can be configured with [`Self::with_encoding`] and
+    /// defaults to [`StreamEncoding::Csv`]
     pub fn new_file(schema: SchemaRef, location: PathBuf) -> Self {
         Self {
             schema,
@@ -180,11 +186,20 @@ impl StreamConfig {
     }
 }
 
-/// A [`TableProvider`] for a stream source, such as a FIFO file
+/// A [`TableProvider`] for an unbounded stream source
+///
+/// Currently only reading from / appending to a single file in-place is supported, but
+/// other stream sources and sinks may be added in future.
+///
+/// Applications looking to read/write datasets comprising multiple files, e.g. [Hadoop]-style
+/// data stored in object storage, should instead consider [`ListingTable`].
+///
+/// [Hadoop]: https://hadoop.apache.org/
+/// [`ListingTable`]: crate::datasource::listing::ListingTable
 pub struct StreamTable(Arc<StreamConfig>);
 
 impl StreamTable {
-    /// Create a new [`StreamTable`] for the given `StreamConfig`
+    /// Create a new [`StreamTable`] for the given [`StreamConfig`]
     pub fn new(config: Arc<StreamConfig>) -> Self {
         Self(config)
     }
