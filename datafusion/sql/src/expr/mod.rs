@@ -254,13 +254,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.convert_data_type(&data_type)?,
             ))),
 
-            SQLExpr::TypedString { data_type, value } => {
-                dbg!("TypedString");
-                Ok(Expr::Cast(Cast::new(
-                    Box::new(lit(value)),
-                    self.convert_data_type(&data_type)?,
-                )))
-            }
+            SQLExpr::TypedString { data_type, value } => Ok(Expr::Cast(Cast::new(
+                Box::new(lit(value)),
+                self.convert_data_type(&data_type)?,
+            ))),
 
             SQLExpr::IsNull(expr) => Ok(Expr::IsNull(Box::new(
                 self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
