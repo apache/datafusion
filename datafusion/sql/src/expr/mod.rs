@@ -40,10 +40,7 @@ use datafusion_expr::{
     col, expr, lit, AggregateFunction, Between, BinaryExpr, BuiltinScalarFunction, Cast,
     Expr, ExprSchemable, GetFieldAccess, GetIndexedField, Like, Operator, TryCast,
 };
-use sqlparser::ast::{
-    ArrayAgg, Expr as SQLExpr, JsonOperator, TrimWhereField,
-    Value,
-};
+use sqlparser::ast::{ArrayAgg, Expr as SQLExpr, JsonOperator, TrimWhereField, Value};
 use sqlparser::parser::ParserError::ParserError;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -233,7 +230,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let expr =
                     self.sql_expr_to_logical_expr(*expr, schema, planner_context)?;
 
-                // int/floats should come as seconds rather as nanoseconds    
+                // int/floats should come as seconds rather as nanoseconds
                 dt = match &dt {
                     DataType::Timestamp(TimeUnit::Nanosecond, tz)
                         if expr.get_type(schema)? == DataType::Int64 =>
