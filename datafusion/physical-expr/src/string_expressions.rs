@@ -644,7 +644,7 @@ pub fn overlay<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-///Returns the Levenshtein distance between the two given strings
+///Returns the Levenshtein distance between the two given strings.
 /// LEVENSHTEIN('kitten', 'sitting') = 3
 pub fn levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 2 {
