@@ -22,15 +22,15 @@ use crate::expr::{
     Placeholder, ScalarFunction, TryCast,
 };
 use crate::function::PartitionEvaluatorFactory;
-use crate::WindowUDF;
 use crate::{
     aggregate_function, built_in_function, conditional_expressions::CaseBuilder,
     logical_plan::Subquery, AccumulatorFactoryFunction, AggregateUDF,
     BuiltinScalarFunction, Expr, LogicalPlan, Operator, ReturnTypeFunction,
     ScalarFunctionImplementation, ScalarUDF, Signature, StateTypeFunction, Volatility,
 };
+use crate::{ColumnarValue, WindowUDF};
 use arrow::datatypes::DataType;
-use datafusion_common::{Column, Result};
+use datafusion_common::{internal_err, Column, DataFusionError, Result};
 use std::ops::Not;
 use std::sync::Arc;
 
@@ -993,7 +993,27 @@ pub fn create_udwf(
 pub fn call_fn(name: impl AsRef<str>, args: Vec<Expr>) -> Result<Expr> {
     match name.as_ref().parse::<BuiltinScalarFunction>() {
         Ok(fun) => Ok(Expr::ScalarFunction(ScalarFunction::new(fun, args))),
-        Err(e) => Err(e),
+        Err(_) => {
+            // Constructing a `ScalarUDF` with only name and stub impl/return_type...
+            // This unresolved UDF will be resolved during analyzing using registered functions
+            let placeholder_impl: ScalarFunctionImplementation =
+                Arc::new(|_: &[ColumnarValue]| {
+                    return internal_err!("Unresolved function should not be called");
+                });
+            let return_type_func: ReturnTypeFunction =
+                Arc::new(move |_| Ok(Arc::new(DataType::Null)));
+            let unresolved_udf = crate::ScalarUDF::new(
+                name.as_ref(),
+                &Signature::exact(vec![], Volatility::Immutable),
+                &return_type_func,
+                &placeholder_impl,
+            );
+
+            Ok(Expr::ScalarUDF(crate::expr::ScalarUDF::new(
+                Arc::new(unresolved_udf),
+                args,
+            )))
+        }
     }
 }
 
