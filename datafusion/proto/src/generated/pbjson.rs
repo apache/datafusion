@@ -20936,6 +20936,7 @@ impl serde::Serialize for ScalarFunction {
             Self::ArrayIntersect => "ArrayIntersect",
             Self::ArrayUnion => "ArrayUnion",
             Self::OverLay => "OverLay",
+            Self::Range => "Range",
             Self::Levenshtein => "Levenshtein",
         };
         serializer.serialize_str(variant)
@@ -21070,6 +21071,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "ArrayIntersect",
             "ArrayUnion",
             "OverLay",
+            "Range",
             "Levenshtein",
         ];
 
@@ -21233,6 +21235,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "ArrayIntersect" => Ok(ScalarFunction::ArrayIntersect),
                     "ArrayUnion" => Ok(ScalarFunction::ArrayUnion),
                     "OverLay" => Ok(ScalarFunction::OverLay),
+                    "Range" => Ok(ScalarFunction::Range),
                     "Levenshtein" => Ok(ScalarFunction::Levenshtein),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }

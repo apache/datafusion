@@ -2568,6 +2568,7 @@ pub enum ScalarFunction {
     ArrayIntersect = 119,
     ArrayUnion = 120,
     OverLay = 121,
+    Range = 122,
     Levenshtein = 122,
 }
 impl ScalarFunction {
@@ -2699,6 +2700,7 @@ impl ScalarFunction {
             ScalarFunction::ArrayIntersect => "ArrayIntersect",
             ScalarFunction::ArrayUnion => "ArrayUnion",
             ScalarFunction::OverLay => "OverLay",
+            ScalarFunction::Range => "Range",
             ScalarFunction::Levenshtein => "Levenshtein",
         }
     }
@@ -2827,6 +2829,7 @@ impl ScalarFunction {
             "ArrayIntersect" => Some(Self::ArrayIntersect),
             "ArrayUnion" => Some(Self::ArrayUnion),
             "OverLay" => Some(Self::OverLay),
+            "Range" => Some(Self::Range),
             "Levenshtein" => Some(Self::Levenshtein),
             _ => None,
         }

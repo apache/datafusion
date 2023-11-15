@@ -184,6 +184,8 @@ pub enum BuiltinScalarFunction {
     MakeArray,
     /// Flatten
     Flatten,
+    /// Range
+    Range,
 
     // struct functions
     /// struct
@@ -408,6 +410,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayToString => Volatility::Immutable,
             BuiltinScalarFunction::ArrayIntersect => Volatility::Immutable,
             BuiltinScalarFunction::ArrayUnion => Volatility::Immutable,
+            BuiltinScalarFunction::Range => Volatility::Immutable,
             BuiltinScalarFunction::Cardinality => Volatility::Immutable,
             BuiltinScalarFunction::MakeArray => Volatility::Immutable,
             BuiltinScalarFunction::Ascii => Volatility::Immutable,
@@ -591,6 +594,9 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayToString => Ok(Utf8),
             BuiltinScalarFunction::ArrayIntersect => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayUnion => Ok(input_expr_types[0].clone()),
+            BuiltinScalarFunction::Range => {
+                Ok(List(Arc::new(Field::new("item", Int64, true))))
+            }
             BuiltinScalarFunction::Cardinality => Ok(UInt64),
             BuiltinScalarFunction::MakeArray => match input_expr_types.len() {
                 0 => Ok(List(Arc::new(Field::new("item", Null, true)))),
@@ -909,6 +915,14 @@ impl BuiltinScalarFunction {
                 // 0 or more arguments of arbitrary type
                 Signature::one_of(vec![VariadicAny, Any(0)], self.volatility())
             }
+            BuiltinScalarFunction::Range => Signature::one_of(
+                vec![
+                    Exact(vec![Int64]),
+                    Exact(vec![Int64, Int64]),
+                    Exact(vec![Int64, Int64, Int64]),
+                ],
+                self.volatility(),
+            ),
             BuiltinScalarFunction::Struct => Signature::variadic(
                 struct_expressions::SUPPORTED_STRUCT_TYPES.to_vec(),
                 self.volatility(),
@@ -1545,6 +1559,7 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
         BuiltinScalarFunction::MakeArray => &["make_array", "make_list"],
         BuiltinScalarFunction::ArrayIntersect => &["array_intersect", "list_intersect"],
         BuiltinScalarFunction::OverLay => &["overlay"],
+        BuiltinScalarFunction::Range => &["range", "generate_series"],
 
         // struct functions
         BuiltinScalarFunction::Struct => &["struct"],

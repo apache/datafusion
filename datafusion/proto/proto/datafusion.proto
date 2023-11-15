@@ -637,7 +637,8 @@ enum ScalarFunction {
   ArrayIntersect = 119;
   ArrayUnion = 120;
   OverLay = 121;
-  Levenshtein = 122;
+  Range = 122;
+  Levenshtein = 123;
 }
 
 message ScalarFunctionNode {
