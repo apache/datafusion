@@ -702,7 +702,7 @@ select array_element(make_array(1, 2, 3, 4, 5), 0), array_element(make_array('h'
 NULL NULL
 
 # array_element scalar function #4 (with NULL)
-query error 
+query error
 select array_element(make_array(1, 2, 3, 4, 5), NULL), array_element(make_array('h', 'e', 'l', 'l', 'o'), NULL);
 
 # array_element scalar function #5 (with negative index)
@@ -871,11 +871,11 @@ select array_slice(make_array(1, 2, 3, 4, 5), 0, 4), array_slice(make_array('h',
 [1, 2, 3, 4] [h, e, l]
 
 # array_slice scalar function #8 (with NULL and positive number)
-query error 
+query error
 select array_slice(make_array(1, 2, 3, 4, 5), NULL, 4), array_slice(make_array('h', 'e', 'l', 'l', 'o'), NULL, 3);
 
 # array_slice scalar function #9 (with positive number and NULL)
-query error 
+query error
 select array_slice(make_array(1, 2, 3, 4, 5), 2, NULL), array_slice(make_array('h', 'e', 'l', 'l', 'o'), 3, NULL);
 
 # array_slice scalar function #10 (with zero-zero)
@@ -885,7 +885,7 @@ select array_slice(make_array(1, 2, 3, 4, 5), 0, 0), array_slice(make_array('h',
 [] []
 
 # array_slice scalar function #11 (with NULL-NULL)
-query error 
+query error
 select array_slice(make_array(1, 2, 3, 4, 5), NULL), array_slice(make_array('h', 'e', 'l', 'l', 'o'), NULL);
 
 # array_slice scalar function #12 (with zero and negative number)
@@ -895,11 +895,11 @@ select array_slice(make_array(1, 2, 3, 4, 5), 0, -4), array_slice(make_array('h'
 [1] [h, e]
 
 # array_slice scalar function #13 (with negative number and NULL)
-query error 
+query error
 select array_slice(make_array(1, 2, 3, 4, 5), 2, NULL), array_slice(make_array('h', 'e', 'l', 'l', 'o'), 3, NULL);
 
 # array_slice scalar function #14 (with NULL and negative number)
-query error 
+query error
 select array_slice(make_array(1, 2, 3, 4, 5), NULL, -4), array_slice(make_array('h', 'e', 'l', 'l', 'o'), NULL, -3);
 
 # array_slice scalar function #15 (with negative indexes)
