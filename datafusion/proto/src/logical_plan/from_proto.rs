@@ -49,8 +49,8 @@ use datafusion_expr::{
     concat_expr, concat_ws_expr, cos, cosh, cot, current_date, current_time, date_bin,
     date_part, date_trunc, decode, degrees, digest, encode, exp,
     expr::{self, InList, Sort, WindowFunction},
-    factorial, flatten, floor, from_unixtime, gcd, isnan, iszero, lcm, left, ln, log,
-    log10, log2,
+    factorial, flatten, floor, from_unixtime, gcd, gen_range, isnan, iszero, lcm, left,
+    ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
     lower, lpad, ltrim, md5, nanvl, now, nullif, octet_length, overlay, pi, power,
     radians, random, regexp_match, regexp_replace, repeat, replace, reverse, right,
@@ -488,6 +488,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ArrayToString => Self::ArrayToString,
             ScalarFunction::ArrayIntersect => Self::ArrayIntersect,
             ScalarFunction::ArrayUnion => Self::ArrayUnion,
+            ScalarFunction::Range => Self::Range,
             ScalarFunction::Cardinality => Self::Cardinality,
             ScalarFunction::Array => Self::MakeArray,
             ScalarFunction::NullIf => Self::NullIf,
@@ -1408,6 +1409,12 @@ pub fn parse_expr(
                 ScalarFunction::ArrayIntersect => Ok(array_intersect(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
+                )),
+                ScalarFunction::Range => Ok(gen_range(
+                    args.to_owned()
+                        .iter()
+                        .map(|expr| parse_expr(expr, registry))
+                        .collect::<Result<Vec<_>, _>>()?,
                 )),
                 ScalarFunction::Cardinality => {
                     Ok(cardinality(parse_expr(&args[0], registry)?))
