@@ -1440,7 +1440,7 @@ fn union_generic_lists<OffsetSize: OffsetSizeTrait>(
     r: &GenericListArray<OffsetSize>,
     field: &FieldRef,
 ) -> Result<GenericListArray<OffsetSize>> {
-    let converter = RowConverter::new(vec![SortField::new(l.value_type().clone())])?;
+    let converter = RowConverter::new(vec![SortField::new(l.value_type())])?;
 
     let nulls = NullBuffer::union(l.nulls(), r.nulls());
     let l_values = l.values().clone();
@@ -1494,14 +1494,14 @@ pub fn array_union(args: &[ArrayRef]) -> Result<ArrayRef> {
         (DataType::Null, _) => Ok(array2.clone()),
         (_, DataType::Null) => Ok(array1.clone()),
         (DataType::List(field_ref), DataType::List(_)) => {
-            check_datatypes("array_union", &[&array1, &array2])?;
+            check_datatypes("array_union", &[array1, array2])?;
             let list1 = array1.as_list::<i32>();
             let list2 = array2.as_list::<i32>();
             let result = union_generic_lists::<i32>(list1, list2, field_ref)?;
             Ok(Arc::new(result))
         }
         (DataType::LargeList(field_ref), DataType::LargeList(_)) => {
-            check_datatypes("array_union", &[&array1, &array2])?;
+            check_datatypes("array_union", &[array1, array2])?;
             let list1 = array1.as_list::<i64>();
             let list2 = array2.as_list::<i64>();
             let result = union_generic_lists::<i64>(list1, list2, field_ref)?;
@@ -1985,7 +1985,7 @@ pub fn array_intersect(args: &[ArrayRef]) -> Result<ArrayRef> {
     if first_array.value_type() != second_array.value_type() {
         return internal_err!("array_intersect is not implemented for '{first_array:?}' and '{second_array:?}'");
     }
-    let dt = first_array.value_type().clone();
+    let dt = first_array.value_type();
 
     let mut offsets = vec![0];
     let mut new_arrays = vec![];

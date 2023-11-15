@@ -245,11 +245,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let on_expr = on_expr
                     .into_iter()
                     .map(|e| {
-                        self.sql_expr_to_logical_expr(
-                            e.clone(),
-                            plan.schema(),
-                            planner_context,
-                        )
+                        self.sql_expr_to_logical_expr(e, plan.schema(), planner_context)
                     })
                     .collect::<Result<Vec<_>>>()?;
 
