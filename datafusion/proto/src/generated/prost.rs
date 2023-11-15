@@ -2569,7 +2569,7 @@ pub enum ScalarFunction {
     ArrayUnion = 120,
     OverLay = 121,
     Range = 122,
-    Levenshtein = 122,
+    Levenshtein = 123,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
