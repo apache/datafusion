@@ -1415,10 +1415,6 @@ pub fn parse_expr(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                 )),
-                ScalarFunction::ArrayIntersect => Ok(array_intersect(
-                    parse_expr(&args[0], registry)?,
-                    parse_expr(&args[1], registry)?,
-                )),
                 ScalarFunction::Range => Ok(gen_range(
                     args.to_owned()
                         .iter()
