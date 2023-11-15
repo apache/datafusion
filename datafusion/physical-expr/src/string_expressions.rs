@@ -35,11 +35,11 @@ use datafusion_common::{
     },
     exec_err, ScalarValue,
 };
+use blake2::digest::generic_array::GenericArray;
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 use std::iter;
 use std::sync::Arc;
-use blake2::digest::generic_array::GenericArray;
 use uuid::Uuid;
 
 /// applies a unary expression to `args[0]` that is expected to be downcastable to
