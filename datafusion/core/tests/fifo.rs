@@ -112,8 +112,7 @@ mod unix_test {
                 while waiting_lock.load(Ordering::SeqCst) && cnt > wait_until {
                     thread::sleep(Duration::from_millis(50));
                 }
-                write_to_fifo(&file, &line, execution_start, broken_pipe_timeout)
-                    .unwrap();
+                write_to_fifo(&file, line, execution_start, broken_pipe_timeout).unwrap();
             }
             drop(file);
         })
