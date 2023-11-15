@@ -44,6 +44,7 @@ mod sp_repartition_fuzz_tests {
     };
     use test_utils::add_empty_batches;
 
+    use datafusion_physical_expr::equivalence::EquivalenceClass;
     use itertools::izip;
     use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
 
@@ -112,7 +113,7 @@ mod sp_repartition_fuzz_tests {
     // expressions in the equivalence classes. For other expressions in the same
     // equivalence class use same result. This util gets already calculated result, when available.
     fn get_representative_arr(
-        eq_group: &[Arc<dyn PhysicalExpr>],
+        eq_group: &EquivalenceClass,
         existing_vec: &[Option<ArrayRef>],
         schema: SchemaRef,
     ) -> Option<ArrayRef> {
@@ -185,7 +186,7 @@ mod sp_repartition_fuzz_tests {
                 get_representative_arr(eq_group, &schema_vec, schema.clone())
                     .unwrap_or_else(|| generate_random_array(n_elem, n_distinct));
 
-            for expr in eq_group {
+            for expr in eq_group.iter() {
                 let col = expr.as_any().downcast_ref::<Column>().unwrap();
                 let (idx, _field) = schema.column_with_name(col.name()).unwrap();
                 schema_vec[idx] = Some(representative_array.clone());
