@@ -1789,12 +1789,6 @@ SELECT TIMESTAMPTZ '2020-01-01 00:00:00Z' = TIMESTAMP '2020-01-01'
 true
 
 # verify to_timestamp edge cases to be in sync with postgresql
-query PPPPP
-SELECT to_timestamp(null), to_timestamp(-62125747200), to_timestamp(0), to_timestamp(1926632005177), to_timestamp(1926632005)
-----
-NULL 0001-04-25T00:00:00 1970-01-01T00:00:00 +63022-07-16T12:59:37 2031-01-19T23:33:25
-
-# verify to_timestamp edge cases to be in sync with postgresql
 query PPPPPPPP
 SELECT to_timestamp(null), to_timestamp(-62125747200), to_timestamp(0), to_timestamp(1926632005177), to_timestamp(1926632005), to_timestamp(1), to_timestamp(-1), to_timestamp(0-1)
 ----
