@@ -28,7 +28,6 @@ use arrow::{
     },
     datatypes::{ArrowNativeType, ArrowPrimitiveType, DataType},
 };
-use blake2::digest::generic_array::GenericArray;
 use datafusion_common::utils::datafusion_strsim;
 use datafusion_common::{
     cast::{
