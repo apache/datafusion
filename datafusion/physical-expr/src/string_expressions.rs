@@ -28,13 +28,13 @@ use arrow::{
     },
     datatypes::{ArrowNativeType, ArrowPrimitiveType, DataType},
 };
+use datafusion_common::utils::datafusion_strsim;
 use datafusion_common::{
     cast::{
         as_generic_string_array, as_int64_array, as_primitive_array, as_string_array,
     },
     exec_err, ScalarValue,
 };
-use datafusion_common::utils::datafusion_strsim;
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 use std::iter;
