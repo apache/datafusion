@@ -737,6 +737,12 @@ scalar_expr!(
     "Returns an array of the elements in the intersection of array1 and array2."
 );
 
+nary_scalar_expr!(
+    Range,
+    gen_range,
+    "Returns a list of values in the range between start and stop with step."
+);
+
 // string functions
 scalar_expr!(Ascii, ascii, chr, "ASCII code value of the character");
 scalar_expr!(
