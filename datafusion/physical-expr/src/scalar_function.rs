@@ -77,14 +77,14 @@ impl ScalarFunctionExpr {
         name: &str,
         fun: ScalarFunctionImplementation,
         args: Vec<Arc<dyn PhysicalExpr>>,
-        return_type: &DataType,
+        return_type: DataType,
         monotonicity: Option<FuncMonotonicity>,
     ) -> Self {
         Self {
             fun,
             name: name.to_owned(),
             args,
-            return_type: return_type.clone(),
+            return_type,
             monotonicity,
         }
     }
@@ -107,6 +107,11 @@ impl ScalarFunctionExpr {
     /// Data type produced by this expression
     pub fn return_type(&self) -> &DataType {
         &self.return_type
+    }
+
+    /// Monotonicity information of the function
+    pub fn monotonicity(&self) -> &Option<FuncMonotonicity> {
+        &self.monotonicity
     }
 }
 
@@ -136,7 +141,10 @@ impl PhysicalExpr for ScalarFunctionExpr {
         let inputs = match (self.args.len(), self.name.parse::<BuiltinScalarFunction>()) {
             // MakeArray support zero argument but has the different behavior from the array with one null.
             (0, Ok(scalar_fun))
-                if scalar_fun.supports_zero_argument()
+                if scalar_fun
+                    .signature()
+                    .type_signature
+                    .supports_zero_argument()
                     && scalar_fun != BuiltinScalarFunction::MakeArray =>
             {
                 vec![ColumnarValue::create_null_array(batch.num_rows())]
@@ -165,7 +173,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
             &self.name,
             self.fun.clone(),
             children,
-            self.return_type(),
+            self.return_type().clone(),
             self.monotonicity.clone(),
         )))
     }

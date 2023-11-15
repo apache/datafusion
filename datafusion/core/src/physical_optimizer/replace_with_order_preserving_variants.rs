@@ -176,8 +176,9 @@ fn get_updated_plan(
     // a `SortPreservingRepartitionExec` if appropriate:
     if is_repartition(&plan) && !plan.maintains_input_order()[0] && is_spr_better {
         let child = plan.children().swap_remove(0);
-        let repartition = RepartitionExec::try_new(child, plan.output_partitioning())?;
-        plan = Arc::new(repartition.with_preserve_order(true)) as _
+        let repartition = RepartitionExec::try_new(child, plan.output_partitioning())?
+            .with_preserve_order();
+        plan = Arc::new(repartition) as _
     }
     // When the input of a `CoalescePartitionsExec` has an ordering, replace it
     // with a `SortPreservingMergeExec` if appropriate:

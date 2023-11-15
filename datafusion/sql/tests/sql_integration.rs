@@ -422,12 +422,11 @@ CopyTo: format=csv output_url=output.csv single_file_output=true options: ()
 fn plan_insert() {
     let sql =
         "insert into person (id, first_name, last_name) values (1, 'Alan', 'Turing')";
-    let plan = r#"
-Dml: op=[Insert Into] table=[person]
-  Projection: CAST(column1 AS UInt32) AS id, column2 AS first_name, column3 AS last_name
-    Values: (Int64(1), Utf8("Alan"), Utf8("Turing"))
-    "#
-    .trim();
+    let plan = "Dml: op=[Insert Into] table=[person]\
+                \n  Projection: CAST(column1 AS UInt32) AS id, column2 AS first_name, column3 AS last_name, \
+                        CAST(NULL AS Int32) AS age, CAST(NULL AS Utf8) AS state, CAST(NULL AS Float64) AS salary, \
+                        CAST(NULL AS Timestamp(Nanosecond, None)) AS birth_date, CAST(NULL AS Int32) AS 😀\
+                \n    Values: (Int64(1), Utf8(\"Alan\"), Utf8(\"Turing\"))";
     quick_test(sql, plan);
 }
 
@@ -4037,12 +4036,11 @@ Dml: op=[Update] table=[person]
 fn test_prepare_statement_insert_infer() {
     let sql = "insert into person (id, first_name, last_name) values ($1, $2, $3)";
 
-    let expected_plan = r#"
-Dml: op=[Insert Into] table=[person]
-  Projection: column1 AS id, column2 AS first_name, column3 AS last_name
-    Values: ($1, $2, $3)
-        "#
-    .trim();
+    let expected_plan = "Dml: op=[Insert Into] table=[person]\
+                        \n  Projection: column1 AS id, column2 AS first_name, column3 AS last_name, \
+                                    CAST(NULL AS Int32) AS age, CAST(NULL AS Utf8) AS state, CAST(NULL AS Float64) AS salary, \
+                                    CAST(NULL AS Timestamp(Nanosecond, None)) AS birth_date, CAST(NULL AS Int32) AS 😀\
+                        \n    Values: ($1, $2, $3)";
 
     let expected_dt = "[Int32]";
     let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
@@ -4061,12 +4059,11 @@ Dml: op=[Insert Into] table=[person]
         ScalarValue::Utf8(Some("Alan".to_string())),
         ScalarValue::Utf8(Some("Turing".to_string())),
     ];
-    let expected_plan = r#"
-Dml: op=[Insert Into] table=[person]
-  Projection: column1 AS id, column2 AS first_name, column3 AS last_name
-    Values: (UInt32(1), Utf8("Alan"), Utf8("Turing"))
-        "#
-    .trim();
+    let expected_plan = "Dml: op=[Insert Into] table=[person]\
+                        \n  Projection: column1 AS id, column2 AS first_name, column3 AS last_name, \
+                                    CAST(NULL AS Int32) AS age, CAST(NULL AS Utf8) AS state, CAST(NULL AS Float64) AS salary, \
+                                    CAST(NULL AS Timestamp(Nanosecond, None)) AS birth_date, CAST(NULL AS Int32) AS 😀\
+                        \n    Values: (UInt32(1), Utf8(\"Alan\"), Utf8(\"Turing\"))";
     let plan = plan.replace_params_with_values(&param_values).unwrap();
 
     prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);

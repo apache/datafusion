@@ -177,6 +177,14 @@ impl MemoryExec {
         })
     }
 
+    pub fn partitions(&self) -> &[Vec<RecordBatch>] {
+        &self.partitions
+    }
+
+    pub fn projection(&self) -> &Option<Vec<usize>> {
+        &self.projection
+    }
+
     /// A memory table can be ordered by multiple expressions simultaneously.
     /// [`EquivalenceProperties`] keeps track of expressions that describe the
     /// global ordering of the schema. These columns are not necessarily same; e.g.
@@ -196,6 +204,10 @@ impl MemoryExec {
     pub fn with_sort_information(mut self, sort_information: Vec<LexOrdering>) -> Self {
         self.sort_information = sort_information;
         self
+    }
+
+    pub fn original_schema(&self) -> SchemaRef {
+        self.schema.clone()
     }
 }
 

@@ -76,7 +76,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let empty_from = matches!(plan, LogicalPlan::EmptyRelation(_));
 
         // process `where` clause
-        let plan = self.plan_selection(select.selection, plan, planner_context)?;
+        let base_plan = self.plan_selection(select.selection, plan, planner_context)?;
 
         // handle named windows before processing the projection expression
         check_conflicting_windows(&select.named_window)?;
@@ -84,16 +84,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // process the SELECT expressions, with wildcards expanded.
         let select_exprs = self.prepare_select_exprs(
-            &plan,
+            &base_plan,
             select.projection,
             empty_from,
             planner_context,
         )?;
 
         // having and group by clause may reference aliases defined in select projection
-        let projected_plan = self.project(plan.clone(), select_exprs.clone())?;
+        let projected_plan = self.project(base_plan.clone(), select_exprs.clone())?;
         let mut combined_schema = (**projected_plan.schema()).clone();
-        combined_schema.merge(plan.schema());
+        combined_schema.merge(base_plan.schema());
 
         // this alias map is resolved and looked up in both having exprs and group by exprs
         let alias_map = extract_aliases(&select_exprs);
@@ -148,7 +148,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     )?;
                     // aliases from the projection can conflict with same-named expressions in the input
                     let mut alias_map = alias_map.clone();
-                    for f in plan.schema().fields() {
+                    for f in base_plan.schema().fields() {
                         alias_map.remove(f.name());
                     }
                     let group_by_expr =
@@ -158,7 +158,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             .unwrap_or(group_by_expr);
                     let group_by_expr = normalize_col(group_by_expr, &projected_plan)?;
                     self.validate_schema_satisfies_exprs(
-                        plan.schema(),
+                        base_plan.schema(),
                         &[group_by_expr.clone()],
                     )?;
                     Ok(group_by_expr)
@@ -171,7 +171,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .iter()
                 .filter(|select_expr| match select_expr {
                     Expr::AggregateFunction(_) | Expr::AggregateUDF(_) => false,
-                    Expr::Alias(Alias { expr, name: _ }) => !matches!(
+                    Expr::Alias(Alias { expr, name: _, .. }) => !matches!(
                         **expr,
                         Expr::AggregateFunction(_) | Expr::AggregateUDF(_)
                     ),
@@ -187,16 +187,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             || !aggr_exprs.is_empty()
         {
             self.aggregate(
-                plan,
+                &base_plan,
                 &select_exprs,
                 having_expr_opt.as_ref(),
-                group_by_exprs,
-                aggr_exprs,
+                &group_by_exprs,
+                &aggr_exprs,
             )?
         } else {
             match having_expr_opt {
                 Some(having_expr) => return plan_err!("HAVING clause references: {having_expr} must appear in the GROUP BY clause or be used in an aggregate function"),
-                None => (plan, select_exprs, having_expr_opt)
+                None => (base_plan.clone(), select_exprs.clone(), having_expr_opt)
             }
         };
 
@@ -229,19 +229,35 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let plan = project(plan, select_exprs_post_aggr)?;
 
         // process distinct clause
-        let distinct = select
-            .distinct
-            .map(|distinct| match distinct {
-                Distinct::Distinct => Ok(true),
-                Distinct::On(_) => not_impl_err!("DISTINCT ON Exprs not supported"),
-            })
-            .transpose()?
-            .unwrap_or(false);
+        let plan = match select.distinct {
+            None => Ok(plan),
+            Some(Distinct::Distinct) => {
+                LogicalPlanBuilder::from(plan).distinct()?.build()
+            }
+            Some(Distinct::On(on_expr)) => {
+                if !aggr_exprs.is_empty()
+                    || !group_by_exprs.is_empty()
+                    || !window_func_exprs.is_empty()
+                {
+                    return not_impl_err!("DISTINCT ON expressions with GROUP BY, aggregation or window functions are not supported ");
+                }
 
-        let plan = if distinct {
-            LogicalPlanBuilder::from(plan).distinct()?.build()
-        } else {
-            Ok(plan)
+                let on_expr = on_expr
+                    .into_iter()
+                    .map(|e| {
+                        self.sql_expr_to_logical_expr(
+                            e.clone(),
+                            plan.schema(),
+                            planner_context,
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                // Build the final plan
+                return LogicalPlanBuilder::from(base_plan)
+                    .distinct_on(on_expr, select_exprs, None)?
+                    .build();
+            }
         }?;
 
         // DISTRIBUTE BY
@@ -373,7 +389,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     &[&[plan.schema()]],
                     &plan.using_columns()?,
                 )?;
-                let expr = Expr::Alias(Alias::new(col, self.normalizer.normalize(alias)));
+                let expr = col.alias(self.normalizer.normalize(alias));
                 Ok(vec![expr])
             }
             SelectItem::Wildcard(options) => {
@@ -471,6 +487,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         .clone();
                     *expr = Expr::Alias(Alias {
                         expr: Box::new(new_expr),
+                        relation: None,
                         name: name.clone(),
                     });
                 }
@@ -511,18 +528,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ///                              the aggregate
     fn aggregate(
         &self,
-        input: LogicalPlan,
+        input: &LogicalPlan,
         select_exprs: &[Expr],
         having_expr_opt: Option<&Expr>,
-        group_by_exprs: Vec<Expr>,
-        aggr_exprs: Vec<Expr>,
+        group_by_exprs: &[Expr],
+        aggr_exprs: &[Expr],
     ) -> Result<(LogicalPlan, Vec<Expr>, Option<Expr>)> {
         let group_by_exprs =
-            get_updated_group_by_exprs(&group_by_exprs, select_exprs, input.schema())?;
+            get_updated_group_by_exprs(group_by_exprs, select_exprs, input.schema())?;
 
         // create the aggregate plan
         let plan = LogicalPlanBuilder::from(input.clone())
-            .aggregate(group_by_exprs.clone(), aggr_exprs.clone())?
+            .aggregate(group_by_exprs.clone(), aggr_exprs.to_vec())?
             .build()?;
 
         // in this next section of code we are re-writing the projection to refer to columns
@@ -549,25 +566,25 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 _ => aggr_projection_exprs.push(expr.clone()),
             }
         }
-        aggr_projection_exprs.extend_from_slice(&aggr_exprs);
+        aggr_projection_exprs.extend_from_slice(aggr_exprs);
 
         // now attempt to resolve columns and replace with fully-qualified columns
         let aggr_projection_exprs = aggr_projection_exprs
             .iter()
-            .map(|expr| resolve_columns(expr, &input))
+            .map(|expr| resolve_columns(expr, input))
             .collect::<Result<Vec<Expr>>>()?;
 
         // next we replace any expressions that are not a column with a column referencing
         // an output column from the aggregate schema
         let column_exprs_post_aggr = aggr_projection_exprs
             .iter()
-            .map(|expr| expr_as_column_expr(expr, &input))
+            .map(|expr| expr_as_column_expr(expr, input))
             .collect::<Result<Vec<Expr>>>()?;
 
         // next we re-write the projection
         let select_exprs_post_aggr = select_exprs
             .iter()
-            .map(|expr| rebase_expr(expr, &aggr_projection_exprs, &input))
+            .map(|expr| rebase_expr(expr, &aggr_projection_exprs, input))
             .collect::<Result<Vec<Expr>>>()?;
 
         // finally, we have some validation that the re-written projection can be resolved
@@ -582,7 +599,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // aggregation.
         let having_expr_post_aggr = if let Some(having_expr) = having_expr_opt {
             let having_expr_post_aggr =
-                rebase_expr(having_expr, &aggr_projection_exprs, &input)?;
+                rebase_expr(having_expr, &aggr_projection_exprs, input)?;
 
             check_columns_satisfy_exprs(
                 &column_exprs_post_aggr,
