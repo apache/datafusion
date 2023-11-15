@@ -29,6 +29,7 @@ mod value;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow_schema::DataType;
+use arrow_schema::TimeUnit;
 use datafusion_common::{
     internal_err, not_impl_err, plan_err, Column, DFSchema, DataFusionError, Result,
     ScalarValue,
@@ -39,7 +40,10 @@ use datafusion_expr::{
     col, expr, lit, AggregateFunction, Between, BinaryExpr, BuiltinScalarFunction, Cast,
     Expr, ExprSchemable, GetFieldAccess, GetIndexedField, Like, Operator, TryCast,
 };
-use sqlparser::ast::{ArrayAgg, Expr as SQLExpr, JsonOperator, TrimWhereField, Value};
+use sqlparser::ast::{
+    ArrayAgg, Expr as SQLExpr, JsonOperator, TrimWhereField,
+    Value,
+};
 use sqlparser::parser::ParserError::ParserError;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -224,14 +228,23 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             SQLExpr::Cast {
                 expr, data_type, ..
-            } => Ok(Expr::Cast(Cast::new(
-                Box::new(self.sql_expr_to_logical_expr(
-                    *expr,
-                    schema,
-                    planner_context,
-                )?),
-                self.convert_data_type(&data_type)?,
-            ))),
+            } => {
+                let mut dt = self.convert_data_type(&data_type)?;
+                let expr =
+                    self.sql_expr_to_logical_expr(*expr, schema, planner_context)?;
+
+                // int/floats should come as seconds rather as nanoseconds    
+                dt = match &dt {
+                    DataType::Timestamp(TimeUnit::Nanosecond, tz)
+                        if expr.get_type(schema)? == DataType::Int64 =>
+                    {
+                        DataType::Timestamp(TimeUnit::Second, tz.clone())
+                    }
+                    _ => dt,
+                };
+
+                Ok(Expr::Cast(Cast::new(Box::new(expr), dt)))
+            }
 
             SQLExpr::TryCast {
                 expr, data_type, ..
@@ -244,10 +257,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.convert_data_type(&data_type)?,
             ))),
 
-            SQLExpr::TypedString { data_type, value } => Ok(Expr::Cast(Cast::new(
-                Box::new(lit(value)),
-                self.convert_data_type(&data_type)?,
-            ))),
+            SQLExpr::TypedString { data_type, value } => {
+                dbg!("TypedString");
+                Ok(Expr::Cast(Cast::new(
+                    Box::new(lit(value)),
+                    self.convert_data_type(&data_type)?,
+                )))
+            }
 
             SQLExpr::IsNull(expr) => Ok(Expr::IsNull(Box::new(
                 self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,

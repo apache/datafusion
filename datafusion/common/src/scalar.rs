@@ -983,6 +983,9 @@ impl ScalarValue {
             ScalarValue::Decimal256(Some(v), precision, scale) => Ok(
                 ScalarValue::Decimal256(Some(v.neg_wrapping()), *precision, *scale),
             ),
+            ScalarValue::TimestampSecond(Some(v), tz) => {
+                Ok(ScalarValue::TimestampSecond(Some(-v), tz.clone()))
+            }
             value => _internal_err!(
                 "Can not run arithmetic negative on scalar value {value:?}"
             ),
