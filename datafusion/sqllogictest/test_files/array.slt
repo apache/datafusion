@@ -241,6 +241,13 @@ AS VALUES
 ;
 
 statement ok
+CREATE TABLE arrays_range
+AS VALUES
+  (3, 10, 2),
+  (4, 13, 3)
+;
+
+statement ok
 CREATE TABLE arrays_with_repeating_elements
 AS VALUES
   (make_array(1, 2, 1, 3, 2, 2, 1, 3, 2, 3), 2, 4, 3),
@@ -1919,6 +1926,101 @@ select array_to_string(make_array(), ',')
 ----
 (empty)
 
+
+## array_union (aliases: `list_union`)
+
+# array_union scalar function #1
+query ?
+select array_union([1, 2, 3, 4], [5, 6, 3, 4]);
+----
+[1, 2, 3, 4, 5, 6]
+
+# array_union scalar function #2
+query ?
+select array_union([1, 2, 3, 4], [5, 6, 7, 8]);
+----
+[1, 2, 3, 4, 5, 6, 7, 8]
+
+# array_union scalar function #3
+query ?
+select array_union([1,2,3], []);
+----
+[1, 2, 3]
+
+# array_union scalar function #4
+query ?
+select array_union([1, 2, 3, 4], [5, 4]);
+----
+[1, 2, 3, 4, 5]
+
+# array_union scalar function #5
+statement ok
+CREATE TABLE arrays_with_repeating_elements_for_union
+AS VALUES
+  ([1], [2]),
+  ([2, 3], [3]),
+  ([3], [3, 4])
+;
+
+query ?
+select array_union(column1, column2) from arrays_with_repeating_elements_for_union;
+----
+[1, 2]
+[2, 3]
+[3, 4]
+
+statement ok
+drop table arrays_with_repeating_elements_for_union;
+
+# array_union scalar function #6
+query ?
+select array_union([], []);
+----
+NULL
+
+# array_union scalar function #7
+query ?
+select array_union([[null]], []);
+----
+[[]]
+
+# array_union scalar function #8
+query ?
+select array_union([null], [null]);
+----
+[]
+
+# array_union scalar function #9
+query ?
+select array_union(null, []);
+----
+NULL
+
+# array_union scalar function #10
+query ?
+select array_union(null, null);
+----
+NULL
+
+# array_union scalar function #11
+query ?
+select array_union([1.2, 3.0], [1.2, 3.0, 5.7]);
+----
+[1.2, 3.0, 5.7]
+
+# array_union scalar function #12
+query ?
+select array_union(['hello'], ['hello','datafusion']);
+----
+[hello, datafusion]
+
+
+
+
+
+
+
+
 # list_to_string scalar function #4 (function alias `array_to_string`)
 query TTT
 select list_to_string(['h', 'e', 'l', 'l', 'o'], ','), list_to_string([1, 2, 3, 4, 5], '-'), list_to_string([1.0, 2.0, 3.0], '|');
@@ -2038,6 +2140,20 @@ query ???
 select array_remove(make_array(1, 2, 2, 1, 1), 2), array_remove(make_array(1.0, 2.0, 2.0, 1.0, 1.0), 1.0), array_remove(make_array('h', 'e', 'l', 'l', 'o'), 'l');
 ----
 [1, 2, 1, 1] [2.0, 2.0, 1.0, 1.0] [h, e, l, o]
+
+query ???
+select 
+  array_remove(make_array(1, null, 2, 3), 2),
+  array_remove(make_array(1.1, null, 2.2, 3.3), 1.1),
+  array_remove(make_array('a', null, 'bc'), 'a');
+----
+[1, , 3] [, 2.2, 3.3] [, bc]
+
+# TODO: https://github.com/apache/arrow-datafusion/issues/7142
+# query
+# select
+#  array_remove(make_array(1, null, 2), null),
+#  array_remove(make_array(1, null, 2, null), null);
 
 # array_remove scalar function #2 (element is list)
 query ??
@@ -2553,6 +2669,32 @@ select list_has_all(make_array(1,2,3), make_array(4,5,6)),
 ----
 false true false true
 
+query ???
+select range(column2),
+       range(column1, column2),
+       range(column1, column2, column3)
+from arrays_range;
+----
+[0, 1, 2, 3, 4, 5, 6, 7, 8, 9] [3, 4, 5, 6, 7, 8, 9] [3, 5, 7, 9]
+[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] [4, 5, 6, 7, 8, 9, 10, 11, 12] [4, 7, 10]
+
+query ?????
+select range(5),
+       range(2, 5),
+       range(2, 10, 3),
+       range(1, 5, -1),
+       range(1, -5, 1)
+;
+----
+[0, 1, 2, 3, 4] [2, 3, 4] [2, 5, 8] [1] []
+
+query ???
+select generate_series(5),
+       generate_series(2, 5),
+       generate_series(2, 10, 3)
+;
+----
+[0, 1, 2, 3, 4] [2, 3, 4] [2, 5, 8]
 
 ### Array operators tests
 
@@ -2859,6 +3001,9 @@ drop table array_intersect_table_3D;
 
 statement ok
 drop table arrays_values_without_nulls;
+
+statement ok
+drop table arrays_range;
 
 statement ok
 drop table arrays_with_repeating_elements;

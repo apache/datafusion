@@ -852,7 +852,7 @@ pub fn date_part(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
     let array = match array {
         ColumnarValue::Array(array) => array.clone(),
-        ColumnarValue::Scalar(scalar) => scalar.to_array(),
+        ColumnarValue::Scalar(scalar) => scalar.to_array()?,
     };
 
     let arr = match date_part.to_lowercase().as_str() {

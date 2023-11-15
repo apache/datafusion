@@ -73,6 +73,7 @@ message LogicalPlanNode {
     CustomTableScanNode custom_scan = 25;
     PrepareNode prepare = 26;
     DropViewNode drop_view = 27;
+    DistinctOnNode distinct_on = 28;
   }
 }
 
@@ -308,6 +309,13 @@ message DistinctNode {
   LogicalPlanNode input = 1;
 }
 
+message DistinctOnNode {
+  repeated LogicalExprNode on_expr = 1;
+  repeated LogicalExprNode select_expr = 2;
+  repeated LogicalExprNode sort_expr = 3;
+  LogicalPlanNode input = 4;
+}
+
 message UnionNode {
   repeated LogicalPlanNode inputs = 1;
 }
@@ -363,7 +371,7 @@ message LogicalExprNode {
     SortExprNode sort = 12;
     NegativeNode negative = 13;
     InListNode in_list = 14;
-    bool wildcard = 15;
+    Wildcard wildcard = 15;
     ScalarFunctionNode scalar_function = 16;
     TryCastNode try_cast = 17;
 
@@ -397,6 +405,10 @@ message LogicalExprNode {
     PlaceholderNode placeholder = 34;
 
   }
+}
+
+message Wildcard {
+  optional string qualifier = 1;
 }
 
 message PlaceholderNode {
@@ -481,6 +493,7 @@ message Not {
 message AliasNode {
   LogicalExprNode expr = 1;
   string alias = 2;
+  repeated OwnedTableReference relation = 3;
 }
 
 message BinaryExprNode {
@@ -622,6 +635,9 @@ enum ScalarFunction {
   StringToArray = 117;
   ToTimestampNanos = 118;
   ArrayIntersect = 119;
+  ArrayUnion = 120;
+  OverLay = 121;
+  Range = 122;
 }
 
 message ScalarFunctionNode {
@@ -1072,8 +1088,10 @@ message PlanType {
     OptimizedLogicalPlanType OptimizedLogicalPlan = 2;
     EmptyMessage FinalLogicalPlan = 3;
     EmptyMessage InitialPhysicalPlan = 4;
+    EmptyMessage InitialPhysicalPlanWithStats = 9;
     OptimizedPhysicalPlanType OptimizedPhysicalPlan = 5;
     EmptyMessage FinalPhysicalPlan = 6;
+    EmptyMessage FinalPhysicalPlanWithStats = 10;
   }
 }
 

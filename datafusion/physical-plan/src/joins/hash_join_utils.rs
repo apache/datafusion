@@ -103,12 +103,17 @@ use hashbrown::HashSet;
 /// ```
 pub struct JoinHashMap {
     // Stores hash value to last row index
-    pub map: RawTable<(u64, u64)>,
+    map: RawTable<(u64, u64)>,
     // Stores indices in chained list data structure
-    pub next: Vec<u64>,
+    next: Vec<u64>,
 }
 
 impl JoinHashMap {
+    #[cfg(test)]
+    pub(crate) fn new(map: RawTable<(u64, u64)>, next: Vec<u64>) -> Self {
+        Self { map, next }
+    }
+
     pub(crate) fn with_capacity(capacity: usize) -> Self {
         JoinHashMap {
             map: RawTable::with_capacity(capacity),
@@ -607,7 +612,7 @@ pub fn update_filter_expr_interval(
         .origin_sorted_expr()
         .expr
         .evaluate(batch)?
-        .into_array(1);
+        .into_array(1)?;
     // Convert the array to a ScalarValue:
     let value = ScalarValue::try_from_array(&array, 0)?;
     // Create a ScalarValue representing positive or negative infinity for the same data type:

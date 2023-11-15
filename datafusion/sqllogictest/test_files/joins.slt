@@ -1361,29 +1361,31 @@ from join_t1
 inner join join_t2 on join_t1.t1_id = join_t2.t2_id
 ----
 logical_plan
-Aggregate: groupBy=[[]], aggr=[[COUNT(alias1) AS COUNT(DISTINCT join_t1.t1_id)]]
---Aggregate: groupBy=[[join_t1.t1_id AS alias1]], aggr=[[]]
-----Projection: join_t1.t1_id
-------Inner Join: join_t1.t1_id = join_t2.t2_id
---------TableScan: join_t1 projection=[t1_id]
---------TableScan: join_t2 projection=[t2_id]
+Projection: COUNT(alias1) AS COUNT(DISTINCT join_t1.t1_id)
+--Aggregate: groupBy=[[]], aggr=[[COUNT(alias1)]]
+----Aggregate: groupBy=[[join_t1.t1_id AS alias1]], aggr=[[]]
+------Projection: join_t1.t1_id
+--------Inner Join: join_t1.t1_id = join_t2.t2_id
+----------TableScan: join_t1 projection=[t1_id]
+----------TableScan: join_t2 projection=[t2_id]
 physical_plan
-AggregateExec: mode=Final, gby=[], aggr=[COUNT(DISTINCT join_t1.t1_id)]
---CoalescePartitionsExec
-----AggregateExec: mode=Partial, gby=[], aggr=[COUNT(DISTINCT join_t1.t1_id)]
-------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[]
---------AggregateExec: mode=Partial, gby=[t1_id@0 as alias1], aggr=[]
-----------ProjectionExec: expr=[t1_id@0 as t1_id]
-------------CoalesceBatchesExec: target_batch_size=2
---------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(t1_id@0, t2_id@0)]
-----------------CoalesceBatchesExec: target_batch_size=2
-------------------RepartitionExec: partitioning=Hash([t1_id@0], 2), input_partitions=2
---------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-----------------------MemoryExec: partitions=1, partition_sizes=[1]
-----------------CoalesceBatchesExec: target_batch_size=2
-------------------RepartitionExec: partitioning=Hash([t2_id@0], 2), input_partitions=2
---------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-----------------------MemoryExec: partitions=1, partition_sizes=[1]
+ProjectionExec: expr=[COUNT(alias1)@0 as COUNT(DISTINCT join_t1.t1_id)]
+--AggregateExec: mode=Final, gby=[], aggr=[COUNT(alias1)]
+----CoalescePartitionsExec
+------AggregateExec: mode=Partial, gby=[], aggr=[COUNT(alias1)]
+--------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[]
+----------AggregateExec: mode=Partial, gby=[t1_id@0 as alias1], aggr=[]
+------------ProjectionExec: expr=[t1_id@0 as t1_id]
+--------------CoalesceBatchesExec: target_batch_size=2
+----------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(t1_id@0, t2_id@0)]
+------------------CoalesceBatchesExec: target_batch_size=2
+--------------------RepartitionExec: partitioning=Hash([t1_id@0], 2), input_partitions=2
+----------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+------------------------MemoryExec: partitions=1, partition_sizes=[1]
+------------------CoalesceBatchesExec: target_batch_size=2
+--------------------RepartitionExec: partitioning=Hash([t2_id@0], 2), input_partitions=2
+----------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+------------------------MemoryExec: partitions=1, partition_sizes=[1]
 
 statement ok
 set datafusion.explain.logical_plan_only = true;
@@ -3407,3 +3409,4 @@ set datafusion.optimizer.prefer_existing_sort = false;
 
 statement ok
 drop table annotated_data;
+

@@ -248,8 +248,10 @@ pub(crate) mod tests {
         let expr = agg.expressions();
         let values = expr
             .iter()
-            .map(|e| e.evaluate(batch))
-            .map(|r| r.map(|v| v.into_array(batch.num_rows())))
+            .map(|e| {
+                e.evaluate(batch)
+                    .and_then(|v| v.into_array(batch.num_rows()))
+            })
             .collect::<Result<Vec<_>>>()?;
         accum.update_batch(&values)?;
         accum.evaluate()
@@ -263,8 +265,10 @@ pub(crate) mod tests {
         let expr = agg.expressions();
         let values = expr
             .iter()
-            .map(|e| e.evaluate(batch))
-            .map(|r| r.map(|v| v.into_array(batch.num_rows())))
+            .map(|e| {
+                e.evaluate(batch)
+                    .and_then(|v| v.into_array(batch.num_rows()))
+            })
             .collect::<Result<Vec<_>>>()?;
         let indices = vec![0; batch.num_rows()];
         accum.update_batch(&values, &indices, None, 1)?;

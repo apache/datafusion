@@ -176,12 +176,16 @@ pub enum BuiltinScalarFunction {
     ArrayToString,
     /// array_intersect
     ArrayIntersect,
+    /// array_union
+    ArrayUnion,
     /// cardinality
     Cardinality,
     /// construct an array from columns
     MakeArray,
     /// Flatten
     Flatten,
+    /// Range
+    Range,
 
     // struct functions
     /// struct
@@ -290,6 +294,8 @@ pub enum BuiltinScalarFunction {
     RegexpMatch,
     /// arrow_typeof
     ArrowTypeof,
+    /// overlay
+    OverLay,
 }
 
 /// Maps the sql function name to `BuiltinScalarFunction`
@@ -401,6 +407,8 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArraySlice => Volatility::Immutable,
             BuiltinScalarFunction::ArrayToString => Volatility::Immutable,
             BuiltinScalarFunction::ArrayIntersect => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayUnion => Volatility::Immutable,
+            BuiltinScalarFunction::Range => Volatility::Immutable,
             BuiltinScalarFunction::Cardinality => Volatility::Immutable,
             BuiltinScalarFunction::MakeArray => Volatility::Immutable,
             BuiltinScalarFunction::Ascii => Volatility::Immutable,
@@ -452,6 +460,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Struct => Volatility::Immutable,
             BuiltinScalarFunction::FromUnixtime => Volatility::Immutable,
             BuiltinScalarFunction::ArrowTypeof => Volatility::Immutable,
+            BuiltinScalarFunction::OverLay => Volatility::Immutable,
 
             // Stable builtin functions
             BuiltinScalarFunction::Now => Volatility::Stable,
@@ -581,6 +590,10 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArraySlice => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayToString => Ok(Utf8),
             BuiltinScalarFunction::ArrayIntersect => Ok(input_expr_types[0].clone()),
+            BuiltinScalarFunction::ArrayUnion => Ok(input_expr_types[0].clone()),
+            BuiltinScalarFunction::Range => {
+                Ok(List(Arc::new(Field::new("item", Int64, true))))
+            }
             BuiltinScalarFunction::Cardinality => Ok(UInt64),
             BuiltinScalarFunction::MakeArray => match input_expr_types.len() {
                 0 => Ok(List(Arc::new(Field::new("item", Null, true)))),
@@ -808,6 +821,10 @@ impl BuiltinScalarFunction {
 
             BuiltinScalarFunction::Abs => Ok(input_expr_types[0].clone()),
 
+            BuiltinScalarFunction::OverLay => {
+                utf8_to_str_type(&input_expr_types[0], "overlay")
+            }
+
             BuiltinScalarFunction::Acos
             | BuiltinScalarFunction::Asin
             | BuiltinScalarFunction::Atan
@@ -885,11 +902,20 @@ impl BuiltinScalarFunction {
                 Signature::variadic_any(self.volatility())
             }
             BuiltinScalarFunction::ArrayIntersect => Signature::any(2, self.volatility()),
+            BuiltinScalarFunction::ArrayUnion => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::Cardinality => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::MakeArray => {
                 // 0 or more arguments of arbitrary type
                 Signature::one_of(vec![VariadicAny, Any(0)], self.volatility())
             }
+            BuiltinScalarFunction::Range => Signature::one_of(
+                vec![
+                    Exact(vec![Int64]),
+                    Exact(vec![Int64, Int64]),
+                    Exact(vec![Int64, Int64, Int64]),
+                ],
+                self.volatility(),
+            ),
             BuiltinScalarFunction::Struct => Signature::variadic(
                 struct_expressions::SUPPORTED_STRUCT_TYPES.to_vec(),
                 self.volatility(),
@@ -1253,7 +1279,15 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::ArrowTypeof => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::Abs => Signature::any(1, self.volatility()),
-
+            BuiltinScalarFunction::OverLay => Signature::one_of(
+                vec![
+                    Exact(vec![Utf8, Utf8, Int64, Int64]),
+                    Exact(vec![LargeUtf8, LargeUtf8, Int64, Int64]),
+                    Exact(vec![Utf8, Utf8, Int64]),
+                    Exact(vec![LargeUtf8, LargeUtf8, Int64]),
+                ],
+                self.volatility(),
+            ),
             BuiltinScalarFunction::Acos
             | BuiltinScalarFunction::Asin
             | BuiltinScalarFunction::Atan
@@ -1508,9 +1542,12 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
             "array_join",
             "list_join",
         ],
+        BuiltinScalarFunction::ArrayUnion => &["array_union", "list_union"],
         BuiltinScalarFunction::Cardinality => &["cardinality"],
         BuiltinScalarFunction::MakeArray => &["make_array", "make_list"],
         BuiltinScalarFunction::ArrayIntersect => &["array_intersect", "list_intersect"],
+        BuiltinScalarFunction::OverLay => &["overlay"],
+        BuiltinScalarFunction::Range => &["range", "generate_series"],
 
         // struct functions
         BuiltinScalarFunction::Struct => &["struct"],

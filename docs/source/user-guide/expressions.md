@@ -233,8 +233,10 @@ Unlike to some databases the math functions in Datafusion works the same way as 
 | array_slice(array, index)             | Returns a slice of the array. `array_slice([1, 2, 3, 4, 5, 6, 7, 8], 3, 6) -> [3, 4, 5, 6]`                                                                              |
 | array_to_string(array, delimiter)     | Converts each element to its text representation. `array_to_string([1, 2, 3, 4], ',') -> 1,2,3,4`                                                                        |
 | array_intersect(array1, array2)       | Returns an array of the elements in the intersection of array1 and array2. `array_intersect([1, 2, 3, 4], [5, 6, 3, 4]) -> [3, 4]`                                       |
+| array_union(array1, array2)           | Returns an array of the elements in the union of array1 and array2 without duplicates. `array_union([1, 2, 3, 4], [5, 6, 3, 4]) -> [1, 2, 3, 4, 5, 6]`                   |
 | cardinality(array)                    | Returns the total number of elements in the array. `cardinality([[1, 2, 3], [4, 5, 6]]) -> 6`                                                                            |
 | make_array(value1, [value2 [, ...]])  | Returns an Arrow array using the specified input expressions. `make_array(1, 2, 3) -> [1, 2, 3]`                                                                         |
+| range(start [, stop, step])           | Returns an Arrow array between start and stop with step. `SELECT range(2, 10, 3) -> [2, 5, 8]`                                                                           |
 | trim_array(array, n)                  | Deprecated                                                                                                                                                               |
 
 ## Regular Expressions
