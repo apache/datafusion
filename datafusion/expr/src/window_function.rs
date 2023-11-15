@@ -295,10 +295,10 @@ mod tests {
     #[test]
     fn test_count_return_type() -> Result<()> {
         let fun = find_df_window_func("count").unwrap();
-        let observed = fun.return_type(&[DataType::Utf8], &vec![])?;
+        let observed = fun.return_type(&[DataType::Utf8], &[])?;
         assert_eq!(DataType::Int64, observed);
 
-        let observed = fun.return_type(&[DataType::UInt64], &vec![])?;
+        let observed = fun.return_type(&[DataType::UInt64], &[])?;
         assert_eq!(DataType::Int64, observed);
 
         Ok(())
@@ -307,10 +307,10 @@ mod tests {
     #[test]
     fn test_first_value_return_type() -> Result<()> {
         let fun = find_df_window_func("first_value").unwrap();
-        let observed = fun.return_type(&[DataType::Utf8], &vec![])?;
+        let observed = fun.return_type(&[DataType::Utf8], &[])?;
         assert_eq!(DataType::Utf8, observed);
 
-        let observed = fun.return_type(&[DataType::UInt64], &vec![])?;
+        let observed = fun.return_type(&[DataType::UInt64], &[])?;
         assert_eq!(DataType::UInt64, observed);
 
         Ok(())
@@ -319,10 +319,10 @@ mod tests {
     #[test]
     fn test_last_value_return_type() -> Result<()> {
         let fun = find_df_window_func("last_value").unwrap();
-        let observed = fun.return_type(&[DataType::Utf8], &vec![])?;
+        let observed = fun.return_type(&[DataType::Utf8], &[])?;
         assert_eq!(DataType::Utf8, observed);
 
-        let observed = fun.return_type(&[DataType::Float64], &vec![])?;
+        let observed = fun.return_type(&[DataType::Float64], &[])?;
         assert_eq!(DataType::Float64, observed);
 
         Ok(())
@@ -331,10 +331,10 @@ mod tests {
     #[test]
     fn test_lead_return_type() -> Result<()> {
         let fun = find_df_window_func("lead").unwrap();
-        let observed = fun.return_type(&[DataType::Utf8], &vec![])?;
+        let observed = fun.return_type(&[DataType::Utf8], &[])?;
         assert_eq!(DataType::Utf8, observed);
 
-        let observed = fun.return_type(&[DataType::Float64], &vec![])?;
+        let observed = fun.return_type(&[DataType::Float64], &[])?;
         assert_eq!(DataType::Float64, observed);
 
         Ok(())
