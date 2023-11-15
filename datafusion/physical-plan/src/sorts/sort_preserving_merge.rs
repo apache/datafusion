@@ -174,8 +174,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
-        let output_oeq = self.input.equivalence_properties();
-        output_oeq.with_reorder(self.expr.to_vec())
+        self.input.equivalence_properties()
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
