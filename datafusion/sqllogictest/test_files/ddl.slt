@@ -750,7 +750,7 @@ query TT
 explain select c1 from t;
 ----
 logical_plan TableScan: t projection=[c1]
-physical_plan CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/empty.csv]]}, projection=[c1], infinite_source=true, has_header=true
+physical_plan StreamingTableExec: partition_sizes=1, projection=[c1], infinite_source=true
 
 statement ok
 drop table t;
