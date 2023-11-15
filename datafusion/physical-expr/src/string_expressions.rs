@@ -34,9 +34,9 @@ use datafusion_common::{
     },
     exec_err, ScalarValue,
 };
+use datafusion_common::utils::datafusion_strsim;
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
-use edit_distance::edit_distance;
 use std::iter;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -660,7 +660,7 @@ pub fn levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         .zip(str2_array.iter())
         .map(|(string1, string2)| match (string1, string2) {
             (Some(string1), Some(string2)) => {
-                Some(edit_distance(string1, string2) as i64)
+                Some(datafusion_strsim::levenshtein(string1, string2) as i64)
             }
             _ => None,
         })
