@@ -47,6 +47,8 @@ pub enum PlanType {
     FinalLogicalPlan,
     /// The initial physical plan, prepared for execution
     InitialPhysicalPlan,
+    /// The initial physical plan with stats, prepared for execution
+    InitialPhysicalPlanWithStats,
     /// The ExecutionPlan which results from applying an optimizer pass
     OptimizedPhysicalPlan {
         /// The name of the optimizer which produced this plan
@@ -54,6 +56,8 @@ pub enum PlanType {
     },
     /// The final, fully optimized physical which would be executed
     FinalPhysicalPlan,
+    /// The final with stats, fully optimized physical which would be executed
+    FinalPhysicalPlanWithStats,
 }
 
 impl Display for PlanType {
@@ -69,10 +73,14 @@ impl Display for PlanType {
             }
             PlanType::FinalLogicalPlan => write!(f, "logical_plan"),
             PlanType::InitialPhysicalPlan => write!(f, "initial_physical_plan"),
+            PlanType::InitialPhysicalPlanWithStats => {
+                write!(f, "initial_physical_plan_with_stats")
+            }
             PlanType::OptimizedPhysicalPlan { optimizer_name } => {
                 write!(f, "physical_plan after {optimizer_name}")
             }
             PlanType::FinalPhysicalPlan => write!(f, "physical_plan"),
+            PlanType::FinalPhysicalPlanWithStats => write!(f, "physical_plan_with_stats"),
         }
     }
 }
