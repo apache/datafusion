@@ -15,15 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Support for user-defined window (UDWF) window functions
+//! [`WindowUDF`]: User Defined Window Functions
 
+use crate::{
+    Expr, PartitionEvaluator, PartitionEvaluatorFactory, ReturnTypeFunction, Signature,
+    WindowFrame,
+};
+use arrow::datatypes::DataType;
+use datafusion_common::Result;
 use std::{
     fmt::{self, Debug, Display, Formatter},
     sync::Arc,
-};
-
-use crate::{
-    Expr, PartitionEvaluatorFactory, ReturnTypeFunction, Signature, WindowFrame,
 };
 
 /// Logical representation of a user-defined window function (UDWF)
@@ -35,13 +37,13 @@ use crate::{
 #[derive(Clone)]
 pub struct WindowUDF {
     /// name
-    pub name: String,
+    name: String,
     /// signature
-    pub signature: Signature,
+    signature: Signature,
     /// Return type
-    pub return_type: ReturnTypeFunction,
+    return_type: ReturnTypeFunction,
     /// Return the partition evaluator
-    pub partition_evaluator_factory: PartitionEvaluatorFactory,
+    partition_evaluator_factory: PartitionEvaluatorFactory,
 }
 
 impl Debug for WindowUDF {
@@ -86,7 +88,7 @@ impl WindowUDF {
         partition_evaluator_factory: &PartitionEvaluatorFactory,
     ) -> Self {
         Self {
-            name: name.to_owned(),
+            name: name.to_string(),
             signature: signature.clone(),
             return_type: return_type.clone(),
             partition_evaluator_factory: partition_evaluator_factory.clone(),
@@ -114,5 +116,27 @@ impl WindowUDF {
             order_by,
             window_frame,
         })
+    }
+
+    /// Returns this function's name
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns this function's signature (what input types are accepted)
+    pub fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    /// Return the type of the function given its input types
+    pub fn return_type(&self, args: &[DataType]) -> Result<DataType> {
+        // Old API returns an Arc of the datatype for some reason
+        let res = (self.return_type)(args)?;
+        Ok(res.as_ref().clone())
+    }
+
+    /// Return a `PartitionEvaluator` for evaluating this window function
+    pub fn partition_evaluator_factory(&self) -> Result<Box<dyn PartitionEvaluator>> {
+        (self.partition_evaluator_factory)()
     }
 }

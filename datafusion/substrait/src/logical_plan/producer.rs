@@ -619,7 +619,7 @@ pub fn to_substrait_agg_measure(
             for arg in args {
                 arguments.push(FunctionArgument { arg_type: Some(ArgType::Value(to_substrait_rex(arg, schema, 0, extension_info)?)) });
             }
-            let function_anchor = _register_function(fun.name.clone(), extension_info);
+            let function_anchor = _register_function(fun.name().to_string(), extension_info);
             Ok(Measure {
                 measure: Some(AggregateFunction {
                     function_reference: function_anchor,

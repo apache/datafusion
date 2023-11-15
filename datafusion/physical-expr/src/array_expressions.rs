@@ -643,6 +643,58 @@ fn general_append_and_prepend(
     )?))
 }
 
+/// Generates an array of integers from start to stop with a given step.
+///
+/// This function takes 1 to 3 ArrayRefs as arguments, representing start, stop, and step values.
+/// It returns a `Result<ArrayRef>` representing the resulting ListArray after the operation.
+///
+/// # Arguments
+///
+/// * `args` - An array of 1 to 3 ArrayRefs representing start, stop, and step(step value can not be zero.) values.
+///    
+/// # Examples
+///
+/// gen_range(3) => [0, 1, 2]
+/// gen_range(1, 4) => [1, 2, 3]
+/// gen_range(1, 7, 2) => [1, 3, 5]
+pub fn gen_range(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let (start_array, stop_array, step_array) = match args.len() {
+        1 => (None, as_int64_array(&args[0])?, None),
+        2 => (
+            Some(as_int64_array(&args[0])?),
+            as_int64_array(&args[1])?,
+            None,
+        ),
+        3 => (
+            Some(as_int64_array(&args[0])?),
+            as_int64_array(&args[1])?,
+            Some(as_int64_array(&args[2])?),
+        ),
+        _ => return internal_err!("gen_range expects 1 to 3 arguments"),
+    };
+
+    let mut values = vec![];
+    let mut offsets = vec![0];
+    for (idx, stop) in stop_array.iter().enumerate() {
+        let stop = stop.unwrap_or(0);
+        let start = start_array.as_ref().map(|arr| arr.value(idx)).unwrap_or(0);
+        let step = step_array.as_ref().map(|arr| arr.value(idx)).unwrap_or(1);
+        if step == 0 {
+            return exec_err!("step can't be 0 for function range(start [, stop, step]");
+        }
+        let value = (start..stop).step_by(step as usize);
+        values.extend(value);
+        offsets.push(values.len() as i32);
+    }
+    let arr = Arc::new(ListArray::try_new(
+        Arc::new(Field::new("item", DataType::Int64, true)),
+        OffsetBuffer::new(offsets.into()),
+        Arc::new(Int64Array::from(values)),
+        None,
+    )?);
+    Ok(arr)
+}
+
 /// Array_append SQL function
 pub fn array_append(args: &[ArrayRef]) -> Result<ArrayRef> {
     let list_array = as_list_array(&args[0])?;
