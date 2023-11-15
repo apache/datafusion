@@ -3007,6 +3007,16 @@ SELECT STRING_AGG('a',','), STRING_AGG('a', NULL), STRING_AGG(NULL, ','), STRING
 ----
 a a NULL NULL
 
+query TT
+select string_agg('', '|'), string_agg('a', '');
+----
+(empty) a
+
+query T
+SELECT STRING_AGG(column1, '|') FROM (values (''), (null), (''));
+----
+|
+
 statement ok
 CREATE TABLE strings(g INTEGER, x VARCHAR, y VARCHAR)
 
@@ -3027,6 +3037,9 @@ query T
 SELECT STRING_AGG(x,',') FROM strings WHERE g > 100
 ----
 NULL
+
+statement ok
+drop table strings
 
 query T
 WITH my_data as (

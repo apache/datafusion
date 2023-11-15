@@ -148,8 +148,8 @@ impl Accumulator for StringAggAccumulator {
             .iter()
             .filter_map(|v| v.as_ref().map(ToString::to_string))
             .collect();
-        let s = string_array.join(self.delimiter.as_str());
-        if !s.is_empty() {
+        if !string_array.is_empty() {
+            let s = string_array.join(self.delimiter.as_str());
             let v = self.values.get_or_insert("".to_string());
             if !v.is_empty() {
                 v.push_str(self.delimiter.as_str());
