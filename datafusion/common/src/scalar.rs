@@ -1725,7 +1725,7 @@ impl ScalarValue {
     ///
     /// Errors if `self` is
     /// - a decimal that fails be converted to a decimal array of size
-    /// - a `Fixedsizelist` that is not supported yet
+    /// - a `Fixedsizelist` that fails to be concatenated into an array of size
     /// - a `List` that fails to be concatenated into an array of size
     /// - a `Dictionary` that fails be converted to a dictionary array of size
     pub fn to_array_of_size(&self, size: usize) -> Result<ArrayRef> {
@@ -1846,10 +1846,7 @@ impl ScalarValue {
                         .collect::<LargeBinaryArray>(),
                 ),
             },
-            ScalarValue::FixedSizeList(..) => {
-                return _not_impl_err!("FixedSizeList is not supported yet")
-            }
-            ScalarValue::List(arr) => {
+            ScalarValue::List(arr) | ScalarValue::FixedSizeList(arr) => {
                 let arrays = std::iter::repeat(arr.as_ref())
                     .take(size)
                     .collect::<Vec<_>>();
@@ -2324,8 +2321,6 @@ impl ScalarValue {
     ///
     /// Errors if
     /// - it fails to downcast `array` to the data type of `self`
-    /// - `self` is a `Fixedsizelist`
-    /// - `self` is a `List`
     /// - `self` is a `Struct`
     ///
     /// # Panics
@@ -2398,10 +2393,10 @@ impl ScalarValue {
             ScalarValue::LargeBinary(val) => {
                 eq_array_primitive!(array, index, LargeBinaryArray, val)?
             }
-            ScalarValue::FixedSizeList(..) => {
-                return _not_impl_err!("FixedSizeList is not supported yet")
+            ScalarValue::List(arr) | ScalarValue::FixedSizeList(arr) => {
+                let right = array.slice(index, 1);
+                arr == &right
             }
-            ScalarValue::List(_) => return _not_impl_err!("List is not supported yet"),
             ScalarValue::Date32(val) => {
                 eq_array_primitive!(array, index, Date32Array, val)?
             }
@@ -3104,6 +3099,27 @@ mod tests {
     }
 
     #[test]
+    fn test_to_array_of_size_for_fsl() {
+        let values = Int32Array::from_iter([Some(1), None, Some(2)]);
+        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        let arr = FixedSizeListArray::new(field.clone(), 3, Arc::new(values), None);
+        let sv = ScalarValue::FixedSizeList(Arc::new(arr));
+        let actual_arr = sv
+            .to_array_of_size(2)
+            .expect("Failed to convert to array of size");
+
+        let expected_values =
+            Int32Array::from_iter([Some(1), None, Some(2), Some(1), None, Some(2)]);
+        let expected_arr =
+            FixedSizeListArray::new(field, 3, Arc::new(expected_values), None);
+
+        assert_eq!(
+            &expected_arr,
+            as_fixed_size_list_array(actual_arr.as_ref()).unwrap()
+        );
+    }
+
+    #[test]
     fn test_list_to_array_string() {
         let scalars = vec![
             ScalarValue::Utf8(Some(String::from("rust"))),
@@ -3179,6 +3195,33 @@ mod tests {
         let expected = list_of_string_builder.finish();
 
         assert_eq!(result, &expected);
+    }
+
+    #[test]
+    fn test_list_scalar_eq_to_array() {
+        let list_array: ArrayRef =
+            Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+                Some(vec![Some(0), Some(1), Some(2)]),
+                None,
+                Some(vec![None, Some(5)]),
+            ]));
+
+        let fsl_array: ArrayRef =
+            Arc::new(FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+                vec![
+                    Some(vec![Some(0), Some(1), Some(2)]),
+                    None,
+                    Some(vec![Some(3), None, Some(5)]),
+                ],
+                3,
+            ));
+
+        for arr in [list_array, fsl_array] {
+            for i in 0..arr.len() {
+                let scalar = ScalarValue::List(arr.slice(i, 1));
+                assert!(scalar.eq_array(&arr, i).unwrap());
+            }
+        }
     }
 
     #[test]
