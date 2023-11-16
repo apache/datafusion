@@ -1010,5 +1010,5 @@ catan-prod1-daily success catan-prod1-daily high
 #    (select sum(t2_int) is null from t2 where t1.t1_id = t2.t2_id)
 #----
 #2
-#4
 #3
+#4
