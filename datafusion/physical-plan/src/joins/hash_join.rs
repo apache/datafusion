@@ -648,6 +648,8 @@ impl ExecutionPlan for HashJoinExec {
     }
 }
 
+/// Reads the left (build) side of the input, buffering it in memory, to build a
+/// hash table (`LeftJoinData`)
 async fn collect_left_input(
     partition: Option<usize>,
     random_state: RandomState,
@@ -841,7 +843,7 @@ impl RecordBatchStream for HashJoinStream {
 /// # Example
 ///
 /// For `LEFT.b1 = RIGHT.b2`:
-/// LEFT Table:
+/// LEFT (build) Table:
 /// ```text
 ///  a1  b1  c1
 ///  1   1   10
@@ -853,7 +855,7 @@ impl RecordBatchStream for HashJoinStream {
 ///  13   10  130
 /// ```
 ///
-/// RIGHT Table:
+/// RIGHT (probe) Table:
 /// ```text
 ///  a2   b2  c2
 ///  2    2   20

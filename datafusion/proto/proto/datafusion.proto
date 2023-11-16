@@ -638,6 +638,7 @@ enum ScalarFunction {
   ArrayUnion = 120;
   OverLay = 121;
   Range = 122;
+  ArrayPopFront = 123;
 }
 
 message ScalarFunctionNode {

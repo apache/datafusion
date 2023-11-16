@@ -44,18 +44,13 @@ use datafusion_expr::CreateExternalTable;
 use async_trait::async_trait;
 
 /// A `TableProviderFactory` capable of creating new `ListingTable`s
+#[derive(Debug, Default)]
 pub struct ListingTableFactory {}
 
 impl ListingTableFactory {
     /// Creates a new `ListingTableFactory`
     pub fn new() -> Self {
-        Self {}
-    }
-}
-
-impl Default for ListingTableFactory {
-    fn default() -> Self {
-        Self::new()
+        Self::default()
     }
 }
 

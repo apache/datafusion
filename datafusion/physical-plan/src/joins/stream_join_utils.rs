@@ -79,15 +79,15 @@ impl JoinHashMapType for PruningJoinHashMap {
 /// Let's continue the example of `JoinHashMap` and then show how `PruningJoinHashMap` would
 /// handle the pruning scenario.
 ///
-/// Insert the pair (1,4) into the `PruningJoinHashMap`:
+/// Insert the pair (10,4) into the `PruningJoinHashMap`:
 /// map:
-/// ---------
-/// | 1 | 5 |
-/// | 2 | 3 |
-/// ---------
+/// ----------
+/// | 10 | 5 |
+/// | 20 | 3 |
+/// ----------
 /// list:
 /// ---------------------
-/// | 0 | 0 | 0 | 2 | 4 | <--- hash value 1 maps to 5,4,2 (which means indices values 4,3,1)
+/// | 0 | 0 | 0 | 2 | 4 | <--- hash value 10 maps to 5,4,2 (which means indices values 4,3,1)
 /// ---------------------
 ///
 /// Now, let's prune 3 rows from `PruningJoinHashMap`:
@@ -97,7 +97,7 @@ impl JoinHashMapType for PruningJoinHashMap {
 /// ---------
 /// list:
 /// ---------
-/// | 2 | 4 | <--- hash value 1 maps to 2 (5 - 3), 1 (4 - 3), NA (2 - 3) (which means indices values 1,0)
+/// | 2 | 4 | <--- hash value 10 maps to 2 (5 - 3), 1 (4 - 3), NA (2 - 3) (which means indices values 1,0)
 /// ---------
 ///
 /// After pruning, the | 2 | 3 | entry is deleted from `PruningJoinHashMap` since

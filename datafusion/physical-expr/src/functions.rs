@@ -359,6 +359,9 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ArrayNdims => {
             Arc::new(|args| make_scalar_function(array_expressions::array_ndims)(args))
         }
+        BuiltinScalarFunction::ArrayPopFront => Arc::new(|args| {
+            make_scalar_function(array_expressions::array_pop_front)(args)
+        }),
         BuiltinScalarFunction::ArrayPopBack => {
             Arc::new(|args| make_scalar_function(array_expressions::array_pop_back)(args))
         }
