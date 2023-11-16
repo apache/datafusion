@@ -60,8 +60,10 @@ pub trait BuiltInWindowFunctionExpr: Send + Sync + std::fmt::Debug {
     fn evaluate_args(&self, batch: &RecordBatch) -> Result<Vec<ArrayRef>> {
         self.expressions()
             .iter()
-            .map(|e| e.evaluate(batch))
-            .map(|r| r.map(|v| v.into_array(batch.num_rows())))
+            .map(|e| {
+                e.evaluate(batch)
+                    .and_then(|v| v.into_array(batch.num_rows()))
+            })
             .collect()
     }
 

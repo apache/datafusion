@@ -494,6 +494,10 @@ SELECT counter(*) from test;
 statement error Did you mean 'STDDEV'?
 SELECT STDEV(v1) from test;
 
+# Aggregate function
+statement error Did you mean 'COVAR'?
+SELECT COVARIA(1,1);
+
 # Window function
 statement error Did you mean 'SUM'?
 SELECT v1, v2, SUMM(v2) OVER(ORDER BY v1) from test;
@@ -811,3 +815,45 @@ SELECT products.* REPLACE (price*2 AS price, product_id+1000 AS product_id) FROM
 1002 OldBrand Product 2 59.98
 1003 OldBrand Product 3 79.98
 1004 OldBrand Product 4 99.98
+
+#overlay tests
+statement ok
+CREATE TABLE over_test(
+  str TEXT,
+  characters TEXT,
+  pos INT,
+  len INT
+) as VALUES
+  ('123', 'abc', 4, 5),
+  ('abcdefg', 'qwertyasdfg', 1, 7),
+  ('xyz', 'ijk', 1, 2),
+  ('Txxxxas', 'hom', 2, 4),
+  (NULL, 'hom', 2, 4),
+  ('Txxxxas', 'hom', NULL, 4),
+  ('Txxxxas', 'hom', 2, NULL),
+  ('Txxxxas', NULL, 2, 4)
+;
+
+query T
+SELECT overlay(str placing characters from pos for len) from over_test
+----
+abc
+qwertyasdfg
+ijkz
+Thomas
+NULL
+NULL
+NULL
+NULL
+
+query T
+SELECT overlay(str placing characters from pos) from over_test
+----
+abc
+qwertyasdfg
+ijk
+Thomxas
+NULL
+NULL
+Thomxas
+NULL

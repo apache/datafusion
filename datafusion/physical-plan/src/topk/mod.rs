@@ -153,7 +153,7 @@ impl TopK {
             .iter()
             .map(|expr| {
                 let value = expr.expr.evaluate(&batch)?;
-                Ok(value.into_array(batch.num_rows()))
+                value.into_array(batch.num_rows())
             })
             .collect::<Result<Vec<_>>>()?;
 

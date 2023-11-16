@@ -15,20 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
+mod data_utils;
 use arrow::util::pretty::pretty_format_batches;
-use arrow::{datatypes::Schema, record_batch::RecordBatch};
-use arrow_array::builder::{Int64Builder, StringBuilder};
-use arrow_schema::{DataType, Field, SchemaRef};
 use criterion::{criterion_group, criterion_main, Criterion};
+use data_utils::make_data;
 use datafusion::physical_plan::{collect, displayable, ExecutionPlan};
 use datafusion::prelude::SessionContext;
 use datafusion::{datasource::MemTable, error::Result};
-use datafusion_common::DataFusionError;
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::TaskContext;
-use rand_distr::Distribution;
-use rand_distr::{Normal, Pareto};
-use std::fmt::Write;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
@@ -78,10 +73,10 @@ async fn aggregate(
     let batch = batches.first().unwrap();
     assert_eq!(batch.num_rows(), 10);
 
-    let actual = format!("{}", pretty_format_batches(&batches)?);
+    let actual = format!("{}", pretty_format_batches(&batches)?).to_lowercase();
     let expected_asc = r#"
 +----------------------------------+--------------------------+
-| trace_id                         | MAX(traces.timestamp_ms) |
+| trace_id                         | max(traces.timestamp_ms) |
 +----------------------------------+--------------------------+
 | 5868861a23ed31355efc5200eb80fe74 | 16909009999999           |
 | 4040e64656804c3d77320d7a0e7eb1f0 | 16909009999998           |
@@ -101,85 +96,6 @@ async fn aggregate(
     }
 
     Ok(())
-}
-
-fn make_data(
-    partition_cnt: i32,
-    sample_cnt: i32,
-    asc: bool,
-) -> Result<(Arc<Schema>, Vec<Vec<RecordBatch>>), DataFusionError> {
-    use rand::Rng;
-    use rand::SeedableRng;
-
-    // constants observed from trace data
-    let simultaneous_group_cnt = 2000;
-    let fitted_shape = 12f64;
-    let fitted_scale = 5f64;
-    let mean = 0.1;
-    let stddev = 1.1;
-    let pareto = Pareto::new(fitted_scale, fitted_shape).unwrap();
-    let normal = Normal::new(mean, stddev).unwrap();
-    let mut rng = rand::rngs::SmallRng::from_seed([0; 32]);
-
-    // populate data
-    let schema = test_schema();
-    let mut partitions = vec![];
-    let mut cur_time = 16909000000000i64;
-    for _ in 0..partition_cnt {
-        let mut id_builder = StringBuilder::new();
-        let mut ts_builder = Int64Builder::new();
-        let gen_id = |rng: &mut rand::rngs::SmallRng| {
-            rng.gen::<[u8; 16]>()
-                .iter()
-                .fold(String::new(), |mut output, b| {
-                    let _ = write!(output, "{b:02X}");
-                    output
-                })
-        };
-        let gen_sample_cnt =
-            |mut rng: &mut rand::rngs::SmallRng| pareto.sample(&mut rng).ceil() as u32;
-        let mut group_ids = (0..simultaneous_group_cnt)
-            .map(|_| gen_id(&mut rng))
-            .collect::<Vec<_>>();
-        let mut group_sample_cnts = (0..simultaneous_group_cnt)
-            .map(|_| gen_sample_cnt(&mut rng))
-            .collect::<Vec<_>>();
-        for _ in 0..sample_cnt {
-            let random_index = rng.gen_range(0..simultaneous_group_cnt);
-            let trace_id = &mut group_ids[random_index];
-            let sample_cnt = &mut group_sample_cnts[random_index];
-            *sample_cnt -= 1;
-            if *sample_cnt == 0 {
-                *trace_id = gen_id(&mut rng);
-                *sample_cnt = gen_sample_cnt(&mut rng);
-            }
-
-            id_builder.append_value(trace_id);
-            ts_builder.append_value(cur_time);
-
-            if asc {
-                cur_time += 1;
-            } else {
-                let samp: f64 = normal.sample(&mut rng);
-                let samp = samp.round();
-                cur_time += samp as i64;
-            }
-        }
-
-        // convert to MemTable
-        let id_col = Arc::new(id_builder.finish());
-        let ts_col = Arc::new(ts_builder.finish());
-        let batch = RecordBatch::try_new(schema.clone(), vec![id_col, ts_col])?;
-        partitions.push(vec![batch]);
-    }
-    Ok((schema, partitions))
-}
-
-fn test_schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![
-        Field::new("trace_id", DataType::Utf8, false),
-        Field::new("timestamp_ms", DataType::Int64, false),
-    ]))
 }
 
 fn criterion_benchmark(c: &mut Criterion) {

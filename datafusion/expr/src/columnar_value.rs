@@ -20,7 +20,7 @@
 use arrow::array::ArrayRef;
 use arrow::array::NullArray;
 use arrow::datatypes::DataType;
-use datafusion_common::ScalarValue;
+use datafusion_common::{Result, ScalarValue};
 use std::sync::Arc;
 
 /// Represents the result of evaluating an expression: either a single
@@ -47,11 +47,15 @@ impl ColumnarValue {
 
     /// Convert a columnar value into an ArrayRef. [`Self::Scalar`] is
     /// converted by repeating the same scalar multiple times.
-    pub fn into_array(self, num_rows: usize) -> ArrayRef {
-        match self {
+    ///
+    /// # Errors
+    ///
+    /// Errors if `self` is a Scalar that fails to be converted into an array of size
+    pub fn into_array(self, num_rows: usize) -> Result<ArrayRef> {
+        Ok(match self {
             ColumnarValue::Array(array) => array,
-            ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(num_rows),
-        }
+            ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(num_rows)?,
+        })
     }
 
     /// null columnar values are implemented as a null array in order to pass batch

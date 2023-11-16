@@ -587,7 +587,10 @@ mod tests {
         let mut states = vec![];
 
         for idx in 0..state1.len() {
-            states.push(concat(&[&state1[idx].to_array(), &state2[idx].to_array()])?);
+            states.push(concat(&[
+                &state1[idx].to_array()?,
+                &state2[idx].to_array()?,
+            ])?);
         }
 
         let mut first_accumulator =
@@ -614,7 +617,10 @@ mod tests {
         let mut states = vec![];
 
         for idx in 0..state1.len() {
-            states.push(concat(&[&state1[idx].to_array(), &state2[idx].to_array()])?);
+            states.push(concat(&[
+                &state1[idx].to_array()?,
+                &state2[idx].to_array()?,
+            ])?);
         }
 
         let mut last_accumulator =

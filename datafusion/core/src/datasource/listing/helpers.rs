@@ -102,7 +102,7 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
                 }
             }
             Expr::ScalarUDF(ScalarUDF { fun, .. }) => {
-                match fun.signature.volatility {
+                match fun.signature().volatility {
                     Volatility::Immutable => VisitRecursion::Continue,
                     // TODO: Stable functions could be `applicable`, but that would require access to the context
                     Volatility::Stable | Volatility::Volatile => {
@@ -120,8 +120,7 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
             | Expr::AggregateFunction { .. }
             | Expr::Sort { .. }
             | Expr::WindowFunction { .. }
-            | Expr::Wildcard
-            | Expr::QualifiedWildcard { .. }
+            | Expr::Wildcard { .. }
             | Expr::Placeholder(_) => {
                 is_applicable = false;
                 VisitRecursion::Stop
@@ -276,7 +275,10 @@ async fn prune_partitions(
     // Applies `filter` to `batch` returning `None` on error
     let do_filter = |filter| -> Option<ArrayRef> {
         let expr = create_physical_expr(filter, &df_schema, &schema, &props).ok()?;
-        Some(expr.evaluate(&batch).ok()?.into_array(partitions.len()))
+        expr.evaluate(&batch)
+            .ok()?
+            .into_array(partitions.len())
+            .ok()
     };
 
     //.Compute the conjunction of the filters, ignoring errors
