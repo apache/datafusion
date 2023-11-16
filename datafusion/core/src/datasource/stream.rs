@@ -283,7 +283,12 @@ struct StreamWrite(Arc<StreamConfig>);
 
 impl DisplayAs for StreamWrite {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "{self:?}")
+        f.debug_struct("StreamWrite")
+            .field("location", &self.0.location)
+            .field("batch_size", &self.0.batch_size)
+            .field("encoding", &self.0.encoding)
+            .field("header", &self.0.header)
+            .finish_non_exhaustive()
     }
 }
 
