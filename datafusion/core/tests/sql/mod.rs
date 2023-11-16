@@ -87,7 +87,6 @@ pub mod parquet;
 pub mod parquet_schema;
 pub mod partitioned_csv;
 pub mod predicates;
-pub mod projection;
 pub mod references;
 pub mod repartition;
 pub mod select;
