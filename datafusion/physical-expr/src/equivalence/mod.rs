@@ -416,7 +416,7 @@ mod tests {
         let col_a3 = &col("a3", &out_schema)?;
         let col_a4 = &col("a4", &out_schema)?;
         let projection_mapping = ProjectionMapping::try_new(
-            &vec![
+            &[
                 (col_a.clone(), "a1".into()),
                 (col_a.clone(), "a2".into()),
                 (col_a.clone(), "a3".into()),
@@ -1675,7 +1675,7 @@ mod tests {
         }];
         eq_properties.add_new_orderings([ordering]);
         let projection_mapping = ProjectionMapping::try_new(
-            &vec![
+            &[
                 (Arc::new(Column::new("b", 1)) as _, "b_new".into()),
                 (Arc::new(Column::new("a", 0)) as _, "a_new".into()),
             ],
@@ -1708,7 +1708,7 @@ mod tests {
         let schema = Arc::new(schema);
         let eq_properties = EquivalenceProperties::new(schema.clone());
         let projection_mapping = ProjectionMapping::try_new(
-            &vec![
+            &[
                 (Arc::new(Column::new("c", 2)) as _, "c_new".into()),
                 (Arc::new(Column::new("b", 1)) as _, "b_new".into()),
             ],
