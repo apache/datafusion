@@ -186,8 +186,7 @@ impl ExprIntervalGraphNode {
         let expr = node.expression().clone();
         if let Some(literal) = expr.as_any().downcast_ref::<Literal>() {
             let value = literal.value();
-            let interval = Interval::try_new(value.clone(), value.clone())
-                .unwrap_or(Interval::make_unbounded(&literal.value().data_type())?);
+            let interval = Interval::try_new(value.clone(), value.clone())?;
             Ok(ExprIntervalGraphNode::new_with_interval(expr, interval))
         } else {
             Ok(ExprIntervalGraphNode::new(expr))
@@ -224,7 +223,7 @@ pub fn propagate_arithmetic(
     parent: &Interval,
     left_child: &Interval,
     right_child: &Interval,
-) -> Result<Option<Vec<Interval>>> {
+) -> Result<Option<(Interval, Interval)>> {
     let inverse_op = get_inverse_op(*op)?;
     match (left_child.data_type(), right_child.data_type()) {
         // If we have a child whose type is a time interval (i.e. DataType::Interval), we need special handling
@@ -260,7 +259,7 @@ pub fn propagate_arithmetic(
                         propagate_right(&value, parent, right_child, op, &inverse_op)?
                     {
                         // Return intervals for both children:
-                        Ok(Some(vec![value, right]))
+                        Ok(Some((value, right)))
                     } else {
                         // If the right child is infeasible, short-circuit.
                         Ok(None)
@@ -321,7 +320,7 @@ pub fn propagate_comparison(
     parent: &Interval,
     left_child: &Interval,
     right_child: &Interval,
-) -> Result<Option<Vec<Interval>>> {
+) -> Result<Option<(Interval, Interval)>> {
     if parent == &Interval::UNCERTAIN || parent == &Interval::CERTAINLY_FALSE {
         // We cannot propagate over an uncertain interval.
         // TODO: Certainly false asserting comparison operators are not supported yet.
@@ -329,7 +328,7 @@ pub fn propagate_comparison(
     } else {
         match op {
             Operator::Eq => left_child.intersect(right_child).map(|result| {
-                result.map(|intersection| vec![intersection.clone(), intersection])
+                result.map(|intersection| (intersection.clone(), intersection))
             }),
             Operator::Lt => satisfy_comparison(left_child, right_child, false, false),
             Operator::LtEq => satisfy_comparison(left_child, right_child, true, false),
@@ -649,7 +648,7 @@ fn propagate_time_interval_at_left(
     parent: &Interval,
     op: &Operator,
     inverse_op: &Operator,
-) -> Result<Option<Vec<Interval>>> {
+) -> Result<Option<(Interval, Interval)>> {
     // We check if the child's time interval(s) has a non-zero month or day field(s).
     // If so, we return it as is without propagating. Otherwise, we first convert
     // the time intervals to the Duration type, then propagate, and then convert the bounds to time intervals again.
@@ -659,7 +658,7 @@ fn propagate_time_interval_at_left(
                 let right = propagate_right(&value, parent, right_child, op, inverse_op)?;
                 let new_interval = convert_duration_type_to_interval(&value);
                 match (new_interval, right) {
-                    (Some(left), Some(right)) => Ok(Some(vec![left, right])),
+                    (Some(left), Some(right)) => Ok(Some((left, right))),
                     _ => Ok(None),
                 }
             }
@@ -668,7 +667,7 @@ fn propagate_time_interval_at_left(
     } else if let Some(right) =
         propagate_right(left_child, parent, right_child, op, inverse_op)?
     {
-        Ok(Some(vec![left_child.clone(), right]))
+        Ok(Some((left_child.clone(), right)))
     } else {
         Ok(None)
     }
@@ -684,7 +683,7 @@ fn propagate_time_interval_at_right(
     parent: &Interval,
     op: &Operator,
     inverse_op: &Operator,
-) -> Result<Option<Vec<Interval>>> {
+) -> Result<Option<(Interval, Interval)>> {
     // We check if the child's time interval(s) has a non-zero month or day field(s).
     // If so, we return it as is without propagating. Otherwise, we first convert
     // the time intervals to the Duration type, then propagate, and then convert the bounds to time intervals again.
@@ -696,7 +695,7 @@ fn propagate_time_interval_at_right(
                 if let Some(right) =
                     right.and_then(|right| convert_duration_type_to_interval(&right))
                 {
-                    Ok(Some(vec![value, right]))
+                    Ok(Some((value, right)))
                 } else {
                     Ok(None)
                 }
@@ -705,7 +704,7 @@ fn propagate_time_interval_at_right(
         }
     } else {
         match apply_operator(inverse_op, parent, right_child)?.intersect(left_child)? {
-            Some(value) => Ok(Some(vec![value, right_child.clone()])),
+            Some(value) => Ok(Some((value, right_child.clone()))),
             None => Ok(None),
         }
     }
@@ -1438,7 +1437,7 @@ mod tests {
             ScalarValue::Int64(Some(1000)),
         )?;
         assert_eq!(
-            (Some(vec![
+            (Some((
                 Interval::try_new(
                     ScalarValue::try_from(&DataType::Int64)?,
                     ScalarValue::Int64(Some(999))
@@ -1447,7 +1446,7 @@ mod tests {
                     ScalarValue::Int64(Some(1000)),
                     ScalarValue::Int64(Some(1000))
                 )?
-            ])),
+            ))),
             propagate_comparison(
                 &Operator::Lt,
                 &Interval::CERTAINLY_TRUE,
@@ -1463,7 +1462,7 @@ mod tests {
             ScalarValue::TimestampNanosecond(Some(1000), None),
         )?;
         assert_eq!(
-            (Some(vec![
+            (Some((
                 Interval::try_new(
                     ScalarValue::try_from(&DataType::Timestamp(
                         TimeUnit::Nanosecond,
@@ -1476,7 +1475,7 @@ mod tests {
                     ScalarValue::TimestampNanosecond(Some(1000), None),
                     ScalarValue::TimestampNanosecond(Some(1000), None),
                 )?
-            ])),
+            ))),
             propagate_comparison(
                 &Operator::Lt,
                 &Interval::CERTAINLY_TRUE,
@@ -1494,7 +1493,7 @@ mod tests {
             ScalarValue::TimestampNanosecond(Some(1000), Some("+05:00".into())),
         )?;
         assert_eq!(
-            (Some(vec![
+            (Some((
                 Interval::try_new(
                     ScalarValue::try_from(&DataType::Timestamp(
                         TimeUnit::Nanosecond,
@@ -1507,7 +1506,7 @@ mod tests {
                     ScalarValue::TimestampNanosecond(Some(1000), Some("+05:00".into())),
                     ScalarValue::TimestampNanosecond(Some(1000), Some("+05:00".into())),
                 )?
-            ])),
+            ))),
             propagate_comparison(
                 &Operator::Lt,
                 &Interval::CERTAINLY_TRUE,

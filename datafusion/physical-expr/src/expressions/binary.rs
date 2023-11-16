@@ -365,9 +365,15 @@ impl PhysicalExpr for BinaryExpr {
         // TODO: Other logical operators.
         // False expected OR operator could be a meaningful implementation as the next step.
         else if self.op.is_comparison_operator() {
-            propagate_comparison(&self.op, interval, left_interval, right_interval)
+            Ok(
+                propagate_comparison(&self.op, interval, left_interval, right_interval)?
+                    .map(|(left, right)| vec![left, right]),
+            )
         } else {
-            propagate_arithmetic(&self.op, interval, left_interval, right_interval)
+            Ok(
+                propagate_arithmetic(&self.op, interval, left_interval, right_interval)?
+                    .map(|(left, right)| vec![left, right]),
+            )
         }
     }
 

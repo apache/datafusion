@@ -279,11 +279,14 @@ impl Interval {
     /// Decide if this interval is certainly greater than, possibly greater than,
     /// or can't be greater than `other` by returning `[true, true]`,
     /// `[false, true]` or `[false, false]` respectively.
+    ///
+    /// Note: This function only works with intervals of the same datatype.
+    /// Attempting to compare intervals of different datatypes will lead to an error.
     pub(crate) fn gt<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
-        if get_result_type(&self.data_type(), &Operator::Gt, &rhs.data_type()).is_err() {
+        if self.data_type().ne(&rhs.data_type()) {
             internal_err!(
-                "Interval datatypes must be compatible to be compared, lhs:{}, rhs:{}",
+                "Intervals must have the same datatype to be compared, lhs:{}, rhs:{}",
                 self.data_type(),
                 rhs.data_type()
             )
@@ -308,12 +311,14 @@ impl Interval {
     /// Decide if this interval is certainly greater than or equal to, possibly
     /// greater than or equal to, or can't be greater than or equal to `other`
     /// by returning `[true, true]`, `[false, true]` or `[false, false]` respectively.
+    ///
+    /// Note: This function only works with intervals of the same datatype.
+    /// Attempting to compare intervals of different datatypes will lead to an error.
     pub(crate) fn gt_eq<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
-        if get_result_type(&self.data_type(), &Operator::GtEq, &rhs.data_type()).is_err()
-        {
+        if self.data_type().ne(&rhs.data_type()) {
             internal_err!(
-                "Interval datatypes must be compatible to be compared, lhs:{}, rhs:{}",
+                "Intervals must have the same datatype to be compared, lhs:{}, rhs:{}",
                 self.data_type(),
                 rhs.data_type()
             )
@@ -338,6 +343,9 @@ impl Interval {
     /// Decide if this interval is certainly less than, possibly less than, or
     /// can't be less than `other` by returning `[true, true]`, `[false, true]`
     /// or `[false, false]` respectively.
+    ///
+    /// Note: This function only works with intervals of the same datatype.
+    /// Attempting to compare intervals of different datatypes will lead to an error.
     pub(crate) fn lt<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         other.borrow().gt(self)
     }
@@ -345,6 +353,9 @@ impl Interval {
     /// Decide if this interval is certainly less than or equal to, possibly
     /// less than or equal to, or can't be less than or equal to `other` by
     /// returning `[true, true]`, `[false, true]` or `[false, false]` respectively.
+    ///
+    /// Note: This function only works with intervals of the same datatype.
+    /// Attempting to compare intervals of different datatypes will lead to an error.
     pub(crate) fn lt_eq<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         other.borrow().gt_eq(self)
     }
@@ -352,6 +363,9 @@ impl Interval {
     /// Decide if this interval is certainly equal to, possibly equal to, or
     /// can't be equal to `other` by returning `[true, true]`, `[false, true]`
     /// or `[false, false]` respectively.
+    ///
+    /// Note: This function only works with intervals of the same datatype.
+    /// Attempting to compare intervals of different datatypes will lead to an error.
     pub(crate) fn equal<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
         if get_result_type(&self.data_type(), &Operator::Eq, &rhs.data_type()).is_err() {
@@ -409,11 +423,14 @@ impl Interval {
 
     /// Compute the intersection of this interval with the given interval.
     /// If the intersection is empty, return `None`.
+    ///
+    /// Note: This function only works with intervals of the same datatype.
+    /// Attempting to compare intervals of different datatypes will lead to an error.
     pub fn intersect<T: Borrow<Self>>(&self, other: T) -> Result<Option<Self>> {
         let rhs = other.borrow();
-        if get_result_type(&self.data_type(), &Operator::Gt, &rhs.data_type()).is_err() {
+        if self.data_type().ne(&rhs.data_type()) {
             return internal_err!(
-                "Interval datatypes must be compatible to check intersection, lhs:{}, rhs:{}", self.data_type(), rhs.data_type()
+                "Intervals must have the same datatype to check intersection, lhs:{}, rhs:{}", self.data_type(), rhs.data_type()
             );
         };
 
@@ -440,11 +457,14 @@ impl Interval {
     /// Decide if this interval is certainly contains, possibly contains, or
     /// can't contain `other` by returning `[true, true]`, `[false, true]` or
     /// `[false, false]` respectively.
+    ///
+    /// Note: This function only works with intervals of the same datatype.
+    /// Attempting to compare intervals of different datatypes will lead to an error.
     pub fn contains<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
-        if get_result_type(&self.data_type(), &Operator::Eq, &rhs.data_type()).is_err() {
+        if self.data_type().ne(&rhs.data_type()) {
             return internal_err!(
-                "Interval datatypes must be compatible to check containment, lhs:{}, rhs:{}", self.data_type(), rhs.data_type()
+                "Intervals must have the same datatype to check containment, lhs:{}, rhs:{}", self.data_type(), rhs.data_type()
             );
         };
 
@@ -494,18 +514,23 @@ impl Interval {
     /// a1 * b2, b1 * a2, b1 * b2), max(a1 * a2, a1 * b2, b1 * a2, b1 * b2)]`.
     /// Note that this represents all possible values the product can take if
     /// one can choose single values arbitrarily from each of the operands.
+    ///
+    /// Note: This function only works with intervals of the same datatype.
+    /// Attempting to compare intervals of different datatypes will lead to an error.
     pub fn mul<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
-        let dt =
-            get_result_type(&self.data_type(), &Operator::Multiply, &rhs.data_type())?;
-
-        let zero = ScalarValue::new_zero(&dt)?;
-        // We want 0 to be approachable from both negative and positive sides.
-        let zero_point = match &dt {
-            DataType::Float32 => Self::make_private(Some(-0.0_f32), Some(0.0_f32)),
-            DataType::Float64 => Self::make_private(Some(-0.0_f64), Some(0.0_f64)),
-            _ => Self::new(prev_value(zero.clone()), next_value(zero)),
+        let dt = if self.data_type().eq(&rhs.data_type()) {
+            self.data_type()
+        } else {
+            return internal_err!(
+                "Intervals must have the same datatype for multiplication operation, lhs:{}, rhs:{}",
+                self.data_type(),
+                rhs.data_type()
+            );
         };
+
+        let zero_point =
+            Self::new(ScalarValue::new_zero(&dt)?, ScalarValue::new_zero(&dt)?);
 
         let result = match (
             Self::CERTAINLY_TRUE == self.contains(&zero_point)?,
@@ -529,11 +554,22 @@ impl Interval {
     /// all possible values the quotient can take if one can choose single values
     /// arbitrarily from each of the operands.
     ///
+    /// Note: This function only works with intervals of the same datatype.
+    /// Attempting to compare intervals of different datatypes will lead to an error.
+    ///
     /// **TODO**: Once interval sets are supported, cases where the divisor contains
     ///           0 should result in an interval set, not the universal set.
     pub fn div<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
-        let dt = get_result_type(&self.data_type(), &Operator::Divide, &rhs.data_type())?;
+        let dt = if self.data_type().eq(&rhs.data_type()) {
+            self.data_type()
+        } else {
+            return internal_err!(
+                "Intervals must have the same datatype for division operation, lhs:{}, rhs:{}",
+                self.data_type(),
+                rhs.data_type()
+            );
+        };
 
         let zero = ScalarValue::new_zero(&dt)?;
         // We want 0 to be approachable from both negative and positive sides.
@@ -545,14 +581,15 @@ impl Interval {
 
         // Exit early with an unbounded interval if zero is strictly inside the
         // right hand side:
-        if rhs.contains(&zero_point)? == Self::CERTAINLY_TRUE
-            || (rhs.lower.eq(&zero) && rhs.upper.eq(&zero))
+        if rhs.contains(&zero_point)? == Self::CERTAINLY_TRUE && !dt.is_unsigned_integer()
         {
             Self::make_unbounded(&dt)
         }
         // At this point, we know that only one endpoint of the right hand side
         // can be zero.
-        else if self.contains(&zero_point)? == Self::CERTAINLY_TRUE {
+        else if self.contains(&zero_point)? == Self::CERTAINLY_TRUE
+            && !dt.is_unsigned_integer()
+        {
             Ok(div_helper_lhs_zero_inclusive(&dt, self, rhs, &zero_point))
         } else {
             Ok(div_helper_zero_exclusive(&dt, self, rhs, &zero_point))
@@ -724,7 +761,7 @@ fn div_bounds<const UPPER: bool>(
 ) -> ScalarValue {
     let zero = ScalarValue::new_zero(dt).unwrap();
 
-    if lhs.is_null() || rhs.eq(&zero) {
+    if (lhs.is_null() || rhs.eq(&zero)) || (dt.is_unsigned_integer() && rhs.is_null()) {
         return ScalarValue::try_from(dt).unwrap();
     } else if rhs.is_null() {
         return zero;
@@ -962,12 +999,22 @@ fn min_of_bounds(first: &ScalarValue, second: &ScalarValue) -> ScalarValue {
 /// LtEq => true / false
 ///
 /// Lt => false / false
+///
+/// Note: This function only works with intervals of the same datatype.
+/// Attempting to compare intervals of different datatypes will lead to an error.
 pub fn satisfy_comparison(
     left: &Interval,
     right: &Interval,
     includes_endpoints: bool,
     op_gt: bool,
-) -> Result<Option<Vec<Interval>>> {
+) -> Result<Option<(Interval, Interval)>> {
+    if left.data_type().ne(&right.data_type()) {
+        return internal_err!(
+            "Intervals must have the same datatype, lhs:{}, rhs:{}",
+            left.data_type(),
+            right.data_type()
+        );
+    }
     // The algorithm is implemented to work with Gt or GtEq operators. In case of Lt or LtEq
     // operator, we can switch the sides at the initial and final steps.
     let (left, right) = if op_gt { (left, right) } else { (right, left) };
@@ -975,10 +1022,10 @@ pub fn satisfy_comparison(
     if left.upper <= right.lower && !left.upper.is_null() {
         if includes_endpoints && left.upper == right.lower {
             // Singleton intervals
-            return Ok(Some(vec![
+            return Ok(Some((
                 Interval::try_new(left.upper.clone(), left.upper.clone())?,
                 Interval::try_new(left.upper.clone(), left.upper.clone())?,
-            ]));
+            )));
         } else {
             // left:  <--======----0------------>
             // right: <------------0--======---->
@@ -1017,15 +1064,15 @@ pub fn satisfy_comparison(
         };
 
     if op_gt {
-        Ok(Some(vec![
+        Ok(Some((
             Interval::try_new(new_left_lower, left.upper.clone())?,
             Interval::try_new(right.lower.clone(), new_right_upper)?,
-        ]))
+        )))
     } else {
-        Ok(Some(vec![
+        Ok(Some((
             Interval::try_new(right.lower.clone(), new_right_upper)?,
             Interval::try_new(new_left_lower, left.upper.clone())?,
-        ]))
+        )))
     }
 }
 
@@ -1783,7 +1830,6 @@ mod tests {
         use ScalarValue::*;
 
         let cases = vec![
-            // Boolean intervals:
             (
                 (Boolean(None), Boolean(Some(false))),
                 Boolean(Some(false)),
@@ -1799,7 +1845,6 @@ mod tests {
                 Boolean(Some(false)),
                 Boolean(Some(true)),
             ),
-            // Integer intervals:
             (
                 (UInt16(Some(u16::MAX)), UInt16(None)),
                 UInt16(Some(u16::MAX)),
@@ -1810,7 +1855,6 @@ mod tests {
                 Int16(None),
                 Int16(Some(-1000)),
             ),
-            // Floating point intervals:
             (
                 (Float32(Some(f32::MAX)), Float32(Some(f32::MAX))),
                 Float32(Some(f32::MAX)),
@@ -1880,37 +1924,35 @@ mod tests {
 
     #[test]
     fn gt_lt_test() -> Result<()> {
-        use ScalarValue::*;
-
         let exactly_gt_cases = vec![
             (
-                Interval::try_new(Int64(Some(1000_i64)), Int64(None))?,
-                Interval::try_new(Int64(None), Int64(Some(999_i64)))?,
+                Interval::make(Some(1000_i64), None)?,
+                Interval::make(None, Some(999_i64))?,
             ),
             (
-                Interval::try_new(Int64(Some(1000_i64)), Int64(Some(1000_i64)))?,
-                Interval::try_new(Int64(None), Int64(Some(999_i64)))?,
+                Interval::make(Some(1000_i64), Some(1000_i64))?,
+                Interval::make(None, Some(999_i64))?,
             ),
             (
-                Interval::try_new(Int64(Some(501_i64)), Int64(Some(1000_i64)))?,
-                Interval::try_new(Int64(Some(500_i64)), Int64(Some(500_i64)))?,
+                Interval::make(Some(501_i64), Some(1000_i64))?,
+                Interval::make(Some(500_i64), Some(500_i64))?,
             ),
             (
-                Interval::try_new(Int64(Some(-1000_i64)), Int64(Some(1000_i64)))?,
-                Interval::try_new(Int64(None), Int64(Some(-1500_i64)))?,
+                Interval::make(Some(-1000_i64), Some(1000_i64))?,
+                Interval::make(None, Some(-1500_i64))?,
             ),
             (
                 Interval::try_new(
-                    next_value(Float32(Some(0.0))),
-                    next_value(Float32(Some(0.0))),
+                    next_value(ScalarValue::Float32(Some(0.0))),
+                    next_value(ScalarValue::Float32(Some(0.0))),
                 )?,
-                Interval::try_new(Float32(Some(0.0)), Float32(Some(0.0)))?,
+                Interval::make(Some(0.0_f32), Some(0.0_f32))?,
             ),
             (
-                Interval::try_new(Float32(Some(-1.0)), Float32(Some(-1.0)))?,
+                Interval::make(Some(-1.0_f32), Some(-1.0_f32))?,
                 Interval::try_new(
-                    prev_value(Float32(Some(-1.0))),
-                    prev_value(Float32(Some(-1.0))),
+                    prev_value(ScalarValue::Float32(Some(-1.0))),
+                    prev_value(ScalarValue::Float32(Some(-1.0))),
                 )?,
             ),
         ];
@@ -1921,28 +1963,34 @@ mod tests {
 
         let possibly_gt_cases = vec![
             (
-                Interval::try_new(Int64(Some(1000_i64)), Int64(Some(2000_i64)))?,
-                Interval::try_new(Int64(Some(1000_i64)), Int64(Some(1000_i64)))?,
+                Interval::make(Some(1000_i64), Some(2000_i64))?,
+                Interval::make(Some(1000_i64), Some(1000_i64))?,
             ),
             (
-                Interval::try_new(Int64(Some(500_i64)), Int64(Some(1000_i64)))?,
-                Interval::try_new(Int64(Some(500_i64)), Int64(Some(1000_i64)))?,
+                Interval::make(Some(500_i64), Some(1000_i64))?,
+                Interval::make(Some(500_i64), Some(1000_i64))?,
             ),
             (
-                Interval::try_new(Int64(Some(1000_i64)), Int64(None))?,
-                Interval::try_new(Int64(Some(1000_i64)), Int64(None))?,
+                Interval::make(Some(1000_i64), None)?,
+                Interval::make(Some(1000_i64), None)?,
             ),
             (
-                Interval::try_new(Int64(None), Int64(None))?,
-                Interval::try_new(Int64(None), Int64(None))?,
+                Interval::make::<i64>(None, None)?,
+                Interval::make::<i64>(None, None)?,
             ),
             (
-                Interval::try_new(Float32(Some(0.0)), next_value(Float32(Some(0.0))))?,
-                Interval::try_new(Float32(Some(0.0)), Float32(Some(0.0)))?,
+                Interval::try_new(
+                    ScalarValue::Float32(Some(0.0_f32)),
+                    next_value(ScalarValue::Float32(Some(0.0_f32))),
+                )?,
+                Interval::make(Some(0.0_f32), Some(0.0_f32))?,
             ),
             (
-                Interval::try_new(Float32(Some(-1.0)), Float32(Some(-1.0)))?,
-                Interval::try_new(prev_value(Float32(Some(-1.0))), Float32(Some(-1.0)))?,
+                Interval::make(Some(-1.0_f32), Some(-1.0_f32))?,
+                Interval::try_new(
+                    prev_value(ScalarValue::Float32(Some(-1.0_f32))),
+                    ScalarValue::Float32(Some(-1.0_f32)),
+                )?,
             ),
         ];
         for (first, second) in possibly_gt_cases {
@@ -1952,24 +2000,30 @@ mod tests {
 
         let not_gt_cases = vec![
             (
-                Interval::try_new(Int64(Some(1000_i64)), Int64(Some(1000_i64)))?,
-                Interval::try_new(Int64(Some(1000_i64)), Int64(Some(1000_i64)))?,
+                Interval::make(Some(1000_i64), Some(1000_i64))?,
+                Interval::make(Some(1000_i64), Some(1000_i64))?,
             ),
             (
-                Interval::try_new(Int64(Some(500_i64)), Int64(Some(1000_i64)))?,
-                Interval::try_new(Int64(Some(1000_i64)), Int64(None))?,
+                Interval::make(Some(500_i64), Some(1000_i64))?,
+                Interval::make(Some(1000_i64), None)?,
             ),
             (
-                Interval::try_new(Int64(None), Int64(Some(1000_i64)))?,
-                Interval::try_new(Int64(Some(1000_i64)), Int64(Some(1500_i64)))?,
+                Interval::make(None, Some(1000_i64))?,
+                Interval::make(Some(1000_i64), Some(1500_i64))?,
             ),
             (
-                Interval::try_new(prev_value(Float32(Some(0.0))), Float32(Some(0.0)))?,
-                Interval::try_new(Float32(Some(0.0)), Float32(Some(0.0)))?,
+                Interval::try_new(
+                    prev_value(ScalarValue::Float32(Some(0.0_f32))),
+                    ScalarValue::Float32(Some(0.0_f32)),
+                )?,
+                Interval::make(Some(0.0_f32), Some(0.0_f32))?,
             ),
             (
-                Interval::try_new(Float32(Some(-1.0)), Float32(Some(-1.0)))?,
-                Interval::try_new(Float32(Some(-1.0)), next_value(Float32(Some(-1.0))))?,
+                Interval::make(Some(-1.0_f32), Some(-1.0_f32))?,
+                Interval::try_new(
+                    ScalarValue::Float32(Some(-1.0_f32)),
+                    next_value(ScalarValue::Float32(Some(-1.0_f32))),
+                )?,
             ),
         ];
         for (first, second) in not_gt_cases {
@@ -1982,31 +2036,36 @@ mod tests {
 
     #[test]
     fn gteq_lteq_test() -> Result<()> {
-        use ScalarValue::*;
         let exactly_gteq_cases = vec![
             (
-                Interval::try_new(Int64(Some(1000_i64)), Int64(None))?,
-                Interval::try_new(Int64(None), Int64(Some(1000_i64)))?,
+                Interval::make(Some(1000_i64), None)?,
+                Interval::make(None, Some(1000_i64))?,
             ),
             (
-                Interval::try_new(Int64(Some(1000_i64)), Int64(Some(1000_i64)))?,
-                Interval::try_new(Int64(None), Int64(Some(1000_i64)))?,
+                Interval::make(Some(1000_i64), Some(1000_i64))?,
+                Interval::make(None, Some(1000_i64))?,
             ),
             (
-                Interval::try_new(Int64(Some(500_i64)), Int64(Some(1000_i64)))?,
-                Interval::try_new(Int64(Some(500_i64)), Int64(Some(500_i64)))?,
+                Interval::make(Some(500_i64), Some(1000_i64))?,
+                Interval::make(Some(500_i64), Some(500_i64))?,
             ),
             (
-                Interval::try_new(Int64(Some(-1000_i64)), Int64(Some(1000_i64)))?,
-                Interval::try_new(Int64(None), Int64(Some(-1500_i64)))?,
+                Interval::make(Some(-1000_i64), Some(1000_i64))?,
+                Interval::make(None, Some(-1500_i64))?,
             ),
             (
-                Interval::try_new(Float32(Some(0.0)), Float32(Some(0.0)))?,
-                Interval::try_new(Float32(Some(0.0)), Float32(Some(0.0)))?,
+                Interval::make(Some(0.0_f32), Some(0.0_f32))?,
+                Interval::make(Some(0.0_f32), Some(0.0_f32))?,
             ),
             (
-                Interval::try_new(Float32(Some(-1.0)), next_value(Float32(Some(-1.0))))?,
-                Interval::try_new(prev_value(Float32(Some(-1.0))), Float32(Some(-1.0)))?,
+                Interval::try_new(
+                    ScalarValue::Float32(Some(-1.0)),
+                    next_value(ScalarValue::Float32(Some(-1.0))),
+                )?,
+                Interval::try_new(
+                    prev_value(ScalarValue::Float32(Some(-1.0))),
+                    ScalarValue::Float32(Some(-1.0)),
+                )?,
             ),
         ];
         for (first, second) in exactly_gteq_cases {
@@ -2016,30 +2075,33 @@ mod tests {
 
         let possibly_gteq_cases = vec![
             (
-                Interval::try_new(Int64(Some(999_i64)), Int64(Some(2000_i64)))?,
-                Interval::try_new(Int64(Some(1000_i64)), Int64(Some(1000_i64)))?,
+                Interval::make(Some(999_i64), Some(2000_i64))?,
+                Interval::make(Some(1000_i64), Some(1000_i64))?,
             ),
             (
-                Interval::try_new(Int64(Some(500_i64)), Int64(Some(1000_i64)))?,
-                Interval::try_new(Int64(Some(500_i64)), Int64(Some(1001_i64)))?,
+                Interval::make(Some(500_i64), Some(1000_i64))?,
+                Interval::make(Some(500_i64), Some(1001_i64))?,
             ),
             (
-                Interval::try_new(Int64(Some(0_i64)), Int64(None))?,
-                Interval::try_new(Int64(Some(1000_i64)), Int64(None))?,
+                Interval::make(Some(0_i64), None)?,
+                Interval::make(Some(1000_i64), None)?,
             ),
             (
-                Interval::try_new(Int64(None), Int64(None))?,
-                Interval::try_new(Int64(None), Int64(None))?,
+                Interval::make::<i64>(None, None)?,
+                Interval::make::<i64>(None, None)?,
             ),
             (
-                Interval::try_new(prev_value(Float32(Some(0.0))), Float32(Some(0.0)))?,
-                Interval::try_new(Float32(Some(0.0)), Float32(Some(0.0)))?,
-            ),
-            (
-                Interval::try_new(Float32(Some(-1.0)), Float32(Some(-1.0)))?,
                 Interval::try_new(
-                    prev_value(Float32(Some(-1.0))),
-                    next_value(Float32(Some(-1.0))),
+                    prev_value(ScalarValue::Float32(Some(0.0))),
+                    ScalarValue::Float32(Some(0.0)),
+                )?,
+                Interval::make(Some(0.0_f32), Some(0.0_f32))?,
+            ),
+            (
+                Interval::make(Some(-1.0_f32), Some(-1.0_f32))?,
+                Interval::try_new(
+                    prev_value(ScalarValue::Float32(Some(-1.0_f32))),
+                    next_value(ScalarValue::Float32(Some(-1.0_f32))),
                 )?,
             ),
         ];
@@ -2050,29 +2112,29 @@ mod tests {
 
         let not_gteq_cases = vec![
             (
-                Interval::try_new(Int64(Some(1000_i64)), Int64(Some(1000_i64)))?,
-                Interval::try_new(Int64(Some(2000_i64)), Int64(Some(2000_i64)))?,
+                Interval::make(Some(1000_i64), Some(1000_i64))?,
+                Interval::make(Some(2000_i64), Some(2000_i64))?,
             ),
             (
-                Interval::try_new(Int64(Some(500_i64)), Int64(Some(999_i64)))?,
-                Interval::try_new(Int64(Some(1000_i64)), Int64(None))?,
+                Interval::make(Some(500_i64), Some(999_i64))?,
+                Interval::make(Some(1000_i64), None)?,
             ),
             (
-                Interval::try_new(Int64(None), Int64(Some(1000_i64)))?,
-                Interval::try_new(Int64(Some(1001_i64)), Int64(Some(1500_i64)))?,
+                Interval::make(None, Some(1000_i64))?,
+                Interval::make(Some(1001_i64), Some(1500_i64))?,
             ),
             (
                 Interval::try_new(
-                    prev_value(Float32(Some(0.0))),
-                    prev_value(Float32(Some(0.0))),
+                    prev_value(ScalarValue::Float32(Some(0.0_f32))),
+                    prev_value(ScalarValue::Float32(Some(0.0_f32))),
                 )?,
-                Interval::try_new(Float32(Some(0.0)), Float32(Some(0.0)))?,
+                Interval::make(Some(0.0_f32), Some(0.0_f32))?,
             ),
             (
-                Interval::try_new(Float32(Some(-1.0)), Float32(Some(-1.0)))?,
+                Interval::make(Some(-1.0_f32), Some(-1.0_f32))?,
                 Interval::try_new(
-                    next_value(Float32(Some(-1.0))),
-                    next_value(Float32(Some(-1.0))),
+                    next_value(ScalarValue::Float32(Some(-1.0))),
+                    next_value(ScalarValue::Float32(Some(-1.0))),
                 )?,
             ),
         ];
@@ -2086,23 +2148,22 @@ mod tests {
 
     #[test]
     fn equal_test() -> Result<()> {
-        use ScalarValue::*;
         let exactly_eq_cases = vec![
             (
-                Interval::try_new(Int64(Some(1000_i64)), Int64(Some(1000_i64)))?,
-                Interval::try_new(Int64(Some(1000_i64)), Int64(Some(1000_i64)))?,
+                Interval::make(Some(1000_i64), Some(1000_i64))?,
+                Interval::make(Some(1000_i64), Some(1000_i64))?,
             ),
             (
-                Interval::try_new(Float32(Some(f32::MAX)), Float32(Some(f32::MAX)))?,
-                Interval::try_new(Float32(Some(f32::MAX)), Float32(Some(f32::MAX)))?,
+                Interval::make(Some(0_u64), Some(0_u64))?,
+                Interval::make(Some(0_u64), Some(0_u64))?,
             ),
             (
-                Interval::try_new(Float64(Some(f64::MIN)), Float64(Some(f64::MIN)))?,
-                Interval::try_new(Float64(Some(f64::MIN)), Float64(Some(f64::MIN)))?,
+                Interval::make(Some(f32::MAX), Some(f32::MAX))?,
+                Interval::make(Some(f32::MAX), Some(f32::MAX))?,
             ),
             (
-                Interval::try_new(UInt64(Some(0_u64)), UInt64(Some(0_u64)))?,
-                Interval::try_new(UInt64(Some(0_u64)), UInt64(Some(0_u64)))?,
+                Interval::make(Some(f64::MIN), Some(f64::MIN))?,
+                Interval::make(Some(f64::MIN), Some(f64::MIN))?,
             ),
         ];
         for (first, second) in exactly_eq_cases {
@@ -2112,30 +2173,33 @@ mod tests {
 
         let possibly_eq_cases = vec![
             (
-                Interval::try_new(UInt64(None), UInt64(None))?,
-                Interval::try_new(UInt64(None), UInt64(None))?,
+                Interval::make::<i64>(None, None)?,
+                Interval::make::<i64>(None, None)?,
             ),
             (
-                Interval::try_new(UInt64(Some(0)), UInt64(Some(0)))?,
-                Interval::try_new(UInt64(Some(0)), UInt64(Some(1000)))?,
+                Interval::make(Some(0_i64), Some(0_i64))?,
+                Interval::make(Some(0_i64), Some(1000_i64))?,
             ),
             (
-                Interval::try_new(UInt64(Some(0)), UInt64(Some(0)))?,
-                Interval::try_new(UInt64(Some(0)), UInt64(Some(1000)))?,
+                Interval::make(Some(0_i64), Some(0_i64))?,
+                Interval::make(Some(0_i64), Some(1000_i64))?,
             ),
             (
-                Interval::try_new(Float32(Some(100.0)), Float32(Some(200.0)))?,
-                Interval::try_new(Float32(Some(0.0)), Float32(Some(1000.0)))?,
+                Interval::make(Some(100.0_f32), Some(200.0_f32))?,
+                Interval::make(Some(0.0_f32), Some(1000.0_f32))?,
             ),
             (
-                Interval::try_new(prev_value(Float32(Some(0.0))), Float32(Some(0.0)))?,
-                Interval::try_new(Float32(Some(0.0)), Float32(Some(0.0)))?,
-            ),
-            (
-                Interval::try_new(Float32(Some(-1.0)), Float32(Some(-1.0)))?,
                 Interval::try_new(
-                    prev_value(Float32(Some(-1.0))),
-                    next_value(Float32(Some(-1.0))),
+                    prev_value(ScalarValue::Float32(Some(0.0))),
+                    ScalarValue::Float32(Some(0.0)),
+                )?,
+                Interval::make(Some(0.0_f32), Some(0.0_f32))?,
+            ),
+            (
+                Interval::make(Some(-1.0_f32), Some(-1.0_f32))?,
+                Interval::try_new(
+                    prev_value(ScalarValue::Float32(Some(-1.0))),
+                    next_value(ScalarValue::Float32(Some(-1.0))),
                 )?,
             ),
         ];
@@ -2146,29 +2210,29 @@ mod tests {
 
         let not_eq_cases = vec![
             (
-                Interval::try_new(Int64(Some(1000_i64)), Int64(Some(1000_i64)))?,
-                Interval::try_new(Int64(Some(2000_i64)), Int64(Some(2000_i64)))?,
+                Interval::make(Some(1000_i64), Some(1000_i64))?,
+                Interval::make(Some(2000_i64), Some(2000_i64))?,
             ),
             (
-                Interval::try_new(Int64(Some(500_i64)), Int64(Some(999_i64)))?,
-                Interval::try_new(Int64(Some(1000_i64)), Int64(None))?,
+                Interval::make(Some(500_i64), Some(999_i64))?,
+                Interval::make(Some(1000_i64), None)?,
             ),
             (
-                Interval::try_new(Int64(None), Int64(Some(1000_i64)))?,
-                Interval::try_new(Int64(Some(1001_i64)), Int64(Some(1500_i64)))?,
+                Interval::make(None, Some(1000_i64))?,
+                Interval::make(Some(1001_i64), Some(1500_i64))?,
             ),
             (
                 Interval::try_new(
-                    prev_value(Float32(Some(0.0))),
-                    prev_value(Float32(Some(0.0))),
+                    prev_value(ScalarValue::Float32(Some(0.0))),
+                    prev_value(ScalarValue::Float32(Some(0.0))),
                 )?,
-                Interval::try_new(Float32(Some(0.0)), Float32(Some(0.0)))?,
+                Interval::make(Some(0.0_f32), Some(0.0_f32))?,
             ),
             (
-                Interval::try_new(Float32(Some(-1.0)), Float32(Some(-1.0)))?,
+                Interval::make(Some(-1.0_f32), Some(-1.0_f32))?,
                 Interval::try_new(
-                    next_value(Float32(Some(-1.0))),
-                    next_value(Float32(Some(-1.0))),
+                    next_value(ScalarValue::Float32(Some(-1.0))),
+                    next_value(ScalarValue::Float32(Some(-1.0))),
                 )?,
             ),
         ];
@@ -2193,18 +2257,9 @@ mod tests {
 
         for case in cases {
             assert_eq!(
-                Interval::try_new(
-                    ScalarValue::Boolean(Some(case.0)),
-                    ScalarValue::Boolean(Some(case.1))
-                )?
-                .and(Interval::try_new(
-                    ScalarValue::Boolean(Some(case.2)),
-                    ScalarValue::Boolean(Some(case.3))
-                )?)?,
-                Interval::try_new(
-                    ScalarValue::Boolean(Some(case.4)),
-                    ScalarValue::Boolean(Some(case.5))
-                )?
+                Interval::make(Some(case.0), Some(case.1))?
+                    .and(Interval::make(Some(case.2), Some(case.3))?)?,
+                Interval::make(Some(case.4), Some(case.5))?
             );
         }
         Ok(())
@@ -2220,15 +2275,8 @@ mod tests {
 
         for case in cases {
             assert_eq!(
-                Interval::try_new(
-                    ScalarValue::Boolean(Some(case.0)),
-                    ScalarValue::Boolean(Some(case.1))
-                )?
-                .not()?,
-                Interval::try_new(
-                    ScalarValue::Boolean(Some(case.2)),
-                    ScalarValue::Boolean(Some(case.3))
-                )?
+                Interval::make(Some(case.0), Some(case.1))?.not()?,
+                Interval::make(Some(case.2), Some(case.3))?
             );
         }
         Ok(())
@@ -2236,73 +2284,71 @@ mod tests {
 
     #[test]
     fn intersect_test() -> Result<()> {
-        use ScalarValue::*;
-
         let possible_cases = vec![
             (
-                Interval::try_new(Int64(Some(1000_i64)), Int64(None))?,
-                Interval::try_new(Int64(None), Int64(None))?,
-                Interval::try_new(Int64(Some(1000_i64)), Int64(None))?,
+                Interval::make(Some(1000_i64), None)?,
+                Interval::make::<i64>(None, None)?,
+                Interval::make(Some(1000_i64), None)?,
             ),
             (
-                Interval::try_new(Int64(Some(1000_i64)), Int64(None))?,
-                Interval::try_new(Int64(None), Int64(Some(1000_i64)))?,
-                Interval::try_new(Int64(Some(1000_i64)), Int64(Some(1000_i64)))?,
+                Interval::make(Some(1000_i64), None)?,
+                Interval::make(None, Some(1000_i64))?,
+                Interval::make(Some(1000_i64), Some(1000_i64))?,
             ),
             (
-                Interval::try_new(Int64(Some(1000_i64)), Int64(None))?,
-                Interval::try_new(Int64(None), Int64(Some(2000_i64)))?,
-                Interval::try_new(Int64(Some(1000_i64)), Int64(Some(2000_i64)))?,
+                Interval::make(Some(1000_i64), None)?,
+                Interval::make(None, Some(2000_i64))?,
+                Interval::make(Some(1000_i64), Some(2000_i64))?,
             ),
             (
-                Interval::try_new(Int64(Some(1000_i64)), Int64(Some(2000_i64)))?,
-                Interval::try_new(Int64(Some(1000_i64)), Int64(None))?,
-                Interval::try_new(Int64(Some(1000_i64)), Int64(Some(2000_i64)))?,
+                Interval::make(Some(1000_i64), Some(2000_i64))?,
+                Interval::make(Some(1000_i64), None)?,
+                Interval::make(Some(1000_i64), Some(2000_i64))?,
             ),
             (
-                Interval::try_new(Int64(Some(1000_i64)), Int64(Some(2000_i64)))?,
-                Interval::try_new(Int64(Some(1000_i64)), Int64(Some(1500_i64)))?,
-                Interval::try_new(Int64(Some(1000_i64)), Int64(Some(1500_i64)))?,
+                Interval::make(Some(1000_i64), Some(2000_i64))?,
+                Interval::make(Some(1000_i64), Some(1500_i64))?,
+                Interval::make(Some(1000_i64), Some(1500_i64))?,
             ),
             (
-                Interval::try_new(Int64(Some(1000_i64)), Int64(Some(2000_i64)))?,
-                Interval::try_new(Int64(Some(500)), Int64(Some(1500_i64)))?,
-                Interval::try_new(Int64(Some(1000_i64)), Int64(Some(1500_i64)))?,
+                Interval::make(Some(1000_i64), Some(2000_i64))?,
+                Interval::make(Some(500_i64), Some(1500_i64))?,
+                Interval::make(Some(1000_i64), Some(1500_i64))?,
             ),
             (
-                Interval::try_new(UInt64(None), UInt64(Some(2000_u64)))?,
-                Interval::try_new(UInt64(Some(500_u64)), UInt64(None))?,
-                Interval::try_new(UInt64(Some(500_u64)), UInt64(Some(2000_u64)))?,
+                Interval::make::<i64>(None, None)?,
+                Interval::make::<i64>(None, None)?,
+                Interval::make::<i64>(None, None)?,
             ),
             (
-                Interval::try_new(Float64(None), Float64(None))?,
-                Interval::try_new(Float64(None), Float64(None))?,
-                Interval::try_new(Float64(None), Float64(None))?,
+                Interval::make(None, Some(2000_u64))?,
+                Interval::make(Some(500_u64), None)?,
+                Interval::make(Some(500_u64), Some(2000_u64))?,
             ),
             (
-                Interval::try_new(Float64(Some(1000.0)), Float64(None))?,
-                Interval::try_new(Float64(None), Float64(Some(1000.0)))?,
-                Interval::try_new(Float64(Some(1000.0)), Float64(Some(1000.0)))?,
+                Interval::make(Some(0_u64), Some(0_u64))?,
+                Interval::make(Some(0_u64), None)?,
+                Interval::make(Some(0_u64), Some(0_u64))?,
             ),
             (
-                Interval::try_new(Float64(Some(1000.0)), Float64(Some(1500.0)))?,
-                Interval::try_new(Float64(Some(0.0)), Float64(Some(1500.0)))?,
-                Interval::try_new(Float64(Some(1000.0)), Float64(Some(1500.0)))?,
+                Interval::make(Some(1000.0_f32), None)?,
+                Interval::make(None, Some(1000.0_f32))?,
+                Interval::make(Some(1000.0_f32), Some(1000.0_f32))?,
             ),
             (
-                Interval::try_new(Float64(Some(-1000.0)), Float64(Some(1500.0)))?,
-                Interval::try_new(Float64(Some(-1500.0)), Float64(Some(2000.0)))?,
-                Interval::try_new(Float64(Some(-1000.0)), Float64(Some(1500.0)))?,
+                Interval::make(Some(1000.0_f32), Some(1500.0_f32))?,
+                Interval::make(Some(0.0_f32), Some(1500.0_f32))?,
+                Interval::make(Some(1000.0_f32), Some(1500.0_f32))?,
             ),
             (
-                Interval::try_new(Float64(Some(16.0)), Float64(Some(32.0)))?,
-                Interval::try_new(Float64(Some(32.0)), Float64(Some(64.0)))?,
-                Interval::try_new(Float64(Some(32.0)), Float64(Some(32.0)))?,
+                Interval::make(Some(-1000.0_f64), Some(1500.0_f64))?,
+                Interval::make(Some(-1500.0_f64), Some(2000.0_f64))?,
+                Interval::make(Some(-1000.0_f64), Some(1500.0_f64))?,
             ),
             (
-                Interval::try_new(UInt64(Some(0_u64)), UInt64(Some(0_u64)))?,
-                Interval::try_new(UInt64(Some(0_u64)), UInt64(None))?,
-                Interval::try_new(UInt64(Some(0_u64)), UInt64(Some(0_u64)))?,
+                Interval::make(Some(16.0_f64), Some(32.0_f64))?,
+                Interval::make(Some(32.0_f64), Some(64.0_f64))?,
+                Interval::make(Some(32.0_f64), Some(32.0_f64))?,
             ),
         ];
         for (first, second, expected) in possible_cases {
@@ -2311,34 +2357,34 @@ mod tests {
 
         let empty_cases = vec![
             (
-                Interval::try_new(Int64(Some(1000_i64)), Int64(None))?,
-                Interval::try_new(Int64(None), Int64(Some(0_i64)))?,
+                Interval::make(Some(1000_i64), None)?,
+                Interval::make(None, Some(0_i64))?,
             ),
             (
-                Interval::try_new(Int64(Some(1000_i64)), Int64(None))?,
-                Interval::try_new(Int64(None), Int64(Some(999_i64)))?,
+                Interval::make(Some(1000_i64), None)?,
+                Interval::make(None, Some(999_i64))?,
             ),
             (
-                Interval::try_new(Int64(Some(1500_i64)), Int64(Some(2000_i64)))?,
-                Interval::try_new(Int64(Some(1000_i64)), Int64(Some(1499_i64)))?,
+                Interval::make(Some(1500_i64), Some(2000_i64))?,
+                Interval::make(Some(1000_i64), Some(1499_i64))?,
             ),
             (
-                Interval::try_new(Int64(Some(0_i64)), Int64(Some(1000_i64)))?,
-                Interval::try_new(Int64(Some(2000_i64)), Int64(Some(3000_i64)))?,
-            ),
-            (
-                Interval::try_new(
-                    prev_value(Float32(Some(1.0))),
-                    prev_value(Float32(Some(1.0))),
-                )?,
-                Interval::try_new(Float32(Some(1.0)), Float32(Some(1.0)))?,
+                Interval::make(Some(0_i64), Some(1000_i64))?,
+                Interval::make(Some(2000_i64), Some(3000_i64))?,
             ),
             (
                 Interval::try_new(
-                    next_value(Float32(Some(1.0))),
-                    next_value(Float32(Some(1.0))),
+                    prev_value(ScalarValue::Float32(Some(1.0))),
+                    prev_value(ScalarValue::Float32(Some(1.0))),
                 )?,
-                Interval::try_new(Float32(Some(1.0)), Float32(Some(1.0)))?,
+                Interval::make(Some(1.0_f32), Some(1.0_f32))?,
+            ),
+            (
+                Interval::try_new(
+                    next_value(ScalarValue::Float32(Some(1.0))),
+                    next_value(ScalarValue::Float32(Some(1.0))),
+                )?,
+                Interval::make(Some(1.0_f32), Some(1.0_f32))?,
             ),
         ];
         for (first, second) in empty_cases {
@@ -2350,58 +2396,56 @@ mod tests {
 
     #[test]
     fn test_contains() -> Result<()> {
-        use ScalarValue::*;
-
         let possible_cases = vec![
             (
-                Interval::try_new(Float64(None), Float64(None))?,
-                Interval::try_new(Float64(None), Float64(None))?,
+                Interval::make::<i64>(None, None)?,
+                Interval::make::<i64>(None, None)?,
                 Interval::CERTAINLY_TRUE,
             ),
             (
-                Interval::try_new(Int64(Some(1500_i64)), Int64(Some(2000_i64)))?,
-                Interval::try_new(Int64(Some(1501_i64)), Int64(Some(1999_i64)))?,
+                Interval::make(Some(1500_i64), Some(2000_i64))?,
+                Interval::make(Some(1501_i64), Some(1999_i64))?,
                 Interval::CERTAINLY_TRUE,
             ),
             (
-                Interval::try_new(Int64(Some(1000_i64)), Int64(None))?,
-                Interval::try_new(Int64(None), Int64(None))?,
+                Interval::make(Some(1000_i64), None)?,
+                Interval::make::<i64>(None, None)?,
                 Interval::UNCERTAIN,
             ),
             (
-                Interval::try_new(Int64(Some(1000_i64)), Int64(Some(2000_i64)))?,
-                Interval::try_new(Int64(Some(500)), Int64(Some(1500_i64)))?,
+                Interval::make(Some(1000_i64), Some(2000_i64))?,
+                Interval::make(Some(500), Some(1500_i64))?,
                 Interval::UNCERTAIN,
             ),
             (
-                Interval::try_new(Float64(Some(16.0)), Float64(Some(32.0)))?,
-                Interval::try_new(Float64(Some(32.0)), Float64(Some(64.0)))?,
+                Interval::make(Some(16.0), Some(32.0))?,
+                Interval::make(Some(32.0), Some(64.0))?,
                 Interval::UNCERTAIN,
             ),
             (
-                Interval::try_new(Int64(Some(1000_i64)), Int64(None))?,
-                Interval::try_new(Int64(None), Int64(Some(0_i64)))?,
+                Interval::make(Some(1000_i64), None)?,
+                Interval::make(None, Some(0_i64))?,
                 Interval::CERTAINLY_FALSE,
             ),
             (
-                Interval::try_new(Int64(Some(1500_i64)), Int64(Some(2000_i64)))?,
-                Interval::try_new(Int64(Some(1000_i64)), Int64(Some(1499_i64)))?,
+                Interval::make(Some(1500_i64), Some(2000_i64))?,
+                Interval::make(Some(1000_i64), Some(1499_i64))?,
                 Interval::CERTAINLY_FALSE,
             ),
             (
                 Interval::try_new(
-                    prev_value(Float32(Some(1.0))),
-                    prev_value(Float32(Some(1.0))),
+                    prev_value(ScalarValue::Float32(Some(1.0))),
+                    prev_value(ScalarValue::Float32(Some(1.0))),
                 )?,
-                Interval::try_new(Float32(Some(1.0)), Float32(Some(1.0)))?,
+                Interval::make(Some(1.0_f32), Some(1.0_f32))?,
                 Interval::CERTAINLY_FALSE,
             ),
             (
                 Interval::try_new(
-                    next_value(Float32(Some(1.0))),
-                    next_value(Float32(Some(1.0))),
+                    next_value(ScalarValue::Float32(Some(1.0))),
+                    next_value(ScalarValue::Float32(Some(1.0))),
                 )?,
-                Interval::try_new(Float32(Some(1.0)), Float32(Some(1.0)))?,
+                Interval::make(Some(1.0_f32), Some(1.0_f32))?,
                 Interval::CERTAINLY_FALSE,
             ),
         ];
@@ -2414,72 +2458,71 @@ mod tests {
 
     #[test]
     fn test_add() -> Result<()> {
-        use ScalarValue::*;
         let cases = vec![
             (
-                Interval::try_new(Int64(Some(100_i64)), Int64(Some(200_i64)))?,
-                Interval::try_new(Int64(None), Int64(Some(200_i64)))?,
-                Interval::try_new(Int64(None), Int64(Some(400_i64)))?,
+                Interval::make(Some(100_i64), Some(200_i64))?,
+                Interval::make(None, Some(200_i64))?,
+                Interval::make(None, Some(400_i64))?,
             ),
             (
-                Interval::try_new(Int64(Some(100_i64)), Int64(Some(200_i64)))?,
-                Interval::try_new(Int64(Some(200_i64)), Int64(None))?,
-                Interval::try_new(Int64(Some(300_i64)), Int64(None))?,
+                Interval::make(Some(100_i64), Some(200_i64))?,
+                Interval::make(Some(200_i64), None)?,
+                Interval::make(Some(300_i64), None)?,
             ),
             (
-                Interval::try_new(Int64(None), Int64(Some(200_i64)))?,
-                Interval::try_new(Int64(Some(100_i64)), Int64(Some(200_i64)))?,
-                Interval::try_new(Int64(None), Int64(Some(400_i64)))?,
+                Interval::make(None, Some(200_i64))?,
+                Interval::make(Some(100_i64), Some(200_i64))?,
+                Interval::make(None, Some(400_i64))?,
             ),
             (
-                Interval::try_new(Int64(Some(200_i64)), Int64(None))?,
-                Interval::try_new(Int64(Some(100_i64)), Int64(Some(200_i64)))?,
-                Interval::try_new(Int64(Some(300_i64)), Int64(None))?,
+                Interval::make(Some(200_i64), None)?,
+                Interval::make(Some(100_i64), Some(200_i64))?,
+                Interval::make(Some(300_i64), None)?,
             ),
             (
-                Interval::try_new(Int64(Some(100_i64)), Int64(Some(200_i64)))?,
-                Interval::try_new(Int64(Some(-300_i64)), Int64(Some(150_i64)))?,
-                Interval::try_new(Int64(Some(-200_i64)), Int64(Some(350_i64)))?,
+                Interval::make(Some(100_i64), Some(200_i64))?,
+                Interval::make(Some(-300_i64), Some(150_i64))?,
+                Interval::make(Some(-200_i64), Some(350_i64))?,
             ),
             (
-                Interval::try_new(Float64(Some(100_f64)), Float64(None))?,
-                Interval::try_new(Float64(None), Float64(Some(200_f64)))?,
-                Interval::try_new(Float64(None), Float64(None))?,
+                Interval::make(Some(f32::MAX), Some(f32::MAX))?,
+                Interval::make(Some(11_f32), Some(11_f32))?,
+                Interval::make(Some(f32::MAX), None)?,
             ),
             (
-                Interval::try_new(Float64(None), Float64(Some(100_f64)))?,
-                Interval::try_new(Float64(None), Float64(Some(200_f64)))?,
-                Interval::try_new(Float64(None), Float64(Some(300_f64)))?,
-            ),
-            (
-                Interval::try_new(Float32(Some(f32::MAX)), Float32(Some(f32::MAX)))?,
-                Interval::try_new(Float32(Some(11_f32)), Float32(Some(11_f32)))?,
-                Interval::try_new(Float32(Some(f32::MAX)), Float32(None))?,
-            ),
-            (
-                Interval::try_new(Float32(Some(f32::MIN)), Float32(Some(f32::MIN)))?,
-                Interval::try_new(Float32(Some(-10_f32)), Float32(Some(10_f32)))?,
+                Interval::make(Some(f32::MIN), Some(f32::MIN))?,
+                Interval::make(Some(-10_f32), Some(10_f32))?,
                 // Since rounding mode is up, the result would be much greater than f32::MIN
                 // (f32::MIN = -3.4_028_235e38, the result is -3.4_028_233e38)
-                Interval::try_new(
-                    Float32(None),
-                    Float32(Some(-340282330000000000000000000000000000000.0)),
+                Interval::make(
+                    None,
+                    Some(-340282330000000000000000000000000000000.0_f32),
                 )?,
             ),
             (
-                Interval::try_new(Float32(Some(f32::MIN)), Float32(Some(f32::MIN)))?,
-                Interval::try_new(Float32(Some(-10_f32)), Float32(Some(-10_f32)))?,
-                Interval::try_new(Float32(None), Float32(Some(f32::MIN)))?,
+                Interval::make(Some(f32::MIN), Some(f32::MIN))?,
+                Interval::make(Some(-10_f32), Some(-10_f32))?,
+                Interval::make(None, Some(f32::MIN))?,
             ),
             (
-                Interval::try_new(Float32(Some(1.0)), Float32(Some(f32::MAX)))?,
-                Interval::try_new(Float32(Some(f32::MAX)), Float32(Some(f32::MAX)))?,
-                Interval::try_new(Float32(Some(f32::MAX)), Float32(None))?,
+                Interval::make(Some(1.0), Some(f32::MAX))?,
+                Interval::make(Some(f32::MAX), Some(f32::MAX))?,
+                Interval::make(Some(f32::MAX), None)?,
             ),
             (
-                Interval::try_new(Float32(Some(f32::MIN)), Float32(Some(f32::MIN)))?,
-                Interval::try_new(Float32(Some(f32::MAX)), Float32(Some(f32::MAX)))?,
-                Interval::try_new(Float32(Some(-0.0)), Float32(Some(0.0)))?,
+                Interval::make(Some(f32::MIN), Some(f32::MIN))?,
+                Interval::make(Some(f32::MAX), Some(f32::MAX))?,
+                Interval::make(Some(-0.0_f32), Some(0.0_f32))?,
+            ),
+            (
+                Interval::make(Some(100_f64), None)?,
+                Interval::make(None, Some(200_f64))?,
+                Interval::make::<i64>(None, None)?,
+            ),
+            (
+                Interval::make(None, Some(100_f64))?,
+                Interval::make(None, Some(200_f64))?,
+                Interval::make(None, Some(300_f64))?,
             ),
         ];
         for case in cases {
@@ -2503,89 +2546,81 @@ mod tests {
 
     #[test]
     fn test_sub() -> Result<()> {
-        use ScalarValue::*;
-
         let cases = vec![
             (
-                Interval::try_new(Int64(Some(100_i64)), Int64(Some(200_i64)))?,
-                Interval::try_new(Int64(None), Int64(Some(200_i64)))?,
-                Interval::try_new(Int64(Some(-100_i64)), Int64(None))?,
+                Interval::make(Some(i32::MAX), Some(i32::MAX))?,
+                Interval::make(Some(11_i32), Some(11_i32))?,
+                Interval::make(Some(i32::MAX - 11), Some(i32::MAX - 11))?,
             ),
             (
-                Interval::try_new(Int64(Some(100_i64)), Int64(Some(200_i64)))?,
-                Interval::try_new(Int64(Some(200_i64)), Int64(None))?,
-                Interval::try_new(Int64(None), Int64(Some(0)))?,
+                Interval::make(Some(100_i64), Some(200_i64))?,
+                Interval::make(None, Some(200_i64))?,
+                Interval::make(Some(-100_i64), None)?,
             ),
             (
-                Interval::try_new(Int64(None), Int64(Some(200_i64)))?,
-                Interval::try_new(Int64(Some(100_i64)), Int64(Some(200_i64)))?,
-                Interval::try_new(Int64(None), Int64(Some(100_i64)))?,
+                Interval::make(Some(100_i64), Some(200_i64))?,
+                Interval::make(Some(200_i64), None)?,
+                Interval::make(None, Some(0_i64))?,
             ),
             (
-                Interval::try_new(Int64(Some(200_i64)), Int64(None))?,
-                Interval::try_new(Int64(Some(100_i64)), Int64(Some(200_i64)))?,
-                Interval::try_new(Int64(Some(0_i64)), Int64(None))?,
+                Interval::make(None, Some(200_i64))?,
+                Interval::make(Some(100_i64), Some(200_i64))?,
+                Interval::make(None, Some(100_i64))?,
             ),
             (
-                Interval::try_new(Int64(Some(100_i64)), Int64(Some(200_i64)))?,
-                Interval::try_new(Int64(Some(-300_i64)), Int64(Some(150_i64)))?,
-                Interval::try_new(Int64(Some(-50_i64)), Int64(Some(500_i64)))?,
+                Interval::make(Some(200_i64), None)?,
+                Interval::make(Some(100_i64), Some(200_i64))?,
+                Interval::make(Some(0_i64), None)?,
             ),
             (
-                Interval::try_new(Int64(Some(i64::MIN)), Int64(Some(i64::MIN)))?,
-                Interval::try_new(Int64(Some(-10)), Int64(Some(-10)))?,
-                Interval::try_new(
-                    Int64(Some(i64::MIN + 10)),
-                    Int64(Some(i64::MIN + 10)),
-                )?,
+                Interval::make(Some(100_i64), Some(200_i64))?,
+                Interval::make(Some(-300_i64), Some(150_i64))?,
+                Interval::make(Some(-50_i64), Some(500_i64))?,
             ),
             (
-                Interval::try_new(Int64(Some(1)), Int64(Some(i64::MAX)))?,
-                Interval::try_new(Int64(Some(i64::MAX)), Int64(Some(i64::MAX)))?,
-                Interval::try_new(Int64(Some(1 - i64::MAX)), Int64(Some(0)))?,
+                Interval::make(Some(i64::MIN), Some(i64::MIN))?,
+                Interval::make(Some(-10_i64), Some(-10_i64))?,
+                Interval::make(Some(i64::MIN + 10), Some(i64::MIN + 10))?,
             ),
             (
-                Interval::try_new(Int64(Some(i64::MIN)), Int64(Some(i64::MIN)))?,
-                Interval::try_new(Int64(Some(i64::MAX)), Int64(Some(i64::MAX)))?,
-                Interval::try_new(Int64(None), Int64(Some(i64::MIN)))?,
+                Interval::make(Some(1), Some(i64::MAX))?,
+                Interval::make(Some(i64::MAX), Some(i64::MAX))?,
+                Interval::make(Some(1 - i64::MAX), Some(0))?,
             ),
             (
-                Interval::try_new(Float64(Some(100_f64)), Float64(None))?,
-                Interval::try_new(Float64(None), Float64(Some(200_f64)))?,
-                Interval::try_new(Float64(Some(-100_f64)), Float64(None))?,
+                Interval::make(Some(i64::MIN), Some(i64::MIN))?,
+                Interval::make(Some(i64::MAX), Some(i64::MAX))?,
+                Interval::make(None, Some(i64::MIN))?,
             ),
             (
-                Interval::try_new(Float64(None), Float64(Some(100_f64)))?,
-                Interval::try_new(Float64(None), Float64(Some(200_f64)))?,
-                Interval::try_new(Float64(None), Float64(None))?,
+                Interval::make(Some(2_u32), Some(10_u32))?,
+                Interval::make(Some(4_u32), Some(6_u32))?,
+                Interval::make(None, Some(6_u32))?,
             ),
             (
-                Interval::try_new(Int32(Some(i32::MAX)), Int32(Some(i32::MAX)))?,
-                Interval::try_new(Int32(Some(11)), Int32(Some(11)))?,
-                Interval::try_new(
-                    Int32(Some(i32::MAX - 11)),
-                    Int32(Some(i32::MAX - 11)),
-                )?,
+                Interval::make(Some(2_u32), Some(10_u32))?,
+                Interval::make(Some(20_u32), Some(30_u32))?,
+                Interval::make(None, Some(0_u32))?,
             ),
             (
-                Interval::try_new(Float32(Some(f32::MIN)), Float32(Some(f32::MIN)))?,
-                Interval::try_new(Float32(Some(-10_f32)), Float32(Some(10_f32)))?,
+                Interval::make(Some(f32::MIN), Some(f32::MIN))?,
+                Interval::make(Some(-10_f32), Some(10_f32))?,
                 // Since rounding mode is up, the result would be much larger than f32::MIN
                 // (f32::MIN = -3.4_028_235e38, the result is -3.4_028_233e38)
-                Interval::try_new(
-                    Float32(None),
-                    Float32(Some(-340282330000000000000000000000000000000.0)),
+                Interval::make(
+                    None,
+                    Some(-340282330000000000000000000000000000000.0_f32),
                 )?,
             ),
             (
-                Interval::try_new(UInt32(Some(2)), UInt32(Some(10)))?,
-                Interval::try_new(UInt32(Some(4)), UInt32(Some(6)))?,
-                Interval::try_new(UInt32(None), UInt32(Some(6)))?,
+                Interval::make(Some(100_f64), None)?,
+                Interval::make(None, Some(200_f64))?,
+                Interval::make(Some(-100_f64), None)?,
             ),
             (
-                Interval::try_new(UInt32(Some(2)), UInt32(Some(10)))?,
-                Interval::try_new(UInt32(Some(20)), UInt32(Some(30)))?,
-                Interval::try_new(UInt32(None), UInt32(Some(0)))?,
+                Interval::make(None, Some(100_f64))?,
+                Interval::make(None, Some(200_f64))?,
+                Interval::make::<i64>(None, None)?,
             ),
         ];
         for case in cases {
@@ -2609,83 +2644,121 @@ mod tests {
 
     #[test]
     fn test_mul() -> Result<()> {
-        use ScalarValue::*;
-
         let cases = vec![
             (
-                Interval::try_new(Int64(Some(1_i64)), Int64(Some(2_i64)))?,
-                Interval::try_new(Int64(None), Int64(Some(2_i64)))?,
-                Interval::try_new(Int64(None), Int64(Some(4_i64)))?,
+                Interval::make(Some(1_i64), Some(2_i64))?,
+                Interval::make(None, Some(2_i64))?,
+                Interval::make(None, Some(4_i64))?,
             ),
             (
-                Interval::try_new(Int64(Some(1_i64)), Int64(Some(2_i64)))?,
-                Interval::try_new(Int64(Some(2_i64)), Int64(None))?,
-                Interval::try_new(Int64(Some(2_i64)), Int64(None))?,
+                Interval::make(Some(1_i64), Some(2_i64))?,
+                Interval::make(Some(2_i64), None)?,
+                Interval::make(Some(2_i64), None)?,
             ),
             (
-                Interval::try_new(Int64(None), Int64(Some(2_i64)))?,
-                Interval::try_new(Int64(Some(1_i64)), Int64(Some(2_i64)))?,
-                Interval::try_new(Int64(None), Int64(Some(4_i64)))?,
+                Interval::make(None, Some(2_i64))?,
+                Interval::make(Some(1_i64), Some(2_i64))?,
+                Interval::make(None, Some(4_i64))?,
             ),
             (
-                Interval::try_new(Int64(Some(2_i64)), Int64(None))?,
-                Interval::try_new(Int64(Some(1_i64)), Int64(Some(2_i64)))?,
-                Interval::try_new(Int64(Some(2_i64)), Int64(None))?,
+                Interval::make(Some(2_i64), None)?,
+                Interval::make(Some(1_i64), Some(2_i64))?,
+                Interval::make(Some(2_i64), None)?,
             ),
             (
-                Interval::try_new(Int64(Some(1_i64)), Int64(Some(2_i64)))?,
-                Interval::try_new(Int64(Some(-3_i64)), Int64(Some(15_i64)))?,
-                Interval::try_new(Int64(Some(-6_i64)), Int64(Some(30_i64)))?,
+                Interval::make(Some(1_i64), Some(2_i64))?,
+                Interval::make(Some(-3_i64), Some(15_i64))?,
+                Interval::make(Some(-6_i64), Some(30_i64))?,
             ),
             (
-                Interval::try_new(Float64(Some(1_f64)), Float64(None))?,
-                Interval::try_new(Float64(None), Float64(Some(2_f64)))?,
-                Interval::try_new(Float64(None), Float64(None))?,
+                Interval::make(Some(-0.0), Some(0.0))?,
+                Interval::make(None, Some(0.0))?,
+                Interval::make::<i64>(None, None)?,
             ),
             (
-                Interval::try_new(Float64(None), Float64(Some(1_f64)))?,
-                Interval::try_new(Float64(None), Float64(Some(2_f64)))?,
-                Interval::try_new(Float64(None), Float64(None))?,
+                Interval::make(Some(f32::MIN), Some(f32::MIN))?,
+                Interval::make(Some(-10_f32), Some(10_f32))?,
+                Interval::make::<i64>(None, None)?,
             ),
             (
-                Interval::try_new(Float32(Some(f32::MAX)), Float32(Some(f32::MAX)))?,
-                Interval::try_new(Float32(Some(11_f32)), Float32(Some(11_f32)))?,
-                Interval::try_new(Float32(Some(f32::MAX)), Float32(None))?,
+                Interval::make(Some(f32::MAX), Some(f32::MAX))?,
+                Interval::make(Some(11_f32), Some(11_f32))?,
+                Interval::make(Some(f32::MAX), None)?,
             ),
             (
-                Interval::try_new(Float32(Some(f32::MIN)), Float32(Some(f32::MIN)))?,
-                Interval::try_new(Float32(Some(-10_f32)), Float32(Some(10_f32)))?,
-                Interval::try_new(Float32(None), Float32(None))?,
+                Interval::make(Some(f32::MIN), Some(f32::MIN))?,
+                Interval::make(Some(-10_f32), Some(-10_f32))?,
+                Interval::make(Some(f32::MAX), None)?,
             ),
             (
-                Interval::try_new(Float32(Some(f32::MIN)), Float32(Some(f32::MIN)))?,
-                Interval::try_new(Float32(Some(-10_f32)), Float32(Some(-10_f32)))?,
-                Interval::try_new(Float32(Some(f32::MAX)), Float32(None))?,
+                Interval::make(Some(1.0), Some(f32::MAX))?,
+                Interval::make(Some(f32::MAX), Some(f32::MAX))?,
+                Interval::make(Some(f32::MAX), None)?,
             ),
             (
-                Interval::try_new(Float32(Some(1.0)), Float32(Some(f32::MAX)))?,
-                Interval::try_new(Float32(Some(f32::MAX)), Float32(Some(f32::MAX)))?,
-                Interval::try_new(Float32(Some(f32::MAX)), Float32(None))?,
+                Interval::make(Some(f32::MIN), Some(f32::MIN))?,
+                Interval::make(Some(f32::MAX), Some(f32::MAX))?,
+                Interval::make(None, Some(f32::MIN))?,
             ),
             (
-                Interval::try_new(Float32(Some(f32::MIN)), Float32(Some(f32::MIN)))?,
-                Interval::try_new(Float32(Some(f32::MAX)), Float32(Some(f32::MAX)))?,
-                Interval::try_new(Float32(None), Float32(Some(f32::MIN)))?,
+                Interval::make(Some(-0.0_f32), Some(0.0_f32))?,
+                Interval::make(Some(f32::MAX), None)?,
+                Interval::make::<f32>(None, None)?,
             ),
             (
-                Interval::try_new(Float32(Some(0.0)), Float32(Some(0.0)))?,
-                Interval::try_new(Float32(Some(f32::MAX)), Float32(None))?,
-                Interval::try_new(Float32(Some(0.0)), Float32(None))?,
+                Interval::make(Some(0.0_f32), Some(0.0_f32))?,
+                Interval::make(Some(f32::MAX), None)?,
+                Interval::make(Some(0.0_f32), None)?,
             ),
             (
-                Interval::try_new(Float32(Some(-0.0)), Float32(Some(0.0)))?,
-                Interval::try_new(Float32(Some(f32::MAX)), Float32(None))?,
-                Interval::try_new(Float32(None), Float32(None))?,
+                Interval::make(Some(1_f64), None)?,
+                Interval::make(None, Some(2_f64))?,
+                Interval::make::<f64>(None, None)?,
             ),
             (
-                Interval::try_new(Float32(Some(-0.0)), Float32(Some(0.0)))?,
-                Interval::try_new(Float32(None), Float32(Some(0.0)))?,
-                Interval::try_new(Float32(None), Float32(None))?,
+                Interval::make(None, Some(1_f64))?,
+                Interval::make(None, Some(2_f64))?,
+                Interval::make::<f64>(None, None)?,
+            ),
+            (
+                Interval::make(Some(-0.0_f64), Some(-0.0_f64))?,
+                Interval::make(Some(1_f64), Some(2_f64))?,
+                Interval::make(Some(-0.0_f64), Some(-0.0_f64))?,
+            ),
+            (
+                Interval::make(Some(0.0_f64), Some(0.0_f64))?,
+                Interval::make(Some(1_f64), Some(2_f64))?,
+                Interval::make(Some(0.0_f64), Some(0.0_f64))?,
+            ),
+            (
+                Interval::make(Some(-0.0_f64), Some(0.0_f64))?,
+                Interval::make(Some(1_f64), Some(2_f64))?,
+                Interval::make(Some(-0.0_f64), Some(0.0_f64))?,
+            ),
+            (
+                Interval::make(Some(-0.0_f64), Some(1.0_f64))?,
+                Interval::make(Some(1_f64), Some(2_f64))?,
+                Interval::make(Some(-0.0_f64), Some(2.0_f64))?,
+            ),
+            (
+                Interval::make(Some(0.0_f64), Some(1.0_f64))?,
+                Interval::make(Some(1_f64), Some(2_f64))?,
+                Interval::make(Some(0.0_f64), Some(2.0_f64))?,
+            ),
+            (
+                Interval::make(Some(-0.0_f64), Some(1.0_f64))?,
+                Interval::make(Some(-1_f64), Some(2_f64))?,
+                Interval::make(Some(-1.0_f64), Some(2.0_f64))?,
+            ),
+            (
+                Interval::make::<f64>(None, None)?,
+                Interval::make(Some(-0.0_f64), Some(0.0_f64))?,
+                Interval::make::<f64>(None, None)?,
+            ),
+            (
+                Interval::make::<f64>(None, Some(10.0_f64))?,
+                Interval::make(Some(-0.0_f64), Some(0.0_f64))?,
+                Interval::make::<f64>(None, None)?,
             ),
         ];
         for case in cases {
@@ -2709,128 +2782,166 @@ mod tests {
 
     #[test]
     fn test_div() -> Result<()> {
-        use ScalarValue::*;
-
         let cases = vec![
             (
-                Interval::try_new(Int64(Some(100_i64)), Int64(Some(200_i64)))?,
-                Interval::try_new(Int64(Some(1_i64)), Int64(Some(2_i64)))?,
-                Interval::try_new(Int64(Some(50_i64)), Int64(Some(200_i64)))?,
+                Interval::make(Some(100_i64), Some(200_i64))?,
+                Interval::make(Some(1_i64), Some(2_i64))?,
+                Interval::make(Some(50_i64), Some(200_i64))?,
             ),
             (
-                Interval::try_new(Int64(Some(-200_i64)), Int64(Some(-100_i64)))?,
-                Interval::try_new(Int64(Some(-2_i64)), Int64(Some(-1_i64)))?,
-                Interval::try_new(Int64(Some(50_i64)), Int64(Some(200_i64)))?,
+                Interval::make(Some(-200_i64), Some(-100_i64))?,
+                Interval::make(Some(-2_i64), Some(-1_i64))?,
+                Interval::make(Some(50_i64), Some(200_i64))?,
             ),
             (
-                Interval::try_new(Int64(Some(100_i64)), Int64(Some(200_i64)))?,
-                Interval::try_new(Int64(Some(-2_i64)), Int64(Some(-1_i64)))?,
-                Interval::try_new(Int64(Some(-200_i64)), Int64(Some(-50_i64)))?,
+                Interval::make(Some(100_i64), Some(200_i64))?,
+                Interval::make(Some(-2_i64), Some(-1_i64))?,
+                Interval::make(Some(-200_i64), Some(-50_i64))?,
             ),
             (
-                Interval::try_new(Int64(Some(-200_i64)), Int64(Some(-100_i64)))?,
-                Interval::try_new(Int64(Some(1_i64)), Int64(Some(2_i64)))?,
-                Interval::try_new(Int64(Some(-200_i64)), Int64(Some(-50_i64)))?,
+                Interval::make(Some(-200_i64), Some(-100_i64))?,
+                Interval::make(Some(1_i64), Some(2_i64))?,
+                Interval::make(Some(-200_i64), Some(-50_i64))?,
             ),
             (
-                Interval::try_new(Int64(Some(-200_i64)), Int64(Some(100_i64)))?,
-                Interval::try_new(Int64(Some(1_i64)), Int64(Some(2_i64)))?,
-                Interval::try_new(Int64(Some(-200_i64)), Int64(Some(100_i64)))?,
+                Interval::make(Some(-200_i64), Some(100_i64))?,
+                Interval::make(Some(1_i64), Some(2_i64))?,
+                Interval::make(Some(-200_i64), Some(100_i64))?,
             ),
             (
-                Interval::try_new(Int64(Some(-100_i64)), Int64(Some(200_i64)))?,
-                Interval::try_new(Int64(Some(1_i64)), Int64(Some(2_i64)))?,
-                Interval::try_new(Int64(Some(-100_i64)), Int64(Some(200_i64)))?,
+                Interval::make(Some(-100_i64), Some(200_i64))?,
+                Interval::make(Some(1_i64), Some(2_i64))?,
+                Interval::make(Some(-100_i64), Some(200_i64))?,
             ),
             (
-                Interval::try_new(Int64(Some(-100_i64)), Int64(Some(200_i64)))?,
-                Interval::try_new(Int64(Some(-1_i64)), Int64(Some(2_i64)))?,
-                Interval::try_new(Int64(None), Int64(None))?,
+                Interval::make(Some(10_i64), Some(20_i64))?,
+                Interval::make::<i64>(None, None)?,
+                Interval::make::<i64>(None, None)?,
             ),
             (
-                Interval::try_new(Int64(Some(-100_i64)), Int64(Some(200_i64)))?,
-                Interval::try_new(Int64(Some(-2_i64)), Int64(Some(1_i64)))?,
-                Interval::try_new(Int64(None), Int64(None))?,
+                Interval::make(Some(-100_i64), Some(200_i64))?,
+                Interval::make(Some(-1_i64), Some(2_i64))?,
+                Interval::make::<i64>(None, None)?,
             ),
             (
-                Interval::try_new(Int64(Some(100_i64)), Int64(Some(200_i64)))?,
-                Interval::try_new(Int64(Some(0)), Int64(Some(1_i64)))?,
-                Interval::try_new(Int64(Some(100_i64)), Int64(None))?,
+                Interval::make(Some(-100_i64), Some(200_i64))?,
+                Interval::make(Some(-2_i64), Some(1_i64))?,
+                Interval::make::<i64>(None, None)?,
             ),
             (
-                Interval::try_new(Int64(Some(100_i64)), Int64(Some(200_i64)))?,
-                Interval::try_new(Int64(None), Int64(Some(0)))?,
-                Interval::try_new(Int64(None), Int64(Some(0)))?,
+                Interval::make(Some(100_i64), Some(200_i64))?,
+                Interval::make(Some(0_i64), Some(1_i64))?,
+                Interval::make(Some(100_i64), None)?,
             ),
             (
-                Interval::try_new(Int64(Some(100_i64)), Int64(Some(200_i64)))?,
-                Interval::try_new(Int64(Some(0)), Int64(Some(0)))?,
-                Interval::try_new(Int64(None), Int64(None))?,
+                Interval::make(Some(100_i64), Some(200_i64))?,
+                Interval::make(None, Some(0_i64))?,
+                Interval::make(None, Some(0_i64))?,
             ),
             (
-                Interval::try_new(Int64(Some(0)), Int64(Some(1_i64)))?,
-                Interval::try_new(Int64(Some(100_i64)), Int64(Some(200_i64)))?,
-                Interval::try_new(Int64(Some(0)), Int64(Some(0)))?,
+                Interval::make(Some(100_i64), Some(200_i64))?,
+                Interval::make(Some(0_i64), Some(0_i64))?,
+                Interval::make::<i64>(None, None)?,
             ),
             (
-                Interval::try_new(Int64(Some(0)), Int64(Some(1_i64)))?,
-                Interval::try_new(Int64(Some(100_i64)), Int64(Some(200_i64)))?,
-                Interval::try_new(Int64(Some(0)), Int64(Some(0)))?,
+                Interval::make(Some(0_i64), Some(1_i64))?,
+                Interval::make(Some(100_i64), Some(200_i64))?,
+                Interval::make(Some(0_i64), Some(0_i64))?,
             ),
             (
-                Interval::try_new(Float32(Some(f32::MAX)), Float32(Some(f32::MAX)))?,
-                Interval::try_new(Float32(Some(-0.1)), Float32(Some(0.1)))?,
-                Interval::try_new(Float32(None), Float32(None))?,
+                Interval::make(Some(0_i64), Some(1_i64))?,
+                Interval::make(Some(100_i64), Some(200_i64))?,
+                Interval::make(Some(0_i64), Some(0_i64))?,
             ),
             (
-                Interval::try_new(Float32(Some(f32::MIN)), Float32(None))?,
-                Interval::try_new(Float32(Some(0.1)), Float32(Some(0.1)))?,
-                Interval::try_new(Float32(None), Float32(None))?,
+                Interval::make(Some(1_u32), Some(2_u32))?,
+                Interval::make(Some(0_u32), Some(0_u32))?,
+                Interval::make::<u32>(None, None)?,
             ),
             (
-                Interval::try_new(Float32(Some(-10.0)), Float32(Some(10.0)))?,
-                Interval::try_new(Float32(Some(-0.1)), Float32(Some(-0.1)))?,
-                Interval::try_new(Float32(Some(-100.0)), Float32(Some(100.0)))?,
+                Interval::make(Some(10_u32), Some(20_u32))?,
+                Interval::make(None, Some(2_u32))?,
+                Interval::make(Some(5_u32), None)?,
             ),
             (
-                Interval::try_new(Float32(Some(-10.0)), Float32(Some(f32::MAX)))?,
-                Interval::try_new(Float32(None), Float32(None))?,
-                Interval::try_new(Float32(None), Float32(None))?,
+                Interval::make(Some(10_u32), Some(20_u32))?,
+                Interval::make(Some(0_u32), Some(2_u32))?,
+                Interval::make(Some(5_u32), None)?,
             ),
             (
-                Interval::try_new(Float32(Some(f32::MIN)), Float32(Some(10.0)))?,
-                Interval::try_new(Float32(Some(1.0)), Float32(None))?,
-                Interval::try_new(Float32(Some(f32::MIN)), Float32(Some(10.0)))?,
+                Interval::make(Some(10_u32), Some(20_u32))?,
+                Interval::make(Some(0_u32), Some(0_u32))?,
+                Interval::make::<u32>(None, None)?,
             ),
             (
-                Interval::try_new(Int64(Some(12)), Int64(Some(48)))?,
-                Interval::try_new(Int64(Some(10)), Int64(Some(20)))?,
-                Interval::try_new(Int64(Some(0)), Int64(Some(4)))?,
+                Interval::make(Some(12_u64), Some(48_u64))?,
+                Interval::make(Some(10_u64), Some(20_u64))?,
+                Interval::make(Some(0_u64), Some(4_u64))?,
             ),
             (
-                Interval::try_new(Float32(Some(-4.0)), Float32(Some(2.0)))?,
-                Interval::try_new(Float32(Some(10.0)), Float32(Some(20.0)))?,
-                Interval::try_new(Float32(Some(-0.4)), Float32(Some(0.2)))?,
+                Interval::make(Some(f32::MAX), Some(f32::MAX))?,
+                Interval::make(Some(-0.1_f32), Some(0.1_f32))?,
+                Interval::make::<f32>(None, None)?,
             ),
             (
-                Interval::try_new(Float32(Some(0.0)), Float32(Some(0.0)))?,
-                Interval::try_new(Float32(Some(f32::MAX)), Float32(None))?,
-                Interval::try_new(Float32(Some(0.0)), Float32(Some(0.0)))?,
+                Interval::make(Some(f32::MIN), None)?,
+                Interval::make(Some(0.1_f32), Some(0.1_f32))?,
+                Interval::make::<f32>(None, None)?,
             ),
             (
-                Interval::try_new(Float32(Some(-0.0)), Float32(Some(0.0)))?,
-                Interval::try_new(Float32(Some(f32::MAX)), Float32(None))?,
-                Interval::try_new(Float32(Some(-0.0)), Float32(Some(0.0)))?,
+                Interval::make(Some(-10.0_f32), Some(10.0_f32))?,
+                Interval::make(Some(-0.1_f32), Some(-0.1_f32))?,
+                Interval::make(Some(-100.0_f32), Some(100.0_f32))?,
             ),
             (
-                Interval::try_new(Float32(Some(-0.0)), Float32(Some(0.0)))?,
-                Interval::try_new(Float32(None), Float32(Some(-0.0)))?,
-                Interval::try_new(Float32(None), Float32(None))?,
+                Interval::make(Some(-10.0_f32), Some(f32::MAX))?,
+                Interval::make::<f32>(None, None)?,
+                Interval::make::<f32>(None, None)?,
             ),
             (
-                Interval::try_new(Float32(Some(-0.0)), Float32(Some(-0.0)))?,
-                Interval::try_new(Float32(None), Float32(Some(-0.0)))?,
-                Interval::try_new(Float32(Some(0.0)), Float32(None))?,
+                Interval::make(Some(f32::MIN), Some(10.0_f32))?,
+                Interval::make(Some(1.0_f32), None)?,
+                Interval::make(Some(f32::MIN), Some(10.0_f32))?,
+            ),
+            (
+                Interval::make(Some(-0.0_f32), Some(0.0_f32))?,
+                Interval::make(Some(f32::MAX), None)?,
+                Interval::make(Some(-0.0_f32), Some(0.0_f32))?,
+            ),
+            (
+                Interval::make(Some(-0.0_f32), Some(0.0_f32))?,
+                Interval::make(None, Some(-0.0_f32))?,
+                Interval::make::<f32>(None, None)?,
+            ),
+            (
+                Interval::make(Some(0.0_f32), Some(0.0_f32))?,
+                Interval::make(Some(f32::MAX), None)?,
+                Interval::make(Some(0.0_f32), Some(0.0_f32))?,
+            ),
+            (
+                Interval::make(Some(1.0_f32), Some(2.0_f32))?,
+                Interval::make(Some(0.0_f32), Some(4.0_f32))?,
+                Interval::make(Some(0.25_f32), None)?,
+            ),
+            (
+                Interval::make(Some(1.0_f32), Some(2.0_f32))?,
+                Interval::make(Some(-4.0_f32), Some(-0.0_f32))?,
+                Interval::make(None, Some(-0.25_f32))?,
+            ),
+            (
+                Interval::make(Some(-4.0_f64), Some(2.0_f64))?,
+                Interval::make(Some(10.0_f64), Some(20.0_f64))?,
+                Interval::make(Some(-0.4_f64), Some(0.2_f64))?,
+            ),
+            (
+                Interval::make(Some(-0.0_f64), Some(-0.0_f64))?,
+                Interval::make(None, Some(-0.0_f64))?,
+                Interval::make(Some(0.0_f64), None)?,
+            ),
+            (
+                Interval::make(Some(1.0_f64), Some(2.0_f64))?,
+                Interval::make::<f64>(None, None)?,
+                Interval::make(Some(0.0_f64), None)?,
             ),
         ];
         for case in cases {
@@ -2911,165 +3022,164 @@ mod tests {
 
     #[test]
     fn test_satisfy_comparison() -> Result<()> {
-        use ScalarValue::*;
         let cases = vec![
             (
-                Interval::try_new(Int64(Some(1000_i64)), Int64(None))?,
-                Interval::try_new(Int64(None), Int64(Some(1000_i64)))?,
+                Interval::make(Some(1000_i64), None)?,
+                Interval::make(None, Some(1000_i64))?,
                 true,
                 true,
-                Interval::try_new(Int64(Some(1000_i64)), Int64(None))?,
-                Interval::try_new(Int64(None), Int64(Some(1000_i64)))?,
+                Interval::make(Some(1000_i64), None)?,
+                Interval::make(None, Some(1000_i64))?,
             ),
             (
-                Interval::try_new(Int64(Some(1000_i64)), Int64(None))?,
-                Interval::try_new(Int64(None), Int64(Some(1000_i64)))?,
+                Interval::make(Some(1000_i64), None)?,
+                Interval::make(None, Some(1000_i64))?,
                 true,
                 false,
-                Interval::try_new(Int64(Some(1000_i64)), Int64(Some(1000_i64)))?,
-                Interval::try_new(Int64(Some(1000_i64)), Int64(Some(1000_i64)))?,
+                Interval::make(Some(1000_i64), Some(1000_i64))?,
+                Interval::make(Some(1000_i64), Some(1000_i64))?,
             ),
             (
-                Interval::try_new(Int64(Some(1000_i64)), Int64(None))?,
-                Interval::try_new(Int64(None), Int64(Some(1000_i64)))?,
+                Interval::make(Some(1000_i64), None)?,
+                Interval::make(None, Some(1000_i64))?,
                 false,
                 true,
-                Interval::try_new(Int64(Some(1000_i64)), Int64(None))?,
-                Interval::try_new(Int64(None), Int64(Some(1000_i64)))?,
+                Interval::make(Some(1000_i64), None)?,
+                Interval::make(None, Some(1000_i64))?,
             ),
             (
-                Interval::try_new(Int64(Some(0_i64)), Int64(Some(1000_i64)))?,
-                Interval::try_new(Int64(Some(500_i64)), Int64(Some(1500_i64)))?,
+                Interval::make(Some(0_i64), Some(1000_i64))?,
+                Interval::make(Some(500_i64), Some(1500_i64))?,
                 true,
                 true,
-                Interval::try_new(Int64(Some(500_i64)), Int64(Some(1000_i64)))?,
-                Interval::try_new(Int64(Some(500_i64)), Int64(Some(1000_i64)))?,
+                Interval::make(Some(500_i64), Some(1000_i64))?,
+                Interval::make(Some(500_i64), Some(1000_i64))?,
             ),
             (
-                Interval::try_new(Int64(Some(0_i64)), Int64(Some(1000_i64)))?,
-                Interval::try_new(Int64(Some(500_i64)), Int64(Some(1500_i64)))?,
-                true,
-                false,
-                Interval::try_new(Int64(Some(0_i64)), Int64(Some(1000_i64)))?,
-                Interval::try_new(Int64(Some(500_i64)), Int64(Some(1500_i64)))?,
-            ),
-            (
-                Interval::try_new(Int64(Some(0_i64)), Int64(Some(1000_i64)))?,
-                Interval::try_new(Int64(Some(500_i64)), Int64(Some(1500_i64)))?,
-                false,
-                true,
-                Interval::try_new(Int64(Some(501_i64)), Int64(Some(1000_i64)))?,
-                Interval::try_new(Int64(Some(500_i64)), Int64(Some(999_i64)))?,
-            ),
-            (
-                Interval::try_new(Int64(Some(0_i64)), Int64(Some(1000_i64)))?,
-                Interval::try_new(Int64(Some(500_i64)), Int64(Some(1500_i64)))?,
-                false,
-                false,
-                Interval::try_new(Int64(Some(0_i64)), Int64(Some(1000_i64)))?,
-                Interval::try_new(Int64(Some(500_i64)), Int64(Some(1500_i64)))?,
-            ),
-            (
-                Interval::try_new(Int64(None), Int64(None))?,
-                Interval::try_new(Int64(Some(1_i64)), Int64(Some(1_i64)))?,
-                false,
-                true,
-                Interval::try_new(Int64(Some(2_i64)), Int64(None))?,
-                Interval::try_new(Int64(Some(1_i64)), Int64(Some(1_i64)))?,
-            ),
-            (
-                Interval::try_new(Int64(None), Int64(None))?,
-                Interval::try_new(Int64(Some(1_i64)), Int64(Some(1_i64)))?,
-                true,
-                true,
-                Interval::try_new(Int64(Some(1_i64)), Int64(None))?,
-                Interval::try_new(Int64(Some(1_i64)), Int64(Some(1_i64)))?,
-            ),
-            (
-                Interval::try_new(Int64(Some(1_i64)), Int64(Some(1_i64)))?,
-                Interval::try_new(Int64(None), Int64(None))?,
-                false,
-                true,
-                Interval::try_new(Int64(Some(1_i64)), Int64(Some(1_i64)))?,
-                Interval::try_new(Int64(None), Int64(Some(0_i64)))?,
-            ),
-            (
-                Interval::try_new(Int64(Some(1_i64)), Int64(Some(1_i64)))?,
-                Interval::try_new(Int64(None), Int64(None))?,
-                true,
-                true,
-                Interval::try_new(Int64(Some(1_i64)), Int64(Some(1_i64)))?,
-                Interval::try_new(Int64(None), Int64(Some(1_i64)))?,
-            ),
-            (
-                Interval::try_new(Int64(None), Int64(None))?,
-                Interval::try_new(Int64(Some(1_i64)), Int64(Some(1_i64)))?,
-                false,
-                false,
-                Interval::try_new(Int64(None), Int64(Some(0_i64)))?,
-                Interval::try_new(Int64(Some(1_i64)), Int64(Some(1_i64)))?,
-            ),
-            (
-                Interval::try_new(Int64(None), Int64(None))?,
-                Interval::try_new(Int64(Some(1_i64)), Int64(Some(1_i64)))?,
+                Interval::make(Some(0_i64), Some(1000_i64))?,
+                Interval::make(Some(500_i64), Some(1500_i64))?,
                 true,
                 false,
-                Interval::try_new(Int64(None), Int64(Some(1_i64)))?,
-                Interval::try_new(Int64(Some(1_i64)), Int64(Some(1_i64)))?,
+                Interval::make(Some(0_i64), Some(1000_i64))?,
+                Interval::make(Some(500_i64), Some(1500_i64))?,
             ),
             (
-                Interval::try_new(Int64(Some(1_i64)), Int64(Some(1_i64)))?,
-                Interval::try_new(Int64(None), Int64(None))?,
+                Interval::make(Some(0_i64), Some(1000_i64))?,
+                Interval::make(Some(500_i64), Some(1500_i64))?,
+                false,
+                true,
+                Interval::make(Some(501_i64), Some(1000_i64))?,
+                Interval::make(Some(500_i64), Some(999_i64))?,
+            ),
+            (
+                Interval::make(Some(0_i64), Some(1000_i64))?,
+                Interval::make(Some(500_i64), Some(1500_i64))?,
                 false,
                 false,
-                Interval::try_new(Int64(Some(1_i64)), Int64(Some(1_i64)))?,
-                Interval::try_new(Int64(Some(2_i64)), Int64(None))?,
+                Interval::make(Some(0_i64), Some(1000_i64))?,
+                Interval::make(Some(500_i64), Some(1500_i64))?,
             ),
             (
-                Interval::try_new(Int64(Some(1_i64)), Int64(Some(1_i64)))?,
-                Interval::try_new(Int64(None), Int64(None))?,
+                Interval::make::<i64>(None, None)?,
+                Interval::make(Some(1_i64), Some(1_i64))?,
+                false,
+                true,
+                Interval::make(Some(2_i64), None)?,
+                Interval::make(Some(1_i64), Some(1_i64))?,
+            ),
+            (
+                Interval::make::<i64>(None, None)?,
+                Interval::make(Some(1_i64), Some(1_i64))?,
+                true,
+                true,
+                Interval::make(Some(1_i64), None)?,
+                Interval::make(Some(1_i64), Some(1_i64))?,
+            ),
+            (
+                Interval::make(Some(1_i64), Some(1_i64))?,
+                Interval::make::<i64>(None, None)?,
+                false,
+                true,
+                Interval::make(Some(1_i64), Some(1_i64))?,
+                Interval::make(None, Some(0_i64))?,
+            ),
+            (
+                Interval::make(Some(1_i64), Some(1_i64))?,
+                Interval::make::<i64>(None, None)?,
+                true,
+                true,
+                Interval::make(Some(1_i64), Some(1_i64))?,
+                Interval::make(None, Some(1_i64))?,
+            ),
+            (
+                Interval::make::<i64>(None, None)?,
+                Interval::make(Some(1_i64), Some(1_i64))?,
+                false,
+                false,
+                Interval::make(None, Some(0_i64))?,
+                Interval::make(Some(1_i64), Some(1_i64))?,
+            ),
+            (
+                Interval::make::<i64>(None, None)?,
+                Interval::make(Some(1_i64), Some(1_i64))?,
                 true,
                 false,
-                Interval::try_new(Int64(Some(1_i64)), Int64(Some(1_i64)))?,
-                Interval::try_new(Int64(Some(1_i64)), Int64(None))?,
+                Interval::make(None, Some(1_i64))?,
+                Interval::make(Some(1_i64), Some(1_i64))?,
             ),
             (
-                Interval::try_new(Float64(Some(-1000.0)), Float64(Some(1000.0)))?,
-                Interval::try_new(Float64(Some(-500.0)), Float64(Some(500.0)))?,
-                true,
-                true,
-                Interval::try_new(Float64(Some(-500.0)), Float64(Some(1000.0)))?,
-                Interval::try_new(Float64(Some(-500.0)), Float64(Some(500.0)))?,
+                Interval::make(Some(1_i64), Some(1_i64))?,
+                Interval::make::<i64>(None, None)?,
+                false,
+                false,
+                Interval::make(Some(1_i64), Some(1_i64))?,
+                Interval::make(Some(2_i64), None)?,
             ),
             (
-                Interval::try_new(Float64(Some(-1000.0)), Float64(Some(1000.0)))?,
-                Interval::try_new(Float64(Some(-500.0)), Float64(Some(500.0)))?,
+                Interval::make(Some(1_i64), Some(1_i64))?,
+                Interval::make::<i64>(None, None)?,
+                true,
+                false,
+                Interval::make(Some(1_i64), Some(1_i64))?,
+                Interval::make(Some(1_i64), None)?,
+            ),
+            (
+                Interval::make(Some(-1000.0_f32), Some(1000.0_f32))?,
+                Interval::make(Some(-500.0_f32), Some(500.0_f32))?,
                 false,
                 true,
                 Interval::try_new(
-                    next_value(Float64(Some(-500.0))),
-                    Float64(Some(1000.0)),
+                    next_value(ScalarValue::Float32(Some(-500.0))),
+                    ScalarValue::Float32(Some(1000.0)),
                 )?,
-                Interval::try_new(Float64(Some(-500.0)), Float64(Some(500.0)))?,
+                Interval::make(Some(-500_f32), Some(500.0_f32))?,
             ),
             (
-                Interval::try_new(Float64(Some(-1000.0)), Float64(Some(1000.0)))?,
-                Interval::try_new(Float64(Some(-500.0)), Float64(Some(500.0)))?,
+                Interval::make(Some(-1000.0_f32), Some(1000.0_f32))?,
+                Interval::make(Some(-500.0_f32), Some(500.0_f32))?,
                 true,
                 false,
-                Interval::try_new(Float64(Some(-1000.0)), Float64(Some(500.0)))?,
-                Interval::try_new(Float64(Some(-500.0)), Float64(Some(500.0)))?,
+                Interval::make(Some(-1000.0_f32), Some(500.0_f32))?,
+                Interval::make(Some(-500.0_f32), Some(500.0_f32))?,
             ),
             (
-                Interval::try_new(Float64(Some(-1000.0)), Float64(Some(1000.0)))?,
-                Interval::try_new(Float64(Some(-500.0)), Float64(Some(500.0)))?,
+                Interval::make(Some(-1000.0_f32), Some(1000.0_f32))?,
+                Interval::make(Some(-500.0_f32), Some(500.0_f32))?,
                 false,
                 false,
                 Interval::try_new(
-                    Float64(Some(-1000.0)),
-                    prev_value(Float64(Some(500.0))),
+                    ScalarValue::Float32(Some(-1000.0_f32)),
+                    prev_value(ScalarValue::Float32(Some(500.0_f32))),
                 )?,
-                Interval::try_new(Float64(Some(-500.0)), Float64(Some(500.0)))?,
+                Interval::make(Some(-500.0_f32), Some(500.0_f32))?,
+            ),
+            (
+                Interval::make(Some(-1000.0_f64), Some(1000.0_f64))?,
+                Interval::make(Some(-500.0_f64), Some(500.0_f64))?,
+                true,
+                true,
+                Interval::make(Some(-500.0_f64), Some(1000.0_f64))?,
+                Interval::make(Some(-500.0_f64), Some(500.0_f64))?,
             ),
         ];
         for (first, second, includes_endpoints, op_gt, left_modified, right_modified) in
@@ -3077,20 +3187,20 @@ mod tests {
         {
             assert_eq!(
                 satisfy_comparison(&first, &second, includes_endpoints, op_gt)?.unwrap(),
-                vec![left_modified, right_modified]
+                (left_modified, right_modified)
             );
         }
 
         let infeasible_cases = vec![
             (
-                Interval::try_new(Int64(Some(1000_i64)), Int64(None))?,
-                Interval::try_new(Int64(None), Int64(Some(1000_i64)))?,
+                Interval::make(Some(1000_i64), None)?,
+                Interval::make(None, Some(1000_i64))?,
                 false,
                 false,
             ),
             (
-                Interval::try_new(Float64(Some(-1000.0)), Float64(Some(1000.0)))?,
-                Interval::try_new(Float64(Some(1500.0)), Float64(Some(2000.0)))?,
+                Interval::make(Some(-1000.0_f32), Some(1000.0_f32))?,
+                Interval::make(Some(1500.0_f32), Some(2000.0_f32))?,
                 false,
                 true,
             ),
