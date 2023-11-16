@@ -90,7 +90,7 @@ impl AggregateExpr for StringAgg {
             }
         }
         not_impl_err!(
-            "StringAgg not support for {}: {} with no Literal delimiter",
+            "StringAgg not supported for {}: {} with no Literal delimiter",
             self.name,
             self.data_type
         )
