@@ -1667,24 +1667,21 @@ mod tests {
             Field::new("b", DataType::Int32, true),
             Field::new("c", DataType::Int32, true),
         ]);
-        let mut eq_properties = EquivalenceProperties::new(Arc::new(schema.clone()));
+        let schema = Arc::new(schema.clone());
+        let mut eq_properties = EquivalenceProperties::new(schema.clone());
         let ordering = vec![PhysicalSortExpr {
             expr: Arc::new(Column::new("b", 1)),
             options: SortOptions::default(),
         }];
         eq_properties.add_new_orderings([ordering]);
-        let projection_mapping = ProjectionMapping {
-            inner: vec![
-                (
-                    Arc::new(Column::new("b", 1)) as _,
-                    Arc::new(Column::new("b_new", 0)) as _,
-                ),
-                (
-                    Arc::new(Column::new("a", 0)) as _,
-                    Arc::new(Column::new("a_new", 1)) as _,
-                ),
+        let projection_mapping = ProjectionMapping::try_new(
+            &vec![
+                (Arc::new(Column::new("b", 1)) as _, "b_new".into()),
+                (Arc::new(Column::new("a", 0)) as _, "a_new".into()),
             ],
-        };
+            &schema,
+        )
+        .unwrap();
         let projection_schema = Arc::new(Schema::new(vec![
             Field::new("b_new", DataType::Int32, true),
             Field::new("a_new", DataType::Int32, true),
@@ -1708,19 +1705,16 @@ mod tests {
             Field::new("b", DataType::Int32, true),
             Field::new("c", DataType::Int32, true),
         ]);
-        let eq_properties = EquivalenceProperties::new(Arc::new(schema));
-        let projection_mapping = ProjectionMapping {
-            inner: vec![
-                (
-                    Arc::new(Column::new("c", 2)) as _,
-                    Arc::new(Column::new("c_new", 0)) as _,
-                ),
-                (
-                    Arc::new(Column::new("b", 1)) as _,
-                    Arc::new(Column::new("b_new", 1)) as _,
-                ),
+        let schema = Arc::new(schema);
+        let eq_properties = EquivalenceProperties::new(schema.clone());
+        let projection_mapping = ProjectionMapping::try_new(
+            &vec![
+                (Arc::new(Column::new("c", 2)) as _, "c_new".into()),
+                (Arc::new(Column::new("b", 1)) as _, "b_new".into()),
             ],
-        };
+            &schema,
+        )
+        .unwrap();
         let projection_schema = Arc::new(Schema::new(vec![
             Field::new("c_new", DataType::Int32, true),
             Field::new("b_new", DataType::Int32, true),
