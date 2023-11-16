@@ -18,11 +18,14 @@
 //! Join related functionality used both on logical and physical plans
 
 use std::collections::HashSet;
+use std::fmt::{self, Debug};
 use std::future::Future;
+use std::ops::IndexMut;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::{fmt, usize};
+use std::usize;
 
+use crate::joins::stream_join_utils::{build_filter_input_order, SortedFilterExpr};
 use crate::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder};
 use crate::{ColumnStatistics, ExecutionPlan, Partitioning, Statistics};
 
@@ -47,13 +50,10 @@ use datafusion_physical_expr::{
     LexOrdering, LexOrderingRef, PhysicalExpr, PhysicalSortExpr,
 };
 
-use crate::joins::stream_join_utils::{build_filter_input_order, SortedFilterExpr};
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};
 use hashbrown::raw::RawTable;
 use parking_lot::Mutex;
-use std::fmt::Debug;
-use std::ops::IndexMut;
 
 /// Maps a `u64` hash value based on the build side ["on" values] to a list of indices with this key's value.
 ///

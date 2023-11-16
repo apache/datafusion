@@ -586,13 +586,13 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 )?))
             }
             PhysicalPlanType::SymmetricHashJoin(sym_join) => {
-                let left: Arc<dyn ExecutionPlan> = into_physical_plan(
+                let left = into_physical_plan(
                     &sym_join.left,
                     registry,
                     runtime,
                     extension_codec,
                 )?;
-                let right: Arc<dyn ExecutionPlan> = into_physical_plan(
+                let right = into_physical_plan(
                     &sym_join.right,
                     registry,
                     runtime,
@@ -644,7 +644,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                     side: side.into(),
                                 })
                             })
-                            .collect::<Result<Vec<_>>>()?;
+                            .collect::<Result<_>>()?;
 
                         Ok(JoinFilter::new(expression, column_indices, schema))
                     })
@@ -665,7 +665,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         StreamJoinPartitionMode::Partitioned
                     }
                 };
-                Ok(Arc::new(SymmetricHashJoinExec::try_new(
+                SymmetricHashJoinExec::try_new(
                     left,
                     right,
                     on,
@@ -673,7 +673,8 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     &join_type.into(),
                     sym_join.null_equals_null,
                     partition_mode,
-                )?))
+                )
+                .map(|e| Arc::new(e) as _)
             }
             PhysicalPlanType::Union(union) => {
                 let mut inputs: Vec<Arc<dyn ExecutionPlan>> = vec![];
@@ -1109,7 +1110,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 exec.right().to_owned(),
                 extension_codec,
             )?;
-            let on: Vec<protobuf::JoinOn> = exec
+            let on = exec
                 .on()
                 .iter()
                 .map(|tuple| protobuf::JoinOn {

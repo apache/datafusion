@@ -18,30 +18,30 @@
 //! This file contains common subroutines for symmetric hash join
 //! related functionality, used both in join calculations and optimization rules.
 
+use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
+use std::task::{Context, Poll};
+use std::usize;
+
 use crate::handle_async_state;
 use crate::joins::utils::{JoinFilter, JoinHashMapType};
+
 use arrow::compute::concat_batches;
 use arrow_array::{ArrowPrimitiveType, NativeAdapter, PrimitiveArray, RecordBatch};
 use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder};
 use arrow_schema::SchemaRef;
 use async_trait::async_trait;
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::Result;
-use datafusion_common::{DataFusionError, JoinSide, ScalarValue};
+use datafusion_common::{DataFusionError, JoinSide, Result, ScalarValue};
 use datafusion_execution::SendableRecordBatchStream;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::intervals::{Interval, IntervalBound};
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
-use futures::ready;
-use futures::FutureExt;
-use futures::StreamExt;
+
+use futures::{ready, FutureExt, StreamExt};
 use hashbrown::raw::RawTable;
 use hashbrown::HashSet;
-use std::collections::{HashMap, VecDeque};
-use std::sync::Arc;
-use std::task::{Context, Poll};
-use std::usize;
 
 /// Implementation of `JoinHashMapType` for `PruningJoinHashMap`.
 impl JoinHashMapType for PruningJoinHashMap {
@@ -931,6 +931,8 @@ pub trait EagerJoinStream {
 
 #[cfg(test)]
 pub mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::joins::stream_join_utils::{
         build_filter_input_order, check_filter_expr_contains_sort_information,
@@ -941,12 +943,12 @@ pub mod tests {
         expressions::PhysicalSortExpr,
         joins::utils::{ColumnIndex, JoinFilter},
     };
+
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::ScalarValue;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{binary, cast, col, lit};
-    use std::sync::Arc;
 
     /// Filter expr for a + b > c + 10 AND a + b < c + 100
     pub(crate) fn complicated_filter(
