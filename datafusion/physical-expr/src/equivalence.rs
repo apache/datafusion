@@ -3399,6 +3399,11 @@ mod tests {
                 vec![col_b, col_d],
                 vec![(col_d, option_asc), (col_b, option_asc)],
             ),
+            // TEST CASE 6
+            (
+                vec![col_c, col_e],
+                vec![(col_c, option_asc), (col_e, option_desc)],
+            ),
         ];
         for (exprs, expected) in test_cases {
             let exprs = exprs.into_iter().cloned().collect::<Vec<_>>();
