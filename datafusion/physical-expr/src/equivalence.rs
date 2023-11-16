@@ -1117,28 +1117,22 @@ impl EquivalenceProperties {
     /// This function applies an implicit projection to itself before calling `ordering_satisfy_requirement_helper`.
     /// This enables us to consider complex expressions during analysis.
     pub fn ordering_satisfy_requirement(&self, reqs: LexRequirementRef) -> bool {
-        let projected_eqs = self.clone();
-        projected_eqs.ordering_satisfy_requirement_helper2(reqs)
-    }
-
-    /// Helper function to check whether the given sort requirements are satisfied by any of the
-    /// existing orderings.
-    fn ordering_satisfy_requirement_helper2(mut self, reqs: LexRequirementRef) -> bool {
+        let mut eq_properties = self.clone();
         // First, standardize the given requirement:
-        let normalized_reqs = self.normalize_sort_requirements(reqs);
+        let normalized_reqs = eq_properties.normalize_sort_requirements(reqs);
         for normalized_req in normalized_reqs {
-            if !self.ordering_satisfy_requirement_helper3(&normalized_req) {
+            if !eq_properties.ordering_satisfy_single_req(&normalized_req) {
                 return false;
             }
-            self = self.add_constants(std::iter::once(normalized_req.expr));
+            eq_properties =
+                eq_properties.add_constants(std::iter::once(normalized_req.expr));
         }
         true
     }
 
-    fn ordering_satisfy_requirement_helper3(
-        &self,
-        req: &PhysicalSortRequirement,
-    ) -> bool {
+    /// Check whether PhysicalSortRequirement is satisfied by considering
+    /// leading orderings, equalities, and constant expressions.
+    fn ordering_satisfy_single_req(&self, req: &PhysicalSortRequirement) -> bool {
         let expr_ordering = self.get_expr_ordering(req.expr.clone());
         let ExprOrdering { expr, state, .. } = expr_ordering;
         match state {
