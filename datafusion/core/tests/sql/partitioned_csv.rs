@@ -19,10 +19,7 @@
 
 use std::{io::Write, sync::Arc};
 
-use arrow::{
-    datatypes::{DataType, Field, Schema, SchemaRef},
-    record_batch::RecordBatch,
-};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::{
     error::Result,
     prelude::{CsvReadOptions, SessionConfig, SessionContext},
