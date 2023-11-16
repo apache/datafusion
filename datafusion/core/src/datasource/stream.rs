@@ -165,7 +165,7 @@ impl StreamConfig {
         match &self.encoding {
             StreamEncoding::Csv => {
                 let header = self.header && !self.location.exists();
-                let file = OpenOptions::new().write(true).open(&self.location)?;
+                let file = OpenOptions::new().append(true).open(&self.location)?;
                 let writer = arrow::csv::WriterBuilder::new()
                     .with_header(header)
                     .build(file);
@@ -173,7 +173,7 @@ impl StreamConfig {
                 Ok(Box::new(writer))
             }
             StreamEncoding::Json => {
-                let file = OpenOptions::new().write(true).open(&self.location)?;
+                let file = OpenOptions::new().append(true).open(&self.location)?;
                 Ok(Box::new(arrow::json::LineDelimitedWriter::new(file)))
             }
         }

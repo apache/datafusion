@@ -181,6 +181,11 @@ impl ListingTableUrl {
         }
     }
 
+    /// Returns `true` if `path` refers to a collection of objects
+    pub fn is_collection(&self) -> bool {
+        self.url.as_str().ends_with('/')
+    }
+
     /// Strips the prefix of this [`ListingTableUrl`] from the provided path, returning
     /// an iterator of the remaining path segments
     pub(crate) fn strip_prefix<'a, 'b: 'a>(
@@ -203,8 +208,7 @@ impl ListingTableUrl {
         file_extension: &'a str,
     ) -> Result<BoxStream<'a, Result<ObjectMeta>>> {
         // If the prefix is a file, use a head request, otherwise list
-        let is_dir = self.url.as_str().ends_with('/');
-        let list = match is_dir {
+        let list = match self.is_collection() {
             true => match ctx.runtime_env().cache_manager.get_list_files_cache() {
                 None => futures::stream::once(store.list(Some(&self.prefix)))
                     .try_flatten()

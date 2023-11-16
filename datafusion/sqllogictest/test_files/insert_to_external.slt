@@ -254,6 +254,22 @@ create_local_path 'true',
 single_file 'true',
 );
 
+query error DataFusion error: Error during planning: Inserting into a ListingTable backed by a single file is not supported, URL is possibly missing a trailing `/`\. To append to an existing file use StreamTable, e\.g\. by using CREATE UNBOUNDED EXTERNAL TABLE
+INSERT INTO single_file_test values (1, 2), (3, 4);
+
+statement ok
+drop table single_file_test;
+
+statement ok
+CREATE UNBOUNDED EXTERNAL TABLE
+single_file_test(a bigint, b bigint)
+STORED AS csv
+LOCATION 'test_files/scratch/insert_to_external/single_csv_table.csv'
+OPTIONS(
+create_local_path 'true',
+single_file 'true',
+);
+
 query II
 INSERT INTO single_file_test values (1, 2), (3, 4);
 ----
@@ -267,6 +283,8 @@ INSERT INTO single_file_test values (4, 5), (6, 7);
 query II
 select * from single_file_test;
 ----
+1 2
+3 4
 4 5
 6 7
 
