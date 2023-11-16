@@ -228,7 +228,7 @@ impl OptimizerRule for PushDownProjection {
                 // Gather all columns needed for expressions in this Aggregate
                 let mut new_aggr_expr = vec![];
                 for e in agg.aggr_expr.iter() {
-                    let column = Column::from(e.display_name()?);
+                    let column = Column::from_name(e.display_name()?);
                     if required_columns.contains(&column) {
                         new_aggr_expr.push(e.clone());
                     }
@@ -601,6 +601,31 @@ mod tests {
         \n  Projection: test.b\
         \n    Filter: test.c > Int32(1)\
         \n      TableScan: test projection=[b, c]";
+
+        assert_optimized_plan_eq(&plan, expected)
+    }
+
+    #[test]
+    fn aggregate_with_periods() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("tag.one", DataType::Utf8, false)]);
+
+        // Build a plan that looks as follows (note "tag.one" is a column named
+        // "tag.one", not a column named "one" in a table named "tag"):
+        //
+        // Projection: tag.one
+        //   Aggregate: groupBy=[], aggr=[MAX("tag.one") AS "tag.one"]
+        //    TableScan
+        let plan = table_scan(Some("m4"), &schema, None)?
+            .aggregate(
+                Vec::<Expr>::new(),
+                vec![max(col(Column::new_unqualified("tag.one"))).alias("tag.one")],
+            )?
+            .project([col(Column::new_unqualified("tag.one"))])?
+            .build()?;
+
+        let expected = "\
+        Aggregate: groupBy=[[]], aggr=[[MAX(m4.tag.one) AS tag.one]]\
+        \n  TableScan: m4 projection=[tag.one]";
 
         assert_optimized_plan_eq(&plan, expected)
     }

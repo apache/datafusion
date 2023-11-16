@@ -35,10 +35,10 @@ pub fn create_physical_expr(
         .collect::<Result<Vec<_>>>()?;
 
     Ok(Arc::new(ScalarFunctionExpr::new(
-        &fun.name,
-        fun.fun.clone(),
+        fun.name(),
+        fun.fun().clone(),
         input_phy_exprs.to_vec(),
-        (fun.return_type)(&input_exprs_types)?.as_ref(),
+        fun.return_type(&input_exprs_types)?,
         None,
     )))
 }
