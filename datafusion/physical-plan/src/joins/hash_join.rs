@@ -26,7 +26,7 @@ use std::{any::Any, usize, vec};
 use crate::joins::utils::{
     adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
     calculate_join_output_ordering, get_final_indices_from_bit_map,
-    need_produce_result_in_final,
+    need_produce_result_in_final, JoinHashMap, JoinHashMapType,
 };
 use crate::DisplayAs;
 use crate::{
@@ -35,7 +35,6 @@ use crate::{
     expressions::Column,
     expressions::PhysicalSortExpr,
     hash_utils::create_hashes,
-    joins::hash_join_utils::{JoinHashMap, JoinHashMapType},
     joins::utils::{
         adjust_right_output_partitioning, build_join_schema, check_join_is_valid,
         estimate_join_statistics, partitioned_join_output_partitioning,

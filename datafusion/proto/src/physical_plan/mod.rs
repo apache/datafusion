@@ -39,7 +39,9 @@ use datafusion::physical_plan::expressions::{Column, PhysicalSortExpr};
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::insert::FileSinkExec;
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
-use datafusion::physical_plan::joins::{CrossJoinExec, NestedLoopJoinExec};
+use datafusion::physical_plan::joins::{
+    CrossJoinExec, NestedLoopJoinExec, StreamJoinPartitionMode, SymmetricHashJoinExec,
+};
 use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion::physical_plan::projection::ProjectionExec;
@@ -583,6 +585,96 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     hashjoin.null_equals_null,
                 )?))
             }
+            PhysicalPlanType::SymmetricHashJoin(sym_join) => {
+                let left: Arc<dyn ExecutionPlan> = into_physical_plan(
+                    &sym_join.left,
+                    registry,
+                    runtime,
+                    extension_codec,
+                )?;
+                let right: Arc<dyn ExecutionPlan> = into_physical_plan(
+                    &sym_join.right,
+                    registry,
+                    runtime,
+                    extension_codec,
+                )?;
+                let on = sym_join
+                    .on
+                    .iter()
+                    .map(|col| {
+                        let left = into_required!(col.left)?;
+                        let right = into_required!(col.right)?;
+                        Ok((left, right))
+                    })
+                    .collect::<Result<_>>()?;
+                let join_type = protobuf::JoinType::try_from(sym_join.join_type)
+                    .map_err(|_| {
+                        proto_error(format!(
+                            "Received a SymmetricHashJoin message with unknown JoinType {}",
+                            sym_join.join_type
+                        ))
+                    })?;
+                let filter = sym_join
+                    .filter
+                    .as_ref()
+                    .map(|f| {
+                        let schema = f
+                            .schema
+                            .as_ref()
+                            .ok_or_else(|| proto_error("Missing JoinFilter schema"))?
+                            .try_into()?;
+
+                        let expression = parse_physical_expr(
+                            f.expression.as_ref().ok_or_else(|| {
+                                proto_error("Unexpected empty filter expression")
+                            })?,
+                            registry, &schema
+                        )?;
+                        let column_indices = f.column_indices
+                            .iter()
+                            .map(|i| {
+                                let side = protobuf::JoinSide::try_from(i.side)
+                                    .map_err(|_| proto_error(format!(
+                                        "Received a HashJoinNode message with JoinSide in Filter {}",
+                                        i.side))
+                                    )?;
+
+                                Ok(ColumnIndex{
+                                    index: i.index as usize,
+                                    side: side.into(),
+                                })
+                            })
+                            .collect::<Result<Vec<_>>>()?;
+
+                        Ok(JoinFilter::new(expression, column_indices, schema))
+                    })
+                    .map_or(Ok(None), |v: Result<JoinFilter>| v.map(Some))?;
+
+                let partition_mode =
+                    protobuf::StreamPartitionMode::try_from(sym_join.partition_mode).map_err(|_| {
+                        proto_error(format!(
+                            "Received a SymmetricHashJoin message with unknown PartitionMode {}",
+                            sym_join.partition_mode
+                        ))
+                    })?;
+                let partition_mode = match partition_mode {
+                    protobuf::StreamPartitionMode::SinglePartition => {
+                        StreamJoinPartitionMode::SinglePartition
+                    }
+                    protobuf::StreamPartitionMode::PartitionedExec => {
+                        StreamJoinPartitionMode::Partitioned
+                    }
+                };
+                Ok(Arc::new(SymmetricHashJoinExec::try_new(
+                    left,
+                    right,
+                    on,
+                    filter,
+                    &join_type.into(),
+                    sym_join.null_equals_null,
+                    partition_mode,
+                )?))
+            }
             PhysicalPlanType::Union(union) => {
                 let mut inputs: Vec<Arc<dyn ExecutionPlan>> = vec![];
                 for input in &union.inputs {
@@ -996,6 +1088,79 @@ impl AsExecutionPlan for PhysicalPlanNode {
             return Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::HashJoin(Box::new(
                     protobuf::HashJoinExecNode {
+                        left: Some(Box::new(left)),
+                        right: Some(Box::new(right)),
+                        on,
+                        join_type: join_type.into(),
+                        partition_mode: partition_mode.into(),
+                        null_equals_null: exec.null_equals_null(),
+                        filter,
+                    },
+                ))),
+            });
+        }
+
+        if let Some(exec) = plan.downcast_ref::<SymmetricHashJoinExec>() {
+            let left = protobuf::PhysicalPlanNode::try_from_physical_plan(
+                exec.left().to_owned(),
+                extension_codec,
+            )?;
+            let right = protobuf::PhysicalPlanNode::try_from_physical_plan(
+                exec.right().to_owned(),
+                extension_codec,
+            )?;
+            let on: Vec<protobuf::JoinOn> = exec
+                .on()
+                .iter()
+                .map(|tuple| protobuf::JoinOn {
+                    left: Some(protobuf::PhysicalColumn {
+                        name: tuple.0.name().to_string(),
+                        index: tuple.0.index() as u32,
+                    }),
+                    right: Some(protobuf::PhysicalColumn {
+                        name: tuple.1.name().to_string(),
+                        index: tuple.1.index() as u32,
+                    }),
+                })
+                .collect();
+            let join_type: protobuf::JoinType = exec.join_type().to_owned().into();
+            let filter = exec
+                .filter()
+                .as_ref()
+                .map(|f| {
+                    let expression = f.expression().to_owned().try_into()?;
+                    let column_indices = f
+                        .column_indices()
+                        .iter()
+                        .map(|i| {
+                            let side: protobuf::JoinSide = i.side.to_owned().into();
+                            protobuf::ColumnIndex {
+                                index: i.index as u32,
+                                side: side.into(),
+                            }
+                        })
+                        .collect();
+                    let schema = f.schema().try_into()?;
+                    Ok(protobuf::JoinFilter {
+                        expression: Some(expression),
+                        column_indices,
+                        schema: Some(schema),
+                    })
+                })
+                .map_or(Ok(None), |v: Result<protobuf::JoinFilter>| v.map(Some))?;
+
+            let partition_mode = match exec.partition_mode() {
+                StreamJoinPartitionMode::SinglePartition => {
+                    protobuf::StreamPartitionMode::SinglePartition
+                }
+                StreamJoinPartitionMode::Partitioned => {
+                    protobuf::StreamPartitionMode::PartitionedExec
+                }
+            };
+
+            return Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::SymmetricHashJoin(Box::new(
+                    protobuf::SymmetricHashJoinExecNode {
                         left: Some(Box::new(left)),
                         right: Some(Box::new(right)),
                         on,

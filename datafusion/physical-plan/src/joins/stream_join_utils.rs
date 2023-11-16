@@ -15,149 +15,33 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This file contains common subroutines for regular and symmetric hash join
+//! This file contains common subroutines for symmetric hash join
 //! related functionality, used both in join calculations and optimization rules.
 
-use std::collections::{HashMap, VecDeque};
-use std::fmt::Debug;
-use std::ops::IndexMut;
-use std::sync::Arc;
-use std::{fmt, usize};
-
-use crate::joins::utils::JoinFilter;
-
+use crate::handle_async_state;
+use crate::joins::utils::{JoinFilter, JoinHashMapType};
 use arrow::compute::concat_batches;
-use arrow::datatypes::{ArrowNativeType, SchemaRef};
-use arrow_array::builder::BooleanBufferBuilder;
 use arrow_array::{ArrowPrimitiveType, NativeAdapter, PrimitiveArray, RecordBatch};
+use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder};
+use arrow_schema::SchemaRef;
+use async_trait::async_trait;
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{DataFusionError, JoinSide, Result, ScalarValue};
+use datafusion_common::Result;
+use datafusion_common::{DataFusionError, JoinSide, ScalarValue};
+use datafusion_execution::SendableRecordBatchStream;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::intervals::{Interval, IntervalBound};
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
-
+use futures::ready;
+use futures::FutureExt;
+use futures::StreamExt;
 use hashbrown::raw::RawTable;
 use hashbrown::HashSet;
-
-/// Maps a `u64` hash value based on the build side ["on" values] to a list of indices with this key's value.
-///
-/// By allocating a `HashMap` with capacity for *at least* the number of rows for entries at the build side,
-/// we make sure that we don't have to re-hash the hashmap, which needs access to the key (the hash in this case) value.
-///
-/// E.g. 1 -> [3, 6, 8] indicates that the column values map to rows 3, 6 and 8 for hash value 1
-/// As the key is a hash value, we need to check possible hash collisions in the probe stage
-/// During this stage it might be the case that a row is contained the same hashmap value,
-/// but the values don't match. Those are checked in the [`equal_rows_arr`](crate::joins::hash_join::equal_rows_arr) method.
-///
-/// The indices (values) are stored in a separate chained list stored in the `Vec<u64>`.
-///
-/// The first value (+1) is stored in the hashmap, whereas the next value is stored in array at the position value.
-///
-/// The chain can be followed until the value "0" has been reached, meaning the end of the list.
-/// Also see chapter 5.3 of [Balancing vectorized query execution with bandwidth-optimized storage](https://dare.uva.nl/search?identifier=5ccbb60a-38b8-4eeb-858a-e7735dd37487)
-///
-/// # Example
-///
-/// ``` text
-/// See the example below:
-/// Insert (1,1)
-/// map:
-/// ---------
-/// | 1 | 2 |
-/// ---------
-/// next:
-/// ---------------------
-/// | 0 | 0 | 0 | 0 | 0 |
-/// ---------------------
-/// Insert (2,2)
-/// map:
-/// ---------
-/// | 1 | 2 |
-/// | 2 | 3 |
-/// ---------
-/// next:
-/// ---------------------
-/// | 0 | 0 | 0 | 0 | 0 |
-/// ---------------------
-/// Insert (1,3)
-/// map:
-/// ---------
-/// | 1 | 4 |
-/// | 2 | 3 |
-/// ---------
-/// next:
-/// ---------------------
-/// | 0 | 0 | 0 | 2 | 0 |  <--- hash value 1 maps to 4,2 (which means indices values 3,1)
-/// ---------------------
-/// Insert (1,4)
-/// map:
-/// ---------
-/// | 1 | 5 |
-/// | 2 | 3 |
-/// ---------
-/// next:
-/// ---------------------
-/// | 0 | 0 | 0 | 2 | 4 | <--- hash value 1 maps to 5,4,2 (which means indices values 4,3,1)
-/// ---------------------
-/// ```
-pub struct JoinHashMap {
-    // Stores hash value to last row index
-    map: RawTable<(u64, u64)>,
-    // Stores indices in chained list data structure
-    next: Vec<u64>,
-}
-
-impl JoinHashMap {
-    #[cfg(test)]
-    pub(crate) fn new(map: RawTable<(u64, u64)>, next: Vec<u64>) -> Self {
-        Self { map, next }
-    }
-
-    pub(crate) fn with_capacity(capacity: usize) -> Self {
-        JoinHashMap {
-            map: RawTable::with_capacity(capacity),
-            next: vec![0; capacity],
-        }
-    }
-}
-
-/// Trait defining methods that must be implemented by a hash map type to be used for joins.
-pub trait JoinHashMapType {
-    /// The type of list used to store the hash values.
-    type NextType: IndexMut<usize, Output = u64>;
-    /// Extend with zero
-    fn extend_zero(&mut self, len: usize);
-    /// Returns mutable references to the hash map and the next.
-    fn get_mut(&mut self) -> (&mut RawTable<(u64, u64)>, &mut Self::NextType);
-    /// Returns a reference to the hash map.
-    fn get_map(&self) -> &RawTable<(u64, u64)>;
-    /// Returns a reference to the next.
-    fn get_list(&self) -> &Self::NextType;
-}
-
-/// Implementation of `JoinHashMapType` for `JoinHashMap`.
-impl JoinHashMapType for JoinHashMap {
-    type NextType = Vec<u64>;
-
-    // Void implementation
-    fn extend_zero(&mut self, _: usize) {}
-
-    /// Get mutable references to the hash map and the next.
-    fn get_mut(&mut self) -> (&mut RawTable<(u64, u64)>, &mut Self::NextType) {
-        (&mut self.map, &mut self.next)
-    }
-
-    /// Get a reference to the hash map.
-    fn get_map(&self) -> &RawTable<(u64, u64)> {
-        &self.map
-    }
-
-    /// Get a reference to the next.
-    fn get_list(&self) -> &Self::NextType {
-        &self.next
-    }
-}
+use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
+use std::task::{Context, Poll};
+use std::usize;
 
 /// Implementation of `JoinHashMapType` for `PruningJoinHashMap`.
 impl JoinHashMapType for PruningJoinHashMap {
@@ -181,12 +65,6 @@ impl JoinHashMapType for PruningJoinHashMap {
     /// Get a reference to the next.
     fn get_list(&self) -> &Self::NextType {
         &self.next
-    }
-}
-
-impl fmt::Debug for JoinHashMap {
-    fn fmt(&self, _f: &mut fmt::Formatter) -> fmt::Result {
-        Ok(())
     }
 }
 
@@ -321,7 +199,7 @@ impl PruningJoinHashMap {
     }
 }
 
-fn check_filter_expr_contains_sort_information(
+pub fn check_filter_expr_contains_sort_information(
     expr: &Arc<dyn PhysicalExpr>,
     reference: &Arc<dyn PhysicalExpr>,
 ) -> bool {
@@ -739,9 +617,325 @@ pub fn record_visited_indices<T: ArrowPrimitiveType>(
     }
 }
 
+#[macro_export]
+macro_rules! handle_state {
+    ($match_case:expr) => {
+        match $match_case {
+            Ok(StateResult::Continue) => continue,
+            Ok(StateResult::Ready(res)) => Poll::Ready(Ok(res).transpose()),
+            Err(e) => Poll::Ready(Some(Err(e))),
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! handle_async_state {
+    ($state_func:expr, $cx:expr) => {
+        $crate::handle_state!(ready!($state_func.poll_unpin($cx)))
+    };
+}
+
+/// Represents the possible results of a state in the join stream.
+pub enum StateResult<T> {
+    Ready(T),
+    Continue,
+}
+
+/// Represents the various states of an eager join stream operation.
+///
+/// This enum is used to track the current state of streaming during a join
+/// operation. It provides indicators as to which side of the join needs to be
+/// pulled next or if one (or both) sides have been exhausted. This allows
+/// for efficient management of resources and optimal performance during the
+/// join process.
+#[derive(Clone, Debug)]
+pub enum EagerJoinStreamState {
+    /// Indicates that the next step should pull from the right side of the join.
+    PullRight,
+
+    /// Indicates that the next step should pull from the left side of the join.
+    PullLeft,
+
+    /// State representing that the right side of the join has been fully processed.
+    RightExhausted,
+
+    /// State representing that the left side of the join has been fully processed.
+    LeftExhausted,
+
+    /// Represents a state where both sides of the join are exhausted.
+    ///
+    /// The `final_result` field indicates whether the join operation has
+    /// produced a final result or not.
+    BothExhausted { final_result: bool },
+}
+
+/// Represents the asynchronous trait for an eager join stream.
+/// This trait defines the core methods for handling asynchronous join operations
+/// between two streams (left and right).
+#[async_trait]
+pub trait EagerJoinStream {
+    /// Implements the main polling logic for the join stream.
+    ///
+    /// This method continuously checks the state of the join stream and
+    /// acts accordingly by delegating the handling to appropriate sub-methods
+    /// depending on the current state.
+    ///
+    /// # Arguments
+    ///
+    /// * `cx` - A context that facilitates cooperative non-blocking execution within a task.
+    ///
+    /// # Returns
+    ///
+    /// * `Poll<Option<Result<RecordBatch>>>` - A polled result, either a `RecordBatch` or None.
+    fn poll_next_impl(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<RecordBatch>>>
+    where
+        Self: Send,
+    {
+        loop {
+            return match self.state() {
+                EagerJoinStreamState::PullRight => {
+                    handle_async_state!(self.fetch_next_from_right_stream(), cx)
+                }
+                EagerJoinStreamState::PullLeft => {
+                    handle_async_state!(self.fetch_next_from_left_stream(), cx)
+                }
+                EagerJoinStreamState::RightExhausted => {
+                    handle_async_state!(self.handle_right_stream_end(), cx)
+                }
+                EagerJoinStreamState::LeftExhausted => {
+                    handle_async_state!(self.handle_left_stream_end(), cx)
+                }
+                EagerJoinStreamState::BothExhausted {
+                    final_result: false,
+                } => {
+                    handle_state!(self.prepare_for_final_results_after_exhaustion())
+                }
+                EagerJoinStreamState::BothExhausted { final_result: true } => {
+                    Poll::Ready(None)
+                }
+            };
+        }
+    }
+    /// Asynchronously pulls the next batch from the right (probe) stream.
+    ///
+    /// This default implementation checks for the next value in the right stream.
+    /// If a batch is found, the state is switched to `PullLeft`, and the batch handling
+    /// is delegated to `process_batch_from_right`. If the stream ends, the state is set to `RightExhausted`.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<StateResult<Option<RecordBatch>>>` - The state result after pulling the batch.
+    async fn fetch_next_from_right_stream(
+        &mut self,
+    ) -> Result<StateResult<Option<RecordBatch>>> {
+        match self.right_stream().next().await {
+            Some(Ok(batch)) => {
+                self.set_state(EagerJoinStreamState::PullLeft);
+                self.process_batch_from_right(batch)
+            }
+            Some(Err(e)) => Err(e),
+            None => {
+                self.set_state(EagerJoinStreamState::RightExhausted);
+                Ok(StateResult::Continue)
+            }
+        }
+    }
+
+    /// Asynchronously pulls the next batch from the left (build) stream.
+    ///
+    /// This default implementation checks for the next value in the left stream.
+    /// If a batch is found, the state is switched to `PullRight`, and the batch handling
+    /// is delegated to `process_batch_from_left`. If the stream ends, the state is set to `LeftExhausted`.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<StateResult<Option<RecordBatch>>>` - The state result after pulling the batch.
+    async fn fetch_next_from_left_stream(
+        &mut self,
+    ) -> Result<StateResult<Option<RecordBatch>>> {
+        match self.left_stream().next().await {
+            Some(Ok(batch)) => {
+                self.set_state(EagerJoinStreamState::PullRight);
+                self.process_batch_from_left(batch)
+            }
+            Some(Err(e)) => Err(e),
+            None => {
+                self.set_state(EagerJoinStreamState::LeftExhausted);
+                Ok(StateResult::Continue)
+            }
+        }
+    }
+
+    /// Asynchronously handles the scenario when the right stream is exhausted.
+    ///
+    /// In this default implementation, when the right stream is exhausted, it attempts
+    /// to pull from the left stream. If a batch is found in the left stream, it delegates
+    /// the handling to `process_batch_from_left`. If both streams are exhausted, the state is set
+    /// to indicate both streams are exhausted without final results yet.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<StateResult<Option<RecordBatch>>>` - The state result after checking the exhaustion state.
+    async fn handle_right_stream_end(
+        &mut self,
+    ) -> Result<StateResult<Option<RecordBatch>>> {
+        match self.left_stream().next().await {
+            Some(Ok(batch)) => self.process_batch_after_right_end(batch),
+            Some(Err(e)) => Err(e),
+            None => {
+                self.set_state(EagerJoinStreamState::BothExhausted {
+                    final_result: false,
+                });
+                Ok(StateResult::Continue)
+            }
+        }
+    }
+
+    /// Asynchronously handles the scenario when the left stream is exhausted.
+    ///
+    /// When the left stream is exhausted, this default
+    /// implementation tries to pull from the right stream and delegates the batch
+    /// handling to `process_batch_after_left_end`. If both streams are exhausted, the state
+    /// is updated to indicate so.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<StateResult<Option<RecordBatch>>>` - The state result after checking the exhaustion state.
+    async fn handle_left_stream_end(
+        &mut self,
+    ) -> Result<StateResult<Option<RecordBatch>>> {
+        match self.right_stream().next().await {
+            Some(Ok(batch)) => self.process_batch_after_left_end(batch),
+            Some(Err(e)) => Err(e),
+            None => {
+                self.set_state(EagerJoinStreamState::BothExhausted {
+                    final_result: false,
+                });
+                Ok(StateResult::Continue)
+            }
+        }
+    }
+
+    /// Handles the state when both streams are exhausted and final results are yet to be produced.
+    ///
+    /// This default implementation switches the state to indicate both streams are
+    /// exhausted with final results and then invokes the handling for this specific
+    /// scenario via `process_batches_before_finalization`.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<StateResult<Option<RecordBatch>>>` - The state result after both streams are exhausted.
+    fn prepare_for_final_results_after_exhaustion(
+        &mut self,
+    ) -> Result<StateResult<Option<RecordBatch>>> {
+        self.set_state(EagerJoinStreamState::BothExhausted { final_result: true });
+        self.process_batches_before_finalization()
+    }
+
+    /// Handles a pulled batch from the right stream.
+    ///
+    /// # Arguments
+    ///
+    /// * `batch` - The pulled `RecordBatch` from the right stream.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<StateResult<Option<RecordBatch>>>` - The state result after processing the batch.
+    fn process_batch_from_right(
+        &mut self,
+        batch: RecordBatch,
+    ) -> Result<StateResult<Option<RecordBatch>>>;
+
+    /// Handles a pulled batch from the left stream.
+    ///
+    /// # Arguments
+    ///
+    /// * `batch` - The pulled `RecordBatch` from the left stream.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<StateResult<Option<RecordBatch>>>` - The state result after processing the batch.
+    fn process_batch_from_left(
+        &mut self,
+        batch: RecordBatch,
+    ) -> Result<StateResult<Option<RecordBatch>>>;
+
+    /// Handles the situation when only the left stream is exhausted.
+    ///
+    /// # Arguments
+    ///
+    /// * `right_batch` - The `RecordBatch` from the right stream.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<StateResult<Option<RecordBatch>>>` - The state result after the left stream is exhausted.
+    fn process_batch_after_left_end(
+        &mut self,
+        right_batch: RecordBatch,
+    ) -> Result<StateResult<Option<RecordBatch>>>;
+
+    /// Handles the situation when only the right stream is exhausted.
+    ///
+    /// # Arguments
+    ///
+    /// * `left_batch` - The `RecordBatch` from the left stream.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<StateResult<Option<RecordBatch>>>` - The state result after the right stream is exhausted.
+    fn process_batch_after_right_end(
+        &mut self,
+        left_batch: RecordBatch,
+    ) -> Result<StateResult<Option<RecordBatch>>>;
+
+    /// Handles the final state after both streams are exhausted.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<StateResult<Option<RecordBatch>>>` - The final state result after processing.
+    fn process_batches_before_finalization(
+        &mut self,
+    ) -> Result<StateResult<Option<RecordBatch>>>;
+
+    /// Provides mutable access to the right stream.
+    ///
+    /// # Returns
+    ///
+    /// * `&mut SendableRecordBatchStream` - Returns a mutable reference to the right stream.
+    fn right_stream(&mut self) -> &mut SendableRecordBatchStream;
+
+    /// Provides mutable access to the left stream.
+    ///
+    /// # Returns
+    ///
+    /// * `&mut SendableRecordBatchStream` - Returns a mutable reference to the left stream.
+    fn left_stream(&mut self) -> &mut SendableRecordBatchStream;
+
+    /// Sets the current state of the join stream.
+    ///
+    /// # Arguments
+    ///
+    /// * `state` - The new state to be set.
+    fn set_state(&mut self, state: EagerJoinStreamState);
+
+    /// Fetches the current state of the join stream.
+    ///
+    /// # Returns
+    ///
+    /// * `EagerJoinStreamState` - The current state of the join stream.
+    fn state(&mut self) -> EagerJoinStreamState;
+}
+
 #[cfg(test)]
 pub mod tests {
     use super::*;
+    use crate::joins::stream_join_utils::{
+        build_filter_input_order, check_filter_expr_contains_sort_information,
+        convert_sort_expr_with_filter_schema, PruningJoinHashMap,
+    };
     use crate::{
         expressions::Column,
         expressions::PhysicalSortExpr,

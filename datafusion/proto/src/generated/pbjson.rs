@@ -17935,6 +17935,9 @@ impl serde::Serialize for PhysicalPlanNode {
                 physical_plan_node::PhysicalPlanType::JsonSink(v) => {
                     struct_ser.serialize_field("jsonSink", v)?;
                 }
+                physical_plan_node::PhysicalPlanType::SymmetricHashJoin(v) => {
+                    struct_ser.serialize_field("symmetricHashJoin", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -17981,6 +17984,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
             "analyze",
             "json_sink",
             "jsonSink",
+            "symmetric_hash_join",
+            "symmetricHashJoin",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -18008,6 +18013,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
             NestedLoopJoin,
             Analyze,
             JsonSink,
+            SymmetricHashJoin,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -18052,6 +18058,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
                             "nestedLoopJoin" | "nested_loop_join" => Ok(GeneratedField::NestedLoopJoin),
                             "analyze" => Ok(GeneratedField::Analyze),
                             "jsonSink" | "json_sink" => Ok(GeneratedField::JsonSink),
+                            "symmetricHashJoin" | "symmetric_hash_join" => Ok(GeneratedField::SymmetricHashJoin),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -18233,6 +18240,13 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
                                 return Err(serde::de::Error::duplicate_field("jsonSink"));
                             }
                             physical_plan_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_plan_node::PhysicalPlanType::JsonSink)
+;
+                        }
+                        GeneratedField::SymmetricHashJoin => {
+                            if physical_plan_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("symmetricHashJoin"));
+                            }
+                            physical_plan_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_plan_node::PhysicalPlanType::SymmetricHashJoin)
 ;
                         }
                     }
@@ -23716,6 +23730,77 @@ impl<'de> serde::Deserialize<'de> for Statistics {
         deserializer.deserialize_struct("datafusion.Statistics", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for StreamPartitionMode {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let variant = match self {
+            Self::SinglePartition => "SINGLE_PARTITION",
+            Self::PartitionedExec => "PARTITIONED_EXEC",
+        };
+        serializer.serialize_str(variant)
+    }
+}
+impl<'de> serde::Deserialize<'de> for StreamPartitionMode {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "SINGLE_PARTITION",
+            "PARTITIONED_EXEC",
+        ];
+
+        struct GeneratedVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = StreamPartitionMode;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(formatter, "expected one of: {:?}", &FIELDS)
+            }
+
+            fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Signed(v), &self)
+                    })
+            }
+
+            fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Unsigned(v), &self)
+                    })
+            }
+
+            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                match value {
+                    "SINGLE_PARTITION" => Ok(StreamPartitionMode::SinglePartition),
+                    "PARTITIONED_EXEC" => Ok(StreamPartitionMode::PartitionedExec),
+                    _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
+                }
+            }
+        }
+        deserializer.deserialize_any(GeneratedVisitor)
+    }
+}
 impl serde::Serialize for StringifiedPlan {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -24132,6 +24217,206 @@ impl<'de> serde::Deserialize<'de> for SubqueryAliasNode {
             }
         }
         deserializer.deserialize_struct("datafusion.SubqueryAliasNode", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for SymmetricHashJoinExecNode {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.left.is_some() {
+            len += 1;
+        }
+        if self.right.is_some() {
+            len += 1;
+        }
+        if !self.on.is_empty() {
+            len += 1;
+        }
+        if self.join_type != 0 {
+            len += 1;
+        }
+        if self.partition_mode != 0 {
+            len += 1;
+        }
+        if self.null_equals_null {
+            len += 1;
+        }
+        if self.filter.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.SymmetricHashJoinExecNode", len)?;
+        if let Some(v) = self.left.as_ref() {
+            struct_ser.serialize_field("left", v)?;
+        }
+        if let Some(v) = self.right.as_ref() {
+            struct_ser.serialize_field("right", v)?;
+        }
+        if !self.on.is_empty() {
+            struct_ser.serialize_field("on", &self.on)?;
+        }
+        if self.join_type != 0 {
+            let v = JoinType::try_from(self.join_type)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.join_type)))?;
+            struct_ser.serialize_field("joinType", &v)?;
+        }
+        if self.partition_mode != 0 {
+            let v = StreamPartitionMode::try_from(self.partition_mode)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.partition_mode)))?;
+            struct_ser.serialize_field("partitionMode", &v)?;
+        }
+        if self.null_equals_null {
+            struct_ser.serialize_field("nullEqualsNull", &self.null_equals_null)?;
+        }
+        if let Some(v) = self.filter.as_ref() {
+            struct_ser.serialize_field("filter", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for SymmetricHashJoinExecNode {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "left",
+            "right",
+            "on",
+            "join_type",
+            "joinType",
+            "partition_mode",
+            "partitionMode",
+            "null_equals_null",
+            "nullEqualsNull",
+            "filter",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Left,
+            Right,
+            On,
+            JoinType,
+            PartitionMode,
+            NullEqualsNull,
+            Filter,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "left" => Ok(GeneratedField::Left),
+                            "right" => Ok(GeneratedField::Right),
+                            "on" => Ok(GeneratedField::On),
+                            "joinType" | "join_type" => Ok(GeneratedField::JoinType),
+                            "partitionMode" | "partition_mode" => Ok(GeneratedField::PartitionMode),
+                            "nullEqualsNull" | "null_equals_null" => Ok(GeneratedField::NullEqualsNull),
+                            "filter" => Ok(GeneratedField::Filter),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = SymmetricHashJoinExecNode;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.SymmetricHashJoinExecNode")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<SymmetricHashJoinExecNode, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut left__ = None;
+                let mut right__ = None;
+                let mut on__ = None;
+                let mut join_type__ = None;
+                let mut partition_mode__ = None;
+                let mut null_equals_null__ = None;
+                let mut filter__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Left => {
+                            if left__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("left"));
+                            }
+                            left__ = map_.next_value()?;
+                        }
+                        GeneratedField::Right => {
+                            if right__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("right"));
+                            }
+                            right__ = map_.next_value()?;
+                        }
+                        GeneratedField::On => {
+                            if on__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("on"));
+                            }
+                            on__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::JoinType => {
+                            if join_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("joinType"));
+                            }
+                            join_type__ = Some(map_.next_value::<JoinType>()? as i32);
+                        }
+                        GeneratedField::PartitionMode => {
+                            if partition_mode__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("partitionMode"));
+                            }
+                            partition_mode__ = Some(map_.next_value::<StreamPartitionMode>()? as i32);
+                        }
+                        GeneratedField::NullEqualsNull => {
+                            if null_equals_null__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nullEqualsNull"));
+                            }
+                            null_equals_null__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Filter => {
+                            if filter__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("filter"));
+                            }
+                            filter__ = map_.next_value()?;
+                        }
+                    }
+                }
+                Ok(SymmetricHashJoinExecNode {
+                    left: left__,
+                    right: right__,
+                    on: on__.unwrap_or_default(),
+                    join_type: join_type__.unwrap_or_default(),
+                    partition_mode: partition_mode__.unwrap_or_default(),
+                    null_equals_null: null_equals_null__.unwrap_or_default(),
+                    filter: filter__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.SymmetricHashJoinExecNode", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for TimeUnit {
