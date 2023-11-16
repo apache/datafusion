@@ -46,7 +46,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // interpret names with '.' as if they were
             // compound identifiers, but this is not a compound
             // identifier. (e.g. it is "foo.bar" not foo.bar)
-            let normalize_ident = self.normalizer.normalize(id);
+            let normalize_ident = self.normalizer.normalize_column(id);
             match schema.field_with_unqualified_name(normalize_ident.as_str()) {
                 Ok(_) => {
                     // found a match without a qualified name, this is a inner table column
@@ -85,19 +85,20 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     pub(super) fn sql_compound_identifier_to_expr(
         &self,
-        ids: Vec<Ident>,
+        mut ids: Vec<Ident>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         if ids.len() < 2 {
             return internal_err!("Not a compound identifier: {ids:?}");
         }
-
+        let col_name = ids.pop().unwrap();
         if ids[0].value.starts_with('@') {
-            let var_names: Vec<_> = ids
+            let mut var_names: Vec<_> = ids
                 .into_iter()
                 .map(|id| self.normalizer.normalize(id))
                 .collect();
+            var_names.push(self.normalizer.normalize_column(col_name));
             let ty = self
                 .schema_provider
                 .get_variable_type(&var_names)
@@ -108,10 +109,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 })?;
             Ok(Expr::ScalarVariable(ty, var_names))
         } else {
-            let ids = ids
+            let mut ids = ids
                 .into_iter()
                 .map(|id| self.normalizer.normalize(id))
                 .collect::<Vec<_>>();
+            ids.push(self.normalizer.normalize_column(col_name));
 
             // Currently not supporting more than one nested level
             // Though ideally once that support is in place, this code should work with it

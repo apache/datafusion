@@ -180,6 +180,10 @@ pub fn can_coerce_from(type_into: &DataType, type_from: &DataType) -> bool {
                 | Float64
                 | Decimal128(_, _)
         ),
+        // This can lose precision (because `into_type` might be less precise than `from_type`),
+        // but casting to Float64 can also lose precision- which is how most functions currently
+        // work
+        Decimal128(_, _) => matches!(type_from, Decimal128(_, _)),
         Timestamp(TimeUnit::Nanosecond, _) => {
             matches!(
                 type_from,

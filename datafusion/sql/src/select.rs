@@ -373,7 +373,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     &[&[plan.schema()]],
                     &plan.using_columns()?,
                 )?;
-                let expr = Expr::Alias(Alias::new(col, self.normalizer.normalize(alias)));
+                let expr = Expr::Alias(Alias::new(col, self.normalizer.normalize_column(alias)));
                 Ok(vec![expr])
             }
             SelectItem::Wildcard(options) => {
