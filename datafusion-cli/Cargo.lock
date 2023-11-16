@@ -359,9 +359,9 @@ dependencies = [
 
 [[package]]
 name = "async-compression"
-version = "0.4.4"
+version = "0.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f658e2baef915ba0f26f1f7c42bfb8e12f532a01f449a090ded75ae7a07e9ba2"
+checksum = "bc2d0cfb2a7388d34f590e76686704c494ed7aaceed62ee1ba35cbf363abc2a5"
 dependencies = [
  "bzip2",
  "flate2",
@@ -850,10 +850,11 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.0.84"
+version = "1.0.83"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0f8e7c90afad890484a21653d08b6e209ae34770fb5ee298f9c699fcc1e5c856"
+checksum = "f1174fb0b6ec23863f8b971027804a42614e347eafb0a95bf0b12cdae21fc4d0"
 dependencies = [
+ "jobserver",
  "libc",
 ]
 
@@ -1122,7 +1123,7 @@ dependencies = [
  "half",
  "hashbrown 0.14.2",
  "indexmap 2.1.0",
- "itertools",
+ "itertools 0.12.0",
  "log",
  "num-traits",
  "num_cpus",
@@ -1227,7 +1228,7 @@ dependencies = [
  "datafusion-expr",
  "datafusion-physical-expr",
  "hashbrown 0.14.2",
- "itertools",
+ "itertools 0.12.0",
  "log",
  "regex-syntax",
 ]
@@ -1252,7 +1253,7 @@ dependencies = [
  "hashbrown 0.14.2",
  "hex",
  "indexmap 2.1.0",
- "itertools",
+ "itertools 0.12.0",
  "libc",
  "log",
  "md-5",
@@ -1284,7 +1285,7 @@ dependencies = [
  "half",
  "hashbrown 0.14.2",
  "indexmap 2.1.0",
- "itertools",
+ "itertools 0.12.0",
  "log",
  "once_cell",
  "parking_lot",
@@ -1421,9 +1422,9 @@ checksum = "5443807d6dff69373d433ab9ef5378ad8df50ca6298caf15de6e52e24aaf54d5"
 
 [[package]]
 name = "errno"
-version = "0.3.6"
+version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c18ee0ed65a5f1f81cac6b1d213b69c35fa47d4252ad41f1486dbd8226fe36e"
+checksum = "f258a7194e7f7c2a7837a8913aeab7fd8c383457034fa20ce4dd3dcb813e8eb8"
 dependencies = [
  "libc",
  "windows-sys",
@@ -1645,9 +1646,9 @@ checksum = "d2fabcfbdc87f4758337ca535fb41a6d701b65693ce38287d856d1674551ec9b"
 
 [[package]]
 name = "h2"
-version = "0.3.21"
+version = "0.3.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91fc23aa11be92976ef4729127f1a74adf36d8436f7816b185d18df956790833"
+checksum = "4d6250322ef6e60f93f9a2162799302cd6f68f79f6e5d85c8c16f14d1d958178"
 dependencies = [
  "bytes",
  "fnv",
@@ -1655,7 +1656,7 @@ dependencies = [
  "futures-sink",
  "futures-util",
  "http",
- "indexmap 1.9.3",
+ "indexmap 2.1.0",
  "slab",
  "tokio",
  "tokio-util",
@@ -1736,9 +1737,9 @@ dependencies = [
 
 [[package]]
 name = "http"
-version = "0.2.10"
+version = "0.2.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f95b9abcae896730d42b78e09c155ed4ddf82c07b4de772c64aee5b2d8b7c150"
+checksum = "8947b1a6fad4393052c7ba1f4cd97bed3e953a95c79c92ad9b051a04611d9fbb"
 dependencies = [
  "bytes",
  "fnv",
@@ -1911,10 +1912,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "itertools"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25db6b064527c5d482d0423354fcd07a89a2dfe07b67892e62411946db7f07b0"
+dependencies = [
+ "either",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "af150ab688ff2122fcef229be89cb50dd66af9e01a4ff320cc137eecc9bacc38"
+
+[[package]]
+name = "jobserver"
+version = "0.1.27"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8c37f63953c4c63420ed5fd3d6d398c719489b9f872b9fa683262f8edd363c7d"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "js-sys"
@@ -2280,7 +2299,7 @@ dependencies = [
  "futures",
  "humantime",
  "hyper",
- "itertools",
+ "itertools 0.11.0",
  "parking_lot",
  "percent-encoding",
  "quick-xml",
@@ -2515,7 +2534,7 @@ dependencies = [
  "anstyle",
  "difflib",
  "float-cmp",
- "itertools",
+ "itertools 0.11.0",
  "normalize-line-endings",
  "predicates-core",
  "regex",
@@ -2810,9 +2829,9 @@ dependencies = [
 
 [[package]]
 name = "rustix"
-version = "0.38.21"
+version = "0.38.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b426b0506e5d50a7d8dafcf2e81471400deb602392c7dd110815afb4eaf02a3"
+checksum = "9ad981d6c340a49cdc40a1028d9c6084ec7e9fa33fcb839cab656a267071e234"
 dependencies = [
  "bitflags 2.4.1",
  "errno",
@@ -3240,9 +3259,9 @@ dependencies = [
 
 [[package]]
 name = "termcolor"
-version = "1.3.0"
+version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6093bad37da69aab9d123a8091e4be0aa4a03e4d601ec641c327398315f62b64"
+checksum = "ff1bc3d3f05aff0403e8ac0d92ced918ec05b666a43f83297ccef5bea8a3d449"
 dependencies = [
  "winapi-util",
 ]
@@ -3881,18 +3900,18 @@ dependencies = [
 
 [[package]]
 name = "zerocopy"
-version = "0.7.25"
+version = "0.7.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8cd369a67c0edfef15010f980c3cbe45d7f651deac2cd67ce097cd801de16557"
+checksum = "e97e415490559a91254a2979b4829267a57d2fcd741a98eee8b722fb57289aa0"
 dependencies = [
  "zerocopy-derive",
 ]
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.7.25"
+version = "0.7.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c2f140bda219a26ccc0cdb03dba58af72590c53b22642577d88a927bc5c87d6b"
+checksum = "dd7e48ccf166952882ca8bd778a43502c64f33bf94c12ebe2a7f08e5a0f6689f"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3901,9 +3920,9 @@ dependencies = [
 
 [[package]]
 name = "zeroize"
-version = "1.6.0"
+version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2a0956f1ba7c7909bfb66c2e9e4124ab6f6482560f6628b5aaeba39207c9aad9"
+checksum = "12a3946ecfc929b583800f4629b6c25b88ac6e92a40ea5670f77112a85d40a8b"
 
 [[package]]
 name = "zstd"
