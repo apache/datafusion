@@ -173,6 +173,10 @@ fn compute_array_length(
                 value = downcast_arg!(value, ListArray).value(0);
                 current_dimension += 1;
             }
+            DataType::LargeList(..) => {
+                value = downcast_arg!(value, LargeListArray).value(0);
+                current_dimension += 1;
+            }
             _ => return Ok(None),
         }
     }
