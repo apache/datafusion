@@ -81,7 +81,7 @@ impl AggregateExpr for StringAgg {
                 }
                 _ => {
                     return not_impl_err!(
-                        "StringAgg not support for {}: {} with delimiter {}",
+                        "StringAgg not supported for {}: {} with delimiter {}",
                         self.name,
                         self.data_type,
                         delimiter.value()
