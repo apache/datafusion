@@ -202,8 +202,10 @@ impl ExecutionPlan for FilterExec {
             // https://github.com/apache/arrow-datafusion/issues/8133
             let selectivity = 0.2_f64;
             let mut stats = input_stats.clone().into_inexact();
-            stats.num_rows = stats.num_rows.apply_filter(selectivity);
-            stats.total_byte_size = stats.total_byte_size.apply_filter(selectivity);
+            stats.num_rows = stats.num_rows.with_estimated_selectivity(selectivity);
+            stats.total_byte_size = stats
+                .total_byte_size
+                .with_estimated_selectivity(selectivity);
             return Ok(stats);
         }
 
@@ -217,8 +219,8 @@ impl ExecutionPlan for FilterExec {
 
         // Estimate (inexact) selectivity of predicate
         let selectivity = analysis_ctx.selectivity.unwrap_or(1.0);
-        let num_rows = num_rows.apply_filter(selectivity);
-        let total_byte_size = total_byte_size.apply_filter(selectivity);
+        let num_rows = num_rows.with_estimated_selectivity(selectivity);
+        let total_byte_size = total_byte_size.with_estimated_selectivity(selectivity);
 
         let column_statistics = collect_new_statistics(
             &input_stats.column_statistics,
