@@ -79,21 +79,10 @@ impl AggregateExpr for StringAgg {
                 ScalarValue::Null => {
                     return Ok(Box::new(StringAggAccumulator::new("")));
                 }
-                _ => {
-                    return not_impl_err!(
-                        "StringAgg not supported for {}: {} with delimiter {}",
-                        self.name,
-                        self.data_type,
-                        delimiter.value()
-                    )
-                }
+                _ => return not_impl_err!("StringAgg not supported for {}", self.name),
             }
         }
-        not_impl_err!(
-            "StringAgg not supported for {}: {} with no Literal delimiter",
-            self.name,
-            self.data_type
-        )
+        not_impl_err!("StringAgg not supported for {}", self.name)
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
