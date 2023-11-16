@@ -3453,13 +3453,27 @@ mod tests {
             for n_req in 0..=exprs.len() {
                 for exprs in exprs.iter().combinations(n_req) {
                     let exprs = exprs.into_iter().cloned().collect::<Vec<_>>();
-                    let (ordering, _indices) =
+                    let (ordering, indices) =
                         eq_properties.find_longest_permutation(&exprs);
+                    // Make sure that find_longest_permutation return values are consistent
+                    let ordering2 = indices
+                        .iter()
+                        .zip(ordering.iter())
+                        .map(|(&idx, sort_expr)| PhysicalSortExpr {
+                            expr: exprs[idx].clone(),
+                            options: sort_expr.options,
+                        })
+                        .collect::<Vec<_>>();
+                    assert_eq!(
+                        ordering, ordering2,
+                        "indices and lexicographical ordering do not match"
+                    );
 
                     let err_msg = format!(
                         "Error in test case ordering:{:?}, eq_properties.oeq_class: {:?}, eq_properties.eq_group: {:?}, eq_properties.constants: {:?}",
                         ordering, eq_properties.oeq_class, eq_properties.eq_group, eq_properties.constants
                     );
+                    assert_eq!(ordering.len(), indices.len(), "{}", err_msg);
                     // Since ordered section satisfies schema, we expect
                     // that result will be same after sort (e.g sort was unnecessary).
                     assert!(
