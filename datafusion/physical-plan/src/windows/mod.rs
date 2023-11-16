@@ -405,7 +405,7 @@ pub fn get_best_fitting_window(
     let orderby_keys = window_exprs[0].order_by();
     let (should_reverse, partition_search_mode) =
         if let Some((should_reverse, partition_search_mode)) =
-            get_window_mode(partitionby_exprs, orderby_keys, input)?
+            get_window_mode(partitionby_exprs, orderby_keys, input)
         {
             (should_reverse, partition_search_mode)
         } else {
@@ -467,12 +467,12 @@ pub fn get_best_fitting_window(
 ///   can run with existing input ordering, so we can remove `SortExec` before it.
 /// The `bool` field in the return value represents whether we should reverse window
 /// operator to remove `SortExec` before it. The `PartitionSearchMode` field represents
-/// the mode this window operator should work in to accomodate the existing ordering.
+/// the mode this window operator should work in to accommodate the existing ordering.
 pub fn get_window_mode(
     partitionby_exprs: &[Arc<dyn PhysicalExpr>],
     orderby_keys: &[PhysicalSortExpr],
     input: &Arc<dyn ExecutionPlan>,
-) -> Result<Option<(bool, PartitionSearchMode)>> {
+) -> Option<(bool, PartitionSearchMode)> {
     let input_eqs = input.equivalence_properties();
     let mut partition_by_reqs: Vec<PhysicalSortRequirement> = vec![];
     let (_, indices) = input_eqs.find_longest_permutation(partitionby_exprs);
@@ -499,10 +499,10 @@ pub fn get_window_mode(
             } else {
                 PartitionSearchMode::PartiallySorted(indices)
             };
-            return Ok(Some((should_swap, mode)));
+            return Some((should_swap, mode));
         }
     }
-    Ok(None)
+    None
 }
 
 #[cfg(test)]
@@ -869,7 +869,7 @@ mod tests {
                 order_by_exprs.push(PhysicalSortExpr { expr, options });
             }
             let res =
-                get_window_mode(&partition_by_exprs, &order_by_exprs, &exec_unbounded)?;
+                get_window_mode(&partition_by_exprs, &order_by_exprs, &exec_unbounded);
             // Since reversibility is not important in this test. Convert Option<(bool, PartitionSearchMode)> to Option<PartitionSearchMode>
             let res = res.map(|(_, mode)| mode);
             assert_eq!(
@@ -1033,7 +1033,7 @@ mod tests {
             }
 
             assert_eq!(
-                get_window_mode(&partition_by_exprs, &order_by_exprs, &exec_unbounded)?,
+                get_window_mode(&partition_by_exprs, &order_by_exprs, &exec_unbounded),
                 *expected,
                 "Unexpected result for in unbounded test case#: {case_idx:?}, case: {test_case:?}"
             );

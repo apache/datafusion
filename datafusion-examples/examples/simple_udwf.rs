@@ -89,7 +89,7 @@ async fn main() -> Result<()> {
             "SELECT \
                car, \
                speed, \
-               smooth_it(speed) OVER (PARTITION BY car ORDER BY time),\
+               smooth_it(speed) OVER (PARTITION BY car ORDER BY time) AS smooth_speed,\
                time \
                from cars \
              ORDER BY \
@@ -109,7 +109,7 @@ async fn main() -> Result<()> {
         "SELECT \
            car, \
            speed, \
-           smooth_it(speed) OVER (PARTITION BY car ORDER BY time ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),\
+           smooth_it(speed) OVER (PARTITION BY car ORDER BY time ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) AS smooth_speed,\
            time \
            from cars \
          ORDER BY \
