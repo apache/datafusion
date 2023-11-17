@@ -18,6 +18,7 @@
 //! Array expressions
 
 use std::any::type_name;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use arrow::array::*;
@@ -38,7 +39,6 @@ use datafusion_common::{
 };
 
 use itertools::Itertools;
-use std::collections::HashSet;
 
 macro_rules! downcast_arg {
     ($ARG:expr, $ARRAY_TYPE:ident) => {{
@@ -521,6 +521,84 @@ pub fn array_element(args: &[ArrayRef]) -> Result<ArrayRef> {
     let list_array = as_list_array(&args[0])?;
     let key = as_int64_array(&args[1])?;
     define_array_slice(list_array, key, key, true)
+}
+
+fn general_except<OffsetSize: OffsetSizeTrait>(
+    l: &GenericListArray<OffsetSize>,
+    r: &GenericListArray<OffsetSize>,
+    field: &FieldRef,
+) -> Result<GenericListArray<OffsetSize>> {
+    let converter = RowConverter::new(vec![SortField::new(l.value_type())])?;
+
+    let l_values = l.values().to_owned();
+    let r_values = r.values().to_owned();
+    let l_values = converter.convert_columns(&[l_values])?;
+    let r_values = converter.convert_columns(&[r_values])?;
+
+    let mut offsets = Vec::<OffsetSize>::with_capacity(l.len() + 1);
+    offsets.push(OffsetSize::usize_as(0));
+
+    let mut rows = Vec::with_capacity(l_values.num_rows());
+    let mut dedup = HashSet::new();
+
+    for (l_w, r_w) in l.offsets().windows(2).zip(r.offsets().windows(2)) {
+        let l_slice = l_w[0].as_usize()..l_w[1].as_usize();
+        let r_slice = r_w[0].as_usize()..r_w[1].as_usize();
+        for i in r_slice {
+            let right_row = r_values.row(i);
+            dedup.insert(right_row);
+        }
+        for i in l_slice {
+            let left_row = l_values.row(i);
+            if dedup.insert(left_row) {
+                rows.push(left_row);
+            }
+        }
+
+        offsets.push(OffsetSize::usize_as(rows.len()));
+        dedup.clear();
+    }
+
+    if let Some(values) = converter.convert_rows(rows)?.get(0) {
+        Ok(GenericListArray::<OffsetSize>::new(
+            field.to_owned(),
+            OffsetBuffer::new(offsets.into()),
+            values.to_owned(),
+            l.nulls().cloned(),
+        ))
+    } else {
+        internal_err!("array_except failed to convert rows")
+    }
+}
+
+pub fn array_except(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 2 {
+        return internal_err!("array_except needs two arguments");
+    }
+
+    let array1 = &args[0];
+    let array2 = &args[1];
+
+    match (array1.data_type(), array2.data_type()) {
+        (DataType::Null, _) | (_, DataType::Null) => Ok(array1.to_owned()),
+        (DataType::List(field), DataType::List(_)) => {
+            check_datatypes("array_except", &[&array1, &array2])?;
+            let list1 = array1.as_list::<i32>();
+            let list2 = array2.as_list::<i32>();
+            let result = general_except::<i32>(list1, list2, field)?;
+            Ok(Arc::new(result))
+        }
+        (DataType::LargeList(field), DataType::LargeList(_)) => {
+            check_datatypes("array_except", &[&array1, &array2])?;
+            let list1 = array1.as_list::<i64>();
+            let list2 = array2.as_list::<i64>();
+            let result = general_except::<i64>(list1, list2, field)?;
+            Ok(Arc::new(result))
+        }
+        (dt1, dt2) => {
+            internal_err!("array_except got unexpected types: {dt1:?} and {dt2:?}")
+        }
+    }
 }
 
 pub fn array_slice(args: &[ArrayRef]) -> Result<ArrayRef> {
