@@ -370,7 +370,7 @@ mod tests {
     use crate::expressions;
     use crate::test;
 
-    use arrow_schema::{DataType, Field, Schema};
+    use arrow_schema::DataType;
     use datafusion_common::ScalarValue;
 
     #[tokio::test]
