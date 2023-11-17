@@ -1194,10 +1194,16 @@ impl EquivalenceProperties {
     ///
     /// A vector of `PhysicalSortExpr` representing the leading orderings.
     fn get_leading_orderings(&self) -> Vec<PhysicalSortExpr> {
-        self.normalized_oeq_class().iter().flat_map(|ordering |{
-            // Get first non-constant sort_expr.
-            ordering.iter().find(| sort_expr| !self.is_expr_constant(&sort_expr.expr)).cloned()
-        }).collect()
+        self.normalized_oeq_class()
+            .iter()
+            .flat_map(|ordering| {
+                // Get first non-constant sort_expr.
+                ordering
+                    .iter()
+                    .find(|sort_expr| !self.is_expr_constant(&sort_expr.expr))
+                    .cloned()
+            })
+            .collect()
     }
 
     /// Retrieves the ordered expressions after projections
@@ -1210,7 +1216,7 @@ impl EquivalenceProperties {
     fn get_ordered_exprs_after_projection(
         &self,
         mapping: &ProjectionMapping,
-    ) -> (Vec<LexOrdering>, Vec<LexOrdering>) {
+    ) -> (Vec<PhysicalSortExpr>, Vec<PhysicalSortExpr>) {
         let mut new_orderings_continuing = vec![];
         let mut new_orderings_complete = vec![];
         let leading_orderings = self.get_leading_orderings();
@@ -1239,7 +1245,7 @@ impl EquivalenceProperties {
                 expr: target.clone(),
                 options: sort_options,
             };
-            let new_ordering = vec![sort_expr.clone()];
+            // let new_ordering = vec![sort_expr.clone()];
 
             // expr is one of the leading ordering. This means that it is not a composite expression
             // Hence its exactness doesn't depend on arguments. Then We can set can_continue true.
@@ -1249,13 +1255,13 @@ impl EquivalenceProperties {
             //  after floor(a) cannot continue iteration.
             let can_continue =
                 physical_exprs_contains(&leading_ordering_exprs, &expr_ordering.expr);
-            let new_ordering = collapse_lex_ordering(new_ordering);
-            if can_continue && !new_orderings_continuing.contains(&new_ordering) {
+            // let new_ordering = collapse_lex_ordering(new_ordering);
+            if can_continue && !new_orderings_continuing.contains(&sort_expr) {
                 // Can continue and isn't already added.
-                new_orderings_continuing.push(new_ordering);
-            } else if !can_continue && !new_orderings_complete.contains(&new_ordering) {
+                new_orderings_continuing.push(sort_expr);
+            } else if !can_continue && !new_orderings_complete.contains(&sort_expr) {
                 // Cannot continue and isn't already added.
-                new_orderings_complete.push(new_ordering);
+                new_orderings_complete.push(sort_expr);
             }
         }
 
@@ -1278,13 +1284,10 @@ impl EquivalenceProperties {
             .collect::<Vec<_>>();
         // Add projected leading orderings to the continuing orderings.
         for projected_leading_ordering in projected_leading_orderings {
-            let projected_leading_ordering = vec![projected_leading_ordering];
             if !new_orderings_continuing.contains(&projected_leading_ordering) {
                 new_orderings_continuing.push(projected_leading_ordering);
             }
         }
-        new_orderings_complete.retain(|ordering| !ordering.is_empty());
-        new_orderings_continuing.retain(|ordering| !ordering.is_empty());
         (new_orderings_complete, new_orderings_continuing)
     }
 
@@ -1695,13 +1698,13 @@ fn update_ordering(
 
 fn suffix_relevant_orderings(
     relevant_orderings: Vec<LexOrdering>,
-    new_orderings: &[LexOrdering],
+    new_orderings: &[PhysicalSortExpr],
 ) -> Vec<LexOrdering> {
     let mut result = vec![];
     for relevant_ordering in &relevant_orderings {
         for new_ordering in new_orderings {
             let mut ordering = relevant_ordering.clone();
-            ordering.extend(new_ordering.to_vec());
+            ordering.push(new_ordering.clone());
             result.push(ordering);
         }
     }
