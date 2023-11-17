@@ -17,11 +17,11 @@
 
 use std::{ops::Neg, sync::Arc};
 
-use crate::expressions::Literal;
-use crate::{PhysicalExpr, PhysicalSortExpr};
+use crate::PhysicalExpr;
 use arrow_schema::SortOptions;
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_common::Result;
+
 use itertools::Itertools;
 
 /// To propagate [`SortOptions`] across the [`PhysicalExpr`], it is insufficient
@@ -166,17 +166,6 @@ impl ExprOrdering {
         }
     }
 
-    // Returns either all of the leaves ordering or `None`.
-    pub fn leaves_orderings(
-        &self,
-        leading_orderings: &[PhysicalSortExpr],
-    ) -> Option<Vec<PhysicalSortExpr>> {
-        let mut leaf_orderings = vec![];
-        let completed =
-            leaf_orderings_helper(&self.expr, &mut leaf_orderings, leading_orderings);
-        completed.then_some(leaf_orderings)
-    }
-
     /// Updates this [`ExprOrdering`]'s children states with the given states.
     pub fn with_new_children(mut self, children_states: Vec<SortProperties>) -> Self {
         self.children_states = children_states;
@@ -228,38 +217,5 @@ impl TreeNode for ExprOrdering {
                     .collect::<Result<Vec<_>>>()?,
             ))
         }
-    }
-}
-
-fn leaf_orderings_helper(
-    expr: &Arc<dyn PhysicalExpr>,
-    leaf_orderings: &mut Vec<PhysicalSortExpr>,
-    leading_orderings: &[PhysicalSortExpr],
-) -> bool {
-    let children = expr.children();
-    let mut state = SortProperties::Unordered;
-    for sort_expr in leading_orderings {
-        if expr.eq(&sort_expr.expr) {
-            state = SortProperties::Ordered(sort_expr.options);
-            break;
-        }
-    }
-    if let SortProperties::Ordered(options) = state {
-        let sort_expr = PhysicalSortExpr {
-            expr: expr.clone(),
-            options,
-        };
-        leaf_orderings.push(sort_expr);
-        return true;
-    }
-    if expr.as_any().is::<Literal>() {
-        return true;
-    }
-    if children.is_empty() {
-        false
-    } else {
-        children
-            .into_iter()
-            .all(|child| leaf_orderings_helper(&child, leaf_orderings, leading_orderings))
     }
 }
