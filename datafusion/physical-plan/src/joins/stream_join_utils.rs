@@ -621,8 +621,8 @@ pub fn record_visited_indices<T: ArrowPrimitiveType>(
 macro_rules! handle_state {
     ($match_case:expr) => {
         match $match_case {
-            Ok(StateResult::Continue) => continue,
-            Ok(StateResult::Ready(res)) => Poll::Ready(Ok(res).transpose()),
+            Ok(StreamJoinStateResult::Continue) => continue,
+            Ok(StreamJoinStateResult::Ready(res)) => Poll::Ready(Ok(res).transpose()),
             Err(e) => Poll::Ready(Some(Err(e))),
         }
     };
@@ -636,7 +636,7 @@ macro_rules! handle_async_state {
 }
 
 /// Represents the possible results of a state in the join stream.
-pub enum StateResult<T> {
+pub enum StreamJoinStateResult<T> {
     Ready(T),
     Continue,
 }
@@ -727,10 +727,10 @@ pub trait EagerJoinStream {
     ///
     /// # Returns
     ///
-    /// * `Result<StateResult<Option<RecordBatch>>>` - The state result after pulling the batch.
+    /// * `Result<StreamJoinStateResult<Option<RecordBatch>>>` - The state result after pulling the batch.
     async fn fetch_next_from_right_stream(
         &mut self,
-    ) -> Result<StateResult<Option<RecordBatch>>> {
+    ) -> Result<StreamJoinStateResult<Option<RecordBatch>>> {
         match self.right_stream().next().await {
             Some(Ok(batch)) => {
                 self.set_state(EagerJoinStreamState::PullLeft);
@@ -739,7 +739,7 @@ pub trait EagerJoinStream {
             Some(Err(e)) => Err(e),
             None => {
                 self.set_state(EagerJoinStreamState::RightExhausted);
-                Ok(StateResult::Continue)
+                Ok(StreamJoinStateResult::Continue)
             }
         }
     }
@@ -752,10 +752,10 @@ pub trait EagerJoinStream {
     ///
     /// # Returns
     ///
-    /// * `Result<StateResult<Option<RecordBatch>>>` - The state result after pulling the batch.
+    /// * `Result<StreamJoinStateResult<Option<RecordBatch>>>` - The state result after pulling the batch.
     async fn fetch_next_from_left_stream(
         &mut self,
-    ) -> Result<StateResult<Option<RecordBatch>>> {
+    ) -> Result<StreamJoinStateResult<Option<RecordBatch>>> {
         match self.left_stream().next().await {
             Some(Ok(batch)) => {
                 self.set_state(EagerJoinStreamState::PullRight);
@@ -764,7 +764,7 @@ pub trait EagerJoinStream {
             Some(Err(e)) => Err(e),
             None => {
                 self.set_state(EagerJoinStreamState::LeftExhausted);
-                Ok(StateResult::Continue)
+                Ok(StreamJoinStateResult::Continue)
             }
         }
     }
@@ -778,10 +778,10 @@ pub trait EagerJoinStream {
     ///
     /// # Returns
     ///
-    /// * `Result<StateResult<Option<RecordBatch>>>` - The state result after checking the exhaustion state.
+    /// * `Result<StreamJoinStateResult<Option<RecordBatch>>>` - The state result after checking the exhaustion state.
     async fn handle_right_stream_end(
         &mut self,
-    ) -> Result<StateResult<Option<RecordBatch>>> {
+    ) -> Result<StreamJoinStateResult<Option<RecordBatch>>> {
         match self.left_stream().next().await {
             Some(Ok(batch)) => self.process_batch_after_right_end(batch),
             Some(Err(e)) => Err(e),
@@ -789,7 +789,7 @@ pub trait EagerJoinStream {
                 self.set_state(EagerJoinStreamState::BothExhausted {
                     final_result: false,
                 });
-                Ok(StateResult::Continue)
+                Ok(StreamJoinStateResult::Continue)
             }
         }
     }
@@ -803,10 +803,10 @@ pub trait EagerJoinStream {
     ///
     /// # Returns
     ///
-    /// * `Result<StateResult<Option<RecordBatch>>>` - The state result after checking the exhaustion state.
+    /// * `Result<StreamJoinStateResult<Option<RecordBatch>>>` - The state result after checking the exhaustion state.
     async fn handle_left_stream_end(
         &mut self,
-    ) -> Result<StateResult<Option<RecordBatch>>> {
+    ) -> Result<StreamJoinStateResult<Option<RecordBatch>>> {
         match self.right_stream().next().await {
             Some(Ok(batch)) => self.process_batch_after_left_end(batch),
             Some(Err(e)) => Err(e),
@@ -814,7 +814,7 @@ pub trait EagerJoinStream {
                 self.set_state(EagerJoinStreamState::BothExhausted {
                     final_result: false,
                 });
-                Ok(StateResult::Continue)
+                Ok(StreamJoinStateResult::Continue)
             }
         }
     }
@@ -827,10 +827,10 @@ pub trait EagerJoinStream {
     ///
     /// # Returns
     ///
-    /// * `Result<StateResult<Option<RecordBatch>>>` - The state result after both streams are exhausted.
+    /// * `Result<StreamJoinStateResult<Option<RecordBatch>>>` - The state result after both streams are exhausted.
     fn prepare_for_final_results_after_exhaustion(
         &mut self,
-    ) -> Result<StateResult<Option<RecordBatch>>> {
+    ) -> Result<StreamJoinStateResult<Option<RecordBatch>>> {
         self.set_state(EagerJoinStreamState::BothExhausted { final_result: true });
         self.process_batches_before_finalization()
     }
@@ -843,11 +843,11 @@ pub trait EagerJoinStream {
     ///
     /// # Returns
     ///
-    /// * `Result<StateResult<Option<RecordBatch>>>` - The state result after processing the batch.
+    /// * `Result<StreamJoinStateResult<Option<RecordBatch>>>` - The state result after processing the batch.
     fn process_batch_from_right(
         &mut self,
         batch: RecordBatch,
-    ) -> Result<StateResult<Option<RecordBatch>>>;
+    ) -> Result<StreamJoinStateResult<Option<RecordBatch>>>;
 
     /// Handles a pulled batch from the left stream.
     ///
@@ -857,11 +857,11 @@ pub trait EagerJoinStream {
     ///
     /// # Returns
     ///
-    /// * `Result<StateResult<Option<RecordBatch>>>` - The state result after processing the batch.
+    /// * `Result<StreamJoinStateResult<Option<RecordBatch>>>` - The state result after processing the batch.
     fn process_batch_from_left(
         &mut self,
         batch: RecordBatch,
-    ) -> Result<StateResult<Option<RecordBatch>>>;
+    ) -> Result<StreamJoinStateResult<Option<RecordBatch>>>;
 
     /// Handles the situation when only the left stream is exhausted.
     ///
@@ -871,11 +871,11 @@ pub trait EagerJoinStream {
     ///
     /// # Returns
     ///
-    /// * `Result<StateResult<Option<RecordBatch>>>` - The state result after the left stream is exhausted.
+    /// * `Result<StreamJoinStateResult<Option<RecordBatch>>>` - The state result after the left stream is exhausted.
     fn process_batch_after_left_end(
         &mut self,
         right_batch: RecordBatch,
-    ) -> Result<StateResult<Option<RecordBatch>>>;
+    ) -> Result<StreamJoinStateResult<Option<RecordBatch>>>;
 
     /// Handles the situation when only the right stream is exhausted.
     ///
@@ -885,20 +885,20 @@ pub trait EagerJoinStream {
     ///
     /// # Returns
     ///
-    /// * `Result<StateResult<Option<RecordBatch>>>` - The state result after the right stream is exhausted.
+    /// * `Result<StreamJoinStateResult<Option<RecordBatch>>>` - The state result after the right stream is exhausted.
     fn process_batch_after_right_end(
         &mut self,
         left_batch: RecordBatch,
-    ) -> Result<StateResult<Option<RecordBatch>>>;
+    ) -> Result<StreamJoinStateResult<Option<RecordBatch>>>;
 
     /// Handles the final state after both streams are exhausted.
     ///
     /// # Returns
     ///
-    /// * `Result<StateResult<Option<RecordBatch>>>` - The final state result after processing.
+    /// * `Result<StreamJoinStateResult<Option<RecordBatch>>>` - The final state result after processing.
     fn process_batches_before_finalization(
         &mut self,
-    ) -> Result<StateResult<Option<RecordBatch>>>;
+    ) -> Result<StreamJoinStateResult<Option<RecordBatch>>>;
 
     /// Provides mutable access to the right stream.
     ///

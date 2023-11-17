@@ -37,7 +37,7 @@ use crate::joins::stream_join_utils::{
     calculate_filter_expr_intervals, combine_two_batches,
     convert_sort_expr_with_filter_schema, get_pruning_anti_indices,
     get_pruning_semi_indices, record_visited_indices, EagerJoinStream,
-    EagerJoinStreamState, PruningJoinHashMap, SortedFilterExpr, StateResult,
+    EagerJoinStreamState, PruningJoinHashMap, SortedFilterExpr, StreamJoinStateResult,
 };
 use crate::joins::utils::{
     build_batch_from_indices, build_join_schema, check_join_is_valid,
@@ -1013,13 +1013,13 @@ impl EagerJoinStream for SymmetricHashJoinStream {
     fn process_batch_from_right(
         &mut self,
         batch: RecordBatch,
-    ) -> Result<StateResult<Option<RecordBatch>>> {
+    ) -> Result<StreamJoinStateResult<Option<RecordBatch>>> {
         self.perform_join_for_given_side(batch, JoinSide::Right)
             .map(|maybe_batch| {
                 if maybe_batch.is_some() {
-                    StateResult::Ready(maybe_batch)
+                    StreamJoinStateResult::Ready(maybe_batch)
                 } else {
-                    StateResult::Continue
+                    StreamJoinStateResult::Continue
                 }
             })
     }
@@ -1027,13 +1027,13 @@ impl EagerJoinStream for SymmetricHashJoinStream {
     fn process_batch_from_left(
         &mut self,
         batch: RecordBatch,
-    ) -> Result<StateResult<Option<RecordBatch>>> {
+    ) -> Result<StreamJoinStateResult<Option<RecordBatch>>> {
         self.perform_join_for_given_side(batch, JoinSide::Left)
             .map(|maybe_batch| {
                 if maybe_batch.is_some() {
-                    StateResult::Ready(maybe_batch)
+                    StreamJoinStateResult::Ready(maybe_batch)
                 } else {
-                    StateResult::Continue
+                    StreamJoinStateResult::Continue
                 }
             })
     }
@@ -1041,20 +1041,20 @@ impl EagerJoinStream for SymmetricHashJoinStream {
     fn process_batch_after_left_end(
         &mut self,
         right_batch: RecordBatch,
-    ) -> Result<StateResult<Option<RecordBatch>>> {
+    ) -> Result<StreamJoinStateResult<Option<RecordBatch>>> {
         self.process_batch_from_right(right_batch)
     }
 
     fn process_batch_after_right_end(
         &mut self,
         left_batch: RecordBatch,
-    ) -> Result<StateResult<Option<RecordBatch>>> {
+    ) -> Result<StreamJoinStateResult<Option<RecordBatch>>> {
         self.process_batch_from_left(left_batch)
     }
 
     fn process_batches_before_finalization(
         &mut self,
-    ) -> Result<StateResult<Option<RecordBatch>>> {
+    ) -> Result<StreamJoinStateResult<Option<RecordBatch>>> {
         // Get the left side results:
         let left_result = build_side_determined_results(
             &self.left,
@@ -1082,9 +1082,9 @@ impl EagerJoinStream for SymmetricHashJoinStream {
             // Update the metrics:
             self.metrics.output_batches.add(1);
             self.metrics.output_rows.add(batch.num_rows());
-            return Ok(StateResult::Ready(result));
+            return Ok(StreamJoinStateResult::Ready(result));
         }
-        Ok(StateResult::Continue)
+        Ok(StreamJoinStateResult::Continue)
     }
 
     fn right_stream(&mut self) -> &mut SendableRecordBatchStream {
@@ -2014,9 +2014,6 @@ mod tests {
         Ok(())
     }
 
-    // TODO: Enable this test once the PartialOrd problem of time intervals
-    //       are addressed.
-    #[ignore]
     #[rstest]
     #[tokio::test(flavor = "multi_thread")]
     async fn test_with_interval_columns(
