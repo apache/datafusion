@@ -73,7 +73,6 @@ macro_rules! test_expression {
 }
 
 pub mod aggregates;
-pub mod arrow_files;
 pub mod create_drop;
 pub mod csv_files;
 pub mod describe;
@@ -93,7 +92,6 @@ pub mod references;
 pub mod repartition;
 pub mod select;
 mod sql_api;
-pub mod subqueries;
 pub mod timestamp;
 
 fn create_join_context(

@@ -636,6 +636,7 @@ nullif(expression1, expression2)
 - [upper](#upper)
 - [uuid](#uuid)
 - [overlay](#overlay)
+- [levenshtein](#levenshtein)
 
 ### `ascii`
 
@@ -1137,6 +1138,20 @@ overlay(str PLACING substr FROM pos [FOR count])
 - **pos**: the start position to replace of str.
 - **count**: the count of characters to be replaced from start position of str. If not specified, will use substr length instead.
 
+### `levenshtein`
+
+Returns the Levenshtein distance between the two given strings.
+For example, `levenshtein('kitten', 'sitting') = 3`
+
+```
+levenshtein(str1, str2)
+```
+
+#### Arguments
+
+- **str1**: String expression to compute Levenshtein distance with str2.
+- **str2**: String expression to compute Levenshtein distance with str1.
+
 ## Binary String Functions
 
 - [decode](#decode)
@@ -1515,6 +1530,7 @@ from_unixtime(expression)
 - [array_length](#array_length)
 - [array_ndims](#array_ndims)
 - [array_prepend](#array_prepend)
+- [array_pop_front](#array_pop_front)
 - [array_pop_back](#array_pop_back)
 - [array_position](#array_position)
 - [array_positions](#array_positions)
@@ -1867,6 +1883,30 @@ array_prepend(element, array)
 - array_push_front
 - list_prepend
 - list_push_front
+
+### `array_pop_front`
+
+Returns the array without the first element.
+
+```
+array_pop_first(array)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```
+❯ select array_pop_first([1, 2, 3]);
++-------------------------------+
+| array_pop_first(List([1,2,3])) |
++-------------------------------+
+| [2, 3]                        |
++-------------------------------+
+```
 
 ### `array_pop_back`
 

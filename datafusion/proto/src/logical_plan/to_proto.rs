@@ -613,12 +613,12 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     }
                     WindowFunction::AggregateUDF(aggr_udf) => {
                         protobuf::window_expr_node::WindowFunction::Udaf(
-                            aggr_udf.name.clone(),
+                            aggr_udf.name().to_string(),
                         )
                     }
                     WindowFunction::WindowUDF(window_udf) => {
                         protobuf::window_expr_node::WindowFunction::Udwf(
-                            window_udf.name.clone(),
+                            window_udf.name().to_string(),
                         )
                     }
                 };
@@ -769,7 +769,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
             }
             Expr::ScalarUDF(ScalarUDF { fun, args }) => Self {
                 expr_type: Some(ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode {
-                    fun_name: fun.name.clone(),
+                    fun_name: fun.name().to_string(),
                     args: args
                         .iter()
                         .map(|expr| expr.try_into())
@@ -784,7 +784,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
             }) => Self {
                 expr_type: Some(ExprType::AggregateUdfExpr(Box::new(
                     protobuf::AggregateUdfExprNode {
-                        fun_name: fun.name.clone(),
+                        fun_name: fun.name().to_string(),
                         args: args.iter().map(|expr| expr.try_into()).collect::<Result<
                             Vec<_>,
                             Error,
@@ -1134,7 +1134,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     Value::LargeUtf8Value(s.to_owned())
                 })
             }
-            ScalarValue::Fixedsizelist(..) => Err(Error::General(
+            ScalarValue::FixedSizeList(..) => Err(Error::General(
                 "Proto serialization error: ScalarValue::Fixedsizelist not supported"
                     .to_string(),
             )),
@@ -1480,6 +1480,7 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Flatten => Self::Flatten,
             BuiltinScalarFunction::ArrayLength => Self::ArrayLength,
             BuiltinScalarFunction::ArrayNdims => Self::ArrayNdims,
+            BuiltinScalarFunction::ArrayPopFront => Self::ArrayPopFront,
             BuiltinScalarFunction::ArrayPopBack => Self::ArrayPopBack,
             BuiltinScalarFunction::ArrayPosition => Self::ArrayPosition,
             BuiltinScalarFunction::ArrayPositions => Self::ArrayPositions,
@@ -1555,6 +1556,7 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Iszero => Self::Iszero,
             BuiltinScalarFunction::ArrowTypeof => Self::ArrowTypeof,
             BuiltinScalarFunction::OverLay => Self::OverLay,
+            BuiltinScalarFunction::Levenshtein => Self::Levenshtein,
         };
 
         Ok(scalar_function)

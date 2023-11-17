@@ -323,7 +323,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 let new_expr = coerce_arguments_for_signature(
                     args.as_slice(),
                     &self.schema,
-                    &fun.signature,
+                    fun.signature(),
                 )?;
                 Ok(Expr::ScalarUDF(ScalarUDF::new(fun, new_expr)))
             }
@@ -364,7 +364,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 let new_expr = coerce_arguments_for_signature(
                     args.as_slice(),
                     &self.schema,
-                    &fun.signature,
+                    fun.signature(),
                 )?;
                 let expr = Expr::AggregateUDF(expr::AggregateUDF::new(
                     fun, new_expr, filter, order_by,
@@ -763,6 +763,7 @@ fn coerce_case_expression(case: Case, schema: &DFSchemaRef) -> Result<Case> {
 mod test {
     use std::sync::Arc;
 
+    use arrow::array::{FixedSizeListArray, Int32Array};
     use arrow::datatypes::{DataType, TimeUnit};
 
     use arrow::datatypes::Field;
@@ -1237,15 +1238,14 @@ mod test {
 
     #[test]
     fn test_casting_for_fixed_size_list() -> Result<()> {
-        let val = lit(ScalarValue::Fixedsizelist(
-            Some(vec![
-                ScalarValue::from(1i32),
-                ScalarValue::from(2i32),
-                ScalarValue::from(3i32),
-            ]),
-            Arc::new(Field::new("item", DataType::Int32, true)),
-            3,
-        ));
+        let val = lit(ScalarValue::FixedSizeList(Arc::new(
+            FixedSizeListArray::new(
+                Arc::new(Field::new("item", DataType::Int32, true)),
+                3,
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                None,
+            ),
+        )));
         let expr = Expr::ScalarFunction(ScalarFunction {
             fun: BuiltinScalarFunction::MakeArray,
             args: vec![val.clone()],

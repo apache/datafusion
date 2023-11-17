@@ -20937,6 +20937,8 @@ impl serde::Serialize for ScalarFunction {
             Self::ArrayUnion => "ArrayUnion",
             Self::OverLay => "OverLay",
             Self::Range => "Range",
+            Self::ArrayPopFront => "ArrayPopFront",
+            Self::Levenshtein => "Levenshtein",
         };
         serializer.serialize_str(variant)
     }
@@ -21071,6 +21073,8 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "ArrayUnion",
             "OverLay",
             "Range",
+            "ArrayPopFront",
+            "Levenshtein",
         ];
 
         struct GeneratedVisitor;
@@ -21234,6 +21238,8 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "ArrayUnion" => Ok(ScalarFunction::ArrayUnion),
                     "OverLay" => Ok(ScalarFunction::OverLay),
                     "Range" => Ok(ScalarFunction::Range),
+                    "ArrayPopFront" => Ok(ScalarFunction::ArrayPopFront),
+                    "Levenshtein" => Ok(ScalarFunction::Levenshtein),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }
