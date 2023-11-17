@@ -1843,14 +1843,13 @@ impl Projection {
 /// produced by the projection operation. If the schema computation is successful,
 /// the `Result` will contain the schema; otherwise, it will contain an error.
 pub fn projection_schema(input: &LogicalPlan, exprs: &[Expr]) -> Result<Arc<DFSchema>> {
-    let schema = Arc::new(DFSchema::new_with_metadata(
+    let mut schema = DFSchema::new_with_metadata(
         exprlist_to_fields(exprs, input)?,
         input.schema().metadata().clone(),
-    )?);
-    let id_key_groups = calc_func_dependencies_for_project(exprs, input)?;
-    let schema = schema.as_ref().clone();
-    let schema = Arc::new(schema.with_functional_dependencies(id_key_groups));
-    Ok(schema)
+    )?;
+    schema = schema
+        .with_functional_dependencies(calc_func_dependencies_for_project(exprs, input)?);
+    Ok(Arc::new(schema))
 }
 
 /// Aliased subquery

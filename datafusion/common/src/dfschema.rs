@@ -201,7 +201,7 @@ impl DFSchema {
         functional_dependencies: FunctionalDependencies,
     ) -> Self {
         // TODO: Add validity for functional dependency
-        //  Such as if table size is 10, functional dependency cannot contain 11, etc.
+        // Such as if table size is 10, functional dependency cannot contain 11, etc.
         self.functional_dependencies = functional_dependencies;
         self
     }
