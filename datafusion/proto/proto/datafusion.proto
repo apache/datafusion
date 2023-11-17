@@ -639,6 +639,8 @@ enum ScalarFunction {
   OverLay = 121;
   Range = 122;
   ArrayExcept = 123;
+  ArrayPopFront = 124;
+  Levenshtein = 125;
 }
 
 message ScalarFunctionNode {
@@ -982,6 +984,7 @@ message ScalarValue{
     int32  date_32_value = 14;
     ScalarTime32Value time32_value = 15;
     ScalarListValue list_value = 17;
+    ScalarListValue fixed_size_list_value = 18;
 
     Decimal128 decimal128_value = 20;
     Decimal256 decimal256_value = 39;

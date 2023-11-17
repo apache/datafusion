@@ -138,6 +138,8 @@ pub enum BuiltinScalarFunction {
     ArrayHasAll,
     /// array_has_any
     ArrayHasAny,
+    /// array_pop_front
+    ArrayPopFront,
     /// array_pop_back
     ArrayPopBack,
     /// array_dims
@@ -298,6 +300,8 @@ pub enum BuiltinScalarFunction {
     ArrowTypeof,
     /// overlay
     OverLay,
+    /// levenshtein
+    Levenshtein,
 }
 
 /// Maps the sql function name to `BuiltinScalarFunction`
@@ -395,6 +399,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayExcept => Volatility::Immutable,
             BuiltinScalarFunction::ArrayLength => Volatility::Immutable,
             BuiltinScalarFunction::ArrayNdims => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayPopFront => Volatility::Immutable,
             BuiltinScalarFunction::ArrayPopBack => Volatility::Immutable,
             BuiltinScalarFunction::ArrayPosition => Volatility::Immutable,
             BuiltinScalarFunction::ArrayPositions => Volatility::Immutable,
@@ -464,6 +469,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::FromUnixtime => Volatility::Immutable,
             BuiltinScalarFunction::ArrowTypeof => Volatility::Immutable,
             BuiltinScalarFunction::OverLay => Volatility::Immutable,
+            BuiltinScalarFunction::Levenshtein => Volatility::Immutable,
 
             // Stable builtin functions
             BuiltinScalarFunction::Now => Volatility::Stable,
@@ -573,6 +579,7 @@ impl BuiltinScalarFunction {
             },
             BuiltinScalarFunction::ArrayLength => Ok(UInt64),
             BuiltinScalarFunction::ArrayNdims => Ok(UInt64),
+            BuiltinScalarFunction::ArrayPopFront => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayPopBack => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayPosition => Ok(UInt64),
             BuiltinScalarFunction::ArrayPositions => {
@@ -829,6 +836,10 @@ impl BuiltinScalarFunction {
                 utf8_to_str_type(&input_expr_types[0], "overlay")
             }
 
+            BuiltinScalarFunction::Levenshtein => {
+                utf8_to_int_type(&input_expr_types[0], "levenshtein")
+            }
+
             BuiltinScalarFunction::Acos
             | BuiltinScalarFunction::Asin
             | BuiltinScalarFunction::Atan
@@ -872,6 +883,7 @@ impl BuiltinScalarFunction {
         // for now, the list is small, as we do not have many built-in functions.
         match self {
             BuiltinScalarFunction::ArrayAppend => Signature::any(2, self.volatility()),
+            BuiltinScalarFunction::ArrayPopFront => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayPopBack => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayConcat => {
                 Signature::variadic_any(self.volatility())
@@ -1293,6 +1305,10 @@ impl BuiltinScalarFunction {
                 ],
                 self.volatility(),
             ),
+            BuiltinScalarFunction::Levenshtein => Signature::one_of(
+                vec![Exact(vec![Utf8, Utf8]), Exact(vec![LargeUtf8, LargeUtf8])],
+                self.volatility(),
+            ),
             BuiltinScalarFunction::Acos
             | BuiltinScalarFunction::Asin
             | BuiltinScalarFunction::Atan
@@ -1457,6 +1473,7 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
         BuiltinScalarFunction::Trim => &["trim"],
         BuiltinScalarFunction::Upper => &["upper"],
         BuiltinScalarFunction::Uuid => &["uuid"],
+        BuiltinScalarFunction::Levenshtein => &["levenshtein"],
 
         // regex functions
         BuiltinScalarFunction::RegexpMatch => &["regexp_match"],
@@ -1518,6 +1535,7 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
         }
         BuiltinScalarFunction::ArrayLength => &["array_length", "list_length"],
         BuiltinScalarFunction::ArrayNdims => &["array_ndims", "list_ndims"],
+        BuiltinScalarFunction::ArrayPopFront => &["array_pop_front", "list_pop_front"],
         BuiltinScalarFunction::ArrayPopBack => &["array_pop_back", "list_pop_back"],
         BuiltinScalarFunction::ArrayPosition => &[
             "array_position",

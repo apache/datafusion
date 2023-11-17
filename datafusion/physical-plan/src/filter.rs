@@ -201,7 +201,7 @@ impl ExecutionPlan for FilterExec {
             // tracking issue for making this configurable:
             // https://github.com/apache/arrow-datafusion/issues/8133
             let selectivity = 0.2_f32;
-            let mut stats = input_stats.clone().into_inexact();
+            let mut stats = input_stats.into_inexact();
             if let Precision::Inexact(n) = stats.num_rows {
                 stats.num_rows = Precision::Inexact((selectivity * n as f32) as usize);
             }
@@ -277,16 +277,10 @@ fn collect_new_statistics(
                         )
                     };
                 ColumnStatistics {
-                    null_count: match input_column_stats[idx].null_count.get_value() {
-                        Some(nc) => Precision::Inexact(*nc),
-                        None => Precision::Absent,
-                    },
+                    null_count: input_column_stats[idx].null_count.clone().to_inexact(),
                     max_value,
                     min_value,
-                    distinct_count: match distinct_count.get_value() {
-                        Some(dc) => Precision::Inexact(*dc),
-                        None => Precision::Absent,
-                    },
+                    distinct_count: distinct_count.to_inexact(),
                 }
             },
         )

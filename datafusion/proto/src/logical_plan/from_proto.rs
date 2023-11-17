@@ -50,7 +50,7 @@ use datafusion_expr::{
     current_time, date_bin, date_part, date_trunc, decode, degrees, digest, encode, exp,
     expr::{self, InList, Sort, WindowFunction},
     factorial, flatten, floor, from_unixtime, gcd, gen_range, isnan, iszero, lcm, left,
-    ln, log, log10, log2,
+    levenshtein, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
     lower, lpad, ltrim, md5, nanvl, now, nullif, octet_length, overlay, pi, power,
     radians, random, regexp_match, regexp_replace, repeat, replace, reverse, right,
@@ -66,7 +66,7 @@ use datafusion_expr::{
     WindowFrameUnits,
 };
 use datafusion_expr::{
-    array_empty, array_pop_back,
+    array_empty, array_pop_back, array_pop_front,
     expr::{Alias, Placeholder},
 };
 use std::sync::Arc;
@@ -474,6 +474,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Flatten => Self::Flatten,
             ScalarFunction::ArrayLength => Self::ArrayLength,
             ScalarFunction::ArrayNdims => Self::ArrayNdims,
+            ScalarFunction::ArrayPopFront => Self::ArrayPopFront,
             ScalarFunction::ArrayPopBack => Self::ArrayPopBack,
             ScalarFunction::ArrayPosition => Self::ArrayPosition,
             ScalarFunction::ArrayPositions => Self::ArrayPositions,
@@ -549,6 +550,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Iszero => Self::Iszero,
             ScalarFunction::ArrowTypeof => Self::ArrowTypeof,
             ScalarFunction::OverLay => Self::OverLay,
+            ScalarFunction::Levenshtein => Self::Levenshtein,
         }
     }
 }
@@ -657,7 +659,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
             Value::Float64Value(v) => Self::Float64(Some(*v)),
             Value::Date32Value(v) => Self::Date32(Some(*v)),
             // ScalarValue::List is serialized using arrow IPC format
-            Value::ListValue(scalar_list) => {
+            Value::ListValue(scalar_list) | Value::FixedSizeListValue(scalar_list) => {
                 let protobuf::ScalarListValue {
                     ipc_message,
                     arrow_data,
@@ -698,7 +700,11 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 .map_err(DataFusionError::ArrowError)
                 .map_err(|e| e.context("Decoding ScalarValue::List Value"))?;
                 let arr = record_batch.column(0);
-                Self::List(arr.to_owned())
+                match value {
+                    Value::ListValue(_) => Self::List(arr.to_owned()),
+                    Value::FixedSizeListValue(_) => Self::FixedSizeList(arr.to_owned()),
+                    _ => unreachable!(),
+                }
             }
             Value::NullValue(v) => {
                 let null_type: DataType = v.try_into()?;
@@ -1331,6 +1337,9 @@ pub fn parse_expr(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                 )),
+                ScalarFunction::ArrayPopFront => {
+                    Ok(array_pop_front(parse_expr(&args[0], registry)?))
+                }
                 ScalarFunction::ArrayPopBack => {
                     Ok(array_pop_back(parse_expr(&args[0], registry)?))
                 }
@@ -1631,6 +1640,10 @@ pub fn parse_expr(
                         ))
                     }
                 }
+                ScalarFunction::Levenshtein => Ok(levenshtein(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
                 ScalarFunction::ToHex => Ok(to_hex(parse_expr(&args[0], registry)?)),
                 ScalarFunction::ToTimestampMillis => {
                     Ok(to_timestamp_millis(parse_expr(&args[0], registry)?))

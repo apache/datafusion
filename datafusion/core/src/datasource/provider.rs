@@ -26,6 +26,8 @@ use datafusion_expr::{CreateExternalTable, LogicalPlan};
 pub use datafusion_expr::{TableProviderFilterPushDown, TableType};
 
 use crate::arrow::datatypes::SchemaRef;
+use crate::datasource::listing_table_factory::ListingTableFactory;
+use crate::datasource::stream::StreamTableFactory;
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::logical_expr::Expr;
@@ -213,4 +215,42 @@ pub trait TableProviderFactory: Sync + Send {
         state: &SessionState,
         cmd: &CreateExternalTable,
     ) -> Result<Arc<dyn TableProvider>>;
+}
+
+/// The default [`TableProviderFactory`]
+///
+/// If [`CreateExternalTable`] is unbounded calls [`StreamTableFactory::create`],
+/// otherwise calls [`ListingTableFactory::create`]
+#[derive(Debug, Default)]
+pub struct DefaultTableFactory {
+    stream: StreamTableFactory,
+    listing: ListingTableFactory,
+}
+
+impl DefaultTableFactory {
+    /// Creates a new [`DefaultTableFactory`]
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[async_trait]
+impl TableProviderFactory for DefaultTableFactory {
+    async fn create(
+        &self,
+        state: &SessionState,
+        cmd: &CreateExternalTable,
+    ) -> Result<Arc<dyn TableProvider>> {
+        let mut unbounded = cmd.unbounded;
+        for (k, v) in &cmd.options {
+            if k.eq_ignore_ascii_case("unbounded") && v.eq_ignore_ascii_case("true") {
+                unbounded = true
+            }
+        }
+
+        match unbounded {
+            true => self.stream.create(state, cmd).await,
+            false => self.listing.create(state, cmd).await,
+        }
+    }
 }

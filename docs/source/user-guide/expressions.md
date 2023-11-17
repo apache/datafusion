@@ -219,6 +219,7 @@ Unlike to some databases the math functions in Datafusion works the same way as 
 | flatten(array)                        | Converts an array of arrays to a flat array `flatten([[1], [2, 3], [4, 5, 6]]) -> [1, 2, 3, 4, 5, 6]`                                                                    |
 | array_length(array, dimension)        | Returns the length of the array dimension. `array_length([1, 2, 3, 4, 5]) -> 5`                                                                                          |
 | array_ndims(array)                    | Returns the number of dimensions of the array. `array_ndims([[1, 2, 3], [4, 5, 6]]) -> 2`                                                                                |
+| array_pop_front(array)                | Returns the array without the first element. `array_pop_front([1, 2, 3]) -> [2, 3]`                                                                                      |
 | array_pop_back(array)                 | Returns the array without the last element. `array_pop_back([1, 2, 3]) -> [1, 2]`                                                                                        |
 | array_position(array, element)        | Searches for an element in the array, returns first occurrence. `array_position([1, 2, 2, 3, 4], 2) -> 2`                                                                |
 | array_positions(array, element)       | Searches for an element in the array, returns all occurrences. `array_positions([1, 2, 2, 3, 4], 2) -> [2, 3]`                                                           |
