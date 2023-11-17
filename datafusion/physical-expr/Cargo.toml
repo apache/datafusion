@@ -34,11 +34,7 @@ path = "src/lib.rs"
 
 [features]
 crypto_expressions = ["md-5", "sha2", "blake2", "blake3"]
-default = [
-    "crypto_expressions",
-    "regex_expressions",
-    "unicode_expressions",
-    "encoding_expressions",
+default = ["crypto_expressions", "regex_expressions", "unicode_expressions", "encoding_expressions",
 ]
 encoding_expressions = ["base64", "hex"]
 regex_expressions = ["regex"]
