@@ -1148,7 +1148,8 @@ pub fn prepare_sorted_exprs(
         vec![left_temp_sorted_filter_expr, right_temp_sorted_filter_expr];
 
     // Build the expression interval graph
-    let mut graph = ExprIntervalGraph::try_new(filter.expression().clone())?;
+    let mut graph =
+        ExprIntervalGraph::try_new(filter.expression().clone(), filter.schema())?;
 
     // Update sorted expressions with node indices
     update_sorted_exprs_with_node_indices(&mut graph, &mut sorted_exprs);

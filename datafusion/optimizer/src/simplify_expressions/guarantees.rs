@@ -193,6 +193,7 @@ impl<'a> TreeNodeRewriter for GuaranteeRewriter<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::datatypes::DataType;
     use datafusion_common::{tree_node::TreeNode, ScalarValue};
     use datafusion_expr::{col, lit, Operator};
 
@@ -205,7 +206,7 @@ mod tests {
             (
                 col("x"),
                 NullableInterval::NotNull {
-                    values: Default::default(),
+                    values: Interval::make_unbounded(&DataType::Boolean).unwrap(),
                 },
             ),
         ];

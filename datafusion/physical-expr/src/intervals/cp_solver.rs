@@ -27,7 +27,7 @@ use super::utils::{
 use crate::expressions::Literal;
 use crate::utils::{build_dag, ExprTreeNode};
 use crate::PhysicalExpr;
-use arrow_schema::DataType;
+use arrow_schema::{DataType, Schema};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::interval_arithmetic::{
     apply_operator, satisfy_comparison, Interval,
@@ -162,11 +162,11 @@ impl Display for ExprIntervalGraphNode {
 
 impl ExprIntervalGraphNode {
     /// Constructs a new DAEG node with an [-∞, ∞] range.
-    pub fn new(expr: Arc<dyn PhysicalExpr>) -> Self {
-        ExprIntervalGraphNode {
+    pub fn new_unbounded(expr: Arc<dyn PhysicalExpr>, dt: &DataType) -> Result<Self> {
+        Ok(ExprIntervalGraphNode {
             expr,
-            interval: Interval::default(),
-        }
+            interval: Interval::make_unbounded(dt)?,
+        })
     }
 
     /// Constructs a new DAEG node with the given range.
@@ -182,14 +182,18 @@ impl ExprIntervalGraphNode {
     /// This function creates a DAEG node from Datafusion's [ExprTreeNode]
     /// object. Literals are created with definite, singleton intervals while
     /// any other expression starts with an indefinite interval ([-∞, ∞]).
-    pub fn make_node(node: &ExprTreeNode<NodeIndex>) -> Result<ExprIntervalGraphNode> {
+    pub fn make_node(
+        node: &ExprTreeNode<NodeIndex>,
+        schema: &Schema,
+    ) -> Result<ExprIntervalGraphNode> {
         let expr = node.expression().clone();
         if let Some(literal) = expr.as_any().downcast_ref::<Literal>() {
             let value = literal.value();
             let interval = Interval::try_new(value.clone(), value.clone())?;
             Ok(ExprIntervalGraphNode::new_with_interval(expr, interval))
         } else {
-            Ok(ExprIntervalGraphNode::new(expr))
+            let dt = expr.data_type(schema)?;
+            ExprIntervalGraphNode::new_unbounded(expr, &dt)
         }
     }
 }
@@ -343,9 +347,10 @@ pub fn propagate_comparison(
 }
 
 impl ExprIntervalGraph {
-    pub fn try_new(expr: Arc<dyn PhysicalExpr>) -> Result<Self> {
+    pub fn try_new(expr: Arc<dyn PhysicalExpr>, schema: &Schema) -> Result<Self> {
         // Build the full graph:
-        let (root, graph) = build_dag(expr, &ExprIntervalGraphNode::make_node)?;
+        let (root, graph) =
+            build_dag(expr, &|node| ExprIntervalGraphNode::make_node(node, schema))?;
         Ok(Self { graph, root })
     }
 
@@ -481,13 +486,16 @@ impl ExprIntervalGraph {
     /// # Examples
     ///
     /// ```
-    /// use std::sync::Arc;
+    /// use arrow::datatypes::DataType;
+    /// use arrow::datatypes::Field;
+    /// use arrow::datatypes::Schema;
     /// use datafusion_common::ScalarValue;
-    /// use datafusion_expr::Operator;
     /// use datafusion_expr::interval_arithmetic::Interval;
+    /// use datafusion_expr::Operator;
     /// use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
     /// use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
     /// use datafusion_physical_expr::PhysicalExpr;
+    /// use std::sync::Arc;
     ///
     /// let expr = Arc::new(BinaryExpr::new(
     ///     Arc::new(Column::new("gnz", 0)),
@@ -495,7 +503,9 @@ impl ExprIntervalGraph {
     ///     Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
     /// ));
     ///
-    /// let mut graph = ExprIntervalGraph::try_new(expr).unwrap();
+    /// let schema = Schema::new(vec![Field::new("gnz".to_string(), DataType::Int32, true)]);
+    ///
+    /// let mut graph = ExprIntervalGraph::try_new(expr, &schema).unwrap();
     /// // Do it once, while constructing.
     /// let node_indices = graph
     ///     .gather_node_indices(&[Arc::new(Column::new("gnz", 0))]);
@@ -712,7 +722,7 @@ fn propagate_time_interval_at_right(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_schema::DataType;
+    use arrow_schema::{DataType, Field};
     use itertools::Itertools;
 
     use crate::expressions::{BinaryExpr, Column};
@@ -723,6 +733,7 @@ mod tests {
     use rand::{Rng, SeedableRng};
     use rstest::*;
 
+    #[allow(clippy::too_many_arguments)]
     fn experiment(
         expr: Arc<dyn PhysicalExpr>,
         exprs_with_interval: (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>),
@@ -731,6 +742,7 @@ mod tests {
         left_expected: Interval,
         right_expected: Interval,
         result: PropagationResult,
+        schema: &Schema,
     ) -> Result<()> {
         let col_stats = vec![
             (exprs_with_interval.0.clone(), left_interval),
@@ -740,7 +752,7 @@ mod tests {
             (exprs_with_interval.0.clone(), left_expected),
             (exprs_with_interval.1.clone(), right_expected),
         ];
-        let mut graph = ExprIntervalGraph::try_new(expr)?;
+        let mut graph = ExprIntervalGraph::try_new(expr, schema)?;
         let expr_indexes = graph
             .gather_node_indices(&col_stats.iter().map(|(e, _)| e.clone()).collect_vec());
 
@@ -825,7 +837,7 @@ mod tests {
 
                 experiment(
                     expr,
-                    (left_col, right_col),
+                    (left_col.clone(), right_col.clone()),
                     Interval::try_new(
                         ScalarValue::try_from(left_given.0).unwrap(),
                         ScalarValue::try_from(left_given.1).unwrap(),
@@ -843,6 +855,18 @@ mod tests {
                         ScalarValue::try_from(right_expected.1).unwrap(),
                     )?,
                     PropagationResult::Success,
+                    &Schema::new(vec![
+                        Field::new(
+                            left_col.as_any().downcast_ref::<Column>().unwrap().name(),
+                            DataType::$SCALAR,
+                            true,
+                        ),
+                        Field::new(
+                            right_col.as_any().downcast_ref::<Column>().unwrap().name(),
+                            DataType::$SCALAR,
+                            true,
+                        ),
+                    ]),
                 )
             }
         };
@@ -866,7 +890,7 @@ mod tests {
         let expr = Arc::new(BinaryExpr::new(left_and_1, Operator::Gt, right_col.clone()));
         experiment(
             expr,
-            (left_col, right_col),
+            (left_col.clone(), right_col.clone()),
             Interval::try_new(
                 ScalarValue::Int32(Some(10)),
                 ScalarValue::Int32(Some(20)),
@@ -875,6 +899,18 @@ mod tests {
             Interval::make(Some(10), Some(20))?,
             Interval::make(Some(100), None)?,
             PropagationResult::Infeasible,
+            &Schema::new(vec![
+                Field::new(
+                    left_col.as_any().downcast_ref::<Column>().unwrap().name(),
+                    DataType::Int32,
+                    true,
+                ),
+                Field::new(
+                    right_col.as_any().downcast_ref::<Column>().unwrap().name(),
+                    DataType::Int32,
+                    true,
+                ),
+            ]),
         )
     }
 
@@ -1179,7 +1215,14 @@ mod tests {
             Arc::new(Column::new("b", 1)),
         ));
         let expr = Arc::new(BinaryExpr::new(left_expr, Operator::Gt, right_expr));
-        let mut graph = ExprIntervalGraph::try_new(expr).unwrap();
+        let mut graph = ExprIntervalGraph::try_new(
+            expr,
+            &Schema::new(vec![
+                Field::new("a", DataType::Int32, true),
+                Field::new("b", DataType::Int32, true),
+            ]),
+        )
+        .unwrap();
         // Define a test leaf node.
         let leaf_node = Arc::new(BinaryExpr::new(
             Arc::new(Column::new("a", 0)),
@@ -1218,7 +1261,16 @@ mod tests {
             Arc::new(Column::new("z", 1)),
         ));
         let expr = Arc::new(BinaryExpr::new(left_expr, Operator::Gt, right_expr));
-        let mut graph = ExprIntervalGraph::try_new(expr).unwrap();
+        let mut graph = ExprIntervalGraph::try_new(
+            expr,
+            &Schema::new(vec![
+                Field::new("a", DataType::Int32, true),
+                Field::new("b", DataType::Int32, true),
+                Field::new("y", DataType::Int32, true),
+                Field::new("z", DataType::Int32, true),
+            ]),
+        )
+        .unwrap();
         // Define a test leaf node.
         let leaf_node = Arc::new(BinaryExpr::new(
             Arc::new(Column::new("a", 0)),
@@ -1257,7 +1309,15 @@ mod tests {
             Arc::new(Column::new("z", 1)),
         ));
         let expr = Arc::new(BinaryExpr::new(left_expr, Operator::Gt, right_expr));
-        let mut graph = ExprIntervalGraph::try_new(expr).unwrap();
+        let mut graph = ExprIntervalGraph::try_new(
+            expr,
+            &Schema::new(vec![
+                Field::new("a", DataType::Int32, true),
+                Field::new("b", DataType::Int32, true),
+                Field::new("z", DataType::Int32, true),
+            ]),
+        )
+        .unwrap();
         // Define a test leaf node.
         let leaf_node = Arc::new(BinaryExpr::new(
             Arc::new(Column::new("a", 0)),
@@ -1299,7 +1359,16 @@ mod tests {
             Arc::new(Column::new("z", 1)),
         ));
         let expr = Arc::new(BinaryExpr::new(left_expr, Operator::Gt, right_expr));
-        let mut graph = ExprIntervalGraph::try_new(expr).unwrap();
+        let mut graph = ExprIntervalGraph::try_new(
+            expr,
+            &Schema::new(vec![
+                Field::new("a", DataType::Int32, true),
+                Field::new("b", DataType::Int32, true),
+                Field::new("y", DataType::Int32, true),
+                Field::new("z", DataType::Int32, true),
+            ]),
+        )
+        .unwrap();
         // Define a test leaf node.
         let leaf_node = Arc::new(BinaryExpr::new(
             Arc::new(Column::new("a", 0)),

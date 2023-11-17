@@ -535,15 +535,16 @@ impl Interval {
         let result = match (
             Self::CERTAINLY_TRUE == self.contains(&zero_point)?,
             Self::CERTAINLY_TRUE == rhs.contains(&zero_point)?,
+            dt.is_unsigned_integer(),
         ) {
-            (true, true) => mul_helper_multi_zero_inclusive(&dt, self, rhs),
-            (true, false) => {
+            (true, true, false) => mul_helper_multi_zero_inclusive(&dt, self, rhs),
+            (true, false, false) => {
                 mul_helper_single_zero_inclusive(&dt, self, rhs, &zero_point)
             }
-            (false, true) => {
+            (false, true, false) => {
                 mul_helper_single_zero_inclusive(&dt, rhs, self, &zero_point)
             }
-            (false, false) => mul_helper_zero_exclusive(&dt, self, rhs, &zero_point),
+            _ => mul_helper_zero_exclusive(&dt, self, rhs, &zero_point),
         };
         Ok(result)
     }
@@ -636,15 +637,6 @@ impl Interval {
             None
         }
         .map(|result| result + 1)
-    }
-}
-
-impl Default for Interval {
-    fn default() -> Self {
-        Self {
-            lower: ScalarValue::Null,
-            upper: ScalarValue::Null,
-        }
     }
 }
 
@@ -1477,14 +1469,6 @@ pub enum NullableInterval {
     MaybeNull { values: Interval },
     /// The value is definitely not null in this interval and is within values
     NotNull { values: Interval },
-}
-
-impl Default for NullableInterval {
-    fn default() -> Self {
-        NullableInterval::MaybeNull {
-            values: Interval::default(),
-        }
-    }
 }
 
 impl Display for NullableInterval {
@@ -2681,6 +2665,31 @@ mod tests {
                 Interval::make::<i64>(None, None)?,
             ),
             (
+                Interval::make(Some(1_u32), Some(2_u32))?,
+                Interval::make(Some(0_u32), Some(1_u32))?,
+                Interval::make(Some(0_u32), Some(2_u32))?,
+            ),
+            (
+                Interval::make(None, Some(2_u32))?,
+                Interval::make(Some(0_u32), Some(1_u32))?,
+                Interval::make(None, Some(2_u32))?,
+            ),
+            (
+                Interval::make(None, Some(2_u32))?,
+                Interval::make(Some(1_u32), Some(2_u32))?,
+                Interval::make(None, Some(4_u32))?,
+            ),
+            (
+                Interval::make(None, Some(2_u32))?,
+                Interval::make(Some(1_u32), None)?,
+                Interval::make::<u32>(None, None)?,
+            ),
+            (
+                Interval::make::<u32>(None, None)?,
+                Interval::make(Some(0_u32), None)?,
+                Interval::make::<u32>(None, None)?,
+            ),
+            (
                 Interval::make(Some(f32::MAX), Some(f32::MAX))?,
                 Interval::make(Some(11_f32), Some(11_f32))?,
                 Interval::make(Some(f32::MAX), None)?,
@@ -2877,6 +2886,21 @@ mod tests {
                 Interval::make(Some(12_u64), Some(48_u64))?,
                 Interval::make(Some(10_u64), Some(20_u64))?,
                 Interval::make(Some(0_u64), Some(4_u64))?,
+            ),
+            (
+                Interval::make(Some(12_u64), Some(48_u64))?,
+                Interval::make(None, Some(2_u64))?,
+                Interval::make(Some(6_u64), None)?,
+            ),
+            (
+                Interval::make(Some(12_u64), Some(48_u64))?,
+                Interval::make(Some(0_u64), Some(2_u64))?,
+                Interval::make(Some(6_u64), None)?,
+            ),
+            (
+                Interval::make(None, Some(48_u64))?,
+                Interval::make(Some(0_u64), Some(2_u64))?,
+                Interval::make::<u64>(None, None)?,
             ),
             (
                 Interval::make(Some(f32::MAX), Some(f32::MAX))?,

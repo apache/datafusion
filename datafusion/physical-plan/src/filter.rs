@@ -219,7 +219,7 @@ impl ExecutionPlan for FilterExec {
             &input_stats.column_statistics,
         )?;
 
-        let analysis_ctx = analyze(predicate, input_analysis_ctx)?;
+        let analysis_ctx = analyze(predicate, input_analysis_ctx, &self.schema())?;
 
         // Estimate (inexact) selectivity of predicate
         let selectivity = analysis_ctx.selectivity.unwrap_or(1.0);

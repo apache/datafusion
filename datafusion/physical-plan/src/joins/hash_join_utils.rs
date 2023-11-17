@@ -30,6 +30,7 @@ use arrow::compute::concat_batches;
 use arrow::datatypes::{ArrowNativeType, SchemaRef};
 use arrow_array::builder::BooleanBufferBuilder;
 use arrow_array::{ArrowPrimitiveType, NativeAdapter, PrimitiveArray, RecordBatch};
+use arrow_schema::Schema;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{DataFusionError, JoinSide, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
@@ -438,7 +439,11 @@ pub fn build_filter_input_order(
     order: &PhysicalSortExpr,
 ) -> Result<Option<SortedFilterExpr>> {
     let opt_expr = convert_sort_expr_with_filter_schema(&side, filter, schema, order)?;
-    Ok(opt_expr.map(|filter_expr| SortedFilterExpr::new(order.clone(), filter_expr)))
+    opt_expr
+        .map(|filter_expr| {
+            SortedFilterExpr::new(order.clone(), filter_expr, filter.schema())
+        })
+        .transpose()
 }
 
 /// Convert a physical expression into a filter expression using the given
@@ -484,13 +489,15 @@ impl SortedFilterExpr {
     pub fn new(
         origin_sorted_expr: PhysicalSortExpr,
         filter_expr: Arc<dyn PhysicalExpr>,
-    ) -> Self {
-        Self {
+        filter_schema: &Schema,
+    ) -> Result<Self> {
+        let dt = &filter_expr.data_type(filter_schema)?;
+        Ok(Self {
             origin_sorted_expr,
             filter_expr,
-            interval: Interval::default(),
+            interval: Interval::make_unbounded(dt)?,
             node_index: 0,
-        }
+        })
     }
     /// Get origin expr information
     pub fn origin_sorted_expr(&self) -> &PhysicalSortExpr {

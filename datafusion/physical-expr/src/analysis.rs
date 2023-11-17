@@ -131,6 +131,7 @@ impl ExprBoundaries {
 pub fn analyze(
     expr: &Arc<dyn PhysicalExpr>,
     context: AnalysisContext,
+    schema: &Schema,
 ) -> Result<AnalysisContext> {
     let target_boundaries = context.boundaries;
 
@@ -139,7 +140,7 @@ pub fn analyze(
         .map(|c| Arc::new(c) as Arc<dyn PhysicalExpr>)
         .collect();
 
-    let mut graph = ExprIntervalGraph::try_new(expr.clone())?;
+    let mut graph = ExprIntervalGraph::try_new(expr.clone(), schema)?;
 
     let target_expr_and_indices: Vec<(Arc<dyn PhysicalExpr>, usize)> =
         graph.gather_node_indices(columns.as_slice());
