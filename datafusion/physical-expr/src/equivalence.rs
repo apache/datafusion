@@ -1185,20 +1185,29 @@ impl EquivalenceProperties {
         self.eq_group.project_expr(projection_mapping, expr)
     }
 
+    /// Retrieves the leading orderings among all valid orderings.
+    ///
+    /// Leading ordering is the first non-constant ordering inside each
+    /// lexicographical ordering.
+    ///
+    /// # Returns
+    ///
+    /// A vector of `PhysicalSortExpr` representing the leading orderings.
     fn get_leading_orderings(&self) -> Vec<PhysicalSortExpr> {
-        let mut leading_orderings = vec![];
-        for ordering in self.normalized_oeq_class().iter() {
-            for sort_expr in ordering {
-                if !self.is_expr_constant(&sort_expr.expr) {
-                    leading_orderings.push(sort_expr.clone());
-                    break;
-                }
-            }
-        }
-        leading_orderings
+        self.normalized_oeq_class().iter().flat_map(|ordering |{
+            // Get first non-constant sort_expr.
+            ordering.iter().find(| sort_expr| !self.is_expr_constant(&sort_expr.expr)).cloned()
+        }).collect()
     }
 
-    fn calc_ordered_exprs(
+    /// Retrieves the ordered expressions after projections
+    ///
+    /// # Returns
+    ///
+    /// A tuple of `Vec<PhysicalSortExpr>`,
+    /// - first entry contains orderings that cannot accept further suffix orderings.
+    /// - second entry contains orderings that can accept further suffix orderings.
+    fn get_ordered_exprs_after_projection(
         &self,
         mapping: &ProjectionMapping,
     ) -> (Vec<LexOrdering>, Vec<LexOrdering>) {
@@ -1209,6 +1218,14 @@ impl EquivalenceProperties {
             .iter()
             .map(|sort_expr| sort_expr.expr.clone())
             .collect::<Vec<_>>();
+
+        // Find which projection expressions have an order after projection.
+        // Add ordered projection expressions to the either complete or continuing ordering expressions
+        // Complete ordering expressions means that, these orderings cannot accept suffix orderings after them.
+        //  (Because they cannot guarantee how its arguments map during function, such as floor(a), round(a), etc.)
+        //  This means that we cannot guarantee when floor(a) have a fixed value, a will also have a fixed value.
+        //  Hence, ordering [x, a, b] shouldn't be projected as `[x, floor(a), b]` bu as `[x, floor(a)]`
+        // Continuing ordering expressions means that, these orderings can accept suffix orderings after them.
         for (source, target) in mapping.iter() {
             let expr_ordering = self.get_expr_ordering(source.clone());
             let sort_options =
@@ -1225,10 +1242,11 @@ impl EquivalenceProperties {
             let new_ordering = vec![sort_expr.clone()];
 
             // expr is one of the leading ordering. This means that it is not a composite expression
-            // Hence its exactness doesn't depend on arguments. We can set is_complete true
+            // Hence its exactness doesn't depend on arguments. Then We can set can_continue true.
             // TODO: If we know that composite (complex) expression is 1-to-1 function.
             //  we can still continue iteration. If a is among leading orderings, exp(a) function
-            //  can still continue. Even if it is not directly, among leading orderings. However, floor(a) cannot.
+            //  can still continue. Even if it is not directly, among leading orderings. However,
+            //  after floor(a) cannot continue iteration.
             let can_continue =
                 physical_exprs_contains(&leading_ordering_exprs, &expr_ordering.expr);
             let new_ordering = collapse_lex_ordering(new_ordering);
@@ -1241,9 +1259,12 @@ impl EquivalenceProperties {
             }
         }
 
-        // Project existing leading orderings. If leading ordering is a+b
-        // and mapping is a as a_new, b as b_new; Projected leading ordering
-        // would be a_new+b_new.
+        // Project existing leading orderings. If leading ordering is `a+b`
+        // and mapping is `a as a_new`, `b as b_new`; Projected leading ordering
+        // would be `a_new+b_new`.
+        // Please note that: loop above where we iterate thorough all projections
+        // to understand ordering of the each projection expression cannot handles this case.
+        // Because neither `a_new` and `b_new` are themselves ordered. But their sum is ordered.
         let projected_leading_orderings = leading_orderings
             .into_iter()
             .flat_map(|sort_expr| {
@@ -1255,6 +1276,7 @@ impl EquivalenceProperties {
                     })
             })
             .collect::<Vec<_>>();
+        // Add projected leading orderings to the continuing orderings.
         for projected_leading_ordering in projected_leading_orderings {
             let projected_leading_ordering = vec![projected_leading_ordering];
             if !new_orderings_continuing.contains(&projected_leading_ordering) {
@@ -1277,7 +1299,7 @@ impl EquivalenceProperties {
         let mut continuing_orderings: Vec<LexOrdering> = vec![];
         for sort_expr in ordering.iter() {
             let (new_orderings_complete, new_ordering_continuing) =
-                self.calc_ordered_exprs(mapping);
+                self.get_ordered_exprs_after_projection(mapping);
             let projected_constants = self.projected_constants(mapping);
 
             // Update constants such that they treat left side of the lex ordering as constant during ordering discovery.
