@@ -4140,6 +4140,52 @@ mod tests {
                     vec![("a_new", option_asc)],
                 ],
             ),
+            // ------- TEST CASE 13 ----------
+            (
+                // orderings
+                vec![
+                    // [a ASC, b ASC, c ASC]
+                    vec![
+                        (col_a, option_asc),
+                        (col_b, option_asc),
+                        (col_c, option_asc),
+                    ],
+                    // [a ASC, a + b ASC, c ASC]
+                    vec![
+                        (col_a, option_asc),
+                        (&a_plus_b, option_asc),
+                        (col_c, option_asc),
+                    ],
+                ],
+                // proj exprs
+                vec![
+                    (col_c, "c_new".to_string()),
+                    (col_b, "b_new".to_string()),
+                    (col_a, "a_new".to_string()),
+                    (&a_plus_b, "a+b".to_string()),
+                ],
+                // expected, This expected may be missing
+                vec![
+                    // [a_new ASC, b_new ASC, c_new ASC]
+                    vec![
+                        ("a_new", option_asc),
+                        ("b_new", option_asc),
+                        ("c_new", option_asc),
+                    ],
+                    // [a_new ASC, a+b ASC, c_new ASC]
+                    vec![
+                        ("a_new", option_asc),
+                        ("a+b", option_asc),
+                        ("c_new", option_asc),
+                    ],
+                    // [a_new ASC, a+b ASC, b_new ASC]
+                    vec![
+                        ("a_new", option_asc),
+                        ("a+b", option_asc),
+                        ("b_new", option_asc),
+                    ],
+                ],
+            ),
         ];
 
         for (orderings, proj_exprs, expected) in test_cases {
