@@ -1122,7 +1122,7 @@ dependencies = [
  "half",
  "hashbrown 0.14.2",
  "indexmap 2.1.0",
- "itertools",
+ "itertools 0.12.0",
  "log",
  "num-traits",
  "num_cpus",
@@ -1229,7 +1229,7 @@ dependencies = [
  "datafusion-expr",
  "datafusion-physical-expr",
  "hashbrown 0.14.2",
- "itertools",
+ "itertools 0.12.0",
  "log",
  "regex-syntax",
 ]
@@ -1254,7 +1254,7 @@ dependencies = [
  "hashbrown 0.14.2",
  "hex",
  "indexmap 2.1.0",
- "itertools",
+ "itertools 0.12.0",
  "log",
  "md-5",
  "paste",
@@ -1285,7 +1285,7 @@ dependencies = [
  "half",
  "hashbrown 0.14.2",
  "indexmap 2.1.0",
- "itertools",
+ "itertools 0.12.0",
  "log",
  "once_cell",
  "parking_lot",
@@ -1912,6 +1912,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "itertools"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25db6b064527c5d482d0423354fcd07a89a2dfe07b67892e62411946db7f07b0"
+dependencies = [
+ "either",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2281,7 +2290,7 @@ dependencies = [
  "futures",
  "humantime",
  "hyper",
- "itertools",
+ "itertools 0.11.0",
  "parking_lot",
  "percent-encoding",
  "quick-xml",
@@ -2516,7 +2525,7 @@ dependencies = [
  "anstyle",
  "difflib",
  "float-cmp",
- "itertools",
+ "itertools 0.11.0",
  "normalize-line-endings",
  "predicates-core",
  "regex",
