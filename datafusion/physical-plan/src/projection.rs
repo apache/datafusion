@@ -21,6 +21,7 @@
 //! projection expressions. `SELECT` without `FROM` will only evaluate expressions.
 
 use std::any::Any;
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -32,15 +33,15 @@ use crate::{
     ColumnStatistics, DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr,
 };
 
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::stats::Precision;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::{Literal, UnKnownColumn};
 use datafusion_physical_expr::EquivalenceProperties;
 
-use datafusion_physical_expr::equivalence::ProjectionMapping;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -70,17 +71,37 @@ impl ProjectionExec {
     ) -> Result<Self> {
         let input_schema = input.schema();
 
+        let fields: Result<Vec<Field>> = expr
+            .iter()
+            .map(|(e, name)| {
+                let mut field = Field::new(
+                    name,
+                    e.data_type(&input_schema)?,
+                    e.nullable(&input_schema)?,
+                );
+                field.set_metadata(
+                    get_field_metadata(e, &input_schema).unwrap_or_default(),
+                );
+
+                Ok(field)
+            })
+            .collect();
+
+        let schema = Arc::new(Schema::new_with_metadata(
+            fields?,
+            input_schema.metadata().clone(),
+        ));
+
         // construct a map from the input expressions to the output expression of the Projection
         let projection_mapping = ProjectionMapping::try_new(&expr, &input_schema)?;
 
         let input_eqs = input.equivalence_properties();
-        let project_eqs =
-            input_eqs.project(&projection_mapping, projection_mapping.output_schema());
+        let project_eqs = input_eqs.project(&projection_mapping, schema.clone());
         let output_ordering = project_eqs.oeq_class().output_ordering();
 
         Ok(Self {
             expr,
-            schema: projection_mapping.output_schema(),
+            schema,
             input,
             output_ordering,
             projection_mapping,
@@ -228,6 +249,24 @@ impl ExecutionPlan for ProjectionExec {
             self.schema.clone(),
         ))
     }
+}
+
+/// If e is a direct column reference, returns the field level
+/// metadata for that field, if any. Otherwise returns None
+fn get_field_metadata(
+    e: &Arc<dyn PhysicalExpr>,
+    input_schema: &Schema,
+) -> Option<HashMap<String, String>> {
+    let name = if let Some(column) = e.as_any().downcast_ref::<Column>() {
+        column.name()
+    } else {
+        return None;
+    };
+
+    input_schema
+        .field_with_name(name)
+        .ok()
+        .map(|f| f.metadata().clone())
 }
 
 fn stats_projection(

@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
 
@@ -28,10 +27,11 @@ use crate::{
     PhysicalSortRequirement,
 };
 use arrow::datatypes::SchemaRef;
-use arrow_schema::{Field, Schema, SortOptions};
+use arrow_schema::SortOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{JoinSide, JoinType, Result};
 
+use indexmap::IndexSet;
 use itertools::Itertools;
 
 /// An `EquivalenceClass` is a set of [`Arc<dyn PhysicalExpr>`]s that are known
@@ -142,7 +142,6 @@ pub struct ProjectionMapping {
     /// `(source expression)` --> `(target expression)`
     /// Indices in the vector corresponds to the indices after projection.
     inner: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>,
-    output_schema: SchemaRef,
 }
 
 impl ProjectionMapping {
@@ -186,33 +185,7 @@ impl ProjectionMapping {
 
             inner.push((source_expr, target_expr));
         }
-
-        // Calculate output schema
-        let fields: Result<Vec<Field>> = expr
-            .iter()
-            .map(|(e, name)| {
-                let mut field = Field::new(
-                    name,
-                    e.data_type(input_schema)?,
-                    e.nullable(input_schema)?,
-                );
-                field.set_metadata(
-                    get_field_metadata(e, input_schema).unwrap_or_default(),
-                );
-
-                Ok(field)
-            })
-            .collect();
-
-        let output_schema = Arc::new(Schema::new_with_metadata(
-            fields?,
-            input_schema.metadata().clone(),
-        ));
-
-        Ok(Self {
-            inner,
-            output_schema,
-        })
+        Ok(Self { inner })
     }
 
     /// Iterate over pairs of (source, target) expressions
@@ -220,11 +193,6 @@ impl ProjectionMapping {
         &self,
     ) -> impl Iterator<Item = &(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)> + '_ {
         self.inner.iter()
-    }
-
-    /// Get a reference to the output schema after projection applied
-    pub fn output_schema(&self) -> SchemaRef {
-        self.output_schema.clone()
     }
 
     /// This function projects ordering requirement according to projection.
@@ -294,24 +262,6 @@ impl ProjectionMapping {
             None
         }
     }
-}
-
-/// If e is a direct column reference, returns the field level
-/// metadata for that field, if any. Otherwise returns None
-fn get_field_metadata(
-    e: &Arc<dyn PhysicalExpr>,
-    input_schema: &Schema,
-) -> Option<HashMap<String, String>> {
-    let name = if let Some(column) = e.as_any().downcast_ref::<Column>() {
-        column.name()
-    } else {
-        return None;
-    };
-
-    input_schema
-        .field_with_name(name)
-        .ok()
-        .map(|f| f.metadata().clone())
 }
 
 /// An `EquivalenceGroup` is a collection of `EquivalenceClass`es where each
@@ -764,29 +714,19 @@ impl OrderingEquivalenceClass {
             .iter()
             .flat_map(|ordering| ordering.first().map(|sort_expr| sort_expr.expr.clone()))
             .collect::<Vec<_>>();
-        self.orderings = self
-            .orderings
-            .iter()
-            .map(|ordering| {
-                let collapsed = collapse_lex_ordering(ordering.to_vec());
-                collapsed
-                    .into_iter()
-                    .enumerate()
-                    .flat_map(|(idx, sort_expr)| {
-                        if idx > 0
-                            && physical_exprs_contains(
-                                &leading_ordering_exprs,
-                                &sort_expr.expr,
-                            )
-                        {
-                            None
-                        } else {
-                            Some(sort_expr)
-                        }
-                    })
-                    .collect()
-            })
-            .collect::<Vec<_>>();
+
+        // Remove leading orderings that are beyond index 0, to simplify ordering.
+        self.orderings.iter_mut().for_each(|ordering| {
+            let mut counter = 0;
+            ordering.retain(|sort_expr| {
+                // Either first entry or is not leading ordering
+                let should_retain = counter == 0
+                    || !physical_exprs_contains(&leading_ordering_exprs, &sort_expr.expr);
+                counter += 1;
+                should_retain
+            });
+        });
+
         let mut idx = 0;
         while idx < self.orderings.len() {
             let mut removal = self.orderings[idx].is_empty();
@@ -1118,17 +1058,40 @@ impl EquivalenceProperties {
         // First, standardize the given requirement:
         let normalized_reqs = eq_properties.normalize_sort_requirements(reqs);
         for normalized_req in normalized_reqs {
+            // Check whether given ordering is satisfied
             if !eq_properties.ordering_satisfy_single_req(&normalized_req) {
                 return false;
             }
+            // - Treat satisfied ordering as constant in the next iterations. Since in lexicographical ordering
+            //   next orderings are only considered as long as their left side have same values
+            //   (e.g for them their left side is constant).
+            //
+            // Please note that, these expressions are not properly constant. This is just implementation
+            // and this interpretation doesn't effect outside users in anyway.
+            //
+            // As an example:
+            // If the requirement is `[a ASC, b + c ASC]`.
+            // and existing orderings are `[a ASC, b ASC], [c ASC]`.
+            // From the analysis above, we know that `[a ASC]` is satisfied.
+            // Then here, we add column `a` as constant to the state.
+            // This enables us to deduce that `b + c ASC` is satisfied, given `a` is constant.
             eq_properties =
                 eq_properties.add_constants(std::iter::once(normalized_req.expr));
         }
         true
     }
 
-    /// Check whether PhysicalSortRequirement is satisfied by considering
-    /// leading orderings, equalities, and constant expressions.
+    /// Determines whether the ordering specified by a given `PhysicalSortRequirement` is satisfied
+    /// based on the internal orderings, equivalent classes, and constant expressions.
+    ///
+    /// # Arguments
+    ///
+    /// - `req`: A reference to a `PhysicalSortRequirement` for which the ordering satisfaction
+    ///   needs to be determined.
+    ///
+    /// # Returns
+    ///
+    /// Returns `true` if the specified ordering is satisfied; otherwise, returns `false`.
     fn ordering_satisfy_single_req(&self, req: &PhysicalSortRequirement) -> bool {
         let expr_ordering = self.get_expr_ordering(req.expr.clone());
         let ExprOrdering { expr, state, .. } = expr_ordering;
@@ -1137,6 +1100,7 @@ impl EquivalenceProperties {
                 let sort_expr = PhysicalSortExpr { expr, options };
                 sort_expr.satisfy(req, self.schema())
             }
+            // Singleton expressions satisfies any ordering.
             SortProperties::Singleton => true,
             SortProperties::Unordered => false,
         }
@@ -1428,13 +1392,27 @@ impl EquivalenceProperties {
         (!orderings.is_empty()).then_some(orderings)
     }
 
+    /// Projects constants based on the provided `ProjectionMapping`.
+    ///
+    /// This function takes a `ProjectionMapping` and identifies and projects constants based on
+    /// the existing constants and the mapping. It ensures that constants are appropriately
+    /// propagated through the projection expressions.
+    ///
+    /// # Arguments
+    ///
+    /// - `mapping`: A reference to a `ProjectionMapping` representing the mapping of source
+    ///   expressions to target expressions in the projection.
+    ///
+    /// # Returns
+    ///
+    /// Returns a vector of `Arc<dyn PhysicalExpr>` containing the projected constants.
     fn projected_constants(
         &self,
         mapping: &ProjectionMapping,
     ) -> Vec<Arc<dyn PhysicalExpr>> {
         // Project existing constants
         // As an example assume that a+b is known to be constant. If projection were:
-        // `a as a_new`, `b as b_new`; we would project constant `a+b` as `a_new+b+new`
+        // `a as a_new`, `b as b_new`; we would project constant `a+b` as `a_new+b_new`
         let mut projected_constants = self
             .constants
             .iter()
@@ -1467,7 +1445,6 @@ impl EquivalenceProperties {
             .filter_map(|order| self.clone().project_ordering(projection_mapping, order))
             .flatten()
             .collect::<Vec<_>>();
-
         Self {
             eq_group: projected_eq_group,
             oeq_class: OrderingEquivalenceClass::new(projected_orderings),
@@ -1494,46 +1471,110 @@ impl EquivalenceProperties {
         exprs: &[Arc<dyn PhysicalExpr>],
     ) -> (LexOrdering, Vec<usize>) {
         let mut eq_properties = self.clone();
-        let mut result_ordering = vec![];
-        let mut indices = vec![];
-        loop {
-            let mut is_fixed = true;
-            for (idx, expr) in exprs.iter().enumerate() {
-                // Do not add already added expressions
-                if !indices.contains(&idx) {
+        let mut result = vec![];
+        // Algorithm is as follows:
+        // - 1. Iterate over all expressions and insert the expressions that are known to be ordered
+        //      into result_ordering.
+        // - 2. Treat inserted expressions as constants (add them as constant to the state)
+        // - 3. Go back to step 1.
+        // - Continue the above iteration as long as no new expression is inserted (Algorithm reached a fixed point).
+
+        let mut search_indices = (0..exprs.len()).collect::<IndexSet<_>>();
+        // Algorithm above should reach a fixed point at-most `exprs.len()` number of iterations.
+        // We could have use loop{}, However, to guarantee we exit anyway (in-case of bugs).
+        // We use upper limit number of iterations (worst-case).
+        for _idx in 0..exprs.len() {
+            // Get ordered expressions with their indices.
+            let ordered_exprs = search_indices
+                .iter()
+                .flat_map(|&idx| {
+                    let expr = exprs[idx].clone();
                     let ExprOrdering { expr, state, .. } =
-                        eq_properties.get_expr_ordering(expr.clone());
+                        eq_properties.get_expr_ordering(expr);
                     if let SortProperties::Ordered(options) = state {
-                        eq_properties =
-                            eq_properties.add_constants(std::iter::once(expr.clone()));
                         let sort_expr = PhysicalSortExpr { expr, options };
-                        result_ordering.push(sort_expr);
-                        indices.push(idx);
-                        is_fixed = false;
+                        Some((sort_expr, idx))
+                    } else {
+                        None
                     }
-                }
-            }
-            if is_fixed {
+                })
+                .collect::<Vec<_>>();
+
+            // We reached a fixed point, exit.
+            if ordered_exprs.is_empty() {
                 break;
             }
+
+            // - Remove indices that have an ordering from search_indices
+            // - Treat ordered expressions as constant in the next iterations. Since in lexicographical ordering
+            //   next orderings are only considered as long as their left side have same values
+            //   (e.g for them their left side is constant).
+            //
+            // Please note that, these expressions are not properly constant. This is just implementation
+            // and this interpretation doesn't effect outside users in anyway.
+            for (sort_expr, idx) in &ordered_exprs {
+                eq_properties =
+                    eq_properties.add_constants(std::iter::once(sort_expr.expr.clone()));
+                search_indices.remove(idx);
+            }
+
+            // Add new ordered section to the state.
+            result.extend(ordered_exprs);
         }
-        (result_ordering, indices)
+        result.into_iter().unzip()
     }
 
+    /// Checks whether a given expression is constant.
+    ///
+    /// This function determines whether the provided expression is constant based on the known constants.
+    ///
+    /// # Arguments
+    ///
+    /// - `expr`: A reference to a `Arc<dyn PhysicalExpr>` representing the expression to be checked.
+    ///
+    /// # Returns
+    ///
+    /// Returns `true` if the expression is constant within the equivalence group; otherwise, returns `false`.
     fn is_expr_constant(&self, expr: &Arc<dyn PhysicalExpr>) -> bool {
+        // As an example, assume that we know columns [a, b] are constant.
+        // `a`, `b`, `a+b` will all return `true`, whereas `c` will return `false`.
         let normalized_constants = self.eq_group.normalize_exprs(self.constants.to_vec());
         let normalized_expr = self.eq_group.normalize_expr(expr.clone());
         is_expr_constant_util(&normalized_constants, &normalized_expr)
     }
 
+    /// Retrieves the ordering information for a given physical expression.
+    ///
+    /// This function constructs an `ExprOrdering` object for the provided expression, which encapsulates
+    /// information about the expression's ordering, including its state and associated options.
+    ///
+    /// # Arguments
+    ///
+    /// - `expr`: An `Arc<dyn PhysicalExpr>` representing the physical expression for which ordering information is sought.
+    ///
+    /// # Returns
+    ///
+    /// Returns an `ExprOrdering` object containing the ordering information for the given expression.
     pub fn get_expr_ordering(&self, expr: Arc<dyn PhysicalExpr>) -> ExprOrdering {
         let expr_ordering = ExprOrdering::new(expr.clone());
         expr_ordering
-            .transform_up(&|expr| update_ordering(expr, self))
+            .transform_up(&|expr| Ok(update_ordering(expr, self)))
+            // It is guaranteed to always return Ok.
             .unwrap()
     }
 }
 
+/// Checks whether a given expression is constant. This function determines whether the
+/// provided expression is constant based on the known constants.
+///
+/// # Arguments
+///
+/// - `constants`: A reference to a `[Arc<dyn PhysicalExpr>]` containing expressions known to be a constant.
+/// - `expr`: A reference to a `Arc<dyn PhysicalExpr>` representing the expression to be checked.
+///
+/// # Returns
+///
+/// Returns `true` if the expression is constant within the equivalence group; otherwise, returns `false`.
 fn is_expr_constant_util(
     constants: &[Arc<dyn PhysicalExpr>],
     expr: &Arc<dyn PhysicalExpr>,
@@ -1671,28 +1712,28 @@ fn updated_right_ordering_equivalence_class(
 fn update_ordering(
     mut node: ExprOrdering,
     eq_properties: &EquivalenceProperties,
-) -> Result<Transformed<ExprOrdering>> {
+) -> Transformed<ExprOrdering> {
     // We have a Column, which is one of the two possible leaf node types:
     let eq_group = &eq_properties.eq_group;
     let normalized_expr = eq_group.normalize_expr(node.expr.clone());
     let oeq_class = &eq_properties.normalized_oeq_class();
     if eq_properties.is_expr_constant(&normalized_expr) {
         node.state = SortProperties::Singleton;
-        return Ok(Transformed::Yes(node));
+        return Transformed::Yes(node);
     } else if let Some(options) = oeq_class.get_options(&normalized_expr) {
         node.state = SortProperties::Ordered(options);
-        return Ok(Transformed::Yes(node));
+        return Transformed::Yes(node);
     }
     if !node.expr.children().is_empty() {
         // We have an intermediate (non-leaf) node, account for its children:
         node.state = node.expr.get_ordering(&node.children_states);
-        Ok(Transformed::Yes(node))
+        Transformed::Yes(node)
     } else if node.expr.as_any().is::<Literal>() {
         // We have a Literal, which is the other possible leaf node type:
         node.state = node.expr.get_ordering(&[]);
-        Ok(Transformed::Yes(node))
+        Transformed::Yes(node)
     } else {
-        Ok(Transformed::No(node))
+        Transformed::No(node)
     }
 }
 
@@ -1725,13 +1766,44 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_array::{ArrayRef, Float64Array, RecordBatch, UInt32Array};
     use arrow_schema::{Fields, SortOptions, TimeUnit};
-    use datafusion_common::{Result, ScalarValue};
+    use datafusion_common::{plan_datafusion_err, DataFusionError, Result, ScalarValue};
     use datafusion_expr::{BuiltinScalarFunction, Operator};
 
     use itertools::{izip, Itertools};
     use rand::rngs::StdRng;
     use rand::seq::SliceRandom;
     use rand::{Rng, SeedableRng};
+
+    fn output_schema(
+        mapping: &ProjectionMapping,
+        input_schema: &Arc<Schema>,
+    ) -> Result<SchemaRef> {
+        // Calculate output schema
+        let fields: Result<Vec<Field>> = mapping
+            .iter()
+            .map(|(source, target)| {
+                let name = target
+                    .as_any()
+                    .downcast_ref::<Column>()
+                    .ok_or_else(|| plan_datafusion_err!("Expects to have column"))?
+                    .name();
+                let field = Field::new(
+                    name,
+                    source.data_type(input_schema)?,
+                    source.nullable(input_schema)?,
+                );
+
+                Ok(field)
+            })
+            .collect();
+
+        let output_schema = Arc::new(Schema::new_with_metadata(
+            fields?,
+            input_schema.metadata().clone(),
+        ));
+
+        Ok(output_schema)
+    }
 
     // Generate a schema which consists of 8 columns (a, b, c, d, e, f, g, h)
     fn create_test_schema() -> Result<SchemaRef> {
@@ -1985,7 +2057,16 @@ mod tests {
             (col_a.clone(), "a4".to_string()),
         ];
         let projection_mapping = ProjectionMapping::try_new(&proj_exprs, &input_schema)?;
-        let out_schema = projection_mapping.output_schema();
+        let out_schema = output_schema(&projection_mapping, &input_schema)?;
+
+        // a as a1, a as a2, a as a3, a as a3
+        let proj_exprs = vec![
+            (col_a.clone(), "a1".to_string()),
+            (col_a.clone(), "a2".to_string()),
+            (col_a.clone(), "a3".to_string()),
+            (col_a.clone(), "a4".to_string()),
+        ];
+        let projection_mapping = ProjectionMapping::try_new(&proj_exprs, &input_schema)?;
 
         // a as a1, a as a2, a as a3, a as a3
         let col_a1 = &col("a1", &out_schema)?;
@@ -2207,136 +2288,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ordering_satisfy_with_equivalence_random() -> Result<()> {
-        const N_RANDOM_SCHEMA: usize = 5;
-        const N_ELEMENTS: usize = 125;
-        const N_DISTINCT: usize = 5;
-        const SORT_OPTIONS: SortOptions = SortOptions {
-            descending: false,
-            nulls_first: false,
-        };
-
-        for seed in 0..N_RANDOM_SCHEMA {
-            // Create a random schema with random properties
-            let (test_schema, eq_properties) = create_random_schema(seed as u64)?;
-            // Generate a data that satisfies properties given
-            let table_data_with_properties =
-                generate_table_for_eq_properties(&eq_properties, N_ELEMENTS, N_DISTINCT)?;
-            let col_exprs = vec![
-                col("a", &test_schema)?,
-                col("b", &test_schema)?,
-                col("c", &test_schema)?,
-                col("d", &test_schema)?,
-                col("e", &test_schema)?,
-                col("f", &test_schema)?,
-            ];
-
-            for n_req in 0..=col_exprs.len() {
-                for exprs in col_exprs.iter().combinations(n_req) {
-                    let requirement = exprs
-                        .into_iter()
-                        .map(|expr| PhysicalSortExpr {
-                            expr: expr.clone(),
-                            options: SORT_OPTIONS,
-                        })
-                        .collect::<Vec<_>>();
-                    let expected = is_table_same_after_sort(
-                        requirement.clone(),
-                        table_data_with_properties.clone(),
-                    )?;
-                    let err_msg = format!(
-                        "Error in test case requirement:{:?}, expected: {:?}, eq_properties.oeq_class: {:?}, eq_properties.eq_group: {:?}, eq_properties.constants: {:?}",
-                        requirement, expected, eq_properties.oeq_class, eq_properties.eq_group, eq_properties.constants
-                    );
-                    // Check whether ordering_satisfy API result and
-                    // experimental result matches.
-                    assert_eq!(
-                        eq_properties.ordering_satisfy(&requirement),
-                        expected,
-                        "{}",
-                        err_msg
-                    );
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_ordering_satisfy_with_equivalence_complex_random() -> Result<()> {
-        const N_RANDOM_SCHEMA: usize = 100;
-        const N_ELEMENTS: usize = 125;
-        const N_DISTINCT: usize = 5;
-        const SORT_OPTIONS: SortOptions = SortOptions {
-            descending: false,
-            nulls_first: false,
-        };
-
-        for seed in 0..N_RANDOM_SCHEMA {
-            // Create a random schema with random properties
-            let (test_schema, eq_properties) = create_random_schema(seed as u64)?;
-            // Generate a data that satisfies properties given
-            let table_data_with_properties =
-                generate_table_for_eq_properties(&eq_properties, N_ELEMENTS, N_DISTINCT)?;
-
-            let exp_fn = create_physical_expr(
-                &BuiltinScalarFunction::Floor,
-                &[col("a", &test_schema)?],
-                &test_schema,
-                &ExecutionProps::default(),
-            )?;
-            let a_plus_b = Arc::new(BinaryExpr::new(
-                col("a", &test_schema)?,
-                Operator::Plus,
-                col("b", &test_schema)?,
-            )) as Arc<dyn PhysicalExpr>;
-            let exprs = vec![
-                col("a", &test_schema)?,
-                col("b", &test_schema)?,
-                col("c", &test_schema)?,
-                col("d", &test_schema)?,
-                col("e", &test_schema)?,
-                col("f", &test_schema)?,
-                exp_fn,
-                a_plus_b,
-            ];
-
-            for n_req in 0..=exprs.len() {
-                for exprs in exprs.iter().combinations(n_req) {
-                    let requirement = exprs
-                        .into_iter()
-                        .map(|expr| PhysicalSortExpr {
-                            expr: expr.clone(),
-                            options: SORT_OPTIONS,
-                        })
-                        .collect::<Vec<_>>();
-                    let expected = is_table_same_after_sort(
-                        requirement.clone(),
-                        table_data_with_properties.clone(),
-                    )?;
-                    let err_msg = format!(
-                        "Error in test case requirement:{:?}, expected: {:?}, eq_properties.oeq_class: {:?}, eq_properties.eq_group: {:?}, eq_properties.constants: {:?}",
-                        requirement, expected, eq_properties.oeq_class, eq_properties.eq_group, eq_properties.constants
-                    );
-                    // Check whether ordering_satisfy API result and
-                    // experimental result matches.
-
-                    assert_eq!(
-                        eq_properties.ordering_satisfy(&requirement),
-                        (expected | false),
-                        "{}",
-                        err_msg
-                    );
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_ordering_satisfy_err_cases() -> Result<()> {
+    fn test_ordering_satisfy_with_equivalence2() -> Result<()> {
         let test_schema = create_test_schema()?;
         let col_a = &col("a", &test_schema)?;
         let col_b = &col("b", &test_schema)?;
@@ -2347,6 +2299,12 @@ mod tests {
         let floor_a = &create_physical_expr(
             &BuiltinScalarFunction::Floor,
             &[col("a", &test_schema)?],
+            &test_schema,
+            &ExecutionProps::default(),
+        )?;
+        let floor_f = &create_physical_expr(
+            &BuiltinScalarFunction::Floor,
+            &[col("f", &test_schema)?],
             &test_schema,
             &ExecutionProps::default(),
         )?;
@@ -2400,6 +2358,24 @@ mod tests {
                 vec![col_e],
                 // requirement [floor(a) ASC],
                 vec![(floor_a, options)],
+                // expected: requirement is satisfied.
+                true,
+            ),
+            // ------------ TEST CASE 2.1 ------------
+            (
+                // orderings
+                vec![
+                    // [a ASC, c ASC, b ASC]
+                    vec![(col_a, options), (col_c, options), (col_b, options)],
+                    // [d ASC]
+                    vec![(col_d, options)],
+                ],
+                // equivalence classes
+                vec![vec![col_a, col_f]],
+                // constants
+                vec![col_e],
+                // requirement [floor(f) ASC], (Please note that a=f)
+                vec![(floor_f, options)],
                 // expected: requirement is satisfied.
                 true,
             ),
@@ -2596,6 +2572,135 @@ mod tests {
                 "{}",
                 err_msg
             );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ordering_satisfy_with_equivalence_random() -> Result<()> {
+        const N_RANDOM_SCHEMA: usize = 5;
+        const N_ELEMENTS: usize = 125;
+        const N_DISTINCT: usize = 5;
+        const SORT_OPTIONS: SortOptions = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+
+        for seed in 0..N_RANDOM_SCHEMA {
+            // Create a random schema with random properties
+            let (test_schema, eq_properties) = create_random_schema(seed as u64)?;
+            // Generate a data that satisfies properties given
+            let table_data_with_properties =
+                generate_table_for_eq_properties(&eq_properties, N_ELEMENTS, N_DISTINCT)?;
+            let col_exprs = vec![
+                col("a", &test_schema)?,
+                col("b", &test_schema)?,
+                col("c", &test_schema)?,
+                col("d", &test_schema)?,
+                col("e", &test_schema)?,
+                col("f", &test_schema)?,
+            ];
+
+            for n_req in 0..=col_exprs.len() {
+                for exprs in col_exprs.iter().combinations(n_req) {
+                    let requirement = exprs
+                        .into_iter()
+                        .map(|expr| PhysicalSortExpr {
+                            expr: expr.clone(),
+                            options: SORT_OPTIONS,
+                        })
+                        .collect::<Vec<_>>();
+                    let expected = is_table_same_after_sort(
+                        requirement.clone(),
+                        table_data_with_properties.clone(),
+                    )?;
+                    let err_msg = format!(
+                        "Error in test case requirement:{:?}, expected: {:?}, eq_properties.oeq_class: {:?}, eq_properties.eq_group: {:?}, eq_properties.constants: {:?}",
+                        requirement, expected, eq_properties.oeq_class, eq_properties.eq_group, eq_properties.constants
+                    );
+                    // Check whether ordering_satisfy API result and
+                    // experimental result matches.
+                    assert_eq!(
+                        eq_properties.ordering_satisfy(&requirement),
+                        expected,
+                        "{}",
+                        err_msg
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ordering_satisfy_with_equivalence_complex_random() -> Result<()> {
+        const N_RANDOM_SCHEMA: usize = 100;
+        const N_ELEMENTS: usize = 125;
+        const N_DISTINCT: usize = 5;
+        const SORT_OPTIONS: SortOptions = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+
+        for seed in 0..N_RANDOM_SCHEMA {
+            // Create a random schema with random properties
+            let (test_schema, eq_properties) = create_random_schema(seed as u64)?;
+            // Generate a data that satisfies properties given
+            let table_data_with_properties =
+                generate_table_for_eq_properties(&eq_properties, N_ELEMENTS, N_DISTINCT)?;
+
+            let exp_fn = create_physical_expr(
+                &BuiltinScalarFunction::Floor,
+                &[col("a", &test_schema)?],
+                &test_schema,
+                &ExecutionProps::default(),
+            )?;
+            let a_plus_b = Arc::new(BinaryExpr::new(
+                col("a", &test_schema)?,
+                Operator::Plus,
+                col("b", &test_schema)?,
+            )) as Arc<dyn PhysicalExpr>;
+            let exprs = vec![
+                col("a", &test_schema)?,
+                col("b", &test_schema)?,
+                col("c", &test_schema)?,
+                col("d", &test_schema)?,
+                col("e", &test_schema)?,
+                col("f", &test_schema)?,
+                exp_fn,
+                a_plus_b,
+            ];
+
+            for n_req in 0..=exprs.len() {
+                for exprs in exprs.iter().combinations(n_req) {
+                    let requirement = exprs
+                        .into_iter()
+                        .map(|expr| PhysicalSortExpr {
+                            expr: expr.clone(),
+                            options: SORT_OPTIONS,
+                        })
+                        .collect::<Vec<_>>();
+                    let expected = is_table_same_after_sort(
+                        requirement.clone(),
+                        table_data_with_properties.clone(),
+                    )?;
+                    let err_msg = format!(
+                        "Error in test case requirement:{:?}, expected: {:?}, eq_properties.oeq_class: {:?}, eq_properties.eq_group: {:?}, eq_properties.constants: {:?}",
+                        requirement, expected, eq_properties.oeq_class, eq_properties.eq_group, eq_properties.constants
+                    );
+                    // Check whether ordering_satisfy API result and
+                    // experimental result matches.
+
+                    assert_eq!(
+                        eq_properties.ordering_satisfy(&requirement),
+                        (expected | false),
+                        "{}",
+                        err_msg
+                    );
+                }
+            }
         }
 
         Ok(())
@@ -2835,6 +2940,23 @@ mod tests {
                 vec![vec![]],
                 // No ordering in the state (empty ordering is ignored).
                 vec![],
+            ),
+            // ------- TEST CASE 6 ---------
+            (
+                // ORDERINGS GIVEN
+                vec![
+                    // [a ASC, b ASC]
+                    vec![(col_a, option_asc), (col_b, option_asc)],
+                    // [b ASC]
+                    vec![(col_b, option_asc)],
+                ],
+                // EXPECTED orderings that is succinct.
+                vec![
+                    // [a ASC]
+                    vec![(col_a, option_asc)],
+                    // [b ASC]
+                    vec![(col_b, option_asc)],
+                ],
             ),
         ];
         for (orderings, expected) in test_cases {
@@ -4129,7 +4251,7 @@ mod tests {
                 .map(|(expr, name)| (expr.clone(), name))
                 .collect::<Vec<_>>();
             let projection_mapping = ProjectionMapping::try_new(&proj_exprs, &schema)?;
-            let output_schema = projection_mapping.output_schema();
+            let output_schema = output_schema(&projection_mapping, &schema)?;
 
             let expected = expected
                 .into_iter()
@@ -4158,6 +4280,9 @@ mod tests {
             }
         }
 
+        let constants = vec![col_a.clone(), col_b.clone(), col_d.clone()];
+        let expr = b_plus_d.clone();
+        assert!(is_expr_constant_util(&constants, &expr));
         Ok(())
     }
 
@@ -4212,7 +4337,7 @@ mod tests {
             .map(|(expr, name)| (expr.clone(), name))
             .collect::<Vec<_>>();
         let projection_mapping = ProjectionMapping::try_new(&proj_exprs, &schema)?;
-        let output_schema = projection_mapping.output_schema();
+        let output_schema = output_schema(&projection_mapping, &schema)?;
 
         let col_a_new = &col("a_new", &output_schema)?;
         let col_b_new = &col("b_new", &output_schema)?;
