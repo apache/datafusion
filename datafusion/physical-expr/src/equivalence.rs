@@ -1217,8 +1217,6 @@ impl EquivalenceProperties {
         &self,
         mapping: &ProjectionMapping,
     ) -> (Vec<PhysicalSortExpr>, Vec<PhysicalSortExpr>) {
-        let mut new_orderings_continuing = vec![];
-        let mut new_orderings_complete = vec![];
         let leading_orderings = self.get_leading_orderings();
         let leading_ordering_exprs = leading_orderings
             .iter()
@@ -1226,44 +1224,41 @@ impl EquivalenceProperties {
             .collect::<Vec<_>>();
 
         // Find which projection expressions have an order after projection.
-        // Add ordered projection expressions to the either complete or continuing ordering expressions
-        // Complete ordering expressions means that, these orderings cannot accept suffix orderings after them.
-        //  (Because they cannot guarantee how its arguments map during function, such as floor(a), round(a), etc.)
-        //  This means that we cannot guarantee when floor(a) have a fixed value, a will also have a fixed value.
-        //  Hence, ordering [x, a, b] shouldn't be projected as `[x, floor(a), b]` bu as `[x, floor(a)]`
-        // Continuing ordering expressions means that, these orderings can accept suffix orderings after them.
-        for (source, target) in mapping.iter() {
-            let expr_ordering = self.get_expr_ordering(source.clone());
-            let sort_options =
-                if let SortProperties::Ordered(sort_options) = expr_ordering.state {
-                    sort_options
+        let ordered_projections = mapping
+            .iter()
+            .flat_map(|(source, target)| {
+                let expr_ordering = self.get_expr_ordering(source.clone());
+                if let SortProperties::Ordered(options) = expr_ordering.state {
+                    Some(PhysicalSortExpr {
+                        expr: target.clone(),
+                        options,
+                    })
                 } else {
-                    // expression is not ordered check next expression in the projection mapping
-                    continue;
-                };
-            let sort_expr = PhysicalSortExpr {
-                expr: target.clone(),
-                options: sort_options,
-            };
-            // let new_ordering = vec![sort_expr.clone()];
+                    // expression is not ordered,
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
 
-            // expr is one of the leading ordering. This means that it is not a composite expression
-            // Hence its exactness doesn't depend on arguments. Then We can set can_continue true.
+        // Split ordered projection expressions to the either complete or continuing ordering expressions
+        // - Complete ordering expressions means that, these orderings cannot accept suffix orderings after them.
+        //   (Because they cannot guarantee how its arguments map during function, such as floor(a), round(a), etc.)
+        //   This means that we cannot guarantee when floor(a) have a fixed value, a will also have a fixed value.
+        //   Hence, ordering [x, a, b] shouldn't be projected as `[x, floor(a), b]` bu as `[x, floor(a)]`
+        // - Continuing ordering expressions means that, these orderings can accept suffix orderings after them.
+        let (mut new_orderings_continuing, mut new_orderings_complete): (
+            Vec<PhysicalSortExpr>,
+            Vec<PhysicalSortExpr>,
+        ) = ordered_projections.into_iter().partition(|sort_expr| {
+            // If expr is one of the leading ordering exprs. This means that it is not a composite expression
+            // Hence its exactness doesn't depend on arguments. These sort expression can accept suffix (e.g in continuing mode).
+            // Others cannot accept suffix (e.g in completed mode)
             // TODO: If we know that composite (complex) expression is 1-to-1 function.
             //  we can still continue iteration. If a is among leading orderings, exp(a) function
             //  can still continue. Even if it is not directly, among leading orderings. However,
             //  after floor(a) cannot continue iteration.
-            let can_continue =
-                physical_exprs_contains(&leading_ordering_exprs, &expr_ordering.expr);
-            // let new_ordering = collapse_lex_ordering(new_ordering);
-            if can_continue && !new_orderings_continuing.contains(&sort_expr) {
-                // Can continue and isn't already added.
-                new_orderings_continuing.push(sort_expr);
-            } else if !can_continue && !new_orderings_complete.contains(&sort_expr) {
-                // Cannot continue and isn't already added.
-                new_orderings_complete.push(sort_expr);
-            }
-        }
+            physical_exprs_contains(&leading_ordering_exprs, &sort_expr.expr)
+        });
 
         // Project existing leading orderings. If leading ordering is `a+b`
         // and mapping is `a as a_new`, `b as b_new`; Projected leading ordering
@@ -1283,11 +1278,11 @@ impl EquivalenceProperties {
             })
             .collect::<Vec<_>>();
         // Add projected leading orderings to the continuing orderings.
-        for projected_leading_ordering in projected_leading_orderings {
-            if !new_orderings_continuing.contains(&projected_leading_ordering) {
-                new_orderings_continuing.push(projected_leading_ordering);
-            }
-        }
+        new_orderings_continuing.extend(projected_leading_orderings);
+
+        // De-duplicate orderings
+        new_orderings_complete = deduplicate_sort_exprs(new_orderings_complete);
+        new_orderings_continuing = deduplicate_sort_exprs(new_orderings_continuing);
         (new_orderings_complete, new_orderings_continuing)
     }
 
@@ -1708,6 +1703,18 @@ fn suffix_relevant_orderings(
         }
     }
     result
+}
+
+/// This function constructs a duplicate-free `Vec<PhysicalSortExpr>` by filtering out
+/// duplicate entries that have same `PhysicalSortExpr` inside.
+pub fn deduplicate_sort_exprs(input: Vec<PhysicalSortExpr>) -> Vec<PhysicalSortExpr> {
+    let mut output = Vec::<PhysicalSortExpr>::new();
+    for item in input {
+        if !output.iter().any(|req| req.eq(&item)) {
+            output.push(item);
+        }
+    }
+    output
 }
 
 #[cfg(test)]
