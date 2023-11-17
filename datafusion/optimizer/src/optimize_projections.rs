@@ -583,6 +583,9 @@ fn optimize_projections(
         LogicalPlan::TableScan(table_scan) => {
             let projection_fields = table_scan.projected_schema.fields();
             let schema = table_scan.source.schema();
+            // We expect to find all of the required indices of the projected schema fields.
+            // among original schema. If at least one of them cannot be found. Use all of the fields in the file.
+            // (No projection at the source)
             let projection = indices
                 .iter()
                 .map(|&idx| {
