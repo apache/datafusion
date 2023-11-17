@@ -25,8 +25,8 @@ use datafusion::logical_expr::{
     BuiltinScalarFunction, Case, Expr, LogicalPlan, Operator,
 };
 use datafusion::logical_expr::{
-    expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder, WindowFrameBound,
-    WindowFrameUnits,
+    expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder,
+    ScalarFunctionDefinition, WindowFrameBound, WindowFrameUnits,
 };
 use datafusion::prelude::JoinType;
 use datafusion::sql::TableReference;
@@ -844,7 +844,7 @@ pub async fn from_substrait_rex(
                         args.push(arg_expr?.as_ref().clone());
                     }
                     Ok(Arc::new(Expr::ScalarFunction(expr::ScalarFunction {
-                        fun,
+                        func_def: ScalarFunctionDefinition::BuiltIn(fun),
                         args,
                     })))
                 }

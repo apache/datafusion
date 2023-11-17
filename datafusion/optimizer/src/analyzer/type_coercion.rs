@@ -45,7 +45,8 @@ use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_large_utf8};
 use datafusion_expr::{
     is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown,
     type_coercion, window_function, AggregateFunction, BuiltinScalarFunction, Expr,
-    LogicalPlan, Operator, Projection, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    LogicalPlan, Operator, Projection, ScalarFunctionDefinition, WindowFrame,
+    WindowFrameBound, WindowFrameUnits,
 };
 use datafusion_expr::{ExprSchemable, Signature};
 
@@ -327,16 +328,34 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 )?;
                 Ok(Expr::ScalarUDF(ScalarUDF::new(fun, new_expr)))
             }
-            Expr::ScalarFunction(ScalarFunction { fun, args }) => {
-                let new_args = coerce_arguments_for_signature(
-                    args.as_slice(),
-                    &self.schema,
-                    &fun.signature(),
-                )?;
-                let new_args =
-                    coerce_arguments_for_fun(new_args.as_slice(), &self.schema, &fun)?;
-                Ok(Expr::ScalarFunction(ScalarFunction::new(fun, new_args)))
-            }
+            Expr::ScalarFunction(ScalarFunction { func_def, args }) => match func_def {
+                ScalarFunctionDefinition::BuiltIn(fun) => {
+                    let new_args = coerce_arguments_for_signature(
+                        args.as_slice(),
+                        &self.schema,
+                        &fun.signature(),
+                    )?;
+                    let new_args = coerce_arguments_for_fun(
+                        new_args.as_slice(),
+                        &self.schema,
+                        &fun,
+                    )?;
+                    Ok(Expr::ScalarFunction(ScalarFunction::new(fun, new_args)))
+                }
+                ScalarFunctionDefinition::UDF(fun) => {
+                    let new_expr = coerce_arguments_for_signature(
+                        args.as_slice(),
+                        &self.schema,
+                        fun.signature(),
+                    )?;
+                    Ok(Expr::ScalarUDF(ScalarUDF::new(fun, new_expr)))
+                }
+                ScalarFunctionDefinition::Name(_) => {
+                    return internal_err!(
+                        "Function `Expr` with name should be resolved."
+                    );
+                }
+            },
             Expr::AggregateFunction(expr::AggregateFunction {
                 fun,
                 args,
@@ -773,7 +792,8 @@ mod test {
     use datafusion_expr::{
         cast, col, concat, concat_ws, create_udaf, is_true, AccumulatorFactoryFunction,
         AggregateFunction, AggregateUDF, BinaryExpr, BuiltinScalarFunction, Case,
-        ColumnarValue, ExprSchemable, Filter, Operator, StateTypeFunction, Subquery,
+        ColumnarValue, ExprSchemable, Filter, Operator, ScalarFunctionDefinition,
+        StateTypeFunction, Subquery,
     };
     use datafusion_expr::{
         lit,
@@ -1247,7 +1267,7 @@ mod test {
             ),
         )));
         let expr = Expr::ScalarFunction(ScalarFunction {
-            fun: BuiltinScalarFunction::MakeArray,
+            func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::MakeArray),
             args: vec![val.clone()],
         });
         let schema = Arc::new(DFSchema::new_with_metadata(
@@ -1279,7 +1299,7 @@ mod test {
         )?;
 
         let expected = Expr::ScalarFunction(ScalarFunction {
-            fun: BuiltinScalarFunction::MakeArray,
+            func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::MakeArray),
             args: vec![expected_casted_expr],
         });
 

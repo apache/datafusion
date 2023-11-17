@@ -32,7 +32,7 @@ use datafusion_common::{
 use datafusion_expr::expr::{Alias, Cast, InList, ScalarFunction, ScalarUDF};
 use datafusion_expr::{
     binary_expr, Between, BinaryExpr, Expr, GetFieldAccess, GetIndexedField, Like,
-    Operator, TryCast,
+    Operator, ScalarFunctionDefinition, TryCast,
 };
 use std::sync::Arc;
 
@@ -348,20 +348,50 @@ pub fn create_physical_expr(
             )))
         }
 
-        Expr::ScalarFunction(ScalarFunction { fun, args }) => {
-            let physical_args = args
-                .iter()
-                .map(|e| {
-                    create_physical_expr(e, input_dfschema, input_schema, execution_props)
-                })
-                .collect::<Result<Vec<_>>>()?;
-            functions::create_physical_expr(
-                fun,
-                &physical_args,
-                input_schema,
-                execution_props,
-            )
-        }
+        Expr::ScalarFunction(ScalarFunction { func_def, args }) => match func_def {
+            ScalarFunctionDefinition::BuiltIn(fun) => {
+                let physical_args = args
+                    .iter()
+                    .map(|e| {
+                        create_physical_expr(
+                            e,
+                            input_dfschema,
+                            input_schema,
+                            execution_props,
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                functions::create_physical_expr(
+                    fun,
+                    &physical_args,
+                    input_schema,
+                    execution_props,
+                )
+            }
+            ScalarFunctionDefinition::UDF(fun) => {
+                let mut physical_args = vec![];
+                for e in args {
+                    physical_args.push(create_physical_expr(
+                        e,
+                        input_dfschema,
+                        input_schema,
+                        execution_props,
+                    )?);
+                }
+                // udfs with zero params expect null array as input
+                if args.is_empty() {
+                    physical_args.push(Arc::new(Literal::new(ScalarValue::Null)));
+                }
+                udf::create_physical_expr(
+                    fun.clone().as_ref(),
+                    &physical_args,
+                    input_schema,
+                )
+            }
+            ScalarFunctionDefinition::Name(_) => {
+                internal_err!("Function `Expr` with name should be resolved.")
+            }
+        },
         Expr::ScalarUDF(ScalarUDF { fun, args }) => {
             let mut physical_args = vec![];
             for e in args {

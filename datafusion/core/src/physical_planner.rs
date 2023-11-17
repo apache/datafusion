@@ -90,7 +90,8 @@ use datafusion_expr::expr::{
 use datafusion_expr::expr_rewriter::{unalias, unnormalize_cols};
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
 use datafusion_expr::{
-    DescribeTable, DmlStatement, StringifiedPlan, WindowFrame, WindowFrameBound, WriteOp,
+    DescribeTable, DmlStatement, ScalarFunctionDefinition, StringifiedPlan, WindowFrame,
+    WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_sql::utils::window_expr_common_partition_keys;
@@ -218,8 +219,15 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
 
             Ok(name)
         }
-        Expr::ScalarFunction(func) => {
-            create_function_physical_name(&func.fun.to_string(), false, &func.args)
+        Expr::ScalarFunction(func_expr) => {
+            let func_name = match &func_expr.func_def {
+                ScalarFunctionDefinition::BuiltIn(fun) => Ok(fun.to_string()),
+                ScalarFunctionDefinition::UDF(fun) => Ok(fun.name().to_string()),
+                ScalarFunctionDefinition::Name(_) => {
+                    internal_err!("Function `Expr` with name should be resolved.")
+                }
+            };
+            create_function_physical_name(&func_name?, false, &func_expr.args)
         }
         Expr::ScalarUDF(ScalarUDF { fun, args }) => {
             create_function_physical_name(fun.name(), false, args)
