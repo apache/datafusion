@@ -667,23 +667,33 @@ impl OrderingEquivalenceClass {
     /// For instance, If we already have the ordering [a ASC, b ASC, c DESC],
     /// then there is no need to keep ordering [a ASC, b ASC] in the state.
     fn remove_redundant_entries(&mut self) {
-        let leading_ordering_exprs = self
-            .orderings
-            .iter()
-            .flat_map(|ordering| ordering.first().map(|sort_expr| sort_expr.expr.clone()))
-            .collect::<Vec<_>>();
+        // TODO: we can remove leading orderings from the end
 
-        // Remove leading orderings that are beyond index 0, to simplify ordering.
-        self.orderings.iter_mut().for_each(|ordering| {
-            let mut counter = 0;
-            ordering.retain(|sort_expr| {
-                // Either first entry or is not leading ordering
-                let should_retain = counter == 0
-                    || !physical_exprs_contains(&leading_ordering_exprs, &sort_expr.expr);
-                counter += 1;
-                should_retain
-            });
-        });
+        // let leading_ordering_exprs = self
+        //     .orderings
+        //     .iter()
+        //     .flat_map(|ordering| ordering.first().map(|sort_expr| sort_expr.expr.clone()))
+        //     .collect::<Vec<_>>();
+        //
+        // // Remove leading orderings that are beyond index 0, to simplify ordering.
+        // self.orderings.iter_mut().for_each(|ordering| {
+        //     while ordering.len() > 1{
+        //         let end_sort_expr = &ordering[ordering.len()-1];
+        //         if physical_exprs_contains(&leading_ordering_exprs, &end_sort_expr.expr){
+        //             ordering.pop();
+        //         } else {
+        //             break;
+        //         }
+        //     }
+        //     // let mut counter = 0;
+        //     // ordering.retain(|sort_expr| {
+        //     //     // Either first entry or is not leading ordering
+        //     //     let should_retain = counter == 0
+        //     //         || !physical_exprs_contains(&leading_ordering_exprs, &sort_expr.expr);
+        //     //     counter += 1;
+        //     //     should_retain
+        //     // });
+        // });
 
         let mut idx = 0;
         while idx < self.orderings.len() {
@@ -2596,7 +2606,7 @@ mod tests {
             let table_data_with_properties =
                 generate_table_for_eq_properties(&eq_properties, N_ELEMENTS, N_DISTINCT)?;
 
-            let exp_fn = create_physical_expr(
+            let floor_a = create_physical_expr(
                 &BuiltinScalarFunction::Floor,
                 &[col("a", &test_schema)?],
                 &test_schema,
@@ -2614,7 +2624,7 @@ mod tests {
                 col("d", &test_schema)?,
                 col("e", &test_schema)?,
                 col("f", &test_schema)?,
-                exp_fn,
+                floor_a,
                 a_plus_b,
             ];
 
@@ -2897,8 +2907,8 @@ mod tests {
                 ],
                 // EXPECTED orderings that is succinct.
                 vec![
-                    // [a ASC]
-                    vec![(col_a, option_asc)],
+                    // [a ASC, b ASC]
+                    vec![(col_a, option_asc), (col_b, option_asc)],
                     // [b ASC]
                     vec![(col_b, option_asc)],
                 ],
@@ -3495,7 +3505,7 @@ mod tests {
             let table_data_with_properties =
                 generate_table_for_eq_properties(&eq_properties, N_ELEMENTS, N_DISTINCT)?;
 
-            let exp_fn = create_physical_expr(
+            let floor_a = create_physical_expr(
                 &BuiltinScalarFunction::Floor,
                 &[col("a", &test_schema)?],
                 &test_schema,
@@ -3513,7 +3523,7 @@ mod tests {
                 col("d", &test_schema)?,
                 col("e", &test_schema)?,
                 col("f", &test_schema)?,
-                exp_fn,
+                floor_a,
                 a_plus_b,
             ];
 
@@ -3900,8 +3910,8 @@ mod tests {
                 ],
                 // expected
                 vec![
-                    // [date_bin_res ASC]
-                    vec![("date_bin_res", option_asc)],
+                    // [date_bin_res ASC, ts_new ASC]
+                    vec![("date_bin_res", option_asc), ("ts_new", option_asc)],
                     // [ts_new ASC]
                     vec![("ts_new", option_asc)],
                 ],
@@ -3940,6 +3950,10 @@ mod tests {
                         ("date_bin_res", option_asc),
                         ("ts_new", option_asc),
                     ],
+                    // [a_new ASC, b_new ASC]
+                    vec![("a_new", option_asc), ("b_new", option_asc)],
+                    // [b_new ASC, a_new ASC]
+                    vec![("b_new", option_asc), ("a_new", option_asc)],
                 ],
             ),
             // ---------- TEST CASE 5 ------------
@@ -3983,42 +3997,6 @@ mod tests {
             ),
             // ------- TEST CASE 7 ----------
             (
-                // orderings
-                vec![
-                    // [a ASC, ts ASC]
-                    vec![(&col_a, option_asc), (&col_ts, option_asc)],
-                    // [b ASC, ts ASC]
-                    vec![(&col_b, option_asc), (&col_ts, option_asc)],
-                ],
-                // projection exprs
-                vec![
-                    (col_b, "b_new".to_string()),
-                    (col_a, "a_new".to_string()),
-                    (col_ts, "ts_new".to_string()),
-                    (date_bin_func, "date_bin_res".to_string()),
-                ],
-                // expected
-                vec![
-                    // [a_new ASC, ts_new ASC]
-                    vec![("a_new", option_asc), ("ts_new", option_asc)],
-                    // [a_new ASC, date_bin_res ASC, ts_new ASC]
-                    vec![
-                        ("a_new", option_asc),
-                        ("date_bin_res", option_asc),
-                        ("ts_new", option_asc),
-                    ],
-                    // [b_new ASC, ts_new ASC]
-                    vec![("b_new", option_asc), ("ts_new", option_asc)],
-                    // [b_new ASC, date_bin_res ASC, ts_new ASC]
-                    vec![
-                        ("b_new", option_asc),
-                        ("date_bin_res", option_asc),
-                        ("ts_new", option_asc),
-                    ],
-                ],
-            ),
-            // ------- TEST CASE 8 ----------
-            (
                 vec![
                     // [a ASC, b ASC, c ASC]
                     vec![(col_a, option_asc), (col_b, option_asc)],
@@ -4054,7 +4032,7 @@ mod tests {
                     ],
                 ],
             ),
-            // ------- TEST CASE 9 ----------
+            // ------- TEST CASE 8 ----------
             (
                 // orderings
                 vec![
@@ -4074,7 +4052,7 @@ mod tests {
                     vec![("b+d", option_asc)],
                 ],
             ),
-            // ------- TEST CASE 10 ----------
+            // ------- TEST CASE 9 ----------
             (
                 // orderings
                 vec![
@@ -4102,11 +4080,19 @@ mod tests {
                         ("d_new", option_asc),
                         ("b_new", option_asc),
                     ],
+                    // [a_new ASC, d_new ASC, c_new ASC]
+                    vec![
+                        ("a_new", option_asc),
+                        ("d_new", option_asc),
+                        ("c_new", option_asc),
+                    ],
                     // [c_new ASC]
                     vec![("c_new", option_asc)],
+                    // [a_new ASC, c_new ASC]
+                    vec![("a_new", option_asc), ("c_new", option_asc)],
                 ],
             ),
-            // ------- TEST CASE 11 ----------
+            // ------- TEST CASE 10 ----------
             (
                 vec![
                     // [a ASC, b ASC, c ASC]
@@ -4141,7 +4127,7 @@ mod tests {
                     ],
                 ],
             ),
-            // ------- TEST CASE 12 ----------
+            // ------- TEST CASE 11 ----------
             (
                 // orderings
                 vec![
@@ -4164,7 +4150,7 @@ mod tests {
                     vec![("a_new", option_asc), ("b+d", option_asc)],
                 ],
             ),
-            // ------- TEST CASE 13 ----------
+            // ------- TEST CASE 12 ----------
             (
                 // orderings
                 vec![
@@ -4374,6 +4360,25 @@ mod tests {
                     vec![(col_a_new, option_asc), (col_c_new, option_asc)],
                 ],
             ),
+            // ---------- TEST CASE 6 ------------
+            (
+                // orderings
+                vec![
+                    // [c ASC, b ASC]
+                    vec![(col_c, option_asc), (col_b, option_asc)],
+                ],
+                // expected
+                vec![
+                    // [round_c_res ASC, c_new ASC]
+                    vec![
+                        (col_round_c_res, option_asc),
+                        (col_c_new, option_asc),
+                        (col_b_new, option_asc),
+                    ],
+                    // [c_new ASC, b_new ASC]
+                    vec![(col_c_new, option_asc), (col_b_new, option_asc)],
+                ],
+            ),
         ];
 
         for (orderings, expected) in test_cases {
@@ -4396,6 +4401,83 @@ mod tests {
             assert_eq!(orderings.len(), expected.len(), "{}", err_msg);
             for expected_ordering in &expected {
                 assert!(orderings.contains(expected_ordering), "{}", err_msg)
+            }
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn project_orderings_random() -> Result<()> {
+        const N_RANDOM_SCHEMA: usize = 20;
+        const N_ELEMENTS: usize = 125;
+        const N_DISTINCT: usize = 5;
+
+        for seed in 0..N_RANDOM_SCHEMA {
+            // Create a random schema with random properties
+            let (test_schema, eq_properties) = create_random_schema(seed as u64)?;
+            // Generate a data that satisfies properties given
+            let table_data_with_properties =
+                generate_table_for_eq_properties(&eq_properties, N_ELEMENTS, N_DISTINCT)?;
+            // Floor(a)
+            let floor_a = create_physical_expr(
+                &BuiltinScalarFunction::Floor,
+                &[col("a", &test_schema)?],
+                &test_schema,
+                &ExecutionProps::default(),
+            )?;
+            // a + b
+            let a_plus_b = Arc::new(BinaryExpr::new(
+                col("a", &test_schema)?,
+                Operator::Plus,
+                col("b", &test_schema)?,
+            )) as Arc<dyn PhysicalExpr>;
+            let proj_exprs = vec![
+                (col("a", &test_schema)?, "a_new"),
+                (col("b", &test_schema)?, "b_new"),
+                (col("c", &test_schema)?, "c_new"),
+                (col("d", &test_schema)?, "d_new"),
+                (col("e", &test_schema)?, "e_new"),
+                (col("f", &test_schema)?, "f_new"),
+                (floor_a, "floor(a)"),
+                (a_plus_b, "a+b"),
+            ];
+
+            for n_req in 0..=proj_exprs.len() {
+                for proj_exprs in proj_exprs.iter().combinations(n_req) {
+                    let proj_exprs = proj_exprs.into_iter().map(|(expr, name)| (expr.clone(), name.to_string())).collect::<Vec<_>>();
+                    let projection_mapping = ProjectionMapping::try_new(&proj_exprs, &test_schema)?;
+
+                    let output_schema = output_schema(&projection_mapping, &test_schema)?;
+
+                    // Apply projection to the input record batch.
+                    let projected_values = projection_mapping.iter().map(|(source, _target)| {
+                        source.evaluate(&table_data_with_properties)?.into_array(N_ELEMENTS)
+                    }).collect::<Result<Vec<_>>>()?;
+                    let projected_batch = if projected_values.is_empty(){
+                        RecordBatch::new_empty(output_schema.clone())
+                    } else {
+                        RecordBatch::try_new(output_schema.clone(), projected_values)?
+                    };
+
+                    let projected_eq = eq_properties.project(&projection_mapping, output_schema);
+                    for ordering in projected_eq.oeq_class().iter(){
+                        let err_msg = format!(
+                            "Error in test case ordering:{:?}, eq_properties.oeq_class: {:?}, eq_properties.eq_group: {:?}, eq_properties.constants: {:?}, projection_mapping: {:?}",
+                            ordering, eq_properties.oeq_class, eq_properties.eq_group, eq_properties.constants, projection_mapping
+                        );
+                        // Since ordered section satisfies schema, we expect
+                        // that result will be same after sort (e.g sort was unnecessary).
+                        assert!(
+                            is_table_same_after_sort(
+                                ordering.clone(),
+                                projected_batch.clone(),
+                            )?,
+                            "{}",
+                            err_msg
+                        );
+                    }
+                }
             }
         }
 
