@@ -1327,9 +1327,8 @@ impl EquivalenceProperties {
             };
             completed_orderings.extend(new_completed_orderings);
 
-            let new_continuing_orderings =
+            continuing_orderings =
                 suffix_relevant_orderings(relevant_orderings, &new_ordering_continuing);
-            continuing_orderings = new_continuing_orderings;
 
             continuing_orderings = continuing_orderings
                 .into_iter()
