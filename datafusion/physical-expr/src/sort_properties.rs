@@ -18,7 +18,6 @@
 use std::{ops::Neg, sync::Arc};
 
 use crate::PhysicalExpr;
-
 use arrow_schema::SortOptions;
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_common::Result;
