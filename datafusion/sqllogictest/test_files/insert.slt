@@ -289,7 +289,7 @@ insert into table_without_values values(2, NULL);
 ----
 1
 
-# insert NULL values for the missing column (field2) 
+# insert NULL values for the missing column (field2)
 query II
 insert into table_without_values(field1) values(3);
 ----

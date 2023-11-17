@@ -1615,8 +1615,6 @@ pub struct FileSinkConfig {
     pub output_schema: ::core::option::Option<Schema>,
     #[prost(message, repeated, tag = "5")]
     pub table_partition_cols: ::prost::alloc::vec::Vec<PartitionColumn>,
-    #[prost(enumeration = "FileWriterMode", tag = "6")]
-    pub writer_mode: i32,
     #[prost(bool, tag = "7")]
     pub single_file_output: bool,
     #[prost(bool, tag = "8")]
@@ -3194,35 +3192,6 @@ impl UnionMode {
         match value {
             "sparse" => Some(Self::Sparse),
             "dense" => Some(Self::Dense),
-            _ => None,
-        }
-    }
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-#[repr(i32)]
-pub enum FileWriterMode {
-    Append = 0,
-    Put = 1,
-    PutMultipart = 2,
-}
-impl FileWriterMode {
-    /// String value of the enum field names used in the ProtoBuf definition.
-    ///
-    /// The values are not transformed in any way and thus are considered stable
-    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-    pub fn as_str_name(&self) -> &'static str {
-        match self {
-            FileWriterMode::Append => "APPEND",
-            FileWriterMode::Put => "PUT",
-            FileWriterMode::PutMultipart => "PUT_MULTIPART",
-        }
-    }
-    /// Creates an enum from field names used in the ProtoBuf definition.
-    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-        match value {
-            "APPEND" => Some(Self::Append),
-            "PUT" => Some(Self::Put),
-            "PUT_MULTIPART" => Some(Self::PutMultipart),
             _ => None,
         }
     }

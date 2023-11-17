@@ -49,10 +49,7 @@ use std::{
 
 use super::listing::ListingTableUrl;
 use crate::error::{DataFusionError, Result};
-use crate::{
-    datasource::file_format::write::FileWriterMode,
-    physical_plan::{DisplayAs, DisplayFormatType},
-};
+use crate::physical_plan::{DisplayAs, DisplayFormatType};
 use crate::{
     datasource::{
         listing::{FileRange, PartitionedFile},
@@ -90,8 +87,6 @@ pub struct FileSinkConfig {
     /// A vector of column names and their corresponding data types,
     /// representing the partitioning columns for the file
     pub table_partition_cols: Vec<(String, DataType)>,
-    /// A writer mode that determines how data is written to the file
-    pub writer_mode: FileWriterMode,
     /// If true, it is assumed there is a single table_path which is a file to which all data should be written
     /// regardless of input partitioning. Otherwise, each table path is assumed to be a directory
     /// to which each output partition is written to its own output file.

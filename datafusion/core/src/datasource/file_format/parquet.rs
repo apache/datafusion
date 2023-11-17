@@ -40,11 +40,12 @@ use crate::datasource::statistics::{create_max_min_accs, get_col_stats};
 use arrow::datatypes::SchemaRef;
 use arrow::datatypes::{Fields, Schema};
 use bytes::{BufMut, BytesMut};
-use datafusion_common::{exec_err, not_impl_err, plan_err, DataFusionError, FileType};
+use datafusion_common::{exec_err, not_impl_err, DataFusionError, FileType};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
 use futures::{StreamExt, TryStreamExt};
 use hashbrown::HashMap;
+use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
 use parquet::arrow::{
     arrow_to_parquet_schema, parquet_to_arrow_schema, AsyncArrowWriter,
@@ -55,7 +56,7 @@ use parquet::file::properties::WriterProperties;
 use parquet::file::statistics::Statistics as ParquetStatistics;
 
 use super::write::demux::start_demuxer_task;
-use super::write::{create_writer, AbortableWrite, FileWriterMode};
+use super::write::{create_writer, AbortableWrite};
 use super::{FileFormat, FileScanConfig};
 use crate::arrow::array::{
     BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array,
@@ -64,7 +65,7 @@ use crate::arrow::datatypes::DataType;
 use crate::config::ConfigOptions;
 
 use crate::datasource::physical_plan::{
-    FileGroupDisplay, FileMeta, FileSinkConfig, ParquetExec, SchemaAdapter,
+    FileGroupDisplay, FileSinkConfig, ParquetExec, SchemaAdapter,
 };
 use crate::error::Result;
 use crate::execution::context::SessionState;
@@ -596,11 +597,7 @@ impl DisplayAs for ParquetSink {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(
-                    f,
-                    "ParquetSink(writer_mode={:?}, file_groups=",
-                    self.config.writer_mode
-                )?;
+                write!(f, "ParquetSink(file_groups=",)?;
                 FileGroupDisplay(&self.config.file_groups).fmt_as(t, f)?;
                 write!(f, ")")
             }
@@ -642,36 +639,23 @@ impl ParquetSink {
     /// AsyncArrowWriters are used when individual parquet file serialization is not parallelized
     async fn create_async_arrow_writer(
         &self,
-        file_meta: FileMeta,
+        location: &Path,
         object_store: Arc<dyn ObjectStore>,
         parquet_props: WriterProperties,
     ) -> Result<
         AsyncArrowWriter<Box<dyn tokio::io::AsyncWrite + std::marker::Send + Unpin>>,
     > {
-        let object = &file_meta.object_meta;
-        match self.config.writer_mode {
-            FileWriterMode::Append => {
-                plan_err!(
-                    "Appending to Parquet files is not supported by the file format!"
-                )
-            }
-            FileWriterMode::Put => {
-                not_impl_err!("FileWriterMode::Put is not implemented for ParquetSink")
-            }
-            FileWriterMode::PutMultipart => {
-                let (_, multipart_writer) = object_store
-                    .put_multipart(&object.location)
-                    .await
-                    .map_err(DataFusionError::ObjectStore)?;
-                let writer = AsyncArrowWriter::try_new(
-                    multipart_writer,
-                    self.get_writer_schema(),
-                    10485760,
-                    Some(parquet_props),
-                )?;
-                Ok(writer)
-            }
-        }
+        let (_, multipart_writer) = object_store
+            .put_multipart(location)
+            .await
+            .map_err(DataFusionError::ObjectStore)?;
+        let writer = AsyncArrowWriter::try_new(
+            multipart_writer,
+            self.get_writer_schema(),
+            10485760,
+            Some(parquet_props),
+        )?;
+        Ok(writer)
     }
 }
 
@@ -730,13 +714,7 @@ impl DataSink for ParquetSink {
             if !allow_single_file_parallelism {
                 let mut writer = self
                     .create_async_arrow_writer(
-                        ObjectMeta {
-                            location: path,
-                            last_modified: chrono::offset::Utc::now(),
-                            size: 0,
-                            e_tag: None,
-                        }
-                        .into(),
+                        &path,
                         object_store.clone(),
                         parquet_props.clone(),
                     )
@@ -752,17 +730,10 @@ impl DataSink for ParquetSink {
                 });
             } else {
                 let writer = create_writer(
-                    FileWriterMode::PutMultipart,
                     // Parquet files as a whole are never compressed, since they
                     // manage compressed blocks themselves.
                     FileCompressionType::UNCOMPRESSED,
-                    ObjectMeta {
-                        location: path,
-                        last_modified: chrono::offset::Utc::now(),
-                        size: 0,
-                        e_tag: None,
-                    }
-                    .into(),
+                    &path,
                     object_store.clone(),
                 )
                 .await?;
