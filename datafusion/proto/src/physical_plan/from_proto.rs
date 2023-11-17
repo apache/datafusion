@@ -18,7 +18,6 @@
 //! Serde code to convert from protocol buffers to Rust data structures.
 
 use std::convert::{TryFrom, TryInto};
-use std::ops::Deref;
 use std::sync::Arc;
 
 use arrow::compute::SortOptions;
@@ -314,12 +313,12 @@ pub fn parse_physical_expr(
                 &e.name,
                 fun_expr,
                 args,
-                &convert_required!(e.return_type)?,
+                convert_required!(e.return_type)?,
                 None,
             ))
         }
         ExprType::ScalarUdf(e) => {
-            let scalar_fun = registry.udf(e.name.as_str())?.deref().clone().fun;
+            let scalar_fun = registry.udf(e.name.as_str())?.fun().clone();
 
             let args = e
                 .args
@@ -331,7 +330,7 @@ pub fn parse_physical_expr(
                 e.name.as_str(),
                 scalar_fun,
                 args,
-                &convert_required!(e.return_type)?,
+                convert_required!(e.return_type)?,
                 None,
             ))
         }

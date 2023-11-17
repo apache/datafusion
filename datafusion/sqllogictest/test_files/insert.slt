@@ -218,9 +218,8 @@ Dml: op=[Insert Into] table=[table_without_values]
 ------TableScan: aggregate_test_100 projection=[c1]
 physical_plan
 FileSinkExec: sink=MemoryTable (partitions=1)
---ProjectionExec: expr=[c1@0 as c1]
-----SortExec: expr=[c1@0 ASC NULLS LAST]
-------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1], has_header=true
+--SortExec: expr=[c1@0 ASC NULLS LAST]
+----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1], has_header=true
 
 query T
 insert into table_without_values select c1 from aggregate_test_100 order by c1;
@@ -259,14 +258,18 @@ insert into table_without_values(name, id) values(4, 'zoo');
 statement error Error during planning: Column count doesn't match insert query!
 insert into table_without_values(id) values(4, 'zoo');
 
-statement error Error during planning: Inserting query must have the same schema with the table.
+# insert NULL values for the missing column (name)
+query IT
 insert into table_without_values(id) values(4);
+----
+1
 
 query IT rowsort
 select * from table_without_values;
 ----
 1 foo
 2 bar
+4 NULL
 
 statement ok
 drop table table_without_values;
@@ -286,6 +289,16 @@ insert into table_without_values values(2, NULL);
 ----
 1
 
+# insert NULL values for the missing column (field2) 
+query II
+insert into table_without_values(field1) values(3);
+----
+1
+
+# insert NULL values for the missing column (field1), but column is non-nullable
+statement error Execution error: Invalid batch column at '0' has null but schema specifies non-nullable
+insert into table_without_values(field2) values(300);
+
 statement error Execution error: Invalid batch column at '0' has null but schema specifies non-nullable
 insert into table_without_values values(NULL, 300);
 
@@ -297,6 +310,7 @@ select * from table_without_values;
 ----
 1 100
 2 NULL
+3 NULL
 
 statement ok
 drop table table_without_values;

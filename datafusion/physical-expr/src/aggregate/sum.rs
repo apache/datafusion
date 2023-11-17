@@ -41,7 +41,10 @@ use datafusion_expr::Accumulator;
 #[derive(Debug, Clone)]
 pub struct Sum {
     name: String,
+    // The DataType for the input expression
     data_type: DataType,
+    // The DataType for the final sum
+    return_type: DataType,
     expr: Arc<dyn PhysicalExpr>,
     nullable: bool,
 }
@@ -53,11 +56,12 @@ impl Sum {
         name: impl Into<String>,
         data_type: DataType,
     ) -> Self {
-        let data_type = sum_return_type(&data_type).unwrap();
+        let return_type = sum_return_type(&data_type).unwrap();
         Self {
             name: name.into(),
-            expr,
             data_type,
+            return_type,
+            expr,
             nullable: true,
         }
     }
@@ -70,13 +74,13 @@ impl Sum {
 /// `s` is a `Sum`, `helper` is a macro accepting (ArrowPrimitiveType, DataType)
 macro_rules! downcast_sum {
     ($s:ident, $helper:ident) => {
-        match $s.data_type {
-            DataType::UInt64 => $helper!(UInt64Type, $s.data_type),
-            DataType::Int64 => $helper!(Int64Type, $s.data_type),
-            DataType::Float64 => $helper!(Float64Type, $s.data_type),
-            DataType::Decimal128(_, _) => $helper!(Decimal128Type, $s.data_type),
-            DataType::Decimal256(_, _) => $helper!(Decimal256Type, $s.data_type),
-            _ => not_impl_err!("Sum not supported for {}: {}", $s.name, $s.data_type),
+        match $s.return_type {
+            DataType::UInt64 => $helper!(UInt64Type, $s.return_type),
+            DataType::Int64 => $helper!(Int64Type, $s.return_type),
+            DataType::Float64 => $helper!(Float64Type, $s.return_type),
+            DataType::Decimal128(_, _) => $helper!(Decimal128Type, $s.return_type),
+            DataType::Decimal256(_, _) => $helper!(Decimal256Type, $s.return_type),
+            _ => not_impl_err!("Sum not supported for {}: {}", $s.name, $s.return_type),
         }
     };
 }
@@ -91,7 +95,7 @@ impl AggregateExpr for Sum {
     fn field(&self) -> Result<Field> {
         Ok(Field::new(
             &self.name,
-            self.data_type.clone(),
+            self.return_type.clone(),
             self.nullable,
         ))
     }
@@ -108,7 +112,7 @@ impl AggregateExpr for Sum {
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![Field::new(
             format_state_name(&self.name, "sum"),
-            self.data_type.clone(),
+            self.return_type.clone(),
             self.nullable,
         )])
     }

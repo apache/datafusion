@@ -32,8 +32,8 @@ use crate::expr_rewriter::{
     rewrite_sort_cols_by_aggs,
 };
 use crate::logical_plan::{
-    Aggregate, Analyze, CrossJoin, Distinct, EmptyRelation, Explain, Filter, Join,
-    JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Prepare,
+    Aggregate, Analyze, CrossJoin, Distinct, DistinctOn, EmptyRelation, Explain, Filter,
+    Join, JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Prepare,
     Projection, Repartition, Sort, SubqueryAlias, TableScan, Union, Unnest, Values,
     Window,
 };
@@ -551,16 +551,29 @@ impl LogicalPlanBuilder {
         let left_plan: LogicalPlan = self.plan;
         let right_plan: LogicalPlan = plan;
 
-        Ok(Self::from(LogicalPlan::Distinct(Distinct {
-            input: Arc::new(union(left_plan, right_plan)?),
-        })))
+        Ok(Self::from(LogicalPlan::Distinct(Distinct::All(Arc::new(
+            union(left_plan, right_plan)?,
+        )))))
     }
 
     /// Apply deduplication: Only distinct (different) values are returned)
     pub fn distinct(self) -> Result<Self> {
-        Ok(Self::from(LogicalPlan::Distinct(Distinct {
-            input: Arc::new(self.plan),
-        })))
+        Ok(Self::from(LogicalPlan::Distinct(Distinct::All(Arc::new(
+            self.plan,
+        )))))
+    }
+
+    /// Project first values of the specified expression list according to the provided
+    /// sorting expressions grouped by the `DISTINCT ON` clause expressions.
+    pub fn distinct_on(
+        self,
+        on_expr: Vec<Expr>,
+        select_expr: Vec<Expr>,
+        sort_expr: Option<Vec<Expr>>,
+    ) -> Result<Self> {
+        Ok(Self::from(LogicalPlan::Distinct(Distinct::On(
+            DistinctOn::try_new(on_expr, select_expr, sort_expr, Arc::new(self.plan))?,
+        ))))
     }
 
     /// Apply a join to `right` using explicitly specified columns and an
@@ -1306,11 +1319,16 @@ pub fn project(
     for e in expr {
         let e = e.into();
         match e {
-            Expr::Wildcard => {
+            Expr::Wildcard { qualifier: None } => {
                 projected_expr.extend(expand_wildcard(input_schema, &plan, None)?)
             }
-            Expr::QualifiedWildcard { ref qualifier } => projected_expr
-                .extend(expand_qualified_wildcard(qualifier, input_schema, None)?),
+            Expr::Wildcard {
+                qualifier: Some(qualifier),
+            } => projected_expr.extend(expand_qualified_wildcard(
+                &qualifier,
+                input_schema,
+                None,
+            )?),
             _ => projected_expr
                 .push(columnize_expr(normalize_col(e, &plan)?, input_schema)),
         }
@@ -1609,7 +1627,7 @@ mod tests {
 
         let plan = table_scan(Some("t1"), &employee_schema(), None)?
             .join_using(t2, JoinType::Inner, vec!["id"])?
-            .project(vec![Expr::Wildcard])?
+            .project(vec![Expr::Wildcard { qualifier: None }])?
             .build()?;
 
         // id column should only show up once in projection
