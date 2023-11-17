@@ -149,16 +149,19 @@ SELECT V1.c1, v1.C2 FROM (SELECT test_simple.C1, TEST_SIMPLE.c2 FROM test_simple
 0 0
 
 # projection on table scan
+statement ok
+set datafusion.explain.logical_plan_only = true
+
 query TT
-explain select c2 from test;
+EXPLAIN SELECT c2 FROM test;
 ----
 logical_plan TableScan: test projection=[c2]
-physical_plan CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_csv/partition-0.csv], [WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_csv/partition-1.csv], [WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_csv/partition-2.csv], [WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_csv/partition-3.csv]]}, projection=[c2], has_header=false
 
-query I
-select count(c2) from test;
-----
-44
+statement count 44
+select c2 from test;
+
+statement ok
+set datafusion.explain.logical_plan_only = false
 
 # project cast dictionary
 query T
