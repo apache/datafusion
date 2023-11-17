@@ -34,10 +34,10 @@ use futures::stream::BoxStream;
 use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
 use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore};
 
-use super::write::orchestration::{stateless_append_all, stateless_multipart_put};
+use super::write::orchestration::stateless_multipart_put;
 use super::{FileFormat, DEFAULT_SCHEMA_INFER_MAX_RECORD};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
-use crate::datasource::file_format::write::{BatchSerializer, FileWriterMode};
+use crate::datasource::file_format::write::BatchSerializer;
 use crate::datasource::physical_plan::{
     CsvExec, FileGroupDisplay, FileScanConfig, FileSinkConfig,
 };
@@ -465,11 +465,7 @@ impl DisplayAs for CsvSink {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(
-                    f,
-                    "CsvSink(writer_mode={:?}, file_groups=",
-                    self.config.writer_mode
-                )?;
+                write!(f, "CsvSink(file_groups=",)?;
                 FileGroupDisplay(&self.config.file_groups).fmt_as(t, f)?;
                 write!(f, ")")
             }
@@ -481,55 +477,6 @@ impl CsvSink {
     fn new(config: FileSinkConfig) -> Self {
         Self { config }
     }
-
-    async fn append_all(
-        &self,
-        data: SendableRecordBatchStream,
-        context: &Arc<TaskContext>,
-    ) -> Result<u64> {
-        if !self.config.table_partition_cols.is_empty() {
-            return Err(DataFusionError::NotImplemented("Inserting in append mode to hive style partitioned tables is not supported".into()));
-        }
-        let writer_options = self.config.file_type_writer_options.try_into_csv()?;
-        let (builder, compression) =
-            (&writer_options.writer_options, &writer_options.compression);
-        let compression = FileCompressionType::from(*compression);
-
-        let object_store = context
-            .runtime_env()
-            .object_store(&self.config.object_store_url)?;
-        let file_groups = &self.config.file_groups;
-
-        let builder_clone = builder.clone();
-        let options_clone = writer_options.clone();
-        let get_serializer = move |file_size| {
-            let inner_clone = builder_clone.clone();
-            // In append mode, consider has_header flag only when file is empty (at the start).
-            // For other modes, use has_header flag as is.
-            let serializer: Box<dyn BatchSerializer> = Box::new(if file_size > 0 {
-                CsvSerializer::new()
-                    .with_builder(inner_clone)
-                    .with_header(false)
-            } else {
-                CsvSerializer::new()
-                    .with_builder(inner_clone)
-                    .with_header(options_clone.writer_options.header())
-            });
-            serializer
-        };
-
-        stateless_append_all(
-            data,
-            context,
-            object_store,
-            file_groups,
-            self.config.unbounded_input,
-            compression,
-            Box::new(get_serializer),
-        )
-        .await
-    }
-
     async fn multipartput_all(
         &self,
         data: SendableRecordBatchStream,
@@ -577,19 +524,8 @@ impl DataSink for CsvSink {
         data: SendableRecordBatchStream,
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
-        match self.config.writer_mode {
-            FileWriterMode::Append => {
-                let total_count = self.append_all(data, context).await?;
-                Ok(total_count)
-            }
-            FileWriterMode::PutMultipart => {
-                let total_count = self.multipartput_all(data, context).await?;
-                Ok(total_count)
-            }
-            FileWriterMode::Put => {
-                return not_impl_err!("FileWriterMode::Put is not supported yet!")
-            }
-        }
+        let total_count = self.multipartput_all(data, context).await?;
+        Ok(total_count)
     }
 }
 

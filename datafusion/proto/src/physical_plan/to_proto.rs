@@ -31,7 +31,6 @@ use datafusion::datasource::{
     file_format::json::JsonSink, physical_plan::FileScanConfig,
 };
 use datafusion::datasource::{
-    file_format::write::FileWriterMode,
     listing::{FileRange, PartitionedFile},
     physical_plan::FileSinkConfig,
 };
@@ -819,7 +818,6 @@ impl TryFrom<&FileSinkConfig> for protobuf::FileSinkConfig {
     type Error = DataFusionError;
 
     fn try_from(conf: &FileSinkConfig) -> Result<Self, Self::Error> {
-        let writer_mode: protobuf::FileWriterMode = conf.writer_mode.into();
         let file_groups = conf
             .file_groups
             .iter()
@@ -847,22 +845,11 @@ impl TryFrom<&FileSinkConfig> for protobuf::FileSinkConfig {
             table_paths,
             output_schema: Some(conf.output_schema.as_ref().try_into()?),
             table_partition_cols,
-            writer_mode: writer_mode.into(),
             single_file_output: conf.single_file_output,
             unbounded_input: conf.unbounded_input,
             overwrite: conf.overwrite,
             file_type_writer_options: Some(file_type_writer_options.try_into()?),
         })
-    }
-}
-
-impl From<FileWriterMode> for protobuf::FileWriterMode {
-    fn from(value: FileWriterMode) -> Self {
-        match value {
-            FileWriterMode::Append => Self::Append,
-            FileWriterMode::Put => Self::Put,
-            FileWriterMode::PutMultipart => Self::PutMultipart,
-        }
     }
 }
 
