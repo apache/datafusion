@@ -25,8 +25,8 @@ use datafusion_common::{
     get_required_group_by_exprs_indices, Column, DFSchema, JoinType, Result,
 };
 use datafusion_expr::{
-    logical_plan::LogicalPlan, projection_schema, Aggregate, Expr, Projection, TableScan,
-    Window,
+    logical_plan::LogicalPlan, projection_schema, Aggregate, Distinct, Expr, Projection,
+    TableScan, Window,
 };
 use itertools::{izip, Itertools};
 use std::collections::HashSet;
@@ -356,7 +356,7 @@ fn optimize_projections(
         | LogicalPlan::Unnest(_)
         | LogicalPlan::Union(_)
         | LogicalPlan::SubqueryAlias(_)
-        | LogicalPlan::Distinct(_) => {
+        | LogicalPlan::Distinct(Distinct::On(_)) => {
             // Re-route required indices from the parent + column indices referred by expressions in the plan
             // to the child.
             // All of these operators benefits from small tables at their inputs. Hence projection_beneficial flag is `true`.
@@ -393,8 +393,9 @@ fn optimize_projections(
         | LogicalPlan::Dml(_)
         | LogicalPlan::Explain(_)
         | LogicalPlan::Analyze(_)
-        | LogicalPlan::Subquery(_) => {
-            // Require all of the fields of the Dml, Ddl, Copy, Explain, Analyze, Subquery input(s).
+        | LogicalPlan::Subquery(_)
+        | LogicalPlan::Distinct(Distinct::All(_)) => {
+            // Require all of the fields of the Dml, Ddl, Copy, Explain, Analyze, Subquery, Distinct::All input(s).
             // Their child plan can be treated as final plan. Otherwise expected schema may not match.
             // TODO: For some subquery variants we may not need to require all indices for its input.
             //  such as Exists<SubQuery>.
