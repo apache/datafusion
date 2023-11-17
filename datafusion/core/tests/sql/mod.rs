@@ -75,7 +75,6 @@ macro_rules! test_expression {
 pub mod aggregates;
 pub mod create_drop;
 pub mod csv_files;
-pub mod describe;
 pub mod displayable;
 pub mod explain_analyze;
 pub mod expr;
