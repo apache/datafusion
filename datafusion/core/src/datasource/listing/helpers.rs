@@ -39,7 +39,6 @@ use crate::datasource::listing::ListingTableUrl;
 use crate::execution::context::SessionState;
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_common::{internal_err, Column, DFField, DFSchema, DataFusionError};
-use datafusion_expr::expr::ScalarUDF;
 use datafusion_expr::{Expr, ScalarFunctionDefinition, Volatility};
 use datafusion_physical_expr::create_physical_expr;
 use datafusion_physical_expr::execution_props::ExecutionProps;
@@ -115,16 +114,6 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
                     }
                     ScalarFunctionDefinition::Name(_) => {
                         internal_err!("Function `Expr` with name should be resolved.")
-                    }
-                }
-            }
-            Expr::ScalarUDF(ScalarUDF { fun, .. }) => {
-                match fun.signature().volatility {
-                    Volatility::Immutable => Ok(VisitRecursion::Continue),
-                    // TODO: Stable functions could be `applicable`, but that would require access to the context
-                    Volatility::Stable | Volatility::Volatile => {
-                        is_applicable = false;
-                        Ok(VisitRecursion::Stop)
                     }
                 }
             }

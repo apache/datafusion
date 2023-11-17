@@ -84,8 +84,7 @@ use datafusion_common::{
 use datafusion_expr::dml::{CopyOptions, CopyTo};
 use datafusion_expr::expr::{
     self, AggregateFunction, AggregateUDF, Alias, Between, BinaryExpr, Cast,
-    GetFieldAccess, GetIndexedField, GroupingSet, InList, Like, ScalarUDF, TryCast,
-    WindowFunction,
+    GetFieldAccess, GetIndexedField, GroupingSet, InList, Like, TryCast, WindowFunction,
 };
 use datafusion_expr::expr_rewriter::{unalias, unnormalize_cols};
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
@@ -228,9 +227,6 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                 }
             };
             create_function_physical_name(&func_name?, false, &func_expr.args)
-        }
-        Expr::ScalarUDF(ScalarUDF { fun, args }) => {
-            create_function_physical_name(fun.name(), false, args)
         }
         Expr::WindowFunction(WindowFunction { fun, args, .. }) => {
             create_function_physical_name(&fun.to_string(), false, args)

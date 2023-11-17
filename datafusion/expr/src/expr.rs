@@ -148,10 +148,8 @@ pub enum Expr {
     TryCast(TryCast),
     /// A sort expression, that can be used to sort values.
     Sort(Sort),
-    /// Represents the call of a built-in scalar function with a set of arguments.
+    /// Represents the call of a scalar function with a set of arguments.
     ScalarFunction(ScalarFunction),
-    /// Represents the call of a user-defined scalar function with arguments.
-    ScalarUDF(ScalarUDF),
     /// Represents the call of an aggregate built-in function with arguments.
     AggregateFunction(AggregateFunction),
     /// Represents the call of a window function with arguments.
@@ -340,12 +338,14 @@ impl Between {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ScalarFunctionDefinition {
-    /// Resolved to a built in scalar function
-    /// (will be removed long term)
+    /// Resolved to a `BuiltinScalarFunction`
+    /// There is plan to migrate `BuiltinScalarFunction` to UDF-based implementation (issue#8045)
+    /// This variant is planned to be removed in long term
     BuiltIn(built_in_function::BuiltinScalarFunction),
     /// Resolved to a user defined function
     UDF(Arc<crate::ScalarUDF>),
-    /// A scalar function that will be called by name
+    /// A scalar function constructed with name, could be resolved with registered functions during
+    /// analyzing.
     Name(Arc<str>),
 }
 
@@ -366,23 +366,13 @@ impl ScalarFunction {
             args,
         }
     }
-}
 
-/// ScalarUDF expression invokes a user-defined scalar function [`ScalarUDF`]
-///
-/// [`ScalarUDF`]: crate::ScalarUDF
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct ScalarUDF {
-    /// The function
-    pub fun: Arc<crate::ScalarUDF>,
-    /// List of expressions to feed to the functions as arguments
-    pub args: Vec<Expr>,
-}
-
-impl ScalarUDF {
-    /// Create a new ScalarUDF expression
-    pub fn new(fun: Arc<crate::ScalarUDF>, args: Vec<Expr>) -> Self {
-        Self { fun, args }
+    /// Create a new ScalarFunction expression with a user-defined function (UDF)
+    pub fn new_udf(udf: Arc<crate::ScalarUDF>, args: Vec<Expr>) -> Self {
+        Self {
+            func_def: ScalarFunctionDefinition::UDF(udf),
+            args,
+        }
     }
 }
 
@@ -750,7 +740,6 @@ impl Expr {
             Expr::Placeholder(_) => "Placeholder",
             Expr::ScalarFunction(..) => "ScalarFunction",
             Expr::ScalarSubquery { .. } => "ScalarSubquery",
-            Expr::ScalarUDF(..) => "ScalarUDF",
             Expr::ScalarVariable(..) => "ScalarVariable",
             Expr::Sort { .. } => "Sort",
             Expr::TryCast { .. } => "TryCast",
@@ -1227,9 +1216,6 @@ impl fmt::Display for Expr {
                     fmt_function(f, func_name, false, &func_expr.args, true)
                 }
             },
-            Expr::ScalarUDF(ScalarUDF { fun, args }) => {
-                fmt_function(f, fun.name(), false, args, true)
-            }
             Expr::WindowFunction(WindowFunction {
                 fun,
                 args,
@@ -1571,9 +1557,6 @@ fn create_name(e: &Expr) -> Result<String> {
                 create_function_name(name, false, &func_expr.args)
             }
         },
-        Expr::ScalarUDF(ScalarUDF { fun, args }) => {
-            create_function_name(fun.name(), false, args)
-        }
         Expr::WindowFunction(WindowFunction {
             fun,
             args,

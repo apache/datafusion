@@ -39,8 +39,8 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::{InList, InSubquery, ScalarFunction};
 use datafusion_expr::{
-    and, expr, lit, or, BinaryExpr, BuiltinScalarFunction, Case, ColumnarValue, Expr,
-    Like, ScalarFunctionDefinition, Volatility,
+    and, lit, or, BinaryExpr, BuiltinScalarFunction, Case, ColumnarValue, Expr, Like,
+    ScalarFunctionDefinition, Volatility,
 };
 use datafusion_physical_expr::{
     create_physical_expr, execution_props::ExecutionProps, intervals::NullableInterval,
@@ -354,9 +354,6 @@ impl<'a> ConstEvaluator<'a> {
                 }
                 ScalarFunctionDefinition::Name(_) => true,
             },
-            Expr::ScalarUDF(expr::ScalarUDF { fun, .. }) => {
-                Self::volatility_ok(fun.signature().volatility)
-            }
             Expr::Literal(_)
             | Expr::BinaryExpr { .. }
             | Expr::Not(_)
@@ -1561,7 +1558,7 @@ mod tests {
 
         // immutable UDF should get folded
         // udf_add(1+2, 30+40) --> 73
-        let expr = Expr::ScalarUDF(expr::ScalarUDF::new(
+        let expr = Expr::ScalarFunction(expr::ScalarFunction::new_udf(
             make_udf_add(Volatility::Immutable),
             args.clone(),
         ));
@@ -1570,15 +1567,21 @@ mod tests {
         // stable UDF should be entirely folded
         // udf_add(1+2, 30+40) --> 73
         let fun = make_udf_add(Volatility::Stable);
-        let expr = Expr::ScalarUDF(expr::ScalarUDF::new(Arc::clone(&fun), args.clone()));
+        let expr = Expr::ScalarFunction(expr::ScalarFunction::new_udf(
+            Arc::clone(&fun),
+            args.clone(),
+        ));
         test_evaluate(expr, lit(73));
 
         // volatile UDF should have args folded
         // udf_add(1+2, 30+40) --> udf_add(3, 70)
         let fun = make_udf_add(Volatility::Volatile);
-        let expr = Expr::ScalarUDF(expr::ScalarUDF::new(Arc::clone(&fun), args));
-        let expected_expr =
-            Expr::ScalarUDF(expr::ScalarUDF::new(Arc::clone(&fun), folded_args));
+        let expr =
+            Expr::ScalarFunction(expr::ScalarFunction::new_udf(Arc::clone(&fun), args));
+        let expected_expr = Expr::ScalarFunction(expr::ScalarFunction::new_udf(
+            Arc::clone(&fun),
+            folded_args,
+        ));
         test_evaluate(expr, expected_expr);
     }
 

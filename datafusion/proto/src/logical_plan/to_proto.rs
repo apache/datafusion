@@ -45,7 +45,7 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::{
     self, Alias, Between, BinaryExpr, Cast, GetFieldAccess, GetIndexedField, GroupingSet,
-    InList, Like, Placeholder, ScalarFunction, ScalarFunctionDefinition, ScalarUDF, Sort,
+    InList, Like, Placeholder, ScalarFunction, ScalarFunctionDefinition, Sort,
 };
 use datafusion_expr::{
     logical_plan::PlanType, logical_plan::StringifiedPlan, AggregateFunction,
@@ -785,15 +785,6 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                         .to_string(),
                 ));
                 }
-            },
-            Expr::ScalarUDF(ScalarUDF { fun, args }) => Self {
-                expr_type: Some(ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode {
-                    fun_name: fun.name().to_string(),
-                    args: args
-                        .iter()
-                        .map(|expr| expr.try_into())
-                        .collect::<Result<Vec<_>, Error>>()?,
-                })),
             },
             Expr::AggregateUDF(expr::AggregateUDF {
                 fun,

@@ -29,7 +29,7 @@ use datafusion_common::{
     exec_err, internal_err, not_impl_err, plan_err, DFSchema, DataFusionError, Result,
     ScalarValue,
 };
-use datafusion_expr::expr::{Alias, Cast, InList, ScalarFunction, ScalarUDF};
+use datafusion_expr::expr::{Alias, Cast, InList, ScalarFunction};
 use datafusion_expr::{
     binary_expr, Between, BinaryExpr, Expr, GetFieldAccess, GetIndexedField, Like,
     Operator, ScalarFunctionDefinition, TryCast,
@@ -392,22 +392,6 @@ pub fn create_physical_expr(
                 internal_err!("Function `Expr` with name should be resolved.")
             }
         },
-        Expr::ScalarUDF(ScalarUDF { fun, args }) => {
-            let mut physical_args = vec![];
-            for e in args {
-                physical_args.push(create_physical_expr(
-                    e,
-                    input_dfschema,
-                    input_schema,
-                    execution_props,
-                )?);
-            }
-            // udfs with zero params expect null array as input
-            if args.is_empty() {
-                physical_args.push(Arc::new(Literal::new(ScalarValue::Null)));
-            }
-            udf::create_physical_expr(fun.clone().as_ref(), &physical_args, input_schema)
-        }
         Expr::Between(Between {
             expr,
             negated,

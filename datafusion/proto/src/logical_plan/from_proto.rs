@@ -1705,7 +1705,7 @@ pub fn parse_expr(
         }
         ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode { fun_name, args }) => {
             let scalar_fn = registry.udf(fun_name.as_str())?;
-            Ok(Expr::ScalarUDF(expr::ScalarUDF::new(
+            Ok(Expr::ScalarFunction(expr::ScalarFunction::new_udf(
                 scalar_fn,
                 args.iter()
                     .map(|expr| parse_expr(expr, registry))

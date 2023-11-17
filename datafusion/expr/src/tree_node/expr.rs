@@ -20,7 +20,7 @@
 use crate::expr::{
     AggregateFunction, AggregateUDF, Alias, Between, BinaryExpr, Case, Cast,
     GetIndexedField, GroupingSet, InList, InSubquery, Like, Placeholder, ScalarFunction,
-    ScalarFunctionDefinition, ScalarUDF, Sort, TryCast, WindowFunction,
+    ScalarFunctionDefinition, Sort, TryCast, WindowFunction,
 };
 use crate::{Expr, GetFieldAccess};
 
@@ -64,7 +64,7 @@ impl TreeNode for Expr {
             }
             Expr::GroupingSet(GroupingSet::Rollup(exprs))
             | Expr::GroupingSet(GroupingSet::Cube(exprs)) => exprs.clone(),
-            Expr::ScalarFunction (ScalarFunction{ args, .. } )| Expr::ScalarUDF(ScalarUDF { args, .. })  => {
+            Expr::ScalarFunction (ScalarFunction{ args, .. } )  => {
                 args.clone()
             }
             Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs)) => {
@@ -280,19 +280,15 @@ impl TreeNode for Expr {
                 ScalarFunctionDefinition::BuiltIn(fun) => Expr::ScalarFunction(
                     ScalarFunction::new(fun, transform_vec(args, &mut transform)?),
                 ),
-                ScalarFunctionDefinition::UDF(fun) => Expr::ScalarUDF(ScalarUDF::new(
-                    fun,
-                    transform_vec(args, &mut transform)?,
-                )),
+                ScalarFunctionDefinition::UDF(fun) => Expr::ScalarFunction(
+                    ScalarFunction::new_udf(fun, transform_vec(args, &mut transform)?),
+                ),
                 ScalarFunctionDefinition::Name(_) => {
                     return internal_err!(
                         "Function `Expr` with name should be resolved."
                     );
                 }
             },
-            Expr::ScalarUDF(ScalarUDF { args, fun }) => {
-                Expr::ScalarUDF(ScalarUDF::new(fun, transform_vec(args, &mut transform)?))
-            }
             Expr::WindowFunction(WindowFunction {
                 args,
                 fun,

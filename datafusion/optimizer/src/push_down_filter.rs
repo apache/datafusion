@@ -222,7 +222,10 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         | Expr::InSubquery(_)
         | Expr::ScalarSubquery(_)
         | Expr::OuterReferenceColumn(_, _)
-        | Expr::ScalarUDF(..) => {
+        | Expr::ScalarFunction(datafusion_expr::expr::ScalarFunction {
+            func_def: ScalarFunctionDefinition::UDF(_),
+            ..
+        }) => {
             is_evaluate = false;
             Ok(VisitRecursion::Stop)
         }
