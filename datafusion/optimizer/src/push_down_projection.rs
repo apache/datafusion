@@ -570,8 +570,9 @@ mod tests {
             .project(vec![col("a")])?
             .build()?;
 
-        let expected = "Distinct:\
-        \n  TableScan: test projection=[a]";
+        let expected = "Projection: test.a\
+        \n  Distinct:\
+        \n    TableScan: test projection=[a, b]";
 
         assert_optimized_plan_eq(&plan, expected)
     }
