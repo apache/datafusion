@@ -3041,17 +3041,13 @@ digraph {
 
         let output_schema = plan.schema();
 
-        assert!(
-            output_schema
-                .field_with_name(None, "foo")
-                .unwrap()
-                .is_nullable(),
-        );
-        assert!(
-            output_schema
-                .field_with_name(None, "bar")
-                .unwrap()
-                .is_nullable()
-        );
+        assert!(output_schema
+            .field_with_name(None, "foo")
+            .unwrap()
+            .is_nullable(),);
+        assert!(output_schema
+            .field_with_name(None, "bar")
+            .unwrap()
+            .is_nullable());
     }
 }
