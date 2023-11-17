@@ -255,8 +255,6 @@ impl Optimizer {
             Arc::new(UnwrapCastInComparison::new()),
             Arc::new(CommonSubexprEliminate::new()),
             Arc::new(OptimizeProjections::new()),
-            // OptimizeProjections can pushdown Projections through Limits, do PushDownLimit again.
-            Arc::new(PushDownLimit::new()),
         ];
 
         Self::with_rules(rules)
