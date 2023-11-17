@@ -691,22 +691,25 @@ impl OrderingEquivalenceClass {
     /// For instance, If we already have the ordering [a ASC, b ASC, c DESC],
     /// then there is no need to keep ordering [a ASC, b ASC] in the state.
     fn remove_redundant_entries(&mut self) {
+        // Get leading orderings (e.g first sort expr in each lexicographical ordering) among orderings
         let leading_ordering_exprs = self
             .orderings
             .iter()
             .flat_map(|ordering| ordering.first().map(|sort_expr| sort_expr.expr.clone()))
             .collect::<Vec<_>>();
 
-        // Remove leading orderings that are beyond index 0, to simplify ordering.
+        // Remove leading orderings that are at the end of the lexicographical ordering.
         self.orderings.iter_mut().for_each(|ordering| {
-            let mut counter = 0;
-            ordering.retain(|sort_expr| {
-                // Either first entry or is not leading ordering
-                let should_retain = counter == 0
-                    || !physical_exprs_contains(&leading_ordering_exprs, &sort_expr.expr);
-                counter += 1;
-                should_retain
-            });
+            while ordering.len() > 1 {
+                let last_sort_expr = &ordering[ordering.len() - 1];
+                if physical_exprs_contains(&leading_ordering_exprs, &last_sort_expr.expr)
+                {
+                    ordering.pop();
+                } else {
+                    // last ordering expr is not leading. Stop removing from the end.
+                    break;
+                }
+            }
         });
 
         let mut idx = 0;
@@ -2395,7 +2398,7 @@ mod tests {
             let table_data_with_properties =
                 generate_table_for_eq_properties(&eq_properties, N_ELEMENTS, N_DISTINCT)?;
 
-            let exp_fn = create_physical_expr(
+            let floor_a = create_physical_expr(
                 &BuiltinScalarFunction::Floor,
                 &[col("a", &test_schema)?],
                 &test_schema,
@@ -2413,7 +2416,7 @@ mod tests {
                 col("d", &test_schema)?,
                 col("e", &test_schema)?,
                 col("f", &test_schema)?,
-                exp_fn,
+                floor_a,
                 a_plus_b,
             ];
 
@@ -3294,7 +3297,7 @@ mod tests {
             let table_data_with_properties =
                 generate_table_for_eq_properties(&eq_properties, N_ELEMENTS, N_DISTINCT)?;
 
-            let exp_fn = create_physical_expr(
+            let floor_a = create_physical_expr(
                 &BuiltinScalarFunction::Floor,
                 &[col("a", &test_schema)?],
                 &test_schema,
@@ -3312,7 +3315,7 @@ mod tests {
                 col("d", &test_schema)?,
                 col("e", &test_schema)?,
                 col("f", &test_schema)?,
-                exp_fn,
+                floor_a,
                 a_plus_b,
             ];
 
