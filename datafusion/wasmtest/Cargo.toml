@@ -46,5 +46,5 @@ datafusion-sql = { workspace = true }
 
 # getrandom must be compiled with js feature
 getrandom = { version = "0.2.8", features = ["js"] }
-parquet = { version = "48.0.0", default-features = false }
+parquet = { version = "49.0.0", default-features = false }
 wasm-bindgen = "0.2.87"
