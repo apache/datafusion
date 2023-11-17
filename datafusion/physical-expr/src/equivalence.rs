@@ -677,10 +677,12 @@ impl OrderingEquivalenceClass {
         // Remove leading orderings that are at the end of the lexicographical ordering.
         self.orderings.iter_mut().for_each(|ordering| {
             while ordering.len() > 1 {
-                let end_sort_expr = &ordering[ordering.len() - 1];
-                if physical_exprs_contains(&leading_ordering_exprs, &end_sort_expr.expr) {
+                let last_sort_expr = &ordering[ordering.len() - 1];
+                if physical_exprs_contains(&leading_ordering_exprs, &last_sort_expr.expr)
+                {
                     ordering.pop();
                 } else {
+                    // last ordering expr is not leading. Stop removing from the end.
                     break;
                 }
             }
