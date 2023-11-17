@@ -667,33 +667,24 @@ impl OrderingEquivalenceClass {
     /// For instance, If we already have the ordering [a ASC, b ASC, c DESC],
     /// then there is no need to keep ordering [a ASC, b ASC] in the state.
     fn remove_redundant_entries(&mut self) {
-        // TODO: we can remove leading orderings from the end
+        // Get leading orderings (e.g first sort expr in each lexicographical ordering) among orderings
+        let leading_ordering_exprs = self
+            .orderings
+            .iter()
+            .flat_map(|ordering| ordering.first().map(|sort_expr| sort_expr.expr.clone()))
+            .collect::<Vec<_>>();
 
-        // let leading_ordering_exprs = self
-        //     .orderings
-        //     .iter()
-        //     .flat_map(|ordering| ordering.first().map(|sort_expr| sort_expr.expr.clone()))
-        //     .collect::<Vec<_>>();
-        //
-        // // Remove leading orderings that are beyond index 0, to simplify ordering.
-        // self.orderings.iter_mut().for_each(|ordering| {
-        //     while ordering.len() > 1{
-        //         let end_sort_expr = &ordering[ordering.len()-1];
-        //         if physical_exprs_contains(&leading_ordering_exprs, &end_sort_expr.expr){
-        //             ordering.pop();
-        //         } else {
-        //             break;
-        //         }
-        //     }
-        //     // let mut counter = 0;
-        //     // ordering.retain(|sort_expr| {
-        //     //     // Either first entry or is not leading ordering
-        //     //     let should_retain = counter == 0
-        //     //         || !physical_exprs_contains(&leading_ordering_exprs, &sort_expr.expr);
-        //     //     counter += 1;
-        //     //     should_retain
-        //     // });
-        // });
+        // Remove leading orderings that are at the end of the lexicographical ordering.
+        self.orderings.iter_mut().for_each(|ordering| {
+            while ordering.len() > 1 {
+                let end_sort_expr = &ordering[ordering.len() - 1];
+                if physical_exprs_contains(&leading_ordering_exprs, &end_sort_expr.expr) {
+                    ordering.pop();
+                } else {
+                    break;
+                }
+            }
+        });
 
         let mut idx = 0;
         while idx < self.orderings.len() {
@@ -1342,8 +1333,6 @@ impl EquivalenceProperties {
                 .into_iter()
                 .map(|ordering| self.eq_group.normalize_sort_exprs(&ordering))
                 .collect();
-            let oeq_class = OrderingEquivalenceClass::new(continuing_orderings);
-            continuing_orderings = oeq_class.orderings;
             if continuing_orderings.is_empty() {
                 // Cannot continue iteration safely. Subsequent orderings cannot be calculated properly.
                 break;
@@ -2907,8 +2896,8 @@ mod tests {
                 ],
                 // EXPECTED orderings that is succinct.
                 vec![
-                    // [a ASC, b ASC]
-                    vec![(col_a, option_asc), (col_b, option_asc)],
+                    // [a ASC]
+                    vec![(col_a, option_asc)],
                     // [b ASC]
                     vec![(col_b, option_asc)],
                 ],
@@ -3910,8 +3899,8 @@ mod tests {
                 ],
                 // expected
                 vec![
-                    // [date_bin_res ASC, ts_new ASC]
-                    vec![("date_bin_res", option_asc), ("ts_new", option_asc)],
+                    // [date_bin_res ASC]
+                    vec![("date_bin_res", option_asc)],
                     // [ts_new ASC]
                     vec![("ts_new", option_asc)],
                 ],
@@ -3950,10 +3939,6 @@ mod tests {
                         ("date_bin_res", option_asc),
                         ("ts_new", option_asc),
                     ],
-                    // [a_new ASC, b_new ASC]
-                    vec![("a_new", option_asc), ("b_new", option_asc)],
-                    // [b_new ASC, a_new ASC]
-                    vec![("b_new", option_asc), ("a_new", option_asc)],
                 ],
             ),
             // ---------- TEST CASE 5 ------------
@@ -4080,16 +4065,8 @@ mod tests {
                         ("d_new", option_asc),
                         ("b_new", option_asc),
                     ],
-                    // [a_new ASC, d_new ASC, c_new ASC]
-                    vec![
-                        ("a_new", option_asc),
-                        ("d_new", option_asc),
-                        ("c_new", option_asc),
-                    ],
                     // [c_new ASC]
                     vec![("c_new", option_asc)],
-                    // [a_new ASC, c_new ASC]
-                    vec![("a_new", option_asc), ("c_new", option_asc)],
                 ],
             ),
             // ------- TEST CASE 10 ----------
@@ -4445,23 +4422,33 @@ mod tests {
 
             for n_req in 0..=proj_exprs.len() {
                 for proj_exprs in proj_exprs.iter().combinations(n_req) {
-                    let proj_exprs = proj_exprs.into_iter().map(|(expr, name)| (expr.clone(), name.to_string())).collect::<Vec<_>>();
-                    let projection_mapping = ProjectionMapping::try_new(&proj_exprs, &test_schema)?;
+                    let proj_exprs = proj_exprs
+                        .into_iter()
+                        .map(|(expr, name)| (expr.clone(), name.to_string()))
+                        .collect::<Vec<_>>();
+                    let projection_mapping =
+                        ProjectionMapping::try_new(&proj_exprs, &test_schema)?;
 
                     let output_schema = output_schema(&projection_mapping, &test_schema)?;
 
                     // Apply projection to the input record batch.
-                    let projected_values = projection_mapping.iter().map(|(source, _target)| {
-                        source.evaluate(&table_data_with_properties)?.into_array(N_ELEMENTS)
-                    }).collect::<Result<Vec<_>>>()?;
-                    let projected_batch = if projected_values.is_empty(){
+                    let projected_values = projection_mapping
+                        .iter()
+                        .map(|(source, _target)| {
+                            source
+                                .evaluate(&table_data_with_properties)?
+                                .into_array(N_ELEMENTS)
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    let projected_batch = if projected_values.is_empty() {
                         RecordBatch::new_empty(output_schema.clone())
                     } else {
                         RecordBatch::try_new(output_schema.clone(), projected_values)?
                     };
 
-                    let projected_eq = eq_properties.project(&projection_mapping, output_schema);
-                    for ordering in projected_eq.oeq_class().iter(){
+                    let projected_eq =
+                        eq_properties.project(&projection_mapping, output_schema);
+                    for ordering in projected_eq.oeq_class().iter() {
                         let err_msg = format!(
                             "Error in test case ordering:{:?}, eq_properties.oeq_class: {:?}, eq_properties.eq_group: {:?}, eq_properties.constants: {:?}, projection_mapping: {:?}",
                             ordering, eq_properties.oeq_class, eq_properties.eq_group, eq_properties.constants, projection_mapping
