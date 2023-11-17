@@ -1009,8 +1009,6 @@ impl EquivalenceProperties {
 
     /// Checks whether the given sort requirements are satisfied by any of the
     /// existing orderings.
-    /// This function applies an implicit projection to itself before calling `ordering_satisfy_requirement_helper`.
-    /// This enables us to consider complex expressions during analysis.
     pub fn ordering_satisfy_requirement(&self, reqs: LexRequirementRef) -> bool {
         let mut eq_properties = self.clone();
         // First, standardize the given requirement:
@@ -1421,9 +1419,6 @@ impl EquivalenceProperties {
     /// definition of "partial permutation", see:
     ///
     /// <https://en.wikipedia.org/wiki/Permutation#k-permutations_of_n>
-    ///
-    /// This function applies an implicit projection to itself before calling `find_longest_permutation_helper`.
-    /// This enables us to consider complex expressions during analysis.
     pub fn find_longest_permutation(
         &self,
         exprs: &[Arc<dyn PhysicalExpr>],
@@ -2007,6 +2002,7 @@ mod tests {
 
         let input_properties = EquivalenceProperties::new(input_schema.clone());
         let col_a = col("a", &input_schema)?;
+
         // a as a1, a as a2, a as a3, a as a3
         let proj_exprs = vec![
             (col_a.clone(), "a1".to_string()),
@@ -2015,17 +2011,8 @@ mod tests {
             (col_a.clone(), "a4".to_string()),
         ];
         let projection_mapping = ProjectionMapping::try_new(&proj_exprs, &input_schema)?;
+
         let out_schema = output_schema(&projection_mapping, &input_schema)?;
-
-        // a as a1, a as a2, a as a3, a as a3
-        let proj_exprs = vec![
-            (col_a.clone(), "a1".to_string()),
-            (col_a.clone(), "a2".to_string()),
-            (col_a.clone(), "a3".to_string()),
-            (col_a.clone(), "a4".to_string()),
-        ];
-        let projection_mapping = ProjectionMapping::try_new(&proj_exprs, &input_schema)?;
-
         // a as a1, a as a2, a as a3, a as a3
         let col_a1 = &col("a1", &out_schema)?;
         let col_a2 = &col("a2", &out_schema)?;
