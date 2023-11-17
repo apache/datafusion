@@ -77,3 +77,16 @@ create table t3(a int, b varchar, c double, d int);
 # set from mutiple tables, sqlparser only supports from one table
 query error DataFusion error: SQL error: ParserError\("Expected end of statement, found: ,"\)
 explain update t1 set b = t2.b, c = t3.a, d = 1 from t2, t3 where t1.a = t2.a and t1.a = t3.a;
+
+# test table alias
+query TT
+explain update t1 as T set b = t2.b, c = t.a, d = 1 from t2 where t.a = t2.a and t.b > 'foo' and t2.c > 1.0;
+----
+logical_plan
+Dml: op=[Update] table=[t1]
+--Projection: t.a AS a, t2.b AS b, CAST(t.a AS Float64) AS c, CAST(Int64(1) AS Int32) AS d
+----Filter: t.a = t2.a AND t.b > Utf8("foo") AND t2.c > Float64(1)
+------CrossJoin:
+--------SubqueryAlias: t
+----------TableScan: t1
+--------TableScan: t2

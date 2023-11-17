@@ -24,7 +24,8 @@ use crate::protobuf::{
     arrow_type::ArrowTypeEnum,
     plan_type::PlanTypeEnum::{
         AnalyzedLogicalPlan, FinalAnalyzedLogicalPlan, FinalLogicalPlan,
-        FinalPhysicalPlan, InitialLogicalPlan, InitialPhysicalPlan, OptimizedLogicalPlan,
+        FinalPhysicalPlan, FinalPhysicalPlanWithStats, InitialLogicalPlan,
+        InitialPhysicalPlan, InitialPhysicalPlanWithStats, OptimizedLogicalPlan,
         OptimizedPhysicalPlan,
     },
     AnalyzedLogicalPlanType, CubeNode, EmptyMessage, GroupingSetNode, LogicalExprList,
@@ -352,6 +353,12 @@ impl From<&StringifiedPlan> for protobuf::StringifiedPlan {
                 PlanType::FinalPhysicalPlan => Some(protobuf::PlanType {
                     plan_type_enum: Some(FinalPhysicalPlan(EmptyMessage {})),
                 }),
+                PlanType::InitialPhysicalPlanWithStats => Some(protobuf::PlanType {
+                    plan_type_enum: Some(InitialPhysicalPlanWithStats(EmptyMessage {})),
+                }),
+                PlanType::FinalPhysicalPlanWithStats => Some(protobuf::PlanType {
+                    plan_type_enum: Some(FinalPhysicalPlanWithStats(EmptyMessage {})),
+                }),
             },
             plan: stringified_plan.plan.to_string(),
         }
@@ -476,9 +483,17 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
             Expr::Column(c) => Self {
                 expr_type: Some(ExprType::Column(c.into())),
             },
-            Expr::Alias(Alias { expr, name, .. }) => {
+            Expr::Alias(Alias {
+                expr,
+                relation,
+                name,
+            }) => {
                 let alias = Box::new(protobuf::AliasNode {
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
+                    relation: relation
+                        .to_owned()
+                        .map(|r| vec![r.into()])
+                        .unwrap_or(vec![]),
                     alias: name.to_owned(),
                 });
                 Self {
@@ -598,12 +613,12 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     }
                     WindowFunction::AggregateUDF(aggr_udf) => {
                         protobuf::window_expr_node::WindowFunction::Udaf(
-                            aggr_udf.name.clone(),
+                            aggr_udf.name().to_string(),
                         )
                     }
                     WindowFunction::WindowUDF(window_udf) => {
                         protobuf::window_expr_node::WindowFunction::Udwf(
-                            window_udf.name.clone(),
+                            window_udf.name().to_string(),
                         )
                     }
                 };
@@ -754,7 +769,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
             }
             Expr::ScalarUDF(ScalarUDF { fun, args }) => Self {
                 expr_type: Some(ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode {
-                    fun_name: fun.name.clone(),
+                    fun_name: fun.name().to_string(),
                     args: args
                         .iter()
                         .map(|expr| expr.try_into())
@@ -769,7 +784,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
             }) => Self {
                 expr_type: Some(ExprType::AggregateUdfExpr(Box::new(
                     protobuf::AggregateUdfExprNode {
-                        fun_name: fun.name.clone(),
+                        fun_name: fun.name().to_string(),
                         args: args.iter().map(|expr| expr.try_into()).collect::<Result<
                             Vec<_>,
                             Error,
@@ -960,8 +975,10 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::InList(expr)),
                 }
             }
-            Expr::Wildcard => Self {
-                expr_type: Some(ExprType::Wildcard(true)),
+            Expr::Wildcard { qualifier } => Self {
+                expr_type: Some(ExprType::Wildcard(protobuf::Wildcard {
+                    qualifier: qualifier.clone(),
+                })),
             },
             Expr::ScalarSubquery(_)
             | Expr::InSubquery(_)
@@ -1052,11 +1069,6 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     })),
                 }
             }
-
-            Expr::QualifiedWildcard { .. } => return Err(Error::General(
-                "Proto serialization error: Expr::QualifiedWildcard { .. } not supported"
-                    .to_string(),
-            )),
         };
 
         Ok(expr_node)
@@ -1122,13 +1134,9 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     Value::LargeUtf8Value(s.to_owned())
                 })
             }
-            ScalarValue::Fixedsizelist(..) => Err(Error::General(
-                "Proto serialization error: ScalarValue::Fixedsizelist not supported"
-                    .to_string(),
-            )),
-            // ScalarValue::List is serialized using Arrow IPC messages.
-            // as a single column RecordBatch
-            ScalarValue::List(arr) => {
+            // ScalarValue::List and ScalarValue::FixedSizeList are serialized using
+            // Arrow IPC messages as a single column RecordBatch
+            ScalarValue::List(arr) | ScalarValue::FixedSizeList(arr) => {
                 // Wrap in a "field_name" column
                 let batch = RecordBatch::try_from_iter(vec![(
                     "field_name",
@@ -1156,11 +1164,19 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     schema: Some(schema),
                 };
 
-                Ok(protobuf::ScalarValue {
-                    value: Some(protobuf::scalar_value::Value::ListValue(
-                        scalar_list_value,
-                    )),
-                })
+                match val {
+                    ScalarValue::List(_) => Ok(protobuf::ScalarValue {
+                        value: Some(protobuf::scalar_value::Value::ListValue(
+                            scalar_list_value,
+                        )),
+                    }),
+                    ScalarValue::FixedSizeList(_) => Ok(protobuf::ScalarValue {
+                        value: Some(protobuf::scalar_value::Value::FixedSizeListValue(
+                            scalar_list_value,
+                        )),
+                    }),
+                    _ => unreachable!(),
+                }
             }
             ScalarValue::Date32(val) => {
                 create_proto_scalar(val.as_ref(), &data_type, |s| Value::Date32Value(*s))
@@ -1460,6 +1476,7 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::ArrayAppend => Self::ArrayAppend,
             BuiltinScalarFunction::ArrayConcat => Self::ArrayConcat,
             BuiltinScalarFunction::ArrayEmpty => Self::ArrayEmpty,
+            BuiltinScalarFunction::ArrayExcept => Self::ArrayExcept,
             BuiltinScalarFunction::ArrayHasAll => Self::ArrayHasAll,
             BuiltinScalarFunction::ArrayHasAny => Self::ArrayHasAny,
             BuiltinScalarFunction::ArrayHas => Self::ArrayHas,
@@ -1468,6 +1485,7 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Flatten => Self::Flatten,
             BuiltinScalarFunction::ArrayLength => Self::ArrayLength,
             BuiltinScalarFunction::ArrayNdims => Self::ArrayNdims,
+            BuiltinScalarFunction::ArrayPopFront => Self::ArrayPopFront,
             BuiltinScalarFunction::ArrayPopBack => Self::ArrayPopBack,
             BuiltinScalarFunction::ArrayPosition => Self::ArrayPosition,
             BuiltinScalarFunction::ArrayPositions => Self::ArrayPositions,
@@ -1481,6 +1499,9 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::ArrayReplaceAll => Self::ArrayReplaceAll,
             BuiltinScalarFunction::ArraySlice => Self::ArraySlice,
             BuiltinScalarFunction::ArrayToString => Self::ArrayToString,
+            BuiltinScalarFunction::ArrayIntersect => Self::ArrayIntersect,
+            BuiltinScalarFunction::ArrayUnion => Self::ArrayUnion,
+            BuiltinScalarFunction::Range => Self::Range,
             BuiltinScalarFunction::Cardinality => Self::Cardinality,
             BuiltinScalarFunction::MakeArray => Self::Array,
             BuiltinScalarFunction::NullIf => Self::NullIf,
@@ -1539,6 +1560,8 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Isnan => Self::Isnan,
             BuiltinScalarFunction::Iszero => Self::Iszero,
             BuiltinScalarFunction::ArrowTypeof => Self::ArrowTypeof,
+            BuiltinScalarFunction::OverLay => Self::OverLay,
+            BuiltinScalarFunction::Levenshtein => Self::Levenshtein,
         };
 
         Ok(scalar_function)

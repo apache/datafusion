@@ -89,7 +89,7 @@ impl PhysicalExpr for TryCastExpr {
                 Ok(ColumnarValue::Array(cast))
             }
             ColumnarValue::Scalar(scalar) => {
-                let array = scalar.to_array();
+                let array = scalar.to_array()?;
                 let cast_array = cast_with_options(&array, &self.cast_type, &options)?;
                 let cast_scalar = ScalarValue::try_from_array(&cast_array, 0)?;
                 Ok(ColumnarValue::Scalar(cast_scalar))
@@ -187,7 +187,10 @@ mod tests {
             assert_eq!(expression.data_type(&schema)?, $TYPE);
 
             // compute
-            let result = expression.evaluate(&batch)?.into_array(batch.num_rows());
+            let result = expression
+                .evaluate(&batch)?
+                .into_array(batch.num_rows())
+                .expect("Failed to convert to array");
 
             // verify that the array's data_type is correct
             assert_eq!(*result.data_type(), $TYPE);
@@ -235,7 +238,10 @@ mod tests {
             assert_eq!(expression.data_type(&schema)?, $TYPE);
 
             // compute
-            let result = expression.evaluate(&batch)?.into_array(batch.num_rows());
+            let result = expression
+                .evaluate(&batch)?
+                .into_array(batch.num_rows())
+                .expect("Failed to convert to array");
 
             // verify that the array's data_type is correct
             assert_eq!(*result.data_type(), $TYPE);

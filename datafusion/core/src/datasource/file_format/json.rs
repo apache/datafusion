@@ -230,7 +230,7 @@ impl BatchSerializer for JsonSerializer {
 }
 
 /// Implements [`DataSink`] for writing to a Json file.
-struct JsonSink {
+pub struct JsonSink {
     /// Config options for writing data
     config: FileSinkConfig,
 }
@@ -254,8 +254,14 @@ impl DisplayAs for JsonSink {
 }
 
 impl JsonSink {
-    fn new(config: FileSinkConfig) -> Self {
+    /// Create from config.
+    pub fn new(config: FileSinkConfig) -> Self {
         Self { config }
+    }
+
+    /// Retrieve the inner [`FileSinkConfig`].
+    pub fn config(&self) -> &FileSinkConfig {
+        &self.config
     }
 
     async fn multipartput_all(

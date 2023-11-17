@@ -73,6 +73,11 @@ impl CastExpr {
     pub fn cast_type(&self) -> &DataType {
         &self.cast_type
     }
+
+    /// The cast options
+    pub fn cast_options(&self) -> &CastOptions<'static> {
+        &self.cast_options
+    }
 }
 
 impl fmt::Display for CastExpr {
@@ -173,7 +178,7 @@ pub fn cast_column(
             kernels::cast::cast_with_options(array, cast_type, &cast_options)?,
         )),
         ColumnarValue::Scalar(scalar) => {
-            let scalar_array = scalar.to_array();
+            let scalar_array = scalar.to_array()?;
             let cast_array = kernels::cast::cast_with_options(
                 &scalar_array,
                 cast_type,
@@ -258,7 +263,10 @@ mod tests {
             assert_eq!(expression.data_type(&schema)?, $TYPE);
 
             // compute
-            let result = expression.evaluate(&batch)?.into_array(batch.num_rows());
+            let result = expression
+                .evaluate(&batch)?
+                .into_array(batch.num_rows())
+                .expect("Failed to convert to array");
 
             // verify that the array's data_type is correct
             assert_eq!(*result.data_type(), $TYPE);
@@ -307,7 +315,10 @@ mod tests {
             assert_eq!(expression.data_type(&schema)?, $TYPE);
 
             // compute
-            let result = expression.evaluate(&batch)?.into_array(batch.num_rows());
+            let result = expression
+                .evaluate(&batch)?
+                .into_array(batch.num_rows())
+                .expect("Failed to convert to array");
 
             // verify that the array's data_type is correct
             assert_eq!(*result.data_type(), $TYPE);

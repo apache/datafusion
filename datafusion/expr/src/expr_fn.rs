@@ -99,6 +99,19 @@ pub fn placeholder(id: impl Into<String>) -> Expr {
     })
 }
 
+/// Create an '*' [`Expr::Wildcard`] expression that matches all columns
+///
+/// # Example
+///
+/// ```rust
+/// # use datafusion_expr::{wildcard};
+/// let p = wildcard();
+/// assert_eq!(p.to_string(), "*")
+/// ```
+pub fn wildcard() -> Expr {
+    Expr::Wildcard { qualifier: None }
+}
+
 /// Return a new expression `left <op> right`
 pub fn binary_expr(left: Expr, op: Operator, right: Expr) -> Expr {
     Expr::BinaryExpr(BinaryExpr::new(Box::new(left), op, Box::new(right)))
@@ -577,6 +590,13 @@ scalar_expr!(
     "returns the array without the last element."
 );
 
+scalar_expr!(
+    ArrayPopFront,
+    array_pop_front,
+    array,
+    "returns the array without the first element."
+);
+
 nary_scalar_expr!(ArrayConcat, array_concat, "concatenates arrays.");
 scalar_expr!(
     ArrayHas,
@@ -619,6 +639,12 @@ scalar_expr!(
     array_element,
     array element,
     "extracts the element with the index n from the array."
+);
+scalar_expr!(
+    ArrayExcept,
+    array_except,
+    first_array second_array,
+    "Returns an array of the elements that appear in the first array but not in the second."
 );
 scalar_expr!(
     ArrayLength,
@@ -704,6 +730,8 @@ scalar_expr!(
     array delimiter,
     "converts each element to its text representation."
 );
+scalar_expr!(ArrayUnion, array_union, array1 array2, "returns an array of the elements in the union of array1 and array2 without duplicates.");
+
 scalar_expr!(
     Cardinality,
     cardinality,
@@ -714,6 +742,18 @@ nary_scalar_expr!(
     MakeArray,
     array,
     "returns an Arrow array using the specified input expressions."
+);
+scalar_expr!(
+    ArrayIntersect,
+    array_intersect,
+    first_array second_array,
+    "Returns an array of the elements in the intersection of array1 and array2."
+);
+
+nary_scalar_expr!(
+    Range,
+    gen_range,
+    "Returns a list of values in the range between start and stop with step."
 );
 
 // string functions
@@ -817,6 +857,11 @@ nary_scalar_expr!(
     "concatenates several strings, placing a seperator between each one"
 );
 nary_scalar_expr!(Concat, concat_expr, "concatenates several strings");
+nary_scalar_expr!(
+    OverLay,
+    overlay,
+    "replace the substring of string that starts at the start'th character and extends for count characters with new substring"
+);
 
 // date functions
 scalar_expr!(DatePart, date_part, part date, "extracts a subfield from the date");
@@ -870,6 +915,14 @@ scalar_expr!(
 );
 
 scalar_expr!(ArrowTypeof, arrow_typeof, val, "data type");
+scalar_expr!(Levenshtein, levenshtein, string1 string2, "Returns the Levenshtein distance between the two given strings");
+
+scalar_expr!(
+    Struct,
+    struct_fun,
+    val,
+    "returns a vector of fields from the struct"
+);
 
 /// Create a CASE WHEN statement with literal WHEN expressions for comparison to the base expression.
 pub fn case(expr: Expr) -> CaseBuilder {
@@ -1127,6 +1180,7 @@ mod test {
         test_scalar_expr!(FromUnixtime, from_unixtime, unixtime);
 
         test_scalar_expr!(ArrayAppend, array_append, array, element);
+        test_scalar_expr!(ArrayPopFront, array_pop_front, array);
         test_scalar_expr!(ArrayPopBack, array_pop_back, array);
         test_unary_scalar_expr!(ArrayDims, array_dims);
         test_scalar_expr!(ArrayLength, array_length, array, dimension);
@@ -1146,6 +1200,9 @@ mod test {
         test_nary_scalar_expr!(MakeArray, array, input);
 
         test_unary_scalar_expr!(ArrowTypeof, arrow_typeof);
+        test_nary_scalar_expr!(OverLay, overlay, string, characters, position, len);
+        test_nary_scalar_expr!(OverLay, overlay, string, characters, position);
+        test_scalar_expr!(Levenshtein, levenshtein, string1, string2);
     }
 
     #[test]
