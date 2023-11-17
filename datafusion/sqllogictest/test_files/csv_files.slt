@@ -1,0 +1,71 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+#############
+## Csv Files Tests
+#############
+
+statement ok
+CREATE EXTERNAL TABLE csv_custom_quote (
+    c1  VARCHAR DEFAULT NULL,
+    c2  VARCHAR DEFAULT NULL
+)
+STORED AS CSV
+WITH HEADER ROW
+DELIMITER ','
+OPTIONS ('quote' '~')
+LOCATION '../../testing/data/csv/csv_custom_quote.csv';
+
+statement ok
+CREATE EXTERNAL TABLE csv_custom_escape (
+    c1  VARCHAR DEFAULT NULL,
+    c2  VARCHAR DEFAULT NULL
+)
+STORED AS CSV
+WITH HEADER ROW
+DELIMITER ','
+OPTIONS ('escape' '\')
+LOCATION '../../testing/data/csv/csv_custom_escape.csv';
+
+query TT
+SELECT * from csv_custom_quote;
+----
+id0 value0
+id1 value1
+id2 value2
+id3 value3
+id4 value4
+id5 value5
+id6 value6
+id7 value7
+id8 value8
+id9 value9
+
+
+query TT
+SELECT * from csv_custom_escape;
+----
+id0 value"0
+id1 value"1
+id2 value"2
+id3 value"3
+id4 value"4
+id5 value"5
+id6 value"6
+id7 value"7
+id8 value"8
+id9 value"9

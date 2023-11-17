@@ -73,6 +73,8 @@ impl TableProviderFactory for ListingTableFactory {
                 CsvFormat::default()
                     .with_has_header(cmd.has_header)
                     .with_delimiter(cmd.delimiter as u8)
+                    .with_quote(cmd.options.get("quote").map_or(b'"', |x| x.as_bytes()[0]))
+                    .with_escape(cmd.options.get("escape").map_or(None, |x| Some(x.as_bytes()[0])))
                     .with_file_compression_type(file_compression_type),
             ),
             #[cfg(feature = "parquet")]
