@@ -86,7 +86,6 @@ pub mod parquet;
 pub mod parquet_schema;
 pub mod partitioned_csv;
 pub mod predicates;
-pub mod projection;
 pub mod references;
 pub mod repartition;
 pub mod select;
@@ -453,23 +452,6 @@ async fn register_aggregate_csv_by_sql(ctx: &SessionContext) {
         results.is_empty(),
         "Expected no rows from executing CREATE EXTERNAL TABLE"
     );
-}
-
-async fn register_aggregate_simple_csv(ctx: &SessionContext) -> Result<()> {
-    // It's not possible to use aggregate_test_100 as it doesn't have enough similar values to test grouping on floats.
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("c1", DataType::Float32, false),
-        Field::new("c2", DataType::Float64, false),
-        Field::new("c3", DataType::Boolean, false),
-    ]));
-
-    ctx.register_csv(
-        "aggregate_simple",
-        "tests/data/aggregate_simple.csv",
-        CsvReadOptions::new().schema(&schema),
-    )
-    .await?;
-    Ok(())
 }
 
 async fn register_aggregate_csv(ctx: &SessionContext) -> Result<()> {
