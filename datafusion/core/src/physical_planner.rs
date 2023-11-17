@@ -820,16 +820,13 @@ impl DefaultPhysicalPlanner {
                     let updated_aggregates = initial_aggr.aggr_expr().to_vec();
                     let updated_order_bys = initial_aggr.order_by_expr().to_vec();
 
-                    let (initial_aggr, next_partition_mode): (
-                        Arc<dyn ExecutionPlan>,
-                        AggregateMode,
-                    ) = if can_repartition {
+                    let next_partition_mode = if can_repartition {
                         // construct a second aggregation with 'AggregateMode::FinalPartitioned'
-                        (initial_aggr, AggregateMode::FinalPartitioned)
+                        AggregateMode::FinalPartitioned
                     } else {
                         // construct a second aggregation, keeping the final column name equal to the
                         // first aggregation and the expressions corresponding to the respective aggregate
-                        (initial_aggr, AggregateMode::Final)
+                        AggregateMode::Final
                     };
 
                     let final_grouping_set = PhysicalGroupBy::new_single(

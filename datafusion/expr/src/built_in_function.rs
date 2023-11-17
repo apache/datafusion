@@ -298,6 +298,8 @@ pub enum BuiltinScalarFunction {
     ArrowTypeof,
     /// overlay
     OverLay,
+    /// levenshtein
+    Levenshtein,
 }
 
 /// Maps the sql function name to `BuiltinScalarFunction`
@@ -464,6 +466,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::FromUnixtime => Volatility::Immutable,
             BuiltinScalarFunction::ArrowTypeof => Volatility::Immutable,
             BuiltinScalarFunction::OverLay => Volatility::Immutable,
+            BuiltinScalarFunction::Levenshtein => Volatility::Immutable,
 
             // Stable builtin functions
             BuiltinScalarFunction::Now => Volatility::Stable,
@@ -827,6 +830,10 @@ impl BuiltinScalarFunction {
 
             BuiltinScalarFunction::OverLay => {
                 utf8_to_str_type(&input_expr_types[0], "overlay")
+            }
+
+            BuiltinScalarFunction::Levenshtein => {
+                utf8_to_int_type(&input_expr_types[0], "levenshtein")
             }
 
             BuiltinScalarFunction::Acos
@@ -1293,6 +1300,10 @@ impl BuiltinScalarFunction {
                 ],
                 self.volatility(),
             ),
+            BuiltinScalarFunction::Levenshtein => Signature::one_of(
+                vec![Exact(vec![Utf8, Utf8]), Exact(vec![LargeUtf8, LargeUtf8])],
+                self.volatility(),
+            ),
             BuiltinScalarFunction::Acos
             | BuiltinScalarFunction::Asin
             | BuiltinScalarFunction::Atan
@@ -1457,6 +1468,7 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
         BuiltinScalarFunction::Trim => &["trim"],
         BuiltinScalarFunction::Upper => &["upper"],
         BuiltinScalarFunction::Uuid => &["uuid"],
+        BuiltinScalarFunction::Levenshtein => &["levenshtein"],
 
         // regex functions
         BuiltinScalarFunction::RegexpMatch => &["regexp_match"],
