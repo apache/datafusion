@@ -7888,12 +7888,18 @@ impl serde::Serialize for FilterExecNode {
         if self.expr.is_some() {
             len += 1;
         }
+        if self.default_filter_selectivity != 0 {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.FilterExecNode", len)?;
         if let Some(v) = self.input.as_ref() {
             struct_ser.serialize_field("input", v)?;
         }
         if let Some(v) = self.expr.as_ref() {
             struct_ser.serialize_field("expr", v)?;
+        }
+        if self.default_filter_selectivity != 0 {
+            struct_ser.serialize_field("defaultFilterSelectivity", &self.default_filter_selectivity)?;
         }
         struct_ser.end()
     }
@@ -7907,12 +7913,15 @@ impl<'de> serde::Deserialize<'de> for FilterExecNode {
         const FIELDS: &[&str] = &[
             "input",
             "expr",
+            "default_filter_selectivity",
+            "defaultFilterSelectivity",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Input,
             Expr,
+            DefaultFilterSelectivity,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -7936,6 +7945,7 @@ impl<'de> serde::Deserialize<'de> for FilterExecNode {
                         match value {
                             "input" => Ok(GeneratedField::Input),
                             "expr" => Ok(GeneratedField::Expr),
+                            "defaultFilterSelectivity" | "default_filter_selectivity" => Ok(GeneratedField::DefaultFilterSelectivity),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -7957,6 +7967,7 @@ impl<'de> serde::Deserialize<'de> for FilterExecNode {
             {
                 let mut input__ = None;
                 let mut expr__ = None;
+                let mut default_filter_selectivity__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Input => {
@@ -7971,11 +7982,20 @@ impl<'de> serde::Deserialize<'de> for FilterExecNode {
                             }
                             expr__ = map_.next_value()?;
                         }
+                        GeneratedField::DefaultFilterSelectivity => {
+                            if default_filter_selectivity__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("defaultFilterSelectivity"));
+                            }
+                            default_filter_selectivity__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
                     }
                 }
                 Ok(FilterExecNode {
                     input: input__,
                     expr: expr__,
+                    default_filter_selectivity: default_filter_selectivity__.unwrap_or_default(),
                 })
             }
         }

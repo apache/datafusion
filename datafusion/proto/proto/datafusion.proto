@@ -1360,6 +1360,7 @@ message PhysicalNegativeNode {
 message FilterExecNode {
   PhysicalPlanNode input = 1;
   PhysicalExprNode expr = 2;
+  uint32 default_filter_selectivity = 3;
 }
 
 message FileGroup {

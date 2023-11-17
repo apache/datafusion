@@ -62,6 +62,8 @@ pub struct FilterExec {
     input: Arc<dyn ExecutionPlan>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    /// Selectivity for statistics. 0 = no rows, 100 all rows
+    default_selectivity: u8,
 }
 
 impl FilterExec {
@@ -75,11 +77,20 @@ impl FilterExec {
                 predicate,
                 input: input.clone(),
                 metrics: ExecutionPlanMetricsSet::new(),
+                default_selectivity: 20,
             }),
             other => {
                 plan_err!("Filter predicate must return boolean values, not {other:?}")
             }
         }
+    }
+
+    pub fn with_selectivity(mut self, default_selectivity: u8) -> Result<Self, DataFusionError>{
+        if default_selectivity > 100 {
+            return plan_err!("Default flter selectivity needs to be less than 100");
+        }
+        self.default_selectivity = default_selectivity;
+        Ok(self)
     }
 
     /// The expression to filter on. This expression must evaluate to a boolean value.
@@ -90,6 +101,11 @@ impl FilterExec {
     /// The input plan
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
+    }
+
+    /// The default selectivity
+    pub fn default_selectivity(&self) -> u8 {
+        self.default_selectivity
     }
 }
 
@@ -166,8 +182,16 @@ impl ExecutionPlan for FilterExec {
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        FilterExec::try_new(self.predicate.clone(), children.swap_remove(0))
-            .map(|e| Arc::new(e) as _)
+        FilterExec::try_new(
+            self.predicate.clone(),
+            children.swap_remove(0),
+        ).and_then(
+            |e| {
+                let selectivity = e.default_selectivity();
+                e.with_selectivity(selectivity)
+            } 
+        )
+        .map(|e| Arc::new(e) as _)
     }
 
     fn execute(
@@ -197,10 +221,7 @@ impl ExecutionPlan for FilterExec {
         let input_stats = self.input.statistics()?;
         let schema = self.schema();
         if !check_support(predicate, &schema) {
-            // assume filter selects 20% of rows if we cannot do anything smarter
-            // tracking issue for making this configurable:
-            // https://github.com/apache/arrow-datafusion/issues/8133
-            let selectivity = 0.2_f32;
+            let selectivity = self.default_selectivity as f32 / 100.0;
             let mut stats = input_stats.clone().into_inexact();
             if let Precision::Inexact(n) = stats.num_rows {
                 stats.num_rows = Precision::Inexact((selectivity * n as f32) as usize);
@@ -1007,6 +1028,24 @@ mod tests {
         // First column is "a", and it is a column with only one value after the filter.
         assert!(filter_statistics.column_statistics[0].is_singleton());
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_validation_filter_selectivity() -> Result<()>{
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics::new_unknown(&schema),
+            schema,
+        ));
+        // WHERE a = 10
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Eq,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
+        ));
+        let filter = FilterExec::try_new(predicate, input)?;
+        assert!(filter.with_selectivity(120).is_err());
         Ok(())
     }
 }

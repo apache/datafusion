@@ -913,7 +913,9 @@ impl DefaultPhysicalPlanner {
                         &input_schema,
                         session_state,
                     )?;
-                    Ok(Arc::new(FilterExec::try_new(runtime_expr, physical_input)?))
+                    let selectivity = session_state.config().options().optimizer.default_filter_selectivity;
+                    let filter = FilterExec::try_new(runtime_expr, physical_input)?;
+                    Ok(Arc::new(filter.with_selectivity(selectivity)?))
                 }
                 LogicalPlan::Union(Union { inputs, schema }) => {
                     let physical_plans = self.create_initial_plan_multi(inputs.iter().map(|lp| lp.as_ref()), session_state).await?;

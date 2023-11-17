@@ -178,7 +178,8 @@ impl TestParquetFile {
                 None,
             ));
 
-            let exec = Arc::new(FilterExec::try_new(physical_filter_expr, parquet_exec)?);
+            let exec =
+                Arc::new(FilterExec::try_new(physical_filter_expr, parquet_exec)?);
             Ok(exec)
         } else {
             Ok(Arc::new(ParquetExec::new(scan_config, None, None)))
