@@ -2570,6 +2570,7 @@ pub enum ScalarFunction {
     OverLay = 121,
     Range = 122,
     ArrayPopFront = 123,
+    Levenshtein = 124,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2702,6 +2703,7 @@ impl ScalarFunction {
             ScalarFunction::OverLay => "OverLay",
             ScalarFunction::Range => "Range",
             ScalarFunction::ArrayPopFront => "ArrayPopFront",
+            ScalarFunction::Levenshtein => "Levenshtein",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2831,6 +2833,7 @@ impl ScalarFunction {
             "OverLay" => Some(Self::OverLay),
             "Range" => Some(Self::Range),
             "ArrayPopFront" => Some(Self::ArrayPopFront),
+            "Levenshtein" => Some(Self::Levenshtein),
             _ => None,
         }
     }

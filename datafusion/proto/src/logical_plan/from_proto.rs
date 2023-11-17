@@ -50,7 +50,7 @@ use datafusion_expr::{
     date_part, date_trunc, decode, degrees, digest, encode, exp,
     expr::{self, InList, Sort, WindowFunction},
     factorial, flatten, floor, from_unixtime, gcd, gen_range, isnan, iszero, lcm, left,
-    ln, log, log10, log2,
+    levenshtein, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
     lower, lpad, ltrim, md5, nanvl, now, nullif, octet_length, overlay, pi, power,
     radians, random, regexp_match, regexp_replace, repeat, replace, reverse, right,
@@ -549,6 +549,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Iszero => Self::Iszero,
             ScalarFunction::ArrowTypeof => Self::ArrowTypeof,
             ScalarFunction::OverLay => Self::OverLay,
+            ScalarFunction::Levenshtein => Self::Levenshtein,
         }
     }
 }
@@ -1630,6 +1631,10 @@ pub fn parse_expr(
                         ))
                     }
                 }
+                ScalarFunction::Levenshtein => Ok(levenshtein(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
                 ScalarFunction::ToHex => Ok(to_hex(parse_expr(&args[0], registry)?)),
                 ScalarFunction::ToTimestampMillis => {
                     Ok(to_timestamp_millis(parse_expr(&args[0], registry)?))

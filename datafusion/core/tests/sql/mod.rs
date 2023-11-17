@@ -91,7 +91,6 @@ pub mod references;
 pub mod repartition;
 pub mod select;
 mod sql_api;
-pub mod subqueries;
 pub mod timestamp;
 
 fn create_join_context(
