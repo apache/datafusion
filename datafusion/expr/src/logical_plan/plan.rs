@@ -2295,22 +2295,21 @@ impl Aggregate {
     ) -> Result<Self> {
         let group_expr = enumerate_grouping_sets(group_expr)?;
 
-        let is_grouping_set = match group_expr.as_slice() {
-            [Expr::GroupingSet(_)] => true,
-            _ => false,
-        };
+        let is_grouping_set = matches!(group_expr.as_slice(), [Expr::GroupingSet(_)]);
 
         let grouping_expr: Vec<Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
-        let all_expr = grouping_expr.iter().chain(aggr_expr.iter());
 
-        let mut fields = exprlist_to_fields(all_expr, &input)?;
+        let mut fields = exprlist_to_fields(grouping_expr.iter(), &input)?;
 
+        // Even columns that cannot be null will become nullable when used in a grouping set.
         if is_grouping_set {
             fields = fields
                 .into_iter()
                 .map(|field| field.with_nullable(true))
                 .collect::<Vec<_>>();
         }
+
+        fields.extend(exprlist_to_fields(aggr_expr.iter(), &input)?);
 
         let schema =
             DFSchema::new_with_metadata(fields, input.schema().metadata().clone())?;
@@ -3042,7 +3041,17 @@ digraph {
 
         let output_schema = plan.schema();
 
-        assert_eq!(output_schema.field_with_name(None, "foo").unwrap().is_nullable(), true);
-        assert_eq!(output_schema.field_with_name(None, "bar").unwrap().is_nullable(), true);
+        assert!(
+            output_schema
+                .field_with_name(None, "foo")
+                .unwrap()
+                .is_nullable(),
+        );
+        assert!(
+            output_schema
+                .field_with_name(None, "bar")
+                .unwrap()
+                .is_nullable()
+        );
     }
 }
