@@ -1350,7 +1350,6 @@ impl EquivalenceProperties {
         orderings.extend(continuing_orderings);
         let oeq_class = OrderingEquivalenceClass::new(orderings);
         orderings = oeq_class.orderings;
-        orderings.retain(|ordering| !ordering.is_empty());
         (!orderings.is_empty()).then_some(orderings)
     }
 
