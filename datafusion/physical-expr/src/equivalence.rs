@@ -195,48 +195,6 @@ impl ProjectionMapping {
         self.inner.iter()
     }
 
-    /// This function projects ordering requirement according to projection.
-    ///
-    /// # Arguments
-    ///
-    /// * `lex_req` - Lexicographical ordering requirement.
-    ///
-    /// # Returns
-    ///
-    /// An `Option` containing the Lexicographical projected ordering requirement.
-    pub fn project_lex_reqs(&self, lex_req: LexRequirementRef) -> Option<LexRequirement> {
-        lex_req
-            .iter()
-            .map(|sort_req| {
-                self.target_expr(&sort_req.expr)
-                    .map(|expr| PhysicalSortRequirement {
-                        expr,
-                        options: sort_req.options,
-                    })
-            })
-            .collect::<Option<Vec<_>>>()
-    }
-
-    /// This function returns target value for each expression
-    ///
-    /// # Arguments
-    ///
-    /// * `exprs` - Source (e.g key) physical expressions
-    ///
-    /// # Returns
-    ///
-    /// An `Option` containing a the targets (e.g value) for the source each expression.
-    /// Returns `Some(Vec<_>)` if all of the expressions are source in the projection mapping.
-    pub fn target_exprs(
-        &self,
-        exprs: &[Arc<dyn PhysicalExpr>],
-    ) -> Option<Vec<Arc<dyn PhysicalExpr>>> {
-        exprs
-            .iter()
-            .map(|expr| self.target_expr(expr))
-            .collect::<Option<Vec<_>>>()
-    }
-
     /// This function returns target value for given expression
     ///
     /// # Arguments
