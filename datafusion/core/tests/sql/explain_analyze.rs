@@ -560,7 +560,7 @@ async fn csv_explain_verbose_plans() {
     // Since the plan contains path that are environmentally
     // dependant(e.g. full path of the test file), only verify
     // important content
-    assert_contains!(&actual, "logical_plan after RemoveUnusedColumns");
+    assert_contains!(&actual, "logical_plan after OptimizeProjections");
     assert_contains!(&actual, "physical_plan");
     assert_contains!(&actual, "FilterExec: c2@1 > 10");
     assert_contains!(actual, "ProjectionExec: expr=[c1@0 as c1]");

@@ -30,11 +30,11 @@ use crate::eliminate_outer_join::EliminateOuterJoin;
 use crate::extract_equijoin_predicate::ExtractEquijoinPredicate;
 use crate::filter_null_join_keys::FilterNullJoinKeys;
 use crate::merge_projection::MergeProjection;
+use crate::optimize_projections::OptimizeProjections;
 use crate::plan_signature::LogicalPlanSignature;
 use crate::propagate_empty_relation::PropagateEmptyRelation;
 use crate::push_down_filter::PushDownFilter;
 use crate::push_down_limit::PushDownLimit;
-use crate::remove_unused_columns::RemoveUnusedColumns;
 use crate::replace_distinct_aggregate::ReplaceDistinctWithAggregate;
 use crate::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
 use crate::scalar_subquery_to_join::ScalarSubqueryToJoin;
@@ -254,8 +254,8 @@ impl Optimizer {
             Arc::new(SimplifyExpressions::new()),
             Arc::new(UnwrapCastInComparison::new()),
             Arc::new(CommonSubexprEliminate::new()),
-            Arc::new(RemoveUnusedColumns::new()),
-            // RemoveUnusedColumns can pushdown Projections through Limits, do PushDownLimit again.
+            Arc::new(OptimizeProjections::new()),
+            // OptimizeProjections can pushdown Projections through Limits, do PushDownLimit again.
             Arc::new(PushDownLimit::new()),
         ];
 

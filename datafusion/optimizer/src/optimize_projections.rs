@@ -34,25 +34,25 @@ use std::sync::Arc;
 
 use crate::{OptimizerConfig, OptimizerRule};
 
-/// A rule for optimizing logical plans by removing unused columns.
+/// A rule for optimizing logical plans by removing unused Columns/Fields.
 ///
-/// `RemoveUnusedColumns` is an optimizer rule that identifies and eliminates columns from a logical plan
+/// `OptimizeProjections` is an optimizer rule that identifies and eliminates columns from a logical plan
 /// that are not used in any downstream operations. This can improve query performance and reduce unnecessary
 /// data processing.
 ///
 /// The rule analyzes the input logical plan, determines the necessary column indices, and then removes any
 /// unnecessary columns. Additionally, it eliminates any unnecessary projections in the plan.
 #[derive(Default)]
-pub struct RemoveUnusedColumns {}
+pub struct OptimizeProjections {}
 
-impl RemoveUnusedColumns {
+impl OptimizeProjections {
     #[allow(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
 }
 
-impl OptimizerRule for RemoveUnusedColumns {
+impl OptimizerRule for OptimizeProjections {
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
@@ -60,11 +60,11 @@ impl OptimizerRule for RemoveUnusedColumns {
     ) -> Result<Option<LogicalPlan>> {
         // All of the fields at the output are necessary.
         let indices = require_all_indices(plan);
-        remove_unnecessary_columns(plan, config, &indices)
+        optimize_projections(plan, config, &indices)
     }
 
     fn name(&self) -> &str {
-        "RemoveUnusedColumns"
+        "OptimizeProjections"
     }
 
     fn apply_order(&self) -> Option<ApplyOrder> {
@@ -340,7 +340,7 @@ fn require_all_indices(plan: &LogicalPlan) -> Vec<usize> {
 /// - `Ok(Some(LogicalPlan))`: An optimized `LogicalPlan` with unnecessary columns removed.
 /// - `Ok(None)`: If the optimization process results in a logical plan that doesn't require further propagation.
 /// - `Err(error)`: If an error occurs during the optimization process.
-fn remove_unnecessary_columns(
+fn optimize_projections(
     plan: &LogicalPlan,
     _config: &dyn OptimizerConfig,
     indices: &[usize],
@@ -426,7 +426,7 @@ fn remove_unnecessary_columns(
             let required_indices =
                 indices_referred_by_exprs(&proj.input, exprs_used.iter())?;
             return if let Some(input) =
-                remove_unnecessary_columns(&proj.input, _config, &required_indices)?
+                optimize_projections(&proj.input, _config, &required_indices)?
             {
                 if &projection_schema(&input, &exprs_used)? == input.schema() {
                     Ok(Some(input))
@@ -492,7 +492,7 @@ fn remove_unnecessary_columns(
                 indices_referred_by_exprs(&aggregate.input, all_exprs_iter)?;
 
             let aggregate_input = if let Some(input) =
-                remove_unnecessary_columns(&aggregate.input, _config, &necessary_indices)?
+                optimize_projections(&aggregate.input, _config, &necessary_indices)?
             {
                 input
             } else {
@@ -535,7 +535,7 @@ fn remove_unnecessary_columns(
                 new_window_expr.iter(),
             )?;
             let window_child = if let Some(new_window_child) =
-                remove_unnecessary_columns(&window.input, _config, &required_indices)?
+                optimize_projections(&window.input, _config, &required_indices)?
             {
                 new_window_child
             } else {
@@ -612,7 +612,7 @@ fn remove_unnecessary_columns(
     let new_inputs = izip!(child_required_indices, plan.inputs().into_iter())
         .map(|((required_indices, projection_beneficial), child)| {
             let (input, mut is_changed) = if let Some(new_input) =
-                remove_unnecessary_columns(child, _config, &required_indices)?
+                optimize_projections(child, _config, &required_indices)?
             {
                 (new_input, true)
             } else {
