@@ -1689,6 +1689,7 @@ fn update_ordering(
     }
 }
 
+/// Suffix each new_ordering to the end of the each relevant ordering.
 fn suffix_relevant_orderings(
     relevant_orderings: Vec<LexOrdering>,
     new_orderings: &[PhysicalSortExpr],
