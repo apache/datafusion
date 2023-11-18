@@ -57,8 +57,6 @@ use datafusion_common::{
 
 use super::plan::{NamedRelation, RecursiveQuery};
 
-use super::plan::{NamedRelation, RecursiveQuery};
-
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
 
