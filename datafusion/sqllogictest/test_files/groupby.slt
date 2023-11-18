@@ -3864,3 +3864,60 @@ select date_bin(interval '1 year', time) as bla, count(distinct state) as count 
 
 statement ok
 drop table t1
+
+
+statement ok
+CREATE EXTERNAL TABLE aggregate_test_100 (
+  c1  VARCHAR NOT NULL,
+  c2  TINYINT NOT NULL,
+  c3  SMALLINT NOT NULL,
+  c4  SMALLINT,
+  c5  INT,
+  c6  BIGINT NOT NULL,
+  c7  SMALLINT NOT NULL,
+  c8  INT NOT NULL,
+  c9  INT UNSIGNED NOT NULL,
+  c10 BIGINT UNSIGNED NOT NULL,
+  c11 FLOAT NOT NULL,
+  c12 DOUBLE NOT NULL,
+  c13 VARCHAR NOT NULL
+)
+STORED AS CSV
+WITH HEADER ROW
+LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+
+query TIIII
+SELECT c1, count(distinct c2), min(distinct c2), min(c3), max(c4) FROM aggregate_test_100 GROUP BY c1 ORDER BY c1;
+----
+a 5 1 -101 32064
+b 5 1 -117 25286
+c 5 1 -117 29106
+d 5 1 -99 31106
+e 5 1 -95 32514
+
+query TT
+EXPLAIN SELECT c1, count(distinct c2), min(distinct c2), sum(c3), max(c4) FROM aggregate_test_100 GROUP BY c1 ORDER BY c1;
+----
+logical_plan
+Sort: aggregate_test_100.c1 ASC NULLS LAST
+--Projection: aggregate_test_100.c1, COUNT(alias1) AS COUNT(DISTINCT aggregate_test_100.c2), MIN(alias1) AS MIN(DISTINCT aggregate_test_100.c2), SUM(alias2) AS SUM(aggregate_test_100.c3), MAX(alias3) AS MAX(aggregate_test_100.c4)
+----Aggregate: groupBy=[[aggregate_test_100.c1]], aggr=[[COUNT(alias1), MIN(alias1), SUM(alias2), MAX(alias3)]]
+------Aggregate: groupBy=[[aggregate_test_100.c1, aggregate_test_100.c2 AS alias1]], aggr=[[SUM(CAST(aggregate_test_100.c3 AS Int64)) AS alias2, MAX(aggregate_test_100.c4) AS alias3]]
+--------TableScan: aggregate_test_100 projection=[c1, c2, c3, c4]
+physical_plan
+SortPreservingMergeExec: [c1@0 ASC NULLS LAST]
+--SortExec: expr=[c1@0 ASC NULLS LAST]
+----ProjectionExec: expr=[c1@0 as c1, COUNT(alias1)@1 as COUNT(DISTINCT aggregate_test_100.c2), MIN(alias1)@2 as MIN(DISTINCT aggregate_test_100.c2), SUM(alias2)@3 as SUM(aggregate_test_100.c3), MAX(alias3)@4 as MAX(aggregate_test_100.c4)]
+------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[COUNT(alias1), MIN(alias1), SUM(alias2), MAX(alias3)]
+--------CoalesceBatchesExec: target_batch_size=2
+----------RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8
+------------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[COUNT(alias1), MIN(alias1), SUM(alias2), MAX(alias3)]
+--------------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1, alias1@1 as alias1], aggr=[alias2, alias3]
+----------------CoalesceBatchesExec: target_batch_size=2
+------------------RepartitionExec: partitioning=Hash([c1@0, alias1@1], 8), input_partitions=8
+--------------------AggregateExec: mode=Partial, gby=[c1@0 as c1, c2@1 as alias1], aggr=[alias2, alias3]
+----------------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3, c4], has_header=true
+
+statement ok
+drop table aggregate_test_100;
