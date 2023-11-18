@@ -210,17 +210,15 @@ impl ListingTableUrl {
         // If the prefix is a file, use a head request, otherwise list
         let list = match self.is_collection() {
             true => match ctx.runtime_env().cache_manager.get_list_files_cache() {
-                None => futures::stream::once(store.list(Some(&self.prefix)))
-                    .try_flatten()
-                    .boxed(),
+                None => store.list(Some(&self.prefix)),
                 Some(cache) => {
                     if let Some(res) = cache.get(&self.prefix) {
                         debug!("Hit list all files cache");
                         futures::stream::iter(res.as_ref().clone().into_iter().map(Ok))
                             .boxed()
                     } else {
-                        let list_res = store.list(Some(&self.prefix)).await;
-                        let vec = list_res?.try_collect::<Vec<ObjectMeta>>().await?;
+                        let list_res = store.list(Some(&self.prefix));
+                        let vec = list_res.try_collect::<Vec<ObjectMeta>>().await?;
                         cache.put(&self.prefix, Arc::new(vec.clone()));
                         futures::stream::iter(vec.into_iter().map(Ok)).boxed()
                     }
@@ -330,8 +328,8 @@ mod tests {
         let url = ListingTableUrl::parse("file:///foo/bar?").unwrap();
         assert_eq!(url.prefix.as_ref(), "foo/bar");
 
-        let err = ListingTableUrl::parse("file:///foo/😺").unwrap_err();
-        assert_eq!(err.to_string(), "Object Store error: Encountered object with invalid path: Error parsing Path \"/foo/😺\": Encountered illegal character sequence \"😺\" whilst parsing path segment \"😺\"");
+        let url = ListingTableUrl::parse("file:///foo/😺").unwrap();
+        assert_eq!(url.prefix.as_ref(), "foo/😺");
 
         let url = ListingTableUrl::parse("file:///foo/bar%2Efoo").unwrap();
         assert_eq!(url.prefix.as_ref(), "foo/bar.foo");

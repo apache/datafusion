@@ -784,6 +784,7 @@ mod tests {
             last_modified: Utc::now(),
             size: 42,
             e_tag: None,
+            version: None,
         };
 
         PartitionedFile {
