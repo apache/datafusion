@@ -201,7 +201,7 @@ impl ExecutionPlan for FilterExec {
             // tracking issue for making this configurable:
             // https://github.com/apache/arrow-datafusion/issues/8133
             let selectivity = 0.2_f64;
-            let mut stats = input_stats.clone().into_inexact();
+            let mut stats = input_stats.into_inexact();
             stats.num_rows = stats.num_rows.with_estimated_selectivity(selectivity);
             stats.total_byte_size = stats
                 .total_byte_size
