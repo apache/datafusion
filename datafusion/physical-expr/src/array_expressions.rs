@@ -1718,6 +1718,7 @@ pub fn flatten(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(flattened_array) as ArrayRef)
 }
 
+/// Macro for dispatching array length computation based on the offset type.
 macro_rules! array_length_dispatch {
     ($ARRAY:expr, $OFFSIZE:ty) => {{
         let list_array = as_generic_list_array::<$OFFSIZE>(&$ARRAY[0])?;
