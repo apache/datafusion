@@ -1718,35 +1718,35 @@ pub fn flatten(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(flattened_array) as ArrayRef)
 }
 
+macro_rules! array_length_dispatch {
+    ($ARRAY:expr, $OFFSIZE:ty) => {{
+        let list_array = as_generic_list_array::<$OFFSIZE>(&$ARRAY[0])?;
+        let dimension = if $ARRAY.len() == 2 {
+            as_int64_array(&$ARRAY[1])?.clone()
+        } else {
+            Int64Array::from_value(1, list_array.len())
+        };
+
+        let result = list_array
+            .iter()
+            .zip(dimension.iter())
+            .map(|(arr, dim)| compute_array_length(arr, dim))
+            .collect::<Result<UInt64Array>>()?;
+
+        Ok(Arc::new(result) as ArrayRef)
+    }};
+}
+
 /// Array_length SQL function
 pub fn array_length(args: &[ArrayRef]) -> Result<ArrayRef> {
     match &args[0].data_type() {
-        DataType::List(_) => _array_length_list::<i32>(args),
-        DataType::LargeList(_) => _array_length_list::<i64>(args),
+        DataType::List(_) => array_length_dispatch!(args, i32),
+        DataType::LargeList(_) => array_length_dispatch!(args, i64),
         _ => Err(DataFusionError::Internal(format!(
             "array_length does not support type '{:?}'",
             args[0].data_type()
         ))),
     }
-}
-
-/// array_length for List and LargeList
-fn _array_length_list<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let list_array = as_generic_list_array::<O>(&args[0])?;
-
-    let dimension = if args.len() == 2 {
-        as_int64_array(&args[1])?.clone()
-    } else {
-        Int64Array::from_value(1, list_array.len())
-    };
-
-    let result = list_array
-        .iter()
-        .zip(dimension.iter())
-        .map(|(arr, dim)| compute_array_length(arr, dim))
-        .collect::<Result<UInt64Array>>()?;
-
-    Ok(Arc::new(result) as ArrayRef)
 }
 
 /// Array_dims SQL function
