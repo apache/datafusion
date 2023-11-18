@@ -582,14 +582,14 @@ pub fn array_except(args: &[ArrayRef]) -> Result<ArrayRef> {
     match (array1.data_type(), array2.data_type()) {
         (DataType::Null, _) | (_, DataType::Null) => Ok(array1.to_owned()),
         (DataType::List(field), DataType::List(_)) => {
-            check_datatypes("array_except", &[&array1, &array2])?;
+            check_datatypes("array_except", &[array1, array2])?;
             let list1 = array1.as_list::<i32>();
             let list2 = array2.as_list::<i32>();
             let result = general_except::<i32>(list1, list2, field)?;
             Ok(Arc::new(result))
         }
         (DataType::LargeList(field), DataType::LargeList(_)) => {
-            check_datatypes("array_except", &[&array1, &array2])?;
+            check_datatypes("array_except", &[array1, array2])?;
             let list1 = array1.as_list::<i64>();
             let list2 = array2.as_list::<i64>();
             let result = general_except::<i64>(list1, list2, field)?;
