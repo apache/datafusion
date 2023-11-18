@@ -131,7 +131,10 @@ mod tests {
         let literal_expr = lit(42i32);
         assert_eq!("42", format!("{literal_expr}"));
 
-        let literal_array = literal_expr.evaluate(&batch)?.into_array(batch.num_rows());
+        let literal_array = literal_expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
         let literal_array = as_int32_array(&literal_array)?;
 
         // note that the contents of the literal array are unrelated to the batch contents except for the length of the array

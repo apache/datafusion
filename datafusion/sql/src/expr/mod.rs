@@ -459,7 +459,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 schema,
                 planner_context,
             ),
-
+            SQLExpr::Overlay {
+                expr,
+                overlay_what,
+                overlay_from,
+                overlay_for,
+            } => self.sql_overlay_to_expr(
+                *expr,
+                *overlay_what,
+                *overlay_from,
+                overlay_for,
+                schema,
+                planner_context,
+            ),
             SQLExpr::Nested(e) => {
                 self.sql_expr_to_logical_expr(*e, schema, planner_context)
             }
@@ -641,6 +653,32 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 vec![arg, to_trim]
             }
             None => vec![arg],
+        };
+        Ok(Expr::ScalarFunction(ScalarFunction::new(fun, args)))
+    }
+
+    fn sql_overlay_to_expr(
+        &self,
+        expr: SQLExpr,
+        overlay_what: SQLExpr,
+        overlay_from: SQLExpr,
+        overlay_for: Option<Box<SQLExpr>>,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
+        let fun = BuiltinScalarFunction::OverLay;
+        let arg = self.sql_expr_to_logical_expr(expr, schema, planner_context)?;
+        let what_arg =
+            self.sql_expr_to_logical_expr(overlay_what, schema, planner_context)?;
+        let from_arg =
+            self.sql_expr_to_logical_expr(overlay_from, schema, planner_context)?;
+        let args = match overlay_for {
+            Some(for_expr) => {
+                let for_expr =
+                    self.sql_expr_to_logical_expr(*for_expr, schema, planner_context)?;
+                vec![arg, what_arg, from_arg, for_expr]
+            }
+            None => vec![arg, what_arg, from_arg],
         };
         Ok(Expr::ScalarFunction(ScalarFunction::new(fun, args)))
     }

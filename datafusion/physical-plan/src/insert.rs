@@ -151,9 +151,19 @@ impl FileSinkExec {
         }
     }
 
+    /// Input execution plan
+    pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.input
+    }
+
     /// Returns insert sink
     pub fn sink(&self) -> &dyn DataSink {
         self.sink.as_ref()
+    }
+
+    /// Optional sort order for output data
+    pub fn sort_order(&self) -> &Option<Vec<PhysicalSortRequirement>> {
+        &self.sort_order
     }
 
     /// Returns the metrics of the underlying [DataSink]
@@ -170,7 +180,7 @@ impl DisplayAs for FileSinkExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "InsertExec: sink=")?;
+                write!(f, "FileSinkExec: sink=")?;
                 self.sink.fmt_as(t, f)
             }
         }

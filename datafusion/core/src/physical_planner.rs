@@ -27,7 +27,6 @@ use crate::datasource::file_format::csv::CsvFormat;
 use crate::datasource::file_format::json::JsonFormat;
 #[cfg(feature = "parquet")]
 use crate::datasource::file_format::parquet::ParquetFormat;
-use crate::datasource::file_format::write::FileWriterMode;
 use crate::datasource::file_format::FileFormat;
 use crate::datasource::listing::ListingTableUrl;
 use crate::datasource::physical_plan::FileSinkConfig;
@@ -250,7 +249,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             for e in args {
                 names.push(create_physical_name(e, false)?);
             }
-            Ok(format!("{}({})", fun.name, names.join(",")))
+            Ok(format!("{}({})", fun.name(), names.join(",")))
         }
         Expr::GroupingSet(grouping_set) => match grouping_set {
             GroupingSet::Rollup(exprs) => Ok(format!(
@@ -364,9 +363,8 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         Expr::Sort { .. } => {
             internal_err!("Create physical name does not support sort expression")
         }
-        Expr::Wildcard => internal_err!("Create physical name does not support wildcard"),
-        Expr::QualifiedWildcard { .. } => {
-            internal_err!("Create physical name does not support qualified wildcard")
+        Expr::Wildcard { .. } => {
+            internal_err!("Create physical name does not support wildcard")
         }
         Expr::Placeholder(_) => {
             internal_err!("Create physical name does not support placeholder")
@@ -592,7 +590,6 @@ impl DefaultPhysicalPlanner {
                         output_schema: Arc::new(schema),
                         table_partition_cols: vec![],
                         unbounded_input: false,
-                        writer_mode: FileWriterMode::PutMultipart,
                         single_file_output: *single_file_output,
                         overwrite: false,
                         file_type_writer_options
@@ -821,16 +818,13 @@ impl DefaultPhysicalPlanner {
                     let updated_aggregates = initial_aggr.aggr_expr().to_vec();
                     let updated_order_bys = initial_aggr.order_by_expr().to_vec();
 
-                    let (initial_aggr, next_partition_mode): (
-                        Arc<dyn ExecutionPlan>,
-                        AggregateMode,
-                    ) = if can_repartition {
+                    let next_partition_mode = if can_repartition {
                         // construct a second aggregation with 'AggregateMode::FinalPartitioned'
-                        (initial_aggr, AggregateMode::FinalPartitioned)
+                        AggregateMode::FinalPartitioned
                     } else {
                         // construct a second aggregation, keeping the final column name equal to the
                         // first aggregation and the expressions corresponding to the respective aggregate
-                        (initial_aggr, AggregateMode::Final)
+                        AggregateMode::Final
                     };
 
                     let final_grouping_set = PhysicalGroupBy::new_single(
@@ -1894,11 +1888,24 @@ impl DefaultPhysicalPlanner {
                     .await
                 {
                     Ok(input) => {
+                        // This plan will includes statistics if show_statistics is on
                         stringified_plans.push(
                             displayable(input.as_ref())
                                 .set_show_statistics(config.show_statistics)
                                 .to_stringified(e.verbose, InitialPhysicalPlan),
                         );
+
+                        // If the show_statisitcs is off, add another line to show statsitics in the case of explain verbose
+                        if e.verbose && !config.show_statistics {
+                            stringified_plans.push(
+                                displayable(input.as_ref())
+                                    .set_show_statistics(true)
+                                    .to_stringified(
+                                        e.verbose,
+                                        InitialPhysicalPlanWithStats,
+                                    ),
+                            );
+                        }
 
                         match self.optimize_internal(
                             input,
@@ -1913,11 +1920,26 @@ impl DefaultPhysicalPlanner {
                                 );
                             },
                         ) {
-                            Ok(input) => stringified_plans.push(
-                                displayable(input.as_ref())
-                                    .set_show_statistics(config.show_statistics)
-                                    .to_stringified(e.verbose, FinalPhysicalPlan),
-                            ),
+                            Ok(input) => {
+                                // This plan will includes statistics if show_statistics is on
+                                stringified_plans.push(
+                                    displayable(input.as_ref())
+                                        .set_show_statistics(config.show_statistics)
+                                        .to_stringified(e.verbose, FinalPhysicalPlan),
+                                );
+
+                                // If the show_statisitcs is off, add another line to show statsitics in the case of explain verbose
+                                if e.verbose && !config.show_statistics {
+                                    stringified_plans.push(
+                                        displayable(input.as_ref())
+                                            .set_show_statistics(true)
+                                            .to_stringified(
+                                                e.verbose,
+                                                FinalPhysicalPlanWithStats,
+                                            ),
+                                    );
+                                }
+                            }
                             Err(DataFusionError::Context(optimizer_name, e)) => {
                                 let plan_type = OptimizedPhysicalPlan { optimizer_name };
                                 stringified_plans

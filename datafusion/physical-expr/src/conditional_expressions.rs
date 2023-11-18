@@ -54,7 +54,7 @@ pub fn coalesce(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                     if value.is_null() {
                         continue;
                     } else {
-                        let last_value = value.to_array_of_size(size);
+                        let last_value = value.to_array_of_size(size)?;
                         current_value =
                             zip(&remainder, &last_value, current_value.as_ref())?;
                         break;

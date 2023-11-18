@@ -121,19 +121,22 @@ impl ScalarUDF {
     pub fn name(&self) -> &str {
         &self.name
     }
-    /// Returns this function's signature
+
+    /// Returns this function's signature (what input types are accepted)
     pub fn signature(&self) -> &Signature {
         &self.signature
     }
-    /// return the return type of this function given the types of the arguments
+
+    /// Return the type of the function given its input types
     pub fn return_type(&self, args: &[DataType]) -> Result<DataType> {
         // Old API returns an Arc of the datatype for some reason
         let res = (self.return_type)(args)?;
         Ok(res.as_ref().clone())
     }
-    /// return the implementation of this function
-    pub fn fun(&self) -> &ScalarFunctionImplementation {
-        &self.fun
+
+    /// Return the actual implementation
+    pub fn fun(&self) -> ScalarFunctionImplementation {
+        self.fun.clone()
     }
 }
 

@@ -45,10 +45,10 @@ use crate::physical_plan::insert::FileSinkExec;
 use crate::physical_plan::SendableRecordBatchStream;
 use crate::physical_plan::{DisplayAs, DisplayFormatType, Statistics};
 
-use super::write::orchestration::{stateless_append_all, stateless_multipart_put};
+use super::write::orchestration::stateless_multipart_put;
 
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
-use crate::datasource::file_format::write::{BatchSerializer, FileWriterMode};
+use crate::datasource::file_format::write::BatchSerializer;
 use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
 use crate::datasource::physical_plan::{FileSinkConfig, NdJsonExec};
 use crate::error::Result;
@@ -230,7 +230,7 @@ impl BatchSerializer for JsonSerializer {
 }
 
 /// Implements [`DataSink`] for writing to a Json file.
-struct JsonSink {
+pub struct JsonSink {
     /// Config options for writing data
     config: FileSinkConfig,
 }
@@ -245,11 +245,7 @@ impl DisplayAs for JsonSink {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(
-                    f,
-                    "JsonSink(writer_mode={:?}, file_groups=",
-                    self.config.writer_mode
-                )?;
+                write!(f, "JsonSink(file_groups=",)?;
                 FileGroupDisplay(&self.config.file_groups).fmt_as(t, f)?;
                 write!(f, ")")
             }
@@ -258,42 +254,14 @@ impl DisplayAs for JsonSink {
 }
 
 impl JsonSink {
-    fn new(config: FileSinkConfig) -> Self {
+    /// Create from config.
+    pub fn new(config: FileSinkConfig) -> Self {
         Self { config }
     }
 
-    async fn append_all(
-        &self,
-        data: SendableRecordBatchStream,
-        context: &Arc<TaskContext>,
-    ) -> Result<u64> {
-        if !self.config.table_partition_cols.is_empty() {
-            return Err(DataFusionError::NotImplemented("Inserting in append mode to hive style partitioned tables is not supported".into()));
-        }
-
-        let writer_options = self.config.file_type_writer_options.try_into_json()?;
-        let compression = &writer_options.compression;
-
-        let object_store = context
-            .runtime_env()
-            .object_store(&self.config.object_store_url)?;
-        let file_groups = &self.config.file_groups;
-
-        let get_serializer = move |_| {
-            let serializer: Box<dyn BatchSerializer> = Box::new(JsonSerializer::new());
-            serializer
-        };
-
-        stateless_append_all(
-            data,
-            context,
-            object_store,
-            file_groups,
-            self.config.unbounded_input,
-            (*compression).into(),
-            Box::new(get_serializer),
-        )
-        .await
+    /// Retrieve the inner [`FileSinkConfig`].
+    pub fn config(&self) -> &FileSinkConfig {
+        &self.config
     }
 
     async fn multipartput_all(
@@ -336,19 +304,8 @@ impl DataSink for JsonSink {
         data: SendableRecordBatchStream,
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
-        match self.config.writer_mode {
-            FileWriterMode::Append => {
-                let total_count = self.append_all(data, context).await?;
-                Ok(total_count)
-            }
-            FileWriterMode::PutMultipart => {
-                let total_count = self.multipartput_all(data, context).await?;
-                Ok(total_count)
-            }
-            FileWriterMode::Put => {
-                return not_impl_err!("FileWriterMode::Put is not supported yet!")
-            }
-        }
+        let total_count = self.multipartput_all(data, context).await?;
+        Ok(total_count)
     }
 }
 

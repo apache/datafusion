@@ -19,10 +19,10 @@ use std::collections::HashMap;
 use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
 
-use arrow::array::ArrayRef;
+use arrow::array::{ArrayRef, FixedSizeListArray};
 use arrow::datatypes::{
-    DataType, Field, Fields, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
-    Schema, SchemaRef, TimeUnit, UnionFields, UnionMode,
+    DataType, Field, Fields, Int32Type, IntervalDayTimeType, IntervalMonthDayNanoType,
+    IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields, UnionMode,
 };
 
 use prost::Message;
@@ -291,6 +291,32 @@ async fn roundtrip_logical_plan_aggregation() -> Result<()> {
     .await?;
 
     let query = "SELECT a, SUM(b + 1) as b_sum FROM t1 GROUP BY a ORDER BY b_sum DESC";
+    let plan = ctx.sql(query).await?.into_optimized_plan()?;
+
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_logical_plan_distinct_on() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let schema = Schema::new(vec![
+        Field::new("a", DataType::Int64, true),
+        Field::new("b", DataType::Decimal128(15, 2), true),
+    ]);
+
+    ctx.register_csv(
+        "t1",
+        "tests/testdata/test.csv",
+        CsvReadOptions::default().schema(&schema),
+    )
+    .await?;
+
+    let query = "SELECT DISTINCT ON (a % 2) a, b * 2 FROM t1 ORDER BY a % 2 DESC, b";
     let plan = ctx.sql(query).await?.into_optimized_plan()?;
 
     let bytes = logical_plan_to_bytes(&plan)?;
@@ -664,6 +690,14 @@ fn round_trip_scalar_values() {
             ],
             &DataType::List(new_arc_field("item", DataType::Float32, true)),
         )),
+        ScalarValue::FixedSizeList(Arc::new(FixedSizeListArray::from_iter_primitive::<
+            Int32Type,
+            _,
+            _,
+        >(
+            vec![Some(vec![Some(1), Some(2), Some(3)])],
+            3,
+        ))),
         ScalarValue::Dictionary(
             Box::new(DataType::Int32),
             Box::new(ScalarValue::Utf8(Some("foo".into()))),
@@ -1147,7 +1181,17 @@ fn roundtrip_inlist() {
 
 #[test]
 fn roundtrip_wildcard() {
-    let test_expr = Expr::Wildcard;
+    let test_expr = Expr::Wildcard { qualifier: None };
+
+    let ctx = SessionContext::new();
+    roundtrip_expr_test(test_expr, ctx);
+}
+
+#[test]
+fn roundtrip_qualified_wildcard() {
+    let test_expr = Expr::Wildcard {
+        qualifier: Some("foo".into()),
+    };
 
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
@@ -1523,12 +1567,12 @@ fn roundtrip_window() {
         Ok(Box::new(DummyWindow {}))
     }
 
-    let dummy_window_udf = WindowUDF {
-        name: String::from("dummy_udwf"),
-        signature: Signature::exact(vec![DataType::Float64], Volatility::Immutable),
-        return_type: Arc::new(return_type),
-        partition_evaluator_factory: Arc::new(make_partition_evaluator),
-    };
+    let dummy_window_udf = WindowUDF::new(
+        "dummy_udwf",
+        &Signature::exact(vec![DataType::Float64], Volatility::Immutable),
+        &(Arc::new(return_type) as _),
+        &(Arc::new(make_partition_evaluator) as _),
+    );
 
     let test_expr6 = Expr::WindowFunction(expr::WindowFunction::new(
         WindowFunction::WindowUDF(Arc::new(dummy_window_udf.clone())),

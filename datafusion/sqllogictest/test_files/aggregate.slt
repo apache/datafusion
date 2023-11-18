@@ -2524,6 +2524,205 @@ b 0 0
 c 1 1
 
 #
+# Push limit into distinct group-by aggregation tests
+#
+
+# Make results deterministic
+statement ok
+set datafusion.optimizer.repartition_aggregations = false;
+
+#
+query TT
+EXPLAIN SELECT DISTINCT c3 FROM aggregate_test_100 group by c3 limit 5;
+----
+logical_plan
+Limit: skip=0, fetch=5
+--Aggregate: groupBy=[[aggregate_test_100.c3]], aggr=[[]]
+----Aggregate: groupBy=[[aggregate_test_100.c3]], aggr=[[]]
+------TableScan: aggregate_test_100 projection=[c3]
+physical_plan
+GlobalLimitExec: skip=0, fetch=5
+--AggregateExec: mode=Final, gby=[c3@0 as c3], aggr=[], lim=[5]
+----CoalescePartitionsExec
+------AggregateExec: mode=Partial, gby=[c3@0 as c3], aggr=[], lim=[5]
+--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+----------AggregateExec: mode=Final, gby=[c3@0 as c3], aggr=[], lim=[5]
+------------CoalescePartitionsExec
+--------------AggregateExec: mode=Partial, gby=[c3@0 as c3], aggr=[], lim=[5]
+----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c3], has_header=true
+
+query I
+SELECT DISTINCT c3 FROM aggregate_test_100 group by c3 limit 5;
+----
+1
+-40
+29
+-85
+-82
+
+query TT
+EXPLAIN SELECT c2, c3 FROM aggregate_test_100 group by c2, c3 limit 5 offset 4;
+----
+logical_plan
+Limit: skip=4, fetch=5
+--Aggregate: groupBy=[[aggregate_test_100.c2, aggregate_test_100.c3]], aggr=[[]]
+----TableScan: aggregate_test_100 projection=[c2, c3]
+physical_plan
+GlobalLimitExec: skip=4, fetch=5
+--AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[], lim=[9]
+----CoalescePartitionsExec
+------AggregateExec: mode=Partial, gby=[c2@0 as c2, c3@1 as c3], aggr=[], lim=[9]
+--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], has_header=true
+
+query II
+SELECT c2, c3 FROM aggregate_test_100 group by c2, c3 limit 5 offset 4;
+----
+5 -82
+4 -111
+3 104
+3 13
+1 38
+
+# The limit should only apply to the aggregations which group by c3
+query TT
+EXPLAIN SELECT DISTINCT c3 FROM aggregate_test_100 WHERE c3 between 10 and 20 group by c2, c3 limit 4;
+----
+logical_plan
+Limit: skip=0, fetch=4
+--Aggregate: groupBy=[[aggregate_test_100.c3]], aggr=[[]]
+----Projection: aggregate_test_100.c3
+------Aggregate: groupBy=[[aggregate_test_100.c2, aggregate_test_100.c3]], aggr=[[]]
+--------Filter: aggregate_test_100.c3 >= Int16(10) AND aggregate_test_100.c3 <= Int16(20)
+----------TableScan: aggregate_test_100 projection=[c2, c3], partial_filters=[aggregate_test_100.c3 >= Int16(10), aggregate_test_100.c3 <= Int16(20)]
+physical_plan
+GlobalLimitExec: skip=0, fetch=4
+--AggregateExec: mode=Final, gby=[c3@0 as c3], aggr=[], lim=[4]
+----CoalescePartitionsExec
+------AggregateExec: mode=Partial, gby=[c3@0 as c3], aggr=[], lim=[4]
+--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+----------ProjectionExec: expr=[c3@1 as c3]
+------------AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[]
+--------------CoalescePartitionsExec
+----------------AggregateExec: mode=Partial, gby=[c2@0 as c2, c3@1 as c3], aggr=[]
+------------------CoalesceBatchesExec: target_batch_size=8192
+--------------------FilterExec: c3@1 >= 10 AND c3@1 <= 20
+----------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], has_header=true
+
+query I
+SELECT DISTINCT c3 FROM aggregate_test_100 WHERE c3 between 10 and 20 group by c2, c3 limit 4;
+----
+13
+17
+12
+14
+
+# An aggregate expression causes the limit to not be pushed to the aggregation
+query TT
+EXPLAIN SELECT max(c1), c2, c3 FROM aggregate_test_100 group by c2, c3 limit 5;
+----
+logical_plan
+Projection: MAX(aggregate_test_100.c1), aggregate_test_100.c2, aggregate_test_100.c3
+--Limit: skip=0, fetch=5
+----Aggregate: groupBy=[[aggregate_test_100.c2, aggregate_test_100.c3]], aggr=[[MAX(aggregate_test_100.c1)]]
+------TableScan: aggregate_test_100 projection=[c1, c2, c3]
+physical_plan
+ProjectionExec: expr=[MAX(aggregate_test_100.c1)@2 as MAX(aggregate_test_100.c1), c2@0 as c2, c3@1 as c3]
+--GlobalLimitExec: skip=0, fetch=5
+----AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[MAX(aggregate_test_100.c1)]
+------CoalescePartitionsExec
+--------AggregateExec: mode=Partial, gby=[c2@1 as c2, c3@2 as c3], aggr=[MAX(aggregate_test_100.c1)]
+----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3], has_header=true
+
+# TODO(msirek): Extend checking in LimitedDistinctAggregation equal groupings to ignore the order of columns
+# in the group-by column lists, so the limit could be pushed to the lowest AggregateExec in this case
+query TT
+EXPLAIN SELECT DISTINCT c3, c2 FROM aggregate_test_100 group by c2, c3 limit 3 offset 10;
+----
+logical_plan
+Limit: skip=10, fetch=3
+--Aggregate: groupBy=[[aggregate_test_100.c3, aggregate_test_100.c2]], aggr=[[]]
+----Projection: aggregate_test_100.c3, aggregate_test_100.c2
+------Aggregate: groupBy=[[aggregate_test_100.c2, aggregate_test_100.c3]], aggr=[[]]
+--------TableScan: aggregate_test_100 projection=[c2, c3]
+physical_plan
+GlobalLimitExec: skip=10, fetch=3
+--AggregateExec: mode=Final, gby=[c3@0 as c3, c2@1 as c2], aggr=[], lim=[13]
+----CoalescePartitionsExec
+------AggregateExec: mode=Partial, gby=[c3@0 as c3, c2@1 as c2], aggr=[], lim=[13]
+--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+----------ProjectionExec: expr=[c3@1 as c3, c2@0 as c2]
+------------AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[]
+--------------CoalescePartitionsExec
+----------------AggregateExec: mode=Partial, gby=[c2@0 as c2, c3@1 as c3], aggr=[]
+------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+--------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], has_header=true
+
+query II
+SELECT DISTINCT c3, c2 FROM aggregate_test_100 group by c2, c3 limit 3 offset 10;
+----
+57 1
+-54 4
+112 3
+
+query TT
+EXPLAIN SELECT c2, c3 FROM aggregate_test_100 group by rollup(c2, c3) limit 3;
+----
+logical_plan
+Projection: aggregate_test_100.c2, aggregate_test_100.c3
+--Limit: skip=0, fetch=3
+----Aggregate: groupBy=[[ROLLUP (aggregate_test_100.c2, aggregate_test_100.c3)]], aggr=[[]]
+------TableScan: aggregate_test_100 projection=[c2, c3]
+physical_plan
+GlobalLimitExec: skip=0, fetch=3
+--AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[], lim=[3]
+----CoalescePartitionsExec
+------AggregateExec: mode=Partial, gby=[(NULL as c2, NULL as c3), (c2@0 as c2, NULL as c3), (c2@0 as c2, c3@1 as c3)], aggr=[]
+--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], has_header=true
+
+query II
+SELECT c2, c3 FROM aggregate_test_100 group by rollup(c2, c3) limit 3;
+----
+NULL NULL
+2 NULL
+5 NULL
+
+
+statement ok
+set datafusion.optimizer.enable_distinct_aggregation_soft_limit = false;
+
+# The limit should not be pushed into the aggregations
+query TT
+EXPLAIN SELECT DISTINCT c3 FROM aggregate_test_100 group by c3 limit 5;
+----
+logical_plan
+Limit: skip=0, fetch=5
+--Aggregate: groupBy=[[aggregate_test_100.c3]], aggr=[[]]
+----Aggregate: groupBy=[[aggregate_test_100.c3]], aggr=[[]]
+------TableScan: aggregate_test_100 projection=[c3]
+physical_plan
+GlobalLimitExec: skip=0, fetch=5
+--AggregateExec: mode=Final, gby=[c3@0 as c3], aggr=[]
+----CoalescePartitionsExec
+------AggregateExec: mode=Partial, gby=[c3@0 as c3], aggr=[]
+--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+----------AggregateExec: mode=Final, gby=[c3@0 as c3], aggr=[]
+------------CoalescePartitionsExec
+--------------AggregateExec: mode=Partial, gby=[c3@0 as c3], aggr=[]
+----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c3], has_header=true
+
+statement ok
+set datafusion.optimizer.enable_distinct_aggregation_soft_limit = true;
+
+statement ok
+set datafusion.optimizer.repartition_aggregations = true;
+
+#
 # regr_*() tests
 #
 
@@ -2789,3 +2988,79 @@ NULL NULL 1 NULL 3 6 0 0 0
 NULL NULL 1 NULL 5 15 0 0 0
 3 0 2 1 5.5 16.5 0.5 4.5 1.5
 3 0 3 1 6 18 2 18 6
+
+statement error
+SELECT STRING_AGG()
+
+statement error
+SELECT STRING_AGG(1,2,3)
+
+statement error
+SELECT STRING_AGG(STRING_AGG('a', ','))
+
+query T
+SELECT STRING_AGG('a', ',')
+----
+a
+
+query TTTT
+SELECT STRING_AGG('a',','), STRING_AGG('a', NULL), STRING_AGG(NULL, ','), STRING_AGG(NULL, NULL)
+----
+a a NULL NULL
+
+query TT
+select string_agg('', '|'), string_agg('a', '');
+----
+(empty) a
+
+query T
+SELECT STRING_AGG(column1, '|') FROM (values (''), (null), (''));
+----
+|
+
+statement ok
+CREATE TABLE strings(g INTEGER, x VARCHAR, y VARCHAR)
+
+query ITT
+INSERT INTO strings VALUES (1,'a','/'), (1,'b','-'), (2,'i','/'), (2,NULL,'-'), (2,'j','+'), (3,'p','/'), (4,'x','/'), (4,'y','-'), (4,'z','+')
+----
+9
+
+query IT
+SELECT g, STRING_AGG(x,'|') FROM strings GROUP BY g ORDER BY g
+----
+1 a|b
+2 i|j
+3 p
+4 x|y|z
+
+query T
+SELECT STRING_AGG(x,',') FROM strings WHERE g > 100
+----
+NULL
+
+statement ok
+drop table strings
+
+query T
+WITH my_data as (
+SELECT 'text1'::varchar(1000) as my_column union all
+SELECT 'text1'::varchar(1000) as my_column union all
+SELECT 'text1'::varchar(1000) as my_column
+)
+SELECT string_agg(my_column,', ') as my_string_agg
+FROM my_data
+----
+text1, text1, text1
+
+query T
+WITH my_data as (
+SELECT 1 as dummy,  'text1'::varchar(1000) as my_column union all
+SELECT 1 as dummy,  'text1'::varchar(1000) as my_column union all
+SELECT 1 as dummy,  'text1'::varchar(1000) as my_column
+)
+SELECT string_agg(my_column,', ') as my_string_agg
+FROM my_data
+GROUP BY dummy
+----
+text1, text1, text1

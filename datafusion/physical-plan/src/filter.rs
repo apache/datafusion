@@ -194,11 +194,20 @@ impl ExecutionPlan for FilterExec {
     fn statistics(&self) -> Result<Statistics> {
         let predicate = self.predicate();
 
+        let input_stats = self.input.statistics()?;
         let schema = self.schema();
         if !check_support(predicate, &schema) {
-            return Ok(Statistics::new_unknown(&schema));
+            // assume filter selects 20% of rows if we cannot do anything smarter
+            // tracking issue for making this configurable:
+            // https://github.com/apache/arrow-datafusion/issues/8133
+            let selectivity = 0.2_f64;
+            let mut stats = input_stats.into_inexact();
+            stats.num_rows = stats.num_rows.with_estimated_selectivity(selectivity);
+            stats.total_byte_size = stats
+                .total_byte_size
+                .with_estimated_selectivity(selectivity);
+            return Ok(stats);
         }
-        let input_stats = self.input.statistics()?;
 
         let num_rows = input_stats.num_rows;
         let total_byte_size = input_stats.total_byte_size;
@@ -210,14 +219,8 @@ impl ExecutionPlan for FilterExec {
 
         // Estimate (inexact) selectivity of predicate
         let selectivity = analysis_ctx.selectivity.unwrap_or(1.0);
-        let num_rows = match num_rows.get_value() {
-            Some(nr) => Precision::Inexact((*nr as f64 * selectivity).ceil() as usize),
-            None => Precision::Absent,
-        };
-        let total_byte_size = match total_byte_size.get_value() {
-            Some(tbs) => Precision::Inexact((*tbs as f64 * selectivity).ceil() as usize),
-            None => Precision::Absent,
-        };
+        let num_rows = num_rows.with_estimated_selectivity(selectivity);
+        let total_byte_size = total_byte_size.with_estimated_selectivity(selectivity);
 
         let column_statistics = collect_new_statistics(
             &input_stats.column_statistics,
@@ -252,17 +255,23 @@ fn collect_new_statistics(
                 },
             )| {
                 let closed_interval = interval.close_bounds();
+                let (min_value, max_value) =
+                    if closed_interval.lower.value.eq(&closed_interval.upper.value) {
+                        (
+                            Precision::Exact(closed_interval.lower.value),
+                            Precision::Exact(closed_interval.upper.value),
+                        )
+                    } else {
+                        (
+                            Precision::Inexact(closed_interval.lower.value),
+                            Precision::Inexact(closed_interval.upper.value),
+                        )
+                    };
                 ColumnStatistics {
-                    null_count: match input_column_stats[idx].null_count.get_value() {
-                        Some(nc) => Precision::Inexact(*nc),
-                        None => Precision::Absent,
-                    },
-                    max_value: Precision::Inexact(closed_interval.upper.value),
-                    min_value: Precision::Inexact(closed_interval.lower.value),
-                    distinct_count: match distinct_count.get_value() {
-                        Some(dc) => Precision::Inexact(*dc),
-                        None => Precision::Absent,
-                    },
+                    null_count: input_column_stats[idx].null_count.clone().to_inexact(),
+                    max_value,
+                    min_value,
+                    distinct_count: distinct_count.to_inexact(),
                 }
             },
         )
@@ -288,7 +297,7 @@ pub(crate) fn batch_filter(
 ) -> Result<RecordBatch> {
     predicate
         .evaluate(batch)
-        .map(|v| v.into_array(batch.num_rows()))
+        .and_then(|v| v.into_array(batch.num_rows()))
         .and_then(|array| {
             Ok(as_boolean_array(&array)?)
                 // apply filter array to record batch
@@ -960,6 +969,28 @@ mod tests {
         };
 
         assert_eq!(filter_statistics, expected_filter_statistics);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_statistics_with_constant_column() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics::new_unknown(&schema),
+            schema,
+        ));
+        // WHERE a = 10
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Eq,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
+        ));
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, input)?);
+        let filter_statistics = filter.statistics()?;
+        // First column is "a", and it is a column with only one value after the filter.
+        assert!(filter_statistics.column_statistics[0].is_singleton());
 
         Ok(())
     }

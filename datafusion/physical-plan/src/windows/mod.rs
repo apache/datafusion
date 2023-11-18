@@ -55,19 +55,26 @@ pub use datafusion_physical_expr::window::{
 };
 
 #[derive(Debug, Clone, PartialEq)]
-/// Specifies partition expression properties in terms of existing ordering(s).
-/// As an example if existing ordering is [a ASC, b ASC, c ASC],
-/// `PARTITION BY b` will have `PartitionSearchMode::Linear`.
-/// `PARTITION BY a, c` and `PARTITION BY c, a` will have `PartitionSearchMode::PartiallySorted(0)`, `PartitionSearchMode::PartiallySorted(1)`
-///  respectively (subset `a` defines an ordered section. Indices points to index of `a` among partition by expressions).
-/// `PARTITION BY a, b` and `PARTITION BY b, a` will have `PartitionSearchMode::Sorted` mode.
+/// Specifies aggregation grouping and/or window partitioning properties of a
+/// set of expressions in terms of the existing ordering.
+/// For example, if the existing ordering is `[a ASC, b ASC, c ASC]`:
+/// - A `PARTITION BY b` clause will result in `Linear` mode.
+/// - A `PARTITION BY a, c` or a `PARTITION BY c, a` clause will result in
+///   `PartiallySorted([0])` or `PartiallySorted([1])` modes, respectively.
+///   The vector stores the index of `a` in the respective PARTITION BY expression.
+/// - A `PARTITION BY a, b` or a `PARTITION BY b, a` clause will result in
+///   `Sorted` mode.
+/// Note that the examples above are applicable for `GROUP BY` clauses too.
 pub enum PartitionSearchMode {
-    /// None of the partition expressions is ordered.
+    /// There is no partial permutation of the expressions satisfying the
+    /// existing ordering.
     Linear,
-    /// A non-empty subset of the the partition expressions are ordered.
-    /// Indices stored constructs ordered subset, that is satisfied by existing ordering(s).
+    /// There is a partial permutation of the expressions satisfying the
+    /// existing ordering. Indices describing the longest partial permutation
+    /// are stored in the vector.
     PartiallySorted(Vec<usize>),
-    /// All Partition expressions are ordered (Also empty case)
+    /// There is a (full) permutation of the expressions satisfying the
+    /// existing ordering.
     Sorted,
 }
 
@@ -248,7 +255,7 @@ fn create_udwf_window_expr(
         .collect::<Result<_>>()?;
 
     // figure out the output type
-    let data_type = (fun.return_type)(&input_types)?;
+    let data_type = fun.return_type(&input_types)?;
     Ok(Arc::new(WindowUDFExpr {
         fun: Arc::clone(fun),
         args: args.to_vec(),
@@ -265,7 +272,7 @@ struct WindowUDFExpr {
     /// Display name
     name: String,
     /// result type
-    data_type: Arc<DataType>,
+    data_type: DataType,
 }
 
 impl BuiltInWindowFunctionExpr for WindowUDFExpr {
@@ -275,11 +282,7 @@ impl BuiltInWindowFunctionExpr for WindowUDFExpr {
 
     fn field(&self) -> Result<Field> {
         let nullable = true;
-        Ok(Field::new(
-            &self.name,
-            self.data_type.as_ref().clone(),
-            nullable,
-        ))
+        Ok(Field::new(&self.name, self.data_type.clone(), nullable))
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
@@ -287,7 +290,7 @@ impl BuiltInWindowFunctionExpr for WindowUDFExpr {
     }
 
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
-        (self.fun.partition_evaluator_factory)()
+        self.fun.partition_evaluator_factory()
     }
 
     fn name(&self) -> &str {
@@ -402,7 +405,7 @@ pub fn get_best_fitting_window(
     let orderby_keys = window_exprs[0].order_by();
     let (should_reverse, partition_search_mode) =
         if let Some((should_reverse, partition_search_mode)) =
-            get_window_mode(partitionby_exprs, orderby_keys, input)?
+            get_window_mode(partitionby_exprs, orderby_keys, input)
         {
             (should_reverse, partition_search_mode)
         } else {
@@ -464,12 +467,12 @@ pub fn get_best_fitting_window(
 ///   can run with existing input ordering, so we can remove `SortExec` before it.
 /// The `bool` field in the return value represents whether we should reverse window
 /// operator to remove `SortExec` before it. The `PartitionSearchMode` field represents
-/// the mode this window operator should work in to accomodate the existing ordering.
+/// the mode this window operator should work in to accommodate the existing ordering.
 pub fn get_window_mode(
     partitionby_exprs: &[Arc<dyn PhysicalExpr>],
     orderby_keys: &[PhysicalSortExpr],
     input: &Arc<dyn ExecutionPlan>,
-) -> Result<Option<(bool, PartitionSearchMode)>> {
+) -> Option<(bool, PartitionSearchMode)> {
     let input_eqs = input.equivalence_properties();
     let mut partition_by_reqs: Vec<PhysicalSortRequirement> = vec![];
     let (_, indices) = input_eqs.find_longest_permutation(partitionby_exprs);
@@ -496,10 +499,10 @@ pub fn get_window_mode(
             } else {
                 PartitionSearchMode::PartiallySorted(indices)
             };
-            return Ok(Some((should_swap, mode)));
+            return Some((should_swap, mode));
         }
     }
-    Ok(None)
+    None
 }
 
 #[cfg(test)]
@@ -866,7 +869,7 @@ mod tests {
                 order_by_exprs.push(PhysicalSortExpr { expr, options });
             }
             let res =
-                get_window_mode(&partition_by_exprs, &order_by_exprs, &exec_unbounded)?;
+                get_window_mode(&partition_by_exprs, &order_by_exprs, &exec_unbounded);
             // Since reversibility is not important in this test. Convert Option<(bool, PartitionSearchMode)> to Option<PartitionSearchMode>
             let res = res.map(|(_, mode)| mode);
             assert_eq!(
@@ -1030,7 +1033,7 @@ mod tests {
             }
 
             assert_eq!(
-                get_window_mode(&partition_by_exprs, &order_by_exprs, &exec_unbounded)?,
+                get_window_mode(&partition_by_exprs, &order_by_exprs, &exec_unbounded),
                 *expected,
                 "Unexpected result for in unbounded test case#: {case_idx:?}, case: {test_case:?}"
             );
