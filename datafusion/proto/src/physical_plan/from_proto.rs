@@ -18,13 +18,11 @@
 //! Serde code to convert from protocol buffers to Rust data structures.
 
 use std::convert::{TryFrom, TryInto};
-use std::ops::Deref;
 use std::sync::Arc;
 
 use arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::datasource::file_format::json::JsonSink;
-use datafusion::datasource::file_format::write::FileWriterMode;
 use datafusion::datasource::listing::{FileRange, ListingTableUrl, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{FileScanConfig, FileSinkConfig};
@@ -314,12 +312,12 @@ pub fn parse_physical_expr(
                 &e.name,
                 fun_expr,
                 args,
-                &convert_required!(e.return_type)?,
+                convert_required!(e.return_type)?,
                 None,
             ))
         }
         ExprType::ScalarUdf(e) => {
-            let scalar_fun = registry.udf(e.name.as_str())?.deref().clone().fun;
+            let scalar_fun = registry.udf(e.name.as_str())?.fun().clone();
 
             let args = e
                 .args
@@ -331,7 +329,7 @@ pub fn parse_physical_expr(
                 e.name.as_str(),
                 scalar_fun,
                 args,
-                &convert_required!(e.return_type)?,
+                convert_required!(e.return_type)?,
                 None,
             ))
         }
@@ -542,6 +540,7 @@ impl TryFrom<&protobuf::PartitionedFile> for PartitionedFile {
                 last_modified: Utc.timestamp_nanos(val.last_modified_ns as i64),
                 size: val.size as usize,
                 e_tag: None,
+                version: None,
             },
             partition_values: val
                 .partition_values
@@ -740,22 +739,11 @@ impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
             table_paths,
             output_schema: Arc::new(convert_required!(conf.output_schema)?),
             table_partition_cols,
-            writer_mode: conf.writer_mode().into(),
             single_file_output: conf.single_file_output,
             unbounded_input: conf.unbounded_input,
             overwrite: conf.overwrite,
             file_type_writer_options: convert_required!(conf.file_type_writer_options)?,
         })
-    }
-}
-
-impl From<protobuf::FileWriterMode> for FileWriterMode {
-    fn from(value: protobuf::FileWriterMode) -> Self {
-        match value {
-            protobuf::FileWriterMode::Append => Self::Append,
-            protobuf::FileWriterMode::Put => Self::Put,
-            protobuf::FileWriterMode::PutMultipart => Self::PutMultipart,
-        }
     }
 }
 

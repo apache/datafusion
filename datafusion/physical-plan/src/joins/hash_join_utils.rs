@@ -61,44 +61,45 @@ use hashbrown::HashSet;
 ///
 /// ``` text
 /// See the example below:
-/// Insert (1,1)
+///
+/// Insert (10,1)            <-- insert hash value 10 with row index 1
 /// map:
-/// ---------
-/// | 1 | 2 |
-/// ---------
+/// ----------
+/// | 10 | 2 |
+/// ----------
 /// next:
 /// ---------------------
 /// | 0 | 0 | 0 | 0 | 0 |
 /// ---------------------
-/// Insert (2,2)
+/// Insert (20,2)
 /// map:
-/// ---------
-/// | 1 | 2 |
-/// | 2 | 3 |
-/// ---------
+/// ----------
+/// | 10 | 2 |
+/// | 20 | 3 |
+/// ----------
 /// next:
 /// ---------------------
 /// | 0 | 0 | 0 | 0 | 0 |
 /// ---------------------
-/// Insert (1,3)
+/// Insert (10,3)           <-- collision! row index 3 has a hash value of 10 as well
+/// map:
+/// ----------
+/// | 10 | 4 |
+/// | 20 | 3 |
+/// ----------
+/// next:
+/// ---------------------
+/// | 0 | 0 | 0 | 2 | 0 |  <--- hash value 10 maps to 4,2 (which means indices values 3,1)
+/// ---------------------
+/// Insert (10,4)          <-- another collision! row index 4 ALSO has a hash value of 10
 /// map:
 /// ---------
-/// | 1 | 4 |
-/// | 2 | 3 |
+/// | 10 | 5 |
+/// | 20 | 3 |
 /// ---------
 /// next:
 /// ---------------------
-/// | 0 | 0 | 0 | 2 | 0 |  <--- hash value 1 maps to 4,2 (which means indices values 3,1)
-/// ---------------------
-/// Insert (1,4)
-/// map:
-/// ---------
-/// | 1 | 5 |
-/// | 2 | 3 |
-/// ---------
-/// next:
-/// ---------------------
-/// | 0 | 0 | 0 | 2 | 4 | <--- hash value 1 maps to 5,4,2 (which means indices values 4,3,1)
+/// | 0 | 0 | 0 | 2 | 4 | <--- hash value 10 maps to 5,4,2 (which means indices values 4,3,1)
 /// ---------------------
 /// ```
 pub struct JoinHashMap {
@@ -124,7 +125,7 @@ impl JoinHashMap {
 
 /// Trait defining methods that must be implemented by a hash map type to be used for joins.
 pub trait JoinHashMapType {
-    /// The type of list used to store the hash values.
+    /// The type of list used to store the next list
     type NextType: IndexMut<usize, Output = u64>;
     /// Extend with zero
     fn extend_zero(&mut self, len: usize);
@@ -201,15 +202,15 @@ impl fmt::Debug for JoinHashMap {
 /// Let's continue the example of `JoinHashMap` and then show how `PruningJoinHashMap` would
 /// handle the pruning scenario.
 ///
-/// Insert the pair (1,4) into the `PruningJoinHashMap`:
+/// Insert the pair (10,4) into the `PruningJoinHashMap`:
 /// map:
-/// ---------
-/// | 1 | 5 |
-/// | 2 | 3 |
-/// ---------
+/// ----------
+/// | 10 | 5 |
+/// | 20 | 3 |
+/// ----------
 /// list:
 /// ---------------------
-/// | 0 | 0 | 0 | 2 | 4 | <--- hash value 1 maps to 5,4,2 (which means indices values 4,3,1)
+/// | 0 | 0 | 0 | 2 | 4 | <--- hash value 10 maps to 5,4,2 (which means indices values 4,3,1)
 /// ---------------------
 ///
 /// Now, let's prune 3 rows from `PruningJoinHashMap`:
@@ -219,7 +220,7 @@ impl fmt::Debug for JoinHashMap {
 /// ---------
 /// list:
 /// ---------
-/// | 2 | 4 | <--- hash value 1 maps to 2 (5 - 3), 1 (4 - 3), NA (2 - 3) (which means indices values 1,0)
+/// | 2 | 4 | <--- hash value 10 maps to 2 (5 - 3), 1 (4 - 3), NA (2 - 3) (which means indices values 1,0)
 /// ---------
 ///
 /// After pruning, the | 2 | 3 | entry is deleted from `PruningJoinHashMap` since

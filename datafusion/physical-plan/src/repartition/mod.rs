@@ -472,9 +472,6 @@ impl ExecutionPlan for RepartitionExec {
         if !self.maintains_input_order()[0] {
             result.clear_orderings();
         }
-        if self.preserve_order {
-            result = result.with_reorder(self.sort_exprs().unwrap_or_default().to_vec())
-        }
         result
     }
 

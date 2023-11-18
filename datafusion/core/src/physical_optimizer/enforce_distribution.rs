@@ -3794,7 +3794,11 @@ pub(crate) mod tests {
             sort_key,
             projection_exec_with_alias(
                 filter_exec(parquet_exec()),
-                vec![("a".to_string(), "a".to_string())],
+                vec![
+                    ("a".to_string(), "a".to_string()),
+                    ("b".to_string(), "b".to_string()),
+                    ("c".to_string(), "c".to_string()),
+                ],
             ),
             false,
         );
@@ -3803,7 +3807,7 @@ pub(crate) mod tests {
             "SortPreservingMergeExec: [c@2 ASC]",
             // Expect repartition on the input to the sort (as it can benefit from additional parallelism)
             "SortExec: expr=[c@2 ASC]",
-            "ProjectionExec: expr=[a@0 as a]",
+            "ProjectionExec: expr=[a@0 as a, b@1 as b, c@2 as c]",
             "FilterExec: c@2 = 0",
             // repartition is lowest down
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
@@ -3815,7 +3819,7 @@ pub(crate) mod tests {
         let expected_first_sort_enforcement = &[
             "SortExec: expr=[c@2 ASC]",
             "CoalescePartitionsExec",
-            "ProjectionExec: expr=[a@0 as a]",
+            "ProjectionExec: expr=[a@0 as a, b@1 as b, c@2 as c]",
             "FilterExec: c@2 = 0",
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",

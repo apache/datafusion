@@ -55,7 +55,7 @@ pub struct StreamingTableExec {
     partitions: Vec<Arc<dyn PartitionStream>>,
     projection: Option<Arc<[usize]>>,
     projected_schema: SchemaRef,
-    projected_output_ordering: Option<LexOrdering>,
+    projected_output_ordering: Vec<LexOrdering>,
     infinite: bool,
 }
 
@@ -65,7 +65,7 @@ impl StreamingTableExec {
         schema: SchemaRef,
         partitions: Vec<Arc<dyn PartitionStream>>,
         projection: Option<&Vec<usize>>,
-        projected_output_ordering: Option<LexOrdering>,
+        projected_output_ordering: impl IntoIterator<Item = LexOrdering>,
         infinite: bool,
     ) -> Result<Self> {
         for x in partitions.iter() {
@@ -88,7 +88,7 @@ impl StreamingTableExec {
             partitions,
             projected_schema,
             projection: projection.cloned().map(Into::into),
-            projected_output_ordering,
+            projected_output_ordering: projected_output_ordering.into_iter().collect(),
             infinite,
         })
     }
@@ -125,7 +125,7 @@ impl DisplayAs for StreamingTableExec {
                 }
 
                 self.projected_output_ordering
-                    .as_deref()
+                    .first()
                     .map_or(Ok(()), |ordering| {
                         if !ordering.is_empty() {
                             write!(
@@ -160,15 +160,16 @@ impl ExecutionPlan for StreamingTableExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.projected_output_ordering.as_deref()
+        self.projected_output_ordering
+            .first()
+            .map(|ordering| ordering.as_slice())
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
-        let mut result = EquivalenceProperties::new(self.schema());
-        if let Some(ordering) = &self.projected_output_ordering {
-            result.add_new_orderings([ordering.clone()])
-        }
-        result
+        EquivalenceProperties::new_with_orderings(
+            self.schema(),
+            &self.projected_output_ordering,
+        )
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

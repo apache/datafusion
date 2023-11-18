@@ -102,7 +102,7 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
                 }
             }
             Expr::ScalarUDF(ScalarUDF { fun, .. }) => {
-                match fun.signature.volatility {
+                match fun.signature().volatility {
                     Volatility::Immutable => VisitRecursion::Continue,
                     // TODO: Stable functions could be `applicable`, but that would require access to the context
                     Volatility::Stable | Volatility::Volatile => {
@@ -361,8 +361,7 @@ pub async fn pruned_partition_list<'a>(
                 Some(files) => files,
                 None => {
                     trace!("Recursively listing partition {}", partition.path);
-                    let s = store.list(Some(&partition.path)).await?;
-                    s.try_collect().await?
+                    store.list(Some(&partition.path)).try_collect().await?
                 }
             };
 

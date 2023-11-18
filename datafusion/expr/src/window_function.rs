@@ -171,12 +171,8 @@ impl WindowFunction {
             WindowFunction::BuiltInWindowFunction(fun) => {
                 fun.return_type(input_expr_types)
             }
-            WindowFunction::AggregateUDF(fun) => {
-                Ok((*(fun.return_type)(input_expr_types)?).clone())
-            }
-            WindowFunction::WindowUDF(fun) => {
-                Ok((*(fun.return_type)(input_expr_types)?).clone())
-            }
+            WindowFunction::AggregateUDF(fun) => fun.return_type(input_expr_types),
+            WindowFunction::WindowUDF(fun) => fun.return_type(input_expr_types),
         }
     }
 }
@@ -234,8 +230,8 @@ impl WindowFunction {
         match self {
             WindowFunction::AggregateFunction(fun) => fun.signature(),
             WindowFunction::BuiltInWindowFunction(fun) => fun.signature(),
-            WindowFunction::AggregateUDF(fun) => fun.signature.clone(),
-            WindowFunction::WindowUDF(fun) => fun.signature.clone(),
+            WindowFunction::AggregateUDF(fun) => fun.signature().clone(),
+            WindowFunction::WindowUDF(fun) => fun.signature().clone(),
         }
     }
 }

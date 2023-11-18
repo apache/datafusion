@@ -1146,7 +1146,7 @@ mod tests {
                         Arc::new(Column::new("b", 1)),
                     )),
                 ],
-                &DataType::Int32,
+                DataType::Int32,
                 None,
             )),
             Arc::new(CaseExpr::try_new(
@@ -1212,7 +1212,7 @@ mod tests {
                         Arc::new(Column::new("b", 1)),
                     )),
                 ],
-                &DataType::Int32,
+                DataType::Int32,
                 None,
             )),
             Arc::new(CaseExpr::try_new(
@@ -1281,7 +1281,7 @@ mod tests {
                         Arc::new(Column::new("b", 1)),
                     )),
                 ],
-                &DataType::Int32,
+                DataType::Int32,
                 None,
             )),
             Arc::new(CaseExpr::try_new(
@@ -1347,7 +1347,7 @@ mod tests {
                         Arc::new(Column::new("b_new", 1)),
                     )),
                 ],
-                &DataType::Int32,
+                DataType::Int32,
                 None,
             )),
             Arc::new(CaseExpr::try_new(

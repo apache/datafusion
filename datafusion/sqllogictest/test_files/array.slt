@@ -702,7 +702,7 @@ select array_element(make_array(1, 2, 3, 4, 5), 0), array_element(make_array('h'
 NULL NULL
 
 # array_element scalar function #4 (with NULL)
-query error 
+query error
 select array_element(make_array(1, 2, 3, 4, 5), NULL), array_element(make_array('h', 'e', 'l', 'l', 'o'), NULL);
 
 # array_element scalar function #5 (with negative index)
@@ -826,6 +826,44 @@ select array_pop_back(column1) from arrayspop;
 []
 [, 10, 11]
 
+## array_pop_front (aliases: `list_pop_front`)
+
+# array_pop_front scalar function #1
+query ??
+select array_pop_front(make_array(1, 2, 3, 4, 5)), array_pop_front(make_array('h', 'e', 'l', 'l', 'o'));
+----
+[2, 3, 4, 5] [e, l, l, o]
+
+# array_pop_front scalar function #2 (after array_pop_front, array is empty)
+query ?
+select array_pop_front(make_array(1));
+----
+[]
+
+# array_pop_front scalar function #3 (array_pop_front the empty array)
+query ?
+select array_pop_front(array_pop_front(make_array(1)));
+----
+[]
+
+# array_pop_front scalar function #5 (array_pop_front the nested arrays)
+query ?
+select array_pop_front(make_array(make_array(1, 2, 3), make_array(2, 9, 1), make_array(7, 8, 9), make_array(1, 2, 3), make_array(1, 7, 4), make_array(4, 5, 6)));
+----
+[[2, 9, 1], [7, 8, 9], [1, 2, 3], [1, 7, 4], [4, 5, 6]]
+
+# array_pop_front scalar function #6 (array_pop_front the nested arrays with NULL)
+query ?
+select array_pop_front(make_array(NULL, make_array(1, 2, 3), make_array(2, 9, 1), make_array(7, 8, 9), make_array(1, 2, 3), make_array(1, 7, 4)));
+----
+[[1, 2, 3], [2, 9, 1], [7, 8, 9], [1, 2, 3], [1, 7, 4]]
+
+# array_pop_front scalar function #8 (after array_pop_front, nested array is empty)
+query ?
+select array_pop_front(make_array(make_array(1, 2, 3)));
+----
+[]
+
 ## array_slice (aliases: list_slice)
 
 # array_slice scalar function #1 (with positive indexes)
@@ -871,11 +909,11 @@ select array_slice(make_array(1, 2, 3, 4, 5), 0, 4), array_slice(make_array('h',
 [1, 2, 3, 4] [h, e, l]
 
 # array_slice scalar function #8 (with NULL and positive number)
-query error 
+query error
 select array_slice(make_array(1, 2, 3, 4, 5), NULL, 4), array_slice(make_array('h', 'e', 'l', 'l', 'o'), NULL, 3);
 
 # array_slice scalar function #9 (with positive number and NULL)
-query error 
+query error
 select array_slice(make_array(1, 2, 3, 4, 5), 2, NULL), array_slice(make_array('h', 'e', 'l', 'l', 'o'), 3, NULL);
 
 # array_slice scalar function #10 (with zero-zero)
@@ -885,7 +923,7 @@ select array_slice(make_array(1, 2, 3, 4, 5), 0, 0), array_slice(make_array('h',
 [] []
 
 # array_slice scalar function #11 (with NULL-NULL)
-query error 
+query error
 select array_slice(make_array(1, 2, 3, 4, 5), NULL), array_slice(make_array('h', 'e', 'l', 'l', 'o'), NULL);
 
 # array_slice scalar function #12 (with zero and negative number)
@@ -895,11 +933,11 @@ select array_slice(make_array(1, 2, 3, 4, 5), 0, -4), array_slice(make_array('h'
 [1] [h, e]
 
 # array_slice scalar function #13 (with negative number and NULL)
-query error 
+query error
 select array_slice(make_array(1, 2, 3, 4, 5), 2, NULL), array_slice(make_array('h', 'e', 'l', 'l', 'o'), 3, NULL);
 
 # array_slice scalar function #14 (with NULL and negative number)
-query error 
+query error
 select array_slice(make_array(1, 2, 3, 4, 5), NULL, -4), array_slice(make_array('h', 'e', 'l', 'l', 'o'), NULL, -3);
 
 # array_slice scalar function #15 (with negative indexes)
@@ -2695,6 +2733,114 @@ select generate_series(5),
 ;
 ----
 [0, 1, 2, 3, 4] [2, 3, 4] [2, 5, 8]
+
+## array_except
+
+statement ok
+CREATE TABLE array_except_table
+AS VALUES
+  ([1, 2, 2, 3], [2, 3, 4]),
+  ([2, 3, 3], [3]),
+  ([3], [3, 3, 4]),
+  (null, [3, 4]),
+  ([1, 2], null),
+  (null, null)
+;
+
+query ?
+select array_except(column1, column2) from array_except_table;
+----
+[1]
+[2]
+[]
+NULL
+[1, 2]
+NULL
+
+statement ok
+drop table array_except_table;
+
+statement ok
+CREATE TABLE array_except_nested_list_table
+AS VALUES
+  ([[1, 2], [3]], [[2], [3], [4, 5]]),
+  ([[1, 2], [3]], [[2], [1, 2]]),
+  ([[1, 2], [3]], null),
+  (null, [[1], [2, 3], [4, 5, 6]]),
+  ([[1], [2, 3], [4, 5, 6]], [[2, 3], [4, 5, 6], [1]])
+;
+
+query ?
+select array_except(column1, column2) from array_except_nested_list_table;
+----
+[[1, 2]]
+[[3]]
+[[1, 2], [3]]
+NULL
+[]
+
+statement ok
+drop table array_except_nested_list_table;
+
+statement ok
+CREATE TABLE array_except_table_float
+AS VALUES
+  ([1.1, 2.2, 3.3], [2.2]),
+  ([1.1, 2.2, 3.3], [4.4]),
+  ([1.1, 2.2, 3.3], [3.3, 2.2, 1.1])
+;
+
+query ?
+select array_except(column1, column2) from array_except_table_float;
+----
+[1.1, 3.3]
+[1.1, 2.2, 3.3]
+[]
+
+statement ok
+drop table array_except_table_float;
+
+statement ok
+CREATE TABLE array_except_table_ut8
+AS VALUES
+  (['a', 'b', 'c'], ['a']),
+  (['a', 'bc', 'def'], ['g', 'def']),
+  (['a', 'bc', 'def'], null),
+  (null, ['a'])
+;
+
+query ?
+select array_except(column1, column2) from array_except_table_ut8;
+----
+[b, c]
+[a, bc]
+[a, bc, def]
+NULL
+
+statement ok
+drop table array_except_table_ut8;
+
+statement ok
+CREATE TABLE array_except_table_bool
+AS VALUES
+  ([true, false, false], [false]),
+  ([true, true, true], [false]),
+  ([false, false, false], [true]),
+  ([true, false], null),
+  (null, [true, false])
+;
+
+query ?
+select array_except(column1, column2) from array_except_table_bool;
+----
+[true]
+[true]
+[false]
+[true, false]
+NULL
+
+statement ok
+drop table array_except_table_bool;
 
 ### Array operators tests
 
