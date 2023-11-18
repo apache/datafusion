@@ -72,8 +72,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // next, scalar built-in
         if let Ok(fun) = BuiltinScalarFunction::from_str(&name) {
-            let args =
-                self.function_args_to_expr(args, schema, planner_context)?;
+            let args = self.function_args_to_expr(args, schema, planner_context)?;
 
             // Translate array_aggregate to aggregate function with array argument.
             if fun == BuiltinScalarFunction::ArrayAggregate {

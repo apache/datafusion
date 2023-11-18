@@ -35,7 +35,7 @@ use arrow_array::types::{
 use arrow_array::{Array, ArrowNativeTypeOp, ArrowNumericType};
 use arrow_buffer::ArrowNativeType;
 use datafusion_common::cast::{as_list_array, as_primitive_array};
-use datafusion_common::utils::wrap_into_list_array;
+use datafusion_common::utils::array_into_list_array;
 use datafusion_common::{
     internal_err, not_impl_err, DataFusionError, Result, ScalarValue,
 };
@@ -91,27 +91,6 @@ macro_rules! downcast_sum {
 }
 pub(crate) use downcast_sum;
 
-// TODO: Replace with `downcast_sum` after most of the AggregateExpr differentiate `return_data_type` and `data_type`
-// The reason we have this is because using the name `return_data_type` makes more much sense to me,
-// instead of changing `data_type` to `return_data_type` all the AggregateExpr that have `downcast_sum`, introduce v2 is better.
-macro_rules! downcast_sum_v2 {
-    ($s:ident, $helper:ident) => {
-        match $s.return_data_type {
-            DataType::UInt64 => $helper!(UInt64Type, $s.return_data_type),
-            DataType::Int64 => $helper!(Int64Type, $s.return_data_type),
-            DataType::Float64 => $helper!(Float64Type, $s.return_data_type),
-            DataType::Decimal128(_, _) => $helper!(Decimal128Type, $s.return_data_type),
-            DataType::Decimal256(_, _) => $helper!(Decimal256Type, $s.return_data_type),
-            _ => not_impl_err!(
-                "Sum not supported for {}: {}",
-                $s.name,
-                $s.return_data_type
-            ),
-        }
-    };
-}
-pub(crate) use downcast_sum_v2;
-
 impl AggregateExpr for Sum {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -132,27 +111,27 @@ impl AggregateExpr for Sum {
             match field.data_type() {
                 DataType::Int64 => {
                     return Ok(Box::new(ArraySumAccumulator::<Int64Type>::new(
-                        self.return_data_type.clone(),
+                        self.return_type.clone(),
                     )))
                 }
                 DataType::UInt64 => {
                     return Ok(Box::new(ArraySumAccumulator::<UInt64Type>::new(
-                        self.return_data_type.clone(),
+                        self.return_type.clone(),
                     )))
                 }
                 DataType::Float64 => {
                     return Ok(Box::new(ArraySumAccumulator::<Float64Type>::new(
-                        self.return_data_type.clone(),
+                        self.return_type.clone(),
                     )))
                 }
                 DataType::Decimal128(_, _) => {
                     return Ok(Box::new(ArraySumAccumulator::<Decimal128Type>::new(
-                        self.return_data_type.clone(),
+                        self.return_type.clone(),
                     )))
                 }
                 DataType::Decimal256(_, _) => {
                     return Ok(Box::new(ArraySumAccumulator::<Decimal256Type>::new(
-                        self.return_data_type.clone(),
+                        self.return_type.clone(),
                     )))
                 }
                 _ => unimplemented!(
@@ -168,7 +147,7 @@ impl AggregateExpr for Sum {
                 Ok(Box::new(SumAccumulator::<$t>::new($dt.clone())))
             };
         }
-        downcast_sum_v2!(self, helper)
+        downcast_sum!(self, helper)
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
@@ -200,7 +179,7 @@ impl AggregateExpr for Sum {
                 )))
             };
         }
-        downcast_sum_v2!(self, helper)
+        downcast_sum!(self, helper)
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
@@ -213,7 +192,7 @@ impl AggregateExpr for Sum {
                 Ok(Box::new(SlidingSumAccumulator::<$t>::new($dt.clone())))
             };
         }
-        downcast_sum_v2!(self, helper)
+        downcast_sum!(self, helper)
     }
 }
 
@@ -313,7 +292,7 @@ impl<T: ArrowNumericType> Accumulator for ArraySumAccumulator<T> {
         // Wrap single-row input into multiple-rows input and use the same logic as multiple-rows input
         let list_values = match as_list_array(&values[0]) {
             Ok(arr) => arr.to_owned(),
-            Err(_) => wrap_into_list_array(values[0].clone()),
+            Err(_) => array_into_list_array(values[0].clone()),
         };
 
         let row_number = list_values.len();

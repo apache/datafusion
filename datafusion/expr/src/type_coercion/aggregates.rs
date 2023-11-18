@@ -119,9 +119,9 @@ pub fn coerce_types(
                     return coerce_types(agg_fun, &[v.as_ref().clone()], signature)
                 }
                 List(field) => {
-                    let coerce_types =
+                    let coerced_types =
                         coerce_types(agg_fun, &[field.data_type().clone()], signature)?;
-                    let data_type = coerce_types[0].clone();
+                    let data_type = coerced_types[0].clone();
                     List(Arc::new(Field::new(
                         field.name(),
                         data_type,
