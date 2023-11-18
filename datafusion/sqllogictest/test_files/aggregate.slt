@@ -3044,8 +3044,8 @@ drop table strings
 query T
 WITH my_data as (
 SELECT 'text1'::varchar(1000) as my_column union all
-SELECT 'text1'::varchar(1000) as my_column union all
-SELECT 'text1'::varchar(1000) as my_column
+SELECT 'text2'::varchar(1000) as my_column union all
+SELECT 'text3'::varchar(1000) as my_column
 )
 SELECT string_agg(my_column,', ') as my_string_agg
 FROM my_data
