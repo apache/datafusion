@@ -462,6 +462,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Ltrim => Self::Ltrim,
             ScalarFunction::Rtrim => Self::Rtrim,
             ScalarFunction::ToTimestamp => Self::ToTimestamp,
+            ScalarFunction::ArrayAggregate => Self::ArrayAggregate,
             ScalarFunction::ArrayAppend => Self::ArrayAppend,
             ScalarFunction::ArrayConcat => Self::ArrayConcat,
             ScalarFunction::ArrayEmpty => Self::ArrayEmpty,

@@ -2572,6 +2572,7 @@ pub enum ScalarFunction {
     ArrayExcept = 123,
     ArrayPopFront = 124,
     Levenshtein = 125,
+    ArrayAggregate = 126,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2706,6 +2707,7 @@ impl ScalarFunction {
             ScalarFunction::ArrayExcept => "ArrayExcept",
             ScalarFunction::ArrayPopFront => "ArrayPopFront",
             ScalarFunction::Levenshtein => "Levenshtein",
+            ScalarFunction::ArrayAggregate => "ArrayAggregate",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2837,6 +2839,7 @@ impl ScalarFunction {
             "ArrayExcept" => Some(Self::ArrayExcept),
             "ArrayPopFront" => Some(Self::ArrayPopFront),
             "Levenshtein" => Some(Self::Levenshtein),
+            "ArrayAggregate" => Some(Self::ArrayAggregate),
             _ => None,
         }
     }

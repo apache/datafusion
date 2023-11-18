@@ -128,6 +128,8 @@ pub enum BuiltinScalarFunction {
     Cot,
 
     // array functions
+    /// array_aggregate
+    ArrayAggregate,
     /// array_append
     ArrayAppend,
     /// array_concat
@@ -389,6 +391,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Tanh => Volatility::Immutable,
             BuiltinScalarFunction::Trunc => Volatility::Immutable,
             BuiltinScalarFunction::ArrayAppend => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayAggregate => Volatility::Immutable,
             BuiltinScalarFunction::ArrayConcat => Volatility::Immutable,
             BuiltinScalarFunction::ArrayEmpty => Volatility::Immutable,
             BuiltinScalarFunction::ArrayHasAll => Volatility::Immutable,
@@ -534,6 +537,7 @@ impl BuiltinScalarFunction {
                 Ok(data_type)
             }
             BuiltinScalarFunction::ArrayAppend => Ok(input_expr_types[0].clone()),
+            BuiltinScalarFunction::ArrayAggregate => unimplemented!("ArrayAggregate is based on Aggreation function, so no return value for it."),
             BuiltinScalarFunction::ArrayConcat => {
                 let mut expr_type = Null;
                 let mut max_dims = 0;
@@ -893,23 +897,24 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayElement => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::ArrayExcept => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::Flatten => Signature::any(1, self.volatility()),
-            BuiltinScalarFunction::ArrayHasAll
+
+            BuiltinScalarFunction::ArrayAggregate
+            | BuiltinScalarFunction::ArrayHasAll
             | BuiltinScalarFunction::ArrayHasAny
-            | BuiltinScalarFunction::ArrayHas => Signature::any(2, self.volatility()),
-            BuiltinScalarFunction::ArrayLength => {
-                Signature::variadic_any(self.volatility())
+            | BuiltinScalarFunction::ArrayHas
+            | BuiltinScalarFunction::ArrayPositions
+            | BuiltinScalarFunction::ArrayPrepend
+            | BuiltinScalarFunction::ArrayRepeat
+            | BuiltinScalarFunction::ArrayRemove
+            | BuiltinScalarFunction::ArrayRemoveAll => {
+                Signature::any(2, self.volatility())
             }
-            BuiltinScalarFunction::ArrayNdims => Signature::any(1, self.volatility()),
-            BuiltinScalarFunction::ArrayPosition => {
-                Signature::variadic_any(self.volatility())
-            }
-            BuiltinScalarFunction::ArrayPositions => Signature::any(2, self.volatility()),
-            BuiltinScalarFunction::ArrayPrepend => Signature::any(2, self.volatility()),
-            BuiltinScalarFunction::ArrayRepeat => Signature::any(2, self.volatility()),
-            BuiltinScalarFunction::ArrayRemove => Signature::any(2, self.volatility()),
-            BuiltinScalarFunction::ArrayRemoveN => Signature::any(3, self.volatility()),
-            BuiltinScalarFunction::ArrayRemoveAll => Signature::any(2, self.volatility()),
-            BuiltinScalarFunction::ArrayReplace => Signature::any(3, self.volatility()),
+
+            BuiltinScalarFunction::ArrayRemoveN
+            | BuiltinScalarFunction::ArrayReplace
+            | BuiltinScalarFunction::ArrayReplaceAll
+            | BuiltinScalarFunction::ArraySlice => Signature::any(3, self.volatility()),
+
             BuiltinScalarFunction::ArrayReplaceN => Signature::any(4, self.volatility()),
             BuiltinScalarFunction::ArrayReplaceAll => {
                 Signature::any(3, self.volatility())
@@ -1509,6 +1514,12 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
         BuiltinScalarFunction::ArrowTypeof => &["arrow_typeof"],
 
         // array functions
+        BuiltinScalarFunction::ArrayAggregate => &[
+            "array_aggregate",
+            "list_aggregate",
+            "array_aggr",
+            "list_aggr",
+        ],
         BuiltinScalarFunction::ArrayAppend => &[
             "array_append",
             "list_append",
