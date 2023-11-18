@@ -1748,51 +1748,27 @@ pub fn array_ndims(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(result) as ArrayRef)
 }
 
-macro_rules! non_list_contains {
-    ($ARRAY:expr, $SUB_ARRAY:expr, $ARRAY_TYPE:ident) => {{
-        let sub_array = downcast_arg!($SUB_ARRAY, $ARRAY_TYPE);
-        let mut boolean_builder = BooleanArray::builder($ARRAY.len());
-
-        for (arr, elem) in $ARRAY.iter().zip(sub_array.iter()) {
-            if let (Some(arr), Some(elem)) = (arr, elem) {
-                let arr = downcast_arg!(arr, $ARRAY_TYPE);
-                let res = arr.iter().dedup().flatten().any(|x| x == elem);
-                boolean_builder.append_value(res);
-            }
-        }
-        Ok(Arc::new(boolean_builder.finish()))
-    }};
-}
-
 /// Array_has SQL function
 pub fn array_has(args: &[ArrayRef]) -> Result<ArrayRef> {
     let array = as_list_array(&args[0])?;
     let element = &args[1];
 
     check_datatypes("array_has", &[array.values(), element])?;
-    match element.data_type() {
-        DataType::List(_) => {
-            let sub_array = as_list_array(element)?;
-            let mut boolean_builder = BooleanArray::builder(array.len());
+    let mut boolean_builder = BooleanArray::builder(array.len());
 
-            for (arr, elem) in array.iter().zip(sub_array.iter()) {
-                if let (Some(arr), Some(elem)) = (arr, elem) {
-                    let list_arr = as_list_array(&arr)?;
-                    let res = list_arr.iter().dedup().flatten().any(|x| *x == *elem);
-                    boolean_builder.append_value(res);
-                }
-            }
-            Ok(Arc::new(boolean_builder.finish()))
-        }
-        data_type => {
-            macro_rules! array_function {
-                ($ARRAY_TYPE:ident) => {
-                    non_list_contains!(array, element, $ARRAY_TYPE)
-                };
-            }
-            call_array_function!(data_type, false)
+    let converter = RowConverter::new(vec![SortField::new(array.value_type())])?;
+    let r_values = converter.convert_columns(&[element.clone()])?;
+    for (row_idx, arr) in array.iter().enumerate() {
+        if let Some(arr) = arr {
+            let arr_values = converter.convert_columns(&[arr])?;
+            let res = arr_values
+                .iter()
+                .dedup()
+                .any(|x| x == r_values.row(row_idx));
+            boolean_builder.append_value(res);
         }
     }
+    Ok(Arc::new(boolean_builder.finish()))
 }
 
 macro_rules! array_has_any_non_list_check {
