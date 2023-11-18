@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines physical expressions that can evaluated at runtime during query execution
+//! [`StringAgg`] and [`StringAggAccumulator`] accumulator for the `string_agg` function
 
 use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::{format_state_name, Literal};
