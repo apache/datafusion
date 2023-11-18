@@ -1114,29 +1114,29 @@ fn remove_dist_changing_operators(
     })
 }
 
-/// Changes each child of the `dist_context.plan` such that they no longer
-/// use order preserving variants, if no ordering is required at the output
-/// of the physical plan (there is no global ordering requirement by the query).
-fn update_plan_to_remove_unnecessary_final_order(
-    dist_context: DistributionContext,
-) -> Result<Arc<dyn ExecutionPlan>> {
-    let DistributionContext {
-        plan,
-        distribution_onwards,
-        ..
-    } = dist_context;
-    let new_children = izip!(plan.children(), distribution_onwards)
-        .map(|(mut child, mut dist_onward)| {
-            replace_order_preserving_variants(&mut child, &mut dist_onward)?;
-            Ok(child)
-        })
-        .collect::<Result<Vec<_>>>()?;
-    if !new_children.is_empty() {
-        plan.with_new_children(new_children)
-    } else {
-        Ok(plan)
-    }
-}
+// /// Changes each child of the `dist_context.plan` such that they no longer
+// /// use order preserving variants, if no ordering is required at the output
+// /// of the physical plan (there is no global ordering requirement by the query).
+// fn update_plan_to_remove_unnecessary_final_order(
+//     dist_context: DistributionContext,
+// ) -> Result<Arc<dyn ExecutionPlan>> {
+//     let DistributionContext {
+//         plan,
+//         distribution_onwards,
+//         ..
+//     } = dist_context;
+//     let new_children = izip!(plan.children(), distribution_onwards)
+//         .map(|(mut child, mut dist_onward)| {
+//             replace_order_preserving_variants(&mut child, &mut dist_onward)?;
+//             Ok(child)
+//         })
+//         .collect::<Result<Vec<_>>>()?;
+//     if !new_children.is_empty() {
+//         plan.with_new_children(new_children)
+//     } else {
+//         Ok(plan)
+//     }
+// }
 
 /// Updates the physical plan `input` by using `dist_onward` replace order preserving operator variants
 /// with their corresponding operators that do not preserve order. It is a wrapper for `replace_order_preserving_variants_helper`
@@ -1228,7 +1228,7 @@ fn ensure_distribution(
         mut plan,
         mut distribution_onwards,
         has_recursive_ancestor,
-    } = remove_unnecessary_repartition(dist_context)?;
+    } = remove_dist_changing_operators(dist_context)?;
 
     if let Some(exec) = plan.as_any().downcast_ref::<WindowAggExec>() {
         if let Some(updated_window) = get_best_fitting_window(
