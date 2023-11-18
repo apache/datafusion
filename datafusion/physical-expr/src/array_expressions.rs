@@ -1771,55 +1771,27 @@ pub fn array_has(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(boolean_builder.finish()))
 }
 
-macro_rules! array_has_any_non_list_check {
-    ($ARRAY:expr, $SUB_ARRAY:expr, $ARRAY_TYPE:ident) => {{
-        let arr = downcast_arg!($ARRAY, $ARRAY_TYPE);
-        let sub_arr = downcast_arg!($SUB_ARRAY, $ARRAY_TYPE);
-
-        let mut res = false;
-        for elem in sub_arr.iter().dedup() {
-            if let Some(elem) = elem {
-                res |= arr.iter().dedup().flatten().any(|x| x == elem);
-            } else {
-                return internal_err!(
-                    "array_has_any does not support Null type for element in sub_array"
-                );
-            }
-        }
-        res
-    }};
-}
-
 /// Array_has_any SQL function
 pub fn array_has_any(args: &[ArrayRef]) -> Result<ArrayRef> {
     check_datatypes("array_has_any", &[&args[0], &args[1]])?;
 
     let array = as_list_array(&args[0])?;
     let sub_array = as_list_array(&args[1])?;
-
     let mut boolean_builder = BooleanArray::builder(array.len());
+
+    let converter = RowConverter::new(vec![SortField::new(array.value_type())])?;
     for (arr, sub_arr) in array.iter().zip(sub_array.iter()) {
         if let (Some(arr), Some(sub_arr)) = (arr, sub_arr) {
-            let res = match arr.data_type() {
-                DataType::List(_) => {
-                    let arr = downcast_arg!(arr, ListArray);
-                    let sub_arr = downcast_arg!(sub_arr, ListArray);
+            let arr_values = converter.convert_columns(&[arr])?;
+            let sub_arr_values = converter.convert_columns(&[sub_arr])?;
 
-                    let mut res = false;
-                    for elem in sub_arr.iter().dedup().flatten() {
-                        res |= arr.iter().dedup().flatten().any(|x| *x == *elem);
-                    }
-                    res
+            let mut res = false;
+            for elem in sub_arr_values.iter().dedup() {
+                res |= arr_values.iter().dedup().any(|x| x == elem);
+                if res {
+                    break;
                 }
-                data_type => {
-                    macro_rules! array_function {
-                        ($ARRAY_TYPE:ident) => {
-                            array_has_any_non_list_check!(arr, sub_arr, $ARRAY_TYPE)
-                        };
-                    }
-                    call_array_function!(data_type, false)
-                }
-            };
+            }
             boolean_builder.append_value(res);
         }
     }
