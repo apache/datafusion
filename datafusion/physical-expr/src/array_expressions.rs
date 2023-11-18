@@ -26,7 +26,7 @@ use arrow::buffer::OffsetBuffer;
 use arrow::compute;
 use arrow::datatypes::{DataType, Field, UInt64Type};
 use arrow::row::{RowConverter, SortField};
-use arrow_buffer::{NullBuffer, ScalarBuffer};
+use arrow_buffer::NullBuffer;
 
 use arrow_schema::FieldRef;
 use datafusion_common::cast::{
@@ -319,7 +319,7 @@ fn array_array<O: OffsetSizeTrait>(
     }
 
     let mut offsets: Vec<O> = Vec::with_capacity(total_len);
-    offsets.push(O::from_usize(0).unwrap());
+    offsets.push(O::usize_as(0));
 
     let capacity = Capacities::Array(total_len);
     let data_ref = data.iter().collect::<Vec<_>>();
@@ -343,7 +343,7 @@ fn array_array<O: OffsetSizeTrait>(
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
         Arc::new(Field::new("item", data_type, true)),
-        OffsetBuffer::new(ScalarBuffer::from(offsets)),
+        OffsetBuffer::new(offsets.into()),
         arrow_array::make_array(data),
         None,
     )?))
