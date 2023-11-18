@@ -2936,7 +2936,7 @@ impl fmt::Display for ScalarValue {
                 // TODO: Remove NullArray
                 // There are NullArray(0) currently, so we need to check the length
                 if arr.len() == 0 {
-                    write!(f, "[]")? 
+                    write!(f, "[]")?
                 } else {
                     let options = FormatOptions::default().with_display_error(true);
                     // TODO: No way to map to fmt::Error yet
