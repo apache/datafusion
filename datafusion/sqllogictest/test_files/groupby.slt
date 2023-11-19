@@ -3919,5 +3919,27 @@ SortPreservingMergeExec: [c1@0 ASC NULLS LAST]
 ----------------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
 ------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3, c4], has_header=true
 
+# Use PostgreSQL dialect
+statement ok
+set datafusion.sql_parser.dialect = 'Postgres';
+
+query II
+SELECT c2, count(distinct c3) FILTER (WHERE c1 != 'a') FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
+----
+1 17
+2 17
+3 13
+4 19
+5 11
+
+query III
+SELECT c2, count(distinct c3) FILTER (WHERE c1 != 'a'), count(c5) FILTER (WHERE c1 != 'b') FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
+----
+1 17 19
+2 17 18
+3 13 17
+4 19 18
+5 11 9
+
 statement ok
 drop table aggregate_test_100;
