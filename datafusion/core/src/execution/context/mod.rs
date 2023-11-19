@@ -1315,18 +1315,14 @@ impl SessionState {
             );
         }
 
-        // register built in functions
-        let mut scalar_functions = HashMap::new();
-        datafusion_functions::register_all(&mut scalar_functions);
-
-        SessionState {
+        let mut new_self = SessionState {
             session_id,
             analyzer: Analyzer::new(),
             optimizer: Optimizer::new(),
             physical_optimizers: PhysicalOptimizer::new(),
             query_planner: Arc::new(DefaultQueryPlanner {}),
             catalog_list,
-            scalar_functions,
+            scalar_functions: HashMap::new(),
             aggregate_functions: HashMap::new(),
             window_functions: HashMap::new(),
             serializer_registry: Arc::new(EmptySerializerRegistry),
@@ -1334,7 +1330,13 @@ impl SessionState {
             execution_props: ExecutionProps::new(),
             runtime_env: runtime,
             table_factories,
-        }
+        };
+
+        // register built in functions
+        datafusion_functions::register_all(&mut new_self)
+            .expect("can not register built in functions");
+
+        new_self
     }
     /// Returns new [`SessionState`] using the provided
     /// [`SessionConfig`] and [`RuntimeEnv`].
@@ -1926,6 +1928,10 @@ impl FunctionRegistry for SessionState {
         result.cloned().ok_or_else(|| {
             plan_datafusion_err!("There is no UDWF named \"{name}\" in the registry")
         })
+    }
+
+    fn register_udf(&mut self, udf: Arc<ScalarUDF>) -> Result<Option<Arc<ScalarUDF>>> {
+        Ok(self.scalar_functions.insert(udf.name().into(), udf))
     }
 }
 

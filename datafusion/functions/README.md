@@ -23,4 +23,19 @@
 
 This crate contains several sets of functions that can be used with DataFusion.
 
+Each module should implement a "function package" that should have a function with the signature:
+
+``` rust
+XXXX...
+```
+
+Which returns an actual function implementation when the relevant feature is activated, or returns
+a stub function when the feature is not activated that errros and explains what feature
+flag is needed to actually activate them.
+
+This means that the same functions are always registered so the same set of functions is always availabke
+even if some only generate runtime errors when called. 
+
+TODO: should we also offer a mode / configuration flag that will not register such functions?
+
 [df]: https://crates.io/crates/datafusion

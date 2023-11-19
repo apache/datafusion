@@ -17,20 +17,8 @@
 
 use arrow::datatypes::DataType;
 use datafusion_common::{exec_err, plan_err, DataFusionError, Result};
-use datafusion_expr::{
-    ColumnarValue, FunctionImplementation, ScalarUDF, Signature, Volatility,
-};
-use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
-
-/// Insert a function into the registry
-pub(crate) fn insert(
-    registry: &mut HashMap<String, Arc<ScalarUDF>>,
-    udf: impl FunctionImplementation + Send + Sync + 'static,
-) {
-    let udf = ScalarUDF::new_from_impl(Arc::new(udf));
-    registry.insert(udf.name().to_string(), Arc::new(udf));
-}
+use datafusion_expr::{ColumnarValue, FunctionImplementation, Signature, Volatility};
+use std::sync::OnceLock;
 
 /// A scalar function that always errors with a hint. This is used to stub out
 /// functions that are not enabled with the current set of crate features.

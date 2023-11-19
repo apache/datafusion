@@ -29,7 +29,6 @@ authors = { workspace = true }
 rust-version = { workspace = true }
 
 [features]
-default= []
 # enable the encode/decode functions
 encoding_expressions = ["base64", "hex"]
 
@@ -47,3 +46,4 @@ datafusion-common = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 hex = { version = "0.4", optional = true }
+log = "0.4.20"

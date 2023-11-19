@@ -17,27 +17,33 @@
 
 #[cfg(feature = "encoding_expressions")]
 mod inner;
-#[cfg(feature = "encoding_expressions")]
-mod meta;
 
-use crate::utils::insert;
-use datafusion_expr::ScalarUDF;
-use std::collections::HashMap;
+use datafusion_expr::FunctionImplementation;
 use std::sync::Arc;
 
-/// Registers the `encode` and `decode` functions with the function registry
+/// If feature flag is enabled, ues actual implementation
 #[cfg(feature = "encoding_expressions")]
-pub fn register(registry: &mut HashMap<String, Arc<ScalarUDF>>) {
-    insert(registry, meta::EncodeFunc {});
-    insert(registry, meta::DecodeFunc {});
+macro_rules! use_function {
+    ($UDF:ty, $NAME:expr) => {{
+        Arc::new(<$UDF>::default()) as _
+    }};
 }
 
-/// Registers the `encode` and `decode` stubs with the function registry
+/// If feature flag is not enabled, registers a stub that will error with a nice message
 #[cfg(not(feature = "encoding_expressions"))]
-pub fn register(registry: &mut HashMap<String, Arc<ScalarUDF>>) {
-    let hint = "Requires compilation with feature flag: encoding_expressions.";
+macro_rules! use_function {
+    ($IGNORE:tt :: $IGNORE2:tt, $NAME:expr) => {{
+        Arc::new(crate::stub::StubFunc::new(
+            $NAME,
+            "feature 'encoding_expressions' not enabled",
+        ))
+    }};
+}
 
-    for function_name in ["encode", "decode"] {
-        insert(registry, crate::utils::StubFunc::new(function_name, hint));
-    }
+/// Return a list of all functions in this package
+pub(crate) fn functions() -> Vec<Arc<dyn FunctionImplementation + Send + Sync>> {
+    vec![
+        use_function!(inner::EncodeFunc, "encode"),
+        use_function!(inner::DecodeFunc, "decode"),
+    ]
 }

@@ -32,6 +32,103 @@ use datafusion_expr::ColumnarValue;
 use std::sync::Arc;
 use std::{fmt, str::FromStr};
 
+use datafusion_expr::TypeSignature::*;
+use datafusion_expr::{FunctionImplementation, Signature, Volatility};
+use std::sync::OnceLock;
+
+#[derive(Default, Debug)]
+pub(super) struct EncodeFunc {}
+
+static ENCODE_SIGNATURE: OnceLock<Signature> = OnceLock::new();
+
+impl FunctionImplementation for EncodeFunc {
+    fn name(&self) -> &str {
+        "encode"
+    }
+
+    fn signature(&self) -> &Signature {
+        use DataType::*;
+        ENCODE_SIGNATURE.get_or_init(|| {
+            Signature::one_of(
+                vec![
+                    Exact(vec![Utf8, Utf8]),
+                    Exact(vec![LargeUtf8, Utf8]),
+                    Exact(vec![Binary, Utf8]),
+                    Exact(vec![LargeBinary, Utf8]),
+                ],
+                Volatility::Immutable,
+            )
+        })
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        use DataType::*;
+
+        Ok(match arg_types[0] {
+            Utf8 => Utf8,
+            LargeUtf8 => LargeUtf8,
+            Binary => Utf8,
+            LargeBinary => LargeUtf8,
+            Null => Null,
+            _ => {
+                return plan_err!("The encode function can only accept utf8 or binary.");
+            }
+        })
+    }
+
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        // Put a feature flag here to make sure this is only compiled when the feature is activated
+        super::inner::encode(args)
+    }
+}
+
+#[derive(Default, Debug)]
+pub(super) struct DecodeFunc {}
+
+static DECODE_SIGNATURE: OnceLock<Signature> = OnceLock::new();
+
+impl FunctionImplementation for DecodeFunc {
+    fn name(&self) -> &str {
+        "decode"
+    }
+
+    fn signature(&self) -> &Signature {
+        use DataType::*;
+
+        DECODE_SIGNATURE.get_or_init(|| {
+            Signature::one_of(
+                vec![
+                    Exact(vec![Utf8, Utf8]),
+                    Exact(vec![LargeUtf8, Utf8]),
+                    Exact(vec![Binary, Utf8]),
+                    Exact(vec![LargeBinary, Utf8]),
+                ],
+                Volatility::Immutable,
+            )
+        })
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        use DataType::*;
+
+        Ok(match arg_types[0] {
+            Utf8 => Binary,
+            LargeUtf8 => LargeBinary,
+            Binary => Binary,
+            LargeBinary => LargeBinary,
+            Null => Null,
+            _ => {
+                return plan_err!("The decode function can only accept utf8 or binary.");
+            }
+        })
+    }
+
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        // Put a feature flag here to make sure this is only compiled when the feature is activated
+        super::inner::decode(args)
+    }
+}
+
 #[derive(Debug, Copy, Clone)]
 enum Encoding {
     Base64,
