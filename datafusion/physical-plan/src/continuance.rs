@@ -20,10 +20,6 @@
 use std::any::Any;
 use std::sync::Arc;
 
-// use crate::error::{DataFusionError, Result};
-// use crate::physical_plan::{
-//     DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
-// };
 use arrow::datatypes::SchemaRef;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::Partitioning;
@@ -39,9 +35,6 @@ use super::{
     SendableRecordBatchStream, Statistics,
 };
 use datafusion_common::{DataFusionError, Result};
-// use tokio::stream::;
-
-// use crate::exe::context::TaskContext;
 
 /// A temporary "working table" operation where the input data will be
 /// taken from the named handle during the execution and will be re-published
