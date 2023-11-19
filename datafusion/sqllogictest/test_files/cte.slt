@@ -118,3 +118,16 @@ ORDER BY time, name
 9 Tim 360
 10 John 127
 10 Tim 380
+
+# recursive CTE with aggregations works
+query I rowsort
+WITH RECURSIVE nodes AS ( 
+    SELECT 1 as id
+    UNION ALL 
+    SELECT id + 1 as id 
+    FROM nodes
+    WHERE id < 10
+)
+SELECT sum(id) FROM nodes
+----
+55
