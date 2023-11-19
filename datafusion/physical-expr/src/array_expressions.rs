@@ -1510,6 +1510,21 @@ pub fn array_union(args: &[ArrayRef]) -> Result<ArrayRef> {
     let array1 = &args[0];
     let array2 = &args[1];
     match (array1.data_type(), array2.data_type()) {
+        (DataType::Null, DataType::Null) => {
+            // NullArray(1): means null, NullArray(0): means []
+            // union([], null) = [], union(null, []) = [], union(null, null) = null
+            let nulls = match (array1.len(), array2.len()) {
+                (1, 1) => Some(NullBuffer::new_null(1)),
+                _ => None,
+            };
+            let arr = Arc::new(ListArray::try_new(
+                Arc::new(Field::new("item", DataType::Null, true)),
+                OffsetBuffer::new(vec![0; 2].into()),
+                Arc::new(NullArray::new(0)),
+                nulls,
+            )?) as ArrayRef;
+            Ok(arr)
+        }
         (DataType::Null, _) => Ok(array2.clone()),
         (_, DataType::Null) => Ok(array1.clone()),
         (DataType::List(field_ref), DataType::List(_)) => {

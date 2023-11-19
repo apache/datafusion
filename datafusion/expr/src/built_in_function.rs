@@ -600,7 +600,16 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArraySlice => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayToString => Ok(Utf8),
             BuiltinScalarFunction::ArrayIntersect => Ok(input_expr_types[0].clone()),
-            BuiltinScalarFunction::ArrayUnion => Ok(input_expr_types[0].clone()),
+            BuiltinScalarFunction::ArrayUnion => {
+                match (input_expr_types[0].clone(), input_expr_types[1].clone()) {
+                    (DataType::Null, DataType::Null) => Ok(DataType::List(Arc::new(
+                        Field::new("item", DataType::Null, true),
+                    ))),
+                    (DataType::Null, dt) => Ok(dt),
+                    (dt, DataType::Null) => Ok(dt),
+                    (dt, _) => Ok(dt),
+                }
+            }
             BuiltinScalarFunction::Range => {
                 Ok(List(Arc::new(Field::new("item", Int64, true))))
             }

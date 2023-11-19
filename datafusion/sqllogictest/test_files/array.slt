@@ -2014,7 +2014,7 @@ drop table arrays_with_repeating_elements_for_union;
 query ?
 select array_union([], []);
 ----
-NULL
+[]
 
 # array_union scalar function #7
 query ?
@@ -2032,7 +2032,7 @@ select array_union([null], [null]);
 query ?
 select array_union(null, []);
 ----
-NULL
+[]
 
 # array_union scalar function #10
 query ?
