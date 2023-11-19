@@ -34,7 +34,7 @@ use arrow_array::types::{
 };
 use arrow_array::{Array, ArrowNativeTypeOp, ArrowNumericType};
 use arrow_buffer::ArrowNativeType;
-use datafusion_common::cast::{as_list_array, as_primitive_array};
+use datafusion_common::cast::as_primitive_array;
 use datafusion_common::utils::array_into_list_array;
 use datafusion_common::{
     internal_err, not_impl_err, DataFusionError, Result, ScalarValue,
@@ -106,7 +106,6 @@ impl AggregateExpr for Sum {
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        // TODO: Rewrite `downcast_sum` that accepts `DataType` instead of `self` to extend support to `List`
         if let DataType::List(field) = &self.data_type {
             match field.data_type() {
                 DataType::Int64 => {
@@ -134,11 +133,13 @@ impl AggregateExpr for Sum {
                         self.return_type.clone(),
                     )))
                 }
-                _ => unimplemented!(
-                    "Sum not supported for {}: {}",
-                    self.name,
-                    self.data_type
-                ),
+                _ => {
+                    return internal_err!(
+                        "Sum not supported for {}: {}",
+                        self.name,
+                        self.data_type
+                    )
+                }
             }
         }
 
@@ -290,9 +291,10 @@ impl<T: ArrowNumericType> Accumulator for ArraySumAccumulator<T> {
     // ListArray is for multiple-rows input, and PrimitiveArray is for single-row input
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         // Wrap single-row input into multiple-rows input and use the same logic as multiple-rows input
-        let list_values = match as_list_array(&values[0]) {
-            Ok(arr) => arr.to_owned(),
-            Err(_) => array_into_list_array(values[0].clone()),
+        let list_values = if let Some(list_arr) = values[0].as_list_opt::<i32>() {
+            list_arr.to_owned()
+        } else {
+            array_into_list_array(values[0].clone())
         };
 
         let row_number = list_values.len();
