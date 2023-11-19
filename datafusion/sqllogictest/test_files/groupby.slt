@@ -3865,7 +3865,6 @@ select date_bin(interval '1 year', time) as bla, count(distinct state) as count 
 statement ok
 drop table t1
 
-
 statement ok
 CREATE EXTERNAL TABLE aggregate_test_100 (
   c1  VARCHAR NOT NULL,
@@ -3940,6 +3939,10 @@ SELECT c2, count(distinct c3) FILTER (WHERE c1 != 'a'), count(c5) FILTER (WHERE 
 3 13 17
 4 19 18
 5 11 9
+
+# Restore the default dialect
+statement ok
+set datafusion.sql_parser.dialect = 'Generic';
 
 statement ok
 drop table aggregate_test_100;
