@@ -518,7 +518,7 @@ impl LogicalPlan {
                     .map(|expr| {
                         Ok(Expr::Column(create_col_from_scalar_expr(
                             &expr,
-                            subquery_alias.alias.to_string(),
+                            Some(subquery_alias.alias.to_string()),
                         )?))
                     })
                     .map_or(Ok(None), |v| v.map(Some))

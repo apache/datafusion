@@ -221,7 +221,7 @@ impl TreeNodeRewriter for ExtractScalarSubQuery {
                     .map_or(plan_err!("single expression required."), Ok)?;
                 Ok(Expr::Column(create_col_from_scalar_expr(
                     &scalar_expr,
-                    subqry_alias,
+                    Some(subqry_alias),
                 )?))
             }
             _ => Ok(expr),
