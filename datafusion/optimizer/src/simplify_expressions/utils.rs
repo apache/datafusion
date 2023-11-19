@@ -525,8 +525,8 @@ pub fn simpl_concat_ws(delimiter: &Expr, args: &[Expr]) -> Result<Expr> {
         d => Ok(concat_ws(
             d.clone(),
             args.iter()
-                .cloned()
                 .filter(|x| !is_null(x))
+                .cloned()
                 .collect::<Vec<Expr>>(),
         )),
     }
