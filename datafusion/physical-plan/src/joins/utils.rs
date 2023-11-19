@@ -463,7 +463,7 @@ pub(crate) fn estimate_join_statistics(
     let left_stats = left.statistics()?;
     let right_stats = right.statistics()?;
 
-    let join_stats = estimate_join_cardinality(join_type, left_stats, right_stats, &on)?;
+    let join_stats = estimate_join_cardinality(join_type, left_stats, right_stats, &on);
     let (num_rows, column_statistics) = match join_stats {
         Some(stats) => (Precision::Inexact(stats.num_rows), stats.column_statistics),
         None => (Precision::Absent, Statistics::unknown_column(schema)),
@@ -481,7 +481,7 @@ fn estimate_join_cardinality(
     left_stats: Statistics,
     right_stats: Statistics,
     on: &JoinOn,
-) -> Result<Option<PartialJoinStatistics>> {
+) -> Option<PartialJoinStatistics> {
     match join_type {
         JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
             let (left_col_stats, right_col_stats) = on
@@ -494,7 +494,7 @@ fn estimate_join_cardinality(
                 })
                 .unzip::<_, _, Vec<_>, Vec<_>>();
 
-            let Some(ij_cardinality) = estimate_inner_join_cardinality(
+            let ij_cardinality = estimate_inner_join_cardinality(
                 Statistics {
                     num_rows: left_stats.num_rows.clone(),
                     total_byte_size: Precision::Absent,
@@ -505,10 +505,7 @@ fn estimate_join_cardinality(
                     total_byte_size: Precision::Absent,
                     column_statistics: right_col_stats,
                 },
-            )?
-            else {
-                return Ok(None);
-            };
+            )?;
 
             // The cardinality for inner join can also be used to estimate
             // the cardinality of left/right/full outer joins as long as it
@@ -525,11 +522,8 @@ fn estimate_join_cardinality(
                 _ => unreachable!(),
             };
 
-            let Some(num_rows) = cardinality.get_value() else {
-                return Ok(None);
-            };
-            Ok(Some(PartialJoinStatistics {
-                num_rows: *num_rows,
+            Some(PartialJoinStatistics {
+                num_rows: *cardinality.get_value()?,
                 // We don't do anything specific here, just combine the existing
                 // statistics which might yield subpar results (although it is
                 // true, esp regarding min/max). For a better estimation, we need
@@ -539,13 +533,13 @@ fn estimate_join_cardinality(
                     .into_iter()
                     .chain(right_stats.column_statistics)
                     .collect(),
-            }))
+            })
         }
 
         JoinType::LeftSemi
         | JoinType::RightSemi
         | JoinType::LeftAnti
-        | JoinType::RightAnti => Ok(None),
+        | JoinType::RightAnti => None,
     }
 }
 
@@ -556,7 +550,7 @@ fn estimate_join_cardinality(
 fn estimate_inner_join_cardinality(
     left_stats: Statistics,
     right_stats: Statistics,
-) -> Result<Option<Precision<usize>>> {
+) -> Option<Precision<usize>> {
     // The algorithm here is partly based on the non-histogram selectivity estimation
     // from Spark's Catalyst optimizer.
     let mut join_selectivity = Precision::Absent;
@@ -568,19 +562,8 @@ fn estimate_inner_join_cardinality(
         // If there is no overlap in any of the join columns, this means the join
         // itself is disjoint and the cardinality is 0. Though we can only assume
         // this when the statistics are exact (since it is a very strong assumption).
-        let (left_min, left_max, right_min, right_max) = match (
-            left_stat.min_value.get_value(),
-            left_stat.max_value.get_value(),
-            right_stat.min_value.get_value(),
-            right_stat.max_value.get_value(),
-        ) {
-            (Some(l_min), Some(l_max), Some(r_min), Some(r_max)) => {
-                (l_min, l_max, r_min, r_max)
-            }
-            _ => return Ok(None),
-        };
-        if left_min > right_max {
-            return Ok(Some(
+        if left_stat.min_value.get_value()? > right_stat.max_value.get_value()? {
+            return Some(
                 if left_stat.min_value.is_exact().unwrap_or(false)
                     && right_stat.max_value.is_exact().unwrap_or(false)
                 {
@@ -588,10 +571,10 @@ fn estimate_inner_join_cardinality(
                 } else {
                     Precision::Inexact(0)
                 },
-            ));
+            );
         }
-        if left_max < right_min {
-            return Ok(Some(
+        if left_stat.max_value.get_value()? < right_stat.min_value.get_value()? {
+            return Some(
                 if left_stat.max_value.is_exact().unwrap_or(false)
                     && right_stat.min_value.is_exact().unwrap_or(false)
                 {
@@ -599,19 +582,11 @@ fn estimate_inner_join_cardinality(
                 } else {
                     Precision::Inexact(0)
                 },
-            ));
+            );
         }
 
-        let Some(left_max_distinct) =
-            max_distinct_count(&left_stats.num_rows, left_stat)?
-        else {
-            return Ok(None);
-        };
-        let Some(right_max_distinct) =
-            max_distinct_count(&right_stats.num_rows, right_stat)?
-        else {
-            return Ok(None);
-        };
+        let left_max_distinct = max_distinct_count(&left_stats.num_rows, left_stat);
+        let right_max_distinct = max_distinct_count(&right_stats.num_rows, right_stat);
         let max_distinct = left_max_distinct.max(&right_max_distinct);
         if max_distinct.get_value().is_some() {
             // Seems like there are a few implementations of this algorithm that implement
@@ -624,13 +599,9 @@ fn estimate_inner_join_cardinality(
     // With the assumption that the smaller input's domain is generally represented in the bigger
     // input's domain, we can estimate the inner join's cardinality by taking the cartesian product
     // of the two inputs and normalizing it by the selectivity factor.
-    let Some(left_num_rows) = left_stats.num_rows.get_value() else {
-        return Ok(None);
-    };
-    let Some(right_num_rows) = right_stats.num_rows.get_value() else {
-        return Ok(None);
-    };
-    Ok(match join_selectivity {
+    let left_num_rows = left_stats.num_rows.get_value()?;
+    let right_num_rows = right_stats.num_rows.get_value()?;
+    match join_selectivity {
         Precision::Exact(value) if value > 0 => {
             Some(Precision::Exact((left_num_rows * right_num_rows) / value))
         }
@@ -642,48 +613,64 @@ fn estimate_inner_join_cardinality(
         // And let other passes handle this (otherwise we would need to produce an
         // overestimation using just the cartesian product).
         _ => None,
-    })
+    }
 }
 
 /// Estimate the number of maximum distinct values that can be present in the
-/// given column from its statistics.
-///
-/// If distinct_count is available, uses it directly. If the column numeric, and
-/// has min/max values, then they might be used as a fallback option. Otherwise,
-/// returns None.
+/// given column from its statistics. If distinct_count is available, uses it
+/// directly. Otherwise, if the column is numeric and has min/max values, it
+/// estimates the maximum distinct count from those.
 fn max_distinct_count(
     num_rows: &Precision<usize>,
     stats: &ColumnStatistics,
-) -> Result<Option<Precision<usize>>> {
-    match (
-        &stats.distinct_count,
-        stats.max_value.get_value(),
-        stats.min_value.get_value(),
-    ) {
-        (Precision::Exact(_), _, _) | (Precision::Inexact(_), _, _) => {
-            Ok(Some(stats.distinct_count.clone()))
-        }
-        (_, Some(max), Some(min)) => {
-            let numeric_range = Interval::try_new(min.clone(), max.clone())?;
-            // The number can never be greater than the number of rows we have (minus
-            // nulls, since they don't count as distinct values).
-            let ceiling = num_rows.get_value().unwrap_or(&usize::MAX)
-                - stats.null_count.get_value().unwrap_or(&0);
-            let max_dc = numeric_range
-                .cardinality()
-                .map_or(ceiling, |c| (c as usize).min(ceiling));
-            Ok(Some(
-                if num_rows.is_exact().unwrap_or(false)
-                    && stats.max_value.is_exact().unwrap_or(false)
-                    && stats.min_value.is_exact().unwrap_or(false)
+) -> Precision<usize> {
+    match &stats.distinct_count {
+        dc @ (Precision::Exact(_) | Precision::Inexact(_)) => dc.clone(),
+        _ => {
+            // The number can never be greater than the number of rows we have
+            // minus the nulls (since they don't count as distinct values).
+            let result = match num_rows {
+                Precision::Absent => Precision::Absent,
+                Precision::Inexact(count) => {
+                    Precision::Inexact(count - stats.null_count.get_value().unwrap_or(&0))
+                }
+                Precision::Exact(count) => {
+                    let count = count - stats.null_count.get_value().unwrap_or(&0);
+                    if stats.null_count.is_exact().unwrap_or(false) {
+                        Precision::Exact(count)
+                    } else {
+                        Precision::Inexact(count)
+                    }
+                }
+            };
+            // Cap the estimate using the number of possible values:
+            if let (Some(min), Some(max)) =
+                (stats.min_value.get_value(), stats.max_value.get_value())
+            {
+                if let Some(range_dc) = Interval::try_new(min.clone(), max.clone())
+                    .ok()
+                    .and_then(|e| e.cardinality())
                 {
-                    Precision::Exact(max_dc)
-                } else {
-                    Precision::Inexact(max_dc)
-                },
-            ))
+                    let range_dc = range_dc as usize;
+                    // Note that the `unwrap` calls in the below statement are safe.
+                    return if matches!(result, Precision::Absent)
+                        || &range_dc < result.get_value().unwrap()
+                    {
+                        if stats.min_value.is_exact().unwrap()
+                            && stats.max_value.is_exact().unwrap()
+                        {
+                            Precision::Exact(range_dc)
+                        } else {
+                            Precision::Inexact(range_dc)
+                        }
+                    } else {
+                        result
+                    };
+                }
+            }
+
+            result
         }
-        _ => Ok(None),
     }
 }
 
@@ -1504,7 +1491,7 @@ mod tests {
                         total_byte_size: Precision::Absent,
                         column_statistics: right_col_stats.clone(),
                     },
-                )?,
+                ),
                 expected_cardinality.clone()
             );
 
@@ -1516,7 +1503,7 @@ mod tests {
                 create_stats(Some(left_num_rows), left_col_stats.clone(), false),
                 create_stats(Some(right_num_rows), right_col_stats.clone(), false),
                 &join_on,
-            )?;
+            );
 
             assert_eq!(
                 partial_join_stats
@@ -1560,7 +1547,7 @@ mod tests {
                     total_byte_size: Precision::Absent,
                     column_statistics: right_col_stats,
                 },
-            )?,
+            ),
             Some(Precision::Inexact((400 * 400) / 200))
         );
         Ok(())
@@ -1594,7 +1581,7 @@ mod tests {
                     total_byte_size: Precision::Absent,
                     column_statistics: right_col_stats,
                 },
-            )?,
+            ),
             Some(Precision::Inexact(100))
         );
         Ok(())
@@ -1643,7 +1630,7 @@ mod tests {
                 create_stats(Some(1000), left_col_stats.clone(), false),
                 create_stats(Some(2000), right_col_stats.clone(), false),
                 &join_on,
-            )?
+            )
             .unwrap();
             assert_eq!(partial_join_stats.num_rows, expected_num_rows);
             assert_eq!(
@@ -1708,7 +1695,7 @@ mod tests {
                 create_stats(Some(1000), left_col_stats.clone(), true),
                 create_stats(Some(2000), right_col_stats.clone(), true),
                 &join_on,
-            )?
+            )
             .unwrap();
             assert_eq!(partial_join_stats.num_rows, expected_num_rows);
             assert_eq!(

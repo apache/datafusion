@@ -27,11 +27,10 @@ use super::utils::{
 use crate::expressions::Literal;
 use crate::utils::{build_dag, ExprTreeNode};
 use crate::PhysicalExpr;
+
 use arrow_schema::{DataType, Schema};
-use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::interval_arithmetic::{
-    apply_operator, satisfy_comparison, Interval,
-};
+use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_expr::interval_arithmetic::{apply_operator, satisfy_greater, Interval};
 use datafusion_expr::Operator;
 
 use petgraph::graph::NodeIndex;
@@ -147,7 +146,7 @@ pub enum PropagationResult {
 }
 
 /// This is a node in the DAEG; it encapsulates a reference to the actual
-/// [PhysicalExpr] as well as an interval containing expression bounds.
+/// [`PhysicalExpr`] as well as an interval containing expression bounds.
 #[derive(Clone, Debug)]
 pub struct ExprIntervalGraphNode {
     expr: Arc<dyn PhysicalExpr>,
@@ -163,10 +162,8 @@ impl Display for ExprIntervalGraphNode {
 impl ExprIntervalGraphNode {
     /// Constructs a new DAEG node with an [-∞, ∞] range.
     pub fn new_unbounded(expr: Arc<dyn PhysicalExpr>, dt: &DataType) -> Result<Self> {
-        Ok(ExprIntervalGraphNode {
-            expr,
-            interval: Interval::make_unbounded(dt)?,
-        })
+        Interval::make_unbounded(dt)
+            .map(|interval| ExprIntervalGraphNode { expr, interval })
     }
 
     /// Constructs a new DAEG node with the given range.
@@ -179,27 +176,24 @@ impl ExprIntervalGraphNode {
         &self.interval
     }
 
-    /// This function creates a DAEG node from Datafusion's [ExprTreeNode]
+    /// This function creates a DAEG node from Datafusion's [`ExprTreeNode`]
     /// object. Literals are created with definite, singleton intervals while
     /// any other expression starts with an indefinite interval ([-∞, ∞]).
-    pub fn make_node(
-        node: &ExprTreeNode<NodeIndex>,
-        schema: &Schema,
-    ) -> Result<ExprIntervalGraphNode> {
+    pub fn make_node(node: &ExprTreeNode<NodeIndex>, schema: &Schema) -> Result<Self> {
         let expr = node.expression().clone();
         if let Some(literal) = expr.as_any().downcast_ref::<Literal>() {
             let value = literal.value();
-            let interval = Interval::try_new(value.clone(), value.clone())?;
-            Ok(ExprIntervalGraphNode::new_with_interval(expr, interval))
+            Interval::try_new(value.clone(), value.clone())
+                .map(|interval| Self::new_with_interval(expr, interval))
         } else {
-            let dt = expr.data_type(schema)?;
-            ExprIntervalGraphNode::new_unbounded(expr, &dt)
+            expr.data_type(schema)
+                .and_then(|dt| Self::new_unbounded(expr, &dt))
         }
     }
 }
 
 impl PartialEq for ExprIntervalGraphNode {
-    fn eq(&self, other: &ExprIntervalGraphNode) -> bool {
+    fn eq(&self, other: &Self) -> bool {
         self.expr.eq(&other.expr)
     }
 }
@@ -230,8 +224,9 @@ pub fn propagate_arithmetic(
 ) -> Result<Option<(Interval, Interval)>> {
     let inverse_op = get_inverse_op(*op)?;
     match (left_child.data_type(), right_child.data_type()) {
-        // If we have a child whose type is a time interval (i.e. DataType::Interval), we need special handling
-        // since timestamp differencing results in a Duration type.
+        // If we have a child whose type is a time interval (i.e. DataType::Interval),
+        // we need special handling since timestamp differencing results in a
+        // Duration type.
         (DataType::Timestamp(..), DataType::Interval(_)) => {
             propagate_time_interval_at_right(
                 left_child,
@@ -256,19 +251,11 @@ pub fn propagate_arithmetic(
                 .intersect(left_child)?
             {
                 // Left is feasible:
-                Some(value) => {
+                Some(value) => Ok(
                     // Propagate to the right using the new left.
-
-                    if let Some(right) =
-                        propagate_right(&value, parent, right_child, op, &inverse_op)?
-                    {
-                        // Return intervals for both children:
-                        Ok(Some((value, right)))
-                    } else {
-                        // If the right child is infeasible, short-circuit.
-                        Ok(None)
-                    }
-                }
+                    propagate_right(&value, parent, right_child, op, &inverse_op)?
+                        .map(|right| (value, right)),
+                ),
                 // If the left child is infeasible, short-circuit.
                 None => Ok(None),
             }
@@ -334,14 +321,15 @@ pub fn propagate_comparison(
             Operator::Eq => left_child.intersect(right_child).map(|result| {
                 result.map(|intersection| (intersection.clone(), intersection))
             }),
-            Operator::Lt => satisfy_comparison(left_child, right_child, false, false),
-            Operator::LtEq => satisfy_comparison(left_child, right_child, true, false),
-            Operator::Gt => satisfy_comparison(left_child, right_child, false, true),
-            Operator::GtEq => satisfy_comparison(left_child, right_child, true, true),
-            _ => Err(datafusion_common::DataFusionError::Internal(
+            Operator::Gt => satisfy_greater(left_child, right_child, true),
+            Operator::GtEq => satisfy_greater(left_child, right_child, false),
+            Operator::Lt => satisfy_greater(right_child, left_child, true)
+                .map(|t| t.map(reverse_tuple)),
+            Operator::LtEq => satisfy_greater(right_child, left_child, false)
+                .map(|t| t.map(reverse_tuple)),
+            _ => internal_err!(
                 "The operator must be a comparison operator to propagate intervals"
-                    .to_owned(),
-            )),
+            ),
         }
     }
 }
@@ -403,7 +391,7 @@ impl ExprIntervalGraph {
     //
     // ```
 
-    /// This function associates stable node indices with [PhysicalExpr]s so
+    /// This function associates stable node indices with [`PhysicalExpr`]s so
     /// that we can match `Arc<dyn PhysicalExpr>` and NodeIndex objects during
     /// membership tests.
     pub fn gather_node_indices(
@@ -514,20 +502,14 @@ impl ExprIntervalGraph {
     /// // Provide intervals for leaf variables (here, there is only one).
     /// let intervals = vec![(
     ///     left_index,
-    ///     Interval::try_new(
-    ///         ScalarValue::Int32(Some(10)),
-    ///         ScalarValue::Int32(Some(20)),
-    ///     ).unwrap(),
+    ///     Interval::make(Some(10), Some(20)).unwrap(),
     /// )];
     ///
     /// // Evaluate bounds for the composite expression:
     /// graph.assign_intervals(&intervals);
     /// assert_eq!(
     ///     graph.evaluate_bounds().unwrap(),
-    ///     &Interval::try_new(
-    ///         ScalarValue::Int32(Some(20)),
-    ///         ScalarValue::Int32(Some(30)),
-    ///     ).unwrap(),
+    ///     &Interval::make(Some(20), Some(30)).unwrap(),
     /// )
     /// ```
     pub fn evaluate_bounds(&mut self) -> Result<&Interval> {
@@ -540,7 +522,7 @@ impl ExprIntervalGraph {
             // If the current expression is a leaf, its interval should already
             // be set externally, just continue with the evaluation procedure:
             if !children_intervals.is_empty() {
-                // Reverse to align with [PhysicalExpr]'s children:
+                // Reverse to align with `PhysicalExpr`'s children:
                 children_intervals.reverse();
                 self.graph[node].interval =
                     self.graph[node].expr.evaluate_bounds(&children_intervals)?;
@@ -553,12 +535,16 @@ impl ExprIntervalGraph {
     /// via a top-down traversal.
     fn propagate_constraints(
         &mut self,
-        expression_request: Interval,
+        given_range: Interval,
     ) -> Result<PropagationResult> {
         let mut bfs = Bfs::new(&self.graph, self.root);
 
-        // Assign the root node as what the user expects the expression to evaluate.
-        self.graph[self.root].interval = expression_request;
+        // Adjust the root node with the given range:
+        if let Some(interval) = self.graph[self.root].interval.intersect(given_range)? {
+            self.graph[self.root].interval = interval;
+        } else {
+            return Ok(PropagationResult::Infeasible);
+        }
 
         while let Some(node) = bfs.next(&self.graph) {
             let neighbors = self.graph.neighbors_directed(node, Outgoing);
@@ -568,7 +554,7 @@ impl ExprIntervalGraph {
             if children.is_empty() {
                 continue;
             }
-            // Reverse to align with [PhysicalExpr]'s children:
+            // Reverse to align with `PhysicalExpr`'s children:
             children.reverse();
             let children_intervals = children
                 .iter()
@@ -595,28 +581,24 @@ impl ExprIntervalGraph {
     pub fn update_ranges(
         &mut self,
         leaf_bounds: &mut [(usize, Interval)],
-        expression_request: Interval,
+        given_range: Interval,
     ) -> Result<PropagationResult> {
         self.assign_intervals(leaf_bounds);
         let bounds = self.evaluate_bounds()?;
-        // There are 4 types of relation to consider for requested result and expression evaluation:
-        // 1) bounds ⊂ expression_request => CannotPropagate
-        // 2) expression_request ⊂ bounds => Success
-        // 3) Disjoint sets => Infeasible
-        // 4) Partially intersecting sets => Success
-        if expression_request.contains(bounds)? == Interval::CERTAINLY_TRUE {
-            // bounds ⊂ expression_request => CannotPropagate
+        // There are three possible cases to consider:
+        // (1) given_range ⊇ bounds => Nothing to propagate
+        // (2) ∅ ⊂ (given_range ∩ bounds) ⊂ bounds => Can propagate
+        // (3) Disjoint sets => Infeasible
+        if given_range.is_superset(bounds)? == Interval::CERTAINLY_TRUE {
+            // First case:
             Ok(PropagationResult::CannotPropagate)
-        } else if bounds.contains(&expression_request)? == Interval::CERTAINLY_TRUE
-            || bounds.contains(&expression_request)? == Interval::UNCERTAIN
-        {
-            // expression_request ⊂ bounds => Success, or
-            // Partially intersecting sets => Success
-            let result = self.propagate_constraints(expression_request);
+        } else if bounds.is_superset(&given_range)? != Interval::CERTAINLY_FALSE {
+            // Second case:
+            let result = self.propagate_constraints(given_range);
             self.update_intervals(leaf_bounds);
             result
         } else {
-            // Disjoint sets => Infeasible
+            // Third case:
             Ok(PropagationResult::Infeasible)
         }
     }
@@ -640,18 +622,17 @@ fn propagate_right(
         Operator::Plus => apply_operator(inverse_op, parent, left),
         Operator::Divide => apply_operator(op, left, parent),
         Operator::Multiply => apply_operator(inverse_op, parent, left),
-        _ => Err(DataFusionError::Internal(format!(
-            "Interval arithmetic does not support the operator {}",
-            op
-        ))),
+        _ => internal_err!("Interval arithmetic does not support the operator {}", op),
     }?
     .intersect(right)
 }
 
-/// During the propagation of [`Interval`] values on an [`ExprIntervalGraph`], if there exists a `timestamp - timestamp`
-/// operation, the result would be of type `Duration`. However, we may encounter a situation where a time interval
-/// is involved in an arithmetic operation with a `Duration` type. This function offers special handling for such cases,
-/// where the time interval resides on the left side of the operation.
+/// During the propagation of [`Interval`] values on an [`ExprIntervalGraph`],
+/// if there exists a `timestamp - timestamp` operation, the result would be
+/// of type `Duration`. However, we may encounter a situation where a time interval
+/// is involved in an arithmetic operation with a `Duration` type. This function
+/// offers special handling for such cases, where the time interval resides on
+/// the left side of the operation.
 fn propagate_time_interval_at_left(
     left_child: &Interval,
     right_child: &Interval,
@@ -661,32 +642,33 @@ fn propagate_time_interval_at_left(
 ) -> Result<Option<(Interval, Interval)>> {
     // We check if the child's time interval(s) has a non-zero month or day field(s).
     // If so, we return it as is without propagating. Otherwise, we first convert
-    // the time intervals to the Duration type, then propagate, and then convert the bounds to time intervals again.
-    if let Some(duration) = convert_interval_type_to_duration(left_child) {
+    // the time intervals to the `Duration` type, then propagate, and then convert
+    // the bounds to time intervals again.
+    let result = if let Some(duration) = convert_interval_type_to_duration(left_child) {
         match apply_operator(inverse_op, parent, right_child)?.intersect(duration)? {
             Some(value) => {
+                let left = convert_duration_type_to_interval(&value);
                 let right = propagate_right(&value, parent, right_child, op, inverse_op)?;
-                let new_interval = convert_duration_type_to_interval(&value);
-                match (new_interval, right) {
-                    (Some(left), Some(right)) => Ok(Some((left, right))),
-                    _ => Ok(None),
+                match (left, right) {
+                    (Some(left), Some(right)) => Some((left, right)),
+                    _ => None,
                 }
             }
-            None => Ok(None),
+            None => None,
         }
-    } else if let Some(right) =
-        propagate_right(left_child, parent, right_child, op, inverse_op)?
-    {
-        Ok(Some((left_child.clone(), right)))
     } else {
-        Ok(None)
-    }
+        propagate_right(left_child, parent, right_child, op, inverse_op)?
+            .map(|right| (left_child.clone(), right))
+    };
+    Ok(result)
 }
 
-/// During the propagation of [`Interval`] values on an [`ExprIntervalGraph`], if there exists a `timestamp - timestamp`
-/// operation, the result would be of type `Duration`. However, we may encounter a situation where a time interval
-/// is involved in an arithmetic operation with a `Duration` type. This function offers special handling for such cases,
-/// where the time interval resides on the right side of the operation.
+/// During the propagation of [`Interval`] values on an [`ExprIntervalGraph`],
+/// if there exists a `timestamp - timestamp` operation, the result would be
+/// of type `Duration`. However, we may encounter a situation where a time interval
+/// is involved in an arithmetic operation with a `Duration` type. This function
+/// offers special handling for such cases, where the time interval resides on
+/// the right side of the operation.
 fn propagate_time_interval_at_right(
     left_child: &Interval,
     right_child: &Interval,
@@ -696,39 +678,40 @@ fn propagate_time_interval_at_right(
 ) -> Result<Option<(Interval, Interval)>> {
     // We check if the child's time interval(s) has a non-zero month or day field(s).
     // If so, we return it as is without propagating. Otherwise, we first convert
-    // the time intervals to the Duration type, then propagate, and then convert the bounds to time intervals again.
-    if let Some(duration) = convert_interval_type_to_duration(right_child) {
+    // the time intervals to the `Duration` type, then propagate, and then convert
+    // the bounds to time intervals again.
+    let result = if let Some(duration) = convert_interval_type_to_duration(right_child) {
         match apply_operator(inverse_op, parent, &duration)?.intersect(left_child)? {
             Some(value) => {
-                let right =
-                    propagate_right(left_child, parent, &duration, op, inverse_op)?;
-                if let Some(right) =
-                    right.and_then(|right| convert_duration_type_to_interval(&right))
-                {
-                    Ok(Some((value, right)))
-                } else {
-                    Ok(None)
-                }
+                propagate_right(left_child, parent, &duration, op, inverse_op)?
+                    .and_then(|right| convert_duration_type_to_interval(&right))
+                    .map(|right| (value, right))
             }
-            None => Ok(None),
+            None => None,
         }
     } else {
-        match apply_operator(inverse_op, parent, right_child)?.intersect(left_child)? {
-            Some(value) => Ok(Some((value, right_child.clone()))),
-            None => Ok(None),
-        }
-    }
+        apply_operator(inverse_op, parent, right_child)?
+            .intersect(left_child)?
+            .map(|value| (value, right_child.clone()))
+    };
+    Ok(result)
 }
+
+fn reverse_tuple<T, U>((first, second): (T, U)) -> (U, T) {
+    (second, first)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_schema::{DataType, Field};
-    use itertools::Itertools;
-
     use crate::expressions::{BinaryExpr, Column};
     use crate::intervals::test_utils::gen_conjunctive_numerical_expr;
+
     use arrow::datatypes::TimeUnit;
+    use arrow_schema::{DataType, Field};
     use datafusion_common::ScalarValue;
+
+    use itertools::Itertools;
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};
     use rstest::*;
@@ -838,22 +821,10 @@ mod tests {
                 experiment(
                     expr,
                     (left_col.clone(), right_col.clone()),
-                    Interval::try_new(
-                        ScalarValue::try_from(left_given.0).unwrap(),
-                        ScalarValue::try_from(left_given.1).unwrap(),
-                    )?,
-                    Interval::try_new(
-                        ScalarValue::try_from(right_given.0).unwrap(),
-                        ScalarValue::try_from(right_given.1).unwrap(),
-                    )?,
-                    Interval::try_new(
-                        ScalarValue::try_from(left_expected.0).unwrap(),
-                        ScalarValue::try_from(left_expected.1).unwrap(),
-                    )?,
-                    Interval::try_new(
-                        ScalarValue::try_from(right_expected.0).unwrap(),
-                        ScalarValue::try_from(right_expected.1).unwrap(),
-                    )?,
+                    Interval::make(left_given.0, left_given.1).unwrap(),
+                    Interval::make(right_given.0, right_given.1).unwrap(),
+                    Interval::make(left_expected.0, left_expected.1).unwrap(),
+                    Interval::make(right_expected.0, right_expected.1).unwrap(),
                     PropagationResult::Success,
                     &Schema::new(vec![
                         Field::new(
@@ -891,10 +862,7 @@ mod tests {
         experiment(
             expr,
             (left_col.clone(), right_col.clone()),
-            Interval::try_new(
-                ScalarValue::Int32(Some(10)),
-                ScalarValue::Int32(Some(20)),
-            )?,
+            Interval::make(Some(10_i32), Some(20_i32))?,
             Interval::make(Some(100), None)?,
             Interval::make(Some(10), Some(20))?,
             Interval::make(Some(100), None)?,
@@ -1501,20 +1469,11 @@ mod tests {
         // `right` is known to be [1000,1000]
         // so `left` < `right` results in no new knowledge of `right` but knowing that `left` is now < 1000:` [?, 999]
         let left = Interval::make_unbounded(&DataType::Int64)?;
-        let right = Interval::try_new(
-            ScalarValue::Int64(Some(1000)),
-            ScalarValue::Int64(Some(1000)),
-        )?;
+        let right = Interval::make(Some(1000_i64), Some(1000_i64))?;
         assert_eq!(
             (Some((
-                Interval::try_new(
-                    ScalarValue::try_from(&DataType::Int64)?,
-                    ScalarValue::Int64(Some(999))
-                )?,
-                Interval::try_new(
-                    ScalarValue::Int64(Some(1000)),
-                    ScalarValue::Int64(Some(1000))
-                )?
+                Interval::make(None, Some(999_i64))?,
+                Interval::make(Some(1000_i64), Some(1000_i64))?,
             ))),
             propagate_comparison(
                 &Operator::Lt,

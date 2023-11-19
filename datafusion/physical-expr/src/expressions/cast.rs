@@ -24,11 +24,9 @@ use crate::physical_expr::down_cast_any_ref;
 use crate::sort_properties::SortProperties;
 use crate::PhysicalExpr;
 
-use arrow::compute;
-use arrow::compute::{kernels, CastOptions};
+use arrow::compute::{can_cast_types, kernels, CastOptions};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use compute::can_cast_types;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion_common::{not_impl_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
@@ -226,6 +224,7 @@ pub fn cast(
 mod tests {
     use super::*;
     use crate::expressions::col;
+
     use arrow::{
         array::{
             Array, Decimal128Array, Float32Array, Float64Array, Int16Array, Int32Array,
@@ -234,6 +233,7 @@ mod tests {
         },
         datatypes::*,
     };
+
     use datafusion_common::Result;
 
     // runs an end-to-end test of physical type cast

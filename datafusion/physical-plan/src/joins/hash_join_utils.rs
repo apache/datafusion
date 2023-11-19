@@ -442,7 +442,7 @@ pub fn build_filter_input_order(
     let opt_expr = convert_sort_expr_with_filter_schema(&side, filter, schema, order)?;
     opt_expr
         .map(|filter_expr| {
-            SortedFilterExpr::new(order.clone(), filter_expr, filter.schema())
+            SortedFilterExpr::try_new(order.clone(), filter_expr, filter.schema())
         })
         .transpose()
 }
@@ -487,7 +487,7 @@ pub struct SortedFilterExpr {
 
 impl SortedFilterExpr {
     /// Constructor
-    pub fn new(
+    pub fn try_new(
         origin_sorted_expr: PhysicalSortExpr,
         filter_expr: Arc<dyn PhysicalExpr>,
         filter_schema: &Schema,
@@ -749,18 +749,19 @@ pub fn record_visited_indices<T: ArrowPrimitiveType>(
 
 #[cfg(test)]
 pub mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::{
-        expressions::Column,
-        expressions::PhysicalSortExpr,
+        expressions::{Column, PhysicalSortExpr},
         joins::utils::{ColumnIndex, JoinFilter},
     };
+
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::{JoinSide, ScalarValue};
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{binary, cast, col, lit};
-    use std::sync::Arc;
 
     /// Filter expr for a + b > c + 10 AND a + b < c + 100
     pub(crate) fn complicated_filter(

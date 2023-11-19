@@ -17,9 +17,14 @@
 
 //! Negation (-) expression
 
+use std::any::Any;
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+
 use crate::physical_expr::down_cast_any_ref;
 use crate::sort_properties::SortProperties;
 use crate::PhysicalExpr;
+
 use arrow::{
     compute::kernels::numeric::neg_wrapping,
     datatypes::{DataType, Schema},
@@ -31,10 +36,6 @@ use datafusion_expr::{
     type_coercion::{is_interval, is_null, is_signed_numeric},
     ColumnarValue,
 };
-
-use std::any::Any;
-use std::hash::{Hash, Hasher};
-use std::sync::Arc;
 
 /// Negative expression
 #[derive(Debug, Hash)]
@@ -171,13 +172,14 @@ pub fn negative(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::col;
-    use crate::expressions::Column;
+    use crate::expressions::{col, Column};
+
     use arrow::array::*;
     use arrow::datatypes::*;
     use arrow_schema::DataType::{Float32, Float64, Int16, Int32, Int64, Int8};
-    use datafusion_common::ScalarValue;
-    use datafusion_common::{cast::as_primitive_array, Result};
+    use datafusion_common::cast::as_primitive_array;
+    use datafusion_common::Result;
+
     use paste::paste;
 
     macro_rules! test_array_negative_op {
@@ -221,14 +223,8 @@ mod tests {
         let negative_expr = NegativeExpr {
             arg: Arc::new(Column::new("a", 0)),
         };
-        let child_interval = Interval::try_new(
-            ScalarValue::try_from(Some(-2)).unwrap(),
-            ScalarValue::try_from(Some(1)).unwrap(),
-        )?;
-        let negative_expr_interval = Interval::try_new(
-            ScalarValue::try_from(Some(-1)).unwrap(),
-            ScalarValue::try_from(Some(2)).unwrap(),
-        )?;
+        let child_interval = Interval::make(Some(-2), Some(1))?;
+        let negative_expr_interval = Interval::make(Some(-1), Some(2))?;
         assert_eq!(
             negative_expr.evaluate_bounds(&[&child_interval])?,
             negative_expr_interval

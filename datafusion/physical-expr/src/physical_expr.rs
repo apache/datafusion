@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 use crate::sort_properties::SortProperties;
 use crate::utils::scatter;
+
 use arrow::array::BooleanArray;
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, Schema};
@@ -106,7 +107,7 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
     ///
     /// A Vec of new intervals for the children, in order.
     ///
-    /// If constraint propagation reveals an infeasibility for any child, returns [None].
+    /// If constraint propagation reveals an infeasibility for any child, returns [`None`].
     ///
     /// If none of the child intervals change as a result of propagation, may
     /// return an empty vector instead of cloning `children`.

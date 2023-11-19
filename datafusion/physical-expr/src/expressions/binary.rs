@@ -346,8 +346,8 @@ impl PhysicalExpr for BinaryExpr {
 
         if self.op.eq(&Operator::And) {
             if interval.eq(&Interval::CERTAINLY_TRUE) {
-                // CERTAINLY_TRUE propagation of And operator to
-                // CERTAINLY_FALSE children is infeasible.
+                // A certainly true conjunction can not derive from certainly
+                // false operands, implying infeasability:
                 if left_interval.eq(&Interval::CERTAINLY_FALSE)
                     || right_interval.eq(&Interval::CERTAINLY_FALSE)
                 {
@@ -358,12 +358,13 @@ impl PhysicalExpr for BinaryExpr {
                     Interval::CERTAINLY_TRUE,
                 ]))
             } else {
-                // TODO: Other expectations of AND. It may be expected to return false.
+                // TODO: Other expectations of AND. It may be expected to return
+                //       false.
                 Ok(None)
             }
         }
-        // TODO: Other logical operators.
-        // False expected OR operator could be a meaningful implementation as the next step.
+        // TODO: Other logical operators. False expected OR operator could be a
+        //       meaningful implementation as the next step.
         else if self.op.is_comparison_operator() {
             Ok(
                 propagate_comparison(&self.op, interval, left_interval, right_interval)?

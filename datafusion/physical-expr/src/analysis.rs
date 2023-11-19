@@ -135,28 +135,26 @@ pub fn analyze(
 ) -> Result<AnalysisContext> {
     let target_boundaries = context.boundaries;
 
-    let columns: Vec<Arc<dyn PhysicalExpr>> = collect_columns(expr)
-        .into_iter()
-        .map(|c| Arc::new(c) as Arc<dyn PhysicalExpr>)
-        .collect();
-
     let mut graph = ExprIntervalGraph::try_new(expr.clone(), schema)?;
 
-    let target_expr_and_indices: Vec<(Arc<dyn PhysicalExpr>, usize)> =
-        graph.gather_node_indices(columns.as_slice());
+    let columns = collect_columns(expr)
+        .into_iter()
+        .map(|c| Arc::new(c) as _)
+        .collect::<Vec<_>>();
 
-    let mut target_indices_and_boundaries: Vec<(usize, Interval)> =
-        target_expr_and_indices
-            .iter()
-            .filter_map(|(expr, i)| {
-                target_boundaries.iter().find_map(|bound| {
-                    expr.as_any()
-                        .downcast_ref::<Column>()
-                        .filter(|expr_column| bound.column.eq(*expr_column))
-                        .map(|_| (*i, bound.interval.clone()))
-                })
+    let target_expr_and_indices = graph.gather_node_indices(columns.as_slice());
+
+    let mut target_indices_and_boundaries = target_expr_and_indices
+        .iter()
+        .filter_map(|(expr, i)| {
+            target_boundaries.iter().find_map(|bound| {
+                expr.as_any()
+                    .downcast_ref::<Column>()
+                    .filter(|expr_column| bound.column.eq(*expr_column))
+                    .map(|_| (*i, bound.interval.clone()))
             })
-            .collect();
+        })
+        .collect::<Vec<_>>();
 
     match graph
         .update_ranges(&mut target_indices_and_boundaries, Interval::CERTAINLY_TRUE)?
@@ -194,10 +192,7 @@ fn shrink_boundaries(
         }
     });
 
-    // If during selectivity calculation we encounter an error, use 1.0 as
-    // the safest selectivity estimate.
-    let selectivity =
-        calculate_selectivity(&target_boundaries, &initial_boundaries).unwrap_or(1.0);
+    let selectivity = calculate_selectivity(&target_boundaries, &initial_boundaries);
 
     if !(0.0..=1.0).contains(&selectivity) {
         return internal_err!("Selectivity is out of limit: {}", selectivity);
@@ -212,15 +207,14 @@ fn shrink_boundaries(
 fn calculate_selectivity(
     target_boundaries: &[ExprBoundaries],
     initial_boundaries: &[ExprBoundaries],
-) -> Result<f64> {
+) -> f64 {
     // Since the intervals are assumed uniform and the values
     // are not correlated, we need to multiply the selectivities
     // of multiple columns to get the overall selectivity.
-    target_boundaries.iter().enumerate().try_fold(
-        1.0,
-        |acc, (i, ExprBoundaries { interval, .. })| {
-            let temp = cardinality_ratio(&initial_boundaries[i].interval, interval)?;
-            Ok(acc * temp)
-        },
-    )
+    initial_boundaries
+        .iter()
+        .zip(target_boundaries.iter())
+        .fold(1.0, |acc, (initial, target)| {
+            acc * cardinality_ratio(&initial.interval, &target.interval)
+        })
 }

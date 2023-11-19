@@ -17,6 +17,9 @@
 
 //! This file has test utils for hash joins
 
+use std::sync::Arc;
+use std::usize;
+
 use crate::joins::utils::{JoinFilter, JoinOn};
 use crate::joins::{
     HashJoinExec, PartitionMode, StreamJoinPartitionMode, SymmetricHashJoinExec,
@@ -24,24 +27,23 @@ use crate::joins::{
 use crate::memory::MemoryExec;
 use crate::repartition::RepartitionExec;
 use crate::{common, ExecutionPlan, Partitioning};
+
 use arrow::util::pretty::pretty_format_batches;
 use arrow_array::{
     ArrayRef, Float64Array, Int32Array, IntervalDayTimeArray, RecordBatch,
     TimestampMillisecondArray,
 };
 use arrow_schema::Schema;
-use datafusion_common::Result;
-use datafusion_common::ScalarValue;
+use datafusion_common::{Result, ScalarValue};
 use datafusion_execution::TaskContext;
 use datafusion_expr::{JoinType, Operator};
 use datafusion_physical_expr::intervals::test_utils::{
     gen_conjunctive_numerical_expr, gen_conjunctive_temporal_expr,
 };
 use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
+
 use rand::prelude::StdRng;
 use rand::{Rng, SeedableRng};
-use std::sync::Arc;
-use std::usize;
 
 pub fn compare_batches(collected_1: &[RecordBatch], collected_2: &[RecordBatch]) {
     // compare

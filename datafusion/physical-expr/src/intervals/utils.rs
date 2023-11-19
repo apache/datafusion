@@ -25,7 +25,9 @@ use crate::{
 };
 
 use arrow_schema::{DataType, SchemaRef};
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    internal_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::Operator;
 
@@ -72,10 +74,7 @@ pub fn get_inverse_op(op: Operator) -> Result<Operator> {
         Operator::Minus => Ok(Operator::Plus),
         Operator::Multiply => Ok(Operator::Divide),
         Operator::Divide => Ok(Operator::Multiply),
-        _ => Err(DataFusionError::Internal(format!(
-            "Interval arithmetic does not support the operator {}",
-            op
-        ))),
+        _ => internal_err!("Interval arithmetic does not support the operator {}", op),
     }
 }
 
@@ -181,14 +180,13 @@ fn interval_mdn_to_duration_ns(mdn: &i128) -> Result<i64> {
     let nanoseconds = mdn & MDN_NS_MASK;
 
     if months == 0 && days == 0 {
-        nanoseconds.try_into().map_err(|_| {
-            DataFusionError::Internal("Resulting duration exceeds i64::MAX".to_string())
-        })
+        nanoseconds
+            .try_into()
+            .map_err(|_| internal_datafusion_err!("Resulting duration exceeds i64::MAX"))
     } else {
-        Err(DataFusionError::Internal(
+        internal_err!(
             "The interval cannot have a non-zero month or day value for duration convertibility"
-                .to_string(),
-        ))
+        )
     }
 }
 
@@ -201,9 +199,8 @@ fn interval_dt_to_duration_ms(dt: &i64) -> Result<i64> {
     if days == 0 {
         Ok(milliseconds)
     } else {
-        Err(DataFusionError::Internal(
+        internal_err!(
             "The interval cannot have a non-zero day value for duration convertibility"
-                .to_string(),
-        ))
+        )
     }
 }

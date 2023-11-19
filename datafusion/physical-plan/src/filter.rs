@@ -27,7 +27,6 @@ use super::expressions::PhysicalSortExpr;
 use super::{
     ColumnStatistics, DisplayAs, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
-
 use crate::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
     Column, DisplayFormatType, ExecutionPlan, Partitioning,

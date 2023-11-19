@@ -30,6 +30,104 @@ use arrow::datatypes::{IntervalUnit, TimeUnit};
 use datafusion_common::rounding::{alter_fp_rounding_mode, next_down, next_up};
 use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 
+macro_rules! get_extreme_value {
+    ($extreme:ident, $value:expr) => {
+        match $value {
+            DataType::UInt8 => ScalarValue::UInt8(Some(u8::$extreme)),
+            DataType::UInt16 => ScalarValue::UInt16(Some(u16::$extreme)),
+            DataType::UInt32 => ScalarValue::UInt32(Some(u32::$extreme)),
+            DataType::UInt64 => ScalarValue::UInt64(Some(u64::$extreme)),
+            DataType::Int8 => ScalarValue::Int8(Some(i8::$extreme)),
+            DataType::Int16 => ScalarValue::Int16(Some(i16::$extreme)),
+            DataType::Int32 => ScalarValue::Int32(Some(i32::$extreme)),
+            DataType::Int64 => ScalarValue::Int64(Some(i64::$extreme)),
+            DataType::Float32 => ScalarValue::Float32(Some(f32::$extreme)),
+            DataType::Float64 => ScalarValue::Float64(Some(f64::$extreme)),
+            DataType::Duration(TimeUnit::Second) => {
+                ScalarValue::DurationSecond(Some(i64::$extreme))
+            }
+            DataType::Duration(TimeUnit::Millisecond) => {
+                ScalarValue::DurationMillisecond(Some(i64::$extreme))
+            }
+            DataType::Duration(TimeUnit::Microsecond) => {
+                ScalarValue::DurationMicrosecond(Some(i64::$extreme))
+            }
+            DataType::Duration(TimeUnit::Nanosecond) => {
+                ScalarValue::DurationNanosecond(Some(i64::$extreme))
+            }
+            DataType::Timestamp(TimeUnit::Second, _) => {
+                ScalarValue::TimestampSecond(Some(i64::$extreme), None)
+            }
+            DataType::Timestamp(TimeUnit::Millisecond, _) => {
+                ScalarValue::TimestampMillisecond(Some(i64::$extreme), None)
+            }
+            DataType::Timestamp(TimeUnit::Microsecond, _) => {
+                ScalarValue::TimestampMicrosecond(Some(i64::$extreme), None)
+            }
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                ScalarValue::TimestampNanosecond(Some(i64::$extreme), None)
+            }
+            DataType::Interval(IntervalUnit::YearMonth) => {
+                ScalarValue::IntervalYearMonth(Some(i32::$extreme))
+            }
+            DataType::Interval(IntervalUnit::DayTime) => {
+                ScalarValue::IntervalDayTime(Some(i64::$extreme))
+            }
+            DataType::Interval(IntervalUnit::MonthDayNano) => {
+                ScalarValue::IntervalMonthDayNano(Some(i128::$extreme))
+            }
+            _ => unreachable!(),
+        }
+    };
+}
+
+macro_rules! value_transition {
+    ($bound:ident, $direction:expr, $value:expr) => {
+        match $value {
+            UInt8(Some(value)) if value == u8::$bound => UInt8(None),
+            UInt16(Some(value)) if value == u16::$bound => UInt16(None),
+            UInt32(Some(value)) if value == u32::$bound => UInt32(None),
+            UInt64(Some(value)) if value == u64::$bound => UInt64(None),
+            Int8(Some(value)) if value == i8::$bound => Int8(None),
+            Int16(Some(value)) if value == i16::$bound => Int16(None),
+            Int32(Some(value)) if value == i32::$bound => Int32(None),
+            Int64(Some(value)) if value == i64::$bound => Int64(None),
+            Float32(Some(value)) if value == f32::$bound => Float32(None),
+            Float64(Some(value)) if value == f64::$bound => Float64(None),
+            DurationSecond(Some(value)) if value == i64::$bound => DurationSecond(None),
+            DurationMillisecond(Some(value)) if value == i64::$bound => {
+                DurationMillisecond(None)
+            }
+            DurationMicrosecond(Some(value)) if value == i64::$bound => {
+                DurationMicrosecond(None)
+            }
+            DurationNanosecond(Some(value)) if value == i64::$bound => {
+                DurationNanosecond(None)
+            }
+            TimestampSecond(Some(value), tz) if value == i64::$bound => {
+                TimestampSecond(None, tz)
+            }
+            TimestampMillisecond(Some(value), tz) if value == i64::$bound => {
+                TimestampMillisecond(None, tz)
+            }
+            TimestampMicrosecond(Some(value), tz) if value == i64::$bound => {
+                TimestampMicrosecond(None, tz)
+            }
+            TimestampNanosecond(Some(value), tz) if value == i64::$bound => {
+                TimestampNanosecond(None, tz)
+            }
+            IntervalYearMonth(Some(value)) if value == i32::$bound => {
+                IntervalYearMonth(None)
+            }
+            IntervalDayTime(Some(value)) if value == i64::$bound => IntervalDayTime(None),
+            IntervalMonthDayNano(Some(value)) if value == i128::$bound => {
+                IntervalMonthDayNano(None)
+            }
+            _ => next_value_helper::<$direction>($value),
+        }
+    };
+}
+
 /// The `Interval` type represents a closed interval used for computing
 /// reliable bounds for mathematical expressions.
 ///
@@ -144,9 +242,7 @@ impl Interval {
     ///     to `NULL`s.
     pub fn try_new(lower: ScalarValue, upper: ScalarValue) -> Result<Self> {
         if lower.data_type() != upper.data_type() {
-            return internal_err!(
-                "Bounds must have the same datatype to create a valid interval"
-            );
+            return internal_err!("Endpoints of an Interval should have the same type");
         }
 
         let interval = Self::new(lower, upper);
@@ -207,16 +303,6 @@ impl Interval {
     pub fn make_unbounded(data_type: &DataType) -> Result<Self> {
         let unbounded_endpoint = ScalarValue::try_from(data_type)?;
         Ok(Self::new(unbounded_endpoint.clone(), unbounded_endpoint))
-    }
-
-    /// Only for internal usage. Creates a new `Interval` from the given bounds.
-    /// It doesn't validate the given bounds for ordering. For its user-facing
-    /// counterpart, see [`Interval::make`].
-    fn make_private<T>(lower: Option<T>, upper: Option<T>) -> Self
-    where
-        ScalarValue: From<Option<T>>,
-    {
-        Self::new(ScalarValue::from(lower), ScalarValue::from(upper))
     }
 
     /// Returns a reference to the lower bound.
@@ -280,13 +366,14 @@ impl Interval {
     /// or can't be greater than `other` by returning `[true, true]`,
     /// `[false, true]` or `[false, false]` respectively.
     ///
-    /// Note: This function only works with intervals of the same datatype.
-    /// Attempting to compare intervals of different datatypes will lead to an error.
+    /// NOTE: This function only works with intervals of the same data type.
+    ///       Attempting to compare intervals of different data types will lead
+    ///       to an error.
     pub(crate) fn gt<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
         if self.data_type().ne(&rhs.data_type()) {
             internal_err!(
-                "Intervals must have the same datatype to be compared, lhs:{}, rhs:{}",
+                "Only intervals with the same data type are comparable, lhs:{}, rhs:{}",
                 self.data_type(),
                 rhs.data_type()
             )
@@ -312,13 +399,14 @@ impl Interval {
     /// greater than or equal to, or can't be greater than or equal to `other`
     /// by returning `[true, true]`, `[false, true]` or `[false, false]` respectively.
     ///
-    /// Note: This function only works with intervals of the same datatype.
-    /// Attempting to compare intervals of different datatypes will lead to an error.
+    /// NOTE: This function only works with intervals of the same data type.
+    ///       Attempting to compare intervals of different data types will lead
+    ///       to an error.
     pub(crate) fn gt_eq<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
         if self.data_type().ne(&rhs.data_type()) {
             internal_err!(
-                "Intervals must have the same datatype to be compared, lhs:{}, rhs:{}",
+                "Only intervals with the same data type are comparable, lhs:{}, rhs:{}",
                 self.data_type(),
                 rhs.data_type()
             )
@@ -344,8 +432,9 @@ impl Interval {
     /// can't be less than `other` by returning `[true, true]`, `[false, true]`
     /// or `[false, false]` respectively.
     ///
-    /// Note: This function only works with intervals of the same datatype.
-    /// Attempting to compare intervals of different datatypes will lead to an error.
+    /// NOTE: This function only works with intervals of the same data type.
+    ///       Attempting to compare intervals of different data types will lead
+    ///       to an error.
     pub(crate) fn lt<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         other.borrow().gt(self)
     }
@@ -354,8 +443,9 @@ impl Interval {
     /// less than or equal to, or can't be less than or equal to `other` by
     /// returning `[true, true]`, `[false, true]` or `[false, false]` respectively.
     ///
-    /// Note: This function only works with intervals of the same datatype.
-    /// Attempting to compare intervals of different datatypes will lead to an error.
+    /// NOTE: This function only works with intervals of the same data type.
+    ///       Attempting to compare intervals of different data types will lead
+    ///       to an error.
     pub(crate) fn lt_eq<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         other.borrow().gt_eq(self)
     }
@@ -364,13 +454,16 @@ impl Interval {
     /// can't be equal to `other` by returning `[true, true]`, `[false, true]`
     /// or `[false, false]` respectively.
     ///
-    /// Note: This function only works with intervals of the same datatype.
-    /// Attempting to compare intervals of different datatypes will lead to an error.
+    /// NOTE: This function only works with intervals of the same data type.
+    ///       Attempting to compare intervals of different data types will lead
+    ///       to an error.
     pub(crate) fn equal<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
         if get_result_type(&self.data_type(), &Operator::Eq, &rhs.data_type()).is_err() {
             internal_err!(
-                "Interval datatypes must be compatible to be checked equality, lhs:{}, rhs:{}", self.data_type(), rhs.data_type()
+                "Interval data types must be compatible for equality checks, lhs:{}, rhs:{}",
+                self.data_type(),
+                rhs.data_type()
             )
         } else if !self.lower.is_null()
             && (self.lower == self.upper)
@@ -404,14 +497,14 @@ impl Interval {
                     upper: ScalarValue::Boolean(Some(upper)),
                 })
             }
-            _ => internal_err!("Incompatible types for logical AND operator"),
+            _ => internal_err!("Incompatible data types for logical conjunction"),
         }
     }
 
     /// Compute the logical negation of this (boolean) interval.
     pub(crate) fn not(&self) -> Result<Self> {
         if self.data_type().ne(&DataType::Boolean) {
-            internal_err!("Cannot apply logical negation to non-boolean interval")
+            internal_err!("Cannot apply logical negation to a non-boolean interval")
         } else if self == &Self::CERTAINLY_TRUE {
             Ok(Self::CERTAINLY_FALSE)
         } else if self == &Self::CERTAINLY_FALSE {
@@ -424,13 +517,16 @@ impl Interval {
     /// Compute the intersection of this interval with the given interval.
     /// If the intersection is empty, return `None`.
     ///
-    /// Note: This function only works with intervals of the same datatype.
-    /// Attempting to compare intervals of different datatypes will lead to an error.
+    /// NOTE: This function only works with intervals of the same data type.
+    ///       Attempting to compare intervals of different data types will lead
+    ///       to an error.
     pub fn intersect<T: Borrow<Self>>(&self, other: T) -> Result<Option<Self>> {
         let rhs = other.borrow();
         if self.data_type().ne(&rhs.data_type()) {
             return internal_err!(
-                "Intervals must have the same datatype to check intersection, lhs:{}, rhs:{}", self.data_type(), rhs.data_type()
+                "Only intervals with the same data type are intersectable, lhs:{}, rhs:{}",
+                self.data_type(),
+                rhs.data_type()
             );
         };
 
@@ -448,23 +544,48 @@ impl Interval {
         // New lower and upper bounds must always construct a valid interval.
         assert!(
             (lower.is_null() || upper.is_null() || (lower <= upper)),
-            "Result of the intersection of two intervals cannot be an invalid interval"
+            "The intersection of two intervals can not be an invalid interval"
         );
 
         Ok(Some(Self { lower, upper }))
     }
 
-    /// Decide if this interval is certainly contains, possibly contains, or
-    /// can't contain `other` by returning `[true, true]`, `[false, true]` or
+    /// Decide if this interval certainly contains, possibly contains, or can't
+    /// contain `other` by returning `[true, true]`, `[false, true]` or
     /// `[false, false]` respectively.
     ///
-    /// Note: This function only works with intervals of the same datatype.
-    /// Attempting to compare intervals of different datatypes will lead to an error.
-    pub fn contains<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
+    /// NOTE: This function only works with intervals of the same data type.
+    ///       Attempting to compare intervals of different data types will lead
+    ///       to an error.
+    pub fn contains<T: Borrow<ScalarValue>>(&self, other: T) -> Result<bool> {
         let rhs = other.borrow();
         if self.data_type().ne(&rhs.data_type()) {
             return internal_err!(
-                "Intervals must have the same datatype to check containment, lhs:{}, rhs:{}", self.data_type(), rhs.data_type()
+                "Data types must be compatible for containment checks, lhs:{}, rhs:{}",
+                self.data_type(),
+                rhs.data_type()
+            );
+        }
+
+        // We only check the upper bound for a `None` value because `None`
+        // values are less than `Some` values according to Rust.
+        Ok(&self.lower <= rhs && (self.upper.is_null() || rhs <= &self.upper))
+    }
+
+    /// Decide if this interval is certainly a superset of, possibly a superset
+    /// of, or can't be a superset of `other` by returning `[true, true]`,
+    /// `[false, true]` or `[false, false]` respectively.
+    ///
+    /// NOTE: This function only works with intervals of the same data type.
+    ///       Attempting to compare intervals of different data types will lead
+    ///       to an error.
+    pub fn is_superset<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
+        let rhs = other.borrow();
+        if self.data_type().ne(&rhs.data_type()) {
+            return internal_err!(
+                "Interval data types must match for containment checks, lhs:{}, rhs:{}",
+                self.data_type(),
+                rhs.data_type()
             );
         };
 
@@ -515,36 +636,36 @@ impl Interval {
     /// Note that this represents all possible values the product can take if
     /// one can choose single values arbitrarily from each of the operands.
     ///
-    /// Note: This function only works with intervals of the same datatype.
-    /// Attempting to compare intervals of different datatypes will lead to an error.
+    /// NOTE: This function only works with intervals of the same data type.
+    ///       Attempting to compare intervals of different data types will lead
+    ///       to an error.
     pub fn mul<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
         let dt = if self.data_type().eq(&rhs.data_type()) {
             self.data_type()
         } else {
             return internal_err!(
-                "Intervals must have the same datatype for multiplication operation, lhs:{}, rhs:{}",
+                "Intervals must have the same data type for multiplication, lhs:{}, rhs:{}",
                 self.data_type(),
                 rhs.data_type()
             );
         };
 
-        let zero_point =
-            Self::new(ScalarValue::new_zero(&dt)?, ScalarValue::new_zero(&dt)?);
+        let zero = ScalarValue::new_zero(&dt)?;
 
         let result = match (
-            Self::CERTAINLY_TRUE == self.contains(&zero_point)?,
-            Self::CERTAINLY_TRUE == rhs.contains(&zero_point)?,
+            self.contains(&zero)?,
+            rhs.contains(&zero)?,
             dt.is_unsigned_integer(),
         ) {
             (true, true, false) => mul_helper_multi_zero_inclusive(&dt, self, rhs),
             (true, false, false) => {
-                mul_helper_single_zero_inclusive(&dt, self, rhs, &zero_point)
+                mul_helper_single_zero_inclusive(&dt, self, rhs, zero)
             }
             (false, true, false) => {
-                mul_helper_single_zero_inclusive(&dt, rhs, self, &zero_point)
+                mul_helper_single_zero_inclusive(&dt, rhs, self, zero)
             }
-            _ => mul_helper_zero_exclusive(&dt, self, rhs, &zero_point),
+            _ => mul_helper_zero_exclusive(&dt, self, rhs, zero),
         };
         Ok(result)
     }
@@ -555,18 +676,19 @@ impl Interval {
     /// all possible values the quotient can take if one can choose single values
     /// arbitrarily from each of the operands.
     ///
-    /// Note: This function only works with intervals of the same datatype.
-    /// Attempting to compare intervals of different datatypes will lead to an error.
+    /// NOTE: This function only works with intervals of the same data type.
+    ///       Attempting to compare intervals of different data types will lead
+    ///       to an error.
     ///
     /// **TODO**: Once interval sets are supported, cases where the divisor contains
-    ///           0 should result in an interval set, not the universal set.
+    ///           zero should result in an interval set, not the universal set.
     pub fn div<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
         let dt = if self.data_type().eq(&rhs.data_type()) {
             self.data_type()
         } else {
             return internal_err!(
-                "Intervals must have the same datatype for division operation, lhs:{}, rhs:{}",
+                "Intervals must have the same data type for division, lhs:{}, rhs:{}",
                 self.data_type(),
                 rhs.data_type()
             );
@@ -575,20 +697,20 @@ impl Interval {
         let zero = ScalarValue::new_zero(&dt)?;
         // We want 0 to be approachable from both negative and positive sides.
         let zero_point = match &dt {
-            DataType::Float32 => Self::make_private(Some(-0.0_f32), Some(0.0_f32)),
-            DataType::Float64 => Self::make_private(Some(-0.0_f64), Some(0.0_f64)),
+            DataType::Float32 | DataType::Float64 => Self::new(zero.clone(), zero),
             _ => Self::new(prev_value(zero.clone()), next_value(zero.clone())),
         };
 
         // Exit early with an unbounded interval if zero is strictly inside the
         // right hand side:
-        if rhs.contains(&zero_point)? == Self::CERTAINLY_TRUE && !dt.is_unsigned_integer()
+        if rhs.is_superset(&zero_point)? == Self::CERTAINLY_TRUE
+            && !dt.is_unsigned_integer()
         {
             Self::make_unbounded(&dt)
         }
         // At this point, we know that only one endpoint of the right hand side
         // can be zero.
-        else if self.contains(&zero_point)? == Self::CERTAINLY_TRUE
+        else if self.is_superset(&zero_point)? == Self::CERTAINLY_TRUE
             && !dt.is_unsigned_integer()
         {
             Ok(div_helper_lhs_zero_inclusive(&dt, self, rhs, &zero_point))
@@ -768,102 +890,48 @@ fn div_bounds<const UPPER: bool>(
     .unwrap_or_else(|_| handle_overflow::<UPPER>(dt, Operator::Divide, lhs, rhs))
 }
 
-macro_rules! value_transition {
-    ($bound:ident, $direction:expr, $value:expr) => {
-        match $value {
-            UInt8(Some(value)) if value == u8::$bound => UInt8(None),
-            UInt16(Some(value)) if value == u16::$bound => UInt16(None),
-            UInt32(Some(value)) if value == u32::$bound => UInt32(None),
-            UInt64(Some(value)) if value == u64::$bound => UInt64(None),
-            Int8(Some(value)) if value == i8::$bound => Int8(None),
-            Int16(Some(value)) if value == i16::$bound => Int16(None),
-            Int32(Some(value)) if value == i32::$bound => Int32(None),
-            Int64(Some(value)) if value == i64::$bound => Int64(None),
-            Float32(Some(value)) if value == f32::$bound => Float32(None),
-            Float64(Some(value)) if value == f64::$bound => Float64(None),
-            DurationSecond(Some(value)) if value == i64::$bound => DurationSecond(None),
-            DurationMillisecond(Some(value)) if value == i64::$bound => {
-                DurationMillisecond(None)
-            }
-            DurationMicrosecond(Some(value)) if value == i64::$bound => {
-                DurationMicrosecond(None)
-            }
-            DurationNanosecond(Some(value)) if value == i64::$bound => {
-                DurationNanosecond(None)
-            }
-            TimestampSecond(Some(value), tz) if value == i64::$bound => {
-                TimestampSecond(None, tz)
-            }
-            TimestampMillisecond(Some(value), tz) if value == i64::$bound => {
-                TimestampMillisecond(None, tz)
-            }
-            TimestampMicrosecond(Some(value), tz) if value == i64::$bound => {
-                TimestampMicrosecond(None, tz)
-            }
-            TimestampNanosecond(Some(value), tz) if value == i64::$bound => {
-                TimestampNanosecond(None, tz)
-            }
-            IntervalYearMonth(Some(value)) if value == i32::$bound => {
-                IntervalYearMonth(None)
-            }
-            IntervalDayTime(Some(value)) if value == i64::$bound => IntervalDayTime(None),
-            IntervalMonthDayNano(Some(value)) if value == i128::$bound => {
-                IntervalMonthDayNano(None)
-            }
-            _ => next_value_helper::<$direction>($value),
+/// This function handles cases where an operation results in an overflow. Such
+/// results are converted to an *unbounded endpoint* if:
+///   - We are calculating an upper bound and we have a positive overflow.
+///   - We are calculating a lower bound and we have a negative overflow.
+/// Otherwise; the function sets the endpoint as:
+///   - The minimum representable number with the given datatype (`dt`) if
+///     we are calculating an upper bound and we have a negative overflow.
+///   - The maximum representable number with the given datatype (`dt`) if
+///     we are calculating a lower bound and we have a positive overflow.
+///
+/// **Caution:** This function contains multiple calls to `unwrap()`, and may
+/// return non-standardized interval bounds. Therefore, it should be used
+/// with caution. Currently, it is used in contexts where the `DataType`
+/// (`dt`) is validated prior to calling this function,  `op` is supported by
+/// interval library, and the following interval creation is standardized with
+/// `Interval::new`.
+fn handle_overflow<const UPPER: bool>(
+    dt: &DataType,
+    op: Operator,
+    lhs: &ScalarValue,
+    rhs: &ScalarValue,
+) -> ScalarValue {
+    let zero = ScalarValue::new_zero(dt).unwrap();
+    let positive_sign = match op {
+        Operator::Multiply | Operator::Divide => {
+            lhs.lt(&zero) && rhs.lt(&zero) || lhs.gt(&zero) && rhs.gt(&zero)
+        }
+        Operator::Plus => lhs.ge(&zero),
+        Operator::Minus => lhs.ge(rhs),
+        _ => {
+            unreachable!()
         }
     };
-}
-
-macro_rules! get_extreme_value {
-    ($extreme:ident, $value:expr) => {
-        match $value {
-            DataType::UInt8 => ScalarValue::UInt8(Some(u8::$extreme)),
-            DataType::UInt16 => ScalarValue::UInt16(Some(u16::$extreme)),
-            DataType::UInt32 => ScalarValue::UInt32(Some(u32::$extreme)),
-            DataType::UInt64 => ScalarValue::UInt64(Some(u64::$extreme)),
-            DataType::Int8 => ScalarValue::Int8(Some(i8::$extreme)),
-            DataType::Int16 => ScalarValue::Int16(Some(i16::$extreme)),
-            DataType::Int32 => ScalarValue::Int32(Some(i32::$extreme)),
-            DataType::Int64 => ScalarValue::Int64(Some(i64::$extreme)),
-            DataType::Float32 => ScalarValue::Float32(Some(f32::$extreme)),
-            DataType::Float64 => ScalarValue::Float64(Some(f64::$extreme)),
-            DataType::Duration(TimeUnit::Second) => {
-                ScalarValue::DurationSecond(Some(i64::$extreme))
-            }
-            DataType::Duration(TimeUnit::Millisecond) => {
-                ScalarValue::DurationMillisecond(Some(i64::$extreme))
-            }
-            DataType::Duration(TimeUnit::Microsecond) => {
-                ScalarValue::DurationMicrosecond(Some(i64::$extreme))
-            }
-            DataType::Duration(TimeUnit::Nanosecond) => {
-                ScalarValue::DurationNanosecond(Some(i64::$extreme))
-            }
-            DataType::Timestamp(TimeUnit::Second, _) => {
-                ScalarValue::TimestampSecond(Some(i64::$extreme), None)
-            }
-            DataType::Timestamp(TimeUnit::Millisecond, _) => {
-                ScalarValue::TimestampMillisecond(Some(i64::$extreme), None)
-            }
-            DataType::Timestamp(TimeUnit::Microsecond, _) => {
-                ScalarValue::TimestampMicrosecond(Some(i64::$extreme), None)
-            }
-            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-                ScalarValue::TimestampNanosecond(Some(i64::$extreme), None)
-            }
-            DataType::Interval(IntervalUnit::YearMonth) => {
-                ScalarValue::IntervalYearMonth(Some(i32::$extreme))
-            }
-            DataType::Interval(IntervalUnit::DayTime) => {
-                ScalarValue::IntervalDayTime(Some(i64::$extreme))
-            }
-            DataType::Interval(IntervalUnit::MonthDayNano) => {
-                ScalarValue::IntervalMonthDayNano(Some(i128::$extreme))
-            }
-            _ => unreachable!(),
+    match (UPPER, positive_sign) {
+        (true, true) | (false, false) => ScalarValue::try_from(dt).unwrap(),
+        (true, false) => {
+            get_extreme_value!(MIN, dt)
         }
-    };
+        (false, true) => {
+            get_extreme_value!(MAX, dt)
+        }
+    }
 }
 
 // This function should remain private since it may corrupt the an interval if
@@ -980,92 +1048,91 @@ fn min_of_bounds(first: &ScalarValue, second: &ScalarValue) -> ScalarValue {
     }
 }
 
-/// It either updates one or both of the intervals, or does not modify
-/// the intervals, or it can return None meaning infeasible result.
-/// op => includes_endpoints / op_gt
+/// This function updates the given intervals by enforcing (i.e. propagating)
+/// the inequality `left > right` (or the `left >= right` inequality, if `strict`
+/// is `true`).
 ///
-/// GtEq => true / true
+/// Returns a `Result` wrapping an `Option` containing the tuple of resulting
+/// intervals. If the comparison is infeasible, returns `None`.
 ///
-/// Gt => false / true
+/// Example usage:
+/// ```
+/// use datafusion_common::DataFusionError;
+/// use datafusion_expr::interval_arithmetic::{satisfy_greater, Interval};
 ///
-/// LtEq => true / false
+/// let left = Interval::make(Some(-1000.0_f32), Some(1000.0_f32))?;
+/// let right = Interval::make(Some(500.0_f32), Some(2000.0_f32))?;
+/// let strict = false;
+/// assert_eq!(
+///     satisfy_greater(&left, &right, strict)?,
+///     Some((
+///         Interval::make(Some(500.0_f32), Some(1000.0_f32))?,
+///         Interval::make(Some(500.0_f32), Some(1000.0_f32))?
+///     ))
+/// );
+/// Ok::<(), DataFusionError>(())
+/// ```
 ///
-/// Lt => false / false
-///
-/// Note: This function only works with intervals of the same datatype.
-/// Attempting to compare intervals of different datatypes will lead to an error.
-pub fn satisfy_comparison(
+/// NOTE: This function only works with intervals of the same data type.
+///       Attempting to compare intervals of different data types will lead
+///       to an error.
+pub fn satisfy_greater(
     left: &Interval,
     right: &Interval,
-    includes_endpoints: bool,
-    op_gt: bool,
+    strict: bool,
 ) -> Result<Option<(Interval, Interval)>> {
     if left.data_type().ne(&right.data_type()) {
         return internal_err!(
-            "Intervals must have the same datatype, lhs:{}, rhs:{}",
+            "Intervals must have the same data type, lhs:{}, rhs:{}",
             left.data_type(),
             right.data_type()
         );
     }
-    // The algorithm is implemented to work with Gt or GtEq operators. In case of Lt or LtEq
-    // operator, we can switch the sides at the initial and final steps.
-    let (left, right) = if op_gt { (left, right) } else { (right, left) };
 
-    if left.upper <= right.lower && !left.upper.is_null() {
-        if includes_endpoints && left.upper == right.lower {
-            // Singleton intervals
+    if !left.upper.is_null() && left.upper <= right.lower {
+        if !strict && left.upper == right.lower {
+            // Singleton intervals:
             return Ok(Some((
-                Interval::try_new(left.upper.clone(), left.upper.clone())?,
-                Interval::try_new(left.upper.clone(), left.upper.clone())?,
+                Interval::new(left.upper.clone(), left.upper.clone()),
+                Interval::new(left.upper.clone(), left.upper.clone()),
             )));
         } else {
-            // left:  <--======----0------------>
-            // right: <------------0--======---->
-            // No intersection, infeasible to propagate
+            // Left-hand side:  <--======----0------------>
+            // Right-hand side: <------------0--======---->
+            // No intersection, infeasible to propagate:
             return Ok(None);
         }
     }
 
-    // Gt operator can only change left lower bound and right upper bound.
-    let new_left_lower = if left.lower < right.lower || left.lower.is_null() {
-        if includes_endpoints {
-            right.lower.clone()
-        } else {
+    // Only the lower bound of left hand side and the upper bound of the right
+    // hand side can change after propagating the greater-than operation.
+    let new_left_lower = if left.lower.is_null() || left.lower <= right.lower {
+        if strict {
             next_value(right.lower.clone())
+        } else {
+            right.lower.clone()
         }
-    } else if (left.lower == right.lower) && includes_endpoints {
-        right.lower.clone()
-    } else if (left.lower == right.lower) && !includes_endpoints {
-        next_value(right.lower.clone())
     } else {
-        left.lower.clone()
+        left.lower().clone()
     };
-    let new_right_upper =
-        if (left.upper < right.upper && !left.upper.is_null()) || right.upper.is_null() {
-            if includes_endpoints {
-                left.upper.clone()
-            } else {
-                prev_value(left.upper.clone())
-            }
-        } else if (left.upper == right.upper) && includes_endpoints {
-            left.upper.clone()
-        } else if (left.lower == right.lower) && !includes_endpoints {
+    // Below code is asymmetric relative to the above if statement, because
+    // `None` compares less than `Some` in Rust.
+    let new_right_upper = if right.upper.is_null()
+        || (!left.upper.is_null() && left.upper <= right.upper)
+    {
+        if strict {
             prev_value(left.upper.clone())
         } else {
-            right.upper.clone()
-        };
-
-    if op_gt {
-        Ok(Some((
-            Interval::try_new(new_left_lower, left.upper.clone())?,
-            Interval::try_new(right.lower.clone(), new_right_upper)?,
-        )))
+            left.upper.clone()
+        }
     } else {
-        Ok(Some((
-            Interval::try_new(right.lower.clone(), new_right_upper)?,
-            Interval::try_new(new_left_lower, left.upper.clone())?,
-        )))
-    }
+        right.upper.clone()
+    };
+
+    Ok(Some((
+        Interval::new(new_left_lower, left.upper.clone()),
+        Interval::new(right.lower.clone(), new_right_upper),
+    )))
 }
 
 /// Multiplies two intervals that both contain zero.
@@ -1076,9 +1143,8 @@ pub fn satisfy_comparison(
 /// ranges. Returns an error if the multiplication of bounds fails.
 ///
 /// ```text
-/// left:  <-------=====0=====------->
-///
-/// right: <-------=====0=====------->
+/// Left-hand side:  <-------=====0=====------->
+/// Right-hand side: <-------=====0=====------->
 /// ```
 ///
 /// **Caution:** This function contains multiple calls to `unwrap()`. Therefore,
@@ -1119,15 +1185,13 @@ fn mul_helper_multi_zero_inclusive(
 /// on either side of zero. Returns an error if the multiplication of bounds fails.
 ///
 /// ``` text
-/// left:  <-------=====0=====------->
-///
-/// right: <--======----0------------>
+/// Left-hand side:  <-------=====0=====------->
+/// Right-hand side: <--======----0------------>
 ///
 ///                    or
 ///
-/// left:  <-------=====0=====------->
-///
-/// right: <------------0--======---->
+/// Left-hand side:  <-------=====0=====------->
+/// Right-hand side: <------------0--======---->
 /// ```
 ///
 /// **Caution:** This function contains multiple calls to `unwrap()`. Therefore,
@@ -1137,10 +1201,10 @@ fn mul_helper_single_zero_inclusive(
     dt: &DataType,
     lhs: &Interval,
     rhs: &Interval,
-    zero_point: &Interval,
+    zero: ScalarValue,
 ) -> Interval {
     // With the following interval bounds, there is no possibility to create an invalid interval.
-    if rhs.upper <= zero_point.lower && !rhs.upper.is_null() {
+    if rhs.upper <= zero && !rhs.upper.is_null() {
         // <-------=====0=====------->
         // <--======----0------------>
         let lower = mul_bounds::<false>(dt, &lhs.upper, &rhs.lower);
@@ -1163,27 +1227,23 @@ fn mul_helper_single_zero_inclusive(
 /// their ranges. Returns an error if the multiplication of bounds fails.
 ///
 /// ``` text
-/// left:  <--======----0------------>
-///
-/// right: <--======----0------------>
-///
-///                    or
-///
-/// left:  <--======----0------------>
-///
-/// right: <------------0--======---->
+/// Left-hand side:  <--======----0------------>
+/// Right-hand side: <--======----0------------>
 ///
 ///                    or
 ///
-/// left:  <------------0--======---->
-///
-/// right: <--======----0------------>
+/// Left-hand side:  <--======----0------------>
+/// Right-hand side: <------------0--======---->
 ///
 ///                    or
 ///
-/// left:  <------------0--======---->
+/// Left-hand side:  <------------0--======---->
+/// Right-hand side: <--======----0------------>
 ///
-/// right: <------------0--======---->
+///                    or
+///
+/// Left-hand side:  <------------0--======---->
+/// Right-hand side: <------------0--======---->
 /// ```
 ///
 /// **Caution:** This function contains multiple calls to `unwrap()`. Therefore,
@@ -1193,42 +1253,39 @@ fn mul_helper_zero_exclusive(
     dt: &DataType,
     lhs: &Interval,
     rhs: &Interval,
-    zero_point: &Interval,
+    zero: ScalarValue,
 ) -> Interval {
-    match (
-        lhs.upper <= zero_point.lower && !lhs.upper.is_null(),
-        rhs.upper <= zero_point.lower && !rhs.upper.is_null(),
+    let (lower, upper) = match (
+        lhs.upper <= zero && !lhs.upper.is_null(),
+        rhs.upper <= zero && !rhs.upper.is_null(),
     ) {
         // With the following interval bounds, there is no possibility to create an invalid interval.
-        (true, true) => {
+        (true, true) => (
             // <--======----0------------>
             // <--======----0------------>
-            let lower = mul_bounds::<false>(dt, &lhs.upper, &rhs.upper);
-            let upper = mul_bounds::<true>(dt, &lhs.lower, &rhs.lower);
-            Interval::new(lower, upper)
-        }
-        (true, false) => {
+            mul_bounds::<false>(dt, &lhs.upper, &rhs.upper),
+            mul_bounds::<true>(dt, &lhs.lower, &rhs.lower),
+        ),
+        (true, false) => (
             // <--======----0------------>
             // <------------0--======---->
-            let lower = mul_bounds::<false>(dt, &lhs.lower, &rhs.upper);
-            let upper = mul_bounds::<true>(dt, &lhs.upper, &rhs.lower);
-            Interval::new(lower, upper)
-        }
-        (false, true) => {
+            mul_bounds::<false>(dt, &lhs.lower, &rhs.upper),
+            mul_bounds::<true>(dt, &lhs.upper, &rhs.lower),
+        ),
+        (false, true) => (
             // <------------0--======---->
             // <--======----0------------>
-            let lower = mul_bounds::<false>(dt, &rhs.lower, &lhs.upper);
-            let upper = mul_bounds::<true>(dt, &rhs.upper, &lhs.lower);
-            Interval::new(lower, upper)
-        }
-        (false, false) => {
+            mul_bounds::<false>(dt, &rhs.lower, &lhs.upper),
+            mul_bounds::<true>(dt, &rhs.upper, &lhs.lower),
+        ),
+        (false, false) => (
             // <------------0--======---->
             // <------------0--======---->
-            let lower = mul_bounds::<false>(dt, &lhs.lower, &rhs.lower);
-            let upper = mul_bounds::<true>(dt, &lhs.upper, &rhs.upper);
-            Interval::new(lower, upper)
-        }
-    }
+            mul_bounds::<false>(dt, &lhs.lower, &rhs.lower),
+            mul_bounds::<true>(dt, &lhs.upper, &rhs.upper),
+        ),
+    };
+    Interval::new(lower, upper)
 }
 
 /// Divides the left-hand side interval by the right-hand side interval when
@@ -1240,15 +1297,13 @@ fn mul_helper_zero_exclusive(
 /// zero within its range. Returns an error if the division of bounds fails.
 ///
 /// ``` text
-/// left:  <-------=====0=====------->
-///
-/// right: <--======----0------------>
+/// Left-hand side:  <-------=====0=====------->
+/// Right-hand side: <--======----0------------>
 ///
 ///                    or
 ///
-/// left:  <-------=====0=====------->
-///
-/// right: <------------0--======---->
+/// Left-hand side:  <-------=====0=====------->
+/// Right-hand side: <------------0--======---->
 /// ```
 ///
 /// **Caution:** This function contains multiple calls to `unwrap()`. Therefore,
@@ -1285,27 +1340,23 @@ fn div_helper_lhs_zero_inclusive(
 /// their ranges. Returns an error if the division of bounds fails.
 ///
 /// ``` text
-/// left:  <--======----0------------>
-///
-/// right: <--======----0------------>
-///
-///                    or
-///
-/// left:  <--======----0------------>
-///
-/// right: <------------0--======---->
+/// Left-hand side:  <--======----0------------>
+/// Right-hand side: <--======----0------------>
 ///
 ///                    or
 ///
-/// left:  <------------0--======---->
-///
-/// right: <--======----0------------>
+/// Left-hand side:  <--======----0------------>
+/// Right-hand side: <------------0--======---->
 ///
 ///                    or
 ///
-/// left:  <------------0--======---->
+/// Left-hand side:  <------------0--======---->
+/// Right-hand side: <--======----0------------>
 ///
-/// right: <------------0--======---->
+///                    or
+///
+/// Left-hand side:  <------------0--======---->
+/// Right-hand side: <------------0--======---->
 /// ```
 ///
 /// **Caution:** This function contains multiple calls to `unwrap()`. Therefore,
@@ -1317,58 +1368,50 @@ fn div_helper_zero_exclusive(
     rhs: &Interval,
     zero_point: &Interval,
 ) -> Interval {
-    match (
+    let (lower, upper) = match (
         lhs.upper <= zero_point.lower && !lhs.upper.is_null(),
         rhs.upper <= zero_point.lower && !rhs.upper.is_null(),
     ) {
         // With the following interval bounds, there is no possibility to create an invalid interval.
-        (true, true) => {
+        (true, true) => (
             // <--======----0------------>
             // <--======----0------------>
-            let lower = div_bounds::<false>(dt, &lhs.upper, &rhs.lower);
-            let upper = div_bounds::<true>(dt, &lhs.lower, &rhs.upper);
-            Interval::new(lower, upper)
-        }
-        (true, false) => {
+            div_bounds::<false>(dt, &lhs.upper, &rhs.lower),
+            div_bounds::<true>(dt, &lhs.lower, &rhs.upper),
+        ),
+        (true, false) => (
             // <--======----0------------>
             // <------------0--======---->
-            let lower = div_bounds::<false>(dt, &lhs.lower, &rhs.lower);
-            let upper = div_bounds::<true>(dt, &lhs.upper, &rhs.upper);
-            Interval::new(lower, upper)
-        }
-        (false, true) => {
+            div_bounds::<false>(dt, &lhs.lower, &rhs.lower),
+            div_bounds::<true>(dt, &lhs.upper, &rhs.upper),
+        ),
+        (false, true) => (
             // <------------0--======---->
             // <--======----0------------>
-            let lower = div_bounds::<false>(dt, &lhs.upper, &rhs.upper);
-            let upper = div_bounds::<true>(dt, &lhs.lower, &rhs.lower);
-            Interval::new(lower, upper)
-        }
-        (false, false) => {
+            div_bounds::<false>(dt, &lhs.upper, &rhs.upper),
+            div_bounds::<true>(dt, &lhs.lower, &rhs.lower),
+        ),
+        (false, false) => (
             // <------------0--======---->
             // <------------0--======---->
-            let lower = div_bounds::<false>(dt, &lhs.lower, &rhs.upper);
-            let upper = div_bounds::<true>(dt, &lhs.upper, &rhs.lower);
-            Interval::new(lower, upper)
-        }
-    }
+            div_bounds::<false>(dt, &lhs.lower, &rhs.upper),
+            div_bounds::<true>(dt, &lhs.upper, &rhs.lower),
+        ),
+    };
+    Interval::new(lower, upper)
 }
 
 /// This function computes the selectivity of an operation by computing the
 /// cardinality ratio of the given input/output intervals. If this can not be
 /// calculated for some reason, it returns `1.0` meaning fully selective (no
 /// filtering).
-pub fn cardinality_ratio(
-    initial_interval: &Interval,
-    final_interval: &Interval,
-) -> Result<f64> {
-    Ok(
-        match (final_interval.cardinality(), initial_interval.cardinality()) {
-            (Some(final_interval), Some(initial_interval)) => {
-                final_interval as f64 / initial_interval as f64
-            }
-            _ => 1.0,
-        },
-    )
+pub fn cardinality_ratio(initial_interval: &Interval, final_interval: &Interval) -> f64 {
+    match (final_interval.cardinality(), initial_interval.cardinality()) {
+        (Some(final_interval), Some(initial_interval)) => {
+            (final_interval as f64) / (initial_interval as f64)
+        }
+        _ => 1.0,
+    }
 }
 
 /// Cast scalar value to the given data type using an arrow kernel.
@@ -1379,48 +1422,6 @@ fn cast_scalar_value(
 ) -> Result<ScalarValue> {
     let cast_array = cast_with_options(&value.to_array()?, data_type, cast_options)?;
     ScalarValue::try_from_array(&cast_array, 0)
-}
-
-/// Since we cannot represent the overflow cases, this function sets the bound as **unbounded**
-///   - if it is upper bound and the result is positively overflowed.
-///   - if it is lower bound and the result is negatively overflowed.
-/// Otherwise; the function sets the bound as
-///   - minimum representable number with given datatype (`dt`) if the bound is upper bound
-///     and the result overflows negativity.
-///   - maximum representable number with given datatype (`dt`) if the bound is lower bound
-///     and the result overflows positivity.
-///
-/// **This function contains multiple calls to `unwrap()`, implying potential panics
-/// if preconditions are not met. Therefore, it should be used with caution. Currently,
-/// it is used in contexts where the `DataType` (`dt`) is validated prior to calling
-/// this function. Ensure that `dt` is valid for `ScalarValue::new_zero` and `ScalarValue::try_from`,
-/// and `op` is supported by interval library.**
-fn handle_overflow<const UPPER: bool>(
-    dt: &DataType,
-    op: Operator,
-    lhs: &ScalarValue,
-    rhs: &ScalarValue,
-) -> ScalarValue {
-    let zero = ScalarValue::new_zero(dt).unwrap();
-    let positive_sign = match op {
-        Operator::Multiply | Operator::Divide => {
-            lhs.lt(&zero) && rhs.lt(&zero) || lhs.gt(&zero) && rhs.gt(&zero)
-        }
-        Operator::Plus => lhs.ge(&zero),
-        Operator::Minus => lhs.ge(rhs),
-        _ => {
-            unreachable!()
-        }
-    };
-    match (UPPER, positive_sign) {
-        (true, true) | (false, false) => ScalarValue::try_from(dt).unwrap(),
-        (true, false) => {
-            get_extreme_value!(MIN, dt)
-        }
-        (false, true) => {
-            get_extreme_value!(MAX, dt)
-        }
-    }
 }
 
 /// An [Interval] that also tracks null status using a boolean interval.
@@ -1459,15 +1460,13 @@ fn handle_overflow<const UPPER: bool>(
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NullableInterval {
-    /// The value is always null in this interval
-    ///
-    /// This is typed so it can be used in physical expressions, which don't do
-    /// type coercion.
+    /// The value is always null. This is typed so it can be used in physical
+    /// expressions, which don't do type coercion.
     Null { datatype: DataType },
-    /// The value may or may not be null in this interval. If it is non null its value is within
-    /// the specified values interval
+    /// The value may or may not be null. If it is non-null, its is within the
+    /// specified range.
     MaybeNull { values: Interval },
-    /// The value is definitely not null in this interval and is within values
+    /// The value is definitely not null, and is within the specified range.
     NotNull { values: Interval },
 }
 
@@ -1511,12 +1510,10 @@ impl NullableInterval {
     }
 
     /// Get the data type
-    pub fn get_datatype(&self) -> Result<DataType> {
+    pub fn data_type(&self) -> DataType {
         match self {
-            Self::Null { datatype } => Ok(datatype.clone()),
-            Self::MaybeNull { values } | Self::NotNull { values } => {
-                Ok(values.data_type())
-            }
+            Self::Null { datatype } => datatype.clone(),
+            Self::MaybeNull { values } | Self::NotNull { values } => values.data_type(),
         }
     }
 
@@ -1643,7 +1640,7 @@ impl NullableInterval {
                     })
                 } else {
                     Ok(Self::Null {
-                        datatype: self.get_datatype()?,
+                        datatype: self.data_type(),
                     })
                 }
             }
@@ -1654,16 +1651,17 @@ impl NullableInterval {
     /// interval that is [true, true] if this interval is a superset of the
     /// given interval, [false, false] if this interval is disjoint from the
     /// given interval, and [false, true] otherwise.
-    pub fn contains<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
+    pub fn is_superset<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
         if let (Some(left_values), Some(right_values)) = (self.values(), rhs.values()) {
-            let values = left_values.contains(right_values)?;
-            match (self, rhs) {
-                (Self::NotNull { .. }, Self::NotNull { .. }) => {
-                    Ok(Self::NotNull { values })
-                }
-                _ => Ok(Self::MaybeNull { values }),
-            }
+            left_values
+                .is_superset(right_values)
+                .map(|values| match (self, rhs) {
+                    (Self::NotNull { .. }, Self::NotNull { .. }) => {
+                        Self::NotNull { values }
+                    }
+                    _ => Self::MaybeNull { values },
+                })
         } else {
             Ok(Self::Null {
                 datatype: DataType::Boolean,
@@ -1713,9 +1711,7 @@ impl NullableInterval {
 
 #[cfg(test)]
 mod tests {
-    use crate::interval_arithmetic::{
-        next_value, prev_value, satisfy_comparison, Interval,
-    };
+    use crate::interval_arithmetic::{next_value, prev_value, satisfy_greater, Interval};
 
     use arrow::datatypes::DataType;
     use datafusion_common::{Result, ScalarValue};
@@ -2434,7 +2430,7 @@ mod tests {
             ),
         ];
         for (first, second, expected) in possible_cases {
-            assert_eq!(first.contains(second)?, expected)
+            assert_eq!(first.is_superset(second)?, expected)
         }
 
         Ok(())
@@ -3051,15 +3047,13 @@ mod tests {
                 Interval::make(Some(1000_i64), None)?,
                 Interval::make(None, Some(1000_i64))?,
                 true,
-                true,
                 Interval::make(Some(1000_i64), None)?,
                 Interval::make(None, Some(1000_i64))?,
             ),
             (
-                Interval::make(Some(1000_i64), None)?,
                 Interval::make(None, Some(1000_i64))?,
+                Interval::make(Some(1000_i64), None)?,
                 true,
-                false,
                 Interval::make(Some(1000_i64), Some(1000_i64))?,
                 Interval::make(Some(1000_i64), Some(1000_i64))?,
             ),
@@ -3067,7 +3061,6 @@ mod tests {
                 Interval::make(Some(1000_i64), None)?,
                 Interval::make(None, Some(1000_i64))?,
                 false,
-                true,
                 Interval::make(Some(1000_i64), None)?,
                 Interval::make(None, Some(1000_i64))?,
             ),
@@ -3075,46 +3068,40 @@ mod tests {
                 Interval::make(Some(0_i64), Some(1000_i64))?,
                 Interval::make(Some(500_i64), Some(1500_i64))?,
                 true,
-                true,
                 Interval::make(Some(500_i64), Some(1000_i64))?,
                 Interval::make(Some(500_i64), Some(1000_i64))?,
             ),
             (
-                Interval::make(Some(0_i64), Some(1000_i64))?,
                 Interval::make(Some(500_i64), Some(1500_i64))?,
+                Interval::make(Some(0_i64), Some(1000_i64))?,
                 true,
-                false,
-                Interval::make(Some(0_i64), Some(1000_i64))?,
                 Interval::make(Some(500_i64), Some(1500_i64))?,
+                Interval::make(Some(0_i64), Some(1000_i64))?,
             ),
             (
                 Interval::make(Some(0_i64), Some(1000_i64))?,
                 Interval::make(Some(500_i64), Some(1500_i64))?,
                 false,
-                true,
                 Interval::make(Some(501_i64), Some(1000_i64))?,
                 Interval::make(Some(500_i64), Some(999_i64))?,
             ),
             (
-                Interval::make(Some(0_i64), Some(1000_i64))?,
                 Interval::make(Some(500_i64), Some(1500_i64))?,
-                false,
-                false,
                 Interval::make(Some(0_i64), Some(1000_i64))?,
+                false,
                 Interval::make(Some(500_i64), Some(1500_i64))?,
+                Interval::make(Some(0_i64), Some(1000_i64))?,
             ),
             (
                 Interval::make::<i64>(None, None)?,
                 Interval::make(Some(1_i64), Some(1_i64))?,
                 false,
-                true,
                 Interval::make(Some(2_i64), None)?,
                 Interval::make(Some(1_i64), Some(1_i64))?,
             ),
             (
                 Interval::make::<i64>(None, None)?,
                 Interval::make(Some(1_i64), Some(1_i64))?,
-                true,
                 true,
                 Interval::make(Some(1_i64), None)?,
                 Interval::make(Some(1_i64), Some(1_i64))?,
@@ -3123,7 +3110,6 @@ mod tests {
                 Interval::make(Some(1_i64), Some(1_i64))?,
                 Interval::make::<i64>(None, None)?,
                 false,
-                true,
                 Interval::make(Some(1_i64), Some(1_i64))?,
                 Interval::make(None, Some(0_i64))?,
             ),
@@ -3131,6 +3117,19 @@ mod tests {
                 Interval::make(Some(1_i64), Some(1_i64))?,
                 Interval::make::<i64>(None, None)?,
                 true,
+                Interval::make(Some(1_i64), Some(1_i64))?,
+                Interval::make(None, Some(1_i64))?,
+            ),
+            (
+                Interval::make(Some(1_i64), Some(1_i64))?,
+                Interval::make::<i64>(None, None)?,
+                false,
+                Interval::make(Some(1_i64), Some(1_i64))?,
+                Interval::make(None, Some(0_i64))?,
+            ),
+            (
+                Interval::make(Some(1_i64), Some(1_i64))?,
+                Interval::make::<i64>(None, None)?,
                 true,
                 Interval::make(Some(1_i64), Some(1_i64))?,
                 Interval::make(None, Some(1_i64))?,
@@ -3139,39 +3138,20 @@ mod tests {
                 Interval::make::<i64>(None, None)?,
                 Interval::make(Some(1_i64), Some(1_i64))?,
                 false,
-                false,
-                Interval::make(None, Some(0_i64))?,
-                Interval::make(Some(1_i64), Some(1_i64))?,
-            ),
-            (
-                Interval::make::<i64>(None, None)?,
-                Interval::make(Some(1_i64), Some(1_i64))?,
-                true,
-                false,
-                Interval::make(None, Some(1_i64))?,
-                Interval::make(Some(1_i64), Some(1_i64))?,
-            ),
-            (
-                Interval::make(Some(1_i64), Some(1_i64))?,
-                Interval::make::<i64>(None, None)?,
-                false,
-                false,
-                Interval::make(Some(1_i64), Some(1_i64))?,
                 Interval::make(Some(2_i64), None)?,
+                Interval::make(Some(1_i64), Some(1_i64))?,
             ),
             (
-                Interval::make(Some(1_i64), Some(1_i64))?,
                 Interval::make::<i64>(None, None)?,
-                true,
-                false,
                 Interval::make(Some(1_i64), Some(1_i64))?,
+                true,
                 Interval::make(Some(1_i64), None)?,
+                Interval::make(Some(1_i64), Some(1_i64))?,
             ),
             (
                 Interval::make(Some(-1000.0_f32), Some(1000.0_f32))?,
                 Interval::make(Some(-500.0_f32), Some(500.0_f32))?,
                 false,
-                true,
                 Interval::try_new(
                     next_value(ScalarValue::Float32(Some(-500.0))),
                     ScalarValue::Float32(Some(1000.0)),
@@ -3179,61 +3159,51 @@ mod tests {
                 Interval::make(Some(-500_f32), Some(500.0_f32))?,
             ),
             (
+                Interval::make(Some(-500.0_f32), Some(500.0_f32))?,
                 Interval::make(Some(-1000.0_f32), Some(1000.0_f32))?,
-                Interval::make(Some(-500.0_f32), Some(500.0_f32))?,
                 true,
-                false,
-                Interval::make(Some(-1000.0_f32), Some(500.0_f32))?,
                 Interval::make(Some(-500.0_f32), Some(500.0_f32))?,
+                Interval::make(Some(-1000.0_f32), Some(500.0_f32))?,
             ),
             (
-                Interval::make(Some(-1000.0_f32), Some(1000.0_f32))?,
                 Interval::make(Some(-500.0_f32), Some(500.0_f32))?,
+                Interval::make(Some(-1000.0_f32), Some(1000.0_f32))?,
                 false,
-                false,
+                Interval::make(Some(-500.0_f32), Some(500.0_f32))?,
                 Interval::try_new(
                     ScalarValue::Float32(Some(-1000.0_f32)),
                     prev_value(ScalarValue::Float32(Some(500.0_f32))),
                 )?,
-                Interval::make(Some(-500.0_f32), Some(500.0_f32))?,
             ),
             (
                 Interval::make(Some(-1000.0_f64), Some(1000.0_f64))?,
                 Interval::make(Some(-500.0_f64), Some(500.0_f64))?,
                 true,
-                true,
                 Interval::make(Some(-500.0_f64), Some(1000.0_f64))?,
                 Interval::make(Some(-500.0_f64), Some(500.0_f64))?,
             ),
         ];
-        for (first, second, includes_endpoints, op_gt, left_modified, right_modified) in
-            cases
-        {
+        for (first, second, includes_endpoints, left_modified, right_modified) in cases {
             assert_eq!(
-                satisfy_comparison(&first, &second, includes_endpoints, op_gt)?.unwrap(),
+                satisfy_greater(&first, &second, !includes_endpoints)?.unwrap(),
                 (left_modified, right_modified)
             );
         }
 
         let infeasible_cases = vec![
             (
-                Interval::make(Some(1000_i64), None)?,
                 Interval::make(None, Some(1000_i64))?,
-                false,
+                Interval::make(Some(1000_i64), None)?,
                 false,
             ),
             (
                 Interval::make(Some(-1000.0_f32), Some(1000.0_f32))?,
                 Interval::make(Some(1500.0_f32), Some(2000.0_f32))?,
                 false,
-                true,
             ),
         ];
-        for (first, second, includes_endpoints, op_gt) in infeasible_cases {
-            assert_eq!(
-                satisfy_comparison(&first, &second, includes_endpoints, op_gt)?,
-                None
-            );
+        for (first, second, includes_endpoints) in infeasible_cases {
+            assert_eq!(satisfy_greater(&first, &second, !includes_endpoints)?, None);
         }
 
         Ok(())

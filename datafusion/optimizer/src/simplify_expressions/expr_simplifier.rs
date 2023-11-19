@@ -206,10 +206,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     ///    (
     ///        col("x"),
     ///        NullableInterval::NotNull {
-    ///            values: Interval::try_new(
-    ///                ScalarValue::Int64(Some(3)),
-    ///                ScalarValue::Int64(Some(5)),
-    ///        ).unwrap()
+    ///            values: Interval::make(Some(3_i64), Some(5_i64)).unwrap()
     ///        }
     ///    ),
     ///    // y = 3
@@ -1302,23 +1299,24 @@ mod tests {
         sync::Arc,
     };
 
+    use super::*;
     use crate::simplify_expressions::{
         utils::for_test::{cast_to_int64_expr, now_expr, to_timestamp_expr},
         SimplifyContext,
     };
-
-    use super::*;
     use crate::test::test_table_scan_with_name;
+
     use arrow::{
         array::{ArrayRef, Int32Array},
         datatypes::{DataType, Field, Schema},
     };
-    use chrono::{DateTime, TimeZone, Utc};
     use datafusion_common::{assert_contains, cast::as_int32_array, DFField, ToDFSchema};
     use datafusion_expr::{interval_arithmetic::Interval, *};
     use datafusion_physical_expr::{
         execution_props::ExecutionProps, functions::make_scalar_function,
     };
+
+    use chrono::{DateTime, TimeZone, Utc};
 
     // ------------------------------
     // --- ExprSimplifier tests -----
@@ -3281,11 +3279,7 @@ mod tests {
             (
                 col("c3"),
                 NullableInterval::NotNull {
-                    values: Interval::try_new(
-                        ScalarValue::Int64(Some(0)),
-                        ScalarValue::Int64(Some(2)),
-                    )
-                    .unwrap(),
+                    values: Interval::make(Some(0_i64), Some(2_i64)).unwrap(),
                 },
             ),
             (
@@ -3305,21 +3299,13 @@ mod tests {
             (
                 col("c3"),
                 NullableInterval::MaybeNull {
-                    values: Interval::try_new(
-                        ScalarValue::Int64(Some(0)),
-                        ScalarValue::Int64(Some(2)),
-                    )
-                    .unwrap(),
+                    values: Interval::make(Some(0_i64), Some(2_i64)).unwrap(),
                 },
             ),
             (
                 col("c4"),
                 NullableInterval::MaybeNull {
-                    values: Interval::try_new(
-                        ScalarValue::UInt32(Some(9)),
-                        ScalarValue::UInt32(Some(9)),
-                    )
-                    .unwrap(),
+                    values: Interval::make(Some(9_u32), Some(9_u32)).unwrap(),
                 },
             ),
             (

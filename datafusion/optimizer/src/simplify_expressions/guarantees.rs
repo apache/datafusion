@@ -18,13 +18,15 @@
 //! Simplifier implementation for [`ExprSimplifier::with_guarantees()`]
 //!
 //! [`ExprSimplifier::with_guarantees()`]: crate::simplify_expressions::expr_simplifier::ExprSimplifier::with_guarantees
+
+use std::collections::HashMap;
+
 use datafusion_common::{tree_node::TreeNodeRewriter, DataFusionError, Result};
 use datafusion_expr::{
     expr::InList,
     interval_arithmetic::{Interval, NullableInterval},
     lit, Between, BinaryExpr, Expr,
 };
-use std::collections::HashMap;
 
 /// Rewrite expressions to incorporate guarantees.
 ///
@@ -87,7 +89,7 @@ impl<'a> TreeNodeRewriter for GuaranteeRewriter<'a> {
                         values: Interval::try_new(low.clone(), high.clone())?,
                     };
 
-                    let contains = expr_interval.contains(*interval)?;
+                    let contains = expr_interval.is_superset(*interval)?;
 
                     if contains.is_certainly_true() {
                         Ok(lit(!negated))
@@ -161,7 +163,7 @@ impl<'a> TreeNodeRewriter for GuaranteeRewriter<'a> {
                         .filter_map(|expr| {
                             if let Expr::Literal(item) = expr {
                                 match interval
-                                    .contains(&NullableInterval::from(item.clone()))
+                                    .is_superset(&NullableInterval::from(item.clone()))
                                 {
                                     // If we know for certain the value isn't in the column's interval,
                                     // we can skip checking it.
@@ -193,6 +195,7 @@ impl<'a> TreeNodeRewriter for GuaranteeRewriter<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use arrow::datatypes::DataType;
     use datafusion_common::{tree_node::TreeNode, ScalarValue};
     use datafusion_expr::{col, lit, Operator};
