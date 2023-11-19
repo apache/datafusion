@@ -2687,6 +2687,26 @@ SELECT  array_intersect(make_array(1,2,3), make_array(2,3,4)),
 ----
 [2, 3] [] [aa, cc] [true] [2.2, 3.3] [[2, 2], [3, 3]]
 
+query ?
+select array_intersect([], []);
+----
+[]
+
+query ?
+select array_intersect([], null);
+----
+[]
+
+query ?
+select array_intersect(null, []);
+----
+[]
+
+query ?
+select array_intersect(null, null);
+----
+NULL
+
 query ??????
 SELECT  list_intersect(make_array(1,2,3), make_array(2,3,4)),
         list_intersect(make_array(1,3,5), make_array(2,4,6)),

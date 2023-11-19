@@ -582,7 +582,7 @@ pub fn array_except(args: &[ArrayRef]) -> Result<ArrayRef> {
     match (array1.data_type(), array2.data_type()) {
         (DataType::Null, DataType::Null) => {
             // NullArray(1): means null, NullArray(0): means []
-            // except([], null) = [], except(null, []) = null, except(null, null) = null
+            // except([], []) = [], except([], null) = [], except(null, []) = null, except(null, null) = null
             let nulls = match (array1.len(), array2.len()) {
                 (1, _) => Some(NullBuffer::new_null(1)),
                 _ => None,
@@ -1527,7 +1527,7 @@ pub fn array_union(args: &[ArrayRef]) -> Result<ArrayRef> {
     match (array1.data_type(), array2.data_type()) {
         (DataType::Null, DataType::Null) => {
             // NullArray(1): means null, NullArray(0): means []
-            // union([], null) = [], union(null, []) = [], union(null, null) = null
+            // union([], []) = [], union([], null) = [], union(null, []) = [], union(null, null) = null
             let nulls = match (array1.len(), array2.len()) {
                 (1, 1) => Some(NullBuffer::new_null(1)),
                 _ => None,
@@ -2028,55 +2028,79 @@ pub fn string_to_array<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef
 pub fn array_intersect(args: &[ArrayRef]) -> Result<ArrayRef> {
     assert_eq!(args.len(), 2);
 
-    let first_array = as_list_array(&args[0])?;
-    let second_array = as_list_array(&args[1])?;
+    let first_array = &args[0];
+    let second_array = &args[1];
 
-    if first_array.value_type() != second_array.value_type() {
-        return internal_err!("array_intersect is not implemented for '{first_array:?}' and '{second_array:?}'");
-    }
-    let dt = first_array.value_type();
+    match (first_array.data_type(), second_array.data_type()) {
+        (DataType::Null, DataType::Null) => {
+            // NullArray(1): means null, NullArray(0): means []
+            // intersect([], []) = [], intersect([], null) = [], intersect(null, []) = [], intersect(null, null) = null
+            let nulls = match (first_array.len(), second_array.len()) {
+                (1, 1) => Some(NullBuffer::new_null(1)),
+                _ => None,
+            };
+            let arr = Arc::new(ListArray::try_new(
+                Arc::new(Field::new("item", DataType::Null, true)),
+                OffsetBuffer::new(vec![0; 2].into()),
+                Arc::new(NullArray::new(0)),
+                nulls,
+            )?) as ArrayRef;
+            Ok(arr)
+        }
+        _ => {
+            let first_array = as_list_array(&first_array)?;
+            let second_array = as_list_array(&second_array)?;
 
-    let mut offsets = vec![0];
-    let mut new_arrays = vec![];
+            if first_array.value_type() != second_array.value_type() {
+                return internal_err!("array_intersect is not implemented for '{first_array:?}' and '{second_array:?}'");
+            }
 
-    let converter = RowConverter::new(vec![SortField::new(dt.clone())])?;
-    for (first_arr, second_arr) in first_array.iter().zip(second_array.iter()) {
-        if let (Some(first_arr), Some(second_arr)) = (first_arr, second_arr) {
-            let l_values = converter.convert_columns(&[first_arr])?;
-            let r_values = converter.convert_columns(&[second_arr])?;
+            let dt = first_array.value_type();
 
-            let values_set: HashSet<_> = l_values.iter().collect();
-            let mut rows = Vec::with_capacity(r_values.num_rows());
-            for r_val in r_values.iter().sorted().dedup() {
-                if values_set.contains(&r_val) {
-                    rows.push(r_val);
+            let mut offsets = vec![0];
+            let mut new_arrays = vec![];
+
+            let converter = RowConverter::new(vec![SortField::new(dt.clone())])?;
+            for (first_arr, second_arr) in first_array.iter().zip(second_array.iter()) {
+                if let (Some(first_arr), Some(second_arr)) = (first_arr, second_arr) {
+                    let l_values = converter.convert_columns(&[first_arr])?;
+                    let r_values = converter.convert_columns(&[second_arr])?;
+
+                    let values_set: HashSet<_> = l_values.iter().collect();
+                    let mut rows = Vec::with_capacity(r_values.num_rows());
+                    for r_val in r_values.iter().sorted().dedup() {
+                        if values_set.contains(&r_val) {
+                            rows.push(r_val);
+                        }
+                    }
+
+                    let last_offset: i32 = match offsets.last().copied() {
+                        Some(offset) => offset,
+                        None => return internal_err!("offsets should not be empty"),
+                    };
+                    offsets.push(last_offset + rows.len() as i32);
+                    let arrays = converter.convert_rows(rows)?;
+                    let array = match arrays.get(0) {
+                        Some(array) => array.clone(),
+                        None => {
+                            return internal_err!(
+                                "array_intersect: failed to get array from rows"
+                            )
+                        }
+                    };
+                    new_arrays.push(array);
                 }
             }
 
-            let last_offset: i32 = match offsets.last().copied() {
-                Some(offset) => offset,
-                None => return internal_err!("offsets should not be empty"),
-            };
-            offsets.push(last_offset + rows.len() as i32);
-            let arrays = converter.convert_rows(rows)?;
-            let array = match arrays.get(0) {
-                Some(array) => array.clone(),
-                None => {
-                    return internal_err!(
-                        "array_intersect: failed to get array from rows"
-                    )
-                }
-            };
-            new_arrays.push(array);
+            let field = Arc::new(Field::new("item", dt, true));
+            let offsets = OffsetBuffer::new(offsets.into());
+            let new_arrays_ref =
+                new_arrays.iter().map(|v| v.as_ref()).collect::<Vec<_>>();
+            let values = compute::concat(&new_arrays_ref)?;
+            let arr = Arc::new(ListArray::try_new(field, offsets, values, None)?);
+            Ok(arr)
         }
     }
-
-    let field = Arc::new(Field::new("item", dt, true));
-    let offsets = OffsetBuffer::new(offsets.into());
-    let new_arrays_ref = new_arrays.iter().map(|v| v.as_ref()).collect::<Vec<_>>();
-    let values = compute::concat(&new_arrays_ref)?;
-    let arr = Arc::new(ListArray::try_new(field, offsets, values, None)?);
-    Ok(arr)
 }
 
 #[cfg(test)]
