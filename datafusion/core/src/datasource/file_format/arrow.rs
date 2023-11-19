@@ -214,6 +214,7 @@ mod tests {
             last_modified: DateTime::default(),
             size: usize::MAX,
             e_tag: None,
+            version: None,
         };
 
         let arrow_format = ArrowFormat {};
@@ -256,6 +257,7 @@ mod tests {
             last_modified: DateTime::default(),
             size: usize::MAX,
             e_tag: None,
+            version: None,
         };
 
         let arrow_format = ArrowFormat {};

@@ -1243,6 +1243,7 @@ mod tests {
             last_modified: chrono::DateTime::from(std::time::SystemTime::now()),
             size: data.len(),
             e_tag: None,
+            version: None,
         };
         let in_memory = object_store::memory::InMemory::new();
         in_memory

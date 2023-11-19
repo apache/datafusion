@@ -140,7 +140,7 @@ physical_plan CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/te
 # create a sink table, path is same with aggregate_test_100 table
 # we do not overwrite this file, we only assert plan.
 statement ok
-CREATE EXTERNAL TABLE sink_table (
+CREATE UNBOUNDED EXTERNAL TABLE sink_table (
         c1  VARCHAR NOT NULL,
         c2  TINYINT NOT NULL,
         c3  SMALLINT NOT NULL,
@@ -168,7 +168,7 @@ Dml: op=[Insert Into] table=[sink_table]
 ----Sort: aggregate_test_100.c1 ASC NULLS LAST
 ------TableScan: aggregate_test_100 projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13]
 physical_plan
-FileSinkExec: sink=CsvSink(writer_mode=Append, file_groups=[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv])
+FileSinkExec: sink=StreamWrite { location: "../../testing/data/csv/aggregate_test_100.csv", batch_size: 8192, encoding: Csv, header: true, .. }
 --SortExec: expr=[c1@0 ASC NULLS LAST]
 ----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13], has_header=true
 
