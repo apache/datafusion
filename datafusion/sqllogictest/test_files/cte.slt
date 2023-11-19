@@ -48,7 +48,7 @@ CREATE EXTERNAL TABLE beg_account_balance STORED as CSV WITH HEADER ROW LOCATION
 
 # setup
 statement ok
-CREATE EXTERNAL TABLE account_balance_growth STORED as CSV WITH HEADER ROW LOCATION '../../testing/data/csv/recursive_query_account_growth_2.csv'
+CREATE EXTERNAL TABLE account_balance_growth STORED as CSV WITH HEADER ROW LOCATION '../../testing/data/csv/recursive_query_account_growth_3.csv'
 
 # recursive CTE with static term derived from table works
 query ITI rowsort

@@ -1388,17 +1388,23 @@ fn select_interval_out_of_range() {
 }
 
 #[test]
-fn recursive_ctes() {
-    let sql = "
-        WITH RECURSIVE numbers AS (
-              select 1 as n
-            UNION ALL
-              select n + 1 FROM numbers WHERE N < 10
-        )
-        select * from numbers;";
+fn select_array_no_common_type() {
+    let sql = "SELECT [1, true, null]";
+    let err = logical_plan(sql).expect_err("query should have failed");
+
+    // HashSet doesn't guarantee order
+    assert_contains!(
+        err.strip_backtrace(),
+        "This feature is not implemented: Arrays with different types are not supported: "
+    );
+}
+
+#[test]
+fn select_array_non_literal_type() {
+    let sql = "SELECT [now()]";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-        "This feature is not implemented: Recursive CTEs are not supported",
+        "This feature is not implemented: Arrays with elements other than literal are not supported: now()",
         err.strip_backtrace()
     );
 }

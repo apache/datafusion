@@ -39,7 +39,6 @@ use super::{
 use arrow::error::ArrowError;
 use tokio::sync::mpsc::{Receiver, Sender};
 
-// use crate::execution::context::TaskContext;
 use crate::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
 /// Recursive query execution plan.
