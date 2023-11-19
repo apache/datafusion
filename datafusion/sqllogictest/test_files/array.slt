@@ -2842,6 +2842,26 @@ NULL
 statement ok
 drop table array_except_table_bool;
 
+query ?
+select array_except([], null);
+----
+[]
+
+query ?
+select array_except([], []);
+----
+[]
+
+query ?
+select array_except(null, []);
+----
+NULL
+
+query ?
+select array_except(null, null)
+----
+NULL
+
 ### Array operators tests
 
 

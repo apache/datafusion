@@ -613,7 +613,16 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Range => {
                 Ok(List(Arc::new(Field::new("item", Int64, true))))
             }
-            BuiltinScalarFunction::ArrayExcept => Ok(input_expr_types[0].clone()),
+            BuiltinScalarFunction::ArrayExcept => {
+                match (input_expr_types[0].clone(), input_expr_types[1].clone()) {
+                    (DataType::Null, DataType::Null) => Ok(DataType::List(Arc::new(
+                        Field::new("item", DataType::Null, true),
+                    ))),
+                    (DataType::Null, dt) => Ok(dt),
+                    (dt, DataType::Null) => Ok(dt),
+                    (dt, _) => Ok(dt),
+                }
+            }
             BuiltinScalarFunction::Cardinality => Ok(UInt64),
             BuiltinScalarFunction::MakeArray => match input_expr_types.len() {
                 0 => Ok(List(Arc::new(Field::new("item", Null, true)))),

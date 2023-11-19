@@ -580,6 +580,21 @@ pub fn array_except(args: &[ArrayRef]) -> Result<ArrayRef> {
     let array2 = &args[1];
 
     match (array1.data_type(), array2.data_type()) {
+        (DataType::Null, DataType::Null) => {
+            // NullArray(1): means null, NullArray(0): means []
+            // except([], null) = [], except(null, []) = null, except(null, null) = null
+            let nulls = match (array1.len(), array2.len()) {
+                (1, _) => Some(NullBuffer::new_null(1)),
+                _ => None,
+            };
+            let arr = Arc::new(ListArray::try_new(
+                Arc::new(Field::new("item", DataType::Null, true)),
+                OffsetBuffer::new(vec![0; 2].into()),
+                Arc::new(NullArray::new(0)),
+                nulls,
+            )?) as ArrayRef;
+            Ok(arr)
+        }
         (DataType::Null, _) | (_, DataType::Null) => Ok(array1.to_owned()),
         (DataType::List(field), DataType::List(_)) => {
             check_datatypes("array_except", &[array1, array2])?;
