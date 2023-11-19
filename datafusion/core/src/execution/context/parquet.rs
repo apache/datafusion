@@ -175,6 +175,12 @@ mod tests {
             .unwrap()
             .to_string();
 
+        let path4 = temp_dir_path
+            .join("output4.parquet/")
+            .to_str()
+            .unwrap()
+            .to_string();
+
         // Write the dataframe to a parquet file named 'output1.parquet'
         write_df
             .clone()
@@ -256,7 +262,7 @@ mod tests {
 
         assert_eq!(
             read_df.unwrap_err().strip_backtrace(),
-            "Execution error: File 'output2.parquet.snappy' does not match the expected extension '.parquet'"
+            format!("Execution error: File path 'file:///private{}' does not match the expected extension '.parquet'", path2)
         );
 
         // Read the dataframe from 'output3.parquet.snappy.parquet' with the correct file extension.
@@ -272,6 +278,22 @@ mod tests {
         let results = read_df.collect().await?;
         let total_rows: usize = results.iter().map(|rb| rb.num_rows()).sum();
         assert_eq!(total_rows, 5);
+
+        // Read the dataframe from 'output4/'
+        std::fs::create_dir(&path4)?;
+        let read_df = ctx
+            .read_parquet(
+                &path4,
+                ParquetReadOptions {
+                    ..Default::default()
+                },
+            )
+            .await?;
+
+        let results = read_df.collect().await?;
+        let total_rows: usize = results.iter().map(|rb| rb.num_rows()).sum();
+        assert_eq!(total_rows, 0);
+
         Ok(())
     }
 
