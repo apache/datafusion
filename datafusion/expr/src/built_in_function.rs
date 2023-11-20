@@ -599,19 +599,10 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayReplaceAll => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArraySlice => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayToString => Ok(Utf8),
-            BuiltinScalarFunction::ArrayIntersect => {
+            BuiltinScalarFunction::ArrayUnion | BuiltinScalarFunction::ArrayIntersect => {
                 match (input_expr_types[0].clone(), input_expr_types[1].clone()) {
-                    (DataType::Null, DataType::Null) => Ok(DataType::List(Arc::new(
-                        Field::new("item", DataType::Null, true),
-                    ))),
-                    (dt, _) => Ok(dt),
-                }
-            }
-            BuiltinScalarFunction::ArrayUnion => {
-                match (input_expr_types[0].clone(), input_expr_types[1].clone()) {
-                    (DataType::Null, DataType::Null) => Ok(DataType::List(Arc::new(
-                        Field::new("item", DataType::Null, true),
-                    ))),
+                    (DataType::Null, dt) => Ok(dt),
+                    (dt, DataType::Null) => Ok(dt),
                     (dt, _) => Ok(dt),
                 }
             }
@@ -620,9 +611,9 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::ArrayExcept => {
                 match (input_expr_types[0].clone(), input_expr_types[1].clone()) {
-                    (DataType::Null, DataType::Null) => Ok(DataType::List(Arc::new(
-                        Field::new("item", DataType::Null, true),
-                    ))),
+                    (DataType::Null, _) | (_, DataType::Null) => {
+                        Ok(input_expr_types[0].clone())
+                    }
                     (dt, _) => Ok(dt),
                 }
             }

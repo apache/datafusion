@@ -228,10 +228,10 @@ fn compute_array_dims(arr: Option<ArrayRef>) -> Result<Option<Vec<Option<u64>>>>
 
 fn check_datatypes(name: &str, args: &[&ArrayRef]) -> Result<()> {
     let data_type = args[0].data_type();
-    if !args
-        .iter()
-        .all(|arg| arg.data_type().equals_datatype(data_type))
-    {
+    if !args.iter().all(|arg| {
+        arg.data_type().equals_datatype(data_type)
+            || arg.data_type().equals_datatype(&DataType::Null)
+    }) {
         let types = args.iter().map(|arg| arg.data_type()).collect::<Vec<_>>();
         return plan_err!("{name} received incompatible types: '{types:?}'.");
     }
@@ -580,21 +580,6 @@ pub fn array_except(args: &[ArrayRef]) -> Result<ArrayRef> {
     let array2 = &args[1];
 
     match (array1.data_type(), array2.data_type()) {
-        (DataType::Null, DataType::Null) => {
-            // NullArray(1): means null, NullArray(0): means []
-            // except([], []) = [], except([], null) = [], except(null, []) = null, except(null, null) = null
-            let nulls = match (array1.len(), array2.len()) {
-                (1, _) => Some(NullBuffer::new_null(1)),
-                _ => None,
-            };
-            let arr = Arc::new(ListArray::try_new(
-                Arc::new(Field::new("item", DataType::Null, true)),
-                OffsetBuffer::new(vec![0; 2].into()),
-                Arc::new(NullArray::new(0)),
-                nulls,
-            )?) as ArrayRef;
-            Ok(arr)
-        }
         (DataType::Null, _) | (_, DataType::Null) => Ok(array1.to_owned()),
         (DataType::List(field), DataType::List(_)) => {
             check_datatypes("array_except", &[array1, array2])?;
@@ -1525,36 +1510,31 @@ pub fn array_union(args: &[ArrayRef]) -> Result<ArrayRef> {
     let array1 = &args[0];
     let array2 = &args[1];
     match (array1.data_type(), array2.data_type()) {
-        (DataType::Null, DataType::Null) => {
-            // NullArray(1): means null, NullArray(0): means []
-            // union([], []) = [], union([], null) = [], union(null, []) = [], union(null, null) = null
-            let nulls = match (array1.len(), array2.len()) {
-                (1, 1) => Some(NullBuffer::new_null(1)),
-                _ => None,
-            };
-            let arr = Arc::new(ListArray::try_new(
-                Arc::new(Field::new("item", DataType::Null, true)),
-                OffsetBuffer::new(vec![0; 2].into()),
-                Arc::new(NullArray::new(0)),
-                nulls,
-            )?) as ArrayRef;
-            Ok(arr)
-        }
         (DataType::Null, _) => Ok(array2.clone()),
         (_, DataType::Null) => Ok(array1.clone()),
-        (DataType::List(field_ref), DataType::List(_)) => {
-            check_datatypes("array_union", &[array1, array2])?;
-            let list1 = array1.as_list::<i32>();
-            let list2 = array2.as_list::<i32>();
-            let result = union_generic_lists::<i32>(list1, list2, field_ref)?;
-            Ok(Arc::new(result))
+        (DataType::List(l_field_ref), DataType::List(r_field_ref)) => {
+            match (l_field_ref.data_type(), r_field_ref.data_type()) {
+                (DataType::Null, _) => Ok(array2.clone()),
+                (_, DataType::Null) => Ok(array1.clone()),
+                (_, _) => {
+                    let list1 = array1.as_list::<i32>();
+                    let list2 = array2.as_list::<i32>();
+                    let result = union_generic_lists::<i32>(list1, list2, &l_field_ref)?;
+                    Ok(Arc::new(result))
+                }
+            }
         }
-        (DataType::LargeList(field_ref), DataType::LargeList(_)) => {
-            check_datatypes("array_union", &[array1, array2])?;
-            let list1 = array1.as_list::<i64>();
-            let list2 = array2.as_list::<i64>();
-            let result = union_generic_lists::<i64>(list1, list2, field_ref)?;
-            Ok(Arc::new(result))
+        (DataType::LargeList(l_field_ref), DataType::LargeList(r_field_ref)) => {
+            match (l_field_ref.data_type(), r_field_ref.data_type()) {
+                (DataType::Null, _) => Ok(array2.clone()),
+                (_, DataType::Null) => Ok(array1.clone()),
+                (_, _) => {
+                    let list1 = array1.as_list::<i64>();
+                    let list2 = array2.as_list::<i64>();
+                    let result = union_generic_lists::<i64>(list1, list2, &l_field_ref)?;
+                    Ok(Arc::new(result))
+                }
+            }
         }
         _ => {
             internal_err!(
@@ -2032,21 +2012,8 @@ pub fn array_intersect(args: &[ArrayRef]) -> Result<ArrayRef> {
     let second_array = &args[1];
 
     match (first_array.data_type(), second_array.data_type()) {
-        (DataType::Null, DataType::Null) => {
-            // NullArray(1): means null, NullArray(0): means []
-            // intersect([], []) = [], intersect([], null) = [], intersect(null, []) = [], intersect(null, null) = null
-            let nulls = match (first_array.len(), second_array.len()) {
-                (1, 1) => Some(NullBuffer::new_null(1)),
-                _ => None,
-            };
-            let arr = Arc::new(ListArray::try_new(
-                Arc::new(Field::new("item", DataType::Null, true)),
-                OffsetBuffer::new(vec![0; 2].into()),
-                Arc::new(NullArray::new(0)),
-                nulls,
-            )?) as ArrayRef;
-            Ok(arr)
-        }
+        (DataType::Null, _) => Ok(second_array.clone()),
+        (_, DataType::Null) => Ok(first_array.clone()),
         _ => {
             let first_array = as_list_array(&first_array)?;
             let second_array = as_list_array(&second_array)?;
