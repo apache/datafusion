@@ -257,7 +257,8 @@ fn get_field_metadata(
     e: &Arc<dyn PhysicalExpr>,
     input_schema: &Schema,
 ) -> Option<HashMap<String, String>> {
-    // Look up field by index in schema (not NAME)
+    // Look up field by index in schema (not NAME as there can be more than one
+    // column with the same name)
     e.as_any()
         .downcast_ref::<Column>()
         .map(|column| column.index())
