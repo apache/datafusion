@@ -261,8 +261,7 @@ fn get_field_metadata(
     // column with the same name)
     e.as_any()
         .downcast_ref::<Column>()
-        .map(|column| column.index())
-        .map(|idx| input_schema.field(idx).metadata())
+        .map(|column| input_schema.field(column.index()).metadata())
         .cloned()
 }
 
