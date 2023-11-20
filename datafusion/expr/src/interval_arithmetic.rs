@@ -1113,7 +1113,7 @@ pub fn satisfy_greater(
             right.lower.clone()
         }
     } else {
-        left.lower().clone()
+        left.lower.clone()
     };
     // Below code is asymmetric relative to the above if statement, because
     // `None` compares less than `Some` in Rust.
