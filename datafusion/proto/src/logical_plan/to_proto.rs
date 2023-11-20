@@ -1566,6 +1566,7 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::ArrowTypeof => Self::ArrowTypeof,
             BuiltinScalarFunction::OverLay => Self::OverLay,
             BuiltinScalarFunction::Levenshtein => Self::Levenshtein,
+            BuiltinScalarFunction::SubstrIndex => Self::SubstrIndex,
         };
 
         Ok(scalar_function)

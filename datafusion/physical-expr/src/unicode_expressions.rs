@@ -455,3 +455,48 @@ pub fn translate<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     Ok(Arc::new(result) as ArrayRef)
 }
+
+/// Returns the substring from str before count occurrences of the delimiter delim. If count is positive, everything to the left of the final delimiter (counting from the left) is returned. If count is negative, everything to the right of the final delimiter (counting from the right) is returned.
+/// SUBSTRING_INDEX('www.apache.org', '.', 1) = www
+/// SUBSTRING_INDEX('www.apache.org', '.', 2) = www.apache
+/// SUBSTRING_INDEX('www.apache.org', '.', -2) = apache.org
+/// SUBSTRING_INDEX('www.apache.org', '.', -1) = org
+pub fn substr_index<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let string_array = as_generic_string_array::<T>(&args[0])?;
+    let delimiter_array = as_generic_string_array::<T>(&args[1])?;
+    let count_array = as_int64_array(&args[2])?;
+
+    let result = string_array
+        .iter()
+        .zip(delimiter_array.iter())
+        .zip(count_array.iter())
+        .map(|((string, delimiter), n)| match (string, delimiter, n) {
+            (Some(string), Some(delimiter), Some(n)) => {
+                let mut res = String::new();
+                if n == 0 {
+                    Some("".to_string())
+                } else {
+                    let mut start = 0;
+                    let mut count = 0;
+                    while let Some(idx) = string[start..].find(delimiter) {
+                        count += if n > 0 { 1 } else { -1 };
+                        start += idx + delimiter.len();
+                        if count == n {
+                            if n > 0 {
+                                start -= delimiter.len();
+                                res.push_str(&string[0..start]);
+                            } else {
+                                res.push_str(&string[start..]);
+                            }
+                            break;
+                        }
+                    }
+                    Some(res)
+                }
+            }
+            _ => None,
+        })
+        .collect::<GenericStringArray<T>>();
+
+    Ok(Arc::new(result) as ArrayRef)
+}

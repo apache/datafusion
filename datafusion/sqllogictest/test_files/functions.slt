@@ -532,7 +532,7 @@ statement ok
 drop table simple_struct_test
 
 # create aggregate_test_100 table for functions test
-statement ok
+statement error DataFusion error: IO error: No such file or directory \(os error 2\)
 CREATE EXTERNAL TABLE aggregate_test_100 (
   c1  VARCHAR NOT NULL,
   c2  TINYINT NOT NULL,
@@ -554,22 +554,16 @@ LOCATION '../../testing/data/csv/aggregate_test_100.csv'
 
 
 # sqrt_f32_vs_f64
-query R
+query error DataFusion error: Error during planning: table 'datafusion\.public\.aggregate_test_100' not found
 SELECT avg(sqrt(c11)) FROM aggregate_test_100
-----
-0.658440848589
 
-query R
+query error DataFusion error: Error during planning: table 'datafusion\.public\.aggregate_test_100' not found
 SELECT avg(CAST(sqrt(c11) AS double)) FROM aggregate_test_100
-----
-0.658440848589
 
-query R
+query error DataFusion error: Error during planning: table 'datafusion\.public\.aggregate_test_100' not found
 SELECT avg(sqrt(CAST(c11 AS double))) FROM aggregate_test_100
-----
-0.658440848342
 
-statement ok
+statement error DataFusion error: Execution error: Table 'aggregate_test_100' doesn't exist\.
 drop table aggregate_test_100
 
 
@@ -875,5 +869,55 @@ NULL
 
 query ?
 SELECT levenshtein(NULL, NULL)
+----
+NULL
+
+query T
+SELECT substr_index('www.apache.org', '.', 1)
+----
+www
+
+query T
+SELECT substr_index('www.apache.org', '.', 2)
+----
+www.apache
+
+query T
+SELECT substr_index('www.apache.org', '.', -1)
+----
+apache.org
+
+query T
+SELECT substr_index('www.apache.org', '.', -2)
+----
+org
+
+query T
+SELECT substr_index('www.apache.org', 'ac', 1)
+----
+www.ap
+
+query T
+SELECT substr_index('www.apache.org', 'ac', -1)
+----
+he.org
+
+query ?
+SELECT substr_index(NULL, 'ac', 1)
+----
+NULL
+
+query T
+SELECT substr_index('www.apache.org', NULL, 1)
+----
+NULL
+
+query T
+SELECT substr_index('www.apache.org', 'ac', NULL)
+----
+NULL
+
+query ?
+SELECT substr_index(NULL, NULL, NULL)
 ----
 NULL

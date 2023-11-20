@@ -637,6 +637,7 @@ nullif(expression1, expression2)
 - [uuid](#uuid)
 - [overlay](#overlay)
 - [levenshtein](#levenshtein)
+- [substr_index](#substr_index)
 
 ### `ascii`
 
@@ -1151,6 +1152,23 @@ levenshtein(str1, str2)
 
 - **str1**: String expression to compute Levenshtein distance with str2.
 - **str2**: String expression to compute Levenshtein distance with str1.
+
+### `substr_index`
+
+Returns the substring from str before count occurrences of the delimiter delim.
+If count is positive, everything to the left of the final delimiter (counting from the left) is returned.
+If count is negative, everything to the right of the final delimiter (counting from the right) is returned.
+For example, `substr_index('www.apache.org', '.', 1) = www`, `substr_index('www.apache.org', '.', -1) = apache.org`
+
+```
+substr_index(str, delim, count)
+```
+
+#### Arguments
+
+- **str**: String expression to operate on.
+- **delim**: the string to find in str to split str.
+- **count**: The number of times to search for the delimiter. Can be both a positive or negative number.
 
 ## Binary String Functions
 
