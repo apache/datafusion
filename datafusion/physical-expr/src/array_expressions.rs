@@ -817,8 +817,7 @@ pub fn array_sort(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     let list_array = as_list_array(&args[0])?;
 
-    let sorted_array =
-        arrow_ord::sort::sort(list_array.values(), sort_option.clone()).unwrap();
+    let sorted_array = arrow_ord::sort::sort(list_array.values(), sort_option).unwrap();
 
     Ok(Arc::new(array_into_list_array(sorted_array)))
 }

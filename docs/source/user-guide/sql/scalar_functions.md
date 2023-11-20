@@ -1612,6 +1612,7 @@ array_append(array, element)
 - list_push_back
 
 ### `array_sort`
+
 Sort array.
 
 ```
