@@ -835,15 +835,12 @@ pub fn to_substrait_rex(
                 });
             }
 
-            let func_name = match &func_def {
-                ScalarFunctionDefinition::BuiltIn(fun) => Ok(fun.to_string()),
-                ScalarFunctionDefinition::UDF(fun) => Ok(fun.name().to_string()),
-                ScalarFunctionDefinition::Name(_) => {
-                    internal_err!("Function `Expr` with name should be resolved.")
-                }
-            };
+            // function should be resolved during `AnalyzerRule`
+            if let ScalarFunctionDefinition::Name(_) = func_def {
+                return internal_err!("Function `Expr` with name should be resolved.");
+            }
 
-            let function_anchor = _register_function(func_name?, extension_info);
+            let function_anchor = _register_function(func_def.name(), extension_info);
             Ok(Expression {
                 rex_type: Some(RexType::ScalarFunction(ScalarFunction {
                     function_reference: function_anchor,

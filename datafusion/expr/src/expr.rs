@@ -337,6 +337,7 @@ impl Between {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// Defines which implementation of a function for DataFusion to call.
 pub enum ScalarFunctionDefinition {
     /// Resolved to a `BuiltinScalarFunction`
     /// There is plan to migrate `BuiltinScalarFunction` to UDF-based implementation (issue#8045)
@@ -344,8 +345,8 @@ pub enum ScalarFunctionDefinition {
     BuiltIn(built_in_function::BuiltinScalarFunction),
     /// Resolved to a user defined function
     UDF(Arc<crate::ScalarUDF>),
-    /// A scalar function constructed with name, could be resolved with registered functions during
-    /// analyzing.
+    /// A scalar function constructed with name. This variant can not be executed directly
+    /// and instead must be resolved to one of the other variants prior to physical planning.
     Name(Arc<str>),
 }
 
@@ -356,6 +357,17 @@ pub struct ScalarFunction {
     pub func_def: ScalarFunctionDefinition,
     /// List of expressions to feed to the functions as arguments
     pub args: Vec<Expr>,
+}
+
+impl ScalarFunctionDefinition {
+    /// Function's name for display
+    pub fn name(&self) -> String {
+        match self {
+            ScalarFunctionDefinition::BuiltIn(builtin_func) => builtin_func.to_string(),
+            ScalarFunctionDefinition::UDF(udf) => udf.name().to_string(),
+            ScalarFunctionDefinition::Name(func_name) => func_name.as_ref().to_string(),
+        }
+    }
 }
 
 impl ScalarFunction {
@@ -1201,21 +1213,9 @@ impl fmt::Display for Expr {
                     write!(f, " NULLS LAST")
                 }
             }
-            Expr::ScalarFunction(func_expr) => match &func_expr.func_def {
-                ScalarFunctionDefinition::BuiltIn(builtin_func) => fmt_function(
-                    f,
-                    &builtin_func.to_string(),
-                    false,
-                    &func_expr.args,
-                    true,
-                ),
-                ScalarFunctionDefinition::UDF(udf) => {
-                    fmt_function(f, udf.name(), false, &func_expr.args, true)
-                }
-                ScalarFunctionDefinition::Name(func_name) => {
-                    fmt_function(f, func_name, false, &func_expr.args, true)
-                }
-            },
+            Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
+                fmt_function(f, &func_def.name(), false, args, true)
+            }
             Expr::WindowFunction(WindowFunction {
                 fun,
                 args,
@@ -1546,17 +1546,9 @@ fn create_name(e: &Expr) -> Result<String> {
                 }
             }
         }
-        Expr::ScalarFunction(func_expr) => match &func_expr.func_def {
-            ScalarFunctionDefinition::BuiltIn(builtin_func) => {
-                create_function_name(&builtin_func.to_string(), false, &func_expr.args)
-            }
-            ScalarFunctionDefinition::UDF(udf) => {
-                create_function_name(udf.name(), false, &func_expr.args)
-            }
-            ScalarFunctionDefinition::Name(name) => {
-                create_function_name(name, false, &func_expr.args)
-            }
-        },
+        Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
+            create_function_name(&func_def.name(), false, args)
+        }
         Expr::WindowFunction(WindowFunction {
             fun,
             args,

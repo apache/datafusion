@@ -352,7 +352,7 @@ impl<'a> ConstEvaluator<'a> {
                 ScalarFunctionDefinition::UDF(fun) => {
                     Self::volatility_ok(fun.signature().volatility)
                 }
-                ScalarFunctionDefinition::Name(_) => true,
+                ScalarFunctionDefinition::Name(_) => false,
             },
             Expr::Literal(_)
             | Expr::BinaryExpr { .. }
