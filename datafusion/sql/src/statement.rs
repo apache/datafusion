@@ -1177,7 +1177,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     }
                     // The value is not specified. Fill in the default value for the column.
                     None => table_source
-                        .get_column_default(&target_field.name())
+                        .get_column_default(target_field.name())
                         .cloned()
                         .unwrap_or_else(|| {
                             // If there is no default for the column, then the default is NULL
