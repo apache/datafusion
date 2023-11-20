@@ -2575,6 +2575,7 @@ mod tests {
         let col_b = &col("b", &schema)?;
         let col_c = &col("c", &schema)?;
         let col_d = &col("d", &schema)?;
+        let col_e = &col("e", &schema)?;
 
         let option_asc = SortOptions {
             descending: false,
@@ -2704,7 +2705,11 @@ mod tests {
                     // [c ASC, a ASC]
                     vec![(col_c, option_asc), (col_a, option_asc)],
                     // [d ASC, b ASC, c ASC]
-                    vec![(col_d, option_asc), (col_b, option_asc), (col_c, option_asc)],
+                    vec![
+                        (col_d, option_asc),
+                        (col_b, option_asc),
+                        (col_c, option_asc),
+                    ],
                 ],
                 // EXPECTED orderings that is succinct.
                 vec![
@@ -2715,7 +2720,73 @@ mod tests {
                     // [d ASC]
                     vec![(col_d, option_asc)],
                 ],
-            ),            
+            ),
+            // ------- TEST CASE 8 ---------
+            // b, e
+            // c, a
+            // d, b, e, c, a
+            (
+                // ORDERINGS GIVEN
+                vec![
+                    // [b ASC, e ASC]
+                    vec![(col_b, option_asc), (col_e, option_asc)],
+                    // [c ASC, a ASC]
+                    vec![(col_c, option_asc), (col_a, option_asc)],
+                    // [d ASC, b ASC, e ASC, c ASC, a ASC]
+                    vec![
+                        (col_d, option_asc),
+                        (col_b, option_asc),
+                        (col_e, option_asc),
+                        (col_c, option_asc),
+                        (col_a, option_asc),
+                    ],
+                ],
+                // EXPECTED orderings that is succinct.
+                vec![
+                    // [b ASC, e ASC]
+                    vec![(col_b, option_asc), (col_e, option_asc)],
+                    // [c ASC, a ASC]
+                    vec![(col_c, option_asc), (col_a, option_asc)],
+                    // [d ASC]
+                    vec![(col_d, option_asc)],
+                ],
+            ),
+            // ------- TEST CASE 9 ---------
+            // b
+            // a, b, c
+            // d, a, b
+            (
+                // ORDERINGS GIVEN
+                vec![
+                    // [b ASC]
+                    vec![(col_b, option_asc)],
+                    // [a ASC, b ASC, c ASC]
+                    vec![
+                        (col_a, option_asc),
+                        (col_b, option_asc),
+                        (col_c, option_asc),
+                    ],
+                    // [d ASC, a ASC, b ASC]
+                    vec![
+                        (col_d, option_asc),
+                        (col_a, option_asc),
+                        (col_b, option_asc),
+                    ],
+                ],
+                // EXPECTED orderings that is succinct.
+                vec![
+                    // [b ASC]
+                    vec![(col_b, option_asc)],
+                    // [a ASC, b ASC, c ASC]
+                    vec![
+                        (col_a, option_asc),
+                        (col_b, option_asc),
+                        (col_c, option_asc),
+                    ],
+                    // [d ASC]
+                    vec![(col_d, option_asc)],
+                ],
+            ),
         ];
         for (orderings, expected) in test_cases {
             let orderings = convert_to_orderings(&orderings);
