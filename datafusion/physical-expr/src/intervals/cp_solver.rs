@@ -460,6 +460,33 @@ impl ExprIntervalGraph {
         nodes
     }
 
+    /// Updates intervals for all expressions in the DAEG by successive
+    /// bottom-up and top-down traversals.
+    pub fn update_ranges(
+        &mut self,
+        leaf_bounds: &mut [(usize, Interval)],
+        given_range: Interval,
+    ) -> Result<PropagationResult> {
+        self.assign_intervals(leaf_bounds);
+        let bounds = self.evaluate_bounds()?;
+        // There are three possible cases to consider:
+        // (1) given_range ⊇ bounds => Nothing to propagate
+        // (2) ∅ ⊂ (given_range ∩ bounds) ⊂ bounds => Can propagate
+        // (3) Disjoint sets => Infeasible
+        if given_range.contains(bounds)? == Interval::CERTAINLY_TRUE {
+            // First case:
+            Ok(PropagationResult::CannotPropagate)
+        } else if bounds.contains(&given_range)? != Interval::CERTAINLY_FALSE {
+            // Second case:
+            let result = self.propagate_constraints(given_range);
+            self.update_intervals(leaf_bounds);
+            result
+        } else {
+            // Third case:
+            Ok(PropagationResult::Infeasible)
+        }
+    }
+
     /// This function assigns given ranges to expressions in the DAEG.
     /// The argument `assignments` associates indices of sought expressions
     /// with their corresponding new ranges.
@@ -589,33 +616,6 @@ impl ExprIntervalGraph {
             }
         }
         Ok(PropagationResult::Success)
-    }
-
-    /// Updates intervals for all expressions in the DAEG by successive
-    /// bottom-up and top-down traversals.
-    pub fn update_ranges(
-        &mut self,
-        leaf_bounds: &mut [(usize, Interval)],
-        given_range: Interval,
-    ) -> Result<PropagationResult> {
-        self.assign_intervals(leaf_bounds);
-        let bounds = self.evaluate_bounds()?;
-        // There are three possible cases to consider:
-        // (1) given_range ⊇ bounds => Nothing to propagate
-        // (2) ∅ ⊂ (given_range ∩ bounds) ⊂ bounds => Can propagate
-        // (3) Disjoint sets => Infeasible
-        if given_range.is_superset(bounds)? == Interval::CERTAINLY_TRUE {
-            // First case:
-            Ok(PropagationResult::CannotPropagate)
-        } else if bounds.is_superset(&given_range)? != Interval::CERTAINLY_FALSE {
-            // Second case:
-            let result = self.propagate_constraints(given_range);
-            self.update_intervals(leaf_bounds);
-            result
-        } else {
-            // Third case:
-            Ok(PropagationResult::Infeasible)
-        }
     }
 
     /// Returns the interval associated with the node at the given `index`.
@@ -1557,6 +1557,91 @@ mod tests {
                 &right
             )?
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_propagate_or() -> Result<()> {
+        let expr = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Or,
+            Arc::new(Column::new("b", 1)),
+        ));
+        let parent = Interval::CERTAINLY_FALSE;
+        let children_set = vec![
+            vec![&Interval::CERTAINLY_FALSE, &Interval::UNCERTAIN],
+            vec![&Interval::UNCERTAIN, &Interval::CERTAINLY_FALSE],
+            vec![&Interval::CERTAINLY_FALSE, &Interval::CERTAINLY_FALSE],
+            vec![&Interval::UNCERTAIN, &Interval::UNCERTAIN],
+        ];
+        for children in children_set {
+            assert_eq!(
+                expr.propagate_constraints(&parent, &children)?.unwrap(),
+                vec![Interval::CERTAINLY_FALSE, Interval::CERTAINLY_FALSE],
+            );
+        }
+
+        let parent = Interval::CERTAINLY_FALSE;
+        let children_set = vec![
+            vec![&Interval::CERTAINLY_TRUE, &Interval::UNCERTAIN],
+            vec![&Interval::UNCERTAIN, &Interval::CERTAINLY_TRUE],
+        ];
+        for children in children_set {
+            assert_eq!(expr.propagate_constraints(&parent, &children)?, None,);
+        }
+
+        let parent = Interval::CERTAINLY_TRUE;
+        let children = vec![&Interval::CERTAINLY_FALSE, &Interval::UNCERTAIN];
+        assert_eq!(
+            expr.propagate_constraints(&parent, &children)?.unwrap(),
+            vec![Interval::CERTAINLY_FALSE, Interval::CERTAINLY_TRUE]
+        );
+
+        let parent = Interval::CERTAINLY_TRUE;
+        let children = vec![&Interval::UNCERTAIN, &Interval::UNCERTAIN];
+        assert_eq!(
+            expr.propagate_constraints(&parent, &children)?.unwrap(),
+            // Empty means unchanged intervals.
+            vec![]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_propagate_certainly_false_and() -> Result<()> {
+        let expr = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::And,
+            Arc::new(Column::new("b", 1)),
+        ));
+        let parent = Interval::CERTAINLY_FALSE;
+        let children_and_results_set = vec![
+            (
+                vec![&Interval::CERTAINLY_TRUE, &Interval::UNCERTAIN],
+                vec![Interval::CERTAINLY_TRUE, Interval::CERTAINLY_FALSE],
+            ),
+            (
+                vec![&Interval::UNCERTAIN, &Interval::CERTAINLY_TRUE],
+                vec![Interval::CERTAINLY_FALSE, Interval::CERTAINLY_TRUE],
+            ),
+            (
+                vec![&Interval::UNCERTAIN, &Interval::UNCERTAIN],
+                // Empty means unchanged intervals.
+                vec![],
+            ),
+            (
+                vec![&Interval::CERTAINLY_FALSE, &Interval::UNCERTAIN],
+                vec![],
+            ),
+        ];
+        for (children, result) in children_and_results_set {
+            assert_eq!(
+                expr.propagate_constraints(&parent, &children)?.unwrap(),
+                result
+            );
+        }
 
         Ok(())
     }

@@ -85,7 +85,7 @@ impl<'a> TreeNodeRewriter for GuaranteeRewriter<'a> {
                         values: Interval::try_new(low.clone(), high.clone())?,
                     };
 
-                    let contains = expr_interval.is_superset(*interval)?;
+                    let contains = expr_interval.contains(*interval)?;
 
                     if contains.is_certainly_true() {
                         Ok(lit(!negated))
@@ -166,7 +166,7 @@ impl<'a> TreeNodeRewriter for GuaranteeRewriter<'a> {
                         .filter_map(|expr| {
                             if let Expr::Literal(item) = expr {
                                 match interval
-                                    .is_superset(&NullableInterval::from(item.clone()))
+                                    .contains(&NullableInterval::from(item.clone()))
                                 {
                                     // If we know for certain the value isn't in the column's interval,
                                     // we can skip checking it.

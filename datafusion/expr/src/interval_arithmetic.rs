@@ -551,13 +551,13 @@ impl Interval {
     }
 
     /// Decide if this interval certainly contains, possibly contains, or can't
-    /// contain `other` by returning `[true, true]`, `[false, true]` or
-    /// `[false, false]` respectively.
+    /// contain a [`ScalarValue`] (`other`) by returning `[true, true]`,
+    /// `[false, true]` or `[false, false]` respectively.
     ///
     /// NOTE: This function only works with intervals of the same data type.
     ///       Attempting to compare intervals of different data types will lead
     ///       to an error.
-    pub fn contains<T: Borrow<ScalarValue>>(&self, other: T) -> Result<bool> {
+    pub fn contains_value<T: Borrow<ScalarValue>>(&self, other: T) -> Result<bool> {
         let rhs = other.borrow();
         if self.data_type().ne(&rhs.data_type()) {
             return internal_err!(
@@ -572,14 +572,14 @@ impl Interval {
         Ok(&self.lower <= rhs && (self.upper.is_null() || rhs <= &self.upper))
     }
 
-    /// Decide if this interval is certainly a superset of, possibly a superset
-    /// of, or can't be a superset of `other` by returning `[true, true]`,
-    /// `[false, true]` or `[false, false]` respectively.
+    /// Decide if this interval is a superset of, overlaps with, or
+    /// disjoint with `other` by returning `[true, true]`, `[false, true]` or
+    /// `[false, false]` respectively.
     ///
     /// NOTE: This function only works with intervals of the same data type.
     ///       Attempting to compare intervals of different data types will lead
     ///       to an error.
-    pub fn is_superset<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
+    pub fn contains<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
         if self.data_type().ne(&rhs.data_type()) {
             return internal_err!(
@@ -654,8 +654,8 @@ impl Interval {
         let zero = ScalarValue::new_zero(&dt)?;
 
         let result = match (
-            self.contains(&zero)?,
-            rhs.contains(&zero)?,
+            self.contains_value(&zero)?,
+            rhs.contains_value(&zero)?,
             dt.is_unsigned_integer(),
         ) {
             (true, true, false) => mul_helper_multi_zero_inclusive(&dt, self, rhs),
@@ -703,14 +703,13 @@ impl Interval {
 
         // Exit early with an unbounded interval if zero is strictly inside the
         // right hand side:
-        if rhs.is_superset(&zero_point)? == Self::CERTAINLY_TRUE
-            && !dt.is_unsigned_integer()
+        if rhs.contains(&zero_point)? == Self::CERTAINLY_TRUE && !dt.is_unsigned_integer()
         {
             Self::make_unbounded(&dt)
         }
         // At this point, we know that only one endpoint of the right hand side
         // can be zero.
-        else if self.is_superset(&zero_point)? == Self::CERTAINLY_TRUE
+        else if self.contains(&zero_point)? == Self::CERTAINLY_TRUE
             && !dt.is_unsigned_integer()
         {
             Ok(div_helper_lhs_zero_inclusive(&dt, self, rhs, &zero_point))
@@ -1651,11 +1650,11 @@ impl NullableInterval {
     /// interval that is [true, true] if this interval is a superset of the
     /// given interval, [false, false] if this interval is disjoint from the
     /// given interval, and [false, true] otherwise.
-    pub fn is_superset<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
+    pub fn contains<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
         if let (Some(left_values), Some(right_values)) = (self.values(), rhs.values()) {
             left_values
-                .is_superset(right_values)
+                .contains(right_values)
                 .map(|values| match (self, rhs) {
                     (Self::NotNull { .. }, Self::NotNull { .. }) => {
                         Self::NotNull { values }
@@ -2430,7 +2429,7 @@ mod tests {
             ),
         ];
         for (first, second, expected) in possible_cases {
-            assert_eq!(first.is_superset(second)?, expected)
+            assert_eq!(first.contains(second)?, expected)
         }
 
         Ok(())

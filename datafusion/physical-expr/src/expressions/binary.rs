@@ -346,7 +346,7 @@ impl PhysicalExpr for BinaryExpr {
 
         if self.op.eq(&Operator::And) {
             if interval.eq(&Interval::CERTAINLY_TRUE) {
-                // A certainly true `And` conjunction can not derive from certainly
+                // A certainly true logical conjunction can not derive from certainly
                 // false operands, implying infeasability:
                 if left_interval.eq(&Interval::CERTAINLY_FALSE)
                     || right_interval.eq(&Interval::CERTAINLY_FALSE)
@@ -392,7 +392,7 @@ impl PhysicalExpr for BinaryExpr {
             }
         } else if self.op.eq(&Operator::Or) {
             if interval.eq(&Interval::CERTAINLY_FALSE) {
-                // A certainly false `Or` conjunction can not derive from certainly
+                // A certainly false logical disjunction can not derive from certainly
                 // true operands, implying infeasability:
                 if left_interval.eq(&Interval::CERTAINLY_TRUE)
                     || right_interval.eq(&Interval::CERTAINLY_TRUE)
@@ -463,7 +463,7 @@ impl PhysicalExpr for BinaryExpr {
             Operator::Minus => left_child.sub(right_child),
             Operator::Gt | Operator::GtEq => left_child.gt_or_gteq(right_child),
             Operator::Lt | Operator::LtEq => right_child.gt_or_gteq(left_child),
-            Operator::And => left_child.and(right_child),
+            Operator::And | Operator::Or => left_child.and_or(right_child),
             _ => SortProperties::Unordered,
         }
     }
