@@ -226,18 +226,21 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Cast {
                 expr, data_type, ..
             } => {
-                let mut dt = self.convert_data_type(&data_type)?;
+                let dt = self.convert_data_type(&data_type)?;
                 let expr =
                     self.sql_expr_to_logical_expr(*expr, schema, planner_context)?;
 
-                // int/floats should come as seconds rather as nanoseconds
-                dt = match &dt {
+                // int/floats input should be treated as seconds rather as nanoseconds
+                let expr = match &dt {
                     DataType::Timestamp(TimeUnit::Nanosecond, tz)
                         if expr.get_type(schema)? == DataType::Int64 =>
                     {
-                        DataType::Timestamp(TimeUnit::Second, tz.clone())
+                        Expr::Cast(Cast::new(
+                            Box::new(expr),
+                            DataType::Timestamp(TimeUnit::Second, tz.clone()),
+                        ))
                     }
-                    _ => dt,
+                    _ => expr,
                 };
 
                 Ok(Expr::Cast(Cast::new(Box::new(expr), dt)))

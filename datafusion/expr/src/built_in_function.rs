@@ -779,13 +779,10 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::SubstrIndex => {
                 utf8_to_str_type(&input_expr_types[0], "substr_index")
             }
-            BuiltinScalarFunction::ToTimestamp => Ok(match &input_expr_types[0] {
-                Int64 => Timestamp(Second, None),
-                _ => Timestamp(Nanosecond, None),
-            }),
+            BuiltinScalarFunction::ToTimestamp
+            | BuiltinScalarFunction::ToTimestampNanos => Ok(Timestamp(Nanosecond, None)),
             BuiltinScalarFunction::ToTimestampMillis => Ok(Timestamp(Millisecond, None)),
             BuiltinScalarFunction::ToTimestampMicros => Ok(Timestamp(Microsecond, None)),
-            BuiltinScalarFunction::ToTimestampNanos => Ok(Timestamp(Nanosecond, None)),
             BuiltinScalarFunction::ToTimestampSeconds => Ok(Timestamp(Second, None)),
             BuiltinScalarFunction::FromUnixtime => Ok(Timestamp(Second, None)),
             BuiltinScalarFunction::Now => {
