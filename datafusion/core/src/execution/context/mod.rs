@@ -529,7 +529,7 @@ impl SessionContext {
             if_not_exists,
             or_replace,
             constraints,
-            column_defaults: _,
+            column_defaults,
         } = cmd;
 
         let input = Arc::try_unwrap(input).unwrap_or_else(|e| e.as_ref().clone());
@@ -543,7 +543,12 @@ impl SessionContext {
                 let physical = DataFrame::new(self.state(), input);
 
                 let batches: Vec<_> = physical.collect_partitioned().await?;
-                let table = Arc::new(MemTable::try_new(schema, batches)?);
+                let table = Arc::new(
+                    // pass constraints and column defaults to the mem table.
+                    MemTable::try_new(schema, batches)?
+                        .with_constraints(constraints)
+                        .with_column_defaults(column_defaults.into_iter().collect()),
+                );
 
                 self.register_table(&name, table)?;
                 self.return_empty_dataframe()
@@ -558,8 +563,10 @@ impl SessionContext {
 
                 let batches: Vec<_> = physical.collect_partitioned().await?;
                 let table = Arc::new(
-                    // pass constraints to the mem table.
-                    MemTable::try_new(schema, batches)?.with_constraints(constraints),
+                    // pass constraints and column defaults to the mem table.
+                    MemTable::try_new(schema, batches)?
+                        .with_constraints(constraints)
+                        .with_column_defaults(column_defaults.into_iter().collect()),
                 );
 
                 self.register_table(&name, table)?;
