@@ -1028,40 +1028,40 @@ impl EquivalenceProperties {
         let normalized_reqs = eq_properties.normalize_sort_requirements(reqs);
         for normalized_req in normalized_reqs {
             // Check whether given ordering is satisfied
-            if !eq_properties.ordering_satisfy_single_req(&normalized_req) {
+            if !eq_properties.ordering_satisfy_single(&normalized_req) {
                 return false;
             }
-            // - Treat satisfied ordering as constant in the next iterations. Since in lexicographical ordering
-            //   next orderings are only considered as long as their left side have same values
-            //   (e.g for them their left side is constant).
+            // Treat satisfied keys as constants in subsequent iterations. We
+            // can do this because the "next" key only matters in a lexicographical
+            // ordering when the keys to its left have the same values.
             //
-            // Please note that, these expressions are not properly constant. This is just implementation
-            // and this interpretation doesn't effect outside users in anyway.
+            // Note that these expressions are not properly "constants". This is just
+            // an implementation strategy confined to this function.
             //
-            // As an example:
-            // If the requirement is `[a ASC, b + c ASC]`.
-            // and existing orderings are `[a ASC, b ASC], [c ASC]`.
-            // From the analysis above, we know that `[a ASC]` is satisfied.
-            // Then here, we add column `a` as constant to the state.
-            // This enables us to deduce that `b + c ASC` is satisfied, given `a` is constant.
+            // For example, assume that the requirement is `[a ASC, (b + c) ASC]`,
+            // and existing equivalent orderings are `[a ASC, b ASC]` and `[c ASC]`.
+            // From the analysis above, we know that `[a ASC]` is satisfied. Then,
+            // we add column `a` as constant to the algorithm state. This enables us
+            // to deduce that `(b + c) ASC` is satisfied, given `a` is constant.
             eq_properties =
                 eq_properties.add_constants(std::iter::once(normalized_req.expr));
         }
         true
     }
 
-    /// Determines whether the ordering specified by a given `PhysicalSortRequirement` is satisfied
-    /// based on the internal orderings, equivalent classes, and constant expressions.
+    /// Determines whether the ordering specified by the given sort requirement
+    /// is satisfied based on the orderings within, equivalence classes, and
+    /// constant expressions.
     ///
     /// # Arguments
     ///
-    /// - `req`: A reference to a `PhysicalSortRequirement` for which the ordering satisfaction
-    ///   needs to be determined.
+    /// - `req`: A reference to a `PhysicalSortRequirement` for which the ordering
+    ///   satisfaction check will be done.
     ///
     /// # Returns
     ///
-    /// Returns `true` if the specified ordering is satisfied; otherwise, returns `false`.
-    fn ordering_satisfy_single_req(&self, req: &PhysicalSortRequirement) -> bool {
+    /// Returns `true` if the specified ordering is satisfied, `false` otherwise.
+    fn ordering_satisfy_single(&self, req: &PhysicalSortRequirement) -> bool {
         let expr_ordering = self.get_expr_ordering(req.expr.clone());
         let ExprOrdering { expr, state, .. } = expr_ordering;
         match state {
@@ -1198,31 +1198,31 @@ impl EquivalenceProperties {
 
     /// Projects constants based on the provided `ProjectionMapping`.
     ///
-    /// This function takes a `ProjectionMapping` and identifies and projects constants based on
-    /// the existing constants and the mapping. It ensures that constants are appropriately
-    /// propagated through the projection expressions.
+    /// This function takes a `ProjectionMapping` and identifies/projects
+    /// constants based on the existing constants and the mapping. It ensures
+    /// that constants are appropriately propagated through the projection.
     ///
     /// # Arguments
     ///
-    /// - `mapping`: A reference to a `ProjectionMapping` representing the mapping of source
-    ///   expressions to target expressions in the projection.
+    /// - `mapping`: A reference to a `ProjectionMapping` representing the
+    ///   mapping of source expressions to target expressions in the projection.
     ///
     /// # Returns
     ///
-    /// Returns a vector of `Arc<dyn PhysicalExpr>` containing the projected constants.
+    /// Returns a `Vec<Arc<dyn PhysicalExpr>>` containing the projected constants.
     fn projected_constants(
         &self,
         mapping: &ProjectionMapping,
     ) -> Vec<Arc<dyn PhysicalExpr>> {
-        // Project existing constants
-        // As an example assume that a+b is known to be constant. If projection were:
-        // `a as a_new`, `b as b_new`; we would project constant `a+b` as `a_new+b_new`
+        // First, project existing constants. For example, assume that `a + b`
+        // is known to be constant. If the projection were `a as a_new`, `b as b_new`,
+        // then we would project constant `a + b` as `a_new + b_new`.
         let mut projected_constants = self
             .constants
             .iter()
             .flat_map(|expr| self.eq_group.project_expr(mapping, expr))
             .collect::<Vec<_>>();
-        // Add projection expressions that are known to be constant.
+        // Add projection expressions that are known to be constant:
         for (source, target) in mapping.iter() {
             if self.is_expr_constant(source)
                 && !physical_exprs_contains(&projected_constants, target)
@@ -1240,9 +1240,6 @@ impl EquivalenceProperties {
         projection_mapping: &ProjectionMapping,
         output_schema: SchemaRef,
     ) -> Self {
-        let projected_constants = self.projected_constants(projection_mapping);
-        let projected_eq_group = self.eq_group.project(projection_mapping);
-
         let mut projected_orderings = self
             .oeq_class
             .iter()
@@ -1251,7 +1248,7 @@ impl EquivalenceProperties {
         for (source, target) in projection_mapping.iter() {
             let expr_ordering = ExprOrdering::new(source.clone())
                 .transform_up(&|expr| Ok(update_ordering(expr, self)))
-                // It is guaranteed to always return Ok.
+                // Guaranteed to always return `Ok`.
                 .unwrap();
             if let SortProperties::Ordered(options) = expr_ordering.state {
                 // Push new ordering to the state.
@@ -1262,9 +1259,9 @@ impl EquivalenceProperties {
             }
         }
         Self {
-            eq_group: projected_eq_group,
+            eq_group: self.eq_group.project(projection_mapping),
             oeq_class: OrderingEquivalenceClass::new(projected_orderings),
-            constants: projected_constants,
+            constants: self.projected_constants(projection_mapping),
             schema: output_schema,
         }
     }
@@ -1285,110 +1282,111 @@ impl EquivalenceProperties {
     ) -> (LexOrdering, Vec<usize>) {
         let mut eq_properties = self.clone();
         let mut result = vec![];
-        // Algorithm is as follows:
-        // - 1. Iterate over all expressions and insert the expressions that are known to be ordered
-        //      into result_ordering.
-        // - 2. Treat inserted expressions as constants (add them as constant to the state)
-        // - 3. Go back to step 1.
-        // - Continue the above iteration as long as no new expression is inserted (Algorithm reached a fixed point).
-
+        // The algorithm is as follows:
+        // - Iterate over all the expressions and insert ordered expressions
+        //   into the result.
+        // - Treat inserted expressions as constants (i.e. add them as constants
+        //   to the state).
+        // - Continue the above procedure until no expression is inserted; i.e.
+        //   the algorithm reaches a fixed point.
+        // This algorithm should reach a fixed point in at most `exprs.len()`
+        // iterations.
         let mut search_indices = (0..exprs.len()).collect::<IndexSet<_>>();
-        // Algorithm above should reach a fixed point at-most `exprs.len()` number of iterations.
-        // We could have use loop{}, However, to guarantee we exit anyway (in-case of bugs).
-        // We use upper limit number of iterations (worst-case).
         for _idx in 0..exprs.len() {
             // Get ordered expressions with their indices.
             let ordered_exprs = search_indices
                 .iter()
                 .flat_map(|&idx| {
-                    let expr = exprs[idx].clone();
                     let ExprOrdering { expr, state, .. } =
-                        eq_properties.get_expr_ordering(expr);
+                        eq_properties.get_expr_ordering(exprs[idx].clone());
                     if let SortProperties::Ordered(options) = state {
-                        let sort_expr = PhysicalSortExpr { expr, options };
-                        Some((sort_expr, idx))
+                        Some((PhysicalSortExpr { expr, options }, idx))
                     } else {
                         None
                     }
                 })
                 .collect::<Vec<_>>();
-
             // We reached a fixed point, exit.
             if ordered_exprs.is_empty() {
                 break;
             }
-
-            // - Remove indices that have an ordering from search_indices
-            // - Treat ordered expressions as constant in the next iterations. Since in lexicographical ordering
-            //   next orderings are only considered as long as their left side have same values
-            //   (e.g for them their left side is constant).
+            // Remove indices that have an ordering from `search_indices`, and
+            // treat ordered expressions as constants in subsequent iterations.
+            // We can do this because the "next" key only matters in a lexicographical
+            // ordering when the keys to its left have the same values.
             //
-            // Please note that, these expressions are not properly constant. This is just implementation
-            // and this interpretation doesn't effect outside users in anyway.
-            for (sort_expr, idx) in &ordered_exprs {
+            // Note that these expressions are not properly "constants". This is just
+            // an implementation strategy confined to this function.
+            for (PhysicalSortExpr { expr, .. }, idx) in &ordered_exprs {
                 eq_properties =
-                    eq_properties.add_constants(std::iter::once(sort_expr.expr.clone()));
+                    eq_properties.add_constants(std::iter::once(expr.clone()));
                 search_indices.remove(idx);
             }
-
             // Add new ordered section to the state.
             result.extend(ordered_exprs);
         }
         result.into_iter().unzip()
     }
 
-    /// Checks whether a given expression is constant.
-    ///
-    /// This function determines whether the provided expression is constant based on the known constants.
+    /// This function determines whether the provided expression is constant
+    /// based on the known constants.
     ///
     /// # Arguments
     ///
-    /// - `expr`: A reference to a `Arc<dyn PhysicalExpr>` representing the expression to be checked.
+    /// - `expr`: A reference to a `Arc<dyn PhysicalExpr>` representing the
+    ///   expression to be checked.
     ///
     /// # Returns
     ///
-    /// Returns `true` if the expression is constant within the equivalence group; otherwise, returns `false`.
+    /// Returns `true` if the expression is constant according to equivalence
+    /// group, `false` otherwise.
     fn is_expr_constant(&self, expr: &Arc<dyn PhysicalExpr>) -> bool {
-        // As an example, assume that we know columns [a, b] are constant.
-        // `a`, `b`, `a+b` will all return `true`, whereas `c` will return `false`.
+        // As an example, assume that we know columns `a` and `b` are constant.
+        // Then, `a`, `b` and `a + b` will all return `true` whereas `c` will
+        // return `false`.
         let normalized_constants = self.eq_group.normalize_exprs(self.constants.to_vec());
         let normalized_expr = self.eq_group.normalize_expr(expr.clone());
-        is_expr_constant_util(&normalized_constants, &normalized_expr)
+        is_constant_recurse(&normalized_constants, &normalized_expr)
     }
 
     /// Retrieves the ordering information for a given physical expression.
     ///
-    /// This function constructs an `ExprOrdering` object for the provided expression, which encapsulates
-    /// information about the expression's ordering, including its state and associated options.
+    /// This function constructs an `ExprOrdering` object for the provided
+    /// expression, which encapsulates information about the expression's
+    /// ordering, including its [`SortProperties`].
     ///
     /// # Arguments
     ///
-    /// - `expr`: An `Arc<dyn PhysicalExpr>` representing the physical expression for which ordering information is sought.
+    /// - `expr`: An `Arc<dyn PhysicalExpr>` representing the physical expression
+    ///   for which ordering information is sought.
     ///
     /// # Returns
     ///
-    /// Returns an `ExprOrdering` object containing the ordering information for the given expression.
+    /// Returns an `ExprOrdering` object containing the ordering information for
+    /// the given expression.
     pub fn get_expr_ordering(&self, expr: Arc<dyn PhysicalExpr>) -> ExprOrdering {
-        let expr_ordering = ExprOrdering::new(expr.clone());
-        expr_ordering
+        ExprOrdering::new(expr.clone())
             .transform_up(&|expr| Ok(update_ordering(expr, self)))
-            // It is guaranteed to always return Ok.
+            // Guaranteed to always return `Ok`.
             .unwrap()
     }
 }
 
-/// Checks whether a given expression is constant. This function determines whether the
-/// provided expression is constant based on the known constants.
+/// This function determines whether the provided expression is constant
+/// based on the known constants.
 ///
 /// # Arguments
 ///
-/// - `constants`: A reference to a `[Arc<dyn PhysicalExpr>]` containing expressions known to be a constant.
-/// - `expr`: A reference to a `Arc<dyn PhysicalExpr>` representing the expression to be checked.
+/// - `constants`: A `&[Arc<dyn PhysicalExpr>]` containing expressions known to
+///   be a constant.
+/// - `expr`: A reference to a `Arc<dyn PhysicalExpr>` representing the expression
+///   to check.
 ///
 /// # Returns
 ///
-/// Returns `true` if the expression is constant within the equivalence group; otherwise, returns `false`.
-fn is_expr_constant_util(
+/// Returns `true` if the expression is constant according to equivalence
+/// group, `false` otherwise.
+fn is_constant_recurse(
     constants: &[Arc<dyn PhysicalExpr>],
     expr: &Arc<dyn PhysicalExpr>,
 ) -> bool {
@@ -1396,13 +1394,7 @@ fn is_expr_constant_util(
         return true;
     }
     let children = expr.children();
-    if children.is_empty() {
-        false
-    } else {
-        children
-            .iter()
-            .all(|child| is_expr_constant_util(constants, child))
-    }
+    !children.is_empty() && children.iter().all(|c| is_constant_recurse(constants, c))
 }
 
 /// Calculate ordering equivalence properties for the given join operation.
@@ -1518,27 +1510,24 @@ fn update_ordering(
     eq_properties: &EquivalenceProperties,
 ) -> Transformed<ExprOrdering> {
     // We have a Column, which is one of the two possible leaf node types:
-    let eq_group = &eq_properties.eq_group;
-    let normalized_expr = eq_group.normalize_expr(node.expr.clone());
-    let oeq_class = &eq_properties.normalized_oeq_class();
+    let normalized_expr = eq_properties.eq_group.normalize_expr(node.expr.clone());
     if eq_properties.is_expr_constant(&normalized_expr) {
         node.state = SortProperties::Singleton;
-        return Transformed::Yes(node);
-    } else if let Some(options) = oeq_class.get_options(&normalized_expr) {
+    } else if let Some(options) = eq_properties
+        .normalized_oeq_class()
+        .get_options(&normalized_expr)
+    {
         node.state = SortProperties::Ordered(options);
-        return Transformed::Yes(node);
-    }
-    if !node.expr.children().is_empty() {
+    } else if !node.expr.children().is_empty() {
         // We have an intermediate (non-leaf) node, account for its children:
         node.state = node.expr.get_ordering(&node.children_states);
-        Transformed::Yes(node)
     } else if node.expr.as_any().is::<Literal>() {
         // We have a Literal, which is the other possible leaf node type:
         node.state = node.expr.get_ordering(&[]);
-        Transformed::Yes(node)
     } else {
-        Transformed::No(node)
+        return Transformed::No(node);
     }
+    Transformed::Yes(node)
 }
 
 #[cfg(test)]
@@ -3716,11 +3705,11 @@ mod tests {
 
         let constants = vec![col_a.clone(), col_b.clone()];
         let expr = b_plus_d.clone();
-        assert!(!is_expr_constant_util(&constants, &expr));
+        assert!(!is_constant_recurse(&constants, &expr));
 
         let constants = vec![col_a.clone(), col_b.clone(), col_d.clone()];
         let expr = b_plus_d.clone();
-        assert!(is_expr_constant_util(&constants, &expr));
+        assert!(is_constant_recurse(&constants, &expr));
         Ok(())
     }
 }
