@@ -495,6 +495,7 @@ set datafusion.execution.parquet.bloom_filter_enabled=true;
 
 query T
 SELECT * FROM data_index_bloom_encoding_stats WHERE "String" = 'foo';
+----
 
 query T
 SELECT * FROM data_index_bloom_encoding_stats WHERE "String" = 'test';

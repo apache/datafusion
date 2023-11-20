@@ -188,6 +188,7 @@ async fn store_parquet_in_memory(
                 last_modified: chrono::DateTime::from(SystemTime::now()),
                 size: buf.len(),
                 e_tag: None,
+                version: None,
             };
 
             (meta, Bytes::from(buf))

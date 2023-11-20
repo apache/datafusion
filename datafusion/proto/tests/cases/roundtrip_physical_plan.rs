@@ -22,7 +22,6 @@ use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, Fields, IntervalUnit, Schema};
 use datafusion::datasource::file_format::json::JsonSink;
-use datafusion::datasource::file_format::write::FileWriterMode;
 use datafusion::datasource::listing::{ListingTableUrl, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
@@ -732,7 +731,6 @@ fn roundtrip_json_sink() -> Result<()> {
         table_paths: vec![ListingTableUrl::parse("file:///")?],
         output_schema: schema.clone(),
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
-        writer_mode: FileWriterMode::Put,
         single_file_output: true,
         unbounded_input: false,
         overwrite: true,

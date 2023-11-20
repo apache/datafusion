@@ -29,7 +29,7 @@ rust-version = "1.70"
 readme = "README.md"
 
 [dependencies]
-arrow = "~48.0.1"
+arrow = "49.0.0"
 async-trait = "0.1.41"
 aws-config = "0.55"
 aws-credential-types = "0.55"
@@ -38,7 +38,7 @@ datafusion = { path = "../datafusion/core", version = "33.0.0", features = ["avr
 dirs = "4.0.0"
 env_logger = "0.9"
 mimalloc = { version = "0.1", default-features = false }
-object_store = { version = "0.7.0", features = ["aws", "gcp"] }
+object_store = { version = "0.8.0", features = ["aws", "gcp"] }
 parking_lot = { version = "0.12" }
 regex = "1.8"
 rustyline = "11.0"
