@@ -2668,6 +2668,7 @@ impl ScalarFunction {
             ScalarFunction::Lcm => "Lcm",
             ScalarFunction::Gcd => "Gcd",
             ScalarFunction::ArrayAppend => "ArrayAppend",
+            ScalarFunction::ArraySort => "ArraySort",
             ScalarFunction::ArrayConcat => "ArrayConcat",
             ScalarFunction::ArrayDims => "ArrayDims",
             ScalarFunction::ArrayRepeat => "ArrayRepeat",
