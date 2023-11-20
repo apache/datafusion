@@ -1742,19 +1742,17 @@ ProjectionExec: expr=[COUNT(*)@0 as global_count]
 --AggregateExec: mode=Final, gby=[], aggr=[COUNT(*)]
 ----CoalescePartitionsExec
 ------AggregateExec: mode=Partial, gby=[], aggr=[COUNT(*)]
---------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=2
 ----------ProjectionExec: expr=[]
-------------SortPreservingMergeExec: [c1@0 ASC NULLS LAST]
---------------SortExec: expr=[c1@0 ASC NULLS LAST]
-----------------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[]
-------------------CoalesceBatchesExec: target_batch_size=4096
---------------------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
-----------------------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[]
-------------------------ProjectionExec: expr=[c1@0 as c1]
---------------------------CoalesceBatchesExec: target_batch_size=4096
-----------------------------FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434
-------------------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
---------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c13], has_header=true
+------------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[]
+--------------CoalesceBatchesExec: target_batch_size=4096
+----------------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
+------------------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[]
+--------------------ProjectionExec: expr=[c1@0 as c1]
+----------------------CoalesceBatchesExec: target_batch_size=4096
+------------------------FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434
+--------------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+----------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c13], has_header=true
 
 query I
 SELECT count(*) as global_count FROM
