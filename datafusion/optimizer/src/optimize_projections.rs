@@ -144,7 +144,7 @@ fn optimize_projections(
             // Require all of the fields of the Dml, Ddl, Copy, Explain, Analyze, Subquery, Distinct::All input(s).
             // Their child plan can be treated as final plan. Otherwise expected schema may not match.
             // TODO: For some subquery variants we may not need to require all indices for its input.
-            //  such as Exists<SubQuery>.
+            // such as Exists<SubQuery>.
             let child_requirements = plan
                 .inputs()
                 .iter()
@@ -189,14 +189,10 @@ fn optimize_projections(
                 if &projection_schema(&proj.input, &exprs_used)? == proj.input.schema() {
                     Ok(Some(proj.input.as_ref().clone()))
                 } else {
-                    let new_proj = Projection::try_new(
-                        exprs_used,
-                        Arc::new(proj.input.as_ref().clone()),
-                    )?;
+                    let new_proj = Projection::try_new(exprs_used, proj.input.clone())?;
                     let new_proj = LogicalPlan::Projection(new_proj);
                     Ok(Some(new_proj))
                 }
-                // Ok(Some(new_proj))
             } else {
                 // Projection doesn't change.
                 Ok(None)
