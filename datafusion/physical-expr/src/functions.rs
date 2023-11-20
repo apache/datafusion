@@ -353,6 +353,9 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ArrayElement => {
             Arc::new(|args| make_scalar_function(array_expressions::array_element)(args))
         }
+        BuiltinScalarFunction::ArrayExcept => {
+            Arc::new(|args| make_scalar_function(array_expressions::array_except)(args))
+        }
         BuiltinScalarFunction::ArrayLength => {
             Arc::new(|args| make_scalar_function(array_expressions::array_length)(args))
         }

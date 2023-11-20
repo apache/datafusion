@@ -41,13 +41,13 @@ use datafusion_common::{
 };
 use datafusion_expr::{
     abs, acos, acosh, array, array_append, array_concat, array_dims, array_element,
-    array_has, array_has_all, array_has_any, array_intersect, array_length, array_ndims,
-    array_position, array_positions, array_prepend, array_remove, array_remove_all,
-    array_remove_n, array_repeat, array_replace, array_replace_all, array_replace_n,
-    array_slice, array_sort, array_to_string, arrow_typeof, ascii, asin, asinh, atan,
-    atan2, atanh, bit_length, btrim, cardinality, cbrt, ceil, character_length, chr,
-    coalesce, concat_expr, concat_ws_expr, cos, cosh, cot, current_date, current_time,
-    date_bin, date_part, date_trunc, decode, degrees, digest, encode, exp,
+    array_except, array_has, array_has_all, array_has_any, array_intersect, array_length,
+    array_ndims, array_position, array_positions, array_prepend, array_remove,
+    array_remove_all, array_remove_n, array_repeat, array_replace, array_replace_all,
+    array_replace_n, array_slice, array_sort, array_to_string, arrow_typeof, ascii, asin, asinh,
+    atan, atan2, atanh, bit_length, btrim, cardinality, cbrt, ceil, character_length,
+    chr, coalesce, concat_expr, concat_ws_expr, cos, cosh, cot, current_date,
+    current_time, date_bin, date_part, date_trunc, decode, degrees, digest, encode, exp,
     expr::{self, InList, Sort, WindowFunction},
     factorial, flatten, floor, from_unixtime, gcd, gen_range, isnan, iszero, lcm, left,
     levenshtein, ln, log, log10, log2,
@@ -466,6 +466,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ArraySort => Self::ArraySort,
             ScalarFunction::ArrayConcat => Self::ArrayConcat,
             ScalarFunction::ArrayEmpty => Self::ArrayEmpty,
+            ScalarFunction::ArrayExcept => Self::ArrayExcept,
             ScalarFunction::ArrayHasAll => Self::ArrayHasAll,
             ScalarFunction::ArrayHasAny => Self::ArrayHasAny,
             ScalarFunction::ArrayHas => Self::ArrayHas,
@@ -597,6 +598,7 @@ impl From<protobuf::AggregateFunction> for AggregateFunction {
             protobuf::AggregateFunction::Median => Self::Median,
             protobuf::AggregateFunction::FirstValueAgg => Self::FirstValue,
             protobuf::AggregateFunction::LastValueAgg => Self::LastValue,
+            protobuf::AggregateFunction::StringAgg => Self::StringAgg,
         }
     }
 }
@@ -659,7 +661,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
             Value::Float64Value(v) => Self::Float64(Some(*v)),
             Value::Date32Value(v) => Self::Date32(Some(*v)),
             // ScalarValue::List is serialized using arrow IPC format
-            Value::ListValue(scalar_list) => {
+            Value::ListValue(scalar_list) | Value::FixedSizeListValue(scalar_list) => {
                 let protobuf::ScalarListValue {
                     ipc_message,
                     arrow_data,
@@ -700,7 +702,11 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 .map_err(DataFusionError::ArrowError)
                 .map_err(|e| e.context("Decoding ScalarValue::List Value"))?;
                 let arr = record_batch.column(0);
-                Self::List(arr.to_owned())
+                match value {
+                    Value::ListValue(_) => Self::List(arr.to_owned()),
+                    Value::FixedSizeListValue(_) => Self::FixedSizeList(arr.to_owned()),
+                    _ => unreachable!(),
+                }
             }
             Value::NullValue(v) => {
                 let null_type: DataType = v.try_into()?;
@@ -1355,6 +1361,10 @@ pub fn parse_expr(
                         .map(|expr| parse_expr(expr, registry))
                         .collect::<Result<Vec<_>, _>>()?,
                 )),
+                ScalarFunction::ArrayExcept => Ok(array_except(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
                 ScalarFunction::ArrayHasAll => Ok(array_has_all(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
@@ -1364,6 +1374,10 @@ pub fn parse_expr(
                     parse_expr(&args[1], registry)?,
                 )),
                 ScalarFunction::ArrayHas => Ok(array_has(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
+                ScalarFunction::ArrayIntersect => Ok(array_intersect(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                 )),
@@ -1415,10 +1429,6 @@ pub fn parse_expr(
                     parse_expr(&args[2], registry)?,
                 )),
                 ScalarFunction::ArrayToString => Ok(array_to_string(
-                    parse_expr(&args[0], registry)?,
-                    parse_expr(&args[1], registry)?,
-                )),
-                ScalarFunction::ArrayIntersect => Ok(array_intersect(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                 )),

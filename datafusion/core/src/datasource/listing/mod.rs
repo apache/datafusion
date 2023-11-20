@@ -31,9 +31,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 pub use self::url::ListingTableUrl;
-pub use table::{
-    ListingOptions, ListingTable, ListingTableConfig, ListingTableInsertMode,
-};
+pub use table::{ListingOptions, ListingTable, ListingTableConfig};
 
 /// Stream of files get listed from object store
 pub type PartitionedFileStream =
@@ -82,6 +80,7 @@ impl PartitionedFile {
                 last_modified: chrono::Utc.timestamp_nanos(0),
                 size: size as usize,
                 e_tag: None,
+                version: None,
             },
             partition_values: vec![],
             range: None,
@@ -97,6 +96,7 @@ impl PartitionedFile {
                 last_modified: chrono::Utc.timestamp_nanos(0),
                 size: size as usize,
                 e_tag: None,
+                version: None,
             },
             partition_values: vec![],
             range: Some(FileRange { start, end }),

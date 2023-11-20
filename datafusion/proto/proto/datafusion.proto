@@ -638,8 +638,9 @@ enum ScalarFunction {
   ArrayUnion = 120;
   OverLay = 121;
   Range = 122;
-  ArrayPopFront = 123;
-  Levenshtein = 124;
+  ArrayExcept = 123;
+  ArrayPopFront = 124;
+  Levenshtein = 125;
 }
 
 message ScalarFunctionNode {
@@ -685,6 +686,7 @@ enum AggregateFunction {
   REGR_SXX = 32;
   REGR_SYY = 33;
   REGR_SXY = 34;
+  STRING_AGG = 35;
 }
 
 message AggregateExprNode {
@@ -983,6 +985,7 @@ message ScalarValue{
     int32  date_32_value = 14;
     ScalarTime32Value time32_value = 15;
     ScalarListValue list_value = 17;
+    ScalarListValue fixed_size_list_value = 18;
 
     Decimal128 decimal128_value = 20;
     Decimal256 decimal256_value = 39;
@@ -1155,12 +1158,6 @@ message PhysicalPlanNode {
   }
 }
 
-enum FileWriterMode {
-  APPEND = 0;
-  PUT = 1;
-  PUT_MULTIPART = 2;
-}
-
 enum CompressionTypeVariant {
   GZIP = 0;
   BZIP2 = 1;
@@ -1185,12 +1182,13 @@ message JsonWriterOptions {
 }
 
 message FileSinkConfig {
+  reserved 6; // writer_mode
+
   string object_store_url = 1;
   repeated PartitionedFile file_groups = 2;
   repeated string table_paths = 3;
   Schema output_schema = 4;
   repeated PartitionColumn table_partition_cols = 5;
-  FileWriterMode writer_mode = 6;
   bool single_file_output = 7;
   bool unbounded_input = 8;
   bool overwrite = 9;

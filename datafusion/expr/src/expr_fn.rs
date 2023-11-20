@@ -643,6 +643,12 @@ scalar_expr!(
     "extracts the element with the index n from the array."
 );
 scalar_expr!(
+    ArrayExcept,
+    array_except,
+    first_array second_array,
+    "Returns an array of the elements that appear in the first array but not in the second."
+);
+scalar_expr!(
     ArrayLength,
     array_length,
     array dimension,
