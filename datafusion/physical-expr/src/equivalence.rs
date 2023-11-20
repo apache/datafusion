@@ -1946,6 +1946,33 @@ mod tests {
             .collect()
     }
 
+    // Apply projection to the input_data, return projected equivalence properties and record batch
+    fn apply_projection(
+        proj_exprs: Vec<(Arc<dyn PhysicalExpr>, String)>,
+        input_data: &RecordBatch,
+        input_eq_properties: &EquivalenceProperties,
+    ) -> Result<(RecordBatch, EquivalenceProperties)> {
+        let input_schema = input_data.schema();
+        let projection_mapping = ProjectionMapping::try_new(&proj_exprs, &input_schema)?;
+
+        let output_schema = output_schema(&projection_mapping, &input_schema)?;
+        let num_rows = input_data.num_rows();
+        // Apply projection to the input record batch.
+        let projected_values = projection_mapping
+            .iter()
+            .map(|(source, _target)| source.evaluate(input_data)?.into_array(num_rows))
+            .collect::<Result<Vec<_>>>()?;
+        let projected_batch = if projected_values.is_empty() {
+            RecordBatch::new_empty(output_schema.clone())
+        } else {
+            RecordBatch::try_new(output_schema.clone(), projected_values)?
+        };
+
+        let projected_eq =
+            input_eq_properties.project(&projection_mapping, output_schema);
+        Ok((projected_batch, projected_eq))
+    }
+
     #[test]
     fn add_equal_conditions_test() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
@@ -4417,6 +4444,96 @@ mod tests {
     }
 
     #[test]
+    fn project_orderings3() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Int32, true),
+            Field::new("d", DataType::Int32, true),
+            Field::new("ts", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
+        ]));
+        let col_a = &col("a", &schema)?;
+        let col_b = &col("b", &schema)?;
+        let col_c = &col("c", &schema)?;
+        let col_d = &col("d", &schema)?;
+        let a_plus_b = Arc::new(BinaryExpr::new(
+            col_a.clone(),
+            Operator::Plus,
+            col_b.clone(),
+        )) as Arc<dyn PhysicalExpr>;
+
+        let option_asc = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+
+        let proj_exprs = vec![
+            (col_c, "c_new".to_string()),
+            (col_d, "d_new".to_string()),
+            (&a_plus_b, "a+b".to_string()),
+        ];
+        let proj_exprs = proj_exprs
+            .into_iter()
+            .map(|(expr, name)| (expr.clone(), name))
+            .collect::<Vec<_>>();
+        let projection_mapping = ProjectionMapping::try_new(&proj_exprs, &schema)?;
+        let output_schema = output_schema(&projection_mapping, &schema)?;
+
+        let _col_a_plus_b_new = &col("a+b", &output_schema)?;
+        let col_c_new = &col("c_new", &output_schema)?;
+        let col_d_new = &col("d_new", &output_schema)?;
+
+        let test_cases = vec![
+            // ---------- TEST CASE 1 ------------
+            (
+                // orderings
+                vec![
+                    // [d ASC, b ASC]
+                    vec![(col_d, option_asc), (col_b, option_asc)],
+                    // [c ASC, a ASC]
+                    vec![(col_c, option_asc), (col_a, option_asc)],
+                ],
+                // expected
+                vec![
+                    // TODO: Ordering below is also valid. We should be able to understand it is valid.
+                    //  For now, we cannot understand it is valid.
+                    // // [d_new ASC, c_new ASC, a+b ASC]
+                    // vec![(col_d_new, option_asc), (col_c_new, option_asc), (_col_a_plus_b_new, option_asc)],
+                    // [d_new ASC]
+                    vec![(col_d_new, option_asc)],
+                    // [c_new ASC]
+                    vec![(col_c_new, option_asc)],
+                ],
+            ),
+        ];
+
+        for (orderings, expected) in test_cases {
+            let mut eq_properties = EquivalenceProperties::new(schema.clone());
+
+            let orderings = convert_to_orderings(&orderings);
+            eq_properties.add_new_orderings(orderings);
+
+            let expected = convert_to_orderings(&expected);
+
+            let projected_eq =
+                eq_properties.project(&projection_mapping, output_schema.clone());
+            let orderings = projected_eq.oeq_class();
+
+            let err_msg = format!(
+                "actual: {:?}, expected: {:?}, projection_mapping: {:?}",
+                orderings.orderings, expected, projection_mapping
+            );
+
+            assert_eq!(orderings.len(), expected.len(), "{}", err_msg);
+            for expected_ordering in &expected {
+                assert!(orderings.contains(expected_ordering), "{}", err_msg)
+            }
+        }
+
+        Ok(())
+    }
+
+    #[test]
     fn project_orderings_random() -> Result<()> {
         const N_RANDOM_SCHEMA: usize = 20;
         const N_ELEMENTS: usize = 125;
@@ -4458,32 +4575,17 @@ mod tests {
                         .into_iter()
                         .map(|(expr, name)| (expr.clone(), name.to_string()))
                         .collect::<Vec<_>>();
-                    let projection_mapping =
-                        ProjectionMapping::try_new(&proj_exprs, &test_schema)?;
+                    let (projected_batch, projected_eq) = apply_projection(
+                        proj_exprs.clone(),
+                        &table_data_with_properties,
+                        &eq_properties,
+                    )?;
 
-                    let output_schema = output_schema(&projection_mapping, &test_schema)?;
-
-                    // Apply projection to the input record batch.
-                    let projected_values = projection_mapping
-                        .iter()
-                        .map(|(source, _target)| {
-                            source
-                                .evaluate(&table_data_with_properties)?
-                                .into_array(N_ELEMENTS)
-                        })
-                        .collect::<Result<Vec<_>>>()?;
-                    let projected_batch = if projected_values.is_empty() {
-                        RecordBatch::new_empty(output_schema.clone())
-                    } else {
-                        RecordBatch::try_new(output_schema.clone(), projected_values)?
-                    };
-
-                    let projected_eq =
-                        eq_properties.project(&projection_mapping, output_schema);
+                    // Make sure each ordering after projection is valid.
                     for ordering in projected_eq.oeq_class().iter() {
                         let err_msg = format!(
-                            "Error in test case ordering:{:?}, eq_properties.oeq_class: {:?}, eq_properties.eq_group: {:?}, eq_properties.constants: {:?}, projection_mapping: {:?}",
-                            ordering, eq_properties.oeq_class, eq_properties.eq_group, eq_properties.constants, projection_mapping
+                            "Error in test case ordering:{:?}, eq_properties.oeq_class: {:?}, eq_properties.eq_group: {:?}, eq_properties.constants: {:?}, proj_exprs: {:?}",
+                            ordering, eq_properties.oeq_class, eq_properties.eq_group, eq_properties.constants, proj_exprs
                         );
                         // Since ordered section satisfies schema, we expect
                         // that result will be same after sort (e.g sort was unnecessary).
