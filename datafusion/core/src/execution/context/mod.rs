@@ -529,6 +529,7 @@ impl SessionContext {
             if_not_exists,
             or_replace,
             constraints,
+            column_defaults,
         } = cmd;
 
         let input = Arc::try_unwrap(input).unwrap_or_else(|e| e.as_ref().clone());

@@ -230,6 +230,33 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         Ok(Schema::new(fields))
     }
 
+    pub(super) fn build_column_defaults(
+        &self,
+        columns: &Vec<SQLColumnDef>,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Vec<(String, Expr)>> {
+        let mut column_defaults = vec![];
+        // Default expressions are restricted, they must be variable-free
+        let empty_schema = DFSchema::empty();
+        for column in columns {
+            if let Some(default_sql_expr) =
+                column.options.iter().find_map(|o| match &o.option {
+                    ColumnOption::Default(expr) => Some(expr),
+                    _ => None,
+                })
+            {
+                let default_expr = self.sql_to_expr(
+                    default_sql_expr.clone(),
+                    &empty_schema,
+                    planner_context,
+                )?;
+                column_defaults
+                    .push((self.normalizer.normalize(column.name.clone()), default_expr));
+            }
+        }
+        Ok(column_defaults)
+    }
+
     /// Apply the given TableAlias to the input plan
     pub(crate) fn apply_table_alias(
         &self,
