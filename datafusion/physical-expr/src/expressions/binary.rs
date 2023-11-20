@@ -346,7 +346,7 @@ impl PhysicalExpr for BinaryExpr {
 
         if self.op.eq(&Operator::And) {
             if interval.eq(&Interval::CERTAINLY_TRUE) {
-                // A certainly true conjunction can not derive from certainly
+                // A certainly true `And` conjunction can not derive from certainly
                 // false operands, implying infeasability:
                 if left_interval.eq(&Interval::CERTAINLY_FALSE)
                     || right_interval.eq(&Interval::CERTAINLY_FALSE)
@@ -387,13 +387,56 @@ impl PhysicalExpr for BinaryExpr {
                     Ok(Some(vec![]))
                 }
             } else {
-                // Uncertainty of And operator cannot change the end-points of children in any case.
+                // Uncertainty of And operator cannot shrink the end-points of children in any case.
                 Ok(Some(vec![]))
             }
-        }
-        // TODO: Other logical operators. False expected OR operator could be a
-        //       meaningful implementation as the next step.
-        else if self.op.is_comparison_operator() {
+        } else if self.op.eq(&Operator::Or) {
+            if interval.eq(&Interval::CERTAINLY_FALSE) {
+                // A certainly false `Or` conjunction can not derive from certainly
+                // true operands, implying infeasability:
+                if left_interval.eq(&Interval::CERTAINLY_TRUE)
+                    || right_interval.eq(&Interval::CERTAINLY_TRUE)
+                {
+                    return Ok(None);
+                }
+                Ok(Some(vec![
+                    Interval::CERTAINLY_FALSE,
+                    Interval::CERTAINLY_FALSE,
+                ]))
+            } else if interval.eq(&Interval::CERTAINLY_TRUE) {
+                // If the Or operation results in `certainly true`, it means at least
+                // one of the operands must be true. However, it's not always possible
+                // to determine which operand is true, leading to different scenarios:
+
+                // Feasible: If one child is `certainly false`, and the other one is `uncertain`,
+                // then, the uncertain one must be `certainly true`.
+                if left_interval.eq(&Interval::CERTAINLY_FALSE)
+                    && right_interval.eq(&Interval::UNCERTAIN)
+                {
+                    Ok(Some(vec![
+                        Interval::CERTAINLY_FALSE,
+                        Interval::CERTAINLY_TRUE,
+                    ]))
+                } else if right_interval.eq(&Interval::CERTAINLY_FALSE)
+                    && left_interval.eq(&Interval::UNCERTAIN)
+                {
+                    Ok(Some(vec![
+                        Interval::CERTAINLY_TRUE,
+                        Interval::CERTAINLY_FALSE,
+                    ]))
+                }
+                // Infeasible: If both children are uncertain or if one is already certainly true,
+                // we cannot conclusively refine their intervals further based on this outcome.
+                // In this case, the propagation does not result in any interval changes.
+                else {
+                    // No further refinement possible.
+                    Ok(Some(vec![]))
+                }
+            } else {
+                // Uncertainty of Or operator cannot shrink the end-points of children in any case.
+                Ok(Some(vec![]))
+            }
+        } else if self.op.is_comparison_operator() {
             Ok(
                 propagate_comparison(&self.op, interval, left_interval, right_interval)?
                     .map(|(left, right)| vec![left, right]),
