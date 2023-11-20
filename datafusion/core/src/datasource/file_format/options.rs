@@ -28,7 +28,7 @@ use crate::datasource::file_format::file_compression_type::FileCompressionType;
 #[cfg(feature = "parquet")]
 use crate::datasource::file_format::parquet::ParquetFormat;
 use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
-use crate::datasource::listing::{ListingTableInsertMode, ListingTableUrl};
+use crate::datasource::listing::ListingTableUrl;
 use crate::datasource::{
     file_format::{avro::AvroFormat, csv::CsvFormat, json::JsonFormat},
     listing::ListingOptions,
@@ -76,8 +76,6 @@ pub struct CsvReadOptions<'a> {
     pub infinite: bool,
     /// Indicates how the file is sorted
     pub file_sort_order: Vec<Vec<Expr>>,
-    /// Setting controls how inserts to this file should be handled
-    pub insert_mode: ListingTableInsertMode,
 }
 
 impl<'a> Default for CsvReadOptions<'a> {
@@ -101,7 +99,6 @@ impl<'a> CsvReadOptions<'a> {
             file_compression_type: FileCompressionType::UNCOMPRESSED,
             infinite: false,
             file_sort_order: vec![],
-            insert_mode: ListingTableInsertMode::AppendToFile,
         }
     }
 
@@ -184,12 +181,6 @@ impl<'a> CsvReadOptions<'a> {
         self.file_sort_order = file_sort_order;
         self
     }
-
-    /// Configure how insertions to this table should be handled
-    pub fn insert_mode(mut self, insert_mode: ListingTableInsertMode) -> Self {
-        self.insert_mode = insert_mode;
-        self
-    }
 }
 
 /// Options that control the reading of Parquet files.
@@ -219,8 +210,6 @@ pub struct ParquetReadOptions<'a> {
     pub schema: Option<&'a Schema>,
     /// Indicates how the file is sorted
     pub file_sort_order: Vec<Vec<Expr>>,
-    /// Setting controls how inserts to this file should be handled
-    pub insert_mode: ListingTableInsertMode,
 }
 
 impl<'a> Default for ParquetReadOptions<'a> {
@@ -232,7 +221,6 @@ impl<'a> Default for ParquetReadOptions<'a> {
             skip_metadata: None,
             schema: None,
             file_sort_order: vec![],
-            insert_mode: ListingTableInsertMode::AppendNewFiles,
         }
     }
 }
@@ -270,12 +258,6 @@ impl<'a> ParquetReadOptions<'a> {
     /// Configure if file has known sort order
     pub fn file_sort_order(mut self, file_sort_order: Vec<Vec<Expr>>) -> Self {
         self.file_sort_order = file_sort_order;
-        self
-    }
-
-    /// Configure how insertions to this table should be handled
-    pub fn insert_mode(mut self, insert_mode: ListingTableInsertMode) -> Self {
-        self.insert_mode = insert_mode;
         self
     }
 }
@@ -403,8 +385,6 @@ pub struct NdJsonReadOptions<'a> {
     pub infinite: bool,
     /// Indicates how the file is sorted
     pub file_sort_order: Vec<Vec<Expr>>,
-    /// Setting controls how inserts to this file should be handled
-    pub insert_mode: ListingTableInsertMode,
 }
 
 impl<'a> Default for NdJsonReadOptions<'a> {
@@ -417,7 +397,6 @@ impl<'a> Default for NdJsonReadOptions<'a> {
             file_compression_type: FileCompressionType::UNCOMPRESSED,
             infinite: false,
             file_sort_order: vec![],
-            insert_mode: ListingTableInsertMode::AppendToFile,
         }
     }
 }
@@ -462,12 +441,6 @@ impl<'a> NdJsonReadOptions<'a> {
     /// Configure if file has known sort order
     pub fn file_sort_order(mut self, file_sort_order: Vec<Vec<Expr>>) -> Self {
         self.file_sort_order = file_sort_order;
-        self
-    }
-
-    /// Configure how insertions to this table should be handled
-    pub fn insert_mode(mut self, insert_mode: ListingTableInsertMode) -> Self {
-        self.insert_mode = insert_mode;
         self
     }
 }
@@ -528,7 +501,6 @@ impl ReadOptions<'_> for CsvReadOptions<'_> {
             .with_table_partition_cols(self.table_partition_cols.clone())
             .with_file_sort_order(self.file_sort_order.clone())
             .with_infinite_source(self.infinite)
-            .with_insert_mode(self.insert_mode.clone())
     }
 
     async fn get_resolved_schema(
@@ -555,7 +527,6 @@ impl ReadOptions<'_> for ParquetReadOptions<'_> {
             .with_target_partitions(config.target_partitions())
             .with_table_partition_cols(self.table_partition_cols.clone())
             .with_file_sort_order(self.file_sort_order.clone())
-            .with_insert_mode(self.insert_mode.clone())
     }
 
     async fn get_resolved_schema(
@@ -582,7 +553,6 @@ impl ReadOptions<'_> for NdJsonReadOptions<'_> {
             .with_table_partition_cols(self.table_partition_cols.clone())
             .with_infinite_source(self.infinite)
             .with_file_sort_order(self.file_sort_order.clone())
-            .with_insert_mode(self.insert_mode.clone())
     }
 
     async fn get_resolved_schema(

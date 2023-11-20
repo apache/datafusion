@@ -238,6 +238,14 @@ impl CommonSubexprEliminate {
         let rewritten = pop_expr(&mut rewritten)?;
 
         if affected_id.is_empty() {
+            // Alias aggregation expressions if they have changed
+            let new_aggr_expr = new_aggr_expr
+                .iter()
+                .zip(aggr_expr.iter())
+                .map(|(new_expr, old_expr)| {
+                    new_expr.clone().alias_if_changed(old_expr.display_name()?)
+                })
+                .collect::<Result<Vec<Expr>>>()?;
             // Since group_epxr changes, schema changes also. Use try_new method.
             Aggregate::try_new(Arc::new(new_input), new_group_expr, new_aggr_expr)
                 .map(LogicalPlan::Aggregate)
@@ -367,7 +375,7 @@ impl OptimizerRule for CommonSubexprEliminate {
                 Ok(Some(build_recover_project_plan(
                     &original_schema,
                     optimized_plan,
-                )))
+                )?))
             }
             plan => Ok(plan),
         }
@@ -458,16 +466,19 @@ fn build_common_expr_project_plan(
 /// the "intermediate" projection plan built in [build_common_expr_project_plan].
 ///
 /// This is for those plans who don't keep its own output schema like `Filter` or `Sort`.
-fn build_recover_project_plan(schema: &DFSchema, input: LogicalPlan) -> LogicalPlan {
+fn build_recover_project_plan(
+    schema: &DFSchema,
+    input: LogicalPlan,
+) -> Result<LogicalPlan> {
     let col_exprs = schema
         .fields()
         .iter()
         .map(|field| Expr::Column(field.qualified_column()))
         .collect();
-    LogicalPlan::Projection(
-        Projection::try_new(col_exprs, Arc::new(input))
-            .expect("Cannot build projection plan from an invalid schema"),
-    )
+    Ok(LogicalPlan::Projection(Projection::try_new(
+        col_exprs,
+        Arc::new(input),
+    )?))
 }
 
 fn extract_expressions(
@@ -514,7 +525,7 @@ impl ExprMask {
                 | Expr::ScalarVariable(..)
                 | Expr::Alias(..)
                 | Expr::Sort { .. }
-                | Expr::Wildcard
+                | Expr::Wildcard { .. }
         );
 
         let is_aggr = matches!(

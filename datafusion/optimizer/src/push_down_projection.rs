@@ -606,6 +606,31 @@ mod tests {
     }
 
     #[test]
+    fn aggregate_with_periods() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("tag.one", DataType::Utf8, false)]);
+
+        // Build a plan that looks as follows (note "tag.one" is a column named
+        // "tag.one", not a column named "one" in a table named "tag"):
+        //
+        // Projection: tag.one
+        //   Aggregate: groupBy=[], aggr=[MAX("tag.one") AS "tag.one"]
+        //    TableScan
+        let plan = table_scan(Some("m4"), &schema, None)?
+            .aggregate(
+                Vec::<Expr>::new(),
+                vec![max(col(Column::new_unqualified("tag.one"))).alias("tag.one")],
+            )?
+            .project([col(Column::new_unqualified("tag.one"))])?
+            .build()?;
+
+        let expected = "\
+        Aggregate: groupBy=[[]], aggr=[[MAX(m4.tag.one) AS tag.one]]\
+        \n  TableScan: m4 projection=[tag.one]";
+
+        assert_optimized_plan_eq(&plan, expected)
+    }
+
+    #[test]
     fn redundant_project() -> Result<()> {
         let table_scan = test_table_scan()?;
 

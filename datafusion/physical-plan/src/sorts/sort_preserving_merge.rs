@@ -33,9 +33,7 @@ use arrow::datatypes::SchemaRef;
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{
-    EquivalenceProperties, OrderingEquivalenceProperties, PhysicalSortRequirement,
-};
+use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortRequirement};
 
 use log::{debug, trace};
 
@@ -179,10 +177,6 @@ impl ExecutionPlan for SortPreservingMergeExec {
         self.input.equivalence_properties()
     }
 
-    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        self.input.ordering_equivalence_properties()
-    }
-
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![self.input.clone()]
     }
@@ -271,6 +265,8 @@ impl ExecutionPlan for SortPreservingMergeExec {
 
 #[cfg(test)]
 mod tests {
+    use std::iter::FromIterator;
+
     use super::*;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::expressions::col;
@@ -281,8 +277,8 @@ mod tests {
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::{self, assert_is_pending, make_partition};
     use crate::{collect, common};
-    use arrow::array::ArrayRef;
-    use arrow::array::{Int32Array, StringArray, TimestampNanosecondArray};
+
+    use arrow::array::{ArrayRef, Int32Array, StringArray, TimestampNanosecondArray};
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
@@ -290,7 +286,6 @@ mod tests {
     use datafusion_execution::config::SessionConfig;
 
     use futures::{FutureExt, StreamExt};
-    use std::iter::FromIterator;
 
     #[tokio::test]
     async fn test_merge_interleave() {

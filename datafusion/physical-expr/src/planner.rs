@@ -472,7 +472,7 @@ mod tests {
             ]))],
         )?;
         let result = p.evaluate(&batch)?;
-        let result = result.into_array(4);
+        let result = result.into_array(4).expect("Failed to convert to array");
 
         assert_eq!(
             &result,

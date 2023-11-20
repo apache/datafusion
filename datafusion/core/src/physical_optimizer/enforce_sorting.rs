@@ -51,18 +51,16 @@ use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::physical_plan::windows::{
-    get_best_fitting_window, BoundedWindowAggExec, PartitionSearchMode, WindowAggExec,
+    get_best_fitting_window, BoundedWindowAggExec, WindowAggExec,
 };
 use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
 
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_common::{plan_err, DataFusionError};
-use datafusion_physical_expr::utils::{
-    ordering_satisfy, ordering_satisfy_requirement_concrete,
-};
 use datafusion_physical_expr::{PhysicalSortExpr, PhysicalSortRequirement};
 
 use datafusion_physical_plan::repartition::RepartitionExec;
+use datafusion_physical_plan::windows::PartitionSearchMode;
 use itertools::izip;
 
 /// This rule inspects [`SortExec`]'s in the given physical plan and removes the
@@ -451,13 +449,11 @@ fn ensure_sorting(
     {
         let physical_ordering = child.output_ordering();
         match (required_ordering, physical_ordering) {
-            (Some(required_ordering), Some(physical_ordering)) => {
-                if !ordering_satisfy_requirement_concrete(
-                    physical_ordering,
-                    &required_ordering,
-                    || child.equivalence_properties(),
-                    || child.ordering_equivalence_properties(),
-                ) {
+            (Some(required_ordering), Some(_)) => {
+                if !child
+                    .equivalence_properties()
+                    .ordering_satisfy_requirement(&required_ordering)
+                {
                     // Make sure we preserve the ordering requirements:
                     update_child_to_remove_unnecessary_sort(child, sort_onwards, &plan)?;
                     add_sort_above(child, &required_ordering, None);
@@ -516,13 +512,12 @@ fn analyze_immediate_sort_removal(
 ) -> Option<PlanWithCorrespondingSort> {
     if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
         let sort_input = sort_exec.input().clone();
+
         // If this sort is unnecessary, we should remove it:
-        if ordering_satisfy(
-            sort_input.output_ordering(),
-            sort_exec.output_ordering(),
-            || sort_input.equivalence_properties(),
-            || sort_input.ordering_equivalence_properties(),
-        ) {
+        if sort_input
+            .equivalence_properties()
+            .ordering_satisfy(sort_exec.output_ordering().unwrap_or(&[]))
+        {
             // Since we know that a `SortExec` has exactly one child,
             // we can use the zero index safely:
             return Some(
@@ -708,11 +703,11 @@ fn remove_corresponding_sort_from_sub_plan(
         } else if let Some(repartition) = plan.as_any().downcast_ref::<RepartitionExec>()
         {
             Arc::new(
+                // By default, RepartitionExec does not preserve order
                 RepartitionExec::try_new(
                     children.swap_remove(0),
                     repartition.partitioning().clone(),
-                )?
-                .with_preserve_order(false),
+                )?,
             )
         } else {
             plan.clone().with_new_children(children)?

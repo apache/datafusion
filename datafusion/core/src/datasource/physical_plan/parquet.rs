@@ -45,8 +45,7 @@ use crate::{
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::error::ArrowError;
 use datafusion_physical_expr::{
-    ordering_equivalence_properties_helper, LexOrdering, OrderingEquivalenceProperties,
-    PhysicalExpr, PhysicalSortExpr,
+    EquivalenceProperties, LexOrdering, PhysicalExpr, PhysicalSortExpr,
 };
 
 use bytes::Bytes;
@@ -315,8 +314,8 @@ impl ExecutionPlan for ParquetExec {
             .map(|ordering| ordering.as_slice())
     }
 
-    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        ordering_equivalence_properties_helper(
+    fn equivalence_properties(&self) -> EquivalenceProperties {
+        EquivalenceProperties::new_with_orderings(
             self.schema(),
             &self.projected_output_ordering,
         )
@@ -1719,6 +1718,7 @@ mod tests {
                 last_modified: Utc.timestamp_nanos(0),
                 size: 1337,
                 e_tag: None,
+                version: None,
             },
             partition_values: vec![],
             range: None,

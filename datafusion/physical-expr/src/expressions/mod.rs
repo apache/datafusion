@@ -63,6 +63,7 @@ pub use crate::aggregate::min_max::{MaxAccumulator, MinAccumulator};
 pub use crate::aggregate::regr::{Regr, RegrType};
 pub use crate::aggregate::stats::StatsType;
 pub use crate::aggregate::stddev::{Stddev, StddevPop};
+pub use crate::aggregate::string_agg::StringAgg;
 pub use crate::aggregate::sum::Sum;
 pub use crate::aggregate::sum_distinct::DistinctSum;
 pub use crate::aggregate::variance::{Variance, VariancePop};
@@ -247,8 +248,10 @@ pub(crate) mod tests {
         let expr = agg.expressions();
         let values = expr
             .iter()
-            .map(|e| e.evaluate(batch))
-            .map(|r| r.map(|v| v.into_array(batch.num_rows())))
+            .map(|e| {
+                e.evaluate(batch)
+                    .and_then(|v| v.into_array(batch.num_rows()))
+            })
             .collect::<Result<Vec<_>>>()?;
         accum.update_batch(&values)?;
         accum.evaluate()
@@ -262,8 +265,10 @@ pub(crate) mod tests {
         let expr = agg.expressions();
         let values = expr
             .iter()
-            .map(|e| e.evaluate(batch))
-            .map(|r| r.map(|v| v.into_array(batch.num_rows())))
+            .map(|e| {
+                e.evaluate(batch)
+                    .and_then(|v| v.into_array(batch.num_rows()))
+            })
             .collect::<Result<Vec<_>>>()?;
         let indices = vec![0; batch.num_rows()];
         accum.update_batch(&values, &indices, None, 1)?;

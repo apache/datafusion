@@ -30,7 +30,7 @@ use super::{
 
 use crate::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
-    Column, DisplayFormatType, EquivalenceProperties, ExecutionPlan, Partitioning,
+    Column, DisplayFormatType, ExecutionPlan, Partitioning,
 };
 
 use arrow::compute::filter_record_batch;
@@ -42,13 +42,12 @@ use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::BinaryExpr;
-use datafusion_physical_expr::{
-    analyze, split_conjunction, AnalysisContext, ExprBoundaries,
-    OrderingEquivalenceProperties, PhysicalExpr,
-};
-
 use datafusion_physical_expr::intervals::utils::check_support;
 use datafusion_physical_expr::utils::collect_columns;
+use datafusion_physical_expr::{
+    analyze, split_conjunction, AnalysisContext, EquivalenceProperties, ExprBoundaries,
+    PhysicalExpr,
+};
 
 use futures::stream::{Stream, StreamExt};
 use log::trace;
@@ -146,37 +145,29 @@ impl ExecutionPlan for FilterExec {
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
+        let stats = self.statistics().unwrap();
         // Combine the equal predicates with the input equivalence properties
-        let mut input_properties = self.input.equivalence_properties();
-        let (equal_pairs, _ne_pairs) = collect_columns_from_predicate(&self.predicate);
-        for new_condition in equal_pairs {
-            input_properties.add_equal_conditions(new_condition)
+        let mut result = self.input.equivalence_properties();
+        let (equal_pairs, _) = collect_columns_from_predicate(&self.predicate);
+        for (lhs, rhs) in equal_pairs {
+            let lhs_expr = Arc::new(lhs.clone()) as _;
+            let rhs_expr = Arc::new(rhs.clone()) as _;
+            result.add_equal_conditions(&lhs_expr, &rhs_expr)
         }
-        input_properties
-    }
-
-    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        let stats = self
-            .statistics()
-            .expect("Ordering equivalences need to handle the error case of statistics");
         // Add the columns that have only one value (singleton) after filtering to constants.
         let constants = collect_columns(self.predicate())
             .into_iter()
             .filter(|column| stats.column_statistics[column.index()].is_singleton())
-            .map(|column| Arc::new(column) as Arc<dyn PhysicalExpr>)
-            .collect::<Vec<_>>();
-        let filter_oeq = self.input.ordering_equivalence_properties();
-        filter_oeq.with_constants(constants)
+            .map(|column| Arc::new(column) as _);
+        result.add_constants(constants)
     }
 
     fn with_new_children(
         self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(FilterExec::try_new(
-            self.predicate.clone(),
-            children[0].clone(),
-        )?))
+        FilterExec::try_new(self.predicate.clone(), children.swap_remove(0))
+            .map(|e| Arc::new(e) as _)
     }
 
     fn execute(
@@ -203,11 +194,20 @@ impl ExecutionPlan for FilterExec {
     fn statistics(&self) -> Result<Statistics> {
         let predicate = self.predicate();
 
+        let input_stats = self.input.statistics()?;
         let schema = self.schema();
         if !check_support(predicate, &schema) {
-            return Ok(Statistics::new_unknown(&schema));
+            // assume filter selects 20% of rows if we cannot do anything smarter
+            // tracking issue for making this configurable:
+            // https://github.com/apache/arrow-datafusion/issues/8133
+            let selectivity = 0.2_f64;
+            let mut stats = input_stats.into_inexact();
+            stats.num_rows = stats.num_rows.with_estimated_selectivity(selectivity);
+            stats.total_byte_size = stats
+                .total_byte_size
+                .with_estimated_selectivity(selectivity);
+            return Ok(stats);
         }
-        let input_stats = self.input.statistics()?;
 
         let num_rows = input_stats.num_rows;
         let total_byte_size = input_stats.total_byte_size;
@@ -219,14 +219,8 @@ impl ExecutionPlan for FilterExec {
 
         // Estimate (inexact) selectivity of predicate
         let selectivity = analysis_ctx.selectivity.unwrap_or(1.0);
-        let num_rows = match num_rows.get_value() {
-            Some(nr) => Precision::Inexact((*nr as f64 * selectivity).ceil() as usize),
-            None => Precision::Absent,
-        };
-        let total_byte_size = match total_byte_size.get_value() {
-            Some(tbs) => Precision::Inexact((*tbs as f64 * selectivity).ceil() as usize),
-            None => Precision::Absent,
-        };
+        let num_rows = num_rows.with_estimated_selectivity(selectivity);
+        let total_byte_size = total_byte_size.with_estimated_selectivity(selectivity);
 
         let column_statistics = collect_new_statistics(
             &input_stats.column_statistics,
@@ -261,17 +255,23 @@ fn collect_new_statistics(
                 },
             )| {
                 let closed_interval = interval.close_bounds();
+                let (min_value, max_value) =
+                    if closed_interval.lower.value.eq(&closed_interval.upper.value) {
+                        (
+                            Precision::Exact(closed_interval.lower.value),
+                            Precision::Exact(closed_interval.upper.value),
+                        )
+                    } else {
+                        (
+                            Precision::Inexact(closed_interval.lower.value),
+                            Precision::Inexact(closed_interval.upper.value),
+                        )
+                    };
                 ColumnStatistics {
-                    null_count: match input_column_stats[idx].null_count.get_value() {
-                        Some(nc) => Precision::Inexact(*nc),
-                        None => Precision::Absent,
-                    },
-                    max_value: Precision::Inexact(closed_interval.upper.value),
-                    min_value: Precision::Inexact(closed_interval.lower.value),
-                    distinct_count: match distinct_count.get_value() {
-                        Some(dc) => Precision::Inexact(*dc),
-                        None => Precision::Absent,
-                    },
+                    null_count: input_column_stats[idx].null_count.clone().to_inexact(),
+                    max_value,
+                    min_value,
+                    distinct_count: distinct_count.to_inexact(),
                 }
             },
         )
@@ -297,7 +297,7 @@ pub(crate) fn batch_filter(
 ) -> Result<RecordBatch> {
     predicate
         .evaluate(batch)
-        .map(|v| v.into_array(batch.num_rows()))
+        .and_then(|v| v.into_array(batch.num_rows()))
         .and_then(|array| {
             Ok(as_boolean_array(&array)?)
                 // apply filter array to record batch
@@ -355,17 +355,16 @@ impl RecordBatchStream for FilterExecStream {
 
 /// Return the equals Column-Pairs and Non-equals Column-Pairs
 fn collect_columns_from_predicate(predicate: &Arc<dyn PhysicalExpr>) -> EqualAndNonEqual {
-    let mut eq_predicate_columns: Vec<(&Column, &Column)> = Vec::new();
-    let mut ne_predicate_columns: Vec<(&Column, &Column)> = Vec::new();
+    let mut eq_predicate_columns = Vec::<(&Column, &Column)>::new();
+    let mut ne_predicate_columns = Vec::<(&Column, &Column)>::new();
 
     let predicates = split_conjunction(predicate);
     predicates.into_iter().for_each(|p| {
         if let Some(binary) = p.as_any().downcast_ref::<BinaryExpr>() {
-            let left = binary.left();
-            let right = binary.right();
-            if left.as_any().is::<Column>() && right.as_any().is::<Column>() {
-                let left_column = left.as_any().downcast_ref::<Column>().unwrap();
-                let right_column = right.as_any().downcast_ref::<Column>().unwrap();
+            if let (Some(left_column), Some(right_column)) = (
+                binary.left().as_any().downcast_ref::<Column>(),
+                binary.right().as_any().downcast_ref::<Column>(),
+            ) {
                 match binary.op() {
                     Operator::Eq => {
                         eq_predicate_columns.push((left_column, right_column))
@@ -970,6 +969,28 @@ mod tests {
         };
 
         assert_eq!(filter_statistics, expected_filter_statistics);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_statistics_with_constant_column() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics::new_unknown(&schema),
+            schema,
+        ));
+        // WHERE a = 10
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Eq,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
+        ));
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, input)?);
+        let filter_statistics = filter.statistics()?;
+        // First column is "a", and it is a column with only one value after the filter.
+        assert!(filter_statistics.column_statistics[0].is_singleton());
 
         Ok(())
     }

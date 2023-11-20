@@ -17,6 +17,7 @@
 
 //! This module provides the bisect function, which implements binary search.
 
+use crate::error::_internal_err;
 use crate::{DataFusionError, Result, ScalarValue};
 use arrow::array::{ArrayRef, PrimitiveArray};
 use arrow::buffer::OffsetBuffer;
@@ -24,7 +25,7 @@ use arrow::compute;
 use arrow::compute::{partition, SortColumn, SortOptions};
 use arrow::datatypes::{Field, SchemaRef, UInt32Type};
 use arrow::record_batch::RecordBatch;
-use arrow_array::ListArray;
+use arrow_array::{Array, ListArray};
 use sqlparser::ast::Ident;
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
@@ -338,7 +339,7 @@ pub fn longest_consecutive_prefix<T: Borrow<usize>>(
 
 /// Wrap an array into a single element `ListArray`.
 /// For example `[1, 2, 3]` would be converted into `[[1, 2, 3]]`
-pub fn wrap_into_list_array(arr: ArrayRef) -> ListArray {
+pub fn array_into_list_array(arr: ArrayRef) -> ListArray {
     let offsets = OffsetBuffer::from_lengths([arr.len()]);
     ListArray::new(
         Arc::new(Field::new("item", arr.data_type().to_owned(), true)),
@@ -346,6 +347,47 @@ pub fn wrap_into_list_array(arr: ArrayRef) -> ListArray {
         arr,
         None,
     )
+}
+
+/// Wrap arrays into a single element `ListArray`.
+///
+/// Example:
+/// ```
+/// use arrow::array::{Int32Array, ListArray, ArrayRef};
+/// use arrow::datatypes::{Int32Type, Field};
+/// use std::sync::Arc;
+///
+/// let arr1 = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+/// let arr2 = Arc::new(Int32Array::from(vec![4, 5, 6])) as ArrayRef;
+///
+/// let list_arr = datafusion_common::utils::arrays_into_list_array([arr1, arr2]).unwrap();
+///
+/// let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(
+///    vec![
+///     Some(vec![Some(1), Some(2), Some(3)]),
+///     Some(vec![Some(4), Some(5), Some(6)]),
+///    ]
+/// );
+///
+/// assert_eq!(list_arr, expected);
+pub fn arrays_into_list_array(
+    arr: impl IntoIterator<Item = ArrayRef>,
+) -> Result<ListArray> {
+    let arr = arr.into_iter().collect::<Vec<_>>();
+    if arr.is_empty() {
+        return _internal_err!("Cannot wrap empty array into list array");
+    }
+
+    let lens = arr.iter().map(|x| x.len()).collect::<Vec<_>>();
+    // Assume data type is consistent
+    let data_type = arr[0].data_type().to_owned();
+    let values = arr.iter().map(|x| x.as_ref()).collect::<Vec<_>>();
+    Ok(ListArray::new(
+        Arc::new(Field::new("item", data_type, true)),
+        OffsetBuffer::from_lengths(lens),
+        arrow::compute::concat(values.as_slice())?,
+        None,
+    ))
 }
 
 /// An extension trait for smart pointers. Provides an interface to get a
