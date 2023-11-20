@@ -204,7 +204,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let mut all_constraints = constraints;
                 let inline_constraints = calc_inline_constraints_from_columns(&columns);
                 all_constraints.extend(inline_constraints);
-                // Build default column values
+                // Build column default values
                 let column_defaults =
                     self.build_column_defaults(&columns, planner_context)?;
                 match query {

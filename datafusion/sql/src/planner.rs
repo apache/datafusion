@@ -21,8 +21,7 @@ use std::sync::Arc;
 use std::vec;
 
 use arrow_schema::*;
-use datafusion_common::field_not_found;
-use datafusion_common::internal_err;
+use datafusion_common::{field_not_found, internal_err, SchemaError};
 use datafusion_expr::WindowUDF;
 use sqlparser::ast::TimezoneInfo;
 use sqlparser::ast::{ArrayElemTypeDef, ExactNumberInfo};
@@ -236,8 +235,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         planner_context: &mut PlannerContext,
     ) -> Result<Vec<(String, Expr)>> {
         let mut column_defaults = vec![];
-        // Default expressions are restricted, they must be variable-free
+        // Default expressions are restricted, column references are not allowed
         let empty_schema = DFSchema::empty();
+        let human_readable_error = |e: DataFusionError| match e {
+            DataFusionError::SchemaError(SchemaError::FieldNotFound { .. }) => {
+                DataFusionError::Plan(format!(
+                    "Column reference is not allowed in the DEFAULT expression : {}",
+                    e
+                ))
+            }
+            _ => e,
+        };
+
         for column in columns {
             if let Some(default_sql_expr) =
                 column.options.iter().find_map(|o| match &o.option {
@@ -245,11 +254,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     _ => None,
                 })
             {
-                let default_expr = self.sql_to_expr(
-                    default_sql_expr.clone(),
-                    &empty_schema,
-                    planner_context,
-                )?;
+                let default_expr = self
+                    .sql_to_expr(default_sql_expr.clone(), &empty_schema, planner_context)
+                    .map_err(human_readable_error)?;
                 column_defaults
                     .push((self.normalizer.normalize(column.name.clone()), default_expr));
             }
