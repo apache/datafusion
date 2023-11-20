@@ -181,11 +181,18 @@ mod tests {
             .unwrap()
             .to_string();
 
-        let binding =
-            temp_dir_path.to_str().unwrap().to_string() + &sep + "bbb..bbb" + &sep;
-        let dir = binding.as_str();
+        let path5 = temp_dir_path
+            .join("bbb..bbb")
+            .join("filename.parquet")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let dir = temp_dir_path
+            .join("bbb..bbb".to_owned() + &sep)
+            .to_str()
+            .unwrap()
+            .to_string();
         std::fs::create_dir(dir).expect("create dir failed");
-        let path5 = dir.to_string() + "filename.parquet";
 
         // Write the dataframe to a parquet file named 'output1.parquet'
         write_df
