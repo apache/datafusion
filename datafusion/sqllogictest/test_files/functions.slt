@@ -532,7 +532,7 @@ statement ok
 drop table simple_struct_test
 
 # create aggregate_test_100 table for functions test
-statement error DataFusion error: IO error: No such file or directory \(os error 2\)
+statement ok
 CREATE EXTERNAL TABLE aggregate_test_100 (
   c1  VARCHAR NOT NULL,
   c2  TINYINT NOT NULL,
@@ -554,16 +554,22 @@ LOCATION '../../testing/data/csv/aggregate_test_100.csv'
 
 
 # sqrt_f32_vs_f64
-query error DataFusion error: Error during planning: table 'datafusion\.public\.aggregate_test_100' not found
+query R
 SELECT avg(sqrt(c11)) FROM aggregate_test_100
+----
+0.658440848589
 
-query error DataFusion error: Error during planning: table 'datafusion\.public\.aggregate_test_100' not found
+query R
 SELECT avg(CAST(sqrt(c11) AS double)) FROM aggregate_test_100
+----
+0.658440848589
 
-query error DataFusion error: Error during planning: table 'datafusion\.public\.aggregate_test_100' not found
+query R
 SELECT avg(sqrt(CAST(c11 AS double))) FROM aggregate_test_100
+----
+0.658440848342
 
-statement error DataFusion error: Execution error: Table 'aggregate_test_100' doesn't exist\.
+statement ok
 drop table aggregate_test_100
 
 
