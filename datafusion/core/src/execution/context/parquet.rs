@@ -138,10 +138,10 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(not(target_family = "windows"))]
     #[tokio::test]
     async fn read_from_different_file_extension() -> Result<()> {
         let ctx = SessionContext::new();
+        let sep = std::path::MAIN_SEPARATOR.to_string();
 
         // Make up a new dataframe.
         let write_df = ctx.read_batch(RecordBatch::try_new(
@@ -176,10 +176,16 @@ mod tests {
             .to_string();
 
         let path4 = temp_dir_path
-            .join("output4.parquet/")
+            .join("output4.parquet".to_owned() + &sep)
             .to_str()
             .unwrap()
             .to_string();
+
+        let binding =
+            temp_dir_path.to_str().unwrap().to_string() + &sep + "bbb..bbb" + &sep;
+        let dir = binding.as_str();
+        std::fs::create_dir(dir).expect("create dir failed");
+        let path5 = dir.to_string() + "filename.parquet";
 
         // Write the dataframe to a parquet file named 'output1.parquet'
         write_df
@@ -211,8 +217,22 @@ mod tests {
 
         // Write the dataframe to a parquet file named 'output3.parquet.snappy.parquet'
         write_df
+            .clone()
             .write_parquet(
                 &path3,
+                DataFrameWriteOptions::new().with_single_file_output(true),
+                Some(
+                    WriterProperties::builder()
+                        .set_compression(Compression::SNAPPY)
+                        .build(),
+                ),
+            )
+            .await?;
+
+        // Write the dataframe to a parquet file named 'bbb..bbb/filename.parquet'
+        write_df
+            .write_parquet(
+                &path5,
                 DataFrameWriteOptions::new().with_single_file_output(true),
                 Some(
                     WriterProperties::builder()
@@ -259,10 +279,11 @@ mod tests {
                 },
             )
             .await;
-
+        let binding = DataFilePaths::to_urls(&path2).unwrap();
+        let expexted_path = binding[0].as_str();
         assert_eq!(
             read_df.unwrap_err().strip_backtrace(),
-            format!("Execution error: File path 'file:///private{}' does not match the expected extension '.parquet'", path2)
+            format!("Execution error: File path '{}' does not match the expected extension '.parquet'", expexted_path)
         );
 
         // Read the dataframe from 'output3.parquet.snappy.parquet' with the correct file extension.
@@ -294,6 +315,19 @@ mod tests {
         let total_rows: usize = results.iter().map(|rb| rb.num_rows()).sum();
         assert_eq!(total_rows, 0);
 
+        // Read the datafram from doule dot folder;
+        let read_df = ctx
+            .read_parquet(
+                &path5,
+                ParquetReadOptions {
+                    ..Default::default()
+                },
+            )
+            .await?;
+
+        let results = read_df.collect().await?;
+        let total_rows: usize = results.iter().map(|rb| rb.num_rows()).sum();
+        assert_eq!(total_rows, 5);
         Ok(())
     }
 
