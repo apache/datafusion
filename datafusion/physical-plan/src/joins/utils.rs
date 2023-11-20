@@ -18,12 +18,14 @@
 //! Join related functionality used both on logical and physical plans
 
 use std::collections::HashSet;
+use std::fmt::{self, Debug};
 use std::future::Future;
+use std::ops::IndexMut;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::usize;
 
-use crate::joins::hash_join_utils::{build_filter_input_order, SortedFilterExpr};
+use crate::joins::stream_join_utils::{build_filter_input_order, SortedFilterExpr};
 use crate::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder};
 use crate::{ColumnStatistics, ExecutionPlan, Partitioning, Statistics};
 
@@ -51,7 +53,134 @@ use datafusion_physical_expr::{
 
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};
+use hashbrown::raw::RawTable;
 use parking_lot::Mutex;
+
+/// Maps a `u64` hash value based on the build side ["on" values] to a list of indices with this key's value.
+///
+/// By allocating a `HashMap` with capacity for *at least* the number of rows for entries at the build side,
+/// we make sure that we don't have to re-hash the hashmap, which needs access to the key (the hash in this case) value.
+///
+/// E.g. 1 -> [3, 6, 8] indicates that the column values map to rows 3, 6 and 8 for hash value 1
+/// As the key is a hash value, we need to check possible hash collisions in the probe stage
+/// During this stage it might be the case that a row is contained the same hashmap value,
+/// but the values don't match. Those are checked in the [`equal_rows_arr`](crate::joins::hash_join::equal_rows_arr) method.
+///
+/// The indices (values) are stored in a separate chained list stored in the `Vec<u64>`.
+///
+/// The first value (+1) is stored in the hashmap, whereas the next value is stored in array at the position value.
+///
+/// The chain can be followed until the value "0" has been reached, meaning the end of the list.
+/// Also see chapter 5.3 of [Balancing vectorized query execution with bandwidth-optimized storage](https://dare.uva.nl/search?identifier=5ccbb60a-38b8-4eeb-858a-e7735dd37487)
+///
+/// # Example
+///
+/// ``` text
+/// See the example below:
+///
+/// Insert (10,1)            <-- insert hash value 10 with row index 1
+/// map:
+/// ----------
+/// | 10 | 2 |
+/// ----------
+/// next:
+/// ---------------------
+/// | 0 | 0 | 0 | 0 | 0 |
+/// ---------------------
+/// Insert (20,2)
+/// map:
+/// ----------
+/// | 10 | 2 |
+/// | 20 | 3 |
+/// ----------
+/// next:
+/// ---------------------
+/// | 0 | 0 | 0 | 0 | 0 |
+/// ---------------------
+/// Insert (10,3)           <-- collision! row index 3 has a hash value of 10 as well
+/// map:
+/// ----------
+/// | 10 | 4 |
+/// | 20 | 3 |
+/// ----------
+/// next:
+/// ---------------------
+/// | 0 | 0 | 0 | 2 | 0 |  <--- hash value 10 maps to 4,2 (which means indices values 3,1)
+/// ---------------------
+/// Insert (10,4)          <-- another collision! row index 4 ALSO has a hash value of 10
+/// map:
+/// ---------
+/// | 10 | 5 |
+/// | 20 | 3 |
+/// ---------
+/// next:
+/// ---------------------
+/// | 0 | 0 | 0 | 2 | 4 | <--- hash value 10 maps to 5,4,2 (which means indices values 4,3,1)
+/// ---------------------
+/// ```
+pub struct JoinHashMap {
+    // Stores hash value to last row index
+    map: RawTable<(u64, u64)>,
+    // Stores indices in chained list data structure
+    next: Vec<u64>,
+}
+
+impl JoinHashMap {
+    #[cfg(test)]
+    pub(crate) fn new(map: RawTable<(u64, u64)>, next: Vec<u64>) -> Self {
+        Self { map, next }
+    }
+
+    pub(crate) fn with_capacity(capacity: usize) -> Self {
+        JoinHashMap {
+            map: RawTable::with_capacity(capacity),
+            next: vec![0; capacity],
+        }
+    }
+}
+
+// Trait defining methods that must be implemented by a hash map type to be used for joins.
+pub trait JoinHashMapType {
+    /// The type of list used to store the next list
+    type NextType: IndexMut<usize, Output = u64>;
+    /// Extend with zero
+    fn extend_zero(&mut self, len: usize);
+    /// Returns mutable references to the hash map and the next.
+    fn get_mut(&mut self) -> (&mut RawTable<(u64, u64)>, &mut Self::NextType);
+    /// Returns a reference to the hash map.
+    fn get_map(&self) -> &RawTable<(u64, u64)>;
+    /// Returns a reference to the next.
+    fn get_list(&self) -> &Self::NextType;
+}
+
+/// Implementation of `JoinHashMapType` for `JoinHashMap`.
+impl JoinHashMapType for JoinHashMap {
+    type NextType = Vec<u64>;
+
+    // Void implementation
+    fn extend_zero(&mut self, _: usize) {}
+
+    /// Get mutable references to the hash map and the next.
+    fn get_mut(&mut self) -> (&mut RawTable<(u64, u64)>, &mut Self::NextType) {
+        (&mut self.map, &mut self.next)
+    }
+
+    /// Get a reference to the hash map.
+    fn get_map(&self) -> &RawTable<(u64, u64)> {
+        &self.map
+    }
+
+    /// Get a reference to the next.
+    fn get_list(&self) -> &Self::NextType {
+        &self.next
+    }
+}
+
+impl fmt::Debug for JoinHashMap {
+    fn fmt(&self, _f: &mut fmt::Formatter) -> fmt::Result {
+        Ok(())
+    }
+}
 
 /// The on clause of the join, as vector of (left, right) columns.
 pub type JoinOn = Vec<(Column, Column)>;

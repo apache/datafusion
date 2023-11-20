@@ -33,10 +33,11 @@ use arrow_array::{
     ArrayRef, Float64Array, Int32Array, IntervalDayTimeArray, RecordBatch,
     TimestampMillisecondArray,
 };
-use arrow_schema::Schema;
+use arrow_schema::{DataType, Schema};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_execution::TaskContext;
 use datafusion_expr::{JoinType, Operator};
+use datafusion_physical_expr::expressions::{binary, cast, col, lit};
 use datafusion_physical_expr::intervals::test_utils::{
     gen_conjunctive_numerical_expr, gen_conjunctive_temporal_expr,
 };
@@ -515,4 +516,52 @@ pub fn create_memory_table(
     let right = MemoryExec::try_new(&[right_partition], right_schema, None)?
         .with_sort_information(right_sorted);
     Ok((Arc::new(left), Arc::new(right)))
+}
+
+/// Filter expr for a + b > c + 10 AND a + b < c + 100
+pub(crate) fn complicated_filter(
+    filter_schema: &Schema,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let left_expr = binary(
+        cast(
+            binary(
+                col("0", filter_schema)?,
+                Operator::Plus,
+                col("1", filter_schema)?,
+                filter_schema,
+            )?,
+            filter_schema,
+            DataType::Int64,
+        )?,
+        Operator::Gt,
+        binary(
+            cast(col("2", filter_schema)?, filter_schema, DataType::Int64)?,
+            Operator::Plus,
+            lit(ScalarValue::Int64(Some(10))),
+            filter_schema,
+        )?,
+        filter_schema,
+    )?;
+
+    let right_expr = binary(
+        cast(
+            binary(
+                col("0", filter_schema)?,
+                Operator::Plus,
+                col("1", filter_schema)?,
+                filter_schema,
+            )?,
+            filter_schema,
+            DataType::Int64,
+        )?,
+        Operator::Lt,
+        binary(
+            cast(col("2", filter_schema)?, filter_schema, DataType::Int64)?,
+            Operator::Plus,
+            lit(ScalarValue::Int64(Some(100))),
+            filter_schema,
+        )?,
+        filter_schema,
+    )?;
+    binary(left_expr, Operator::And, right_expr, filter_schema)
 }
