@@ -1825,7 +1825,8 @@ SELECT arrow_typeof(cast(1 as timestamp)), arrow_typeof(cast(null as timestamp))
 Timestamp(Nanosecond, None) Timestamp(Nanosecond, None) Timestamp(Nanosecond, None)
 
 
-# known issues. verify extreme values (expects default precision to be microsecond instead of nanoseconds. Work pending)
+# known issues. currently overflows (expects default precision to be microsecond instead of nanoseconds. Work pending)
+#verify extreme values 
 #query PPPPPPPP
 #SELECT to_timestamp(-62125747200), to_timestamp(1926632005177), -62125747200::timestamp, 1926632005177::timestamp, cast(-62125747200 as timestamp), cast(1926632005177 as timestamp)
 #----
