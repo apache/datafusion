@@ -357,10 +357,38 @@ impl PhysicalExpr for BinaryExpr {
                     Interval::CERTAINLY_TRUE,
                     Interval::CERTAINLY_TRUE,
                 ]))
+            } else if interval.eq(&Interval::CERTAINLY_FALSE) {
+                // If the And operation results in `certainly false`, it means at least
+                // one of the operands must be false. However, it's not always possible
+                // to determine which operand is false, leading to different scenarios:
+
+                // Feasible: If one child is `certainly true`, and the other one is `uncertain`,
+                // then, the uncertain one must be `certainly false`.
+                if left_interval.eq(&Interval::CERTAINLY_TRUE)
+                    && right_interval.eq(&Interval::UNCERTAIN)
+                {
+                    Ok(Some(vec![
+                        Interval::CERTAINLY_TRUE,
+                        Interval::CERTAINLY_FALSE,
+                    ]))
+                } else if right_interval.eq(&Interval::CERTAINLY_TRUE)
+                    && left_interval.eq(&Interval::UNCERTAIN)
+                {
+                    Ok(Some(vec![
+                        Interval::CERTAINLY_FALSE,
+                        Interval::CERTAINLY_TRUE,
+                    ]))
+                }
+                // Infeasible: If both children are uncertain or if one is already certainly false,
+                // we cannot conclusively refine their intervals further based on this outcome.
+                // In this case, the propagation does not result in any interval changes.
+                else {
+                    // No further refinement possible.
+                    Ok(Some(vec![]))
+                }
             } else {
-                // TODO: Other expectations of AND. It may be expected to return
-                //       false.
-                Ok(None)
+                // Uncertainty of And operator cannot change the end-points of children in any case.
+                Ok(Some(vec![]))
             }
         }
         // TODO: Other logical operators. False expected OR operator could be a
