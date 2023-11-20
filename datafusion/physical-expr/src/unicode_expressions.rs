@@ -30,9 +30,7 @@ use datafusion_common::{
     exec_err, internal_err, DataFusionError, Result,
 };
 use hashbrown::HashMap;
-use libc::socket;
 use std::cmp::{max, Ordering};
-use std::process::id;
 use std::sync::Arc;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -475,30 +473,33 @@ pub fn substr_index<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         .map(|((string, delimiter), n)| match (string, delimiter, n) {
             (Some(string), Some(delimiter), Some(n)) => {
                 let mut res = String::new();
-                if n == 0 {
-                    Some("".to_string());
-                } else {
-                    if n > 0 {
-                        let mut idx = string
-                            .split(delimiter)
-                            .take(n as usize)
-                            .fold(0, |len, x| len + x.len() + delimiter.len())
-                            - delimiter.len();
-                        res.push_str(if idx < 0 { &string } else { &string[..idx] });
-                    } else {
-                        let mut idx = (string
-                            .split(delimiter)
-                            .take((-n) as usize)
-                            .fold(string.len() as isize, |len, x| {
-                                len - x.len() as isize - delimiter.len() as isize
-                            })
-                            + delimiter.len() as isize)
-                            as usize;
-                        res.push_str(if idx >= string.len() {
-                            &string
+                match n {
+                    0 => {
+                        "".to_string();
+                    }
+                    _other => {
+                        if n > 0 {
+                            let idx = string
+                                .split(delimiter)
+                                .take(n as usize)
+                                .fold(0, |len, x| len + x.len() + delimiter.len())
+                                - delimiter.len();
+                            res.push_str(if idx >= string.len() { string } else { &string[..idx] });
                         } else {
-                            &string[idx..]
-                        });
+                            let idx = (string
+                                .split(delimiter)
+                                .take((-n) as usize)
+                                .fold(string.len() as isize, |len, x| {
+                                    len - x.len() as isize - delimiter.len() as isize
+                                })
+                                + delimiter.len() as isize)
+                                as usize;
+                            res.push_str(if idx >= string.len() {
+                                string
+                            } else {
+                                &string[idx..]
+                            });
+                        }
                     }
                 }
                 Some(res)
