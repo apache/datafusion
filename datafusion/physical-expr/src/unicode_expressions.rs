@@ -31,6 +31,7 @@ use datafusion_common::{
 };
 use hashbrown::HashMap;
 use std::cmp::{max, Ordering};
+use std::process::id;
 use std::sync::Arc;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -476,21 +477,21 @@ pub fn substr_index<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                 if n == 0 {
                     Some("".to_string())
                 } else {
-                    let mut start = 0;
-                    let mut count = 0;
-                    while let Some(idx) = string[start..].find(delimiter) {
-                        count += if n > 0 { 1 } else { -1 };
-                        start += idx + delimiter.len();
-                        if count == n {
-                            if n > 0 {
-                                start -= delimiter.len();
-                                res.push_str(&string[0..start]);
-                            } else {
-                                res.push_str(&string[start..]);
-                            }
-                            break;
-                        }
-                    }
+                    if n > 0 {
+                        let idx = string
+                            .split(delimiter)
+                            .take(n as usize)
+                            .fold(0, |len, x| len + x.len() + delimiter.len())
+                            - delimiter.len();
+                        res.push_str(&string[..idx])
+                    } else {
+                        let idx = string
+                            .split(delimiter)
+                            .take((-n) as usize)
+                            .fold(string.len(), |len, x| len - x.len() - delimiter.len())
+                            + delimiter.len();
+                        res.push_str(&string[idx..])
+                    };
                     Some(res)
                 }
             }

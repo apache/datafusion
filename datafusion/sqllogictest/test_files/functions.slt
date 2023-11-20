@@ -891,12 +891,12 @@ www.apache
 query T
 SELECT substr_index('www.apache.org', '.', -1)
 ----
-apache.org
+org
 
 query T
 SELECT substr_index('www.apache.org', '.', -2)
 ----
-org
+apache.org
 
 query T
 SELECT substr_index('www.apache.org', 'ac', 1)
