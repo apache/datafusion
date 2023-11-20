@@ -44,10 +44,11 @@ use datafusion_expr::{
     array_except, array_has, array_has_all, array_has_any, array_intersect, array_length,
     array_ndims, array_position, array_positions, array_prepend, array_remove,
     array_remove_all, array_remove_n, array_repeat, array_replace, array_replace_all,
-    array_replace_n, array_slice, array_sort, array_to_string, arrow_typeof, ascii, asin, asinh,
-    atan, atan2, atanh, bit_length, btrim, cardinality, cbrt, ceil, character_length,
-    chr, coalesce, concat_expr, concat_ws_expr, cos, cosh, cot, current_date,
-    current_time, date_bin, date_part, date_trunc, decode, degrees, digest, encode, exp,
+    array_replace_n, array_slice, array_sort, array_to_string, arrow_typeof, ascii, asin,
+    asinh, atan, atan2, atanh, bit_length, btrim, cardinality, cbrt, ceil,
+    character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, cosh, cot,
+    current_date, current_time, date_bin, date_part, date_trunc, decode, degrees, digest,
+    encode, exp,
     expr::{self, InList, Sort, WindowFunction},
     factorial, flatten, floor, from_unixtime, gcd, gen_range, isnan, iszero, lcm, left,
     levenshtein, ln, log, log10, log2,
@@ -1340,10 +1341,9 @@ pub fn parse_expr(
                     parse_expr(&args[1], registry)?,
                 )),
                 ScalarFunction::ArraySort => Ok(array_sort(
-                    args.to_owned()
-                        .iter()
-                        .map(|expr| parse_expr(expr, registry))
-                        .collect::<Result<Vec<_>, _>>()?,
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                    parse_expr(&args[2], registry)?,
                 )),
                 ScalarFunction::ArrayPopFront => {
                     Ok(array_pop_front(parse_expr(&args[0], registry)?))

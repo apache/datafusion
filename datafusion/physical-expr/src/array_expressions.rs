@@ -795,7 +795,6 @@ pub fn array_append(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Array_sort SQL function
 pub fn array_sort(args: &[ArrayRef]) -> Result<ArrayRef> {
-
     let sort_option = match args.len() {
         1 => None,
         2 => {
