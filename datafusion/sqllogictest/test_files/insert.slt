@@ -315,6 +315,45 @@ select * from table_without_values;
 statement ok
 drop table table_without_values;
 
+
+### Test for creating tables into directories that do not already exist
+# note use of `scratch` directory (which is cleared between runs)
+
+statement ok
+create external table new_empty_table(x int) stored as parquet  location 'test_files/scratch/insert/new_empty_table/'; -- needs trailing slash
+
+# should start empty
+query I
+select * from new_empty_table;
+----
+
+# should succeed and the table should create the direectory
+statement ok
+insert into new_empty_table values (1);
+
+# Now has values
+query I
+select * from new_empty_table;
+----
+1
+
+statement ok
+drop table new_empty_table;
+
+## test we get an error if the path doesn't end in slash
+statement ok
+create external table bad_new_empty_table(x int) stored as parquet  location 'test_files/scratch/insert/bad_new_empty_table'; -- no trailing slash
+
+# should fail
+query error DataFusion error: Error during planning: Inserting into a ListingTable backed by a single file is not supported, URL is possibly missing a trailing `/`\. To append to an existing file use StreamTable, e\.g\. by using CREATE UNBOUNDED EXTERNAL TABLE
+insert into bad_new_empty_table values (1);
+
+statement ok
+drop table bad_new_empty_table;
+
+
+### Test for specifying column's default value
+
 statement ok
 create table test_column_defaults(
   a int,
