@@ -95,35 +95,34 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
     /// Updates bounds for child expressions, given a known interval for this
     /// expression.
     ///
-    /// This is used to propagate constraints down through an
-    /// expression tree.
+    /// This is used to propagate constraints down through an expression tree.
     ///
     /// # Arguments
     ///
     /// * `interval` is the currently known interval for this expression.
-    /// * `children` are the current intervals for the children of this expression
+    /// * `children` are the current intervals for the children of this expression.
     ///
     /// # Returns
     ///
-    /// A Vec of new intervals for the children, in order.
+    /// A `Vec` of new intervals for the children, in order.
     ///
-    /// If constraint propagation reveals an infeasibility for any child, returns [`None`].
-    ///
-    /// If none of the child intervals change as a result of propagation, may
-    /// return an empty vector instead of cloning `children`.
+    /// If constraint propagation reveals an infeasibility for any child, returns
+    /// [`None`]. If none of the children intervals change as a result of propagation,
+    /// may return an empty vector instead of cloning `children`. This is the default
+    /// (and conservative) return value.
     ///
     /// # Example
     ///
-    /// If the expression is `a + b`, the current `interval` is `[4, 5] and the
-    /// inputs are given [`a: [0, 2], `b: [-∞, 4]]`, then propagation would
-    /// would return `[a: [0, 2], b: [2, 4]]` as `b` must be at least 2 to
-    /// make the output at least `4`.
+    /// If the expression is `a + b`, the current `interval` is `[4, 5]` and the
+    /// inputs `a` and `b` are respectively given as `[0, 2]` and `[-∞, 4]`, then
+    /// propagation would would return `[0, 2]` and `[2, 4]` as `b` must be at
+    /// least `2` to make the output at least `4`.
     fn propagate_constraints(
         &self,
         _interval: &Interval,
         _children: &[&Interval],
     ) -> Result<Option<Vec<Interval>>> {
-        not_impl_err!("Not implemented for {self}")
+        Ok(Some(vec![]))
     }
 
     /// Update the hash `state` with this expression requirements from

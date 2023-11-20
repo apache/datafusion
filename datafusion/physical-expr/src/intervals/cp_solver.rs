@@ -330,7 +330,7 @@ pub fn propagate_comparison(
     } else if parent == &Interval::CERTAINLY_FALSE {
         match op {
             Operator::Eq => {
-                // Propagation over `not equal` operator is not possible.
+                // TODO: Propagation is not possible until we support interval sets.
                 Ok(None)
             }
             Operator::Gt => satisfy_greater(right_child, left_child, false),
@@ -344,7 +344,7 @@ pub fn propagate_comparison(
             ),
         }
     } else {
-        // Uncertainty cannot change any end-point of intervals.
+        // Uncertainty cannot change any end-point of the intervals.
         Ok(None)
     }
 }

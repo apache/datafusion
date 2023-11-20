@@ -19,10 +19,11 @@
 //!
 //! [`ExprSimplifier::with_guarantees()`]: crate::simplify_expressions::expr_simplifier::ExprSimplifier::with_guarantees
 
+use std::{borrow::Cow, collections::HashMap};
+
 use datafusion_common::{tree_node::TreeNodeRewriter, DataFusionError, Result};
 use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
 use datafusion_expr::{expr::InList, lit, Between, BinaryExpr, Expr};
-use std::{borrow::Cow, collections::HashMap};
 
 /// Rewrite expressions to incorporate guarantees.
 ///
@@ -263,22 +264,14 @@ mod tests {
             (
                 col("x"),
                 NullableInterval::NotNull {
-                    values: Interval::try_new(
-                        ScalarValue::Int32(Some(1)),
-                        ScalarValue::Int32(Some(3)),
-                    )
-                    .unwrap(),
+                    values: Interval::make(Some(1_i32), Some(3_i32)).unwrap(),
                 },
             ),
             // s.y ∈ [1, 3] (not null)
             (
                 col("s").field("y"),
                 NullableInterval::NotNull {
-                    values: Interval::try_new(
-                        ScalarValue::Int32(Some(1)),
-                        ScalarValue::Int32(Some(3)),
-                    )
-                    .unwrap(),
+                    values: Interval::make(Some(1_i32), Some(3_i32)).unwrap(),
                 },
             ),
         ];

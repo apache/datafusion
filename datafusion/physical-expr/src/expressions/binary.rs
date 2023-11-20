@@ -346,24 +346,18 @@ impl PhysicalExpr for BinaryExpr {
 
         if self.op.eq(&Operator::And) {
             if interval.eq(&Interval::CERTAINLY_TRUE) {
-                // A certainly true logical conjunction can not derive from certainly
-                // false operands, implying infeasability:
-                if left_interval.eq(&Interval::CERTAINLY_FALSE)
-                    || right_interval.eq(&Interval::CERTAINLY_FALSE)
-                {
-                    return Ok(None);
-                }
-                Ok(Some(vec![
-                    Interval::CERTAINLY_TRUE,
-                    Interval::CERTAINLY_TRUE,
-                ]))
+                // A certainly true logical conjunction can only derive from possibly
+                // true operands. Otherwise, we prove infeasability.
+                Ok((!left_interval.eq(&Interval::CERTAINLY_FALSE)
+                    && !right_interval.eq(&Interval::CERTAINLY_FALSE))
+                .then(|| vec![Interval::CERTAINLY_TRUE, Interval::CERTAINLY_TRUE]))
             } else if interval.eq(&Interval::CERTAINLY_FALSE) {
-                // If the And operation results in `certainly false`, it means at least
-                // one of the operands must be false. However, it's not always possible
-                // to determine which operand is false, leading to different scenarios:
+                // If the logical conjunction is certainly false, one of the
+                // operands must be false. However, it's not always possible to
+                // determine which operand is false, leading to different scenarios.
 
-                // Feasible: If one child is `certainly true`, and the other one is `uncertain`,
-                // then, the uncertain one must be `certainly false`.
+                // If one operand is certainly true and the other one is uncertain,
+                // then the latter must be certainly false.
                 if left_interval.eq(&Interval::CERTAINLY_TRUE)
                     && right_interval.eq(&Interval::UNCERTAIN)
                 {
@@ -379,37 +373,31 @@ impl PhysicalExpr for BinaryExpr {
                         Interval::CERTAINLY_TRUE,
                     ]))
                 }
-                // Infeasible: If both children are uncertain or if one is already certainly false,
-                // we cannot conclusively refine their intervals further based on this outcome.
-                // In this case, the propagation does not result in any interval changes.
+                // If both children are uncertain, or if one is certainly false,
+                // we cannot conclusively refine their intervals. In this case,
+                // propagation does not result in any interval changes.
                 else {
-                    // No further refinement possible.
                     Ok(Some(vec![]))
                 }
             } else {
-                // Uncertainty of And operator cannot shrink the end-points of children in any case.
+                // An uncertain logical conjunction result can not shrink the
+                // end-points of its children.
                 Ok(Some(vec![]))
             }
         } else if self.op.eq(&Operator::Or) {
             if interval.eq(&Interval::CERTAINLY_FALSE) {
-                // A certainly false logical disjunction can not derive from certainly
-                // true operands, implying infeasability:
-                if left_interval.eq(&Interval::CERTAINLY_TRUE)
-                    || right_interval.eq(&Interval::CERTAINLY_TRUE)
-                {
-                    return Ok(None);
-                }
-                Ok(Some(vec![
-                    Interval::CERTAINLY_FALSE,
-                    Interval::CERTAINLY_FALSE,
-                ]))
+                // A certainly false logical conjunction can only derive from certainly
+                // false operands. Otherwise, we prove infeasability.
+                Ok((!left_interval.eq(&Interval::CERTAINLY_TRUE)
+                    && !right_interval.eq(&Interval::CERTAINLY_TRUE))
+                .then(|| vec![Interval::CERTAINLY_FALSE, Interval::CERTAINLY_FALSE]))
             } else if interval.eq(&Interval::CERTAINLY_TRUE) {
-                // If the Or operation results in `certainly true`, it means at least
-                // one of the operands must be true. However, it's not always possible
-                // to determine which operand is true, leading to different scenarios:
+                // If the logical disjunction is certainly true, one of the
+                // operands must be true. However, it's not always possible to
+                // determine which operand is true, leading to different scenarios.
 
-                // Feasible: If one child is `certainly false`, and the other one is `uncertain`,
-                // then, the uncertain one must be `certainly true`.
+                // If one operand is certainly false and the other one is uncertain,
+                // then the latter must be certainly true.
                 if left_interval.eq(&Interval::CERTAINLY_FALSE)
                     && right_interval.eq(&Interval::UNCERTAIN)
                 {
@@ -425,15 +413,15 @@ impl PhysicalExpr for BinaryExpr {
                         Interval::CERTAINLY_FALSE,
                     ]))
                 }
-                // Infeasible: If both children are uncertain or if one is already certainly true,
-                // we cannot conclusively refine their intervals further based on this outcome.
-                // In this case, the propagation does not result in any interval changes.
+                // If both children are uncertain, or if one is certainly true,
+                // we cannot conclusively refine their intervals. In this case,
+                // propagation does not result in any interval changes.
                 else {
-                    // No further refinement possible.
                     Ok(Some(vec![]))
                 }
             } else {
-                // Uncertainty of Or operator cannot shrink the end-points of children in any case.
+                // An uncertain logical disjunction result can not shrink the
+                // end-points of its children.
                 Ok(Some(vec![]))
             }
         } else if self.op.is_comparison_operator() {
