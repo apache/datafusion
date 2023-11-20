@@ -199,15 +199,12 @@ impl ExecutionPlan for FilterExec {
             // assume filter selects 20% of rows if we cannot do anything smarter
             // tracking issue for making this configurable:
             // https://github.com/apache/arrow-datafusion/issues/8133
-            let selectivity = 0.2_f32;
+            let selectivity = 0.2_f64;
             let mut stats = input_stats.into_inexact();
-            if let Precision::Inexact(n) = stats.num_rows {
-                stats.num_rows = Precision::Inexact((selectivity * n as f32) as usize);
-            }
-            if let Precision::Inexact(n) = stats.total_byte_size {
-                stats.total_byte_size =
-                    Precision::Inexact((selectivity * n as f32) as usize);
-            }
+            stats.num_rows = stats.num_rows.with_estimated_selectivity(selectivity);
+            stats.total_byte_size = stats
+                .total_byte_size
+                .with_estimated_selectivity(selectivity);
             return Ok(stats);
         }
 
@@ -222,14 +219,8 @@ impl ExecutionPlan for FilterExec {
 
         // Estimate (inexact) selectivity of predicate
         let selectivity = analysis_ctx.selectivity.unwrap_or(1.0);
-        let num_rows = match num_rows.get_value() {
-            Some(nr) => Precision::Inexact((*nr as f64 * selectivity).ceil() as usize),
-            None => Precision::Absent,
-        };
-        let total_byte_size = match total_byte_size.get_value() {
-            Some(tbs) => Precision::Inexact((*tbs as f64 * selectivity).ceil() as usize),
-            None => Precision::Absent,
-        };
+        let num_rows = num_rows.with_estimated_selectivity(selectivity);
+        let total_byte_size = total_byte_size.with_estimated_selectivity(selectivity);
 
         let column_statistics = collect_new_statistics(
             &input_stats.column_statistics,

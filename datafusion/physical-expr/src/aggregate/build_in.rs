@@ -369,6 +369,22 @@ pub fn create_aggregate_expr(
             ordering_req.to_vec(),
             ordering_types,
         )),
+        (AggregateFunction::StringAgg, false) => {
+            if !ordering_req.is_empty() {
+                return not_impl_err!(
+                    "STRING_AGG(ORDER BY a ASC) order-sensitive aggregations are not available"
+                );
+            }
+            Arc::new(expressions::StringAgg::new(
+                input_phy_exprs[0].clone(),
+                input_phy_exprs[1].clone(),
+                name,
+                data_type,
+            ))
+        }
+        (AggregateFunction::StringAgg, true) => {
+            return not_impl_err!("STRING_AGG(DISTINCT) aggregations are not available");
+        }
     })
 }
 

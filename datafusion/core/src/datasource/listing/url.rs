@@ -181,6 +181,11 @@ impl ListingTableUrl {
         }
     }
 
+    /// Returns `true` if `path` refers to a collection of objects
+    pub fn is_collection(&self) -> bool {
+        self.url.as_str().ends_with('/')
+    }
+
     /// Strips the prefix of this [`ListingTableUrl`] from the provided path, returning
     /// an iterator of the remaining path segments
     pub(crate) fn strip_prefix<'a, 'b: 'a>(
@@ -203,20 +208,17 @@ impl ListingTableUrl {
         file_extension: &'a str,
     ) -> Result<BoxStream<'a, Result<ObjectMeta>>> {
         // If the prefix is a file, use a head request, otherwise list
-        let is_dir = self.url.as_str().ends_with('/');
-        let list = match is_dir {
+        let list = match self.is_collection() {
             true => match ctx.runtime_env().cache_manager.get_list_files_cache() {
-                None => futures::stream::once(store.list(Some(&self.prefix)))
-                    .try_flatten()
-                    .boxed(),
+                None => store.list(Some(&self.prefix)),
                 Some(cache) => {
                     if let Some(res) = cache.get(&self.prefix) {
                         debug!("Hit list all files cache");
                         futures::stream::iter(res.as_ref().clone().into_iter().map(Ok))
                             .boxed()
                     } else {
-                        let list_res = store.list(Some(&self.prefix)).await;
-                        let vec = list_res?.try_collect::<Vec<ObjectMeta>>().await?;
+                        let list_res = store.list(Some(&self.prefix));
+                        let vec = list_res.try_collect::<Vec<ObjectMeta>>().await?;
                         cache.put(&self.prefix, Arc::new(vec.clone()));
                         futures::stream::iter(vec.into_iter().map(Ok)).boxed()
                     }
@@ -326,8 +328,8 @@ mod tests {
         let url = ListingTableUrl::parse("file:///foo/bar?").unwrap();
         assert_eq!(url.prefix.as_ref(), "foo/bar");
 
-        let err = ListingTableUrl::parse("file:///foo/😺").unwrap_err();
-        assert_eq!(err.to_string(), "Object Store error: Encountered object with invalid path: Error parsing Path \"/foo/😺\": Encountered illegal character sequence \"😺\" whilst parsing path segment \"😺\"");
+        let url = ListingTableUrl::parse("file:///foo/😺").unwrap();
+        assert_eq!(url.prefix.as_ref(), "foo/😺");
 
         let url = ListingTableUrl::parse("file:///foo/bar%2Efoo").unwrap();
         assert_eq!(url.prefix.as_ref(), "foo/bar.foo");
