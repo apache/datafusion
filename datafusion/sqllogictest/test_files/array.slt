@@ -1044,6 +1044,20 @@ select make_array(['a','b'], null);
 ----
 [[a, b], ]
 
+## array_sort (aliases: `list_sort`)
+query ???
+select array_sort(make_array(4, 2, 3, 1)), array_sort(make_array(1.0, 4.0, null, 3.0), true, true), array_sort(make_array('a', 'd', 'c', null, 'b'), false, false);
+----
+[1, 2, 3, 4] [, 4.0, 3.0, 1.0] [a, b, c, d, ]
+
+
+## list_sort (aliases: `array_sort`)
+query ???
+select list_sort(make_array(4, 2, 3, 1)), list_sort(make_array(1.0, 4.0, null, 3.0), true, true), list_sort(make_array('a', 'd', 'c', null, 'b'), false, false);
+----
+[1, 2, 3, 4] [, 4.0, 3.0, 1.0] [a, b, c, d, ]
+
+
 ## array_append (aliases: `list_append`, `array_push_back`, `list_push_back`)
 
 # TODO: array_append with NULLs
@@ -1216,7 +1230,7 @@ select array_prepend(make_array(1, 11, 111), column1), array_prepend(column2, ma
 
 # array_repeat scalar function #1
 query ????????
-select 
+select
   array_repeat(1, 5),
   array_repeat(3.14, 3),
   array_repeat('l', 4),
@@ -1249,7 +1263,7 @@ AS VALUES
   (0, 3, 3.3, 'datafusion', make_array(8, 9));
 
 query ??????
-select 
+select
   array_repeat(column2, column1),
   array_repeat(column3, column1),
   array_repeat(column4, column1),
@@ -1264,7 +1278,7 @@ from array_repeat_table;
 [] [] [] [] [3, 3, 3] []
 
 statement ok
-drop table array_repeat_table; 
+drop table array_repeat_table;
 
 ## array_concat (aliases: `array_cat`, `list_concat`, `list_cat`)
 
@@ -2180,7 +2194,7 @@ select array_remove(make_array(1, 2, 2, 1, 1), 2), array_remove(make_array(1.0, 
 [1, 2, 1, 1] [2.0, 2.0, 1.0, 1.0] [h, e, l, o]
 
 query ???
-select 
+select
   array_remove(make_array(1, null, 2, 3), 2),
   array_remove(make_array(1.1, null, 2.2, 3.3), 1.1),
   array_remove(make_array('a', null, 'bc'), 'a');
@@ -2679,7 +2693,7 @@ from array_intersect_table_3D;
 query ??????
 SELECT  array_intersect(make_array(1,2,3), make_array(2,3,4)),
         array_intersect(make_array(1,3,5), make_array(2,4,6)),
-        array_intersect(make_array('aa','bb','cc'), make_array('cc','aa','dd')), 
+        array_intersect(make_array('aa','bb','cc'), make_array('cc','aa','dd')),
         array_intersect(make_array(true, false), make_array(true)),
         array_intersect(make_array(1.1, 2.2, 3.3), make_array(2.2, 3.3, 4.4)),
         array_intersect(make_array([1, 1], [2, 2], [3, 3]), make_array([2, 2], [3, 3], [4, 4]))
@@ -2690,7 +2704,7 @@ SELECT  array_intersect(make_array(1,2,3), make_array(2,3,4)),
 query ??????
 SELECT  list_intersect(make_array(1,2,3), make_array(2,3,4)),
         list_intersect(make_array(1,3,5), make_array(2,4,6)),
-        list_intersect(make_array('aa','bb','cc'), make_array('cc','aa','dd')), 
+        list_intersect(make_array('aa','bb','cc'), make_array('cc','aa','dd')),
         list_intersect(make_array(true, false), make_array(true)),
         list_intersect(make_array(1.1, 2.2, 3.3), make_array(2.2, 3.3, 4.4)),
         list_intersect(make_array([1, 1], [2, 2], [3, 3]), make_array([2, 2], [3, 3], [4, 4]))

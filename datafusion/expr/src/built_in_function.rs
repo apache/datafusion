@@ -130,6 +130,8 @@ pub enum BuiltinScalarFunction {
     // array functions
     /// array_append
     ArrayAppend,
+    /// array_sort
+    ArraySort,
     /// array_concat
     ArrayConcat,
     /// array_has
@@ -387,6 +389,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Tanh => Volatility::Immutable,
             BuiltinScalarFunction::Trunc => Volatility::Immutable,
             BuiltinScalarFunction::ArrayAppend => Volatility::Immutable,
+            BuiltinScalarFunction::ArraySort => Volatility::Immutable,
             BuiltinScalarFunction::ArrayConcat => Volatility::Immutable,
             BuiltinScalarFunction::ArrayEmpty => Volatility::Immutable,
             BuiltinScalarFunction::ArrayHasAll => Volatility::Immutable,
@@ -531,6 +534,7 @@ impl BuiltinScalarFunction {
                 Ok(data_type)
             }
             BuiltinScalarFunction::ArrayAppend => Ok(input_expr_types[0].clone()),
+            BuiltinScalarFunction::ArraySort => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayConcat => {
                 let mut expr_type = Null;
                 let mut max_dims = 0;
@@ -879,6 +883,9 @@ impl BuiltinScalarFunction {
         // for now, the list is small, as we do not have many built-in functions.
         match self {
             BuiltinScalarFunction::ArrayAppend => Signature::any(2, self.volatility()),
+            BuiltinScalarFunction::ArraySort => {
+                Signature::variadic_any(self.volatility())
+            }
             BuiltinScalarFunction::ArrayPopFront => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayPopBack => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayConcat => {
@@ -1510,6 +1517,7 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
             "array_push_back",
             "list_push_back",
         ],
+        BuiltinScalarFunction::ArraySort => &["array_sort", "list_sort"],
         BuiltinScalarFunction::ArrayConcat => {
             &["array_concat", "array_cat", "list_concat", "list_cat"]
         }

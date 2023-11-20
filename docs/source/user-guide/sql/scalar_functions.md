@@ -1519,6 +1519,7 @@ from_unixtime(expression)
 ## Array Functions
 
 - [array_append](#array_append)
+- [array_sort](#array_sort)
 - [array_cat](#array_cat)
 - [array_concat](#array_concat)
 - [array_contains](#array_contains)
@@ -1548,6 +1549,7 @@ from_unixtime(expression)
 - [cardinality](#cardinality)
 - [empty](#empty)
 - [list_append](#list_append)
+- [list_sort](#list_sort)
 - [list_cat](#list_cat)
 - [list_concat](#list_concat)
 - [list_dims](#list_dims)
@@ -1608,6 +1610,37 @@ array_append(array, element)
 - array_push_back
 - list_append
 - list_push_back
+
+### `array_sort`
+Sort array.
+
+```
+array_sort(array)
+array_sort(array, false)
+array_sort(array, true, false)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+- **desc**: Whether to sort in descending order.
+- **nulls_first**: Whether to sort nulls first.
+
+#### Example
+
+```
+❯ select array_sort([3, 1, null, 2], true, false);
++--------------------------------------+
+| array_sort(List([1,2,3]),Int64(4))   |
++--------------------------------------+
+| [3, 2, 1, ]                          |
++--------------------------------------+
+```
+
+#### Aliases
+
+- list_sort
 
 ### `array_cat`
 
@@ -2358,6 +2391,10 @@ empty(array)
 ### `list_append`
 
 _Alias of [array_append](#array_append)._
+
+### `list_sort`
+
+_Alias of [array_sort](#array_sort)._
 
 ### `list_cat`
 
