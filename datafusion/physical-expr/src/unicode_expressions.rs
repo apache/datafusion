@@ -484,15 +484,18 @@ pub fn substr_index<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                                 .take(n as usize)
                                 .fold(0, |len, x| len + x.len() + delimiter.len())
                                 - delimiter.len();
-                            res.push_str(if idx >= string.len() { string } else { &string[..idx] });
+                            res.push_str(if idx >= string.len() {
+                                string
+                            } else {
+                                &string[..idx]
+                            });
                         } else {
-                            let idx = (string
-                                .split(delimiter)
-                                .take((-n) as usize)
-                                .fold(string.len() as isize, |len, x| {
+                            let idx = (string.split(delimiter).take((-n) as usize).fold(
+                                string.len() as isize,
+                                |len, x| {
                                     len - x.len() as isize - delimiter.len() as isize
-                                })
-                                + delimiter.len() as isize)
+                                },
+                            ) + delimiter.len() as isize)
                                 as usize;
                             res.push_str(if idx >= string.len() {
                                 string
