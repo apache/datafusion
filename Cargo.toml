@@ -34,6 +34,7 @@ members = [
     "datafusion-examples",
     "test-utils",
     "benchmarks",
+    "extension/functions",
 ]
 resolver = "2"
 

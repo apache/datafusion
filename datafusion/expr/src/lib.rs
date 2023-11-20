@@ -77,7 +77,7 @@ pub use partition_evaluator::PartitionEvaluator;
 pub use signature::{Signature, TypeSignature, Volatility, TIMEZONE_WILDCARD};
 pub use table_source::{TableProviderFilterPushDown, TableSource, TableType};
 pub use udaf::AggregateUDF;
-pub use udf::ScalarUDF;
+pub use udf::{ScalarFunctionDef, ScalarFunctionPackage, ScalarUDF};
 pub use udwf::WindowUDF;
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 pub use window_function::{BuiltInWindowFunction, WindowFunction};

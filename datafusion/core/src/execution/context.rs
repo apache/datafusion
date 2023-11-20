@@ -36,7 +36,8 @@ use datafusion_common::{
 use datafusion_execution::registry::SerializerRegistry;
 use datafusion_expr::{
     logical_plan::{DdlStatement, Statement},
-    StringifiedPlan, UserDefinedLogicalNode, WindowUDF,
+    ScalarFunctionDef, ScalarFunctionPackage, StringifiedPlan, UserDefinedLogicalNode,
+    WindowUDF,
 };
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
@@ -79,6 +80,7 @@ use sqlparser::dialect::dialect_from_str;
 use crate::config::ConfigOptions;
 use crate::datasource::physical_plan::{plan_to_csv, plan_to_json, plan_to_parquet};
 use crate::execution::{runtime_env::RuntimeEnv, FunctionRegistry};
+use crate::physical_plan::functions::make_scalar_function;
 use crate::physical_plan::udaf::AggregateUDF;
 use crate::physical_plan::udf::ScalarUDF;
 use crate::physical_plan::ExecutionPlan;
@@ -790,6 +792,30 @@ impl SessionContext {
             .write()
             .execution_props
             .add_var_provider(variable_type, provider);
+    }
+
+    /// Register a function package into this context
+    pub fn register_scalar_function_package(
+        &self,
+        func_pkg: Box<dyn ScalarFunctionPackage>,
+    ) {
+        // Make a `dyn ScalarFunctionDef` into a internal struct for scalar functions, then it can be
+        // registered into context
+        pub fn to_scalar_function(func: Box<dyn ScalarFunctionDef>) -> ScalarUDF {
+            let name = func.name().to_string();
+            let signature = func.signature();
+            let return_type = func.return_type();
+            let func_impl = make_scalar_function(move |args| func.execute(args));
+
+            ScalarUDF::new(&name, &signature, &return_type, &func_impl)
+        }
+
+        for func in func_pkg.functions() {
+            self.state
+                .write()
+                .scalar_functions
+                .insert(func.name().to_string(), Arc::new(to_scalar_function(func)));
+        }
     }
 
     /// Registers a scalar UDF within this context.
