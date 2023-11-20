@@ -138,86 +138,81 @@ impl EquivalenceClass {
 /// projection.
 #[derive(Debug, Clone)]
 pub struct ProjectionMapping {
-    /// `(source expression)` --> `(target expression)`
-    /// Indices in the vector corresponds to the indices after projection.
-    inner: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>,
+    /// Mapping between source expressions and target expressions.
+    /// Vector indices correspond to the indices after projection.
+    map: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>,
 }
 
 impl ProjectionMapping {
     /// Constructs the mapping between a projection's input and output
     /// expressions.
     ///
-    /// For example, given the input projection expressions (`a+b`, `c+d`)
-    /// and an output schema with two columns `"c+d"` and `"a+b"`
-    /// the projection mapping would be
+    /// For example, given the input projection expressions (`a + b`, `c + d`)
+    /// and an output schema with two columns `"c + d"` and `"a + b"`, the
+    /// projection mapping would be:
+    ///
     /// ```text
-    ///  [0]: (c+d, col("c+d"))
-    ///  [1]: (a+b, col("a+b"))
+    ///  [0]: (c + d, col("c + d"))
+    ///  [1]: (a + b, col("a + b"))
     /// ```
-    /// where `col("c+d")` means the column named "c+d".
+    ///
+    /// where `col("c + d")` means the column named `"c + d"`.
     pub fn try_new(
         expr: &[(Arc<dyn PhysicalExpr>, String)],
         input_schema: &SchemaRef,
     ) -> Result<Self> {
         // Construct a map from the input expressions to the output expression of the projection:
-        let mut inner = vec![];
-        for (expr_idx, (expression, name)) in expr.iter().enumerate() {
-            let target_expr = Arc::new(Column::new(name, expr_idx)) as _;
-
-            let source_expr = expression.clone().transform_down(&|e| match e
-                .as_any()
-                .downcast_ref::<Column>(
-            ) {
-                Some(col) => {
-                    // Sometimes, expression and its name in the input_schema doesn't match.
-                    // This can cause problems. Hence in here we make sure that expression name
-                    // matches with the name in the inout_schema.
-                    // Conceptually, source_expr and expression should be same.
-                    let idx = col.index();
-                    let matching_input_field = input_schema.field(idx);
-                    let matching_input_column =
-                        Column::new(matching_input_field.name(), idx);
-                    Ok(Transformed::Yes(Arc::new(matching_input_column)))
-                }
-                None => Ok(Transformed::No(e)),
-            })?;
-
-            inner.push((source_expr, target_expr));
-        }
-        Ok(Self { inner })
+        expr.iter()
+            .enumerate()
+            .map(|(expr_idx, (expression, name))| {
+                let target_expr = Arc::new(Column::new(name, expr_idx)) as _;
+                expression
+                    .clone()
+                    .transform_down(&|e| match e.as_any().downcast_ref::<Column>() {
+                        Some(col) => {
+                            // Sometimes, an expression and its name in the input_schema
+                            // doesn't match. This can cause problems, so we make sure
+                            // that the expression name matches with the name in `input_schema`.
+                            // Conceptually, `source_expr` and `expression` should be the same.
+                            let idx = col.index();
+                            let matching_input_field = input_schema.field(idx);
+                            let matching_input_column =
+                                Column::new(matching_input_field.name(), idx);
+                            Ok(Transformed::Yes(Arc::new(matching_input_column)))
+                        }
+                        None => Ok(Transformed::No(e)),
+                    })
+                    .map(|source_expr| (source_expr, target_expr))
+            })
+            .collect::<Result<Vec<_>>>()
+            .map(|map| Self { map })
     }
 
     /// Iterate over pairs of (source, target) expressions
     pub fn iter(
         &self,
     ) -> impl Iterator<Item = &(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)> + '_ {
-        self.inner.iter()
+        self.map.iter()
     }
 
-    /// This function returns target value for given expression
+    /// This function returns the target expression for a given source expression.
     ///
     /// # Arguments
     ///
-    /// * `expr` - Source (e.g key) physical expression
+    /// * `expr` - Source physical expression.
     ///
     /// # Returns
     ///
-    /// An `Option` containing a the target (e.g value) for the source expression.
-    /// `None` means that source is not found inside the mapping.
+    /// An `Option` containing the target for the given source expression,
+    /// where a `None` value means that `expr` is not inside the mapping.
     pub fn target_expr(
         &self,
         expr: &Arc<dyn PhysicalExpr>,
     ) -> Option<Arc<dyn PhysicalExpr>> {
-        if let Some(idx) = self
-            .inner
+        self.map
             .iter()
-            .position(|(source, _target)| source.eq(expr))
-        {
-            let (_source, target) = &self.inner[idx];
-            Some(target.clone())
-        } else {
-            None
-        }
+            .find(|(source, _)| source.eq(expr))
+            .map(|(_, target)| target.clone())
     }
 }
 
@@ -236,7 +231,7 @@ impl EquivalenceGroup {
 
     /// Creates an equivalence group from the given equivalence classes.
     fn new(classes: Vec<EquivalenceClass>) -> Self {
-        let mut result = EquivalenceGroup { classes };
+        let mut result = Self { classes };
         result.remove_redundant_entries();
         result
     }
@@ -279,12 +274,13 @@ impl EquivalenceGroup {
                 // If the given left and right sides belong to different classes,
                 // we should unify/bridge these classes.
                 if first_idx != second_idx {
-                    // By convention make sure second_idx is larger than first_idx.
+                    // By convention, make sure `second_idx` is larger than `first_idx`.
                     if first_idx > second_idx {
                         (first_idx, second_idx) = (second_idx, first_idx);
                     }
-                    // Remove second_idx from self.classes then merge its values with class at first_idx.
-                    // Convention above makes sure that first_idx is still valid after second_idx removal.
+                    // Remove the class at `second_idx` and merge its values with
+                    // the class at `first_idx`. The convention above makes sure
+                    // that `first_idx` is still valid after removing `second_idx`.
                     let other_class = self.classes.swap_remove(second_idx);
                     self.classes[first_idx].extend(other_class);
                 }
@@ -445,9 +441,9 @@ impl EquivalenceGroup {
             // If the given expression is not inside the mapping, try to project
             // expressions considering the equivalence classes.
             for (source, target) in mapping.iter() {
-                // If we match an equivalent expression to source,
-                // then we can project. For example, if we have the mapping
-                // (a as a1, a + c) and the equivalence class (a, b), expression `b` projects to `a1`.
+                // If we match an equivalent expression to `source`, then we can
+                // project. For example, if we have the mapping `(a as a1, a + c)`
+                // and the equivalence class `(a, b)`, expression `b` projects to `a1`.
                 if self
                     .get_equivalence_class(source)
                     .map_or(false, |group| group.contains(expr))
@@ -461,15 +457,12 @@ impl EquivalenceGroup {
         if children.is_empty() {
             // Leaf expression should be inside mapping.
             return None;
-        } else if let Some(children) = children
+        }
+        children
             .into_iter()
             .map(|child| self.project_expr(mapping, &child))
             .collect::<Option<Vec<_>>>()
-        {
-            return Some(expr.clone().with_new_children(children).unwrap());
-        }
-        // Arriving here implies the expression was invalid after projection.
-        None
+            .map(|children| expr.clone().with_new_children(children).unwrap())
     }
 
     /// Projects `ordering` according to the given projection mapping.
@@ -533,8 +526,8 @@ impl EquivalenceGroup {
         Self::new(classes)
     }
 
-    /// Returns the equivalence class that contains `expr`.
-    /// If none of the equivalence classes contains `expr`, returns `None`.
+    /// Returns the equivalence class containing `expr`. If no equivalence class
+    /// contains `expr`, returns `None`.
     fn get_equivalence_class(
         &self,
         expr: &Arc<dyn PhysicalExpr>,
@@ -687,47 +680,35 @@ impl OrderingEquivalenceClass {
         self.remove_redundant_entries();
     }
 
-    /// Removes redundant orderings from this equivalence class.
-    /// For instance, If we already have the ordering [a ASC, b ASC, c DESC],
-    /// then there is no need to keep ordering [a ASC, b ASC] in the state.
+    /// Removes redundant orderings from this equivalence class. For instance,
+    /// if we already have the ordering `[a ASC, b ASC, c DESC]`, then there is
+    /// no need to keep ordering `[a ASC, b ASC]` in the state.
     fn remove_redundant_entries(&mut self) {
-        // Get leading orderings (e.g first sort expr in each lexicographical ordering) among orderings
-        let leading_ordering_exprs = self
-            .orderings
-            .iter()
-            .flat_map(|ordering| ordering.first().map(|sort_expr| sort_expr.expr.clone()))
-            .collect::<Vec<_>>();
-
-        // Remove leading orderings that are at the end of the lexicographical ordering.
-        self.orderings.iter_mut().for_each(|ordering| {
-            while ordering.len() > 1 {
-                let last_sort_expr = &ordering[ordering.len() - 1];
-                if physical_exprs_contains(&leading_ordering_exprs, &last_sort_expr.expr)
-                {
-                    ordering.pop();
-                } else {
-                    // last ordering expr is not leading. Stop removing from the end.
-                    break;
-                }
-            }
-        });
-
-        let mut idx = 0;
-        while idx < self.orderings.len() {
-            let mut removal = self.orderings[idx].is_empty();
-            for (ordering_idx, ordering) in self.orderings[0..idx].iter().enumerate() {
-                if let Some(right_finer) = finer_side(ordering, &self.orderings[idx]) {
-                    if right_finer {
-                        self.orderings.swap(ordering_idx, idx);
+        let mut work = true;
+        while work {
+            work = false;
+            let mut idx = 0;
+            while idx < self.orderings.len() {
+                let mut ordering_idx = idx + 1;
+                let mut removal = self.orderings[idx].is_empty();
+                while ordering_idx < self.orderings.len() {
+                    work |= resolve_overlap(&mut self.orderings, idx, ordering_idx);
+                    if self.orderings[idx].is_empty() {
+                        removal = true;
+                        break;
                     }
-                    removal = true;
-                    break;
+                    work |= resolve_overlap(&mut self.orderings, ordering_idx, idx);
+                    if self.orderings[ordering_idx].is_empty() {
+                        self.orderings.swap_remove(ordering_idx);
+                    } else {
+                        ordering_idx += 1;
+                    }
                 }
-            }
-            if removal {
-                self.orderings.swap_remove(idx);
-            } else {
-                idx += 1;
+                if removal {
+                    self.orderings.swap_remove(idx);
+                } else {
+                    idx += 1;
+                }
             }
         }
     }
@@ -735,8 +716,7 @@ impl OrderingEquivalenceClass {
     /// Returns the concatenation of all the orderings. This enables merge
     /// operations to preserve all equivalent orderings simultaneously.
     pub fn output_ordering(&self) -> Option<LexOrdering> {
-        let output_ordering =
-            self.orderings.iter().flatten().cloned().collect::<Vec<_>>();
+        let output_ordering = self.orderings.iter().flatten().cloned().collect();
         let output_ordering = collapse_lex_ordering(output_ordering);
         (!output_ordering.is_empty()).then_some(output_ordering)
     }
@@ -793,12 +773,18 @@ pub fn add_offset_to_expr(
     // an `Ok` value.
 }
 
-/// Returns `true` if the ordering `rhs` is strictly finer than the ordering `rhs`,
-/// `false` if the ordering `lhs` is at least as fine as the ordering `lhs`, and
-/// `None` otherwise (i.e. when given orderings are incomparable).
-fn finer_side(lhs: LexOrderingRef, rhs: LexOrderingRef) -> Option<bool> {
-    let all_equal = lhs.iter().zip(rhs.iter()).all(|(lhs, rhs)| lhs.eq(rhs));
-    all_equal.then_some(lhs.len() < rhs.len())
+/// Trims `orderings[idx]` if some suffix of it overlaps with a prefix of
+/// `orderings[pre_idx]`. Returns `true` if there is any overlap, `false` otherwise.
+fn resolve_overlap(orderings: &mut [LexOrdering], idx: usize, pre_idx: usize) -> bool {
+    let length = orderings[idx].len();
+    let other_length = orderings[pre_idx].len();
+    for overlap in 1..=length.min(other_length) {
+        if orderings[idx][length - overlap..] == orderings[pre_idx][..overlap] {
+            orderings[idx].truncate(length - overlap);
+            return true;
+        }
+    }
+    false
 }
 
 /// A `EquivalenceProperties` object stores useful information related to a schema.
@@ -2588,6 +2574,7 @@ mod tests {
         let col_a = &col("a", &schema)?;
         let col_b = &col("b", &schema)?;
         let col_c = &col("c", &schema)?;
+        let col_d = &col("d", &schema)?;
 
         let option_asc = SortOptions {
             descending: false,
@@ -2705,6 +2692,30 @@ mod tests {
                     vec![(col_b, option_asc)],
                 ],
             ),
+            // ------- TEST CASE 7 ---------
+            // b, a
+            // c, a
+            // d, b, c
+            (
+                // ORDERINGS GIVEN
+                vec![
+                    // [b ASC, a ASC]
+                    vec![(col_b, option_asc), (col_a, option_asc)],
+                    // [c ASC, a ASC]
+                    vec![(col_c, option_asc), (col_a, option_asc)],
+                    // [d ASC, b ASC, c ASC]
+                    vec![(col_d, option_asc), (col_b, option_asc), (col_c, option_asc)],
+                ],
+                // EXPECTED orderings that is succinct.
+                vec![
+                    // [b ASC, a ASC]
+                    vec![(col_b, option_asc), (col_a, option_asc)],
+                    // [c ASC, a ASC]
+                    vec![(col_c, option_asc), (col_a, option_asc)],
+                    // [d ASC]
+                    vec![(col_d, option_asc)],
+                ],
+            ),            
         ];
         for (orderings, expected) in test_cases {
             let orderings = convert_to_orderings(&orderings);
