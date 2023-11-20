@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 #[cfg(target_family = "windows")]
 use std::thread;
 
+use clap::Parser;
 use datafusion_sqllogictest::{DataFusion, TestContext};
 use futures::stream::StreamExt;
 use log::info;
@@ -77,7 +78,7 @@ async fn run_tests() -> Result<()> {
     // Enable logging (e.g. set RUST_LOG=debug to see debug logs)
     env_logger::init();
 
-    let options = Options::new();
+    let options: Options = clap::Parser::parse();
 
     // Run all tests in parallel, reporting failures at the end
     //
@@ -88,7 +89,7 @@ async fn run_tests() -> Result<()> {
         .map(|test_file| {
             tokio::task::spawn(async move {
                 println!("Running {:?}", test_file.relative_path);
-                if options.complete_mode {
+                if options.complete {
                     run_complete_file(test_file).await?;
                 } else if options.postgres_runner {
                     run_test_file_with_postgres(test_file).await?;
@@ -272,49 +273,54 @@ fn read_dir_recursive<P: AsRef<Path>>(path: P) -> Box<dyn Iterator<Item = PathBu
 }
 
 /// Parsed command line options
+///
+/// This structure attempts to mimic the command line options
+/// accepted by IDEs such as CLion that pass arguments
+///
+/// See <https://github.com/apache/arrow-datafusion/issues/8287> for more details
+#[derive(Parser, Debug)]
+#[clap(author, version, about, long_about= None)]
 struct Options {
-    // regex like
-    /// arguments passed to the program which are treated as
-    /// cargo test filter (substring match on filenames)
-    filters: Vec<String>,
+    #[clap(long, help = "Auto complete mode to fill out expected results")]
+    complete: bool,
 
-    /// Auto complete mode to fill out expected results
-    complete_mode: bool,
-
-    /// Run Postgres compatibility tests with Postgres runner
+    #[clap(
+        long,
+        env = "PG_COMPAT",
+        help = "Run Postgres compatibility tests with Postgres runner"
+    )]
     postgres_runner: bool,
 
-    /// Include tpch files
+    #[clap(long, env = "INCLUDE_TPCH", help = "Include tpch files")]
     include_tpch: bool,
+
+    #[clap(
+        action,
+        help = "regex like arguments passed to the program which are treated as cargo test filter (substring match on filenames)"
+    )]
+    filters: Vec<String>,
+
+    #[clap(
+        long,
+        help = "IGNORED (for compatibility with built in rust test runner)"
+    )]
+    format: Option<String>,
+
+    #[clap(
+        short = 'Z',
+        long,
+        help = "IGNORED (for compatibility with built in rust test runner)"
+    )]
+    z_options: Option<String>,
+
+    #[clap(
+        long,
+        help = "IGNORED (for compatibility with built in rust test runner)"
+    )]
+    show_output: bool,
 }
 
 impl Options {
-    fn new() -> Self {
-        let args: Vec<_> = std::env::args().collect();
-
-        let complete_mode = args.iter().any(|a| a == "--complete");
-        let postgres_runner = std::env::var("PG_COMPAT").map_or(false, |_| true);
-        let include_tpch = std::env::var("INCLUDE_TPCH").map_or(false, |_| true);
-
-        // treat args after the first as filters to run (substring matching)
-        let filters = if !args.is_empty() {
-            args.into_iter()
-                .skip(1)
-                // ignore command line arguments like `--complete`
-                .filter(|arg| !arg.as_str().starts_with("--"))
-                .collect::<Vec<_>>()
-        } else {
-            vec![]
-        };
-
-        Self {
-            filters,
-            complete_mode,
-            postgres_runner,
-            include_tpch,
-        }
-    }
-
     /// Because this test can be run as a cargo test, commands like
     ///
     /// ```shell

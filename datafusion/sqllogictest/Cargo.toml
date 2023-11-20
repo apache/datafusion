@@ -52,6 +52,7 @@ tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { version = "1.0" }
 tokio-postgres = { version = "0.7.7", optional = true }
+clap = { version = "4.4.8", features = ["derive", "env"] }
 
 [features]
 avro = ["datafusion/avro"]
