@@ -45,7 +45,6 @@ object_store = { workspace = true }
 parking_lot = { workspace = true }
 rand = { workspace = true }
 tempfile = { workspace = true }
-url = { workspace = true }
 tokio = { version = "1.28", features = [
     "macros",
     "rt",
@@ -54,3 +53,4 @@ tokio = { version = "1.28", features = [
     "fs",
     "parking_lot",
 ] }
+url = { workspace = true }
