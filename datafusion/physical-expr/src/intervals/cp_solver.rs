@@ -312,11 +312,7 @@ pub fn propagate_comparison(
     left_child: &Interval,
     right_child: &Interval,
 ) -> Result<Option<(Interval, Interval)>> {
-    if parent == &Interval::UNCERTAIN || parent == &Interval::CERTAINLY_FALSE {
-        // We cannot propagate over an uncertain interval.
-        // TODO: Certainly false asserting comparison operators are not supported yet.
-        Ok(None)
-    } else {
+    if parent == &Interval::CERTAINLY_TRUE {
         match op {
             Operator::Eq => left_child.intersect(right_child).map(|result| {
                 result.map(|intersection| (intersection.clone(), intersection))
@@ -331,6 +327,25 @@ pub fn propagate_comparison(
                 "The operator must be a comparison operator to propagate intervals"
             ),
         }
+    } else if parent == &Interval::CERTAINLY_FALSE {
+        match op {
+            Operator::Eq => {
+                // Propagation over `not equal` operator is not possible.
+                Ok(None)
+            }
+            Operator::Gt => satisfy_greater(right_child, left_child, false),
+            Operator::GtEq => satisfy_greater(right_child, left_child, true),
+            Operator::Lt => satisfy_greater(left_child, right_child, false)
+                .map(|t| t.map(reverse_tuple)),
+            Operator::LtEq => satisfy_greater(left_child, right_child, true)
+                .map(|t| t.map(reverse_tuple)),
+            _ => internal_err!(
+                "The operator must be a comparison operator to propagate intervals"
+            ),
+        }
+    } else {
+        // Uncertainty cannot change any end-point of intervals.
+        Ok(None)
     }
 }
 
