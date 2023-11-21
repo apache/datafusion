@@ -325,7 +325,7 @@ mod tests {
         let path = get_tpch_data_path()?;
         let common = CommonOpt {
             iterations: 1,
-            partitions: 2,
+            partitions: Some(2),
             batch_size: 8192,
             debug: false,
         };
@@ -357,7 +357,7 @@ mod tests {
         let path = get_tpch_data_path()?;
         let common = CommonOpt {
             iterations: 1,
-            partitions: 2,
+            partitions: Some(2),
             batch_size: 8192,
             debug: false,
         };
