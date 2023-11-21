@@ -476,7 +476,9 @@ fn ensure_sorting(
                     update_child_to_remove_unnecessary_sort(child, sort_onwards, &plan)?;
                 }
             }
-            (None, None) => {}
+            (None, None) => {
+                update_child_to_remove_unnecessary_sort(child, sort_onwards, &plan)?;
+            }
         }
     }
     // For window expressions, we can remove some sorts when we can
