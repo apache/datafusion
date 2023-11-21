@@ -2688,7 +2688,6 @@ impl ScalarFunction {
             ScalarFunction::Lcm => "Lcm",
             ScalarFunction::Gcd => "Gcd",
             ScalarFunction::ArrayAppend => "ArrayAppend",
-            ScalarFunction::ArraySort => "ArraySort",
             ScalarFunction::ArrayConcat => "ArrayConcat",
             ScalarFunction::ArrayDims => "ArrayDims",
             ScalarFunction::ArrayRepeat => "ArrayRepeat",
@@ -2728,6 +2727,7 @@ impl ScalarFunction {
             ScalarFunction::ArrayExcept => "ArrayExcept",
             ScalarFunction::ArrayPopFront => "ArrayPopFront",
             ScalarFunction::Levenshtein => "Levenshtein",
+            ScalarFunction::ArraySort => "ArraySort",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2859,6 +2859,7 @@ impl ScalarFunction {
             "ArrayExcept" => Some(Self::ArrayExcept),
             "ArrayPopFront" => Some(Self::ArrayPopFront),
             "Levenshtein" => Some(Self::Levenshtein),
+            "ArraySort" => Some(Self::ArraySort),
             _ => None,
         }
     }
