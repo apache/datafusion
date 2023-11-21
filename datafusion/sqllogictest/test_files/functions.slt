@@ -933,6 +933,21 @@ SELECT substr_index('www.apache.org', 'ac', NULL)
 ----
 NULL
 
+query T
+SELECT substr_index('', 'ac', 1)
+----
+(empty)
+
+query T
+SELECT substr_index('www.apache.org', '', 1)
+----
+(empty)
+
+query T
+SELECT substr_index('www.apache.org', 'ac', 0)
+----
+(empty)
+
 query ?
 SELECT substr_index(NULL, NULL, NULL)
 ----
