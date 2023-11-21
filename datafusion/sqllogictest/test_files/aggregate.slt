@@ -1396,7 +1396,7 @@ SELECT COUNT(DISTINCT c1) FROM test
 query ?
 SELECT ARRAY_AGG([])
 ----
-[]
+[[]]
 
 # array_agg_one
 query ?
@@ -1419,7 +1419,7 @@ e 4
 query ?
 SELECT ARRAY_AGG([]);
 ----
-[]
+[[]]
 
 # array_agg_one
 query ?
