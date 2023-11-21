@@ -29,13 +29,13 @@ use crate::joins::utils::{JoinFilter, JoinHashMapType};
 use arrow::compute::concat_batches;
 use arrow_array::{ArrowPrimitiveType, NativeAdapter, PrimitiveArray, RecordBatch};
 use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder};
-use arrow_schema::SchemaRef;
+use arrow_schema::{Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{DataFusionError, JoinSide, Result, ScalarValue};
 use datafusion_execution::SendableRecordBatchStream;
+use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::intervals::{Interval, IntervalBound};
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 
@@ -316,7 +316,11 @@ pub fn build_filter_input_order(
     order: &PhysicalSortExpr,
 ) -> Result<Option<SortedFilterExpr>> {
     let opt_expr = convert_sort_expr_with_filter_schema(&side, filter, schema, order)?;
-    Ok(opt_expr.map(|filter_expr| SortedFilterExpr::new(order.clone(), filter_expr)))
+    opt_expr
+        .map(|filter_expr| {
+            SortedFilterExpr::try_new(order.clone(), filter_expr, filter.schema())
+        })
+        .transpose()
 }
 
 /// Convert a physical expression into a filter expression using the given
@@ -359,16 +363,18 @@ pub struct SortedFilterExpr {
 
 impl SortedFilterExpr {
     /// Constructor
-    pub fn new(
+    pub fn try_new(
         origin_sorted_expr: PhysicalSortExpr,
         filter_expr: Arc<dyn PhysicalExpr>,
-    ) -> Self {
-        Self {
+        filter_schema: &Schema,
+    ) -> Result<Self> {
+        let dt = &filter_expr.data_type(filter_schema)?;
+        Ok(Self {
             origin_sorted_expr,
             filter_expr,
-            interval: Interval::default(),
+            interval: Interval::make_unbounded(dt)?,
             node_index: 0,
-        }
+        })
     }
     /// Get origin expr information
     pub fn origin_sorted_expr(&self) -> &PhysicalSortExpr {
@@ -494,12 +500,12 @@ pub fn update_filter_expr_interval(
     // Convert the array to a ScalarValue:
     let value = ScalarValue::try_from_array(&array, 0)?;
     // Create a ScalarValue representing positive or negative infinity for the same data type:
-    let unbounded = IntervalBound::make_unbounded(value.data_type())?;
+    let inf = ScalarValue::try_from(value.data_type())?;
     // Update the interval with lower and upper bounds based on the sort option:
     let interval = if sorted_expr.origin_sorted_expr().options.descending {
-        Interval::new(unbounded, IntervalBound::new(value, false))
+        Interval::try_new(inf, value)?
     } else {
-        Interval::new(IntervalBound::new(value, false), unbounded)
+        Interval::try_new(value, inf)?
     };
     // Set the calculated interval for the sorted filter expression:
     sorted_expr.set_interval(interval);
@@ -1024,14 +1030,13 @@ pub mod tests {
         convert_sort_expr_with_filter_schema, PruningJoinHashMap,
     };
     use crate::{
-        expressions::Column,
-        expressions::PhysicalSortExpr,
+        expressions::{Column, PhysicalSortExpr},
         joins::utils::{ColumnIndex, JoinFilter},
     };
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::ScalarValue;
+    use datafusion_common::{JoinSide, ScalarValue};
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{binary, cast, col, lit};
 

@@ -35,10 +35,13 @@ path = "src/lib.rs"
 [features]
 
 [dependencies]
-ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
+ahash = { version = "0.8", default-features = false, features = [
+    "runtime-rng",
+] }
 arrow = { workspace = true }
 arrow-array = { workspace = true }
 datafusion-common = { workspace = true }
+paste = "^1.0"
 sqlparser = { workspace = true }
 strum = { version = "0.25.0", features = ["derive"] }
 strum_macros = "0.25.0"
