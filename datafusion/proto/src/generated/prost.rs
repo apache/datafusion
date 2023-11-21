@@ -1514,7 +1514,7 @@ pub mod owned_table_reference {
 pub struct PhysicalPlanNode {
     #[prost(
         oneof = "physical_plan_node::PhysicalPlanType",
-        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24"
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25"
     )]
     pub physical_plan_type: ::core::option::Option<physical_plan_node::PhysicalPlanType>,
 }
@@ -1571,6 +1571,8 @@ pub mod physical_plan_node {
         Analyze(::prost::alloc::boxed::Box<super::AnalyzeExecNode>),
         #[prost(message, tag = "24")]
         JsonSink(::prost::alloc::boxed::Box<super::JsonSinkExecNode>),
+        #[prost(message, tag = "25")]
+        SymmetricHashJoin(::prost::alloc::boxed::Box<super::SymmetricHashJoinExecNode>),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -2001,6 +2003,24 @@ pub struct HashJoinExecNode {
     #[prost(enumeration = "JoinType", tag = "4")]
     pub join_type: i32,
     #[prost(enumeration = "PartitionMode", tag = "6")]
+    pub partition_mode: i32,
+    #[prost(bool, tag = "7")]
+    pub null_equals_null: bool,
+    #[prost(message, optional, tag = "8")]
+    pub filter: ::core::option::Option<JoinFilter>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SymmetricHashJoinExecNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub left: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub right: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(message, repeated, tag = "3")]
+    pub on: ::prost::alloc::vec::Vec<JoinOn>,
+    #[prost(enumeration = "JoinType", tag = "4")]
+    pub join_type: i32,
+    #[prost(enumeration = "StreamPartitionMode", tag = "6")]
     pub partition_mode: i32,
     #[prost(bool, tag = "7")]
     pub null_equals_null: bool,
@@ -3262,6 +3282,32 @@ impl PartitionMode {
             "COLLECT_LEFT" => Some(Self::CollectLeft),
             "PARTITIONED" => Some(Self::Partitioned),
             "AUTO" => Some(Self::Auto),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum StreamPartitionMode {
+    SinglePartition = 0,
+    PartitionedExec = 1,
+}
+impl StreamPartitionMode {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            StreamPartitionMode::SinglePartition => "SINGLE_PARTITION",
+            StreamPartitionMode::PartitionedExec => "PARTITIONED_EXEC",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "SINGLE_PARTITION" => Some(Self::SinglePartition),
+            "PARTITIONED_EXEC" => Some(Self::PartitionedExec),
             _ => None,
         }
     }
