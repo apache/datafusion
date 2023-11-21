@@ -2592,6 +2592,7 @@ pub enum ScalarFunction {
     ArrayExcept = 123,
     ArrayPopFront = 124,
     Levenshtein = 125,
+    ArraySort = 126,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2687,6 +2688,7 @@ impl ScalarFunction {
             ScalarFunction::Lcm => "Lcm",
             ScalarFunction::Gcd => "Gcd",
             ScalarFunction::ArrayAppend => "ArrayAppend",
+            ScalarFunction::ArraySort => "ArraySort",
             ScalarFunction::ArrayConcat => "ArrayConcat",
             ScalarFunction::ArrayDims => "ArrayDims",
             ScalarFunction::ArrayRepeat => "ArrayRepeat",

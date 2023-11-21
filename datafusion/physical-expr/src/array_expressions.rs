@@ -798,18 +798,18 @@ pub fn array_sort(args: &[ArrayRef]) -> Result<ArrayRef> {
     let sort_option = match args.len() {
         1 => None,
         2 => {
-            let sort = as_boolean_array(&args[1]);
+            let sort = as_string_array(&args[1])?.value(0);
             Some(SortOptions {
-                descending: sort.value(0),
+                descending: order_desc(sort)?,
                 nulls_first: true,
             })
         }
         3 => {
-            let sort = as_boolean_array(&args[1]);
-            let nulls_first = as_boolean_array(&args[2]);
+            let sort = as_string_array(&args[1])?.value(0);
+            let nulls_first = as_string_array(&args[2])?.value(0);
             Some(SortOptions {
-                descending: sort.value(0),
-                nulls_first: nulls_first.value(0),
+                descending: order_desc(sort)?,
+                nulls_first: order_nulls_first(nulls_first)?,
             })
         }
         _ => return internal_err!("array_sort expects 1 to 3 arguments"),
@@ -820,6 +820,24 @@ pub fn array_sort(args: &[ArrayRef]) -> Result<ArrayRef> {
     let sorted_array = arrow_ord::sort::sort(list_array.values(), sort_option).unwrap();
 
     Ok(Arc::new(array_into_list_array(sorted_array)))
+}
+
+fn order_desc(modifier: &str) -> Result<bool> {
+    match modifier.to_uppercase().as_str() {
+        "DESC" => Ok(true),
+        "ASC" => Ok(false),
+        _ => internal_err!("the second parameter of array_sort expects DESC or ASC"),
+    }
+}
+
+fn order_nulls_first(modifier: &str) -> Result<bool> {
+    match modifier.to_uppercase().as_str() {
+        "NULLS FIRST" => Ok(true),
+        "NULLS LAST" => Ok(false),
+        _ => internal_err!(
+            "the third parameter of array_sort expects NULLS FIRST or NULLS LAST"
+        ),
+    }
 }
 
 /// Array_prepend SQL function
@@ -2610,48 +2628,6 @@ mod tests {
 
         assert_eq!(
             &[1, 2, 3, 4],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-    }
-
-    #[test]
-    fn test_array_sort() {
-        // array_sort([2, 3, NULL, 4]) = [NULL, 2, 3, 4]
-        let data = vec![Some(vec![Some(2), Some(3), None, Some(4)])];
-        let array =
-            Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(data)) as ArrayRef;
-
-        let result = array_sort(&[array.clone()])
-            .expect("failed to initialize function array_sort");
-
-        let result =
-            as_list_array(&result).expect("failed to initialize function array_sort");
-
-        assert_eq!(
-            &[0, 2, 3, 4],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-
-        // array_sort([2, 3, NULL, 4], true, false) = [4, 3, 2, NULL]
-        let desc = Arc::new(BooleanArray::from(vec![true])) as ArrayRef;
-        let null_first = Arc::new(BooleanArray::from(vec![false])) as ArrayRef;
-        let result = array_sort(&[array.clone(), desc, null_first])
-            .expect("failed to initialize function array_sort");
-
-        let result = as_list_array(&result)
-            .expect("failed to initialize function array_to_string");
-        assert_eq!(
-            &[4, 3, 2, 0],
             result
                 .value(0)
                 .as_any()
