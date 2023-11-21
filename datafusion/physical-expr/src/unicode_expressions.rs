@@ -462,6 +462,13 @@ pub fn translate<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 /// SUBSTRING_INDEX('www.apache.org', '.', -2) = apache.org
 /// SUBSTRING_INDEX('www.apache.org', '.', -1) = org
 pub fn substr_index<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 3 {
+        return Err(DataFusionError::Internal(format!(
+            "substr_index function requires three arguments, got {}",
+            args.len()
+        )));
+    }
+
     let string_array = as_generic_string_array::<T>(&args[0])?;
     let delimiter_array = as_generic_string_array::<T>(&args[1])?;
     let count_array = as_int64_array(&args[2])?;
