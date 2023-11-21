@@ -1519,7 +1519,7 @@ pub fn array_union(args: &[ArrayRef]) -> Result<ArrayRef> {
                 (_, _) => {
                     let list1 = array1.as_list::<i32>();
                     let list2 = array2.as_list::<i32>();
-                    let result = union_generic_lists::<i32>(list1, list2, &l_field_ref)?;
+                    let result = union_generic_lists::<i32>(list1, list2, l_field_ref)?;
                     Ok(Arc::new(result))
                 }
             }
@@ -1531,7 +1531,7 @@ pub fn array_union(args: &[ArrayRef]) -> Result<ArrayRef> {
                 (_, _) => {
                     let list1 = array1.as_list::<i64>();
                     let list2 = array2.as_list::<i64>();
-                    let result = union_generic_lists::<i64>(list1, list2, &l_field_ref)?;
+                    let result = union_generic_lists::<i64>(list1, list2, l_field_ref)?;
                     Ok(Arc::new(result))
                 }
             }

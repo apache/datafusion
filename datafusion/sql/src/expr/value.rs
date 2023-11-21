@@ -140,12 +140,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             )?;
 
             match value {
-                Expr::Literal(scalar) => {
-                    values.push(Expr::Literal(scalar));
+                Expr::Literal(_) => {
+                    values.push(value);
                 }
                 Expr::ScalarFunction(ref scalar_function) => {
                     if scalar_function.fun == BuiltinScalarFunction::MakeArray {
-                        values.push(Expr::ScalarFunction(scalar_function.clone()));
+                        values.push(value);
                     } else {
                         return not_impl_err!(
                             "ScalarFunctions without MakeArray are not supported: {value}"
