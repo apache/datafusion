@@ -20863,6 +20863,7 @@ impl serde::Serialize for ScalarFunction {
             Self::ArrayExcept => "ArrayExcept",
             Self::ArrayPopFront => "ArrayPopFront",
             Self::Levenshtein => "Levenshtein",
+            Self::ArraySort => "ArraySort",
         };
         serializer.serialize_str(variant)
     }
