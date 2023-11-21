@@ -1314,12 +1314,25 @@ impl ScalarValue {
         }
 
         macro_rules! build_array_list_primitive {
-            ($ARRAY_TY:ident, $SCALAR_TY:ident, $NATIVE_TYPE:ident) => {{
-                Ok::<ArrayRef, DataFusionError>(Arc::new(ListArray::from_iter_primitive::<$ARRAY_TY, _, _>(
-                    scalars.into_iter().map(|x| match x {
-                        ScalarValue::List(arr) => {
+            ($ARRAY_TY:ident, $SCALAR_TY:ident, $NATIVE_TYPE:ident, $LIST_TY:ident, $SCALAR_LIST:pat) => {{
+                Ok::<ArrayRef, DataFusionError>(Arc::new($LIST_TY::from_iter_primitive::<$ARRAY_TY, _, _>(
+                    scalars.into_iter().map(|x| match x{
+                        ScalarValue::List(arr) if matches!(x, $SCALAR_LIST) => {
                             // `ScalarValue::List` contains a single element `ListArray`.
                             let list_arr = as_list_array(&arr);
+                            if list_arr.is_null(0) {
+                                Ok(None)
+                            } else {
+                                let primitive_arr =
+                                    list_arr.values().as_primitive::<$ARRAY_TY>();
+                                Ok(Some(
+                                    primitive_arr.into_iter().collect::<Vec<Option<_>>>(),
+                                ))
+                            }
+                        }
+                        ScalarValue::LargeList(arr) if matches!(x, $SCALAR_LIST) =>{
+                            // `ScalarValue::List` contains a single element `ListArray`.
+                            let list_arr = as_large_list_array(&arr);
                             if list_arr.is_null(0) {
                                 Ok(None)
                             } else {
@@ -1342,13 +1355,33 @@ impl ScalarValue {
         }
 
         macro_rules! build_array_list_string {
-            ($BUILDER:ident, $STRING_ARRAY:ident) => {{
-                let mut builder = ListBuilder::new($BUILDER::new());
+            ($BUILDER:ident, $STRING_ARRAY:ident,$LIST_BUILDER:ident,$SCALAR_LIST:pat) => {{
+                let mut builder = $LIST_BUILDER::new($BUILDER::new());
                 for scalar in scalars.into_iter() {
                     match scalar {
-                        ScalarValue::List(arr) => {
+                        ScalarValue::List(arr) if matches!(scalar, $SCALAR_LIST) => {
                             // `ScalarValue::List` contains a single element `ListArray`.
                             let list_arr = as_list_array(&arr);
+
+                            if list_arr.is_null(0) {
+                                builder.append(false);
+                                continue;
+                            }
+
+                            let string_arr = $STRING_ARRAY(list_arr.values());
+
+                            for v in string_arr.iter() {
+                                if let Some(v) = v {
+                                    builder.values().append_value(v);
+                                } else {
+                                    builder.values().append_null();
+                                }
+                            }
+                            builder.append(true);
+                        }
+                        ScalarValue::LargeList(arr) if matches!(scalar, $SCALAR_LIST) => {
+                            // `ScalarValue::List` contains a single element `ListArray`.
+                            let list_arr = as_large_list_array(&arr);
 
                             if list_arr.is_null(0) {
                                 builder.append(false);
@@ -1454,44 +1487,225 @@ impl ScalarValue {
                 build_array_primitive!(IntervalMonthDayNanoArray, IntervalMonthDayNano)
             }
             DataType::List(fields) if fields.data_type() == &DataType::Int8 => {
-                build_array_list_primitive!(Int8Type, Int8, i8)?
+                build_array_list_primitive!(
+                    Int8Type,
+                    Int8,
+                    i8,
+                    ListArray,
+                    ScalarValue::List(_)
+                )?
             }
             DataType::List(fields) if fields.data_type() == &DataType::Int16 => {
-                build_array_list_primitive!(Int16Type, Int16, i16)?
+                build_array_list_primitive!(
+                    Int16Type,
+                    Int16,
+                    i16,
+                    ListArray,
+                    ScalarValue::List(_)
+                )?
             }
             DataType::List(fields) if fields.data_type() == &DataType::Int32 => {
-                build_array_list_primitive!(Int32Type, Int32, i32)?
+                build_array_list_primitive!(
+                    Int32Type,
+                    Int32,
+                    i32,
+                    ListArray,
+                    ScalarValue::List(_)
+                )?
             }
             DataType::List(fields) if fields.data_type() == &DataType::Int64 => {
-                build_array_list_primitive!(Int64Type, Int64, i64)?
+                build_array_list_primitive!(
+                    Int64Type,
+                    Int64,
+                    i64,
+                    ListArray,
+                    ScalarValue::List(_)
+                )?
             }
             DataType::List(fields) if fields.data_type() == &DataType::UInt8 => {
-                build_array_list_primitive!(UInt8Type, UInt8, u8)?
+                build_array_list_primitive!(
+                    UInt8Type,
+                    UInt8,
+                    u8,
+                    ListArray,
+                    ScalarValue::List(_)
+                )?
             }
             DataType::List(fields) if fields.data_type() == &DataType::UInt16 => {
-                build_array_list_primitive!(UInt16Type, UInt16, u16)?
+                build_array_list_primitive!(
+                    UInt16Type,
+                    UInt16,
+                    u16,
+                    ListArray,
+                    ScalarValue::List(_)
+                )?
             }
             DataType::List(fields) if fields.data_type() == &DataType::UInt32 => {
-                build_array_list_primitive!(UInt32Type, UInt32, u32)?
+                build_array_list_primitive!(
+                    UInt32Type,
+                    UInt32,
+                    u32,
+                    ListArray,
+                    ScalarValue::List(_)
+                )?
             }
             DataType::List(fields) if fields.data_type() == &DataType::UInt64 => {
-                build_array_list_primitive!(UInt64Type, UInt64, u64)?
+                build_array_list_primitive!(
+                    UInt64Type,
+                    UInt64,
+                    u64,
+                    ListArray,
+                    ScalarValue::List(_)
+                )?
             }
             DataType::List(fields) if fields.data_type() == &DataType::Float32 => {
-                build_array_list_primitive!(Float32Type, Float32, f32)?
+                build_array_list_primitive!(
+                    Float32Type,
+                    Float32,
+                    f32,
+                    ListArray,
+                    ScalarValue::List(_)
+                )?
             }
             DataType::List(fields) if fields.data_type() == &DataType::Float64 => {
-                build_array_list_primitive!(Float64Type, Float64, f64)?
+                build_array_list_primitive!(
+                    Float64Type,
+                    Float64,
+                    f64,
+                    ListArray,
+                    ScalarValue::List(_)
+                )?
             }
             DataType::List(fields) if fields.data_type() == &DataType::Utf8 => {
-                build_array_list_string!(StringBuilder, as_string_array)
+                build_array_list_string!(
+                    StringBuilder,
+                    as_string_array,
+                    ListBuilder,
+                    ScalarValue::List(_)
+                )
             }
             DataType::List(fields) if fields.data_type() == &DataType::LargeUtf8 => {
-                build_array_list_string!(LargeStringBuilder, as_largestring_array)
+                build_array_list_string!(
+                    LargeStringBuilder,
+                    as_largestring_array,
+                    ListBuilder,
+                    ScalarValue::List(_)
+                )
             }
             DataType::List(_) => {
                 // Fallback case handling homogeneous lists with any ScalarValue element type
                 let list_array = ScalarValue::iter_to_array_list(scalars)?;
+                Arc::new(list_array)
+            }
+            DataType::LargeList(fields) if fields.data_type() == &DataType::Int8 => {
+                build_array_list_primitive!(
+                    Int8Type,
+                    Int8,
+                    i8,
+                    LargeListArray,
+                    ScalarValue::LargeList(_)
+                )?
+            }
+            DataType::LargeList(fields) if fields.data_type() == &DataType::Int16 => {
+                build_array_list_primitive!(
+                    Int16Type,
+                    Int16,
+                    i16,
+                    LargeListArray,
+                    ScalarValue::LargeList(_)
+                )?
+            }
+            DataType::LargeList(fields) if fields.data_type() == &DataType::Int32 => {
+                build_array_list_primitive!(
+                    Int32Type,
+                    Int32,
+                    i32,
+                    LargeListArray,
+                    ScalarValue::LargeList(_)
+                )?
+            }
+            DataType::LargeList(fields) if fields.data_type() == &DataType::Int64 => {
+                build_array_list_primitive!(
+                    Int64Type,
+                    Int64,
+                    i64,
+                    LargeListArray,
+                    ScalarValue::LargeList(_)
+                )?
+            }
+            DataType::LargeList(fields) if fields.data_type() == &DataType::UInt8 => {
+                build_array_list_primitive!(
+                    UInt8Type,
+                    UInt8,
+                    u8,
+                    LargeListArray,
+                    ScalarValue::LargeList(_)
+                )?
+            }
+            DataType::LargeList(fields) if fields.data_type() == &DataType::UInt16 => {
+                build_array_list_primitive!(
+                    UInt16Type,
+                    UInt16,
+                    u16,
+                    LargeListArray,
+                    ScalarValue::LargeList(_)
+                )?
+            }
+            DataType::LargeList(fields) if fields.data_type() == &DataType::UInt32 => {
+                build_array_list_primitive!(
+                    UInt32Type,
+                    UInt32,
+                    u32,
+                    LargeListArray,
+                    ScalarValue::LargeList(_)
+                )?
+            }
+            DataType::LargeList(fields) if fields.data_type() == &DataType::UInt64 => {
+                build_array_list_primitive!(
+                    UInt64Type,
+                    UInt64,
+                    u64,
+                    LargeListArray,
+                    ScalarValue::LargeList(_)
+                )?
+            }
+            DataType::LargeList(fields) if fields.data_type() == &DataType::Float32 => {
+                build_array_list_primitive!(
+                    Float32Type,
+                    Float32,
+                    f32,
+                    LargeListArray,
+                    ScalarValue::LargeList(_)
+                )?
+            }
+            DataType::LargeList(fields) if fields.data_type() == &DataType::Float64 => {
+                build_array_list_primitive!(
+                    Float64Type,
+                    Float64,
+                    f64,
+                    LargeListArray,
+                    ScalarValue::LargeList(_)
+                )?
+            }
+            DataType::LargeList(fields) if fields.data_type() == &DataType::Utf8 => {
+                build_array_list_string!(
+                    StringBuilder,
+                    as_string_array,
+                    LargeListBuilder,
+                    ScalarValue::LargeList(_)
+                )
+            }
+            DataType::LargeList(fields) if fields.data_type() == &DataType::LargeUtf8 => {
+                build_array_list_string!(
+                    LargeStringBuilder,
+                    as_largestring_array,
+                    LargeListBuilder,
+                    ScalarValue::LargeList(_)
+                )
+            }
+            DataType::LargeList(_) => {
+                // Fallback case handling homogeneous lists with any ScalarValue element type
+                let list_array = ScalarValue::iter_to_large_array_list(scalars)?;
                 Arc::new(list_array)
             }
             DataType::Struct(fields) => {
@@ -1606,7 +1820,6 @@ impl ScalarValue {
             | DataType::Time64(TimeUnit::Millisecond)
             | DataType::Duration(_)
             | DataType::FixedSizeList(_, _)
-            | DataType::LargeList(_)
             | DataType::Union(_, _)
             | DataType::Map(_, _)
             | DataType::RunEndEncoded(_, _) => {
@@ -1674,10 +1887,10 @@ impl ScalarValue {
         Ok(array)
     }
 
-    /// This function build with nulls with nulls buffer.
+    /// This function build ListArray with nulls with nulls buffer.
     fn iter_to_array_list(
         scalars: impl IntoIterator<Item = ScalarValue>,
-    ) -> Result<GenericListArray<i32>> {
+    ) -> Result<ListArray> {
         let mut elements: Vec<ArrayRef> = vec![];
         let mut valid = BooleanBufferBuilder::new(0);
         let mut offsets = vec![];
@@ -1721,7 +1934,62 @@ impl ScalarValue {
 
         let list_array = ListArray::new(
             Arc::new(Field::new("item", flat_array.data_type().clone(), true)),
-            OffsetBuffer::<i32>::from_lengths(offsets),
+            OffsetBuffer::from_lengths(offsets),
+            flat_array,
+            Some(NullBuffer::new(buffer)),
+        );
+
+        Ok(list_array)
+    }
+
+    /// This function build LargeListArray with nulls with nulls buffer.
+    fn iter_to_large_array_list(
+        scalars: impl IntoIterator<Item = ScalarValue>,
+    ) -> Result<LargeListArray> {
+        let mut elements: Vec<ArrayRef> = vec![];
+        let mut valid = BooleanBufferBuilder::new(0);
+        let mut offsets = vec![];
+
+        for scalar in scalars {
+            if let ScalarValue::List(arr) = scalar {
+                // `ScalarValue::List` contains a single element `ListArray`.
+                let list_arr = as_list_array(&arr);
+
+                if list_arr.is_null(0) {
+                    // Repeat previous offset index
+                    offsets.push(0);
+
+                    // Element is null
+                    valid.append(false);
+                } else {
+                    let arr = list_arr.values().to_owned();
+                    offsets.push(arr.len());
+                    elements.push(arr);
+
+                    // Element is valid
+                    valid.append(true);
+                }
+            } else {
+                return _internal_err!(
+                    "Expected ScalarValue::List element. Received {scalar:?}"
+                );
+            }
+        }
+
+        // Concatenate element arrays to create single flat array
+        let element_arrays: Vec<&dyn Array> =
+            elements.iter().map(|a| a.as_ref()).collect();
+
+        let flat_array = match arrow::compute::concat(&element_arrays) {
+            Ok(flat_array) => flat_array,
+            Err(err) => return Err(DataFusionError::ArrowError(err)),
+        };
+
+        let buffer = valid.finish();
+
+        let list_array = LargeListArray::new(
+            Arc::new(Field::new("item", flat_array.data_type().clone(), true)),
+            OffsetBuffer::from_lengths(offsets),
             flat_array,
             Some(NullBuffer::new(buffer)),
         );

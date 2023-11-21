@@ -718,7 +718,7 @@ fn round_trip_scalar_values() {
                     &DataType::Float32,
                 )),
             ],
-            &DataType::List(new_arc_field("item", DataType::Float32, true)),
+            &DataType::LargeList(new_arc_field("item", DataType::Float32, true)),
         )),
         ScalarValue::FixedSizeList(Arc::new(FixedSizeListArray::from_iter_primitive::<
             Int32Type,
