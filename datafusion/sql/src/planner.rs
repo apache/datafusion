@@ -231,6 +231,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         Ok(Schema::new(fields))
     }
 
+    /// Returns pairs of (column_name, default_expr)
     pub(super) fn build_column_defaults(
         &self,
         columns: &Vec<SQLColumnDef>,
