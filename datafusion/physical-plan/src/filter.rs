@@ -85,7 +85,10 @@ impl FilterExec {
         }
     }
 
-    pub fn with_selectivity(mut self, default_selectivity: u8) -> Result<Self, DataFusionError>{
+    pub fn with_default_selectivity(
+        mut self,
+        default_selectivity: u8,
+    ) -> Result<Self, DataFusionError> {
         if default_selectivity > 100 {
             return plan_err!("Default flter selectivity needs to be less than 100");
         }
@@ -182,16 +185,12 @@ impl ExecutionPlan for FilterExec {
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        FilterExec::try_new(
-            self.predicate.clone(),
-            children.swap_remove(0),
-        ).and_then(
-            |e| {
+        FilterExec::try_new(self.predicate.clone(), children.swap_remove(0))
+            .and_then(|e| {
                 let selectivity = e.default_selectivity();
-                e.with_selectivity(selectivity)
-            } 
-        )
-        .map(|e| Arc::new(e) as _)
+                e.with_default_selectivity(selectivity)
+            })
+            .map(|e| Arc::new(e) as _)
     }
 
     fn execute(
@@ -221,15 +220,7 @@ impl ExecutionPlan for FilterExec {
         let input_stats = self.input.statistics()?;
         let schema = self.schema();
         if !check_support(predicate, &schema) {
-            let selectivity = self.default_selectivity as f32 / 100.0;
-            let mut stats = input_stats.clone().into_inexact();
-            if let Precision::Inexact(n) = stats.num_rows {
-                stats.num_rows = Precision::Inexact((selectivity * n as f32) as usize);
-            }
-            if let Precision::Inexact(n) = stats.total_byte_size {
-                stats.total_byte_size =
-                    Precision::Inexact((selectivity * n as f32) as usize);
-            }
+            let selectivity = self.default_selectivity as f64 / 100.0;
             let mut stats = input_stats.into_inexact();
             stats.num_rows = stats.num_rows.with_estimated_selectivity(selectivity);
             stats.total_byte_size = stats
@@ -1025,7 +1016,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_validation_filter_selectivity() -> Result<()>{
+    async fn test_validation_filter_selectivity() -> Result<()> {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let input = Arc::new(StatisticsExec::new(
             Statistics::new_unknown(&schema),
@@ -1038,7 +1029,7 @@ mod tests {
             Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
         ));
         let filter = FilterExec::try_new(predicate, input)?;
-        assert!(filter.with_selectivity(120).is_err());
+        assert!(filter.with_default_selectivity(120).is_err());
         Ok(())
     }
 }

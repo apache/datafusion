@@ -525,8 +525,9 @@ config_namespace! {
         /// will be collected into a single partition
         pub hash_join_single_partition_threshold: usize, default = 1024 * 1024
 
-        /// The default filter selectivity used by Filter statistics
-        /// when an exact selectivity cannot be determined
+        /// The default filter selectivity used by Filter Statistics
+        /// when an exact selectivity cannot be determined. Valid values are
+        /// between 0 (no selectivity) and 100 (all rows are selected).
         pub default_filter_selectivity: u8, default = 20
     }
 }

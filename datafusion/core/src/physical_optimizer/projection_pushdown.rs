@@ -302,16 +302,12 @@ fn try_swapping_with_filter(
         return Ok(None);
     };
 
-    FilterExec::try_new(
-        new_predicate,
-        make_with_child(projection, filter.input())?,
-    ).and_then(
-        |e| {
+    FilterExec::try_new(new_predicate, make_with_child(projection, filter.input())?)
+        .and_then(|e| {
             let selectivity = filter.default_selectivity();
-            e.with_selectivity(selectivity)
-        }
-    )
-    .map(|e| Some(Arc::new(e) as _))
+            e.with_default_selectivity(selectivity)
+        })
+        .map(|e| Some(Arc::new(e) as _))
 }
 
 /// Tries to swap the projection with its input [`RepartitionExec`]. If it can be done,
