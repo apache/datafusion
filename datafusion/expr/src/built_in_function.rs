@@ -33,7 +33,7 @@ use crate::{
 };
 
 use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
-use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
+use datafusion_common::{plan_err, utils, DataFusionError, Result};
 
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
@@ -516,20 +516,7 @@ impl BuiltinScalarFunction {
         // the return type of the built in function.
         // Some built-in functions' return type depends on the incoming type.
         match self {
-            BuiltinScalarFunction::Flatten => {
-                fn get_base_type(data_type: &DataType) -> Result<DataType> {
-                    match data_type {
-                        DataType::List(field) => match field.data_type() {
-                            DataType::List(_) => get_base_type(field.data_type()),
-                            _ => Ok(data_type.to_owned()),
-                        },
-                        _ => internal_err!("Not reachable, data_type should be List"),
-                    }
-                }
-
-                let data_type = get_base_type(&input_expr_types[0])?;
-                Ok(data_type)
-            }
+            BuiltinScalarFunction::Flatten => Ok(utils::base_type(&input_expr_types[0])),
             BuiltinScalarFunction::ArrayAppend => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayConcat => {
                 let mut expr_type = Null;

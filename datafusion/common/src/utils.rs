@@ -26,6 +26,7 @@ use arrow::compute::{partition, SortColumn, SortOptions};
 use arrow::datatypes::{Field, SchemaRef, UInt32Type};
 use arrow::record_batch::RecordBatch;
 use arrow_array::{Array, ListArray};
+use arrow_schema::DataType;
 use sqlparser::ast::Ident;
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
@@ -388,6 +389,27 @@ pub fn arrays_into_list_array(
         arrow::compute::concat(values.as_slice())?,
         None,
     ))
+}
+
+/// Get the base type of a data type.
+///
+/// Example
+/// ```
+/// use arrow::datatypes::{DataType, Field};
+/// use datafusion_common::utils::base_type;
+/// use std::sync::Arc;
+///
+/// let data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+/// let base_type = base_type(&data_type);
+/// assert_eq!(base_type, DataType::Int32);
+pub fn base_type(data_type: &DataType) -> DataType {
+    match data_type {
+        DataType::List(field) => match field.data_type() {
+            DataType::List(_) => base_type(field.data_type()),
+            base_type => base_type.to_owned(),
+        },
+        _ => data_type.to_owned(),
+    }
 }
 
 /// An extension trait for smart pointers. Provides an interface to get a
