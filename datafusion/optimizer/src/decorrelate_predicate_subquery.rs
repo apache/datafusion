@@ -251,8 +251,9 @@ fn build_join(
     // build a predicate for comparing the left and right expressions of a given pair of outer/subquery rows
     // from an IN or NOT IN predicate
     let build_in_predicate = |left: Box<Expr>, right: Box<Expr>| -> Result<Expr> {
-        let right_col = create_col_from_scalar_expr(right.deref(), Some(subquery_alias))?;
-        let eq_predicate = Expr::eq(left.deref().clone(), Expr::Column(right_col));
+        let right_col = create_col_from_scalar_expr(right.deref(), subquery_alias)?;
+        let eq_predicate =
+            Expr::eq(left.deref().clone(), Expr::Column(right_col.clone()));
         if !query_info.negated {
             // early exit if this is an IN predicate
             return Ok(eq_predicate);
@@ -265,12 +266,11 @@ fn build_join(
             }
             false => {}
         }
-        let unqualified_right_col = create_col_from_scalar_expr(right.deref(), None)?;
         let subquery_col = query_info
             .query
             .subquery
             .schema()
-            .field_from_column(&unqualified_right_col)?;
+            .field_with_unqualified_name(right_col.name.as_str())?;
 
         match subquery_col.is_nullable() {
             // add "IS NOT FALSE" to a NOT IN equality predicate whose subquery expression is nullable
