@@ -1617,16 +1617,16 @@ Sort array.
 
 ```
 array_sort(array)
-array_sort(array, false)
-array_sort(array, true, false)
+array_sort(array, 'ASC')
+array_sort(array, 'DESC', 'NULLS FIRST')
 ```
 
 #### Arguments
 
 - **array**: Array expression.
   Can be a constant, column, or function, and any combination of array operators.
-- **desc**: Whether to sort in descending order.
-- **nulls_first**: Whether to sort nulls first.
+- **desc**: Whether to sort in descending order(`ASC` or `DESC`).
+- **nulls_first**: Whether to sort nulls first(`NULLS FIRST` or `NULLS LAST`).
 
 #### Example
 
@@ -1635,7 +1635,7 @@ array_sort(array, true, false)
 +-----------------------------+
 | array_sort(List([3,1,2]))   |
 +-----------------------------+
-| [3, 2, 1]                   |
+| [1, 2, 3]                   |
 +-----------------------------+
 ```
 
