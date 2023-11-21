@@ -285,7 +285,7 @@ impl RunOpt {
     }
 
     fn partitions(&self) -> usize {
-        self.common.partitions
+        self.common.partitions.unwrap_or(num_cpus::get())
     }
 }
 
