@@ -240,7 +240,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let mut column_defaults = vec![];
         // Default expressions are restricted, column references are not allowed
         let empty_schema = DFSchema::empty();
-        let human_readable_error = |e: DataFusionError| match e {
+        let error_desc = |e: DataFusionError| match e {
             DataFusionError::SchemaError(SchemaError::FieldNotFound { .. }) => {
                 plan_datafusion_err!(
                     "Column reference is not allowed in the DEFAULT expression : {}",
