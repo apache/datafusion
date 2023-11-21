@@ -62,8 +62,9 @@ use datafusion_common::{
 };
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
+use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
-use datafusion_physical_expr::intervals::ExprIntervalGraph;
+use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
 
 use ahash::RandomState;
 use futures::Stream;
@@ -631,9 +632,9 @@ fn determine_prune_length(
 
     // Get the lower or upper interval based on the sort direction
     let target = if origin_sorted_expr.options.descending {
-        interval.upper.value.clone()
+        interval.upper().clone()
     } else {
-        interval.lower.value.clone()
+        interval.lower().clone()
     };
 
     // Perform binary search on the array to determine the length of the record batch to be pruned
@@ -975,7 +976,7 @@ impl OneSideHashJoiner {
             filter_intervals.push((expr.node_index(), expr.interval().clone()))
         }
         // Update the physical expression graph using the join filter intervals:
-        graph.update_ranges(&mut filter_intervals)?;
+        graph.update_ranges(&mut filter_intervals, Interval::CERTAINLY_TRUE)?;
         // Extract the new join filter interval for the build side:
         let calculated_build_side_interval = filter_intervals.remove(0).1;
         // If the intervals have not changed, return early without pruning:
@@ -1948,7 +1949,7 @@ mod tests {
         (12, 17),
         )]
         cardinality: (i32, i32),
-        #[values(0, 1)] case_expr: usize,
+        #[values(0, 1, 2)] case_expr: usize,
     ) -> Result<()> {
         let session_config = SessionConfig::new().with_repartition_joins(false);
         let task_ctx = TaskContext::default().with_session_config(session_config);
