@@ -1156,6 +1156,7 @@ message PhysicalPlanNode {
     NestedLoopJoinExecNode nested_loop_join = 22;
     AnalyzeExecNode analyze = 23;
     JsonSinkExecNode json_sink = 24;
+    SymmetricHashJoinExecNode symmetric_hash_join = 25;
   }
 }
 
@@ -1429,6 +1430,21 @@ message HashJoinExecNode {
   repeated JoinOn on = 3;
   JoinType join_type = 4;
   PartitionMode partition_mode = 6;
+  bool null_equals_null = 7;
+  JoinFilter filter = 8;
+}
+
+enum StreamPartitionMode {
+  SINGLE_PARTITION = 0;
+  PARTITIONED_EXEC = 1;
+}
+
+message SymmetricHashJoinExecNode {
+  PhysicalPlanNode left = 1;
+  PhysicalPlanNode right = 2;
+  repeated JoinOn on = 3;
+  JoinType join_type = 4;
+  StreamPartitionMode partition_mode = 6;
   bool null_equals_null = 7;
   JoinFilter filter = 8;
 }
