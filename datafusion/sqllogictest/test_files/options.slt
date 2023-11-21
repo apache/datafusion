@@ -84,7 +84,7 @@ statement ok
 drop table a
 
 # test datafusion.sql_parser.parse_float_as_decimal
-# 
+#
 # default option value is false
 query RR
 select 10000000000000000000.01, -10000000000000000000.01
@@ -209,5 +209,3 @@ select -123456789.0123456789012345678901234567890
 # Restore option to default value
 statement ok
 set datafusion.sql_parser.parse_float_as_decimal = false;
-
-

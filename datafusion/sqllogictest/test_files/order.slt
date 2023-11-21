@@ -447,7 +447,7 @@ statement ok
 drop table multiple_ordered_table;
 
 # Create tables having some ordered columns. In the next step, we will expect to observe that scalar
-# functions, such as mathematical functions like atan(), ceil(), sqrt(), or date_time functions 
+# functions, such as mathematical functions like atan(), ceil(), sqrt(), or date_time functions
 # like date_bin() and date_trunc(), will maintain the order of its argument columns.
 statement ok
 CREATE EXTERNAL TABLE csv_with_timestamps (
