@@ -338,3 +338,21 @@ select arrow_cast(timestamp '2000-01-01T00:00:00Z', 'Timestamp(Nanosecond, Some(
 
 statement error Arrow error: Parser error: Invalid timezone "\+25:00": '\+25:00' is not a valid timezone
 select arrow_cast(timestamp '2000-01-01T00:00:00', 'Timestamp(Nanosecond, Some( "+25:00" ))');
+
+
+## List
+
+
+query ?
+select arrow_cast('1', 'List(Int64)');
+----
+[1]
+
+
+## LargeList
+
+
+query ?
+select arrow_cast('1', 'LargeList(Int64)');
+----
+[1]
