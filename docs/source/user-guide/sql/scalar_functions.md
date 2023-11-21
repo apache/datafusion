@@ -635,6 +635,8 @@ nullif(expression1, expression2)
 - [trim](#trim)
 - [upper](#upper)
 - [uuid](#uuid)
+- [overlay](#overlay)
+- [levenshtein](#levenshtein)
 
 ### `ascii`
 
@@ -1120,6 +1122,36 @@ Returns UUID v4 string value which is unique per row.
 uuid()
 ```
 
+### `overlay`
+
+Returns the string which is replaced by another string from the specified position and specified count length.
+For example, `overlay('Txxxxas' placing 'hom' from 2 for 4) → Thomas`
+
+```
+overlay(str PLACING substr FROM pos [FOR count])
+```
+
+#### Arguments
+
+- **str**: String expression to operate on.
+- **substr**: the string to replace part of str.
+- **pos**: the start position to replace of str.
+- **count**: the count of characters to be replaced from start position of str. If not specified, will use substr length instead.
+
+### `levenshtein`
+
+Returns the Levenshtein distance between the two given strings.
+For example, `levenshtein('kitten', 'sitting') = 3`
+
+```
+levenshtein(str1, str2)
+```
+
+#### Arguments
+
+- **str1**: String expression to compute Levenshtein distance with str2.
+- **str2**: String expression to compute Levenshtein distance with str1.
+
 ## Binary String Functions
 
 - [decode](#decode)
@@ -1498,6 +1530,7 @@ from_unixtime(expression)
 - [array_length](#array_length)
 - [array_ndims](#array_ndims)
 - [array_prepend](#array_prepend)
+- [array_pop_front](#array_pop_front)
 - [array_pop_back](#array_pop_back)
 - [array_position](#array_position)
 - [array_positions](#array_positions)
@@ -1543,6 +1576,7 @@ from_unixtime(expression)
 - [string_to_array](#string_to_array)
 - [string_to_list](#string_to_list)
 - [trim_array](#trim_array)
+- [range](#range)
 
 ### `array_append`
 
@@ -1849,6 +1883,30 @@ array_prepend(element, array)
 - array_push_front
 - list_prepend
 - list_push_front
+
+### `array_pop_front`
+
+Returns the array without the first element.
+
+```
+array_pop_first(array)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```
+❯ select array_pop_first([1, 2, 3]);
++-------------------------------+
+| array_pop_first(List([1,2,3])) |
++-------------------------------+
+| [2, 3]                        |
++-------------------------------+
+```
 
 ### `array_pop_back`
 
@@ -2249,6 +2307,44 @@ array_union(array1, array2)
 
 - list_union
 
+### `array_except`
+
+Returns an array of the elements that appear in the first array but not in the second.
+
+```
+array_except(array1, array2)
+```
+
+#### Arguments
+
+- **array1**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```
+❯ select array_except([1, 2, 3, 4], [5, 6, 3, 4]);
++----------------------------------------------------+
+| array_except([1, 2, 3, 4], [5, 6, 3, 4]);           |
++----------------------------------------------------+
+| [1, 2]                                 |
++----------------------------------------------------+
+❯ select array_except([1, 2, 3, 4], [3, 4, 5, 6]);
++----------------------------------------------------+
+| array_except([1, 2, 3, 4], [3, 4, 5, 6]);           |
++----------------------------------------------------+
+| [3, 4]                                 |
++----------------------------------------------------+
+```
+
+---
+
+#### Aliases
+
+- list_except
+
 ### `cardinality`
 
 Returns the total number of elements in the array.
@@ -2463,6 +2559,20 @@ trim_array(array, n)
 - **array**: Array expression.
   Can be a constant, column, or function, and any combination of array operators.
 - **n**: Element to trim the array.
+
+### `range`
+
+Returns an Arrow array between start and stop with step. `SELECT range(2, 10, 3) -> [2, 5, 8]`
+
+The range start..end contains all values with start <= x < end. It is empty if start >= end.
+
+Step can not be 0 (then the range will be nonsense.).
+
+#### Arguments
+
+- **start**: start of the range
+- **end**: end of the range (not included)
+- **step**: increase by step (can not be 0)
 
 ## Struct Functions
 

@@ -350,7 +350,7 @@ mod tests {
     async fn create_object_store_table_gcs() -> Result<()> {
         let service_account_path = "fake_service_account_path";
         let service_account_key =
-            "{\"private_key\": \"fake_private_key.pem\",\"client_email\":\"fake_client_email\"}";
+            "{\"private_key\": \"fake_private_key.pem\",\"client_email\":\"fake_client_email\", \"private_key_id\":\"id\"}";
         let application_credentials_path = "fake_application_credentials_path";
         let location = "gcs://bucket/path/file.parquet";
 
@@ -366,8 +366,9 @@ mod tests {
         let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET OPTIONS('service_account_key' '{service_account_key}') LOCATION '{location}'");
         let err = create_external_table_test(location, &sql)
             .await
-            .unwrap_err();
-        assert!(err.to_string().contains("No RSA key found in pem file"));
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("No RSA key found in pem file"), "{err}");
 
         // for application_credentials_path
         let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET
@@ -387,15 +388,7 @@ mod tests {
         // Ensure that local files are also registered
         let sql =
             format!("CREATE EXTERNAL TABLE test STORED AS PARQUET LOCATION '{location}'");
-        let err = create_external_table_test(location, &sql)
-            .await
-            .unwrap_err();
-
-        if let DataFusionError::IoError(e) = err {
-            assert_eq!(e.kind(), std::io::ErrorKind::NotFound);
-        } else {
-            return Err(err);
-        }
+        create_external_table_test(location, &sql).await.unwrap();
 
         Ok(())
     }

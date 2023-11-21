@@ -230,6 +230,11 @@ impl ExecutionPlan for FilterExec {
                 stats.total_byte_size =
                     Precision::Inexact((selectivity * n as f32) as usize);
             }
+            let mut stats = input_stats.into_inexact();
+            stats.num_rows = stats.num_rows.with_estimated_selectivity(selectivity);
+            stats.total_byte_size = stats
+                .total_byte_size
+                .with_estimated_selectivity(selectivity);
             return Ok(stats);
         }
 
@@ -243,14 +248,8 @@ impl ExecutionPlan for FilterExec {
 
         // Estimate (inexact) selectivity of predicate
         let selectivity = analysis_ctx.selectivity.unwrap_or(1.0);
-        let num_rows = match num_rows.get_value() {
-            Some(nr) => Precision::Inexact((*nr as f64 * selectivity).ceil() as usize),
-            None => Precision::Absent,
-        };
-        let total_byte_size = match total_byte_size.get_value() {
-            Some(tbs) => Precision::Inexact((*tbs as f64 * selectivity).ceil() as usize),
-            None => Precision::Absent,
-        };
+        let num_rows = num_rows.with_estimated_selectivity(selectivity);
+        let total_byte_size = total_byte_size.with_estimated_selectivity(selectivity);
 
         let column_statistics = collect_new_statistics(
             &input_stats.column_statistics,
@@ -298,16 +297,10 @@ fn collect_new_statistics(
                         )
                     };
                 ColumnStatistics {
-                    null_count: match input_column_stats[idx].null_count.get_value() {
-                        Some(nc) => Precision::Inexact(*nc),
-                        None => Precision::Absent,
-                    },
+                    null_count: input_column_stats[idx].null_count.clone().to_inexact(),
                     max_value,
                     min_value,
-                    distinct_count: match distinct_count.get_value() {
-                        Some(dc) => Precision::Inexact(*dc),
-                        None => Precision::Absent,
-                    },
+                    distinct_count: distinct_count.to_inexact(),
                 }
             },
         )

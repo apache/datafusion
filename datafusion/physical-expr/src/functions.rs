@@ -78,7 +78,7 @@ pub fn create_physical_expr(
         &format!("{fun}"),
         fun_expr,
         input_phy_exprs.to_vec(),
-        &data_type,
+        data_type,
         monotonicity,
     )))
 }
@@ -350,6 +350,9 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ArrayElement => {
             Arc::new(|args| make_scalar_function(array_expressions::array_element)(args))
         }
+        BuiltinScalarFunction::ArrayExcept => {
+            Arc::new(|args| make_scalar_function(array_expressions::array_except)(args))
+        }
         BuiltinScalarFunction::ArrayLength => {
             Arc::new(|args| make_scalar_function(array_expressions::array_length)(args))
         }
@@ -359,6 +362,9 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ArrayNdims => {
             Arc::new(|args| make_scalar_function(array_expressions::array_ndims)(args))
         }
+        BuiltinScalarFunction::ArrayPopFront => Arc::new(|args| {
+            make_scalar_function(array_expressions::array_pop_front)(args)
+        }),
         BuiltinScalarFunction::ArrayPopBack => {
             Arc::new(|args| make_scalar_function(array_expressions::array_pop_back)(args))
         }
@@ -401,6 +407,9 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ArrayIntersect => Arc::new(|args| {
             make_scalar_function(array_expressions::array_intersect)(args)
         }),
+        BuiltinScalarFunction::Range => {
+            Arc::new(|args| make_scalar_function(array_expressions::gen_range)(args))
+        }
         BuiltinScalarFunction::Cardinality => {
             Arc::new(|args| make_scalar_function(array_expressions::cardinality)(args))
         }
@@ -829,6 +838,30 @@ pub fn create_physical_fun(
                 "{input_data_type}"
             )))))
         }),
+        BuiltinScalarFunction::OverLay => Arc::new(|args| match args[0].data_type() {
+            DataType::Utf8 => {
+                make_scalar_function(string_expressions::overlay::<i32>)(args)
+            }
+            DataType::LargeUtf8 => {
+                make_scalar_function(string_expressions::overlay::<i64>)(args)
+            }
+            other => Err(DataFusionError::Internal(format!(
+                "Unsupported data type {other:?} for function overlay",
+            ))),
+        }),
+        BuiltinScalarFunction::Levenshtein => {
+            Arc::new(|args| match args[0].data_type() {
+                DataType::Utf8 => {
+                    make_scalar_function(string_expressions::levenshtein::<i32>)(args)
+                }
+                DataType::LargeUtf8 => {
+                    make_scalar_function(string_expressions::levenshtein::<i64>)(args)
+                }
+                other => Err(DataFusionError::Internal(format!(
+                    "Unsupported data type {other:?} for function levenshtein",
+                ))),
+            })
+        }
     })
 }
 

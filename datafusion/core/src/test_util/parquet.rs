@@ -113,6 +113,7 @@ impl TestParquetFile {
             last_modified: Default::default(),
             size,
             e_tag: None,
+            version: None,
         };
 
         Ok(Self {

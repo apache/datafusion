@@ -95,6 +95,7 @@ fn supports_collect_by_size(
     let Ok(stats) = plan.statistics() else {
         return false;
     };
+
     if let Some(size) = stats.total_byte_size.get_value() {
         *size != 0 && *size < collection_size_threshold
     } else if let Some(row_count) = stats.num_rows.get_value() {
