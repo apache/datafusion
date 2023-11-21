@@ -21,7 +21,9 @@ use std::sync::Arc;
 use std::vec;
 
 use arrow_schema::*;
-use datafusion_common::{field_not_found, internal_err, SchemaError};
+use datafusion_common::{
+    field_not_found, internal_err, plan_datafusion_err, SchemaError,
+};
 use datafusion_expr::WindowUDF;
 use sqlparser::ast::TimezoneInfo;
 use sqlparser::ast::{ArrayElemTypeDef, ExactNumberInfo};
@@ -239,10 +241,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let empty_schema = DFSchema::empty();
         let human_readable_error = |e: DataFusionError| match e {
             DataFusionError::SchemaError(SchemaError::FieldNotFound { .. }) => {
-                DataFusionError::Plan(format!(
+                plan_datafusion_err!(
                     "Column reference is not allowed in the DEFAULT expression : {}",
                     e
-                ))
+                )
             }
             _ => e,
         };
