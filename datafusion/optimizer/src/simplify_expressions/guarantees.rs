@@ -144,12 +144,8 @@ impl<'a> TreeNodeRewriter for GuaranteeRewriter<'a> {
 
             // Columns (if interval is collapsed to a single value)
             Expr::Column(_) => {
-                if let Some(col_interval) = self.guarantees.get(&expr) {
-                    if let Some(value) = col_interval.single_value() {
-                        Ok(lit(value))
-                    } else {
-                        Ok(expr)
-                    }
+                if let Some(interval) = self.guarantees.get(&expr) {
+                    Ok(interval.single_value().map_or(expr, lit))
                 } else {
                     Ok(expr)
                 }

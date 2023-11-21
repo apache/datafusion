@@ -290,8 +290,8 @@ impl Interval {
     }
 
     /// Convenience function to create a new `Interval` from the given (optional)
-    /// bounds. Absence of either endpoint indicates unboundedness on that side.
-    /// See [`Interval::try_new`] for more information.
+    /// bounds, for use in tests only. Absence of either endpoint indicates
+    /// unboundedness on that side. See [`Interval::try_new`] for more information.
     pub fn make<T>(lower: Option<T>, upper: Option<T>) -> Result<Self>
     where
         ScalarValue: From<Option<T>>,
@@ -734,6 +734,8 @@ impl Interval {
             // always have a positive difference after the subtraction,
             // we perform following transformation:
             match (&self.lower, &self.upper) {
+                // Exploit IEEE 754 ordering properties to calculate the correct
+                // cardinality in all cases (including subnormals).
                 (
                     ScalarValue::Float32(Some(lower)),
                     ScalarValue::Float32(Some(upper)),
@@ -1646,10 +1648,13 @@ impl NullableInterval {
         }
     }
 
-    /// Determine if this interval contains the given interval. Returns a boolean
-    /// interval that is [true, true] if this interval is a superset of the
-    /// given interval, [false, false] if this interval is disjoint from the
-    /// given interval, and [false, true] otherwise.
+    /// Decide if this interval is a superset of, overlaps with, or
+    /// disjoint with `other` by returning `[true, true]`, `[false, true]` or
+    /// `[false, false]` respectively.
+    ///
+    /// NOTE: This function only works with intervals of the same data type.
+    ///       Attempting to compare intervals of different data types will lead
+    ///       to an error.
     pub fn contains<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
         if let (Some(left_values), Some(right_values)) = (self.values(), rhs.values()) {
@@ -1669,8 +1674,7 @@ impl NullableInterval {
     }
 
     /// If the interval has collapsed to a single value, return that value.
-    ///
-    /// Otherwise returns None.
+    /// Otherwise, returns `None`.
     ///
     /// # Examples
     ///
@@ -2987,6 +2991,7 @@ mod tests {
         // In IEEE 754 standard for floating-point arithmetic, if we keep the sign and exponent fields same,
         // we can represent 4503599627370496+1 different numbers by changing the mantissa
         // (4503599627370496 = 2^52, since there are 52 bits in mantissa, and 2^23 = 8388608 for f32).
+        // TODO: Add tests for non-exponential boundary aligned intervals too.
         let distinct_f64 = 4503599627370497;
         let distinct_f32 = 8388609;
         let intervals = [
