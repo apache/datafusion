@@ -104,7 +104,7 @@ pub enum ScalarValue {
     ///
     /// The array must be a ListArray with length 1.
     List(ArrayRef),
-    /// The array must be a ListArray with length 1.
+    /// The array must be a LargeListArray with length 1.
     LargeList(ArrayRef),
     /// Date stored as a signed 32bit int days since UNIX epoch 1970-01-01
     Date32(Option<i32>),
