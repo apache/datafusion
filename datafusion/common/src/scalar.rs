@@ -2933,19 +2933,12 @@ impl fmt::Display for ScalarValue {
                 None => write!(f, "NULL")?,
             },
             ScalarValue::List(arr) | ScalarValue::FixedSizeList(arr) => {
-                // TODO: Remove NullArray
-                // There are NullArray(0) currently, so we need to check the length
-                if arr.len() == 0 {
-                    write!(f, "[]")?
-                } else {
-                    let options = FormatOptions::default().with_display_error(true);
-                    // TODO: No way to map to fmt::Error yet
-                    let formatter = ArrayFormatter::try_new(arr, &options)
-                        .map_err(DataFusionError::ArrowError)
-                        .unwrap();
-                    let value_formatter = formatter.value(0);
-                    write!(f, "{value_formatter}")?
-                }
+                // ScalarValue List should always have a single element
+                assert_eq!(arr.len(), 1);
+                let options = FormatOptions::default().with_display_error(true);
+                let formatter = ArrayFormatter::try_new(arr, &options).unwrap();
+                let value_formatter = formatter.value(0);
+                write!(f, "{value_formatter}")?
             }
             ScalarValue::Date32(e) => format_option!(f, e)?,
             ScalarValue::Date64(e) => format_option!(f, e)?,
