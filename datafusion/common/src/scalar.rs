@@ -1798,12 +1798,12 @@ impl ScalarValue {
     }
 
     /// Converts `Vec<ScalarValue>` where each element has type corresponding to
-    /// `data_type`, to a [`ListArray`].
+    /// `data_type`, to a [`LargeListArray`].
     ///
     /// Example
     /// ```
     /// use datafusion_common::ScalarValue;
-    /// use arrow::array::{ListArray, Int32Array};
+    /// use arrow::array::{LargeListArray, Int32Array};
     /// use arrow::datatypes::{DataType, Int32Type};
     /// use datafusion_common::cast::as_large_list_array;
     ///
@@ -1816,7 +1816,7 @@ impl ScalarValue {
     /// let array = ScalarValue::new_large_list(&scalars, &DataType::Int32);
     /// let result = as_large_list_array(&array).unwrap();
     ///
-    /// let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(
+    /// let expected = LargeListArray::from_iter_primitive::<Int32Type, _, _>(
     ///     vec![
     ///        Some(vec![Some(1), None, Some(2)])
     ///     ]);
