@@ -1797,6 +1797,41 @@ impl ScalarValue {
         Arc::new(array_into_list_array(values))
     }
 
+    /// Converts `Vec<ScalarValue>` where each element has type corresponding to
+    /// `data_type`, to a [`ListArray`].
+    ///
+    /// Example
+    /// ```
+    /// use datafusion_common::ScalarValue;
+    /// use arrow::array::{ListArray, Int32Array};
+    /// use arrow::datatypes::{DataType, Int32Type};
+    /// use datafusion_common::cast::as_large_list_array;
+    ///
+    /// let scalars = vec![
+    ///    ScalarValue::Int32(Some(1)),
+    ///    ScalarValue::Int32(None),
+    ///    ScalarValue::Int32(Some(2))
+    /// ];
+    ///
+    /// let array = ScalarValue::new_large_list(&scalars, &DataType::Int32);
+    /// let result = as_large_list_array(&array).unwrap();
+    ///
+    /// let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(
+    ///     vec![
+    ///        Some(vec![Some(1), None, Some(2)])
+    ///     ]);
+    ///
+    /// assert_eq!(result, &expected);
+    /// ```
+    pub fn new_large_list(values: &[ScalarValue], data_type: &DataType) -> ArrayRef {
+        let values = if values.is_empty() {
+            new_empty_array(data_type)
+        } else {
+            Self::iter_to_array(values.iter().cloned()).unwrap()
+        };
+        Arc::new(array_into_large_list_array(values))
+    }
+
     /// Converts a scalar value into an array of `size` rows.
     ///
     /// # Errors
@@ -3693,6 +3728,15 @@ mod tests {
     }
 
     #[test]
+    fn scalar_large_list_null_to_array() {
+        let list_array_ref = ScalarValue::new_large_list(&[], &DataType::UInt64);
+        let list_array = as_large_list_array(&list_array_ref);
+
+        assert_eq!(list_array.len(), 1);
+        assert_eq!(list_array.values().len(), 0);
+    }
+
+    #[test]
     fn scalar_list_to_array() -> Result<()> {
         let values = vec![
             ScalarValue::UInt64(Some(100)),
@@ -3701,6 +3745,27 @@ mod tests {
         ];
         let list_array_ref = ScalarValue::new_list(&values, &DataType::UInt64);
         let list_array = as_list_array(&list_array_ref);
+        assert_eq!(list_array.len(), 1);
+        assert_eq!(list_array.values().len(), 3);
+
+        let prim_array_ref = list_array.value(0);
+        let prim_array = as_uint64_array(&prim_array_ref)?;
+        assert_eq!(prim_array.len(), 3);
+        assert_eq!(prim_array.value(0), 100);
+        assert!(prim_array.is_null(1));
+        assert_eq!(prim_array.value(2), 101);
+        Ok(())
+    }
+
+    #[test]
+    fn scalar_large_list_to_array() -> Result<()> {
+        let values = vec![
+            ScalarValue::UInt64(Some(100)),
+            ScalarValue::UInt64(None),
+            ScalarValue::UInt64(Some(101)),
+        ];
+        let list_array_ref = ScalarValue::new_large_list(&values, &DataType::UInt64);
+        let list_array = as_large_list_array(&list_array_ref);
         assert_eq!(list_array.len(), 1);
         assert_eq!(list_array.values().len(), 3);
 

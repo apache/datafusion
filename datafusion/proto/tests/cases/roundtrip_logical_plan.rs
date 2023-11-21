@@ -574,6 +574,7 @@ fn round_trip_scalar_values() {
         ScalarValue::Utf8(None),
         ScalarValue::LargeUtf8(None),
         ScalarValue::List(ScalarValue::new_list(&[], &DataType::Boolean)),
+        ScalarValue::LargeList(ScalarValue::new_large_list(&[], &DataType::Boolean)),
         ScalarValue::Date32(None),
         ScalarValue::Boolean(Some(true)),
         ScalarValue::Boolean(Some(false)),
@@ -674,10 +675,39 @@ fn round_trip_scalar_values() {
             ],
             &DataType::Float32,
         )),
+        ScalarValue::LargeList(ScalarValue::new_large_list(
+            &[
+                ScalarValue::Float32(Some(-213.1)),
+                ScalarValue::Float32(None),
+                ScalarValue::Float32(Some(5.5)),
+                ScalarValue::Float32(Some(2.0)),
+                ScalarValue::Float32(Some(1.0)),
+            ],
+            &DataType::Float32,
+        )),
         ScalarValue::List(ScalarValue::new_list(
             &[
                 ScalarValue::List(ScalarValue::new_list(&[], &DataType::Float32)),
                 ScalarValue::List(ScalarValue::new_list(
+                    &[
+                        ScalarValue::Float32(Some(-213.1)),
+                        ScalarValue::Float32(None),
+                        ScalarValue::Float32(Some(5.5)),
+                        ScalarValue::Float32(Some(2.0)),
+                        ScalarValue::Float32(Some(1.0)),
+                    ],
+                    &DataType::Float32,
+                )),
+            ],
+            &DataType::List(new_arc_field("item", DataType::Float32, true)),
+        )),
+        ScalarValue::LargeList(ScalarValue::new_large_list(
+            &[
+                ScalarValue::LargeList(ScalarValue::new_large_list(
+                    &[],
+                    &DataType::Float32,
+                )),
+                ScalarValue::LargeList(ScalarValue::new_large_list(
                     &[
                         ScalarValue::Float32(Some(-213.1)),
                         ScalarValue::Float32(None),
