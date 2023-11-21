@@ -20,7 +20,7 @@
 #############
 
 statement ok
-CREATE EXTERNAL TABLE csv_custom_quote (
+CREATE EXTERNAL TABLE custom_quote (
     c1  VARCHAR DEFAULT NULL,
     c2  VARCHAR DEFAULT NULL
 )
@@ -28,10 +28,10 @@ STORED AS CSV
 WITH HEADER ROW
 DELIMITER ','
 OPTIONS ('quote' '~')
-LOCATION '../../testing/data/csv/csv_custom_quote.csv';
+LOCATION '../core/tests/data/custom_quote.csv';
 
 statement ok
-CREATE EXTERNAL TABLE csv_custom_escape (
+CREATE EXTERNAL TABLE custom_escape (
     c1  VARCHAR DEFAULT NULL,
     c2  VARCHAR DEFAULT NULL
 )
@@ -39,10 +39,10 @@ STORED AS CSV
 WITH HEADER ROW
 DELIMITER ','
 OPTIONS ('escape' '\')
-LOCATION '../../testing/data/csv/csv_custom_escape.csv';
+LOCATION '../core/tests/data/custom_escape.csv';
 
 query TT
-SELECT * from csv_custom_quote;
+SELECT * from custom_quote;
 ----
 id0 value0
 id1 value1
@@ -57,7 +57,7 @@ id9 value9
 
 
 query TT
-SELECT * from csv_custom_escape;
+SELECT * from custom_escape;
 ----
 id0 value"0
 id1 value"1
