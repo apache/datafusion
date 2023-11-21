@@ -231,7 +231,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         Ok(Schema::new(fields))
     }
 
-    /// Returns pairs of (column_name, default_expr)
+    /// Returns a vector of (column_name, default_expr) pairs
     pub(super) fn build_column_defaults(
         &self,
         columns: &Vec<SQLColumnDef>,
@@ -259,7 +259,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             {
                 let default_expr = self
                     .sql_to_expr(default_sql_expr.clone(), &empty_schema, planner_context)
-                    .map_err(human_readable_error)?;
+                    .map_err(error_desc)?;
                 column_defaults
                     .push((self.normalizer.normalize(column.name.clone()), default_expr));
             }
