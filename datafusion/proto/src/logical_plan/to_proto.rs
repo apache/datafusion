@@ -1177,7 +1177,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                         )),
                     }),
                     ScalarValue::LargeList(_) => Ok(protobuf::ScalarValue {
-                        value: Some(protobuf::scalar_value::Value::ListValue(
+                        value: Some(protobuf::scalar_value::Value::LargeListValue(
                             scalar_list_value,
                         )),
                     }),
