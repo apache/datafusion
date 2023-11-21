@@ -30,7 +30,7 @@ use crate::cast::{
 };
 use crate::error::{DataFusionError, Result, _internal_err, _not_impl_err};
 use crate::hash_utils::create_hashes;
-use crate::utils::array_into_list_array;
+use crate::utils::{array_into_large_list_array, array_into_list_array};
 use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::compute::kernels::numeric::*;
 use arrow::datatypes::{i256, Fields, SchemaBuilder};
@@ -2202,8 +2202,8 @@ impl ScalarValue {
             DataType::LargeList(_) => {
                 let list_array = as_large_list_array(array);
                 let nested_array = list_array.value(index);
-                // Produces a single element `ListArray` with the value at `index`.
-                let arr = Arc::new(array_into_list_array(nested_array));
+                // Produces a single element `LargeListArray` with the value at `index`.
+                let arr = Arc::new(array_into_large_list_array(nested_array));
 
                 ScalarValue::LargeList(arr)
             }
