@@ -3620,12 +3620,10 @@ mod tests {
 
     #[test]
     fn iter_to_array_string_test() {
-        let arr1 = array_into_list_array(Arc::new(StringArray::from(vec![
-            "foo", "bar", "baz",
-        ])));
-        let arr2 = array_into_list_array(Arc::new(StringArray::from(vec![
-            "rust", "world",
-        ])));
+        let arr1 =
+            array_into_list_array(Arc::new(StringArray::from(vec!["foo", "bar", "baz"])));
+        let arr2 =
+            array_into_list_array(Arc::new(StringArray::from(vec!["rust", "world"])));
 
         let scalars = vec![
             ScalarValue::List(Arc::new(arr1)),
