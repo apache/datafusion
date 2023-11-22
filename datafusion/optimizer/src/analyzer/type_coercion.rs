@@ -782,8 +782,7 @@ mod test {
     use datafusion_expr::{
         cast, col, concat, concat_ws, create_udaf, is_true, AccumulatorFactoryFunction,
         AggregateFunction, AggregateUDF, BinaryExpr, BuiltinScalarFunction, Case,
-        ColumnarValue, ExprSchemable, Filter, Operator,
-        StateTypeFunction, Subquery,
+        ColumnarValue, ExprSchemable, Filter, Operator, StateTypeFunction, Subquery,
     };
     use datafusion_expr::{
         lit,

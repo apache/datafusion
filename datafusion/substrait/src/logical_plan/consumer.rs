@@ -25,8 +25,8 @@ use datafusion::logical_expr::{
     BuiltinScalarFunction, Case, Expr, LogicalPlan, Operator,
 };
 use datafusion::logical_expr::{
-    expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder,
-    WindowFrameBound, WindowFrameUnits,
+    expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder, WindowFrameBound,
+    WindowFrameUnits,
 };
 use datafusion::prelude::JoinType;
 use datafusion::sql::TableReference;
