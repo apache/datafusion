@@ -324,6 +324,8 @@ impl PartialOrd for ScalarValue {
                     if list_arr1.len() != list_arr2.len() {
                         return None;
                     }
+                    assert!(list_arr1.len() == 1);
+                    assert!(list_arr2.len() == 1);
                     for i in 0..list_arr1.len() {
                         let arr1 = list_arr1.value(i);
                         let arr2 = list_arr2.value(i);
@@ -354,6 +356,8 @@ impl PartialOrd for ScalarValue {
                     if list_arr1.len() != list_arr2.len() {
                         return None;
                     }
+                    assert!(list_arr1.len() == 1);
+                    assert!(list_arr2.len() == 1);
                     for i in 0..list_arr1.len() {
                         let arr1 = list_arr1.value(i);
                         let arr2 = list_arr2.value(i);
