@@ -602,12 +602,24 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayReplaceAll => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArraySlice => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayToString => Ok(Utf8),
-            BuiltinScalarFunction::ArrayIntersect => Ok(input_expr_types[0].clone()),
-            BuiltinScalarFunction::ArrayUnion => Ok(input_expr_types[0].clone()),
+            BuiltinScalarFunction::ArrayUnion | BuiltinScalarFunction::ArrayIntersect => {
+                match (input_expr_types[0].clone(), input_expr_types[1].clone()) {
+                    (DataType::Null, dt) => Ok(dt),
+                    (dt, DataType::Null) => Ok(dt),
+                    (dt, _) => Ok(dt),
+                }
+            }
             BuiltinScalarFunction::Range => {
                 Ok(List(Arc::new(Field::new("item", Int64, true))))
             }
-            BuiltinScalarFunction::ArrayExcept => Ok(input_expr_types[0].clone()),
+            BuiltinScalarFunction::ArrayExcept => {
+                match (input_expr_types[0].clone(), input_expr_types[1].clone()) {
+                    (DataType::Null, _) | (_, DataType::Null) => {
+                        Ok(input_expr_types[0].clone())
+                    }
+                    (dt, _) => Ok(dt),
+                }
+            }
             BuiltinScalarFunction::Cardinality => Ok(UInt64),
             BuiltinScalarFunction::MakeArray => match input_expr_types.len() {
                 0 => Ok(List(Arc::new(Field::new("item", Null, true)))),
