@@ -66,7 +66,7 @@ mod metrics;
 pub mod page_filter;
 mod row_filter;
 mod row_groups;
-mod statistics;
+pub(crate) mod statistics;
 
 pub use metrics::ParquetFileMetrics;
 

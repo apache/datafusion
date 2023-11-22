@@ -19,7 +19,7 @@
 
 use arrow_array::RecordBatch;
 use async_trait::async_trait;
-use datafusion_common::stats::{Precision, StatisticsAggregator};
+use datafusion_common::stats::Precision;
 use datafusion_physical_plan::metrics::MetricsSet;
 use parquet::arrow::arrow_writer::{
     compute_leaves, get_column_writers, ArrowColumnChunk, ArrowColumnWriter,
@@ -40,11 +40,12 @@ use arrow::datatypes::SchemaRef;
 use arrow::datatypes::{Fields, Schema};
 use arrow_schema::Field;
 use bytes::{BufMut, BytesMut};
-use datafusion_common::{exec_err, not_impl_err, DataFusionError, FileType, ColumnStatistics};
+use datafusion_common::{
+    exec_err, not_impl_err, ColumnStatistics, DataFusionError, FileType,
+};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
 use futures::{StreamExt, TryStreamExt};
-use hashbrown::HashMap;
 use log::debug;
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
@@ -54,16 +55,14 @@ use parquet::arrow::{
 use parquet::file::footer::{decode_footer, decode_metadata};
 use parquet::file::metadata::{ParquetMetaData, RowGroupMetaData};
 use parquet::file::properties::WriterProperties;
-use parquet::file::statistics::Statistics as ParquetStatistics;
 
 use super::write::demux::start_demuxer_task;
 use super::write::{create_writer, AbortableWrite};
 use super::{FileFormat, FileScanConfig};
 use crate::config::ConfigOptions;
 
-use crate::datasource::physical_plan::{
-    FileGroupDisplay, FileSinkConfig, ParquetExec, SchemaAdapter,
-};
+use crate::datasource::physical_plan::{FileGroupDisplay, FileSinkConfig, ParquetExec};
+use crate::datasource::physical_plan::parquet::statistics::RowGroupStatisticsConverter;
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::insert::{DataSink, FileSinkExec};
@@ -252,8 +251,6 @@ impl FileFormat for ParquetFormat {
     }
 }
 
-
-
 /// Fetches parquet metadata from ObjectStore for given object
 ///
 /// This component is a subject to **change** in near future and is exposed for low level integrations
@@ -348,20 +345,26 @@ async fn fetch_statistics(
         file_metadata.key_value_metadata(),
     )?;
 
-    // Fetch the statisitcs for each column
+    // Fetch the statistics for each column
     let row_groups = metadata.row_groups();
-    let column_statistics = file_schema.fields().iter()
+    let column_statistics = table_schema
+        .fields()
+        .iter()
         .map(|field| {
+            /// TODO need to add the type
             match compute_column_stats(field, row_groups) {
                 Ok(stats) => stats,
                 Err(e) => {
-                    debug!("Ignoring error reading statistics for column {field:?} in {}: '{e}'", file.location);
+                    debug!(
+                    "Ignoring error reading statistics for column {field:?} in {}: '{e}'",
+                    file.location
+                );
                     ColumnStatistics::new_unknown()
                 }
             }
         })
         .collect::<Vec<_>>();
-    Ok(Statistics{
+    Ok(Statistics {
         num_rows: Precision::Exact(file_metadata.num_rows() as usize),
         total_byte_size: Precision::Exact(file.size),
         column_statistics,
@@ -369,15 +372,14 @@ async fn fetch_statistics(
 }
 
 //  Compute column statistics for the specified column.
-fn compute_column_stats(field: &Field, row_groups: &[RowGroupMetaData]) -> Result<ColumnStatistics> {
-    let converter = RowGoupStatisticsConverter::new(
-        field
-    );
+fn compute_column_stats(
+    field: &Field,
+    row_groups: &[RowGroupMetaData],
+) -> Result<ColumnStatistics> {
+    let converter = RowGroupStatisticsConverter::new(field);
     let mins = converter.min(row_groups)?;
     todo!()
-
 }
-
 
 /// Implements [`DataSink`] for writing to a parquet file.
 struct ParquetSink {

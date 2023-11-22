@@ -51,7 +51,7 @@ pub async fn get_statistics_with_limit(
         // currently ignores tables that have no statistics regarding the
         // number of rows.
         let conservative_num_rows = match stats_agg.num_rows() {
-            Precision::Exact(nr) => *nr,
+            Precision::Exact(nr) => nr,
             _ => usize::MIN,
         };
 
@@ -64,7 +64,7 @@ pub async fn get_statistics_with_limit(
                 // If the number of rows exceeds the limit, we can stop processing
                 // files.
                 if let Precision::Exact(num_rows) = stats_agg.num_rows() {
-                    if *num_rows > limit {
+                    if num_rows > limit {
                         break;
                     }
                 }
