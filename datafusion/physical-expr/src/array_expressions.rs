@@ -228,10 +228,10 @@ fn compute_array_dims(arr: Option<ArrayRef>) -> Result<Option<Vec<Option<u64>>>>
 
 fn check_datatypes(name: &str, args: &[&ArrayRef]) -> Result<()> {
     let data_type = args[0].data_type();
-    if !args
-        .iter()
-        .all(|arg| arg.data_type().equals_datatype(data_type))
-    {
+    if !args.iter().all(|arg| {
+        arg.data_type().equals_datatype(data_type)
+            || arg.data_type().equals_datatype(&DataType::Null)
+    }) {
         let types = args.iter().map(|arg| arg.data_type()).collect::<Vec<_>>();
         return plan_err!("{name} received incompatible types: '{types:?}'.");
     }
@@ -1512,19 +1512,29 @@ pub fn array_union(args: &[ArrayRef]) -> Result<ArrayRef> {
     match (array1.data_type(), array2.data_type()) {
         (DataType::Null, _) => Ok(array2.clone()),
         (_, DataType::Null) => Ok(array1.clone()),
-        (DataType::List(field_ref), DataType::List(_)) => {
-            check_datatypes("array_union", &[array1, array2])?;
-            let list1 = array1.as_list::<i32>();
-            let list2 = array2.as_list::<i32>();
-            let result = union_generic_lists::<i32>(list1, list2, field_ref)?;
-            Ok(Arc::new(result))
+        (DataType::List(l_field_ref), DataType::List(r_field_ref)) => {
+            match (l_field_ref.data_type(), r_field_ref.data_type()) {
+                (DataType::Null, _) => Ok(array2.clone()),
+                (_, DataType::Null) => Ok(array1.clone()),
+                (_, _) => {
+                    let list1 = array1.as_list::<i32>();
+                    let list2 = array2.as_list::<i32>();
+                    let result = union_generic_lists::<i32>(list1, list2, l_field_ref)?;
+                    Ok(Arc::new(result))
+                }
+            }
         }
-        (DataType::LargeList(field_ref), DataType::LargeList(_)) => {
-            check_datatypes("array_union", &[array1, array2])?;
-            let list1 = array1.as_list::<i64>();
-            let list2 = array2.as_list::<i64>();
-            let result = union_generic_lists::<i64>(list1, list2, field_ref)?;
-            Ok(Arc::new(result))
+        (DataType::LargeList(l_field_ref), DataType::LargeList(r_field_ref)) => {
+            match (l_field_ref.data_type(), r_field_ref.data_type()) {
+                (DataType::Null, _) => Ok(array2.clone()),
+                (_, DataType::Null) => Ok(array1.clone()),
+                (_, _) => {
+                    let list1 = array1.as_list::<i64>();
+                    let list2 = array2.as_list::<i64>();
+                    let result = union_generic_lists::<i64>(list1, list2, l_field_ref)?;
+                    Ok(Arc::new(result))
+                }
+            }
         }
         _ => {
             internal_err!(
@@ -1748,70 +1758,27 @@ pub fn array_ndims(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(result) as ArrayRef)
 }
 
-macro_rules! non_list_contains {
-    ($ARRAY:expr, $SUB_ARRAY:expr, $ARRAY_TYPE:ident) => {{
-        let sub_array = downcast_arg!($SUB_ARRAY, $ARRAY_TYPE);
-        let mut boolean_builder = BooleanArray::builder($ARRAY.len());
-
-        for (arr, elem) in $ARRAY.iter().zip(sub_array.iter()) {
-            if let (Some(arr), Some(elem)) = (arr, elem) {
-                let arr = downcast_arg!(arr, $ARRAY_TYPE);
-                let res = arr.iter().dedup().flatten().any(|x| x == elem);
-                boolean_builder.append_value(res);
-            }
-        }
-        Ok(Arc::new(boolean_builder.finish()))
-    }};
-}
-
 /// Array_has SQL function
 pub fn array_has(args: &[ArrayRef]) -> Result<ArrayRef> {
     let array = as_list_array(&args[0])?;
     let element = &args[1];
 
     check_datatypes("array_has", &[array.values(), element])?;
-    match element.data_type() {
-        DataType::List(_) => {
-            let sub_array = as_list_array(element)?;
-            let mut boolean_builder = BooleanArray::builder(array.len());
+    let mut boolean_builder = BooleanArray::builder(array.len());
 
-            for (arr, elem) in array.iter().zip(sub_array.iter()) {
-                if let (Some(arr), Some(elem)) = (arr, elem) {
-                    let list_arr = as_list_array(&arr)?;
-                    let res = list_arr.iter().dedup().flatten().any(|x| *x == *elem);
-                    boolean_builder.append_value(res);
-                }
-            }
-            Ok(Arc::new(boolean_builder.finish()))
-        }
-        data_type => {
-            macro_rules! array_function {
-                ($ARRAY_TYPE:ident) => {
-                    non_list_contains!(array, element, $ARRAY_TYPE)
-                };
-            }
-            call_array_function!(data_type, false)
+    let converter = RowConverter::new(vec![SortField::new(array.value_type())])?;
+    let r_values = converter.convert_columns(&[element.clone()])?;
+    for (row_idx, arr) in array.iter().enumerate() {
+        if let Some(arr) = arr {
+            let arr_values = converter.convert_columns(&[arr])?;
+            let res = arr_values
+                .iter()
+                .dedup()
+                .any(|x| x == r_values.row(row_idx));
+            boolean_builder.append_value(res);
         }
     }
-}
-
-macro_rules! array_has_any_non_list_check {
-    ($ARRAY:expr, $SUB_ARRAY:expr, $ARRAY_TYPE:ident) => {{
-        let arr = downcast_arg!($ARRAY, $ARRAY_TYPE);
-        let sub_arr = downcast_arg!($SUB_ARRAY, $ARRAY_TYPE);
-
-        let mut res = false;
-        for elem in sub_arr.iter().dedup() {
-            if let Some(elem) = elem {
-                res |= arr.iter().dedup().flatten().any(|x| x == elem);
-            } else {
-                return internal_err!(
-                    "array_has_any does not support Null type for element in sub_array"
-                );
-            }
-        }
-        res
-    }};
+    Ok(Arc::new(boolean_builder.finish()))
 }
 
 /// Array_has_any SQL function
@@ -1820,53 +1787,25 @@ pub fn array_has_any(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     let array = as_list_array(&args[0])?;
     let sub_array = as_list_array(&args[1])?;
-
     let mut boolean_builder = BooleanArray::builder(array.len());
+
+    let converter = RowConverter::new(vec![SortField::new(array.value_type())])?;
     for (arr, sub_arr) in array.iter().zip(sub_array.iter()) {
         if let (Some(arr), Some(sub_arr)) = (arr, sub_arr) {
-            let res = match arr.data_type() {
-                DataType::List(_) => {
-                    let arr = downcast_arg!(arr, ListArray);
-                    let sub_arr = downcast_arg!(sub_arr, ListArray);
+            let arr_values = converter.convert_columns(&[arr])?;
+            let sub_arr_values = converter.convert_columns(&[sub_arr])?;
 
-                    let mut res = false;
-                    for elem in sub_arr.iter().dedup().flatten() {
-                        res |= arr.iter().dedup().flatten().any(|x| *x == *elem);
-                    }
-                    res
+            let mut res = false;
+            for elem in sub_arr_values.iter().dedup() {
+                res |= arr_values.iter().dedup().any(|x| x == elem);
+                if res {
+                    break;
                 }
-                data_type => {
-                    macro_rules! array_function {
-                        ($ARRAY_TYPE:ident) => {
-                            array_has_any_non_list_check!(arr, sub_arr, $ARRAY_TYPE)
-                        };
-                    }
-                    call_array_function!(data_type, false)
-                }
-            };
+            }
             boolean_builder.append_value(res);
         }
     }
     Ok(Arc::new(boolean_builder.finish()))
-}
-
-macro_rules! array_has_all_non_list_check {
-    ($ARRAY:expr, $SUB_ARRAY:expr, $ARRAY_TYPE:ident) => {{
-        let arr = downcast_arg!($ARRAY, $ARRAY_TYPE);
-        let sub_arr = downcast_arg!($SUB_ARRAY, $ARRAY_TYPE);
-
-        let mut res = true;
-        for elem in sub_arr.iter().dedup() {
-            if let Some(elem) = elem {
-                res &= arr.iter().dedup().flatten().any(|x| x == elem);
-            } else {
-                return internal_err!(
-                    "array_has_all does not support Null type for element in sub_array"
-                );
-            }
-        }
-        res
-    }};
 }
 
 /// Array_has_all SQL function
@@ -1877,28 +1816,20 @@ pub fn array_has_all(args: &[ArrayRef]) -> Result<ArrayRef> {
     let sub_array = as_list_array(&args[1])?;
 
     let mut boolean_builder = BooleanArray::builder(array.len());
+
+    let converter = RowConverter::new(vec![SortField::new(array.value_type())])?;
     for (arr, sub_arr) in array.iter().zip(sub_array.iter()) {
         if let (Some(arr), Some(sub_arr)) = (arr, sub_arr) {
-            let res = match arr.data_type() {
-                DataType::List(_) => {
-                    let arr = downcast_arg!(arr, ListArray);
-                    let sub_arr = downcast_arg!(sub_arr, ListArray);
+            let arr_values = converter.convert_columns(&[arr])?;
+            let sub_arr_values = converter.convert_columns(&[sub_arr])?;
 
-                    let mut res = true;
-                    for elem in sub_arr.iter().dedup().flatten() {
-                        res &= arr.iter().dedup().flatten().any(|x| *x == *elem);
-                    }
-                    res
+            let mut res = true;
+            for elem in sub_arr_values.iter().dedup() {
+                res &= arr_values.iter().dedup().any(|x| x == elem);
+                if !res {
+                    break;
                 }
-                data_type => {
-                    macro_rules! array_function {
-                        ($ARRAY_TYPE:ident) => {
-                            array_has_all_non_list_check!(arr, sub_arr, $ARRAY_TYPE)
-                        };
-                    }
-                    call_array_function!(data_type, false)
-                }
-            };
+            }
             boolean_builder.append_value(res);
         }
     }
@@ -1998,55 +1929,66 @@ pub fn string_to_array<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef
 pub fn array_intersect(args: &[ArrayRef]) -> Result<ArrayRef> {
     assert_eq!(args.len(), 2);
 
-    let first_array = as_list_array(&args[0])?;
-    let second_array = as_list_array(&args[1])?;
+    let first_array = &args[0];
+    let second_array = &args[1];
 
-    if first_array.value_type() != second_array.value_type() {
-        return internal_err!("array_intersect is not implemented for '{first_array:?}' and '{second_array:?}'");
-    }
-    let dt = first_array.value_type();
+    match (first_array.data_type(), second_array.data_type()) {
+        (DataType::Null, _) => Ok(second_array.clone()),
+        (_, DataType::Null) => Ok(first_array.clone()),
+        _ => {
+            let first_array = as_list_array(&first_array)?;
+            let second_array = as_list_array(&second_array)?;
 
-    let mut offsets = vec![0];
-    let mut new_arrays = vec![];
+            if first_array.value_type() != second_array.value_type() {
+                return internal_err!("array_intersect is not implemented for '{first_array:?}' and '{second_array:?}'");
+            }
 
-    let converter = RowConverter::new(vec![SortField::new(dt.clone())])?;
-    for (first_arr, second_arr) in first_array.iter().zip(second_array.iter()) {
-        if let (Some(first_arr), Some(second_arr)) = (first_arr, second_arr) {
-            let l_values = converter.convert_columns(&[first_arr])?;
-            let r_values = converter.convert_columns(&[second_arr])?;
+            let dt = first_array.value_type();
 
-            let values_set: HashSet<_> = l_values.iter().collect();
-            let mut rows = Vec::with_capacity(r_values.num_rows());
-            for r_val in r_values.iter().sorted().dedup() {
-                if values_set.contains(&r_val) {
-                    rows.push(r_val);
+            let mut offsets = vec![0];
+            let mut new_arrays = vec![];
+
+            let converter = RowConverter::new(vec![SortField::new(dt.clone())])?;
+            for (first_arr, second_arr) in first_array.iter().zip(second_array.iter()) {
+                if let (Some(first_arr), Some(second_arr)) = (first_arr, second_arr) {
+                    let l_values = converter.convert_columns(&[first_arr])?;
+                    let r_values = converter.convert_columns(&[second_arr])?;
+
+                    let values_set: HashSet<_> = l_values.iter().collect();
+                    let mut rows = Vec::with_capacity(r_values.num_rows());
+                    for r_val in r_values.iter().sorted().dedup() {
+                        if values_set.contains(&r_val) {
+                            rows.push(r_val);
+                        }
+                    }
+
+                    let last_offset: i32 = match offsets.last().copied() {
+                        Some(offset) => offset,
+                        None => return internal_err!("offsets should not be empty"),
+                    };
+                    offsets.push(last_offset + rows.len() as i32);
+                    let arrays = converter.convert_rows(rows)?;
+                    let array = match arrays.get(0) {
+                        Some(array) => array.clone(),
+                        None => {
+                            return internal_err!(
+                                "array_intersect: failed to get array from rows"
+                            )
+                        }
+                    };
+                    new_arrays.push(array);
                 }
             }
 
-            let last_offset: i32 = match offsets.last().copied() {
-                Some(offset) => offset,
-                None => return internal_err!("offsets should not be empty"),
-            };
-            offsets.push(last_offset + rows.len() as i32);
-            let arrays = converter.convert_rows(rows)?;
-            let array = match arrays.get(0) {
-                Some(array) => array.clone(),
-                None => {
-                    return internal_err!(
-                        "array_intersect: failed to get array from rows"
-                    )
-                }
-            };
-            new_arrays.push(array);
+            let field = Arc::new(Field::new("item", dt, true));
+            let offsets = OffsetBuffer::new(offsets.into());
+            let new_arrays_ref =
+                new_arrays.iter().map(|v| v.as_ref()).collect::<Vec<_>>();
+            let values = compute::concat(&new_arrays_ref)?;
+            let arr = Arc::new(ListArray::try_new(field, offsets, values, None)?);
+            Ok(arr)
         }
     }
-
-    let field = Arc::new(Field::new("item", dt, true));
-    let offsets = OffsetBuffer::new(offsets.into());
-    let new_arrays_ref = new_arrays.iter().map(|v| v.as_ref()).collect::<Vec<_>>();
-    let values = compute::concat(&new_arrays_ref)?;
-    let arr = Arc::new(ListArray::try_new(field, offsets, values, None)?);
-    Ok(arr)
 }
 
 #[cfg(test)]

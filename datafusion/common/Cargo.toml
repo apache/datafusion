@@ -38,14 +38,22 @@ backtrace = []
 pyarrow = ["pyo3", "arrow/pyarrow", "parquet"]
 
 [dependencies]
-ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
-apache-avro = { version = "0.16", default-features = false, features = ["bzip", "snappy", "xz", "zstandard"], optional = true }
+ahash = { version = "0.8", default-features = false, features = [
+    "runtime-rng",
+] }
+apache-avro = { version = "0.16", default-features = false, features = [
+    "bzip",
+    "snappy",
+    "xz",
+    "zstandard",
+], optional = true }
 arrow = { workspace = true }
 arrow-array = { workspace = true }
 arrow-buffer = { workspace = true }
 arrow-schema = { workspace = true }
 chrono = { workspace = true }
 half = { version = "2.1", default-features = false }
+libc = "0.2.140"
 num_cpus = { workspace = true }
 object_store = { workspace = true, optional = true }
 parquet = { workspace = true, optional = true, default-features = true }
