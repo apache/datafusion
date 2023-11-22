@@ -636,6 +636,7 @@ nullif(expression1, expression2)
 - [upper](#upper)
 - [uuid](#uuid)
 - [overlay](#overlay)
+- [levenshtein](#levenshtein)
 
 ### `ascii`
 
@@ -1136,6 +1137,20 @@ overlay(str PLACING substr FROM pos [FOR count])
 - **substr**: the string to replace part of str.
 - **pos**: the start position to replace of str.
 - **count**: the count of characters to be replaced from start position of str. If not specified, will use substr length instead.
+
+### `levenshtein`
+
+Returns the Levenshtein distance between the two given strings.
+For example, `levenshtein('kitten', 'sitting') = 3`
+
+```
+levenshtein(str1, str2)
+```
+
+#### Arguments
+
+- **str1**: String expression to compute Levenshtein distance with str2.
+- **str2**: String expression to compute Levenshtein distance with str1.
 
 ## Binary String Functions
 
@@ -2291,6 +2306,44 @@ array_union(array1, array2)
 #### Aliases
 
 - list_union
+
+### `array_except`
+
+Returns an array of the elements that appear in the first array but not in the second.
+
+```
+array_except(array1, array2)
+```
+
+#### Arguments
+
+- **array1**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```
+❯ select array_except([1, 2, 3, 4], [5, 6, 3, 4]);
++----------------------------------------------------+
+| array_except([1, 2, 3, 4], [5, 6, 3, 4]);           |
++----------------------------------------------------+
+| [1, 2]                                 |
++----------------------------------------------------+
+❯ select array_except([1, 2, 3, 4], [3, 4, 5, 6]);
++----------------------------------------------------+
+| array_except([1, 2, 3, 4], [3, 4, 5, 6]);           |
++----------------------------------------------------+
+| [3, 4]                                 |
++----------------------------------------------------+
+```
+
+---
+
+#### Aliases
+
+- list_except
 
 ### `cardinality`
 

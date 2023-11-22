@@ -171,7 +171,7 @@ impl StreamConfig {
         match &self.encoding {
             StreamEncoding::Csv => {
                 let header = self.header && !self.location.exists();
-                let file = OpenOptions::new().write(true).open(&self.location)?;
+                let file = OpenOptions::new().append(true).open(&self.location)?;
                 let writer = arrow::csv::WriterBuilder::new()
                     .with_header(header)
                     .build(file);
@@ -179,7 +179,7 @@ impl StreamConfig {
                 Ok(Box::new(writer))
             }
             StreamEncoding::Json => {
-                let file = OpenOptions::new().write(true).open(&self.location)?;
+                let file = OpenOptions::new().append(true).open(&self.location)?;
                 Ok(Box::new(arrow::json::LineDelimitedWriter::new(file)))
             }
         }
@@ -298,7 +298,12 @@ struct StreamWrite(Arc<StreamConfig>);
 
 impl DisplayAs for StreamWrite {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "{self:?}")
+        f.debug_struct("StreamWrite")
+            .field("location", &self.0.location)
+            .field("batch_size", &self.0.batch_size)
+            .field("encoding", &self.0.encoding)
+            .field("header", &self.0.header)
+            .finish_non_exhaustive()
     }
 }
 

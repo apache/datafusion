@@ -49,12 +49,12 @@ rust-version = "1.70"
 version = "33.0.0"
 
 [workspace.dependencies]
-arrow = { version = "~48.0.1", features = ["prettyprint"] }
-arrow-array = { version = "~48.0.1", default-features = false, features = ["chrono-tz"] }
-arrow-buffer = { version = "~48.0.1", default-features = false }
-arrow-flight = { version = "~48.0.1", features = ["flight-sql-experimental"] }
-arrow-ord = { version = "~48.0.1", default-features = false }
-arrow-schema = { version = "~48.0.1", default-features = false }
+arrow = { version = "49.0.0", features = ["prettyprint"] }
+arrow-array = { version = "49.0.0", default-features = false, features = ["chrono-tz"] }
+arrow-buffer = { version = "49.0.0", default-features = false }
+arrow-flight = { version = "49.0.0", features = ["flight-sql-experimental"] }
+arrow-ord = { version = "49.0.0", default-features = false }
+arrow-schema = { version = "49.0.0", default-features = false }
 async-trait = "0.1.73"
 bigdecimal = "0.4.1"
 bytes = "1.4"
@@ -79,9 +79,9 @@ indexmap = "2.0.0"
 itertools = "0.12"
 log = "^0.4"
 num_cpus = "1.13.0"
-object_store = { version = "0.7.0", default-features = false }
+object_store = { version = "0.8.0", default-features = false }
 parking_lot = "0.12"
-parquet = { version = "~48.0.1", default-features = false, features = ["arrow", "async", "object_store"] }
+parquet = { version = "49.0.0", default-features = false, features = ["arrow", "async", "object_store"] }
 rand = "0.8"
 rstest = "0.18.0"
 serde_json = "1"
@@ -108,4 +108,3 @@ opt-level = 3
 overflow-checks = false
 panic = 'unwind'
 rpath = false
-

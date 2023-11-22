@@ -1396,7 +1396,7 @@ SELECT COUNT(DISTINCT c1) FROM test
 query ?
 SELECT ARRAY_AGG([])
 ----
-[]
+[[]]
 
 # array_agg_one
 query ?
@@ -1419,7 +1419,7 @@ e 4
 query ?
 SELECT ARRAY_AGG([]);
 ----
-[]
+[[]]
 
 # array_agg_one
 query ?
@@ -2672,9 +2672,10 @@ query TT
 EXPLAIN SELECT c2, c3 FROM aggregate_test_100 group by rollup(c2, c3) limit 3;
 ----
 logical_plan
-Limit: skip=0, fetch=3
---Aggregate: groupBy=[[ROLLUP (aggregate_test_100.c2, aggregate_test_100.c3)]], aggr=[[]]
-----TableScan: aggregate_test_100 projection=[c2, c3]
+Projection: aggregate_test_100.c2, aggregate_test_100.c3
+--Limit: skip=0, fetch=3
+----Aggregate: groupBy=[[ROLLUP (aggregate_test_100.c2, aggregate_test_100.c3)]], aggr=[[]]
+------TableScan: aggregate_test_100 projection=[c2, c3]
 physical_plan
 GlobalLimitExec: skip=0, fetch=3
 --AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[], lim=[3]
@@ -2987,3 +2988,79 @@ NULL NULL 1 NULL 3 6 0 0 0
 NULL NULL 1 NULL 5 15 0 0 0
 3 0 2 1 5.5 16.5 0.5 4.5 1.5
 3 0 3 1 6 18 2 18 6
+
+statement error
+SELECT STRING_AGG()
+
+statement error
+SELECT STRING_AGG(1,2,3)
+
+statement error
+SELECT STRING_AGG(STRING_AGG('a', ','))
+
+query T
+SELECT STRING_AGG('a', ',')
+----
+a
+
+query TTTT
+SELECT STRING_AGG('a',','), STRING_AGG('a', NULL), STRING_AGG(NULL, ','), STRING_AGG(NULL, NULL)
+----
+a a NULL NULL
+
+query TT
+select string_agg('', '|'), string_agg('a', '');
+----
+(empty) a
+
+query T
+SELECT STRING_AGG(column1, '|') FROM (values (''), (null), (''));
+----
+|
+
+statement ok
+CREATE TABLE strings(g INTEGER, x VARCHAR, y VARCHAR)
+
+query ITT
+INSERT INTO strings VALUES (1,'a','/'), (1,'b','-'), (2,'i','/'), (2,NULL,'-'), (2,'j','+'), (3,'p','/'), (4,'x','/'), (4,'y','-'), (4,'z','+')
+----
+9
+
+query IT
+SELECT g, STRING_AGG(x,'|') FROM strings GROUP BY g ORDER BY g
+----
+1 a|b
+2 i|j
+3 p
+4 x|y|z
+
+query T
+SELECT STRING_AGG(x,',') FROM strings WHERE g > 100
+----
+NULL
+
+statement ok
+drop table strings
+
+query T
+WITH my_data as (
+SELECT 'text1'::varchar(1000) as my_column union all
+SELECT 'text1'::varchar(1000) as my_column union all
+SELECT 'text1'::varchar(1000) as my_column
+)
+SELECT string_agg(my_column,', ') as my_string_agg
+FROM my_data
+----
+text1, text1, text1
+
+query T
+WITH my_data as (
+SELECT 1 as dummy,  'text1'::varchar(1000) as my_column union all
+SELECT 1 as dummy,  'text1'::varchar(1000) as my_column union all
+SELECT 1 as dummy,  'text1'::varchar(1000) as my_column
+)
+SELECT string_agg(my_column,', ') as my_string_agg
+FROM my_data
+GROUP BY dummy
+----
+text1, text1, text1

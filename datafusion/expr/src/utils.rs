@@ -900,7 +900,7 @@ pub fn can_hash(data_type: &DataType) -> bool {
         DataType::UInt64 => true,
         DataType::Float32 => true,
         DataType::Float64 => true,
-        DataType::Timestamp(time_unit, None) => match time_unit {
+        DataType::Timestamp(time_unit, _) => match time_unit {
             TimeUnit::Second => true,
             TimeUnit::Millisecond => true,
             TimeUnit::Microsecond => true,

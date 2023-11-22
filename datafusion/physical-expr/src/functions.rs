@@ -350,6 +350,9 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ArrayElement => {
             Arc::new(|args| make_scalar_function(array_expressions::array_element)(args))
         }
+        BuiltinScalarFunction::ArrayExcept => {
+            Arc::new(|args| make_scalar_function(array_expressions::array_except)(args))
+        }
         BuiltinScalarFunction::ArrayLength => {
             Arc::new(|args| make_scalar_function(array_expressions::array_length)(args))
         }
@@ -846,6 +849,19 @@ pub fn create_physical_fun(
                 "Unsupported data type {other:?} for function overlay",
             ))),
         }),
+        BuiltinScalarFunction::Levenshtein => {
+            Arc::new(|args| match args[0].data_type() {
+                DataType::Utf8 => {
+                    make_scalar_function(string_expressions::levenshtein::<i32>)(args)
+                }
+                DataType::LargeUtf8 => {
+                    make_scalar_function(string_expressions::levenshtein::<i64>)(args)
+                }
+                other => Err(DataFusionError::Internal(format!(
+                    "Unsupported data type {other:?} for function levenshtein",
+                ))),
+            })
+        }
     })
 }
 

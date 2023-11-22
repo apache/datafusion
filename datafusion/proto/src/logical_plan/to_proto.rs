@@ -405,6 +405,7 @@ impl From<&AggregateFunction> for protobuf::AggregateFunction {
             AggregateFunction::Median => Self::Median,
             AggregateFunction::FirstValue => Self::FirstValueAgg,
             AggregateFunction::LastValue => Self::LastValueAgg,
+            AggregateFunction::StringAgg => Self::StringAgg,
         }
     }
 }
@@ -720,6 +721,9 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     }
                     AggregateFunction::LastValue => {
                         protobuf::AggregateFunction::LastValueAgg
+                    }
+                    AggregateFunction::StringAgg => {
+                        protobuf::AggregateFunction::StringAgg
                     }
                 };
 
@@ -1144,13 +1148,11 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     Value::LargeUtf8Value(s.to_owned())
                 })
             }
-            ScalarValue::FixedSizeList(..) => Err(Error::General(
-                "Proto serialization error: ScalarValue::Fixedsizelist not supported"
-                    .to_string(),
-            )),
-            // ScalarValue::List is serialized using Arrow IPC messages.
-            // as a single column RecordBatch
-            ScalarValue::List(arr) => {
+            // ScalarValue::List and ScalarValue::FixedSizeList are serialized using
+            // Arrow IPC messages as a single column RecordBatch
+            ScalarValue::List(arr)
+            | ScalarValue::LargeList(arr)
+            | ScalarValue::FixedSizeList(arr) => {
                 // Wrap in a "field_name" column
                 let batch = RecordBatch::try_from_iter(vec![(
                     "field_name",
@@ -1178,11 +1180,24 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     schema: Some(schema),
                 };
 
-                Ok(protobuf::ScalarValue {
-                    value: Some(protobuf::scalar_value::Value::ListValue(
-                        scalar_list_value,
-                    )),
-                })
+                match val {
+                    ScalarValue::List(_) => Ok(protobuf::ScalarValue {
+                        value: Some(protobuf::scalar_value::Value::ListValue(
+                            scalar_list_value,
+                        )),
+                    }),
+                    ScalarValue::LargeList(_) => Ok(protobuf::ScalarValue {
+                        value: Some(protobuf::scalar_value::Value::LargeListValue(
+                            scalar_list_value,
+                        )),
+                    }),
+                    ScalarValue::FixedSizeList(_) => Ok(protobuf::ScalarValue {
+                        value: Some(protobuf::scalar_value::Value::FixedSizeListValue(
+                            scalar_list_value,
+                        )),
+                    }),
+                    _ => unreachable!(),
+                }
             }
             ScalarValue::Date32(val) => {
                 create_proto_scalar(val.as_ref(), &data_type, |s| Value::Date32Value(*s))
@@ -1482,6 +1497,7 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::ArrayAppend => Self::ArrayAppend,
             BuiltinScalarFunction::ArrayConcat => Self::ArrayConcat,
             BuiltinScalarFunction::ArrayEmpty => Self::ArrayEmpty,
+            BuiltinScalarFunction::ArrayExcept => Self::ArrayExcept,
             BuiltinScalarFunction::ArrayHasAll => Self::ArrayHasAll,
             BuiltinScalarFunction::ArrayHasAny => Self::ArrayHasAny,
             BuiltinScalarFunction::ArrayHas => Self::ArrayHas,
@@ -1566,6 +1582,7 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Iszero => Self::Iszero,
             BuiltinScalarFunction::ArrowTypeof => Self::ArrowTypeof,
             BuiltinScalarFunction::OverLay => Self::OverLay,
+            BuiltinScalarFunction::Levenshtein => Self::Levenshtein,
         };
 
         Ok(scalar_function)

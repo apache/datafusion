@@ -100,6 +100,8 @@ pub enum AggregateFunction {
     BoolAnd,
     /// Bool Or
     BoolOr,
+    /// string_agg
+    StringAgg,
 }
 
 impl AggregateFunction {
@@ -141,6 +143,7 @@ impl AggregateFunction {
             BitXor => "BIT_XOR",
             BoolAnd => "BOOL_AND",
             BoolOr => "BOOL_OR",
+            StringAgg => "STRING_AGG",
         }
     }
 }
@@ -171,6 +174,7 @@ impl FromStr for AggregateFunction {
             "array_agg" => AggregateFunction::ArrayAgg,
             "first_value" => AggregateFunction::FirstValue,
             "last_value" => AggregateFunction::LastValue,
+            "string_agg" => AggregateFunction::StringAgg,
             // statistical
             "corr" => AggregateFunction::Correlation,
             "covar" => AggregateFunction::Covariance,
@@ -299,6 +303,7 @@ impl AggregateFunction {
             AggregateFunction::FirstValue | AggregateFunction::LastValue => {
                 Ok(coerced_data_types[0].clone())
             }
+            AggregateFunction::StringAgg => Ok(DataType::LargeUtf8),
         }
     }
 }
@@ -408,6 +413,9 @@ impl AggregateFunction {
                     .collect(),
                 Volatility::Immutable,
             ),
+            AggregateFunction::StringAgg => {
+                Signature::uniform(2, STRINGS.to_vec(), Volatility::Immutable)
+            }
         }
     }
 }

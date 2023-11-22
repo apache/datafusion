@@ -148,8 +148,9 @@ impl RunOpt {
             println!("Executing '{title}' (sorting by: {expr:?})");
             rundata.start_new_case(title);
             for i in 0..self.common.iterations {
-                let config =
-                    SessionConfig::new().with_target_partitions(self.common.partitions);
+                let config = SessionConfig::new().with_target_partitions(
+                    self.common.partitions.unwrap_or(num_cpus::get()),
+                );
                 let ctx = SessionContext::new_with_config(config);
                 let (rows, elapsed) =
                     exec_sort(&ctx, &expr, &test_file, self.common.debug).await?;

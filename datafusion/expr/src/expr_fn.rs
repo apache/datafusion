@@ -641,6 +641,12 @@ scalar_expr!(
     "extracts the element with the index n from the array."
 );
 scalar_expr!(
+    ArrayExcept,
+    array_except,
+    first_array second_array,
+    "Returns an array of the elements that appear in the first array but not in the second."
+);
+scalar_expr!(
     ArrayLength,
     array_length,
     array dimension,
@@ -909,6 +915,7 @@ scalar_expr!(
 );
 
 scalar_expr!(ArrowTypeof, arrow_typeof, val, "data type");
+scalar_expr!(Levenshtein, levenshtein, string1 string2, "Returns the Levenshtein distance between the two given strings");
 
 scalar_expr!(
     Struct,
@@ -1197,6 +1204,7 @@ mod test {
         test_unary_scalar_expr!(ArrowTypeof, arrow_typeof);
         test_nary_scalar_expr!(OverLay, overlay, string, characters, position, len);
         test_nary_scalar_expr!(OverLay, overlay, string, characters, position);
+        test_scalar_expr!(Levenshtein, levenshtein, string1, string2);
     }
 
     #[test]
