@@ -321,7 +321,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 Ok(Expr::Case(case))
             }
             Expr::ScalarFunction(ScalarFunction { func_def, args }) => match func_def {
-                ScalarFunctionDefinition::BuiltIn(fun) => {
+                ScalarFunctionDefinition::BuiltIn { fun, .. } => {
                     let new_args = coerce_arguments_for_signature(
                         args.as_slice(),
                         &self.schema,
@@ -782,7 +782,7 @@ mod test {
     use datafusion_expr::{
         cast, col, concat, concat_ws, create_udaf, is_true, AccumulatorFactoryFunction,
         AggregateFunction, AggregateUDF, BinaryExpr, BuiltinScalarFunction, Case,
-        ColumnarValue, ExprSchemable, Filter, Operator, ScalarFunctionDefinition,
+        ColumnarValue, ExprSchemable, Filter, Operator,
         StateTypeFunction, Subquery,
     };
     use datafusion_expr::{
@@ -1256,10 +1256,10 @@ mod test {
                 None,
             ),
         )));
-        let expr = Expr::ScalarFunction(ScalarFunction {
-            func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::MakeArray),
-            args: vec![val.clone()],
-        });
+        let expr = Expr::ScalarFunction(ScalarFunction::new(
+            BuiltinScalarFunction::MakeArray,
+            vec![val.clone()],
+        ));
         let schema = Arc::new(DFSchema::new_with_metadata(
             vec![DFField::new_unqualified(
                 "item",
@@ -1288,10 +1288,10 @@ mod test {
             &schema,
         )?;
 
-        let expected = Expr::ScalarFunction(ScalarFunction {
-            func_def: ScalarFunctionDefinition::BuiltIn(BuiltinScalarFunction::MakeArray),
-            args: vec![expected_casted_expr],
-        });
+        let expected = Expr::ScalarFunction(ScalarFunction::new(
+            BuiltinScalarFunction::MakeArray,
+            vec![expected_casted_expr],
+        ));
 
         assert_eq!(result, expected);
         Ok(())

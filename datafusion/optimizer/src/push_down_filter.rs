@@ -982,7 +982,7 @@ fn is_volatile_expression(e: &Expr) -> bool {
     e.apply(&mut |expr| {
         Ok(match expr {
             Expr::ScalarFunction(f) => match &f.func_def {
-                ScalarFunctionDefinition::BuiltIn(fun)
+                ScalarFunctionDefinition::BuiltIn { fun, .. }
                     if fun.volatility() == Volatility::Volatile =>
                 {
                     is_volatile = true;

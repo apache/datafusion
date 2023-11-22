@@ -26,7 +26,7 @@ use datafusion::logical_expr::{
 };
 use datafusion::logical_expr::{
     expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder,
-    ScalarFunctionDefinition, WindowFrameBound, WindowFrameUnits,
+    WindowFrameBound, WindowFrameUnits,
 };
 use datafusion::prelude::JoinType;
 use datafusion::sql::TableReference;
@@ -843,10 +843,9 @@ pub async fn from_substrait_rex(
                         };
                         args.push(arg_expr?.as_ref().clone());
                     }
-                    Ok(Arc::new(Expr::ScalarFunction(expr::ScalarFunction {
-                        func_def: ScalarFunctionDefinition::BuiltIn(fun),
-                        args,
-                    })))
+                    Ok(Arc::new(Expr::ScalarFunction(expr::ScalarFunction::new(
+                        fun, args,
+                    ))))
                 }
                 ScalarFunctionType::Op(op) => {
                     if f.arguments.len() != 2 {

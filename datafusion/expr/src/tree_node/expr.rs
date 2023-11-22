@@ -277,7 +277,7 @@ impl TreeNode for Expr {
                 nulls_first,
             )),
             Expr::ScalarFunction(ScalarFunction { func_def, args }) => match func_def {
-                ScalarFunctionDefinition::BuiltIn(fun) => Expr::ScalarFunction(
+                ScalarFunctionDefinition::BuiltIn { fun, .. } => Expr::ScalarFunction(
                     ScalarFunction::new(fun, transform_vec(args, &mut transform)?),
                 ),
                 ScalarFunctionDefinition::UDF(fun) => Expr::ScalarFunction(

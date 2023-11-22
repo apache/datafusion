@@ -224,7 +224,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                 return internal_err!("Function `Expr` with name should be resolved.");
             }
 
-            create_function_physical_name(&func_def.name(), false, args)
+            create_function_physical_name(func_def.name(), false, args)
         }
         Expr::WindowFunction(WindowFunction { fun, args, .. }) => {
             create_function_physical_name(&fun.to_string(), false, args)

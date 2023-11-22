@@ -840,7 +840,8 @@ pub fn to_substrait_rex(
                 return internal_err!("Function `Expr` with name should be resolved.");
             }
 
-            let function_anchor = _register_function(func_def.name(), extension_info);
+            let function_anchor =
+                _register_function(func_def.name().to_string(), extension_info);
             Ok(Expression {
                 rex_type: Some(RexType::ScalarFunction(ScalarFunction {
                     function_reference: function_anchor,

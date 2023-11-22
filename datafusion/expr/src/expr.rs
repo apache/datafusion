@@ -342,7 +342,10 @@ pub enum ScalarFunctionDefinition {
     /// Resolved to a `BuiltinScalarFunction`
     /// There is plan to migrate `BuiltinScalarFunction` to UDF-based implementation (issue#8045)
     /// This variant is planned to be removed in long term
-    BuiltIn(built_in_function::BuiltinScalarFunction),
+    BuiltIn {
+        fun: built_in_function::BuiltinScalarFunction,
+        name: Arc<str>,
+    },
     /// Resolved to a user defined function
     UDF(Arc<crate::ScalarUDF>),
     /// A scalar function constructed with name. This variant can not be executed directly
@@ -361,11 +364,11 @@ pub struct ScalarFunction {
 
 impl ScalarFunctionDefinition {
     /// Function's name for display
-    pub fn name(&self) -> String {
+    pub fn name(&self) -> &str {
         match self {
-            ScalarFunctionDefinition::BuiltIn(builtin_func) => builtin_func.to_string(),
-            ScalarFunctionDefinition::UDF(udf) => udf.name().to_string(),
-            ScalarFunctionDefinition::Name(func_name) => func_name.as_ref().to_string(),
+            ScalarFunctionDefinition::BuiltIn { name, .. } => name.as_ref(),
+            ScalarFunctionDefinition::UDF(udf) => udf.name(),
+            ScalarFunctionDefinition::Name(func_name) => func_name.as_ref(),
         }
     }
 }
@@ -374,7 +377,10 @@ impl ScalarFunction {
     /// Create a new ScalarFunction expression
     pub fn new(fun: built_in_function::BuiltinScalarFunction, args: Vec<Expr>) -> Self {
         Self {
-            func_def: ScalarFunctionDefinition::BuiltIn(fun),
+            func_def: ScalarFunctionDefinition::BuiltIn {
+                fun,
+                name: Arc::from(fun.to_string()),
+            },
             args,
         }
     }
@@ -1214,7 +1220,7 @@ impl fmt::Display for Expr {
                 }
             }
             Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
-                fmt_function(f, &func_def.name(), false, args, true)
+                fmt_function(f, func_def.name(), false, args, true)
             }
             Expr::WindowFunction(WindowFunction {
                 fun,
@@ -1547,7 +1553,7 @@ fn create_name(e: &Expr) -> Result<String> {
             }
         }
         Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
-            create_function_name(&func_def.name(), false, args)
+            create_function_name(func_def.name(), false, args)
         }
         Expr::WindowFunction(WindowFunction {
             fun,

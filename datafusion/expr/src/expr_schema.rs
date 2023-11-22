@@ -84,7 +84,7 @@ impl ExprSchemable for Expr {
             | Expr::TryCast(TryCast { data_type, .. }) => Ok(data_type.clone()),
             Expr::ScalarFunction(ScalarFunction { func_def, args }) => {
                 match func_def {
-                    ScalarFunctionDefinition::BuiltIn(fun) => {
+                    ScalarFunctionDefinition::BuiltIn { fun, .. } => {
                         let arg_data_types = args
                             .iter()
                             .map(|e| e.get_type(schema))
