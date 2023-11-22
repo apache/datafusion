@@ -34,6 +34,7 @@ use crate::utils::array_into_list_array;
 use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::compute::kernels::numeric::*;
 use arrow::datatypes::{i256, Fields, SchemaBuilder};
+use arrow::util::display::{ArrayFormatter, FormatOptions};
 use arrow::{
     array::*,
     compute::kernels::cast::{cast_with_options, CastOptions},
@@ -2931,12 +2932,14 @@ impl fmt::Display for ScalarValue {
                 )?,
                 None => write!(f, "NULL")?,
             },
-            ScalarValue::List(arr) | ScalarValue::FixedSizeList(arr) => write!(
-                f,
-                "{}",
-                arrow::util::pretty::pretty_format_columns("col", &[arr.to_owned()])
-                    .unwrap()
-            )?,
+            ScalarValue::List(arr) | ScalarValue::FixedSizeList(arr) => {
+                // ScalarValue List should always have a single element
+                assert_eq!(arr.len(), 1);
+                let options = FormatOptions::default().with_display_error(true);
+                let formatter = ArrayFormatter::try_new(arr, &options).unwrap();
+                let value_formatter = formatter.value(0);
+                write!(f, "{value_formatter}")?
+            }
             ScalarValue::Date32(e) => format_option!(f, e)?,
             ScalarValue::Date64(e) => format_option!(f, e)?,
             ScalarValue::Time32Second(e) => format_option!(f, e)?,
@@ -3011,8 +3014,10 @@ impl fmt::Debug for ScalarValue {
             }
             ScalarValue::LargeBinary(None) => write!(f, "LargeBinary({self})"),
             ScalarValue::LargeBinary(Some(_)) => write!(f, "LargeBinary(\"{self}\")"),
-            ScalarValue::FixedSizeList(arr) => write!(f, "FixedSizeList([{arr:?}])"),
-            ScalarValue::List(arr) => write!(f, "List([{arr:?}])"),
+            ScalarValue::FixedSizeList(_) => write!(f, "FixedSizeList({self})"),
+            ScalarValue::List(_) => {
+                write!(f, "List({self})")
+            }
             ScalarValue::Date32(_) => write!(f, "Date32(\"{self}\")"),
             ScalarValue::Date64(_) => write!(f, "Date64(\"{self}\")"),
             ScalarValue::Time32Second(_) => write!(f, "Time32Second(\"{self}\")"),
