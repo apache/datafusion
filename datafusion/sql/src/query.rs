@@ -90,6 +90,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     input: Arc::new(plan),
                     if_not_exists: false,
                     or_replace: false,
+                    column_defaults: vec![],
                 }))
             }
             _ => plan,
