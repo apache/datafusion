@@ -3844,7 +3844,7 @@ ProjectionExec: expr=[SUM(alias1)@1 as SUM(DISTINCT t1.x), MAX(alias1)@2 as MAX(
 
 # create an unbounded table that contains ordered timestamp.
 statement ok
-CREATE UNBOUNDED EXTERNAL TABLE csv_with_timestamps (
+CREATE UNBOUNDED EXTERNAL TABLE unbounded_csv_with_timestamps (
   name VARCHAR,
   ts TIMESTAMP
 )
@@ -3855,37 +3855,96 @@ LOCATION '../core/tests/data/timestamps.csv'
 # below query should work in streaming mode.
 query TT
 EXPLAIN SELECT date_bin('15 minutes', ts) as time_chunks
-  FROM csv_with_timestamps
-  GROUP BY (date_bin('15 minutes', ts))
+  FROM unbounded_csv_with_timestamps
+  GROUP BY date_bin('15 minutes', ts)
   ORDER BY time_chunks DESC
-  LIMIT 5
+  LIMIT 5;
 ----
 logical_plan
 Limit: skip=0, fetch=5
 --Sort: time_chunks DESC NULLS FIRST, fetch=5
-----Projection: date_bin(Utf8("15 minutes"),csv_with_timestamps.ts) AS time_chunks
-------Aggregate: groupBy=[[date_bin(IntervalMonthDayNano("900000000000"), csv_with_timestamps.ts) AS date_bin(Utf8("15 minutes"),csv_with_timestamps.ts)]], aggr=[[]]
---------TableScan: csv_with_timestamps projection=[ts]
+----Projection: date_bin(Utf8("15 minutes"),unbounded_csv_with_timestamps.ts) AS time_chunks
+------Aggregate: groupBy=[[date_bin(IntervalMonthDayNano("900000000000"), unbounded_csv_with_timestamps.ts) AS date_bin(Utf8("15 minutes"),unbounded_csv_with_timestamps.ts)]], aggr=[[]]
+--------TableScan: unbounded_csv_with_timestamps projection=[ts]
 physical_plan
 GlobalLimitExec: skip=0, fetch=5
 --SortPreservingMergeExec: [time_chunks@0 DESC], fetch=5
-----ProjectionExec: expr=[date_bin(Utf8("15 minutes"),csv_with_timestamps.ts)@0 as time_chunks]
-------AggregateExec: mode=FinalPartitioned, gby=[date_bin(Utf8("15 minutes"),csv_with_timestamps.ts)@0 as date_bin(Utf8("15 minutes"),csv_with_timestamps.ts)], aggr=[], ordering_mode=Sorted
+----ProjectionExec: expr=[date_bin(Utf8("15 minutes"),unbounded_csv_with_timestamps.ts)@0 as time_chunks]
+------AggregateExec: mode=FinalPartitioned, gby=[date_bin(Utf8("15 minutes"),unbounded_csv_with_timestamps.ts)@0 as date_bin(Utf8("15 minutes"),unbounded_csv_with_timestamps.ts)], aggr=[], ordering_mode=Sorted
 --------CoalesceBatchesExec: target_batch_size=2
-----------SortPreservingRepartitionExec: partitioning=Hash([date_bin(Utf8("15 minutes"),csv_with_timestamps.ts)@0], 8), input_partitions=8, sort_exprs=date_bin(Utf8("15 minutes"),csv_with_timestamps.ts)@0 DESC
-------------AggregateExec: mode=Partial, gby=[date_bin(900000000000, ts@0) as date_bin(Utf8("15 minutes"),csv_with_timestamps.ts)], aggr=[], ordering_mode=Sorted
+----------SortPreservingRepartitionExec: partitioning=Hash([date_bin(Utf8("15 minutes"),unbounded_csv_with_timestamps.ts)@0], 8), input_partitions=8, sort_exprs=date_bin(Utf8("15 minutes"),unbounded_csv_with_timestamps.ts)@0 DESC
+------------AggregateExec: mode=Partial, gby=[date_bin(900000000000, ts@0) as date_bin(Utf8("15 minutes"),unbounded_csv_with_timestamps.ts)], aggr=[], ordering_mode=Sorted
 --------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
 ----------------StreamingTableExec: partition_sizes=1, projection=[ts], infinite_source=true, output_ordering=[ts@0 DESC]
 
 query P
 SELECT date_bin('15 minutes', ts) as time_chunks
-  FROM csv_with_timestamps
-  GROUP BY (date_bin('15 minutes', ts))
+  FROM unbounded_csv_with_timestamps
+  GROUP BY date_bin('15 minutes', ts)
   ORDER BY time_chunks DESC
-  LIMIT 5
+  LIMIT 5;
 ----
 2018-12-13T12:00:00
 2018-11-13T17:00:00
+
+# Since extract is not a monotonic function, below query should not run.
+query error
+SELECT extract(month from ts) as months
+  FROM unbounded_csv_with_timestamps
+  GROUP BY extract(month from ts)
+  ORDER BY months DESC
+  LIMIT 5;
+----
+DataFusion error: PipelineChecker
+caused by
+Error during planning: Aggregate Error: `GROUP BY` clauses with columns without ordering and GROUPING SETS are not supported for unbounded inputs.
+
+
+statement ok
+CREATE EXTERNAL TABLE csv_with_timestamps (
+  name VARCHAR,
+  ts TIMESTAMP
+)
+STORED AS CSV
+WITH ORDER (ts DESC)
+LOCATION '../core/tests/data/timestamps.csv';
+
+# below query should run since it operates on a bounded source and have a sort
+# at the top of its plan.
+query TT
+EXPLAIN SELECT extract(month from ts) as months
+  FROM csv_with_timestamps
+  GROUP BY extract(month from ts)
+  ORDER BY months DESC
+  LIMIT 5;
+----
+logical_plan
+Limit: skip=0, fetch=5
+--Sort: months DESC NULLS FIRST, fetch=5
+----Projection: date_part(Utf8("MONTH"),csv_with_timestamps.ts) AS months
+------Aggregate: groupBy=[[date_part(Utf8("MONTH"), csv_with_timestamps.ts)]], aggr=[[]]
+--------TableScan: csv_with_timestamps projection=[ts]
+physical_plan
+GlobalLimitExec: skip=0, fetch=5
+--SortPreservingMergeExec: [months@0 DESC], fetch=5
+----SortExec: TopK(fetch=5), expr=[months@0 DESC]
+------ProjectionExec: expr=[date_part(Utf8("MONTH"),csv_with_timestamps.ts)@0 as months]
+--------AggregateExec: mode=FinalPartitioned, gby=[date_part(Utf8("MONTH"),csv_with_timestamps.ts)@0 as date_part(Utf8("MONTH"),csv_with_timestamps.ts)], aggr=[]
+----------CoalesceBatchesExec: target_batch_size=2
+------------RepartitionExec: partitioning=Hash([date_part(Utf8("MONTH"),csv_with_timestamps.ts)@0], 8), input_partitions=8
+--------------AggregateExec: mode=Partial, gby=[date_part(MONTH, ts@0) as date_part(Utf8("MONTH"),csv_with_timestamps.ts)], aggr=[]
+----------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/timestamps.csv]]}, projection=[ts], output_ordering=[ts@0 DESC], has_header=false
+
+query R
+SELECT extract(month from ts) as months
+  FROM csv_with_timestamps
+  GROUP BY extract(month from ts)
+  ORDER BY months DESC
+  LIMIT 5;
+----
+12
+11
 
 statement ok
 drop table t1
