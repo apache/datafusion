@@ -1794,17 +1794,23 @@ SELECT to_timestamp(null), to_timestamp(0), to_timestamp(1926632005), to_timesta
 ----
 NULL 1970-01-01T00:00:00 2031-01-19T23:33:25 1970-01-01T00:00:01 1969-12-31T23:59:59 1969-12-31T23:59:59
 
-# verify timestamp cast with integer input timestamp literal syntax
-query PPPPPP
-SELECT null::timestamp, 0::timestamp, 1926632005::timestamp, 1::timestamp, -1::timestamp, (0-1)::timestamp
+# verify timestamp syntax stlyes are consistent
+query BBBBBBBBBBBBB
+SELECT to_timestamp(null) is null as c1,
+       null::timestamp is null as c2, 
+       cast(null as timestamp) is null as c3, 
+       to_timestamp(0) = 0::timestamp as c4, 
+       to_timestamp(1926632005) = 1926632005::timestamp as c5, 
+       to_timestamp(1) = 1::timestamp as c6, 
+       to_timestamp(-1) = -1::timestamp as c7, 
+       to_timestamp(0-1) = (0-1)::timestamp as c8,
+       to_timestamp(0) = cast(0 as timestamp) as c9, 
+       to_timestamp(1926632005) = cast(1926632005 as timestamp) as c10, 
+       to_timestamp(1) = cast(1 as timestamp) as c11, 
+       to_timestamp(-1) = cast(-1 as timestamp) as c12, 
+       to_timestamp(0-1) = cast(0-1 as timestamp) as c13
 ----
-NULL 1970-01-01T00:00:00 2031-01-19T23:33:25 1970-01-01T00:00:01 1969-12-31T23:59:59 1969-12-31T23:59:59
-
-# verify timestamp cast with integer input timestamp literal syntax using CAST syntax
-query PPPPPP
-SELECT cast(null as timestamp), cast(0 as timestamp), cast(1926632005 as timestamp), cast(1 as timestamp), cast(-1 as timestamp), cast(0-1 as timestamp)
-----
-NULL 1970-01-01T00:00:00 2031-01-19T23:33:25 1970-01-01T00:00:01 1969-12-31T23:59:59 1969-12-31T23:59:59
+true true true true true true true true true true true true true
 
 # verify timestamp output types 
 query TTT
@@ -1813,17 +1819,15 @@ SELECT arrow_typeof(to_timestamp(1)), arrow_typeof(to_timestamp(null)), arrow_ty
 Timestamp(Nanosecond, None) Timestamp(Nanosecond, None) Timestamp(Nanosecond, None)
 
 # verify timestamp output types using timestamp literal syntax
-query TTT
-SELECT arrow_typeof(1::timestamp), arrow_typeof(null::timestamp), arrow_typeof('2023-01-10 12:34:56.000'::timestamp)
+query BBBBBB
+SELECT arrow_typeof(to_timestamp(1)) = arrow_typeof(1::timestamp) as c1, 
+       arrow_typeof(to_timestamp(null)) = arrow_typeof(null::timestamp) as c2,
+       arrow_typeof(to_timestamp('2023-01-10 12:34:56.000')) = arrow_typeof('2023-01-10 12:34:56.000'::timestamp) as c3,
+       arrow_typeof(to_timestamp(1)) = arrow_typeof(cast(1 as timestamp)) as c4, 
+       arrow_typeof(to_timestamp(null)) = arrow_typeof(cast(null as timestamp)) as c5,
+       arrow_typeof(to_timestamp('2023-01-10 12:34:56.000')) = arrow_typeof(cast('2023-01-10 12:34:56.000' as timestamp)) as c6
 ----
-Timestamp(Nanosecond, None) Timestamp(Nanosecond, None) Timestamp(Nanosecond, None)
-
-# verify timestamp output types using CAST syntax
-query TTT
-SELECT arrow_typeof(cast(1 as timestamp)), arrow_typeof(cast(null as timestamp)), arrow_typeof(cast('2023-01-10 12:34:56.000' as timestamp))
-----
-Timestamp(Nanosecond, None) Timestamp(Nanosecond, None) Timestamp(Nanosecond, None)
-
+true true true true true true
 
 # known issues. currently overflows (expects default precision to be microsecond instead of nanoseconds. Work pending)
 #verify extreme values 

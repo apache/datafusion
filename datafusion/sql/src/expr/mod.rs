@@ -230,7 +230,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let expr =
                     self.sql_expr_to_logical_expr(*expr, schema, planner_context)?;
 
-                // int/floats input should be treated as seconds rather as nanoseconds
+                // numeric constants are treated as seconds (rather as nanoseconds)
+                // to align with postgres / duckdb semantics
                 let expr = match &dt {
                     DataType::Timestamp(TimeUnit::Nanosecond, tz)
                         if expr.get_type(schema)? == DataType::Int64 =>

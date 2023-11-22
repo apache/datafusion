@@ -597,14 +597,18 @@ fn select_neg_filter() {
 fn select_compound_filter() {
     let sql = "SELECT id, first_name, last_name \
                    FROM person WHERE state = 'CO' AND age >= 21 AND age <= 65";
-    let expected = "Projection: person.id, person.first_name, person.last_name\n  Filter: person.state = Utf8(\"CO\") AND person.age >= Int64(21) AND person.age <= Int64(65)\n    TableScan: person";
+    let expected = "Projection: person.id, person.first_name, person.last_name\
+            \n  Filter: person.state = Utf8(\"CO\") AND person.age >= Int64(21) AND person.age <= Int64(65)\
+            \n    TableScan: person";
     quick_test(sql, expected);
 }
 
 #[test]
 fn test_timestamp_filter() {
     let sql = "SELECT state FROM person WHERE birth_date < CAST (158412331400600000 as timestamp)";
-    let expected = "Projection: person.state\n  Filter: person.birth_date < CAST(CAST(Int64(158412331400600000) AS Timestamp(Second, None)) AS Timestamp(Nanosecond, None))\n    TableScan: person";
+    let expected = "Projection: person.state\
+            \n  Filter: person.birth_date < CAST(CAST(Int64(158412331400600000) AS Timestamp(Second, None)) AS Timestamp(Nanosecond, None))\
+            \n    TableScan: person";
     quick_test(sql, expected);
 }
 
