@@ -1153,6 +1153,27 @@ SELECT
 141680161 63044568 63044568 225513085 225513085
 145294611 141047417 141047417 243203849 243203849
 
+# can coerce given default value to lag/lead value type
+query PP
+SELECT
+  LAG(c9::timestamp, 99999999, '2000-11-22T16:17:06.624Z') OVER(ORDER BY c9) as lag_default_coerced,
+  LEAD(c9::timestamp, 99999999, '2023-11-22T16:17:06.624Z') OVER(ORDER BY c9) as lead_default_coerced
+  FROM aggregate_test_100
+  LIMIT 1
+----
+2000-11-22T16:17:06.624 2023-11-22T16:17:06.624
+
+# cannot coerce given default value to lag value type
+query error
+SELECT
+  LAG(c9, 99999999, '2000-11-22T16:17:06.624Z') OVER(ORDER BY c9)
+  FROM aggregate_test_100
+  LIMIT 1
+----
+DataFusion error: Internal error: Cannot coerce default value Utf8("2000-11-22T16:17:06.624Z") Utf8 to UInt64.
+This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+
+
 #fn test_window_frame_first_value_last_value_aggregate
 query IIII
 SELECT

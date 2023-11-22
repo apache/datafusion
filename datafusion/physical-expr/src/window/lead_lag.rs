@@ -21,10 +21,11 @@
 use crate::window::BuiltInWindowFunctionExpr;
 use crate::PhysicalExpr;
 use arrow::array::ArrayRef;
-use arrow::compute::cast;
+use arrow::compute::{cast, cast_with_options, CastOptions};
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::ScalarValue;
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::type_coercion::functions::can_coerce_from;
 use datafusion_expr::PartitionEvaluator;
 use std::any::Any;
 use std::cmp::min;
@@ -235,11 +236,27 @@ fn get_default_value(
     default_value: Option<&ScalarValue>,
     dtype: &DataType,
 ) -> Result<ScalarValue> {
-    if let Some(value) = default_value {
-        if let ScalarValue::Int64(Some(val)) = value {
-            ScalarValue::try_from_string(val.to_string(), dtype)
+    if let Some(default_value) = default_value {
+        let default_value_type = default_value.data_type();
+        if can_coerce_from(dtype, &default_value_type)
+            || (dtype.is_integer() && default_value_type.is_integer())
+        {
+            ScalarValue::try_from_array(
+                &cast_with_options(
+                    &default_value.to_array()?,
+                    dtype,
+                    &CastOptions {
+                        safe: false,
+                        format_options: Default::default(),
+                    },
+                )?,
+                0,
+            )
         } else {
-            internal_err!("Expects default value to have Int64 type")
+            Err(DataFusionError::Internal(format!(
+                "Cannot coerce default value {:?} {} to {:?}",
+                default_value, default_value_type, dtype
+            )))
         }
     } else {
         Ok(ScalarValue::try_from(dtype)?)
