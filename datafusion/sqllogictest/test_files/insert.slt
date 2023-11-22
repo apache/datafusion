@@ -186,6 +186,7 @@ FileSinkExec: sink=MemoryTable (partitions=8)
 ----------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
 ------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c4, c9], has_header=true
 
+
 query II
 INSERT INTO table_without_values SELECT
 SUM(c4) OVER(PARTITION BY c1 ORDER BY c9 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) as a1,
