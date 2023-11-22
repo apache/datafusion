@@ -2126,20 +2126,20 @@ impl ScalarValue {
     /// Example
     /// ```
     /// use datafusion_common::ScalarValue;
-    /// use arrow::array::{LargeListArray, Int64Array};
-    /// use arrow::datatypes::{DataType, Int64Type};
+    /// use arrow::array::{LargeListArray, Int32Array};
+    /// use arrow::datatypes::{DataType, Int32Type};
     /// use datafusion_common::cast::as_large_list_array;
     ///
     /// let scalars = vec![
-    ///    ScalarValue::Int64(Some(1)),
-    ///    ScalarValue::Int64(None),
-    ///    ScalarValue::Int64(Some(2))
+    ///    ScalarValue::Int32(Some(1)),
+    ///    ScalarValue::Int32(None),
+    ///    ScalarValue::Int32(Some(2))
     /// ];
     ///
-    /// let array = ScalarValue::new_large_list(&scalars, &DataType::Int64);
+    /// let array = ScalarValue::new_large_list(&scalars, &DataType::Int32);
     /// let result = as_large_list_array(&array).unwrap();
     ///
-    /// let expected = LargeListArray::from_iter_primitive::<Int64Type, _, _>(
+    /// let expected = LargeListArray::from_iter_primitive::<Int32Type, _, _>(
     ///     vec![
     ///        Some(vec![Some(1), None, Some(2)])
     ///     ]);
