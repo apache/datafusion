@@ -660,7 +660,9 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
             Value::Float64Value(v) => Self::Float64(Some(*v)),
             Value::Date32Value(v) => Self::Date32(Some(*v)),
             // ScalarValue::List is serialized using arrow IPC format
-            Value::ListValue(scalar_list) | Value::FixedSizeListValue(scalar_list) => {
+            Value::ListValue(scalar_list)
+            | Value::FixedSizeListValue(scalar_list)
+            | Value::LargeListValue(scalar_list) => {
                 let protobuf::ScalarListValue {
                     ipc_message,
                     arrow_data,
@@ -703,6 +705,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 let arr = record_batch.column(0);
                 match value {
                     Value::ListValue(_) => Self::List(arr.to_owned()),
+                    Value::LargeListValue(_) => Self::LargeList(arr.to_owned()),
                     Value::FixedSizeListValue(_) => Self::FixedSizeList(arr.to_owned()),
                     _ => unreachable!(),
                 }
