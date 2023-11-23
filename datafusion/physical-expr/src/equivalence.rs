@@ -1615,15 +1615,26 @@ fn referred_dependencies(
     dependency_map: &HashMap<PhysicalSortExpr, DependencyNode>,
     source: &Arc<dyn PhysicalExpr>,
 ) -> Vec<HashSet<PhysicalSortExpr>> {
+    // Associate `PhysicalExpr` and `PhysicalSortExpr`s that contain it.
+    // such as a-> (a ASC, a DESC)
     let mut expr_to_sort_exprs: HashMap<ExprWrapper, HashSet<PhysicalSortExpr>> =
         HashMap::new();
-    for sort_expr in dependency_map.keys() {
-        if expr_refers(source, &sort_expr.expr) {
+    dependency_map
+        .keys()
+        .filter(|sort_expr| expr_refers(source, &sort_expr.expr))
+        .for_each(|sort_expr| {
             let key = ExprWrapper(sort_expr.expr.clone());
-            let res = expr_to_sort_exprs.entry(key).or_default();
-            res.insert(sort_expr.clone());
-        }
-    }
+            expr_to_sort_exprs
+                .entry(key)
+                .or_default()
+                .insert(sort_expr.clone());
+        });
+
+    // Generate all valid dependencies for the source
+    // such as for a+b
+    // If map is  a-> (a ASC, a DESC).
+    //            b-> (b ASC)
+    // Generate vec![HashSet(a ASC, b ASC), HashSet(a DESC, b ASC)]
     expr_to_sort_exprs
         .values()
         .multi_cartesian_product()
