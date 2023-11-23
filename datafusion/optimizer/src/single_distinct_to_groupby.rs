@@ -567,7 +567,7 @@ mod tests {
     }
 
     #[test]
-    fn common_min_and_distinct_count() -> Result<()> {
+    fn one_distinct_and_one_common() -> Result<()> {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
@@ -657,7 +657,7 @@ mod tests {
 
         // COUNT(DISTINCT a ORDER BY a)
         let expr = Expr::AggregateFunction(expr::AggregateFunction::new(
-            AggregateFunction::Sum,
+            AggregateFunction::Count,
             vec![col("a")],
             true,
             None,
@@ -667,7 +667,7 @@ mod tests {
             .aggregate(vec![col("c")], vec![sum(col("a")), expr])?
             .build()?;
         // Do nothing
-        let expected = "Aggregate: groupBy=[[test.c]], aggr=[[SUM(test.a), SUM(DISTINCT test.a) ORDER BY [test.a]]] [c:UInt32, SUM(test.a):UInt64;N, SUM(DISTINCT test.a) ORDER BY [test.a]:UInt64;N]\
+        let expected = "Aggregate: groupBy=[[test.c]], aggr=[[SUM(test.a), COUNT(DISTINCT test.a) ORDER BY [test.a]]] [c:UInt32, SUM(test.a):UInt64;N, COUNT(DISTINCT test.a) ORDER BY [test.a]:Int64;N]\
                             \n  TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_equal(&plan, expected)
@@ -679,7 +679,7 @@ mod tests {
 
         // COUNT(DISTINCT a ORDER BY a) FILTER (WHERE a > 5)
         let expr = Expr::AggregateFunction(expr::AggregateFunction::new(
-            AggregateFunction::Sum,
+            AggregateFunction::Count,
             vec![col("a")],
             true,
             Some(Box::new(col("a").gt(lit(5)))),
@@ -689,7 +689,7 @@ mod tests {
             .aggregate(vec![col("c")], vec![sum(col("a")), expr])?
             .build()?;
         // Do nothing
-        let expected = "Aggregate: groupBy=[[test.c]], aggr=[[SUM(test.a), SUM(DISTINCT test.a) FILTER (WHERE test.a > Int32(5)) ORDER BY [test.a]]] [c:UInt32, SUM(test.a):UInt64;N, SUM(DISTINCT test.a) FILTER (WHERE test.a > Int32(5)) ORDER BY [test.a]:UInt64;N]\
+        let expected = "Aggregate: groupBy=[[test.c]], aggr=[[SUM(test.a), COUNT(DISTINCT test.a) FILTER (WHERE test.a > Int32(5)) ORDER BY [test.a]]] [c:UInt32, SUM(test.a):UInt64;N, COUNT(DISTINCT test.a) FILTER (WHERE test.a > Int32(5)) ORDER BY [test.a]:Int64;N]\
                             \n  TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_equal(&plan, expected)
