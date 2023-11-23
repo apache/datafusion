@@ -42,9 +42,10 @@ use datafusion_common::{
     plan_datafusion_err, plan_err, DataFusionError, JoinSide, JoinType, Result,
     SharedResult,
 };
+use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::equivalence::add_offset_to_expr;
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::intervals::{ExprIntervalGraph, Interval, IntervalBound};
+use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
 use datafusion_physical_expr::utils::merge_vectors;
 use datafusion_physical_expr::{
     LexOrdering, LexOrderingRef, PhysicalExpr, PhysicalSortExpr,
@@ -713,8 +714,8 @@ fn estimate_inner_join_cardinality(
             );
         }
 
-        let left_max_distinct = max_distinct_count(&left_stats.num_rows, left_stat)?;
-        let right_max_distinct = max_distinct_count(&right_stats.num_rows, right_stat)?;
+        let left_max_distinct = max_distinct_count(&left_stats.num_rows, left_stat);
+        let right_max_distinct = max_distinct_count(&right_stats.num_rows, right_stat);
         let max_distinct = left_max_distinct.max(&right_max_distinct);
         if max_distinct.get_value().is_some() {
             // Seems like there are a few implementations of this algorithm that implement
@@ -745,48 +746,60 @@ fn estimate_inner_join_cardinality(
 }
 
 /// Estimate the number of maximum distinct values that can be present in the
-/// given column from its statistics.
-///
-/// If distinct_count is available, uses it directly. If the column numeric, and
-/// has min/max values, then they might be used as a fallback option. Otherwise,
-/// returns None.
+/// given column from its statistics. If distinct_count is available, uses it
+/// directly. Otherwise, if the column is numeric and has min/max values, it
+/// estimates the maximum distinct count from those.
 fn max_distinct_count(
     num_rows: &Precision<usize>,
     stats: &ColumnStatistics,
-) -> Option<Precision<usize>> {
-    match (
-        &stats.distinct_count,
-        stats.max_value.get_value(),
-        stats.min_value.get_value(),
-    ) {
-        (Precision::Exact(_), _, _) | (Precision::Inexact(_), _, _) => {
-            Some(stats.distinct_count.clone())
-        }
-        (_, Some(max), Some(min)) => {
-            let numeric_range = Interval::new(
-                IntervalBound::new(min.clone(), false),
-                IntervalBound::new(max.clone(), false),
-            )
-            .cardinality()
-            .ok()
-            .flatten()? as usize;
-
-            // The number can never be greater than the number of rows we have (minus
-            // the nulls, since they don't count as distinct values).
-            let ceiling =
-                num_rows.get_value()? - stats.null_count.get_value().unwrap_or(&0);
-            Some(
-                if num_rows.is_exact().unwrap_or(false)
-                    && stats.max_value.is_exact().unwrap_or(false)
-                    && stats.min_value.is_exact().unwrap_or(false)
+) -> Precision<usize> {
+    match &stats.distinct_count {
+        dc @ (Precision::Exact(_) | Precision::Inexact(_)) => dc.clone(),
+        _ => {
+            // The number can never be greater than the number of rows we have
+            // minus the nulls (since they don't count as distinct values).
+            let result = match num_rows {
+                Precision::Absent => Precision::Absent,
+                Precision::Inexact(count) => {
+                    Precision::Inexact(count - stats.null_count.get_value().unwrap_or(&0))
+                }
+                Precision::Exact(count) => {
+                    let count = count - stats.null_count.get_value().unwrap_or(&0);
+                    if stats.null_count.is_exact().unwrap_or(false) {
+                        Precision::Exact(count)
+                    } else {
+                        Precision::Inexact(count)
+                    }
+                }
+            };
+            // Cap the estimate using the number of possible values:
+            if let (Some(min), Some(max)) =
+                (stats.min_value.get_value(), stats.max_value.get_value())
+            {
+                if let Some(range_dc) = Interval::try_new(min.clone(), max.clone())
+                    .ok()
+                    .and_then(|e| e.cardinality())
                 {
-                    Precision::Exact(numeric_range.min(ceiling))
-                } else {
-                    Precision::Inexact(numeric_range.min(ceiling))
-                },
-            )
+                    let range_dc = range_dc as usize;
+                    // Note that the `unwrap` calls in the below statement are safe.
+                    return if matches!(result, Precision::Absent)
+                        || &range_dc < result.get_value().unwrap()
+                    {
+                        if stats.min_value.is_exact().unwrap()
+                            && stats.max_value.is_exact().unwrap()
+                        {
+                            Precision::Exact(range_dc)
+                        } else {
+                            Precision::Inexact(range_dc)
+                        }
+                    } else {
+                        result
+                    };
+                }
+            }
+
+            result
         }
-        _ => None,
     }
 }
 
@@ -1251,7 +1264,8 @@ pub fn prepare_sorted_exprs(
         vec![left_temp_sorted_filter_expr, right_temp_sorted_filter_expr];
 
     // Build the expression interval graph
-    let mut graph = ExprIntervalGraph::try_new(filter.expression().clone())?;
+    let mut graph =
+        ExprIntervalGraph::try_new(filter.expression().clone(), filter.schema())?;
 
     // Update sorted expressions with node indices
     update_sorted_exprs_with_node_indices(&mut graph, &mut sorted_exprs);
@@ -1697,7 +1711,7 @@ mod tests {
                     column_statistics: right_col_stats,
                 },
             ),
-            None
+            Some(Precision::Inexact(100))
         );
         Ok(())
     }

@@ -22,8 +22,8 @@
 
 use std::ops::{Add, BitAnd, Sub};
 
-use datafusion_common::Result;
-use datafusion_common::ScalarValue;
+use crate::Result;
+use crate::ScalarValue;
 
 // Define constants for ARM
 #[cfg(all(target_arch = "aarch64", not(target_os = "windows")))]
@@ -162,7 +162,7 @@ impl FloatBits for f64 {
 /// # Examples
 ///
 /// ```
-/// use datafusion_physical_expr::intervals::rounding::next_up;
+/// use datafusion_common::rounding::next_up;
 ///
 /// let f: f32 = 1.0;
 /// let next_f = next_up(f);
@@ -195,7 +195,7 @@ pub fn next_up<F: FloatBits + Copy>(float: F) -> F {
 /// # Examples
 ///
 /// ```
-/// use datafusion_physical_expr::intervals::rounding::next_down;
+/// use datafusion_common::rounding::next_down;
 ///
 /// let f: f32 = 1.0;
 /// let next_f = next_down(f);
