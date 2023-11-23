@@ -746,7 +746,7 @@ pub fn gen_range(args: &[ArrayRef]) -> Result<ArrayRef> {
         if step == 0 {
             return exec_err!("step can't be 0 for function range(start [, stop, step]");
         }
-        let value ;
+        let value;
         if step < 0 {
             while stop < start {
                 values.push(start);
