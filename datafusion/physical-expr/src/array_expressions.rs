@@ -337,7 +337,7 @@ fn array_array<O: OffsetSizeTrait>(
                 mutable.extend_nulls(1);
             }
         }
-        offsets.push(O::from_usize(mutable.len()).unwrap());
+        offsets.push(O::usize_as(mutable.len()));
     }
     let data = mutable.freeze();
 
