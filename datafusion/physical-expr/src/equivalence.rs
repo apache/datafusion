@@ -16,7 +16,7 @@
 // under the License.
 
 use std::collections::{HashMap, HashSet};
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::expressions::{Column, Literal};
@@ -1287,50 +1287,51 @@ impl EquivalenceProperties {
 
         let mut orderings = vec![];
         for (source, target) in mapping.iter() {
-            let relevant_deps = referred_dependencies(&dependency_map, source);
-            let ordering = get_expr_ordering(source, &relevant_deps);
-            let options = if let SortProperties::Ordered(options) = ordering {
-                options
-            } else {
-                // expression is not ordered. Try next projection
-                continue;
-            };
-            let sort_expr = PhysicalSortExpr {
-                expr: target.clone(),
-                options,
-            };
+            for relevant_deps in referred_dependencies(&dependency_map, source) {
+                let ordering = get_expr_ordering(source, &relevant_deps);
+                let options = if let SortProperties::Ordered(options) = ordering {
+                    options
+                } else {
+                    // expression is not ordered. Try next projection
+                    continue;
+                };
+                let sort_expr = PhysicalSortExpr {
+                    expr: target.clone(),
+                    options,
+                };
 
-            // Construct all of the valid prefix orderings for each of the expressions, that is referred in the projection expression.
-            let relevant_prefixes = relevant_deps
-                .iter()
-                .flat_map(|dep| {
-                    let alternative_prefixes =
-                        construct_prefix_orderings(dep, &dependency_map);
-                    (!alternative_prefixes.is_empty()).then_some(alternative_prefixes)
-                })
-                .collect::<Vec<_>>();
+                // Construct all of the valid prefix orderings for each of the expressions, that is referred in the projection expression.
+                let relevant_prefixes = relevant_deps
+                    .iter()
+                    .flat_map(|dep| {
+                        let alternative_prefixes =
+                            construct_prefix_orderings(dep, &dependency_map);
+                        (!alternative_prefixes.is_empty()).then_some(alternative_prefixes)
+                    })
+                    .collect::<Vec<_>>();
 
-            // No dependency, it is a leading ordering
-            if relevant_prefixes.is_empty() {
-                orderings.push(vec![sort_expr.clone()]);
-            }
+                // No dependency, it is a leading ordering
+                if relevant_prefixes.is_empty() {
+                    orderings.push(vec![sort_expr.clone()]);
+                }
 
-            // Generate all possible orderings where dependencies are satisfied for the current projection expression.
-            // If expression is a+b ASC, and dependency for a ASC is [c ASC], dependency for b ASC is [d DESC].
-            // Then we generate [c ASC, d DESC, a+b ASC], [d DESC, c ASC, a+b ASC].
-            for prefix_orderings in
-                relevant_prefixes.into_iter().multi_cartesian_product()
-            {
-                for prefixes in
-                    prefix_orderings.iter().permutations(prefix_orderings.len())
+                // Generate all possible orderings where dependencies are satisfied for the current projection expression.
+                // If expression is a+b ASC, and dependency for a ASC is [c ASC], dependency for b ASC is [d DESC].
+                // Then we generate [c ASC, d DESC, a+b ASC], [d DESC, c ASC, a+b ASC].
+                for prefix_orderings in
+                    relevant_prefixes.into_iter().multi_cartesian_product()
                 {
-                    let ordering = prefixes
-                        .into_iter()
-                        .flatten()
-                        .chain(std::iter::once(&sort_expr))
-                        .cloned()
-                        .collect();
-                    orderings.push(ordering);
+                    for prefixes in
+                        prefix_orderings.iter().permutations(prefix_orderings.len())
+                    {
+                        let ordering = prefixes
+                            .into_iter()
+                            .flatten()
+                            .chain(std::iter::once(&sort_expr))
+                            .cloned()
+                            .collect();
+                        orderings.push(ordering);
+                    }
                 }
             }
         }
@@ -1572,7 +1573,27 @@ fn expr_refers(
     }
 }
 
-/// Collests referred dependencies for a given source expression.
+/// Wrapper struct for `Arc<dyn PhysicalExpr>`
+/// this struct can be used as key in the hash map
+/// (`Arc<dyn PhysicalExpr>` cannot)
+#[derive(Debug, Clone)]
+struct ExprWrapper(Arc<dyn PhysicalExpr>);
+
+impl PartialEq<Self> for ExprWrapper {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.eq(&other.0)
+    }
+}
+
+impl Eq for ExprWrapper {}
+
+impl Hash for ExprWrapper {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+    }
+}
+
+/// Collects referred dependencies for a given source expression.
 ///
 /// This function analyzes the dependency map to collect referred dependencies for
 /// a given source expression.
@@ -1586,21 +1607,31 @@ fn expr_refers(
 ///
 /// # Returns
 ///
-/// A `HashSet<PhysicalSortExpr>` containing relevant dependencies for the given source
-/// expression. These dependencies are expressions that are referred to by the source
+/// A `Vec<HashSet<PhysicalSortExpr>>` containing dependencies for the given source
+/// expression (Each `HashSet<PhysicalSortExpr>` inside vector can construct source expression).
+/// These dependencies are expressions that are referred to by the source
 /// expression based on the provided dependency map.
 fn referred_dependencies(
     dependency_map: &HashMap<PhysicalSortExpr, DependencyNode>,
     source: &Arc<dyn PhysicalExpr>,
-) -> HashSet<PhysicalSortExpr> {
-    dependency_map
-        .iter()
-        .filter_map(|(sort_expr, _node)| {
-            if expr_refers(source, &sort_expr.expr) {
-                Some(sort_expr.clone())
-            } else {
-                None
-            }
+) -> Vec<HashSet<PhysicalSortExpr>> {
+    let mut expr_to_sort_exprs: HashMap<ExprWrapper, HashSet<PhysicalSortExpr>> =
+        HashMap::new();
+    for sort_expr in dependency_map.keys() {
+        if expr_refers(source, &sort_expr.expr) {
+            let key = ExprWrapper(sort_expr.expr.clone());
+            let res = expr_to_sort_exprs.entry(key).or_default();
+            res.insert(sort_expr.clone());
+        }
+    }
+    expr_to_sort_exprs
+        .values()
+        .multi_cartesian_product()
+        .map(|referred_deps| {
+            referred_deps
+                .into_iter()
+                .cloned()
+                .collect::<HashSet<PhysicalSortExpr>>()
         })
         .collect()
 }
@@ -4179,6 +4210,10 @@ mod tests {
             descending: false,
             nulls_first: false,
         };
+        let option_desc = SortOptions {
+            descending: true,
+            nulls_first: true,
+        };
 
         let test_cases = vec![
             // ---------- TEST CASE 1 ------------
@@ -4313,7 +4348,7 @@ mod tests {
                     (col_d, "d_new".to_string()),
                     (&b_plus_d, "b+d".to_string()),
                 ],
-                // expected, This expected may be missing
+                // expected
                 vec![
                     // [a_new ASC, b_new ASC]
                     vec![("a_new", option_asc), ("b_new", option_asc)],
@@ -4425,7 +4460,7 @@ mod tests {
                     (col_a, "a_new".to_string()),
                     (&b_plus_d, "b+d".to_string()),
                 ],
-                // expected, This expected may be missing
+                // expected
                 vec![
                     // [a_new ASC, b_new ASC]
                     vec![("a_new", option_asc), ("b_new", option_asc)],
@@ -4446,7 +4481,7 @@ mod tests {
                 ],
                 // proj exprs
                 vec![(col_c, "c_new".to_string()), (col_a, "a_new".to_string())],
-                // expected, This expected may be missing
+                // expected
                 vec![
                     // [a_new ASC]
                     vec![("a_new", option_asc)],
@@ -4476,7 +4511,7 @@ mod tests {
                     (col_a, "a_new".to_string()),
                     (&a_plus_b, "a+b".to_string()),
                 ],
-                // expected, This expected may be missing
+                // expected
                 vec![
                     // [a_new ASC, b_new ASC, c_new ASC]
                     vec![
@@ -4510,7 +4545,7 @@ mod tests {
                     (col_a, "a_new".to_string()),
                     (&b_plus_e, "b+e".to_string()),
                 ],
-                // expected, This expected may be missing
+                // expected
                 vec![
                     // [a_new ASC, d_new ASC, b+e ASC]
                     vec![
@@ -4555,7 +4590,7 @@ mod tests {
                     (col_a, "a_new".to_string()),
                     (&a_plus_b, "a+b".to_string()),
                 ],
-                // expected, This expected may be missing
+                // expected
                 vec![
                     // [a_new ASC, d_new ASC, b+e ASC]
                     vec![
@@ -4563,6 +4598,34 @@ mod tests {
                         ("c_new", option_asc),
                         ("a+b", option_asc),
                     ],
+                ],
+            ),
+            // ------- TEST CASE 16 ----------
+            (
+                // orderings
+                vec![
+                    // [a ASC, b ASC]
+                    vec![(col_a, option_asc), (col_b, option_asc)],
+                    // [c ASC, b DESC]
+                    vec![(col_c, option_asc), (col_b, option_desc)],
+                    // [e ASC]
+                    vec![(col_e, option_asc)],
+                ],
+                // proj exprs
+                vec![
+                    (col_c, "c_new".to_string()),
+                    (col_a, "a_new".to_string()),
+                    (col_b, "b_new".to_string()),
+                    (&b_plus_e, "b+e".to_string()),
+                ],
+                // expected
+                vec![
+                    // [a_new ASC, b_new ASC]
+                    vec![("a_new", option_asc), ("b_new", option_asc)],
+                    // [a_new ASC, b_new ASC]
+                    vec![("a_new", option_asc), ("b+e", option_asc)],
+                    // [c_new ASC, b_new DESC]
+                    vec![("c_new", option_asc), ("b_new", option_desc)],
                 ],
             ),
         ];
