@@ -1200,7 +1200,7 @@ pub struct ScalarFixedSizeBinary {
 pub struct ScalarValue {
     #[prost(
         oneof = "scalar_value::Value",
-        tags = "33, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 20, 39, 21, 24, 25, 35, 36, 37, 38, 26, 27, 28, 29, 30, 31, 32, 34"
+        tags = "33, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 39, 21, 24, 25, 35, 36, 37, 38, 26, 27, 28, 29, 30, 31, 32, 34"
     )]
     pub value: ::core::option::Option<scalar_value::Value>,
 }
@@ -1244,8 +1244,12 @@ pub mod scalar_value {
         Date32Value(i32),
         #[prost(message, tag = "15")]
         Time32Value(super::ScalarTime32Value),
+        #[prost(message, tag = "16")]
+        LargeListValue(super::ScalarListValue),
         #[prost(message, tag = "17")]
         ListValue(super::ScalarListValue),
+        #[prost(message, tag = "18")]
+        FixedSizeListValue(super::ScalarListValue),
         #[prost(message, tag = "20")]
         Decimal128Value(super::Decimal128),
         #[prost(message, tag = "39")]
@@ -1512,7 +1516,7 @@ pub mod owned_table_reference {
 pub struct PhysicalPlanNode {
     #[prost(
         oneof = "physical_plan_node::PhysicalPlanType",
-        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24"
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25"
     )]
     pub physical_plan_type: ::core::option::Option<physical_plan_node::PhysicalPlanType>,
 }
@@ -1569,6 +1573,8 @@ pub mod physical_plan_node {
         Analyze(::prost::alloc::boxed::Box<super::AnalyzeExecNode>),
         #[prost(message, tag = "24")]
         JsonSink(::prost::alloc::boxed::Box<super::JsonSinkExecNode>),
+        #[prost(message, tag = "25")]
+        SymmetricHashJoin(::prost::alloc::boxed::Box<super::SymmetricHashJoinExecNode>),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -1613,8 +1619,6 @@ pub struct FileSinkConfig {
     pub output_schema: ::core::option::Option<Schema>,
     #[prost(message, repeated, tag = "5")]
     pub table_partition_cols: ::prost::alloc::vec::Vec<PartitionColumn>,
-    #[prost(enumeration = "FileWriterMode", tag = "6")]
-    pub writer_mode: i32,
     #[prost(bool, tag = "7")]
     pub single_file_output: bool,
     #[prost(bool, tag = "8")]
@@ -2001,6 +2005,24 @@ pub struct HashJoinExecNode {
     #[prost(enumeration = "JoinType", tag = "4")]
     pub join_type: i32,
     #[prost(enumeration = "PartitionMode", tag = "6")]
+    pub partition_mode: i32,
+    #[prost(bool, tag = "7")]
+    pub null_equals_null: bool,
+    #[prost(message, optional, tag = "8")]
+    pub filter: ::core::option::Option<JoinFilter>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SymmetricHashJoinExecNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub left: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub right: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(message, repeated, tag = "3")]
+    pub on: ::prost::alloc::vec::Vec<JoinOn>,
+    #[prost(enumeration = "JoinType", tag = "4")]
+    pub join_type: i32,
+    #[prost(enumeration = "StreamPartitionMode", tag = "6")]
     pub partition_mode: i32,
     #[prost(bool, tag = "7")]
     pub null_equals_null: bool,
@@ -2569,8 +2591,9 @@ pub enum ScalarFunction {
     ArrayUnion = 120,
     OverLay = 121,
     Range = 122,
-    ArrayPopFront = 123,
-    Levenshtein = 124,
+    ArrayExcept = 123,
+    ArrayPopFront = 124,
+    Levenshtein = 125,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2702,6 +2725,7 @@ impl ScalarFunction {
             ScalarFunction::ArrayUnion => "ArrayUnion",
             ScalarFunction::OverLay => "OverLay",
             ScalarFunction::Range => "Range",
+            ScalarFunction::ArrayExcept => "ArrayExcept",
             ScalarFunction::ArrayPopFront => "ArrayPopFront",
             ScalarFunction::Levenshtein => "Levenshtein",
         }
@@ -2832,6 +2856,7 @@ impl ScalarFunction {
             "ArrayUnion" => Some(Self::ArrayUnion),
             "OverLay" => Some(Self::OverLay),
             "Range" => Some(Self::Range),
+            "ArrayExcept" => Some(Self::ArrayExcept),
             "ArrayPopFront" => Some(Self::ArrayPopFront),
             "Levenshtein" => Some(Self::Levenshtein),
             _ => None,
@@ -2878,6 +2903,7 @@ pub enum AggregateFunction {
     RegrSxx = 32,
     RegrSyy = 33,
     RegrSxy = 34,
+    StringAgg = 35,
 }
 impl AggregateFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2923,6 +2949,7 @@ impl AggregateFunction {
             AggregateFunction::RegrSxx => "REGR_SXX",
             AggregateFunction::RegrSyy => "REGR_SYY",
             AggregateFunction::RegrSxy => "REGR_SXY",
+            AggregateFunction::StringAgg => "STRING_AGG",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2965,6 +2992,7 @@ impl AggregateFunction {
             "REGR_SXX" => Some(Self::RegrSxx),
             "REGR_SYY" => Some(Self::RegrSyy),
             "REGR_SXY" => Some(Self::RegrSxy),
+            "STRING_AGG" => Some(Self::StringAgg),
             _ => None,
         }
     }
@@ -3195,35 +3223,6 @@ impl UnionMode {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
-pub enum FileWriterMode {
-    Append = 0,
-    Put = 1,
-    PutMultipart = 2,
-}
-impl FileWriterMode {
-    /// String value of the enum field names used in the ProtoBuf definition.
-    ///
-    /// The values are not transformed in any way and thus are considered stable
-    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-    pub fn as_str_name(&self) -> &'static str {
-        match self {
-            FileWriterMode::Append => "APPEND",
-            FileWriterMode::Put => "PUT",
-            FileWriterMode::PutMultipart => "PUT_MULTIPART",
-        }
-    }
-    /// Creates an enum from field names used in the ProtoBuf definition.
-    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-        match value {
-            "APPEND" => Some(Self::Append),
-            "PUT" => Some(Self::Put),
-            "PUT_MULTIPART" => Some(Self::PutMultipart),
-            _ => None,
-        }
-    }
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-#[repr(i32)]
 pub enum CompressionTypeVariant {
     Gzip = 0,
     Bzip2 = 1,
@@ -3282,6 +3281,32 @@ impl PartitionMode {
             "COLLECT_LEFT" => Some(Self::CollectLeft),
             "PARTITIONED" => Some(Self::Partitioned),
             "AUTO" => Some(Self::Auto),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum StreamPartitionMode {
+    SinglePartition = 0,
+    PartitionedExec = 1,
+}
+impl StreamPartitionMode {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            StreamPartitionMode::SinglePartition => "SINGLE_PARTITION",
+            StreamPartitionMode::PartitionedExec => "PARTITIONED_EXEC",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "SINGLE_PARTITION" => Some(Self::SinglePartition),
+            "PARTITIONED_EXEC" => Some(Self::PartitionedExec),
             _ => None,
         }
     }

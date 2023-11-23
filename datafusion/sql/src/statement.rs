@@ -204,6 +204,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let mut all_constraints = constraints;
                 let inline_constraints = calc_inline_constraints_from_columns(&columns);
                 all_constraints.extend(inline_constraints);
+                // Build column default values
+                let column_defaults =
+                    self.build_column_defaults(&columns, planner_context)?;
                 match query {
                     Some(query) => {
                         let plan = self.query_to_plan(*query, planner_context)?;
@@ -250,6 +253,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 input: Arc::new(plan),
                                 if_not_exists,
                                 or_replace,
+                                column_defaults,
                             },
                         )))
                     }
@@ -272,6 +276,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 input: Arc::new(plan),
                                 if_not_exists,
                                 or_replace,
+                                column_defaults,
                             },
                         )))
                     }
@@ -1170,8 +1175,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         datafusion_expr::Expr::Column(source_field.qualified_column())
                             .cast_to(target_field.data_type(), source.schema())?
                     }
-                    // Fill the default value for the column, currently only supports NULL.
-                    None => datafusion_expr::Expr::Literal(ScalarValue::Null)
+                    // The value is not specified. Fill in the default value for the column.
+                    None => table_source
+                        .get_column_default(target_field.name())
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            // If there is no default for the column, then the default is NULL
+                            datafusion_expr::Expr::Literal(ScalarValue::Null)
+                        })
                         .cast_to(target_field.data_type(), &DFSchema::empty())?,
                 };
                 Ok(expr.alias(target_field.name()))

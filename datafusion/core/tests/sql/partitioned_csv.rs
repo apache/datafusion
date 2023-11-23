@@ -19,30 +19,12 @@
 
 use std::{io::Write, sync::Arc};
 
-use arrow::{
-    datatypes::{DataType, Field, Schema, SchemaRef},
-    record_batch::RecordBatch,
-};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::{
     error::Result,
     prelude::{CsvReadOptions, SessionConfig, SessionContext},
 };
 use tempfile::TempDir;
-
-/// Execute SQL and return results
-async fn plan_and_collect(
-    ctx: &mut SessionContext,
-    sql: &str,
-) -> Result<Vec<RecordBatch>> {
-    ctx.sql(sql).await?.collect().await
-}
-
-/// Execute SQL and return results
-pub async fn execute(sql: &str, partition_count: usize) -> Result<Vec<RecordBatch>> {
-    let tmp_dir = TempDir::new()?;
-    let mut ctx = create_ctx(&tmp_dir, partition_count).await?;
-    plan_and_collect(&mut ctx, sql).await
-}
 
 /// Generate CSV partitions within the supplied directory
 fn populate_csv_partitions(

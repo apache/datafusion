@@ -257,16 +257,12 @@ fn get_field_metadata(
     e: &Arc<dyn PhysicalExpr>,
     input_schema: &Schema,
 ) -> Option<HashMap<String, String>> {
-    let name = if let Some(column) = e.as_any().downcast_ref::<Column>() {
-        column.name()
-    } else {
-        return None;
-    };
-
-    input_schema
-        .field_with_name(name)
-        .ok()
-        .map(|f| f.metadata().clone())
+    // Look up field by index in schema (not NAME as there can be more than one
+    // column with the same name)
+    e.as_any()
+        .downcast_ref::<Column>()
+        .map(|column| input_schema.field(column.index()).metadata())
+        .cloned()
 }
 
 fn stats_projection(

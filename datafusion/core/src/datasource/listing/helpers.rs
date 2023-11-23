@@ -361,8 +361,7 @@ pub async fn pruned_partition_list<'a>(
                 Some(files) => files,
                 None => {
                     trace!("Recursively listing partition {}", partition.path);
-                    let s = store.list(Some(&partition.path)).await?;
-                    s.try_collect().await?
+                    store.list(Some(&partition.path)).try_collect().await?
                 }
             };
 

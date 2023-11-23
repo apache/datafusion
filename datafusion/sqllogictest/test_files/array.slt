@@ -265,6 +265,14 @@ AS VALUES
   (make_array([28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30]), [28, 29, 30], [37, 38, 39], 10)
 ;
 
+query ?
+select [1, true, null]
+----
+[1, 1, ]
+
+query error DataFusion error: This feature is not implemented: ScalarFunctions without MakeArray are not supported: now()
+SELECT [now()]
+
 query TTT
 select arrow_typeof(column1), arrow_typeof(column2), arrow_typeof(column3) from arrays;
 ----
@@ -2014,7 +2022,7 @@ drop table arrays_with_repeating_elements_for_union;
 query ?
 select array_union([], []);
 ----
-NULL
+[]
 
 # array_union scalar function #7
 query ?
@@ -2032,7 +2040,7 @@ select array_union([null], [null]);
 query ?
 select array_union(null, []);
 ----
-NULL
+[]
 
 # array_union scalar function #10
 query ?
@@ -2687,6 +2695,26 @@ SELECT  array_intersect(make_array(1,2,3), make_array(2,3,4)),
 ----
 [2, 3] [] [aa, cc] [true] [2.2, 3.3] [[2, 2], [3, 3]]
 
+query ?
+select array_intersect([], []);
+----
+[]
+
+query ?
+select array_intersect([], null);
+----
+[]
+
+query ?
+select array_intersect(null, []);
+----
+[]
+
+query ?
+select array_intersect(null, null);
+----
+NULL
+
 query ??????
 SELECT  list_intersect(make_array(1,2,3), make_array(2,3,4)),
         list_intersect(make_array(1,3,5), make_array(2,4,6)),
@@ -2733,6 +2761,134 @@ select generate_series(5),
 ;
 ----
 [0, 1, 2, 3, 4] [2, 3, 4] [2, 5, 8]
+
+## array_except
+
+statement ok
+CREATE TABLE array_except_table
+AS VALUES
+  ([1, 2, 2, 3], [2, 3, 4]),
+  ([2, 3, 3], [3]),
+  ([3], [3, 3, 4]),
+  (null, [3, 4]),
+  ([1, 2], null),
+  (null, null)
+;
+
+query ?
+select array_except(column1, column2) from array_except_table;
+----
+[1]
+[2]
+[]
+NULL
+[1, 2]
+NULL
+
+statement ok
+drop table array_except_table;
+
+statement ok
+CREATE TABLE array_except_nested_list_table
+AS VALUES
+  ([[1, 2], [3]], [[2], [3], [4, 5]]),
+  ([[1, 2], [3]], [[2], [1, 2]]),
+  ([[1, 2], [3]], null),
+  (null, [[1], [2, 3], [4, 5, 6]]),
+  ([[1], [2, 3], [4, 5, 6]], [[2, 3], [4, 5, 6], [1]])
+;
+
+query ?
+select array_except(column1, column2) from array_except_nested_list_table;
+----
+[[1, 2]]
+[[3]]
+[[1, 2], [3]]
+NULL
+[]
+
+statement ok
+drop table array_except_nested_list_table;
+
+statement ok
+CREATE TABLE array_except_table_float
+AS VALUES
+  ([1.1, 2.2, 3.3], [2.2]),
+  ([1.1, 2.2, 3.3], [4.4]),
+  ([1.1, 2.2, 3.3], [3.3, 2.2, 1.1])
+;
+
+query ?
+select array_except(column1, column2) from array_except_table_float;
+----
+[1.1, 3.3]
+[1.1, 2.2, 3.3]
+[]
+
+statement ok
+drop table array_except_table_float;
+
+statement ok
+CREATE TABLE array_except_table_ut8
+AS VALUES
+  (['a', 'b', 'c'], ['a']),
+  (['a', 'bc', 'def'], ['g', 'def']),
+  (['a', 'bc', 'def'], null),
+  (null, ['a'])
+;
+
+query ?
+select array_except(column1, column2) from array_except_table_ut8;
+----
+[b, c]
+[a, bc]
+[a, bc, def]
+NULL
+
+statement ok
+drop table array_except_table_ut8;
+
+statement ok
+CREATE TABLE array_except_table_bool
+AS VALUES
+  ([true, false, false], [false]),
+  ([true, true, true], [false]),
+  ([false, false, false], [true]),
+  ([true, false], null),
+  (null, [true, false])
+;
+
+query ?
+select array_except(column1, column2) from array_except_table_bool;
+----
+[true]
+[true]
+[false]
+[true, false]
+NULL
+
+statement ok
+drop table array_except_table_bool;
+
+query ?
+select array_except([], null);
+----
+[]
+
+query ?
+select array_except([], []);
+----
+[]
+
+query ?
+select array_except(null, []);
+----
+NULL
+
+query ?
+select array_except(null, null)
+----
+NULL
 
 ### Array operators tests
 

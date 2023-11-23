@@ -98,7 +98,7 @@ impl SortProperties {
         }
     }
 
-    pub fn and(&self, rhs: &Self) -> Self {
+    pub fn and_or(&self, rhs: &Self) -> Self {
         match (self, rhs) {
             (Self::Ordered(lhs), Self::Ordered(rhs))
                 if lhs.descending == rhs.descending =>

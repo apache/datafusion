@@ -21,9 +21,11 @@ use std::ops::Not;
 
 use super::or_in_list_simplifier::OrInListSimplifier;
 use super::utils::*;
-
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
+use crate::simplify_expressions::guarantees::GuaranteeRewriter;
 use crate::simplify_expressions::regex::simplify_regex_expr;
+use crate::simplify_expressions::SimplifyInfo;
+
 use arrow::{
     array::new_null_array,
     datatypes::{DataType, Field, Schema},
@@ -37,18 +39,15 @@ use datafusion_common::{
 use datafusion_common::{
     exec_err, internal_err, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::expr::{InList, InSubquery, ScalarFunction};
 use datafusion_expr::{
     and, expr, lit, or, BinaryExpr, BuiltinScalarFunction, Case, ColumnarValue, Expr,
     Like, Volatility,
 };
-use datafusion_physical_expr::{
-    create_physical_expr, execution_props::ExecutionProps, intervals::NullableInterval,
+use datafusion_expr::{
+    expr::{InList, InSubquery, ScalarFunction},
+    interval_arithmetic::NullableInterval,
 };
-
-use crate::simplify_expressions::SimplifyInfo;
-
-use crate::simplify_expressions::guarantees::GuaranteeRewriter;
+use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
 
 /// This structure handles API for expression simplification
 pub struct ExprSimplifier<S> {
@@ -178,9 +177,9 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// ```rust
     /// use arrow::datatypes::{DataType, Field, Schema};
     /// use datafusion_expr::{col, lit, Expr};
+    /// use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
     /// use datafusion_common::{Result, ScalarValue, ToDFSchema};
     /// use datafusion_physical_expr::execution_props::ExecutionProps;
-    /// use datafusion_physical_expr::intervals::{Interval, NullableInterval};
     /// use datafusion_optimizer::simplify_expressions::{
     ///     ExprSimplifier, SimplifyContext};
     ///
@@ -207,7 +206,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     ///    (
     ///        col("x"),
     ///        NullableInterval::NotNull {
-    ///            values: Interval::make(Some(3_i64), Some(5_i64), (false, false)),
+    ///            values: Interval::make(Some(3_i64), Some(5_i64)).unwrap()
     ///        }
     ///    ),
     ///    // y = 3
@@ -1300,25 +1299,24 @@ mod tests {
         sync::Arc,
     };
 
+    use super::*;
     use crate::simplify_expressions::{
         utils::for_test::{cast_to_int64_expr, now_expr, to_timestamp_expr},
         SimplifyContext,
     };
-
-    use super::*;
     use crate::test::test_table_scan_with_name;
+
     use arrow::{
         array::{ArrayRef, Int32Array},
         datatypes::{DataType, Field, Schema},
     };
-    use chrono::{DateTime, TimeZone, Utc};
     use datafusion_common::{assert_contains, cast::as_int32_array, DFField, ToDFSchema};
-    use datafusion_expr::*;
+    use datafusion_expr::{interval_arithmetic::Interval, *};
     use datafusion_physical_expr::{
-        execution_props::ExecutionProps,
-        functions::make_scalar_function,
-        intervals::{Interval, NullableInterval},
+        execution_props::ExecutionProps, functions::make_scalar_function,
     };
+
+    use chrono::{DateTime, TimeZone, Utc};
 
     // ------------------------------
     // --- ExprSimplifier tests -----
@@ -3281,7 +3279,7 @@ mod tests {
             (
                 col("c3"),
                 NullableInterval::NotNull {
-                    values: Interval::make(Some(0_i64), Some(2_i64), (false, false)),
+                    values: Interval::make(Some(0_i64), Some(2_i64)).unwrap(),
                 },
             ),
             (
@@ -3301,19 +3299,23 @@ mod tests {
             (
                 col("c3"),
                 NullableInterval::MaybeNull {
-                    values: Interval::make(Some(0_i64), Some(2_i64), (false, false)),
+                    values: Interval::make(Some(0_i64), Some(2_i64)).unwrap(),
                 },
             ),
             (
                 col("c4"),
                 NullableInterval::MaybeNull {
-                    values: Interval::make(Some(9_u32), Some(9_u32), (false, false)),
+                    values: Interval::make(Some(9_u32), Some(9_u32)).unwrap(),
                 },
             ),
             (
                 col("c1"),
                 NullableInterval::NotNull {
-                    values: Interval::make(Some("d"), Some("f"), (false, false)),
+                    values: Interval::try_new(
+                        ScalarValue::Utf8(Some("d".to_string())),
+                        ScalarValue::Utf8(Some("f".to_string())),
+                    )
+                    .unwrap(),
                 },
             ),
         ];

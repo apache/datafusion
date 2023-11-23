@@ -140,7 +140,7 @@ physical_plan CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/te
 # create a sink table, path is same with aggregate_test_100 table
 # we do not overwrite this file, we only assert plan.
 statement ok
-CREATE EXTERNAL TABLE sink_table (
+CREATE UNBOUNDED EXTERNAL TABLE sink_table (
         c1  VARCHAR NOT NULL,
         c2  TINYINT NOT NULL,
         c3  SMALLINT NOT NULL,
@@ -168,7 +168,7 @@ Dml: op=[Insert Into] table=[sink_table]
 ----Sort: aggregate_test_100.c1 ASC NULLS LAST
 ------TableScan: aggregate_test_100 projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13]
 physical_plan
-FileSinkExec: sink=CsvSink(writer_mode=Append, file_groups=[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv])
+FileSinkExec: sink=StreamWrite { location: "../../testing/data/csv/aggregate_test_100.csv", batch_size: 8192, encoding: Csv, header: true, .. }
 --SortExec: expr=[c1@0 ASC NULLS LAST]
 ----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13], has_header=true
 
@@ -362,3 +362,28 @@ GlobalLimitExec: skip=0, fetch=10, statistics=[Rows=Exact(8), Bytes=Absent, [(Co
 
 statement ok
 set datafusion.execution.collect_statistics = false;
+
+# Explain ArrayFuncions
+
+statement ok
+set datafusion.explain.physical_plan_only = false
+
+query TT
+explain select make_array(make_array(1, 2, 3), make_array(4, 5, 6));
+----
+logical_plan
+Projection: List([[1, 2, 3], [4, 5, 6]]) AS make_array(make_array(Int64(1),Int64(2),Int64(3)),make_array(Int64(4),Int64(5),Int64(6)))
+--EmptyRelation
+physical_plan
+ProjectionExec: expr=[[[1, 2, 3], [4, 5, 6]] as make_array(make_array(Int64(1),Int64(2),Int64(3)),make_array(Int64(4),Int64(5),Int64(6)))]
+--EmptyExec: produce_one_row=true
+
+query TT
+explain select [[1, 2, 3], [4, 5, 6]];
+----
+logical_plan
+Projection: List([[1, 2, 3], [4, 5, 6]]) AS make_array(make_array(Int64(1),Int64(2),Int64(3)),make_array(Int64(4),Int64(5),Int64(6)))
+--EmptyRelation
+physical_plan
+ProjectionExec: expr=[[[1, 2, 3], [4, 5, 6]] as make_array(make_array(Int64(1),Int64(2),Int64(3)),make_array(Int64(4),Int64(5),Int64(6)))]
+--EmptyExec: produce_one_row=true
