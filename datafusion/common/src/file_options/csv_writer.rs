@@ -91,11 +91,6 @@ impl TryFrom<(&ConfigOptions, &StatementOptions)> for CsvWriterOptions {
                         )
                     })?)
                 },
-                "quote" | "escape" => {
-                    // These two attributes are only available when reading csv files.
-                    // To avoid error
-                    builder
-                },
                 _ => return Err(DataFusionError::Configuration(format!("Found unsupported option {option} with value {value} for CSV format!")))
             }
         }

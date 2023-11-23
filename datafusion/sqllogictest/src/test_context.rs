@@ -104,6 +104,10 @@ impl TestContext {
                 info!("Registering metadata table tables");
                 register_metadata_tables(test_ctx.session_ctx()).await;
             }
+            "csv_files.slt" => {
+                info!("Registering metadata table tables");
+                register_csv_custom_tables(&mut test_ctx).await;
+            }
             _ => {
                 info!("Using default SessionContext");
             }
@@ -214,6 +218,38 @@ pub async fn register_partition_table(test_ctx: &mut TestContext) {
             "test_partition_table",
             test_ctx.testdir_path().to_str().unwrap(),
             CsvReadOptions::new().schema(&schema),
+        )
+        .await
+        .unwrap();
+}
+
+pub async fn register_csv_custom_tables(test_ctx: &mut TestContext) {
+    test_ctx.enable_testdir();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("c1", DataType::Utf8, false),
+        Field::new("c2", DataType::Utf8, false),
+    ]));
+    let filename = format!("quote_escape.{}", "csv");
+    let file_path = test_ctx.testdir_path().join(filename);
+    let mut file = File::create(file_path.clone()).unwrap();
+
+    // generate some data
+    for index in 0..10 {
+        let text1 = format!("id{index:}");
+        let text2 = format!("value{index:}");
+        let data = format!("~{text1}~,~{text2}~\r\n");
+        file.write_all(data.as_bytes()).unwrap();
+    }
+    test_ctx
+        .ctx
+        .register_csv(
+            "test_custom_quote_escape",
+            file_path.to_str().unwrap(),
+            CsvReadOptions::new()
+                .schema(&schema)
+                .has_header(false)
+                .quote(b'~')
+                .escape(b'\\'),
         )
         .await
         .unwrap();

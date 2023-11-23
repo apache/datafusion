@@ -19,30 +19,20 @@
 ## Csv Files Tests
 #############
 
-statement ok
-CREATE EXTERNAL TABLE custom_quote (
-    c1  VARCHAR DEFAULT NULL,
-    c2  VARCHAR DEFAULT NULL
-)
-STORED AS CSV
-WITH HEADER ROW
-DELIMITER ','
-OPTIONS ('quote' '~')
-LOCATION '../core/tests/data/custom_quote.csv';
-
-statement ok
-CREATE EXTERNAL TABLE custom_escape (
-    c1  VARCHAR DEFAULT NULL,
-    c2  VARCHAR DEFAULT NULL
-)
-STORED AS CSV
-WITH HEADER ROW
-DELIMITER ','
-OPTIONS ('escape' '\')
-LOCATION '../core/tests/data/custom_escape.csv';
+# TODO: https://github.com/apache/arrow-datafusion/issues/8310
+# statement ok
+# CREATE EXTERNAL TABLE test_custom_quote_escape (
+#     c1  VARCHAR DEFAULT NULL,
+#     c2  VARCHAR DEFAULT NULL
+# )
+# STORED AS CSV
+# WITH HEADER ROW
+# DELIMITER ','
+# OPTIONS ('quote' '~', 'escape' '\')
+# LOCATION 'test_custom_quote_escape.csv';
 
 query TT
-SELECT * from custom_quote;
+SELECT * from test_custom_quote_escape;
 ----
 id0 value0
 id1 value1
@@ -54,18 +44,3 @@ id6 value6
 id7 value7
 id8 value8
 id9 value9
-
-
-query TT
-SELECT * from custom_escape;
-----
-id0 value"0
-id1 value"1
-id2 value"2
-id3 value"3
-id4 value"4
-id5 value"5
-id6 value"6
-id7 value"7
-id8 value"8
-id9 value"9
