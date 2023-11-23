@@ -228,6 +228,8 @@ pub struct CreateMemoryTable {
     pub if_not_exists: bool,
     /// Option to replace table content if table already exists
     pub or_replace: bool,
+    /// Default values for columns
+    pub column_defaults: Vec<(String, Expr)>,
 }
 
 /// Creates a view.

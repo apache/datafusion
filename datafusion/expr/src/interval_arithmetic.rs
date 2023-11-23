@@ -698,7 +698,7 @@ impl Interval {
         // We want 0 to be approachable from both negative and positive sides.
         let zero_point = match &dt {
             DataType::Float32 | DataType::Float64 => Self::new(zero.clone(), zero),
-            _ => Self::new(prev_value(zero.clone()), next_value(zero.clone())),
+            _ => Self::new(prev_value(zero.clone()), next_value(zero)),
         };
 
         // Exit early with an unbounded interval if zero is strictly inside the

@@ -985,6 +985,7 @@ message ScalarValue{
     // Literal Date32 value always has a unit of day
     int32  date_32_value = 14;
     ScalarTime32Value time32_value = 15;
+    ScalarListValue large_list_value = 16;
     ScalarListValue list_value = 17;
     ScalarListValue fixed_size_list_value = 18;
 

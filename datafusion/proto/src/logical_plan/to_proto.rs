@@ -1140,7 +1140,9 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
             }
             // ScalarValue::List and ScalarValue::FixedSizeList are serialized using
             // Arrow IPC messages as a single column RecordBatch
-            ScalarValue::List(arr) | ScalarValue::FixedSizeList(arr) => {
+            ScalarValue::List(arr)
+            | ScalarValue::LargeList(arr)
+            | ScalarValue::FixedSizeList(arr) => {
                 // Wrap in a "field_name" column
                 let batch = RecordBatch::try_from_iter(vec![(
                     "field_name",
@@ -1171,6 +1173,11 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 match val {
                     ScalarValue::List(_) => Ok(protobuf::ScalarValue {
                         value: Some(protobuf::scalar_value::Value::ListValue(
+                            scalar_list_value,
+                        )),
+                    }),
+                    ScalarValue::LargeList(_) => Ok(protobuf::ScalarValue {
+                        value: Some(protobuf::scalar_value::Value::LargeListValue(
                             scalar_list_value,
                         )),
                     }),
