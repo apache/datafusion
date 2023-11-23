@@ -20,6 +20,8 @@
 //! projections one by one if the operator below is amenable to this. If a
 //! projection reaches a source, it can even dissappear from the plan entirely.
 
+use std::sync::Arc;
+
 use super::output_requirements::OutputRequirementExec;
 use super::PhysicalOptimizerRule;
 use crate::datasource::physical_plan::CsvExec;
@@ -39,7 +41,6 @@ use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::physical_plan::{Distribution, ExecutionPlan};
 
 use arrow_schema::SchemaRef;
-
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::JoinSide;
@@ -51,7 +52,6 @@ use datafusion_physical_plan::streaming::StreamingTableExec;
 use datafusion_physical_plan::union::UnionExec;
 
 use itertools::Itertools;
-use std::sync::Arc;
 
 /// This rule inspects [`ProjectionExec`]'s in the given physical plan and tries to
 /// remove or swap with its child.
@@ -152,8 +152,8 @@ pub fn remove_unnecessary_projections(
     Ok(maybe_modified.map_or(Transformed::No(plan), Transformed::Yes))
 }
 
-/// Tries to embed `projection` to its input (`csv`). If possible, returns [`CsvExec`]
-/// as the top plan. Otherwise, returns `None`.
+/// Tries to embed `projection` to its input (`csv`). If possible, returns
+/// [`CsvExec`] as the top plan. Otherwise, returns `None`.
 fn try_swapping_with_csv(
     projection: &ProjectionExec,
     csv: &CsvExec,
@@ -177,8 +177,8 @@ fn try_swapping_with_csv(
     })
 }
 
-/// Tries to embed `projection` to its input (`memory`). If possible, returns [`MemoryExec`]
-/// as the top plan. Otherwise, returns `None`.
+/// Tries to embed `projection` to its input (`memory`). If possible, returns
+/// [`MemoryExec`] as the top plan. Otherwise, returns `None`.
 fn try_swapping_with_memory(
     projection: &ProjectionExec,
     memory: &MemoryExec,
@@ -201,7 +201,8 @@ fn try_swapping_with_memory(
 }
 
 /// Tries to embed `projection` to its input (`streaming table`).
-/// If possible, returns [`StreamingTableExec`] as the top plan. Otherwise, returns `None`.
+/// If possible, returns [`StreamingTableExec`] as the top plan. Otherwise,
+/// returns `None`.
 fn try_swapping_with_streaming_table(
     projection: &ProjectionExec,
     streaming_table: &StreamingTableExec,
@@ -233,17 +234,14 @@ fn try_swapping_with_streaming_table(
         lex_orderings.push(orderings);
     }
 
-    Some(
-        StreamingTableExec::try_new(
-            streaming_table.partition_schema().clone(),
-            streaming_table.partitions().clone(),
-            Some(&new_projections),
-            lex_orderings,
-            streaming_table.is_infinite(),
-        )
-        .map(|e| Arc::new(e) as _),
+    StreamingTableExec::try_new(
+        streaming_table.partition_schema().clone(),
+        streaming_table.partitions().clone(),
+        Some(&new_projections),
+        lex_orderings,
+        streaming_table.is_infinite(),
     )
-    .transpose()
+    .map(|e| Some(Arc::new(e) as _))
 }
 
 /// Unifies `projection` with its input (which is also a [`ProjectionExec`]).
@@ -1123,7 +1121,6 @@ fn new_join_children(
 
 #[cfg(test)]
 mod tests {
-    use itertools::Itertools;
     use std::sync::Arc;
 
     use crate::datasource::file_format::file_compression_type::FileCompressionType;
@@ -1162,6 +1159,8 @@ mod tests {
     use datafusion_physical_plan::joins::SymmetricHashJoinExec;
     use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
     use datafusion_physical_plan::union::UnionExec;
+
+    use itertools::Itertools;
 
     #[test]
     fn test_update_matching_exprs() -> Result<()> {
@@ -1672,14 +1671,14 @@ mod tests {
             .into_iter(),
             true,
         )?;
-        let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+        let projection = Arc::new(ProjectionExec::try_new(
             vec![
                 (Arc::new(Column::new("d", 3)), "d".to_string()),
                 (Arc::new(Column::new("e", 2)), "e".to_string()),
                 (Arc::new(Column::new("a", 0)), "a".to_string()),
             ],
             Arc::new(streaming_table) as _,
-        )?);
+        )?) as _;
 
         let after_optimize =
             ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
