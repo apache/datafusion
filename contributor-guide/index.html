@@ -653,7 +653,7 @@ and tries to follow the Rust standard <a class="reference external" href="https:
 </section>
 <section id="sqllogictests-tests">
 <h3>sqllogictests Tests<a class="headerlink" href="#sqllogictests-tests" title="Link to this heading">¶</a></h3>
-<p>DataFusion’s SQL implementation is tested using <a class="reference external" href="https://github.com/apache/arrow-datafusion/tree/main/datafusion/core/tests/sqllogictests">sqllogictest</a> which are run like any other Rust test using <code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">test</span> <span class="pre">--test</span> <span class="pre">sqllogictests</span></code>.</p>
+<p>DataFusion’s SQL implementation is tested using <a class="reference external" href="https://github.com/apache/arrow-datafusion/tree/main/datafusion/sqllogictest">sqllogictest</a> which are run like any other Rust test using <code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">test</span> <span class="pre">--test</span> <span class="pre">sqllogictests</span></code>.</p>
 <p><code class="docutils literal notranslate"><span class="pre">sqllogictests</span></code> tests may be less convenient for new contributors who are familiar with writing <code class="docutils literal notranslate"><span class="pre">.rs</span></code> tests as they require learning another tool. However, <code class="docutils literal notranslate"><span class="pre">sqllogictest</span></code> based tests are much easier to develop and maintain as they 1) do not require a slow recompile/link cycle and 2) can be automatically updated via <code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">test</span> <span class="pre">--test</span> <span class="pre">sqllogictests</span> <span class="pre">--</span> <span class="pre">--complete</span></code>.</p>
 <p>Like similar systems such as <a class="reference external" href="https://duckdb.org/dev/testing">DuckDB</a>, DataFusion has chosen to trade off a slightly higher barrier to contribution for longer term maintainability. While we are still in the process of <a class="reference external" href="https://github.com/apache/arrow-datafusion/issues/6195">migrating some old sql_integration tests</a>, all new tests should be written using sqllogictests if possible.</p>
 </section>
@@ -753,9 +753,9 @@ and tries to follow the Rust standard <a class="reference external" href="https:
 <li><p>tests to the function.</p></li>
 </ul>
 </li>
-<li><p>In <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion/core/tests/sqllogictests/test_files">core/tests/sqllogictests/test_files</a>, add new <code class="docutils literal notranslate"><span class="pre">sqllogictest</span></code> integration tests where the function is called through SQL against well known data and returns the expected result.</p>
+<li><p>In <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion/sqllogictest/test_files">sqllogictest/test_files</a>, add new <code class="docutils literal notranslate"><span class="pre">sqllogictest</span></code> integration tests where the function is called through SQL against well known data and returns the expected result.</p>
 <ul>
-<li><p>Documentation for <code class="docutils literal notranslate"><span class="pre">sqllogictest</span></code> <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion/core/tests/sqllogictests/README.md">here</a></p></li>
+<li><p>Documentation for <code class="docutils literal notranslate"><span class="pre">sqllogictest</span></code> <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion/sqllogictest/README.md">here</a></p></li>
 </ul>
 </li>
 <li><p>Add SQL reference documentation <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/docs/source/user-guide/sql/aggregate_functions.md">here</a></p></li>

@@ -465,8 +465,8 @@
 <h2>Update <code class="docutils literal notranslate"><span class="pre">Cargo.toml</span></code><a class="headerlink" href="#update-cargo-toml" title="Link to this heading">¶</a></h2>
 <p>Find latest available Datafusion version on <a class="reference external" href="https://crates.io/crates/datafusion">DataFusion’s
 crates.io</a> page. Add the dependency to your <code class="docutils literal notranslate"><span class="pre">Cargo.toml</span></code> file:</p>
-<div class="highlight-toml notranslate"><div class="highlight"><pre><span></span><span class="n">datafusion</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;31&quot;</span>
-<span class="n">tokio</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;1.0&quot;</span>
+<div class="highlight-toml notranslate"><div class="highlight"><pre><span></span><span class="n">datafusion</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;31&quot;</span>
+<span class="n">tokio</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;1.0&quot;</span>
 </pre></div>
 </div>
 </section>
@@ -619,9 +619,9 @@ unexpectedly.</p>
 <p>For an optimized build several steps are required. First, use the below in your <code class="docutils literal notranslate"><span class="pre">Cargo.toml</span></code>. It is
 worth noting that using the settings in the <code class="docutils literal notranslate"><span class="pre">[profile.release]</span></code> section will significantly increase the build time.</p>
 <div class="highlight-toml notranslate"><div class="highlight"><pre><span></span><span class="k">[dependencies]</span>
-<span class="n">datafusion</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;22.0&quot;</span><span class="w"> </span><span class="p">,</span><span class="w"> </span><span class="n">features</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s">&quot;simd&quot;</span><span class="p">]}</span>
-<span class="n">tokio</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;^1.0&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">features</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s">&quot;rt-multi-thread&quot;</span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
-<span class="n">snmalloc-rs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;0.3&quot;</span>
+<span class="n">datafusion</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">version</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;22.0&quot;</span><span class="w"> </span><span class="p">,</span><span class="w"> </span><span class="n">features</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;simd&quot;</span><span class="p">]}</span>
+<span class="n">tokio</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">version</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;^1.0&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">features</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;rt-multi-thread&quot;</span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
+<span class="n">snmalloc-rs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;0.3&quot;</span>
 
 <span class="k">[profile.release]</span>
 <span class="n">lto</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
@@ -654,7 +654,7 @@ with <code class="docutils literal notranslate"><span class="pre">native</span><
 <h2>Enable backtraces<a class="headerlink" href="#enable-backtraces" title="Link to this heading">¶</a></h2>
 <p>By default Datafusion returns errors as a plain message. There is option to enable more verbose details about the error,
 like error backtrace. To enable a backtrace you need to add Datafusion <code class="docutils literal notranslate"><span class="pre">backtrace</span></code> feature to your <code class="docutils literal notranslate"><span class="pre">Cargo.toml</span></code> file:</p>
-<div class="highlight-toml notranslate"><div class="highlight"><pre><span></span><span class="n">datafusion</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;31.0.0&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">features</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s">&quot;backtrace&quot;</span><span class="p">]}</span>
+<div class="highlight-toml notranslate"><div class="highlight"><pre><span></span><span class="n">datafusion</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">version</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;31.0.0&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">features</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;backtrace&quot;</span><span class="p">]}</span>
 </pre></div>
 </div>
 <p>Set environment [<code class="docutils literal notranslate"><span class="pre">variables</span></code>] https://doc.rust-lang.org/std/backtrace/index.html#environment-variables</p>
