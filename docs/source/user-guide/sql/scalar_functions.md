@@ -1158,7 +1158,7 @@ levenshtein(str1, str2)
 Returns the substring from str before count occurrences of the delimiter delim.
 If count is positive, everything to the left of the final delimiter (counting from the left) is returned.
 If count is negative, everything to the right of the final delimiter (counting from the right) is returned.
-For example, `substr_index('www.apache.org', '.', 1) = www`, `substr_index('www.apache.org', '.', -1) = apache.org`
+For example, `substr_index('www.apache.org', '.', 1) = www`, `substr_index('www.apache.org', '.', -1) = org`
 
 ```
 substr_index(str, delim, count)
