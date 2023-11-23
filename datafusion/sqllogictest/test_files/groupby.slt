@@ -3888,18 +3888,15 @@ SELECT date_bin('15 minutes', ts) as time_chunks
 2018-11-13T17:00:00
 
 # Since extract is not a monotonic function, below query should not run.
+# when source is unbounded.
 query error
 SELECT extract(month from ts) as months
   FROM unbounded_csv_with_timestamps
   GROUP BY extract(month from ts)
   ORDER BY months DESC
   LIMIT 5;
-----
-DataFusion error: PipelineChecker
-caused by
-Error during planning: Aggregate Error: `GROUP BY` clauses with columns without ordering and GROUPING SETS are not supported for unbounded inputs.
 
-
+# Create a table where timestamp is ordered
 statement ok
 CREATE EXTERNAL TABLE csv_with_timestamps (
   name VARCHAR,
