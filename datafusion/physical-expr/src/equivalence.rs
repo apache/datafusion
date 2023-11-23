@@ -1891,18 +1891,6 @@ fn update_ordering(
     Transformed::Yes(node)
 }
 
-/// This function constructs a duplicate-free `Vec<PhysicalSortExpr>` by filtering out
-/// duplicate entries that have same `PhysicalSortExpr` inside.
-pub fn deduplicate_sort_exprs(input: Vec<PhysicalSortExpr>) -> Vec<PhysicalSortExpr> {
-    let mut output = Vec::<PhysicalSortExpr>::new();
-    for item in input {
-        if !output.iter().any(|req| req.eq(&item)) {
-            output.push(item);
-        }
-    }
-    output
-}
-
 #[cfg(test)]
 mod tests {
     use std::ops::Not;
