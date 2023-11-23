@@ -22,12 +22,14 @@
 //! - Removes unnecessary [LogicalPlan::Projection] from the [LogicalPlan].
 use crate::optimizer::ApplyOrder;
 use datafusion_common::{
-    get_required_group_by_exprs_indices, Column, DFSchema, JoinType, Result,
+    get_required_group_by_exprs_indices, Column, DFSchema, DFSchemaRef, JoinType, Result,
 };
+use datafusion_expr::expr::Alias;
 use datafusion_expr::{
-    logical_plan::LogicalPlan, projection_schema, Aggregate, Distinct, Expr, Projection,
-    TableScan, Window,
+    logical_plan::LogicalPlan, projection_schema, Aggregate, BinaryExpr, Cast, Distinct,
+    Expr, Projection, TableScan, Window,
 };
+use hashbrown::HashMap;
 use itertools::{izip, Itertools};
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -69,6 +71,120 @@ impl OptimizerRule for OptimizeProjections {
 
     fn apply_order(&self) -> Option<ApplyOrder> {
         None
+    }
+}
+
+// Removes alias from the expression.
+// Without this, during projection merge we can end up unnecessary indirections inside the expressions.
+// Consider:
+//
+// Projection (a1 + b1 as sum1)
+// --Projection (a as a1, b as b1)
+// ----Source (a, b)
+//
+// After merge we want to produce
+//
+// Projection (a + b as sum1)
+// --Source(a, b)
+//
+// Without trimming we would end up
+//
+// Projection (a as a1 + b as b1 as sum1)
+// --Source(a, b)
+fn trim_expr(expr: Expr) -> Expr {
+    match expr {
+        Expr::Alias(alias) => *alias.expr,
+        _ => expr,
+    }
+}
+
+// Check whether expression is trivial (e.g it doesn't include computation.)
+fn is_expr_trivial(expr: &Expr) -> bool {
+    matches!(expr, Expr::Column(_) | Expr::Literal(_))
+}
+
+// Rewrites expression using its input projection (Merges consecutive projection expressions).
+fn rewrite_expr(expr: &Expr, input: &Projection) -> Option<Expr> {
+    match expr {
+        Expr::Column(_col) => {
+            // Column refers to single field
+            let indices = indices_referred_by_expr(&input.schema, expr).unwrap();
+            assert_eq!(indices.len(), 1);
+            let idx = indices[0];
+            Some(input.expr[idx].clone())
+        }
+        Expr::BinaryExpr(binary) => {
+            let lhs = trim_expr(rewrite_expr(&binary.left, input)?);
+            let rhs = trim_expr(rewrite_expr(&binary.right, input)?);
+            Some(Expr::BinaryExpr(BinaryExpr::new(
+                Box::new(lhs),
+                binary.op,
+                Box::new(rhs),
+            )))
+        }
+        Expr::Alias(alias) => {
+            let new_expr = trim_expr(rewrite_expr(&alias.expr, input)?);
+            Some(Expr::Alias(Alias::new(
+                new_expr,
+                alias.relation.clone(),
+                alias.name.clone(),
+            )))
+        }
+        Expr::Literal(_val) => Some(expr.clone()),
+        Expr::Cast(cast) => {
+            let new_expr = rewrite_expr(&cast.expr, input)?;
+            Some(Expr::Cast(Cast::new(
+                Box::new(new_expr),
+                cast.data_type.clone(),
+            )))
+        }
+        _ => {
+            // Unsupported type to merge in consecutive projections
+            None
+        }
+    }
+}
+
+fn merge_consecutive_projections(proj: &Projection) -> Result<Option<Projection>> {
+    let prev_projection =
+        if let LogicalPlan::Projection(prev_projection) = proj.input.as_ref() {
+            prev_projection
+        } else {
+            return Ok(None);
+        };
+
+    // Count usages (referral counts) of each projection expression in its input fields
+    // such as Projection(a as a1, a+b, b as b1), will produce: a->2, b->1.
+    let mut column_referral_map: HashMap<Column, usize> = HashMap::new();
+    for expr in &proj.expr {
+        let cols = expr.to_columns()?;
+        for col in cols {
+            *column_referral_map.entry(col.clone()).or_default() += 1;
+        }
+    }
+    // Merging these projection is not beneficial
+    let projection_beneficial = column_referral_map.iter().any(|(col, usage)| {
+        if *usage > 1 {
+            let idx = prev_projection.schema.index_of_column(col).unwrap();
+            // If expression is not trivial, consecutive projections will be beneficial as caching mechanism
+            // when used more than once. See discussion in: https://github.com/apache/arrow-datafusion/issues/8296
+            !is_expr_trivial(&prev_projection.expr[idx])
+        } else {
+            false
+        }
+    });
+    if projection_beneficial {
+        return Ok(None);
+    }
+    if let Some(new_exprs) = proj
+        .expr
+        .iter()
+        .map(|expr| rewrite_expr(expr, prev_projection))
+        .collect::<Option<Vec<_>>>()
+    {
+        Projection::try_new(new_exprs, prev_projection.input.clone()).map(Some)
+    } else {
+        Ok(None)
     }
 }
 
@@ -169,6 +285,13 @@ fn optimize_projections(
             None
         }
         LogicalPlan::Projection(proj) => {
+            let mut is_changed = false;
+            let proj = if let Some(proj_new) = merge_consecutive_projections(proj)? {
+                is_changed = true;
+                proj_new
+            } else {
+                proj.clone()
+            };
             let exprs_used = get_at_indices(&proj.expr, indices);
             let required_indices =
                 indices_referred_by_exprs(&proj.input, exprs_used.iter())?;
@@ -193,6 +316,8 @@ fn optimize_projections(
                     let new_proj = LogicalPlan::Projection(new_proj);
                     Ok(Some(new_proj))
                 }
+            } else if is_changed {
+                Ok(Some(LogicalPlan::Projection(proj)))
             } else {
                 // Projection doesn't change.
                 Ok(None)
@@ -470,21 +595,26 @@ fn indices_referred_by_exprs<'a, I: Iterator<Item = &'a Expr>>(
     exprs: I,
 ) -> Result<Vec<usize>> {
     let new_indices = exprs
-        .flat_map(|expr| {
-            let mut cols = expr.to_columns()?;
-            // Get outer referenced columns (expr.to_columns() doesn't return these columns).
-            cols.extend(outer_columns(expr));
-            cols.iter()
-                .filter(|&col| input.schema().has_column(col))
-                .map(|col| input.schema().index_of_column(col))
-                .collect::<Result<Vec<_>>>()
-        })
+        .flat_map(|expr| indices_referred_by_expr(input.schema(), expr))
         .flatten()
         // Make sure no duplicate entries exists and indices are ordered.
         .sorted()
         .dedup()
         .collect::<Vec<_>>();
     Ok(new_indices)
+}
+
+fn indices_referred_by_expr(
+    input_schema: &DFSchemaRef,
+    expr: &Expr,
+) -> Result<Vec<usize>> {
+    let mut cols = expr.to_columns()?;
+    // Get outer referenced columns (expr.to_columns() doesn't return these columns).
+    cols.extend(outer_columns(expr));
+    cols.iter()
+        .filter(|&col| input_schema.has_column(col))
+        .map(|col| input_schema.index_of_column(col))
+        .collect::<Result<Vec<_>>>()
 }
 
 /// Get all required indices for the input (indices required by parent + indices referred by `exprs`)

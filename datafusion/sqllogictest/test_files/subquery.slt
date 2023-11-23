@@ -1014,3 +1014,31 @@ catan-prod1-daily success catan-prod1-daily high
 #2
 #3
 #4
+
+statement ok
+create table t(a bigint);
+
+# Result of query below shouldn't depend on
+# number of optimization passes
+# See issue: https://github.com/apache/arrow-datafusion/issues/8296
+statement ok
+set datafusion.optimizer.max_passes = 1;
+
+query TT
+explain select a/2, a/2 + 1 from t
+----
+logical_plan
+Projection: t.a / Int64(2)Int64(2)t.a AS t.a / Int64(2), t.a / Int64(2)Int64(2)t.a AS t.a / Int64(2) + Int64(1)
+--Projection: t.a / Int64(2) AS t.a / Int64(2)Int64(2)t.a
+----TableScan: t projection=[a]
+
+statement ok
+set datafusion.optimizer.max_passes = 3;
+
+query TT
+explain select a/2, a/2 + 1 from t
+----
+logical_plan
+Projection: t.a / Int64(2)Int64(2)t.a AS t.a / Int64(2), t.a / Int64(2)Int64(2)t.a AS t.a / Int64(2) + Int64(1)
+--Projection: t.a / Int64(2) AS t.a / Int64(2)Int64(2)t.a
+----TableScan: t projection=[a]
