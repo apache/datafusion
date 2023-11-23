@@ -32,7 +32,7 @@ use arrow_schema::{FieldRef, SortOptions};
 use datafusion_common::cast::{
     as_generic_string_array, as_int64_array, as_list_array, as_string_array,
 };
-use datafusion_common::utils::array_into_list_array;
+use datafusion_common::utils::{array_into_list_array, arrays_into_list_array};
 use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err,
     DataFusionError, Result,
@@ -816,10 +816,17 @@ pub fn array_sort(args: &[ArrayRef]) -> Result<ArrayRef> {
     };
 
     let list_array = as_list_array(&args[0])?;
+    let default_empty = ArrayData::new_empty(&list_array.value_type());
+    let sorted = list_array
+        .iter()
+        .map(|array| {
+            array.map_or(arrow::array::make_array(default_empty.clone()), |arr_ref| {
+                arrow_ord::sort::sort(&arr_ref, sort_option).unwrap()
+            })
+        })
+        .collect::<Vec<_>>();
 
-    let sorted_array = arrow_ord::sort::sort(list_array.values(), sort_option).unwrap();
-
-    Ok(Arc::new(array_into_list_array(sorted_array)))
+    Ok(Arc::new(arrays_into_list_array(sorted)?))
 }
 
 fn order_desc(modifier: &str) -> Result<bool> {
