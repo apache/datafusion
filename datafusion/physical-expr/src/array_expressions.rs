@@ -741,13 +741,22 @@ pub fn gen_range(args: &[ArrayRef]) -> Result<ArrayRef> {
     let mut offsets = vec![0];
     for (idx, stop) in stop_array.iter().enumerate() {
         let stop = stop.unwrap_or(0);
-        let start = start_array.as_ref().map(|arr| arr.value(idx)).unwrap_or(0);
+        let mut start = start_array.as_ref().map(|arr| arr.value(idx)).unwrap_or(0);
         let step = step_array.as_ref().map(|arr| arr.value(idx)).unwrap_or(1);
         if step == 0 {
             return exec_err!("step can't be 0 for function range(start [, stop, step]");
         }
-        let value = (start..stop).step_by(step as usize);
-        values.extend(value);
+        let value ;
+        if step < 0 {
+            while stop < start {
+                values.push(start);
+                start += step;
+            }
+        } else {
+            value = (start..stop).step_by(step as usize);
+            values.extend(value.clone());
+        }
+
         offsets.push(values.len() as i32);
     }
     let arr = Arc::new(ListArray::try_new(
