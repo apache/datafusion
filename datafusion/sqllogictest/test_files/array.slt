@@ -2749,7 +2749,7 @@ select range(5),
        range(2, 5),
        range(2, 10, 3),
        range(1, 5, -1),
-       range(1, -5, 1)
+       range(1, -5, 1),
        range(1, -5, -1)
 ;
 ----
