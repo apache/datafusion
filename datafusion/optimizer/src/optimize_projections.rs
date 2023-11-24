@@ -24,7 +24,7 @@ use crate::optimizer::ApplyOrder;
 use datafusion_common::{
     get_required_group_by_exprs_indices, Column, DFSchema, DFSchemaRef, JoinType, Result,
 };
-use datafusion_expr::expr::Alias;
+use datafusion_expr::expr::{Alias, ScalarFunction};
 use datafusion_expr::{
     logical_plan::LogicalPlan, projection_schema, Aggregate, BinaryExpr, Cast, Distinct,
     Expr, Projection, TableScan, Window,
@@ -71,120 +71,6 @@ impl OptimizerRule for OptimizeProjections {
 
     fn apply_order(&self) -> Option<ApplyOrder> {
         None
-    }
-}
-
-// Removes alias from the expression.
-// Without this, during projection merge we can end up unnecessary indirections inside the expressions.
-// Consider:
-//
-// Projection (a1 + b1 as sum1)
-// --Projection (a as a1, b as b1)
-// ----Source (a, b)
-//
-// After merge we want to produce
-//
-// Projection (a + b as sum1)
-// --Source(a, b)
-//
-// Without trimming we would end up
-//
-// Projection (a as a1 + b as b1 as sum1)
-// --Source(a, b)
-fn trim_expr(expr: Expr) -> Expr {
-    match expr {
-        Expr::Alias(alias) => *alias.expr,
-        _ => expr,
-    }
-}
-
-// Check whether expression is trivial (e.g it doesn't include computation.)
-fn is_expr_trivial(expr: &Expr) -> bool {
-    matches!(expr, Expr::Column(_) | Expr::Literal(_))
-}
-
-// Rewrites expression using its input projection (Merges consecutive projection expressions).
-fn rewrite_expr(expr: &Expr, input: &Projection) -> Option<Expr> {
-    match expr {
-        Expr::Column(_col) => {
-            // Column refers to single field
-            let indices = indices_referred_by_expr(&input.schema, expr).unwrap();
-            assert_eq!(indices.len(), 1);
-            let idx = indices[0];
-            Some(input.expr[idx].clone())
-        }
-        Expr::BinaryExpr(binary) => {
-            let lhs = trim_expr(rewrite_expr(&binary.left, input)?);
-            let rhs = trim_expr(rewrite_expr(&binary.right, input)?);
-            Some(Expr::BinaryExpr(BinaryExpr::new(
-                Box::new(lhs),
-                binary.op,
-                Box::new(rhs),
-            )))
-        }
-        Expr::Alias(alias) => {
-            let new_expr = trim_expr(rewrite_expr(&alias.expr, input)?);
-            Some(Expr::Alias(Alias::new(
-                new_expr,
-                alias.relation.clone(),
-                alias.name.clone(),
-            )))
-        }
-        Expr::Literal(_val) => Some(expr.clone()),
-        Expr::Cast(cast) => {
-            let new_expr = rewrite_expr(&cast.expr, input)?;
-            Some(Expr::Cast(Cast::new(
-                Box::new(new_expr),
-                cast.data_type.clone(),
-            )))
-        }
-        _ => {
-            // Unsupported type to merge in consecutive projections
-            None
-        }
-    }
-}
-
-fn merge_consecutive_projections(proj: &Projection) -> Result<Option<Projection>> {
-    let prev_projection =
-        if let LogicalPlan::Projection(prev_projection) = proj.input.as_ref() {
-            prev_projection
-        } else {
-            return Ok(None);
-        };
-
-    // Count usages (referral counts) of each projection expression in its input fields
-    // such as Projection(a as a1, a+b, b as b1), will produce: a->2, b->1.
-    let mut column_referral_map: HashMap<Column, usize> = HashMap::new();
-    for expr in &proj.expr {
-        let cols = expr.to_columns()?;
-        for col in cols {
-            *column_referral_map.entry(col.clone()).or_default() += 1;
-        }
-    }
-    // Merging these projection is not beneficial
-    let projection_beneficial = column_referral_map.iter().any(|(col, usage)| {
-        if *usage > 1 {
-            let idx = prev_projection.schema.index_of_column(col).unwrap();
-            // If expression is not trivial, consecutive projections will be beneficial as caching mechanism
-            // when used more than once. See discussion in: https://github.com/apache/arrow-datafusion/issues/8296
-            !is_expr_trivial(&prev_projection.expr[idx])
-        } else {
-            false
-        }
-    });
-    if projection_beneficial {
-        return Ok(None);
-    }
-    if let Some(new_exprs) = proj
-        .expr
-        .iter()
-        .map(|expr| rewrite_expr(expr, prev_projection))
-        .collect::<Option<Vec<_>>>()
-    {
-        Projection::try_new(new_exprs, prev_projection.input.clone()).map(Some)
-    } else {
-        Ok(None)
     }
 }
 
@@ -285,42 +171,13 @@ fn optimize_projections(
             None
         }
         LogicalPlan::Projection(proj) => {
-            let mut is_changed = false;
-            let proj = if let Some(proj_new) = merge_consecutive_projections(proj)? {
-                is_changed = true;
-                proj_new
+            return if let Some(proj) = merge_consecutive_projections(proj)? {
+                rewrite_projection_given_requirements(&proj, _config, indices)?
+                    .map(|res| Ok(Some(res)))
+                    // Even if projection cannot be optimized, return merged version
+                    .unwrap_or_else(|| Ok(Some(LogicalPlan::Projection(proj))))
             } else {
-                proj.clone()
-            };
-            let exprs_used = get_at_indices(&proj.expr, indices);
-            let required_indices =
-                indices_referred_by_exprs(&proj.input, exprs_used.iter())?;
-            return if let Some(input) =
-                optimize_projections(&proj.input, _config, &required_indices)?
-            {
-                if &projection_schema(&input, &exprs_used)? == input.schema() {
-                    Ok(Some(input))
-                } else {
-                    let new_proj =
-                        Projection::try_new(exprs_used, Arc::new(input.clone()))?;
-                    let new_proj = LogicalPlan::Projection(new_proj);
-                    Ok(Some(new_proj))
-                }
-            } else if exprs_used.len() < proj.expr.len() {
-                // Projection expression used is different than the existing projection
-                // In this case, even if child doesn't change we should update projection to use less columns.
-                if &projection_schema(&proj.input, &exprs_used)? == proj.input.schema() {
-                    Ok(Some(proj.input.as_ref().clone()))
-                } else {
-                    let new_proj = Projection::try_new(exprs_used, proj.input.clone())?;
-                    let new_proj = LogicalPlan::Projection(new_proj);
-                    Ok(Some(new_proj))
-                }
-            } else if is_changed {
-                Ok(Some(LogicalPlan::Projection(proj)))
-            } else {
-                // Projection doesn't change.
-                Ok(None)
+                rewrite_projection_given_requirements(proj, _config, indices)
             };
         }
         LogicalPlan::Aggregate(aggregate) => {
@@ -513,6 +370,179 @@ fn optimize_projections(
     }
 }
 
+/// Merge Consecutive Projections
+///
+/// Given a projection `proj`, this function attempts to merge it with a previous
+/// projection if it exists and if the merging is beneficial. Merging is considered
+/// beneficial when expressions in the current projection are non-trivial and referred to
+/// more than once in its input fields. This can act as a caching mechanism for non-trivial
+/// computations.
+///
+/// # Arguments
+///
+/// * `proj` - A reference to the `Projection` to be merged.
+///
+/// # Returns
+///
+/// A `Result` containing an `Option` of the merged `Projection`. If merging is not beneficial
+/// it returns `Ok(None)`.
+fn merge_consecutive_projections(proj: &Projection) -> Result<Option<Projection>> {
+    let prev_projection = if let LogicalPlan::Projection(prev) = proj.input.as_ref() {
+        prev
+    } else {
+        return Ok(None);
+    };
+
+    // Count usages (referral counts) of each projection expression in its input fields
+    let column_referral_map: HashMap<Column, usize> = proj
+        .expr
+        .iter()
+        .flat_map(|expr| expr.to_columns())
+        .fold(HashMap::new(), |mut map, cols| {
+            cols.into_iter()
+                .for_each(|col| *map.entry(col.clone()).or_default() += 1);
+            map
+        });
+
+    // Merging these projections is not beneficial, e.g
+    // If an expression is not trivial and it is referred more than 1, consecutive projections will be
+    // beneficial as caching mechanism for non-trivial computations.
+    // See discussion in: https://github.com/apache/arrow-datafusion/issues/8296
+    if column_referral_map.iter().any(|(col, usage)| {
+        *usage > 1
+            && !is_expr_trivial(
+                &prev_projection.expr
+                    [prev_projection.schema.index_of_column(col).unwrap()],
+            )
+    }) {
+        return Ok(None);
+    }
+
+    // If all of the expression of the top projection can be rewritten. Rewrite expressions and create a new projection
+    let new_exprs = proj
+        .expr
+        .iter()
+        .map(|expr| rewrite_expr(expr, prev_projection))
+        .collect::<Result<Option<Vec<_>>>>()?;
+    new_exprs
+        .map(|exprs| Projection::try_new(exprs, prev_projection.input.clone()))
+        .transpose()
+}
+
+/// Trim Expression
+///
+/// Trim the given expression by removing any unnecessary layers of abstraction.
+/// If the expression is an alias, the function returns the underlying expression.
+/// Otherwise, it returns the original expression unchanged.
+///
+/// # Arguments
+///
+/// * `expr` - The input expression to be trimmed.
+///
+/// # Returns
+///
+/// The trimmed expression. If the input is an alias, the underlying expression is returned.
+///
+/// Without trimming, during projection merge we can end up unnecessary indirections inside the expressions.
+/// Consider:
+///
+/// Projection (a1 + b1 as sum1)
+/// --Projection (a as a1, b as b1)
+/// ----Source (a, b)
+///
+/// After merge we want to produce
+///
+/// Projection (a + b as sum1)
+/// --Source(a, b)
+///
+/// Without trimming we would end up
+///
+/// Projection (a as a1 + b as b1 as sum1)
+/// --Source(a, b)
+fn trim_expr(expr: Expr) -> Expr {
+    match expr {
+        Expr::Alias(alias) => *alias.expr,
+        _ => expr,
+    }
+}
+
+// Check whether expression is trivial (e.g it doesn't include computation.)
+fn is_expr_trivial(expr: &Expr) -> bool {
+    matches!(expr, Expr::Column(_) | Expr::Literal(_))
+}
+
+// Exit early when None is seen.
+macro_rules! rewrite_expr_with_check {
+    ($expr:expr, $input:expr) => {
+        if let Some(val) = rewrite_expr($expr, $input)? {
+            val
+        } else {
+            return Ok(None);
+        }
+    };
+}
+
+// Rewrites expression using its input projection (Merges consecutive projection expressions).
+/// Rewrites an projections expression using its input projection
+/// (Helper during merging consecutive projection expressions).
+///
+/// # Arguments
+///
+/// * `expr` - A reference to the expression to be rewritten.
+/// * `input` - A reference to the input (itself a projection) of the projection expression.
+///
+/// # Returns
+///
+/// A `Result` containing an `Option` of the rewritten expression. If the rewrite is successful,
+/// it returns `Ok(Some)` with the modified expression. If the expression cannot be rewritten
+/// it returns `Ok(None)`.
+fn rewrite_expr(expr: &Expr, input: &Projection) -> Result<Option<Expr>> {
+    Ok(match expr {
+        Expr::Column(col) => {
+            // Find index of column
+            let idx = input.schema.index_of_column(col)?;
+            Some(input.expr[idx].clone())
+        }
+        Expr::BinaryExpr(binary) => {
+            let lhs = trim_expr(rewrite_expr_with_check!(&binary.left, input));
+            let rhs = trim_expr(rewrite_expr_with_check!(&binary.right, input));
+            Some(Expr::BinaryExpr(BinaryExpr::new(
+                Box::new(lhs),
+                binary.op,
+                Box::new(rhs),
+            )))
+        }
+        Expr::Alias(alias) => {
+            let new_expr = trim_expr(rewrite_expr_with_check!(&alias.expr, input));
+            Some(Expr::Alias(Alias::new(
+                new_expr,
+                alias.relation.clone(),
+                alias.name.clone(),
+            )))
+        }
+        Expr::Literal(_val) => Some(expr.clone()),
+        Expr::Cast(cast) => {
+            let new_expr = rewrite_expr_with_check!(&cast.expr, input);
+            Some(Expr::Cast(Cast::new(
+                Box::new(new_expr),
+                cast.data_type.clone(),
+            )))
+        }
+        Expr::ScalarFunction(scalar_fn) => scalar_fn
+            .args
+            .iter()
+            .map(|expr| rewrite_expr(expr, input))
+            .collect::<Result<Option<Vec<_>>>>()?
+            .map(|new_args| {
+                Expr::ScalarFunction(ScalarFunction::new(scalar_fn.fun, new_args))
+            }),
+        _ => {
+            // Unsupported type to merge in consecutive projections
+            None
+        }
+    })
+}
+
 /// Retrieves a set of outer-referenced columns from an expression.
 /// Please note that `expr.to_columns()` API doesn't return these columns.
 ///
@@ -604,6 +634,17 @@ fn indices_referred_by_exprs<'a, I: Iterator<Item = &'a Expr>>(
     Ok(new_indices)
 }
 
+/// Get indices of the necessary fields referred by the `expr` among input schema.
+///
+/// # Arguments
+///
+/// * `input_schema`: The input schema to search for indices referred by expr.
+/// * `expr`: An expression for which we want to find necessary field indices at the input schema.
+///
+/// # Returns
+///
+/// A [Result] object that contains the required field indices of the `input_schema`, to be able to calculate
+/// the `expr` successfully.
 fn indices_referred_by_expr(
     input_schema: &DFSchemaRef,
     expr: &Expr,
@@ -770,4 +811,50 @@ fn add_projection_on_top_if_helpful(
 /// A vector of `usize` indices representing all fields in the schema of the provided logical plan.
 fn require_all_indices(plan: &LogicalPlan) -> Vec<usize> {
     (0..plan.schema().fields().len()).collect()
+}
+
+/// Rewrite Projection Given Required fields by its parent(s).
+///
+/// # Arguments
+///
+/// * `proj` - A reference to the original projection to be rewritten.
+/// * `_config` - A reference to the optimizer configuration (unused in the function).
+/// * `indices` - A slice of indices representing the required columns by the parent(s) of projection.
+///
+/// # Returns
+///
+/// A `Result` containing an `Option` of the rewritten logical plan. If the
+/// rewrite is successful, it returns `Some` with the optimized logical plan.
+/// If the logical plan remains unchanged it returns `Ok(None)`.
+fn rewrite_projection_given_requirements(
+    proj: &Projection,
+    _config: &dyn OptimizerConfig,
+    indices: &[usize],
+) -> Result<Option<LogicalPlan>> {
+    let exprs_used = get_at_indices(&proj.expr, indices);
+    let required_indices = indices_referred_by_exprs(&proj.input, exprs_used.iter())?;
+    return if let Some(input) =
+        optimize_projections(&proj.input, _config, &required_indices)?
+    {
+        if &projection_schema(&input, &exprs_used)? == input.schema() {
+            Ok(Some(input))
+        } else {
+            let new_proj = Projection::try_new(exprs_used, Arc::new(input.clone()))?;
+            let new_proj = LogicalPlan::Projection(new_proj);
+            Ok(Some(new_proj))
+        }
+    } else if exprs_used.len() < proj.expr.len() {
+        // Projection expression used is different than the existing projection
+        // In this case, even if child doesn't change we should update projection to use less columns.
+        if &projection_schema(&proj.input, &exprs_used)? == proj.input.schema() {
+            Ok(Some(proj.input.as_ref().clone()))
+        } else {
+            let new_proj = Projection::try_new(exprs_used, proj.input.clone())?;
+            let new_proj = LogicalPlan::Projection(new_proj);
+            Ok(Some(new_proj))
+        }
+    } else {
+        // Projection doesn't change.
+        Ok(None)
+    };
 }
