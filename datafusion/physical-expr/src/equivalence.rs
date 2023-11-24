@@ -1202,21 +1202,18 @@ impl EquivalenceProperties {
         let mut dependency_map = HashMap::new();
         for ordering in self.normalized_oeq_class().iter() {
             for (idx, sort_expr) in ordering.iter().enumerate() {
-                // Previous ordering is dependency. For leading ordering (e.g first sort_expr inside ordering)
-                // there is no dependency.
-                // let dependency = (idx > 0).then_some(&ordering[idx - 1]);
-                let dependency = if idx > 0 {
-                    Some(&ordering[idx - 1])
-                } else {
-                    None
-                };
-                let target_expr = self.project_expr(&sort_expr.expr, mapping);
-                let target_sort_expr = target_expr.map(|expr| PhysicalSortExpr {
-                    expr,
-                    options: sort_expr.options,
-                });
+                let target_sort_expr =
+                    self.project_expr(&sort_expr.expr, mapping).map(|expr| {
+                        PhysicalSortExpr {
+                            expr,
+                            options: sort_expr.options,
+                        }
+                    });
                 let is_projected = target_sort_expr.is_some();
-                if is_projected | any_projection_refers(mapping, &sort_expr.expr) {
+                if is_projected || any_projection_refers(mapping, &sort_expr.expr) {
+                    // Previous ordering is dependency. For leading ordering (e.g first sort_expr inside ordering)
+                    // there is no dependency.
+                    let dependency = idx.checked_sub(1).map(|a| &ordering[a]);
                     // Add sort_exprs that
                     // - can be projected
                     // - referred by any of the projection expressions
