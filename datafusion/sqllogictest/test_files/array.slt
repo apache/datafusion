@@ -2507,6 +2507,11 @@ from array_ndims_table;
 statement ok
 drop table array_ndims_table;
 
+query I
+select array_ndims(arrow_cast([null], 'List(List(List(Int64)))'));
+----
+3
+
 # array_ndims scalar function #2
 query II
 select array_ndims(array_repeat(array_repeat(array_repeat(1, 3), 2), 1)), array_ndims([[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]);
