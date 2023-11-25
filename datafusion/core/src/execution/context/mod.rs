@@ -26,6 +26,7 @@ mod parquet;
 use crate::{
     catalog::{CatalogList, MemoryCatalogList},
     datasource::{
+        function::{TableFunction, TableFunctionImpl},
         listing::{ListingOptions, ListingTable},
         provider::TableProviderFactory,
     },
@@ -42,7 +43,7 @@ use datafusion_common::{
 use datafusion_execution::registry::SerializerRegistry;
 use datafusion_expr::{
     logical_plan::{DdlStatement, Statement},
-    StringifiedPlan, UserDefinedLogicalNode, WindowUDF,
+    Expr, StringifiedPlan, UserDefinedLogicalNode, WindowUDF,
 };
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
@@ -795,6 +796,14 @@ impl SessionContext {
             .add_var_provider(variable_type, provider);
     }
 
+    /// Register a table UDF with this context
+    pub fn register_udtf(&self, name: &str, fun: Arc<dyn TableFunctionImpl>) {
+        self.state.write().table_functions.insert(
+            name.to_owned(),
+            Arc::new(TableFunction::new(name.to_owned(), fun)),
+        );
+    }
+
     /// Registers a scalar UDF within this context.
     ///
     /// Note in SQL queries, function names are looked up using
@@ -1224,6 +1233,8 @@ pub struct SessionState {
     query_planner: Arc<dyn QueryPlanner + Send + Sync>,
     /// Collection of catalogs containing schemas and ultimately TableProviders
     catalog_list: Arc<dyn CatalogList>,
+    /// Table Functions
+    table_functions: HashMap<String, Arc<TableFunction>>,
     /// Scalar functions that are registered with the context
     scalar_functions: HashMap<String, Arc<ScalarUDF>>,
     /// Aggregate functions registered in the context
@@ -1322,6 +1333,7 @@ impl SessionState {
             physical_optimizers: PhysicalOptimizer::new(),
             query_planner: Arc::new(DefaultQueryPlanner {}),
             catalog_list,
+            table_functions: HashMap::new(),
             scalar_functions: HashMap::new(),
             aggregate_functions: HashMap::new(),
             window_functions: HashMap::new(),
@@ -1858,6 +1870,22 @@ impl<'a> ContextProvider for SessionContextProvider<'a> {
             .get(&name)
             .cloned()
             .ok_or_else(|| plan_datafusion_err!("table '{name}' not found"))
+    }
+
+    fn get_table_function_source(
+        &self,
+        name: &str,
+        args: Vec<Expr>,
+    ) -> Result<Arc<dyn TableSource>> {
+        let tbl_func = self
+            .state
+            .table_functions
+            .get(name)
+            .cloned()
+            .ok_or_else(|| plan_datafusion_err!("table function '{name}' not found"))?;
+        let provider = tbl_func.create_table_provider(&args)?;
+
+        Ok(provider_as_source(provider))
     }
 
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>> {
