@@ -2538,10 +2538,36 @@ select array_has(make_array(1,2), 1),
 ----
 true true true true true false true false true false true false
 
+query BBBBBBBBBBBB
+select array_has(arrow_cast(make_array(1,2), 'LargeList(Int64)'), 1),
+       array_has(arrow_cast(make_array(1,2,NULL), 'LargeList(Int64)'), 1),
+       array_has(arrow_cast(make_array([2,3], [3,4]), 'LargeList(List(Int64))'), make_array(2,3)),
+       array_has(arrow_cast(make_array([[1], [2,3]], [[4,5], [6]]), 'LargeList(List(List(Int64)))'), make_array([1], [2,3])),
+       array_has(arrow_cast(make_array([[1], [2,3]], [[4,5], [6]]), 'LargeList(List(List(Int64)))'), make_array([4,5], [6])),
+       array_has(arrow_cast(make_array([[1], [2,3]], [[4,5], [6]]), 'LargeList(List(List(Int64)))'), make_array([1])),
+       array_has(arrow_cast(make_array([[[1]]]), 'LargeList(List(List(List(Int64))))'), make_array([[1]])),
+       array_has(arrow_cast(make_array([[[1]]], [[[1], [2]]]), 'LargeList(List(List(List(Int64))))'), make_array([[2]])),
+       array_has(arrow_cast(make_array([[[1]]], [[[1], [2]]]), 'LargeList(List(List(List(Int64))))'), make_array([[1], [2]])),
+       list_has(arrow_cast(make_array(1,2,3), 'LargeList(Int64)'), 4),
+       array_contains(arrow_cast(make_array(1,2,3), 'LargeList(Int64)'), 3),
+       list_contains(arrow_cast(make_array(1,2,3), 'LargeList(Int64)'), 0)
+;
+----
+true true true true true false true false true false true false
+
 query BBB
 select array_has(column1, column2),
        array_has_all(column3, column4),
        array_has_any(column5, column6)
+from array_has_table_1D;
+----
+true true true
+false false false
+
+query BBB
+select array_has(arrow_cast(column1, 'LargeList(Int64)'), column2),
+       array_has_all(arrow_cast(column3, 'LargeList(Int64)'), arrow_cast(column4, 'LargeList(Int64)')),
+       array_has_any(arrow_cast(column5, 'LargeList(Int64)'), arrow_cast(column6, 'LargeList(Int64)'))
 from array_has_table_1D;
 ----
 true true true
@@ -2557,9 +2583,27 @@ true true false
 false false true
 
 query BBB
+select array_has(arrow_cast(column1, 'LargeList(Float64)'), column2),
+       array_has_all(arrow_cast(column3, 'LargeList(Float64)'), arrow_cast(column4, 'LargeList(Float64)')),
+       array_has_any(arrow_cast(column5, 'LargeList(Float64)'), arrow_cast(column6, 'LargeList(Float64)'))
+from array_has_table_1D_Float;
+----
+true true false
+false false true
+
+query BBB
 select array_has(column1, column2),
        array_has_all(column3, column4),
        array_has_any(column5, column6)
+from array_has_table_1D_Boolean;
+----
+false true true
+true true true
+
+query BBB
+select array_has(arrow_cast(column1, 'LargeList(Boolean)'), column2),
+       array_has_all(arrow_cast(column3, 'LargeList(Boolean)'), arrow_cast(column4, 'LargeList(Boolean)')),
+       array_has_any(arrow_cast(column5, 'LargeList(Boolean)'), arrow_cast(column6, 'LargeList(Boolean)'))
 from array_has_table_1D_Boolean;
 ----
 false true true
@@ -2574,9 +2618,26 @@ from array_has_table_1D_UTF8;
 true true false
 false false true
 
+query BBB
+select array_has(arrow_cast(column1, 'LargeList(Utf8)'), column2),
+       array_has_all(arrow_cast(column3, 'LargeList(Utf8)'), arrow_cast(column4, 'LargeList(Utf8)')),
+       array_has_any(arrow_cast(column5, 'LargeList(Utf8)'), arrow_cast(column6, 'LargeList(Utf8)'))
+from array_has_table_1D_UTF8;
+----
+true true false
+false false true
+
 query BB
 select array_has(column1, column2),
        array_has_all(column3, column4)
+from array_has_table_2D;
+----
+false true
+true false
+
+query BB
+select array_has(arrow_cast(column1, 'LargeList(List(Int64))'), column2),
+       array_has_all(arrow_cast(column3, 'LargeList(List(Int64))'), arrow_cast(column4, 'LargeList(List(Int64))'))
 from array_has_table_2D;
 ----
 false true
@@ -2590,7 +2651,25 @@ true
 false
 
 query B
+select array_has_all(arrow_cast(column1, 'LargeList(List(Float64))'), arrow_cast(column2, 'LargeList(List(Float64))'))
+from array_has_table_2D_float;
+----
+true
+false
+
+query B
 select array_has(column1, column2) from array_has_table_3D;
+----
+false
+true
+false
+false
+true
+false
+true
+
+query B
+select array_has(arrow_cast(column1, 'LargeList(List(List(Int64)))'), column2) from array_has_table_3D;
 ----
 false
 true
@@ -2614,6 +2693,20 @@ false true false false
 false false false false
 false false false false
 
+query BBBB
+select array_has(arrow_cast(column1, 'LargeList(List(Int64))'), make_array(5, 6)),
+       array_has(arrow_cast(column1, 'LargeList(List(Int64))'), make_array(7, NULL)),
+       array_has(arrow_cast(column2, 'LargeList(Float64)'), 5.5),
+       array_has(arrow_cast(column3, 'LargeList(Utf8)'), 'o')
+from arrays;
+----
+false false false true
+true false true false
+true false false true
+false true false false
+false false false false
+false false false false
+
 query BBBBBBBBBBBBB
 select array_has_all(make_array(1,2,3), make_array(1,3)),
        array_has_all(make_array(1,2,3), make_array(1,4)),
@@ -2628,6 +2721,24 @@ select array_has_all(make_array(1,2,3), make_array(1,3)),
        array_has_any(make_array([1,2], [3,4]), make_array([10,20], [3,4])),
        array_has_any(make_array([[1,2,3]]), make_array([[1,2,3], [4,5,6]])),
        array_has_any(make_array([[1,2,3]]), make_array([[1,2,3]], [[4,5,6]]))
+;
+----
+true false true false false false true true false false true false true
+
+query BBBBBBBBBBBBB
+select array_has_all(arrow_cast(make_array(1,2,3), 'LargeList(Int64)'), arrow_cast(make_array(1,3), 'LargeList(Int64)')),
+       array_has_all(arrow_cast(make_array(1,2,3),'LargeList(Int64)'), arrow_cast(make_array(1,4), 'LargeList(Int64)')),
+       array_has_all(arrow_cast(make_array([1,2], [3,4]), 'LargeList(List(Int64))'), arrow_cast(make_array([1,2]), 'LargeList(List(Int64))')),
+       array_has_all(arrow_cast(make_array([1,2], [3,4]), 'LargeList(List(Int64))'), arrow_cast(make_array([1,3]), 'LargeList(List(Int64))')),
+       array_has_all(arrow_cast(make_array([1,2], [3,4]), 'LargeList(List(Int64))'), arrow_cast(make_array([1,2], [3,4], [5,6]), 'LargeList(List(Int64))')),
+       array_has_all(arrow_cast(make_array([[1,2,3]]), 'LargeList(List(List(Int64)))'), arrow_cast(make_array([[1]]), 'LargeList(List(List(Int64)))')),
+       array_has_all(arrow_cast(make_array([[1,2,3]]), 'LargeList(List(List(Int64)))'), arrow_cast(make_array([[1,2,3]]), 'LargeList(List(List(Int64)))')),
+       array_has_any(arrow_cast(make_array(1,2,3),'LargeList(Int64)'), arrow_cast(make_array(1,10,100), 'LargeList(Int64)')),
+       array_has_any(arrow_cast(make_array(1,2,3),'LargeList(Int64)'), arrow_cast(make_array(10,100),'LargeList(Int64)')),
+       array_has_any(arrow_cast(make_array([1,2], [3,4]), 'LargeList(List(Int64))'), arrow_cast(make_array([1,10], [10,4]), 'LargeList(List(Int64))')),
+       array_has_any(arrow_cast(make_array([1,2], [3,4]), 'LargeList(List(Int64))'), arrow_cast(make_array([10,20], [3,4]), 'LargeList(List(Int64))')),
+       array_has_any(arrow_cast(make_array([[1,2,3]]), 'LargeList(List(List(Int64)))'), arrow_cast(make_array([[1,2,3], [4,5,6]]), 'LargeList(List(List(Int64)))')),
+       array_has_any(arrow_cast(make_array([[1,2,3]]), 'LargeList(List(List(Int64)))'), arrow_cast(make_array([[1,2,3]], [[4,5,6]]), 'LargeList(List(List(Int64)))'))
 ;
 ----
 true false true false false false true true false false true false true
