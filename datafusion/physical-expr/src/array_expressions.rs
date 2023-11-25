@@ -1732,7 +1732,6 @@ pub fn array_ndims(args: &[ArrayRef]) -> Result<ArrayRef> {
 
         Ok(Arc::new(UInt64Array::from(data)) as ArrayRef)
     } else {
-        println!("args: {:?}", args);
         Ok(Arc::new(UInt64Array::from(vec![0; args[0].len()])) as ArrayRef)
     }
 }
