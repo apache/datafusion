@@ -32,7 +32,7 @@ use arrow_schema::FieldRef;
 use datafusion_common::cast::{
     as_generic_string_array, as_int64_array, as_list_array, as_string_array,
 };
-use datafusion_common::utils::array_into_list_array;
+use datafusion_common::utils::{array_into_list_array, list_ndims};
 use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err,
     DataFusionError, Result,
@@ -102,6 +102,7 @@ fn compare_element_to_list(
 ) -> Result<BooleanArray> {
     let indices = UInt32Array::from(vec![row_index as u32]);
     let element_array_row = arrow::compute::take(element_array, &indices, None)?;
+
     // Compute all positions in list_row_array (that is itself an
     // array) that are equal to `from_array_row`
     let res = match element_array_row.data_type() {
@@ -171,35 +172,6 @@ fn compute_array_length(
                 current_dimension += 1;
             }
             _ => return Ok(None),
-        }
-    }
-}
-
-/// Returns the dimension of the array
-fn compute_array_ndims(arr: Option<ArrayRef>) -> Result<Option<u64>> {
-    Ok(compute_array_ndims_with_datatype(arr)?.0)
-}
-
-/// Returns the dimension and the datatype of elements of the array
-fn compute_array_ndims_with_datatype(
-    arr: Option<ArrayRef>,
-) -> Result<(Option<u64>, DataType)> {
-    let mut res: u64 = 1;
-    let mut value = match arr {
-        Some(arr) => arr,
-        None => return Ok((None, DataType::Null)),
-    };
-    if value.is_empty() {
-        return Ok((None, DataType::Null));
-    }
-
-    loop {
-        match value.data_type() {
-            DataType::List(..) => {
-                value = downcast_arg!(value, ListArray).value(0);
-                res += 1;
-            }
-            data_type => return Ok((Some(res), data_type.clone())),
         }
     }
 }
@@ -818,10 +790,7 @@ pub fn array_prepend(args: &[ArrayRef]) -> Result<ArrayRef> {
 fn align_array_dimensions(args: Vec<ArrayRef>) -> Result<Vec<ArrayRef>> {
     let args_ndim = args
         .iter()
-        .map(|arg| compute_array_ndims(Some(arg.to_owned())))
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .map(|x| x.unwrap_or(0))
+        .map(|arg| datafusion_common::utils::list_ndims(arg.data_type()))
         .collect::<Vec<_>>();
     let max_ndim = args_ndim.iter().max().unwrap_or(&0);
 
@@ -912,6 +881,7 @@ fn concat_internal(args: &[ArrayRef]) -> Result<ArrayRef> {
         Arc::new(compute::concat(elements.as_slice())?),
         Some(NullBuffer::new(buffer)),
     );
+
     Ok(Arc::new(list_arr))
 }
 
@@ -919,11 +889,11 @@ fn concat_internal(args: &[ArrayRef]) -> Result<ArrayRef> {
 pub fn array_concat(args: &[ArrayRef]) -> Result<ArrayRef> {
     let mut new_args = vec![];
     for arg in args {
-        let (ndim, lower_data_type) =
-            compute_array_ndims_with_datatype(Some(arg.clone()))?;
-        if ndim.is_none() || ndim == Some(1) {
-            return not_impl_err!("Array is not type '{lower_data_type:?}'.");
-        } else if !lower_data_type.equals_datatype(&DataType::Null) {
+        let ndim = list_ndims(arg.data_type());
+        let base_type = datafusion_common::utils::base_type(arg.data_type());
+        if ndim == 0 {
+            return not_impl_err!("Array is not type '{base_type:?}'.");
+        } else if !base_type.eq(&DataType::Null) {
             new_args.push(arg.clone());
         }
     }
@@ -1748,14 +1718,23 @@ pub fn array_dims(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Array_ndims SQL function
 pub fn array_ndims(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let list_array = as_list_array(&args[0])?;
+    if let Some(list_array) = args[0].as_list_opt::<i32>() {
+        let ndims = datafusion_common::utils::list_ndims(list_array.data_type());
 
-    let result = list_array
-        .iter()
-        .map(compute_array_ndims)
-        .collect::<Result<UInt64Array>>()?;
+        let mut data = vec![];
+        for arr in list_array.iter() {
+            if arr.is_some() {
+                data.push(Some(ndims))
+            } else {
+                data.push(None)
+            }
+        }
 
-    Ok(Arc::new(result) as ArrayRef)
+        Ok(Arc::new(UInt64Array::from(data)) as ArrayRef)
+    } else {
+        println!("args: {:?}", args);
+        Ok(Arc::new(UInt64Array::from(vec![0; args[0].len()])) as ArrayRef)
+    }
 }
 
 /// Array_has SQL function
@@ -2017,10 +1996,10 @@ mod tests {
                 .unwrap();
 
         let expected = as_list_array(&array2d_1).unwrap();
-        let expected_dim = compute_array_ndims(Some(array2d_1.to_owned())).unwrap();
+        let expected_dim = datafusion_common::utils::list_ndims(array2d_1.data_type());
         assert_ne!(as_list_array(&res[0]).unwrap(), expected);
         assert_eq!(
-            compute_array_ndims(Some(res[0].clone())).unwrap(),
+            datafusion_common::utils::list_ndims(res[0].data_type()),
             expected_dim
         );
 
@@ -2030,10 +2009,10 @@ mod tests {
             align_array_dimensions(vec![array1d_1, Arc::new(array3d_2.clone())]).unwrap();
 
         let expected = as_list_array(&array3d_1).unwrap();
-        let expected_dim = compute_array_ndims(Some(array3d_1.to_owned())).unwrap();
+        let expected_dim = datafusion_common::utils::list_ndims(array3d_1.data_type());
         assert_ne!(as_list_array(&res[0]).unwrap(), expected);
         assert_eq!(
-            compute_array_ndims(Some(res[0].clone())).unwrap(),
+            datafusion_common::utils::list_ndims(res[0].data_type()),
             expected_dim
         );
     }
