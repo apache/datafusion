@@ -1718,7 +1718,7 @@ pub fn flatten(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(flattened_array) as ArrayRef)
 }
 
-/// Macro for dispatching array length computation based on the offset type.
+/// Dispatch array length computation based on the offset type.
 fn array_length_dispatch<O: OffsetSizeTrait>(array: &[ArrayRef]) -> Result<ArrayRef> {
     let list_array = as_generic_list_array::<O>(&array[0])?;
     let dimension = if array.len() == 2 {
