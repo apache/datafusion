@@ -1089,7 +1089,6 @@ mod tests {
     use crate::physical_optimizer::projection_pushdown::{
         join_table_borders, update_expr, ProjectionPushdown,
     };
-    use crate::physical_optimizer::utils::get_plan_string;
     use crate::physical_optimizer::PhysicalOptimizerRule;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::filter::FilterExec;
@@ -1100,7 +1099,7 @@ mod tests {
     use crate::physical_plan::repartition::RepartitionExec;
     use crate::physical_plan::sorts::sort::SortExec;
     use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-    use crate::physical_plan::ExecutionPlan;
+    use crate::physical_plan::{get_plan_string, ExecutionPlan};
 
     use arrow_schema::{DataType, Field, Schema, SortOptions};
     use datafusion_common::config::ConfigOptions;

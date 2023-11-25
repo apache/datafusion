@@ -27,11 +27,11 @@ use crate::protobuf::{
     physical_aggregate_expr_node, PhysicalSortExprNode, PhysicalSortExprNodeCollection,
     ScalarValue,
 };
+
 use datafusion::datasource::{
-    file_format::json::JsonSink, physical_plan::FileScanConfig,
-};
-use datafusion::datasource::{
+    file_format::json::JsonSink,
     listing::{FileRange, PartitionedFile},
+    physical_plan::FileScanConfig,
     physical_plan::FileSinkConfig,
 };
 use datafusion::logical_expr::BuiltinScalarFunction;

@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Test Window Queries
+//! Tests for window queries
+use std::sync::Arc;
+
 use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::prelude::SessionContext;
@@ -23,20 +25,10 @@ use datafusion_common::{assert_batches_eq, Result, ScalarValue};
 use datafusion_execution::config::SessionConfig;
 use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 use datafusion_physical_expr::expressions::{col, NthValue};
-use datafusion_physical_expr::window::{
-    BuiltInWindowExpr, BuiltInWindowFunctionExpr, WindowExpr,
-};
+use datafusion_physical_expr::window::{BuiltInWindowExpr, BuiltInWindowFunctionExpr};
 use datafusion_physical_plan::memory::MemoryExec;
 use datafusion_physical_plan::windows::{BoundedWindowAggExec, PartitionSearchMode};
-use datafusion_physical_plan::{collect, displayable, ExecutionPlan};
-use std::sync::Arc;
-
-/// Utility function yielding a string representation of the given [`ExecutionPlan`].
-pub fn get_plan_string(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
-    let formatted = displayable(plan.as_ref()).indent(true).to_string();
-    let actual: Vec<&str> = formatted.trim().lines().collect();
-    actual.iter().map(|elem| elem.to_string()).collect()
-}
+use datafusion_physical_plan::{collect, get_plan_string, ExecutionPlan};
 
 // Tests NTH_VALUE(negative index) with memoize feature.
 // To be able to trigger memoize feature for NTH_VALUE we need to
@@ -55,11 +47,12 @@ async fn test_window_nth_value_bounded_memoize() -> Result<()> {
         vec![Arc::new(arrow_array::Int32Array::from(vec![1, 2, 3]))],
     )?;
 
-    let memory_exec = Arc::new(MemoryExec::try_new(
+    let memory_exec = MemoryExec::try_new(
         &[vec![batch.clone(), batch.clone(), batch.clone()]],
         schema.clone(),
         None,
-    )?) as Arc<dyn ExecutionPlan>;
+    )
+    .map(|e| Arc::new(e) as Arc<dyn ExecutionPlan>)?;
     let col_a = col("a", &schema)?;
     let nth_value_func1 =
         NthValue::nth("nth_value(-1)", col_a.clone(), DataType::Int32, 1)?
@@ -69,8 +62,8 @@ async fn test_window_nth_value_bounded_memoize() -> Result<()> {
         NthValue::nth("nth_value(-2)", col_a.clone(), DataType::Int32, 2)?
             .reverse_expr()
             .unwrap();
-    let last_value_func = Arc::new(NthValue::last("last", col_a.clone(), DataType::Int32))
-        as Arc<dyn BuiltInWindowFunctionExpr>;
+    let last_value_func =
+        Arc::new(NthValue::last("last", col_a.clone(), DataType::Int32)) as _;
     let window_exprs = vec![
         // LAST_VALUE(a)
         Arc::new(BuiltInWindowExpr::new(
@@ -82,7 +75,7 @@ async fn test_window_nth_value_bounded_memoize() -> Result<()> {
                 start_bound: WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
                 end_bound: WindowFrameBound::CurrentRow,
             }),
-        )) as Arc<dyn WindowExpr>,
+        )) as _,
         // NTH_VALUE(a, -1)
         Arc::new(BuiltInWindowExpr::new(
             nth_value_func1,
@@ -93,7 +86,7 @@ async fn test_window_nth_value_bounded_memoize() -> Result<()> {
                 start_bound: WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
                 end_bound: WindowFrameBound::CurrentRow,
             }),
-        )) as Arc<dyn WindowExpr>,
+        )) as _,
         // NTH_VALUE(a, -2)
         Arc::new(BuiltInWindowExpr::new(
             nth_value_func2,
@@ -104,14 +97,15 @@ async fn test_window_nth_value_bounded_memoize() -> Result<()> {
                 start_bound: WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
                 end_bound: WindowFrameBound::CurrentRow,
             }),
-        )) as Arc<dyn WindowExpr>,
+        )) as _,
     ];
-    let physical_plan = Arc::new(BoundedWindowAggExec::try_new(
+    let physical_plan = BoundedWindowAggExec::try_new(
         window_exprs,
-        memory_exec.clone(),
+        memory_exec,
         vec![],
         PartitionSearchMode::Sorted,
-    )?) as Arc<dyn ExecutionPlan>;
+    )
+    .map(|e| Arc::new(e) as Arc<dyn ExecutionPlan>)?;
 
     let batches = collect(physical_plan.clone(), ctx.task_ctx()).await?;
 

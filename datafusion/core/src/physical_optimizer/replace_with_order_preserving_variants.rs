@@ -286,7 +286,7 @@ mod tests {
     use crate::physical_plan::repartition::RepartitionExec;
     use crate::physical_plan::sorts::sort::SortExec;
     use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-    use crate::physical_plan::{displayable, Partitioning};
+    use crate::physical_plan::{displayable, get_plan_string, Partitioning};
     use crate::prelude::SessionConfig;
 
     use arrow::compute::SortOptions;
@@ -928,12 +928,5 @@ mod tests {
             None,
             FileCompressionType::UNCOMPRESSED,
         ))
-    }
-
-    // Util function to get string representation of a physical plan
-    fn get_plan_string(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
-        let formatted = displayable(plan.as_ref()).indent(true).to_string();
-        let actual: Vec<&str> = formatted.trim().lines().collect();
-        actual.iter().map(|elem| elem.to_string()).collect()
     }
 }

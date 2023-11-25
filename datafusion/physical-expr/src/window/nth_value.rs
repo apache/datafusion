@@ -15,22 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines physical expressions for `first_value`, `last_value`, and `nth_value`
-//! that can evaluated at runtime during query execution
+//! Defines physical expressions for `FIRST_VALUE`, `LAST_VALUE`, and `NTH_VALUE`
+//! functions that can be evaluated at run time during query execution.
+
+use std::any::Any;
+use std::ops::Range;
+use std::sync::Arc;
 
 use crate::window::window_expr::{NthValueKind, NthValueState};
 use crate::window::BuiltInWindowFunctionExpr;
 use crate::PhysicalExpr;
+
 use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{exec_err, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::window_state::WindowAggState;
 use datafusion_expr::PartitionEvaluator;
-use std::any::Any;
-use std::cmp::Ordering;
-use std::ops::Range;
-use std::sync::Arc;
 
 /// nth_value expression
 #[derive(Debug)]
@@ -78,7 +79,7 @@ impl NthValue {
         n: u32,
     ) -> Result<Self> {
         match n {
-            0 => exec_err!("nth_value expect n to be > 0"),
+            0 => exec_err!("NTH_VALUE expects n to be non-zero"),
             _ => Ok(Self {
                 name: name.into(),
                 expr,
@@ -88,7 +89,7 @@ impl NthValue {
         }
     }
 
-    /// Get nth_value kind
+    /// Get the NTH_VALUE kind
     pub fn get_kind(&self) -> NthValueKind {
         self.kind
     }
@@ -144,21 +145,16 @@ pub(crate) struct NthValueEvaluator {
 }
 
 impl PartitionEvaluator for NthValueEvaluator {
-    /// When the window frame has a fixed beginning (e.g UNBOUNDED
-    /// PRECEDING), for some functions such as FIRST_VALUE, LAST_VALUE and
-    /// NTH_VALUE we can memoize result.  Once result is calculated it
-    /// will always stay same. Hence, we do not need to keep past data
-    /// as we process the entire dataset. This feature enables us to
-    /// prune rows from table. The default implementation does nothing
+    /// When the window frame has a fixed beginning (e.g UNBOUNDED PRECEDING),
+    /// for some functions such as FIRST_VALUE, LAST_VALUE and NTH_VALUE, we
+    /// can memoize the result.  Once result is calculated, it will always stay
+    /// same. Hence, we do not need to keep past data as we process the entire
+    /// dataset.
     fn memoize(&mut self, state: &mut WindowAggState) -> Result<()> {
         let out = &state.out_col;
         let size = out.len();
-        // Stores how many entries we need to keep track in the buffer to calculate correct result.
-        // If we can memoize a result (FIRST, NTH_VALUE(positive_index)). It is enough to keep only single row
-        // For LAST_VALUE also it is enough to keep single row (last row)
-        // However, For NTH_VALUE(negative_index) we need to keep at least ABS(negative_index) number of values
-        // in the buffer.
-        let mut n_buffer_size = 1;
+        let mut buffer_size = 1;
+        // Decide if we arrived at a final result yet:
         let (is_prunable, is_reverse_direction) = match self.state.kind {
             NthValueKind::First => {
                 let n_range =
@@ -169,20 +165,17 @@ impl PartitionEvaluator for NthValueEvaluator {
             NthValueKind::Nth(n) => {
                 let n_range =
                     state.window_frame_range.end - state.window_frame_range.start;
-                match n.cmp(&0) {
-                    Ordering::Greater => {
-                        (n_range >= (n as usize) && size > (n as usize), false)
-                    }
-                    Ordering::Less => {
-                        let reverse_index = -n as usize;
-                        n_buffer_size = reverse_index;
-                        // Negative index represents reverse direction.
-                        (n_range >= reverse_index, true)
-                    }
-                    Ordering::Equal => {
-                        // n = 0  is not valid for nth_value (index starts from 0)
-                        unreachable!();
-                    }
+                #[allow(clippy::comparison_chain)]
+                if n > 0 {
+                    (n_range >= (n as usize) && size > (n as usize), false)
+                } else if n < 0 {
+                    let reverse_index = (-n) as usize;
+                    buffer_size = reverse_index;
+                    // Negative index represents reverse direction.
+                    (n_range >= reverse_index, true)
+                } else {
+                    // The case n = 0 is not valid for the NTH_VALUE function.
+                    unreachable!();
                 }
             }
         };
@@ -192,7 +185,7 @@ impl PartitionEvaluator for NthValueEvaluator {
                 self.state.finalized_result = Some(result);
             }
             state.window_frame_range.start =
-                state.window_frame_range.end.saturating_sub(n_buffer_size);
+                state.window_frame_range.end.saturating_sub(buffer_size);
         }
         Ok(())
     }
@@ -216,35 +209,30 @@ impl PartitionEvaluator for NthValueEvaluator {
                 NthValueKind::First => ScalarValue::try_from_array(arr, range.start),
                 NthValueKind::Last => ScalarValue::try_from_array(arr, range.end - 1),
                 NthValueKind::Nth(n) => {
-                    match n.cmp(&0) {
-                        Ordering::Greater => {
-                            // SQL indices are not 0-based.
-                            let index = (n as usize) - 1;
-                            if index >= n_range {
-                                // Outside the range, Return NULL
-                                ScalarValue::try_from(arr.data_type())
-                            } else {
-                                ScalarValue::try_from_array(arr, range.start + index)
-                            }
+                    #[allow(clippy::comparison_chain)]
+                    if n > 0 {
+                        // SQL indices are not 0-based.
+                        let index = (n as usize) - 1;
+                        if index >= n_range {
+                            // Outside the range, return NULL:
+                            ScalarValue::try_from(arr.data_type())
+                        } else {
+                            ScalarValue::try_from_array(arr, range.start + index)
                         }
-                        // n < 0
-                        Ordering::Less => {
-                            let reverse_index = -n as usize;
-                            if n_range >= reverse_index {
-                                ScalarValue::try_from_array(
-                                    arr,
-                                    // Calculate proper index using length(`n_range`) and distance(`reverse_index`) from the end
-                                    range.start + n_range - reverse_index,
-                                )
-                            } else {
-                                // Outside the range, Return NULL
-                                ScalarValue::try_from(arr.data_type())
-                            }
+                    } else if n < 0 {
+                        let reverse_index = (-n) as usize;
+                        if n_range >= reverse_index {
+                            ScalarValue::try_from_array(
+                                arr,
+                                range.start + n_range - reverse_index,
+                            )
+                        } else {
+                            // Outside the range, return NULL:
+                            ScalarValue::try_from(arr.data_type())
                         }
-                        Ordering::Equal => {
-                            // n = 0  is not valid for nth_value (index starts from 0)
-                            unreachable!();
-                        }
+                    } else {
+                        // The case n = 0 is not valid for the NTH_VALUE function.
+                        unreachable!();
                     }
                 }
             }

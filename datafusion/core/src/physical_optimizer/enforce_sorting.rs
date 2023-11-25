@@ -763,9 +763,8 @@ mod tests {
         repartition_exec, sort_exec, sort_expr, sort_expr_options, sort_merge_join_exec,
         sort_preserving_merge_exec, spr_repartition_exec, union_exec,
     };
-    use crate::physical_optimizer::utils::get_plan_string;
     use crate::physical_plan::repartition::RepartitionExec;
-    use crate::physical_plan::{displayable, Partitioning};
+    use crate::physical_plan::{displayable, get_plan_string, Partitioning};
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::test::csv_exec_sorted;
 
