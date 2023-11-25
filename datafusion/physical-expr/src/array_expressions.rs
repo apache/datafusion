@@ -943,7 +943,7 @@ pub fn array_empty(args: &[ArrayRef]) -> Result<ArrayRef> {
     match array_type {
         DataType::List(_) => array_empty_dispatch::<i32>(&args[0]),
         DataType::LargeList(_) => array_empty_dispatch::<i64>(&args[0]),
-        _ => not_impl_err!("Array is not type '{array_type:?}'."),
+        _ => internal_err!("array_empty does not support type '{array_type:?}'."),
     }
 }
 
