@@ -3049,15 +3049,30 @@ select empty(make_array(1));
 ----
 false
 
+query B
+select empty(arrow_cast(make_array(1), 'LargeList(Int64)'));
+----
+false
+
 # empty scalar function #2
 query B
 select empty(make_array());
 ----
 true
 
+query B
+select empty(arrow_cast(make_array(), 'LargeList(Null)'));
+----
+true
+
 # empty scalar function #3
 query B
 select empty(make_array(NULL));
+----
+false
+
+query B
+select empty(arrow_cast(make_array(NULL), 'LargeList(Null)'));
 ----
 false
 
@@ -3070,6 +3085,17 @@ NULL
 # empty scalar function #5
 query B
 select empty(column1) from arrays;
+----
+false
+false
+false
+false
+NULL
+false
+false
+
+query B
+select empty(arrow_cast(column1, 'LargeList(List(Int64))')) from arrays;
 ----
 false
 false
