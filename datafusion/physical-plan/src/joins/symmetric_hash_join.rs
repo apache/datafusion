@@ -37,12 +37,12 @@ use crate::joins::stream_join_utils::{
     calculate_filter_expr_intervals, combine_two_batches,
     convert_sort_expr_with_filter_schema, get_pruning_anti_indices,
     get_pruning_semi_indices, record_visited_indices, EagerJoinStream,
-    EagerJoinStreamState, PruningJoinHashMap, SortedFilterExpr, StreamJoinStateResult,
+    EagerJoinStreamState, PruningJoinHashMap, SortedFilterExpr,
 };
 use crate::joins::utils::{
     build_batch_from_indices, build_join_schema, check_join_is_valid,
     partitioned_join_output_partitioning, prepare_sorted_exprs, ColumnIndex, JoinFilter,
-    JoinOn,
+    JoinOn, StreamJoinStateResult,
 };
 use crate::{
     expressions::{Column, PhysicalSortExpr},

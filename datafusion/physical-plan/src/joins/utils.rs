@@ -849,6 +849,23 @@ impl<T: 'static> OnceFut<T> {
             ),
         }
     }
+
+    /// Get the result of the computation as a shared reference if it is ready, without consuming it
+    pub(crate) fn get_shared(&mut self, cx: &mut Context<'_>) -> Poll<Result<Arc<T>>> {
+        if let OnceFutState::Pending(fut) = &mut self.state {
+            let r = ready!(fut.poll_unpin(cx));
+            self.state = OnceFutState::Ready(r);
+        }
+
+        // Cannot use loop as this would trip up the borrow checker
+        match &self.state {
+            OnceFutState::Pending(_) => unreachable!(),
+            OnceFutState::Ready(r) => Poll::Ready(
+                r.clone()
+                    .map_err(|e| DataFusionError::External(Box::new(e.clone()))),
+            ),
+        }
+    }
 }
 
 /// Some type `join_type` of join need to maintain the matched indices bit map for the left side, and
@@ -1275,6 +1292,73 @@ pub fn prepare_sorted_exprs(
     let left_sorted_filter_expr = sorted_exprs.swap_remove(0);
 
     Ok((left_sorted_filter_expr, right_sorted_filter_expr, graph))
+}
+
+/// The `handle_state` macro is designed to process the result of a state-changing
+/// operation, encountered e.g. in implementations of `EagerJoinStream`. It
+/// operates on a `StreamJoinStateResult` by matching its variants and executing
+/// corresponding actions. This macro is used to streamline code that deals with
+/// state transitions, reducing boilerplate and improving readability.
+///
+/// # Cases
+///
+/// - `Ok(StreamJoinStateResult::Continue)`: Continues the loop, indicating the
+///   stream join operation should proceed to the next step.
+/// - `Ok(StreamJoinStateResult::Ready(result))`: Returns a `Poll::Ready` with the
+///   result, either yielding a value or indicating the stream is awaiting more
+///   data.
+/// - `Err(e)`: Returns a `Poll::Ready` containing an error, signaling an issue
+///   during the stream join operation.
+///
+/// # Arguments
+///
+/// * `$match_case`: An expression that evaluates to a `Result<StreamJoinStateResult<_>>`.
+#[macro_export]
+macro_rules! handle_state {
+    ($match_case:expr) => {
+        match $match_case {
+            Ok(StreamJoinStateResult::Continue) => continue,
+            Ok(StreamJoinStateResult::Ready(result)) => {
+                Poll::Ready(Ok(result).transpose())
+            }
+            Err(e) => Poll::Ready(Some(Err(e))),
+        }
+    };
+}
+
+/// The `handle_async_state` macro adapts the `handle_state` macro for use in
+/// asynchronous operations, particularly when dealing with `Poll` results within
+/// async traits like `EagerJoinStream`. It polls the asynchronous state-changing
+/// function using `poll_unpin` and then passes the result to `handle_state` for
+/// further processing.
+///
+/// # Arguments
+///
+/// * `$state_func`: An async function or future that returns a
+///   `Result<StreamJoinStateResult<_>>`.
+/// * `$cx`: The context to be passed for polling, usually of type `&mut Context`.
+///
+#[macro_export]
+macro_rules! handle_async_state {
+    ($state_func:expr, $cx:expr) => {
+        $crate::handle_state!(ready!($state_func.poll_unpin($cx)))
+    };
+}
+
+/// Represents the result of an operation on stateful join stream.
+///
+/// This enumueration indicates whether the state produced a result that is
+/// ready for use (`Ready`) or if the operation requires continuation (`Continue`).
+///
+/// Variants:
+/// - `Ready(T)`: Indicates that the operation is complete with a result of type `T`.
+/// - `Continue`: Indicates that the operation is not yet complete and requires further
+///   processing or more data. When this variant is returned, it typically means that the
+///   current invocation of the state did not produce a final result, and the operation
+///   should be invoked again later with more data and possibly with a different state.
+pub enum StreamJoinStateResult<T> {
+    Ready(T),
+    Continue,
 }
 
 #[cfg(test)]
