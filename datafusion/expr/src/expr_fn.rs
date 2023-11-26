@@ -916,6 +916,7 @@ scalar_expr!(
 
 scalar_expr!(ArrowTypeof, arrow_typeof, val, "data type");
 scalar_expr!(Levenshtein, levenshtein, string1 string2, "Returns the Levenshtein distance between the two given strings");
+scalar_expr!(SubstrIndex, substr_index, string delimiter count, "Returns the substring from str before count occurrences of the delimiter");
 
 scalar_expr!(
     Struct,
@@ -1205,6 +1206,7 @@ mod test {
         test_nary_scalar_expr!(OverLay, overlay, string, characters, position, len);
         test_nary_scalar_expr!(OverLay, overlay, string, characters, position);
         test_scalar_expr!(Levenshtein, levenshtein, string1, string2);
+        test_scalar_expr!(SubstrIndex, substr_index, string, delimiter, count);
     }
 
     #[test]

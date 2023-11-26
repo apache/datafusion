@@ -55,9 +55,9 @@ use datafusion_expr::{
     lower, lpad, ltrim, md5, nanvl, now, nullif, octet_length, overlay, pi, power,
     radians, random, regexp_match, regexp_replace, repeat, replace, reverse, right,
     round, rpad, rtrim, sha224, sha256, sha384, sha512, signum, sin, sinh, split_part,
-    sqrt, starts_with, string_to_array, strpos, struct_fun, substr, substring, tan, tanh,
-    to_hex, to_timestamp_micros, to_timestamp_millis, to_timestamp_nanos,
-    to_timestamp_seconds, translate, trim, trunc, upper, uuid,
+    sqrt, starts_with, string_to_array, strpos, struct_fun, substr, substr_index,
+    substring, tan, tanh, to_hex, to_timestamp_micros, to_timestamp_millis,
+    to_timestamp_nanos, to_timestamp_seconds, translate, trim, trunc, upper, uuid,
     window_frame::regularize,
     AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction,
     Case, Cast, Expr, GetFieldAccess, GetIndexedField, GroupingSet,
@@ -551,6 +551,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ArrowTypeof => Self::ArrowTypeof,
             ScalarFunction::OverLay => Self::OverLay,
             ScalarFunction::Levenshtein => Self::Levenshtein,
+            ScalarFunction::SubstrIndex => Self::SubstrIndex,
         }
     }
 }
@@ -1715,6 +1716,11 @@ pub fn parse_expr(
                         .iter()
                         .map(|expr| parse_expr(expr, registry))
                         .collect::<Result<Vec<_>, _>>()?,
+                )),
+                ScalarFunction::SubstrIndex => Ok(substr_index(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                    parse_expr(&args[2], registry)?,
                 )),
                 ScalarFunction::StructFun => {
                     Ok(struct_fun(parse_expr(&args[0], registry)?))
