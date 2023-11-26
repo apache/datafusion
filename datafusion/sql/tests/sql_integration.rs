@@ -606,11 +606,9 @@ fn select_compound_filter() {
 #[test]
 fn test_timestamp_filter() {
     let sql = "SELECT state FROM person WHERE birth_date < CAST (158412331400600000 as timestamp)";
-
     let expected = "Projection: person.state\
-            \n  Filter: person.birth_date < CAST(Int64(158412331400600000) AS Timestamp(Nanosecond, None))\
+            \n  Filter: person.birth_date < CAST(CAST(Int64(158412331400600000) AS Timestamp(Second, None)) AS Timestamp(Nanosecond, None))\
             \n    TableScan: person";
-
     quick_test(sql, expected);
 }
 
