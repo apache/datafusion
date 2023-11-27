@@ -843,10 +843,9 @@ pub async fn from_substrait_rex(
                         };
                         args.push(arg_expr?.as_ref().clone());
                     }
-                    Ok(Arc::new(Expr::ScalarFunction(expr::ScalarFunction {
-                        fun,
-                        args,
-                    })))
+                    Ok(Arc::new(Expr::ScalarFunction(expr::ScalarFunction::new(
+                        fun, args,
+                    ))))
                 }
                 ScalarFunctionType::Op(op) => {
                     if f.arguments.len() != 2 {

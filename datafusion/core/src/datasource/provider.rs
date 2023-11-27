@@ -66,6 +66,11 @@ pub trait TableProvider: Sync + Send {
         None
     }
 
+    /// Get the default value for a column, if available.
+    fn get_column_default(&self, _column: &str) -> Option<&Expr> {
+        None
+    }
+
     /// Create an [`ExecutionPlan`] for scanning the table with optionally
     /// specified `projection`, `filter` and `limit`, described below.
     ///

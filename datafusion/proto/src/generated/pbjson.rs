@@ -20863,6 +20863,7 @@ impl serde::Serialize for ScalarFunction {
             Self::ArrayExcept => "ArrayExcept",
             Self::ArrayPopFront => "ArrayPopFront",
             Self::Levenshtein => "Levenshtein",
+            Self::SubstrIndex => "SubstrIndex",
         };
         serializer.serialize_str(variant)
     }
@@ -21000,6 +21001,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "ArrayExcept",
             "ArrayPopFront",
             "Levenshtein",
+            "SubstrIndex",
         ];
 
         struct GeneratedVisitor;
@@ -21166,6 +21168,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "ArrayExcept" => Ok(ScalarFunction::ArrayExcept),
                     "ArrayPopFront" => Ok(ScalarFunction::ArrayPopFront),
                     "Levenshtein" => Ok(ScalarFunction::Levenshtein),
+                    "SubstrIndex" => Ok(ScalarFunction::SubstrIndex),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }
@@ -21965,6 +21968,9 @@ impl serde::Serialize for ScalarValue {
                 scalar_value::Value::Time32Value(v) => {
                     struct_ser.serialize_field("time32Value", v)?;
                 }
+                scalar_value::Value::LargeListValue(v) => {
+                    struct_ser.serialize_field("largeListValue", v)?;
+                }
                 scalar_value::Value::ListValue(v) => {
                     struct_ser.serialize_field("listValue", v)?;
                 }
@@ -22074,6 +22080,8 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
             "date32Value",
             "time32_value",
             "time32Value",
+            "large_list_value",
+            "largeListValue",
             "list_value",
             "listValue",
             "fixed_size_list_value",
@@ -22132,6 +22140,7 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
             Float64Value,
             Date32Value,
             Time32Value,
+            LargeListValue,
             ListValue,
             FixedSizeListValue,
             Decimal128Value,
@@ -22188,6 +22197,7 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
                             "float64Value" | "float64_value" => Ok(GeneratedField::Float64Value),
                             "date32Value" | "date_32_value" => Ok(GeneratedField::Date32Value),
                             "time32Value" | "time32_value" => Ok(GeneratedField::Time32Value),
+                            "largeListValue" | "large_list_value" => Ok(GeneratedField::LargeListValue),
                             "listValue" | "list_value" => Ok(GeneratedField::ListValue),
                             "fixedSizeListValue" | "fixed_size_list_value" => Ok(GeneratedField::FixedSizeListValue),
                             "decimal128Value" | "decimal128_value" => Ok(GeneratedField::Decimal128Value),
@@ -22325,6 +22335,13 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
                                 return Err(serde::de::Error::duplicate_field("time32Value"));
                             }
                             value__ = map_.next_value::<::std::option::Option<_>>()?.map(scalar_value::Value::Time32Value)
+;
+                        }
+                        GeneratedField::LargeListValue => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("largeListValue"));
+                            }
+                            value__ = map_.next_value::<::std::option::Option<_>>()?.map(scalar_value::Value::LargeListValue)
 ;
                         }
                         GeneratedField::ListValue => {
