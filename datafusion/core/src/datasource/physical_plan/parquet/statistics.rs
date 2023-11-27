@@ -508,6 +508,7 @@ mod test {
     #[should_panic(
         expected = "Inconsistent types in ScalarValue::iter_to_array. Expected Utf8, got Binary(NULL)"
     )]
+    // Due to https://github.com/apache/arrow-datafusion/issues/8295
     fn roundtrip_binary() {
         Test {
             input: Arc::new(BinaryArray::from_opt_vec(vec![
