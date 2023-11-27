@@ -239,8 +239,9 @@ impl<'a> RowGroupStatisticsConverter<'a> {
 mod test {
     use super::*;
     use arrow_array::{
-        BinaryArray, BooleanArray, Decimal128Array, Float32Array, Float64Array,
-        Int32Array, Int64Array, RecordBatch, StringArray, TimestampNanosecondArray,
+        new_null_array, Array, BinaryArray, BooleanArray, Decimal128Array, Float32Array,
+        Float64Array, Int32Array, Int64Array, RecordBatch, StringArray, StructArray,
+        TimestampNanosecondArray,
     };
     use arrow_schema::SchemaRef;
     use bytes::Bytes;
@@ -478,6 +479,45 @@ mod test {
             expected_max: Arc::new(StringArray::from(vec![Some("Q"), Some("ZZ"), None])),
         }
         .run()
+    }
+
+    #[test]
+    fn roundtrip_struct() {
+        let mut test = Test {
+            input: make_struct_array(vec![
+                // row group 1
+                (Some(true), Some(1)),
+                (None, None),
+                (Some(true), Some(3)),
+                // row group 2
+                (Some(true), Some(0)),
+                (Some(false), Some(5)),
+                (None, None),
+                // row group 3
+                (None, None),
+                (None, None),
+                (None, None),
+            ]),
+            // TODO not really sure what the min/max values are
+            expected_min: make_struct_array(vec![
+                (Some(true), Some(1)),
+                (Some(true), Some(0)),
+                (None, None),
+            ]),
+
+            expected_max: make_struct_array(vec![
+                (Some(true), Some(3)),
+                (Some(true), Some(0)),
+                (None, None),
+            ]),
+        };
+        // Due to https://github.com/apache/arrow-datafusion/issues/8334,
+        // statistics for struct arrays are not supported
+        test.expected_min =
+            new_null_array(test.input.data_type(), test.expected_min.len());
+        test.expected_max =
+            new_null_array(test.input.data_type(), test.expected_min.len());
+        test.run()
     }
 
     #[test]
@@ -802,5 +842,24 @@ mod test {
                 expected_max: Arc::new(Float64Array::from(vec![Some(f64::NAN)])),
             })
             .run();
+    }
+
+    // returns a struct array with columns "b" and "i" with the specified values
+    fn make_struct_array(input: Vec<(Option<bool>, Option<i32>)>) -> ArrayRef {
+        let boolean: BooleanArray = input.iter().map(|(b, _i)| b).collect();
+        let int: Int32Array = input.iter().map(|(_b, i)| i).collect();
+
+        let nullable = true;
+        let struct_array = StructArray::from(vec![
+            (
+                Arc::new(Field::new("b", DataType::Boolean, nullable)),
+                Arc::new(boolean) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("i", DataType::Int32, nullable)),
+                Arc::new(int) as ArrayRef,
+            ),
+        ]);
+        Arc::new(struct_array)
     }
 }
