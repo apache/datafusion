@@ -47,8 +47,7 @@ fn sign_extend_be(b: &[u8]) -> [u8; 16] {
     result
 }
 
-/// Converts parquet RowGroup statistics (stored in
-/// [`RowGroupMetaData`]) into an arrow [`ArrayRef`]
+/// Extracts statistics for a single leaf column from [`RowGroupMetaData`] as an arrow [`ArrayRef`]
 ///
 /// For example, given a parquet file with 3 Row Groups, when asked for
 /// statistics for column "A" it will return a single array with 3 elements,
