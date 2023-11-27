@@ -30,6 +30,24 @@ pub struct DataFrame {
 }
 ```
 
+For both `DataFrame` and `LogicalPlan`, you can build the query manually, such as:
+
+```rust
+let df = ctx.table("users").await?;
+
+let new_df = df.select(vec![col("id"), col("bank_account")])?
+    .sort(vec![col("id")])?;
+
+let plan = LogicalPlanBuilder::from(&df.to_logical_plan())
+    .project(vec![col("id"), col("bank_account")])?
+    .sort(vec![col("id")])?
+    .build()?;
+```
+
+But The main difference between a DataFrame and a LogicalPlan is that the DataFrame contains functionality for executing queries rather than just building plans.
+
+You can use `collect` or `execute_stream` to execute the query.
+
 ## How to generate a DataFrame
 
 You can manually call the `DataFrame` API or automatically generate a `DataFrame` through the SQL query planner just like:
@@ -80,7 +98,7 @@ while let Some(rb) = stream.next().await {
 
 # Write DataFrame to Files
 
-You can also serializate `DataFrame` to a file. For now, `Datafusion` supports write `DataFrame` to `csv`, `json` and `parquet`.
+You can also serialize `DataFrame` to a file. For now, `Datafusion` supports write `DataFrame` to `csv`, `json` and `parquet`.
 
 Before writing to a file, it will call collect to calculate all the results of the DataFrame and then write to file.
 
