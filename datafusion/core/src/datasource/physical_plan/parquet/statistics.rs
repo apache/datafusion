@@ -47,15 +47,6 @@ fn sign_extend_be(b: &[u8]) -> [u8; 16] {
     result
 }
 
-/// Extracts statistics for a single leaf column from [`RowGroupMetaData`] as an arrow [`ArrayRef`]
-///
-/// For example, given a parquet file with 3 Row Groups, when asked for
-/// statistics for column "A" it will return a single array with 3 elements,
-///
-pub(crate) struct RowGroupStatisticsConverter<'a> {
-    field: &'a Field,
-}
-
 /// Extract a single min/max statistics from a [`ParquetStatistics`] object
 ///
 /// * `$column_statistics` is the `ParquetStatistics` object
@@ -141,11 +132,21 @@ enum Statistic {
     Max,
 }
 
+/// Extracts statistics for a single leaf column from [`RowGroupMetaData`] as an
+/// arrow [`ArrayRef`]
+///
+/// For example, given a parquet file with 3 Row Groups, when asked for
+/// statistics for column "A" it will return a single array with 3 elements.
+pub(crate) struct RowGroupStatisticsConverter<'a> {
+    field: &'a Field,
+}
+
 impl<'a> RowGroupStatisticsConverter<'a> {
-    /// Create a new RowGoupStatisticsConverter suitable that can extract
-    /// statistics for the specified field
-    pub fn new(field: &'a Field) -> Self {
-        Self { field }
+    /// Create a new RowGoupStatisticsConverter for extracting the named column
+    /// in the schema.
+    pub fn try_new(schema: &'a arrow_schema::Schema, column_name: &str) -> Result<Self> {
+        let field = schema.field_with_name(column_name)?;
+        Ok(Self { field })
     }
 
     /// Returns the min value for the column into an array ref.
@@ -538,7 +539,8 @@ mod test {
             let metadata = parquet_metadata(schema.clone(), input_batch);
 
             for field in schema.fields() {
-                let converter = RowGroupStatisticsConverter::new(field);
+                let converter =
+                    RowGroupStatisticsConverter::try_new(&schema, field.name()).unwrap();
                 let row_groups = metadata.row_groups();
                 let min = converter.min(row_groups).unwrap();
                 assert_eq!(
@@ -645,11 +647,9 @@ mod test {
                     expected_max,
                 } = expected_column;
 
-                let field = arrow_schema
-                    .field_with_name(name)
+                let converter = RowGroupStatisticsConverter::try_new(&arrow_schema, name)
                     .expect("can't find field in schema");
 
-                let converter = RowGroupStatisticsConverter::new(field);
                 let actual_min = converter.min(metadata.row_groups()).unwrap();
                 assert_eq!(&expected_min, &actual_min, "column {name}");
 

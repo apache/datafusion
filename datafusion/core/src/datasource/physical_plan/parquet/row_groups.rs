@@ -320,27 +320,15 @@ macro_rules! get_null_count_values {
 
 impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
-        let field = self
-            .parquet_schema
-            .fields()
-            .find(&column.name)
-            .map(|(_idx, field)| field)?;
-
-        RowGroupStatisticsConverter::new(field)
-            .min([self.row_group_metadata])
+        RowGroupStatisticsConverter::try_new(self.parquet_schema, &column.name)
+            .and_then(|converter| converter.min([self.row_group_metadata]))
             // ignore errors during conversion, and just use no statistics
             .ok()
     }
 
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-        let field = self
-            .parquet_schema
-            .fields()
-            .find(&column.name)
-            .map(|(_idx, field)| field)?;
-
-        RowGroupStatisticsConverter::new(field)
-            .max([self.row_group_metadata])
+        RowGroupStatisticsConverter::try_new(self.parquet_schema, &column.name)
+            .and_then(|converter| converter.max([self.row_group_metadata]))
             // ignore errors during conversion, and just use no statistics
             .ok()
     }
