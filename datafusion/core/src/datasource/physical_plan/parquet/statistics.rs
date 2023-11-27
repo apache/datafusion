@@ -610,13 +610,13 @@ mod test {
             // No column statistics should be read as NULL, but with the right type
             .with_column(ExpectedColumn {
                 name: "id",
-                expected_min: Arc::new(Int32Array::from(vec![None])),
-                expected_max: Arc::new(Int32Array::from(vec![None])),
+                expected_min: i32_array([None]),
+                expected_max: i32_array([None]),
             })
             .with_column(ExpectedColumn {
                 name: "bool_col",
-                expected_min: Arc::new(BooleanArray::from(vec![None])),
-                expected_max: Arc::new(BooleanArray::from(vec![None])),
+                expected_min: bool_array([None]),
+                expected_max: bool_array([None]),
             })
             .run();
     }
@@ -641,69 +641,69 @@ mod test {
         TestFile::new("alltypes_tiny_pages.parquet")
             .with_column(ExpectedColumn {
                 name: "id",
-                expected_min: Arc::new(Int32Array::from(vec![Some(0)])),
-                expected_max: Arc::new(Int32Array::from(vec![Some(7299)])),
+                expected_min: i32_array([Some(0)]),
+                expected_max: i32_array([Some(7299)]),
             })
             .with_column(ExpectedColumn {
                 name: "bool_col",
-                expected_min: Arc::new(BooleanArray::from(vec![Some(false)])),
-                expected_max: Arc::new(BooleanArray::from(vec![Some(true)])),
+                expected_min: bool_array([Some(false)]),
+                expected_max: bool_array([Some(true)]),
             })
             .with_column(ExpectedColumn {
                 name: "tinyint_col",
-                expected_min: Arc::new(Int32Array::from(vec![Some(0)])),
-                expected_max: Arc::new(Int32Array::from(vec![Some(9)])),
+                expected_min: i32_array([Some(0)]),
+                expected_max: i32_array([Some(9)]),
             })
             .with_column(ExpectedColumn {
                 name: "smallint_col",
-                expected_min: Arc::new(Int32Array::from(vec![Some(0)])),
-                expected_max: Arc::new(Int32Array::from(vec![Some(9)])),
+                expected_min: i32_array([Some(0)]),
+                expected_max: i32_array([Some(9)]),
             })
             .with_column(ExpectedColumn {
                 name: "int_col",
-                expected_min: Arc::new(Int32Array::from(vec![Some(0)])),
-                expected_max: Arc::new(Int32Array::from(vec![Some(9)])),
+                expected_min: i32_array([Some(0)]),
+                expected_max: i32_array([Some(9)]),
             })
             .with_column(ExpectedColumn {
                 name: "bigint_col",
-                expected_min: Arc::new(Int64Array::from(vec![Some(0)])),
-                expected_max: Arc::new(Int64Array::from(vec![Some(90)])),
+                expected_min: i64_array([Some(0)]),
+                expected_max: i64_array([Some(90)]),
             })
             .with_column(ExpectedColumn {
                 name: "float_col",
-                expected_min: Arc::new(Float32Array::from(vec![Some(0.0)])),
-                expected_max: Arc::new(Float32Array::from(vec![Some(9.9)])),
+                expected_min: f32_array([Some(0.0)]),
+                expected_max: f32_array([Some(9.9)]),
             })
             .with_column(ExpectedColumn {
                 name: "double_col",
-                expected_min: Arc::new(Float64Array::from(vec![Some(0.0)])),
-                expected_max: Arc::new(Float64Array::from(vec![Some(90.89999999999999)])),
+                expected_min: f64_array([Some(0.0)]),
+                expected_max: f64_array([Some(90.89999999999999)]),
             })
             .with_column(ExpectedColumn {
                 name: "date_string_col",
-                expected_min: Arc::new(StringArray::from(vec![Some("01/01/09")])),
-                expected_max: Arc::new(StringArray::from(vec![Some("12/31/10")])),
+                expected_min: utf8_array([Some("01/01/09")]),
+                expected_max: utf8_array([Some("12/31/10")]),
             })
             .with_column(ExpectedColumn {
                 name: "string_col",
-                expected_min: Arc::new(StringArray::from(vec![Some("0")])),
-                expected_max: Arc::new(StringArray::from(vec![Some("9")])),
+                expected_min: utf8_array([Some("0")]),
+                expected_max: utf8_array([Some("9")]),
             })
             // File has no min/max for timestamp_col
             .with_column(ExpectedColumn {
                 name: "timestamp_col",
-                expected_min: Arc::new(TimestampNanosecondArray::from(vec![None])),
-                expected_max: Arc::new(TimestampNanosecondArray::from(vec![None])),
+                expected_min: timestamp_array([None]),
+                expected_max: timestamp_array([None]),
             })
             .with_column(ExpectedColumn {
                 name: "year",
-                expected_min: Arc::new(Int32Array::from(vec![Some(2009)])),
-                expected_max: Arc::new(Int32Array::from(vec![Some(2010)])),
+                expected_min: i32_array([Some(2009)]),
+                expected_max: i32_array([Some(2010)]),
             })
             .with_column(ExpectedColumn {
                 name: "month",
-                expected_min: Arc::new(Int32Array::from(vec![Some(1)])),
-                expected_max: Arc::new(Int32Array::from(vec![Some(12)])),
+                expected_min: i32_array([Some(1)]),
+                expected_max: i32_array([Some(12)]),
             })
             .run();
     }
