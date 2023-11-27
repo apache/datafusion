@@ -550,10 +550,16 @@ mod test {
             (Some(true), Some(3)),
         ]);
         let int_col = i32_array([Some(100), Some(200), Some(300)]);
-
         let expected_min = i32_array([Some(100)]);
-
         let expected_max = i32_array(vec![Some(300)]);
+
+        // use a name that shadows a name in the struct column
+        match struct_col.data_type() {
+            DataType::Struct(fields) => {
+                assert_eq!(fields.get(1).unwrap().name(), "int_col")
+            }
+            _ => panic!("unexpected data type for struct column"),
+        };
 
         let input_batch = RecordBatch::try_from_iter([
             ("struct_col", struct_col),
@@ -904,7 +910,7 @@ mod test {
         Arc::new(array)
     }
 
-    // returns a struct array with columns "b" and "i" with the specified values
+    // returns a struct array with columns "bool_col" and "int_col" with the specified values
     fn struct_array(input: Vec<(Option<bool>, Option<i32>)>) -> ArrayRef {
         let boolean: BooleanArray = input.iter().map(|(b, _i)| b).collect();
         let int: Int32Array = input.iter().map(|(_b, i)| i).collect();
@@ -912,11 +918,11 @@ mod test {
         let nullable = true;
         let struct_array = StructArray::from(vec![
             (
-                Arc::new(Field::new("b", DataType::Boolean, nullable)),
+                Arc::new(Field::new("bool_col", DataType::Boolean, nullable)),
                 Arc::new(boolean) as ArrayRef,
             ),
             (
-                Arc::new(Field::new("i", DataType::Int32, nullable)),
+                Arc::new(Field::new("int_col", DataType::Int32, nullable)),
                 Arc::new(int) as ArrayRef,
             ),
         ]);
