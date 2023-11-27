@@ -536,7 +536,23 @@ impl BuiltinScalarFunction {
                 let data_type = get_base_type(&input_expr_types[0])?;
                 Ok(data_type)
             }
-            BuiltinScalarFunction::ArrayAppend => Ok(input_expr_types[0].clone()),
+            BuiltinScalarFunction::ArrayAppend => {
+                if let DataType::List(field) = input_expr_types[0].clone() {
+                    if field.data_type().equals_datatype(&DataType::Null) {
+                        Ok(DataType::List(Arc::new(Field::new(
+                            "item",
+                            input_expr_types[1].clone(),
+                            true,
+                        ))))
+                    } else {
+                        Ok(input_expr_types[0].clone())
+                    }
+                } else {
+                    plan_err!(
+                        "The {self} function can only accept list as the first argument"
+                    )
+                }
+            }
             BuiltinScalarFunction::ArrayConcat => {
                 let mut expr_type = Null;
                 let mut max_dims = 0;

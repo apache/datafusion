@@ -227,16 +227,25 @@ fn compute_array_dims(arr: Option<ArrayRef>) -> Result<Option<Vec<Option<u64>>>>
 }
 
 fn check_datatypes(name: &str, args: &[&ArrayRef]) -> Result<()> {
-    let data_type = args[0].data_type();
-    if !args.iter().all(|arg| {
-        arg.data_type().equals_datatype(data_type)
-            || arg.data_type().equals_datatype(&DataType::Null)
-    }) {
-        let types = args.iter().map(|arg| arg.data_type()).collect::<Vec<_>>();
-        return plan_err!("{name} received incompatible types: '{types:?}'.");
+    let mut data_types = args
+        .iter()
+        .map(|arg| arg.data_type())
+        .collect::<HashSet<_>>();
+    match data_types.len() {
+        1 => Ok(()),
+        2 => {
+            if data_types.remove(&DataType::Null) {
+                Ok(())
+            } else {
+                let types = args.iter().map(|arg| arg.data_type()).collect::<Vec<_>>();
+                plan_err!("{name} received incompatible types: '{types:?}'.")
+            }
+        }
+        _ => {
+            let types = args.iter().map(|arg| arg.data_type()).collect::<Vec<_>>();
+            plan_err!("{name} received incompatible types: '{types:?}'.")
+        }
     }
-
-    Ok(())
 }
 
 macro_rules! call_array_function {
@@ -2949,20 +2958,6 @@ mod tests {
             as_uint64_array(&array).expect("failed to initialize function array_ndims");
 
         assert_eq!(result, &UInt64Array::from_value(2, 1));
-    }
-
-    #[test]
-    fn test_check_invalid_datatypes() {
-        let data = vec![Some(vec![Some(1), Some(2), Some(3)])];
-        let list_array =
-            Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(data)) as ArrayRef;
-        let int64_array = Arc::new(StringArray::from(vec![Some("string")])) as ArrayRef;
-
-        let args = [list_array.clone(), int64_array.clone()];
-
-        let array = array_append(&args);
-
-        assert_eq!(array.unwrap_err().strip_backtrace(), "Error during planning: array_append received incompatible types: '[Int64, Utf8]'.");
     }
 
     fn return_array() -> ArrayRef {

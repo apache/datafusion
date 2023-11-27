@@ -1056,16 +1056,16 @@ select make_array(['a','b'], null);
 
 # TODO: array_append with NULLs
 # array_append scalar function #1
-# query ?
-# select array_append(make_array(), 4);
-# ----
-# [4]
+query ?
+select array_append(make_array(), 4);
+----
+[4]
 
 # array_append scalar function #2
-# query ??
-# select array_append(make_array(), make_array()), array_append(make_array(), make_array(4));
-# ----
-# [[]] [[4]]
+query ??
+select array_append(make_array(), make_array()), array_append(make_array(), make_array(4));
+----
+[[]] [[4]]
 
 # array_append scalar function #3
 query ???
