@@ -2739,6 +2739,8 @@ select array_has_all(make_array(1,2,3), make_array(1,3)),
 ----
 true false true false false false true true false false true false true
 
+## array_distinct
+
 query ?
 select array_distinct(null);
 ----
