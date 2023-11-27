@@ -554,14 +554,20 @@ LOCATION '../../testing/data/csv/aggregate_test_100.csv'
 
 
 # sqrt_f32_vs_f64
-query error DataFusion error: Object Store error: Object at location /Users/cli2/Desktop/workspace/github/arrow\-datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+query R
 SELECT avg(sqrt(c11)) FROM aggregate_test_100
+----
+0.658440848589
 
-query error DataFusion error: Object Store error: Object at location /Users/cli2/Desktop/workspace/github/arrow\-datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+query R
 SELECT avg(CAST(sqrt(c11) AS double)) FROM aggregate_test_100
+----
+0.658440848589
 
-query error DataFusion error: Object Store error: Object at location /Users/cli2/Desktop/workspace/github/arrow\-datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+query R
 SELECT avg(sqrt(CAST(c11 AS double))) FROM aggregate_test_100
+----
+0.658440848342
 
 statement ok
 drop table aggregate_test_100
