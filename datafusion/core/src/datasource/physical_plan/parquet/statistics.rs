@@ -498,7 +498,6 @@ mod test {
                 (None, None),
                 (None, None),
             ]),
-            // TODO not really sure what the min/max values are
             expected_min: make_struct_array(vec![
                 (Some(true), Some(1)),
                 (Some(true), Some(0)),
@@ -552,6 +551,55 @@ mod test {
             ])),
         }
         .run()
+    }
+
+    #[test]
+    fn struct_and_non_struct() {
+        // Ensures that statistics for an array that appears *after* a struct
+        // array are not wrong
+        let struct_col = make_struct_array(vec![
+            // row group 1
+            (Some(true), Some(1)),
+            (None, None),
+            (Some(true), Some(3)),
+        ]);
+        let int_col = Arc::new(Int32Array::from(vec![Some(100), Some(200), Some(300)]));
+
+        let expected_min = Arc::new(Int32Array::from(vec![Some(100)])) as ArrayRef;
+
+        let expected_max = Arc::new(Int32Array::from(vec![Some(300)])) as ArrayRef;
+
+        let input_batch = RecordBatch::try_from_iter([
+            ("struct_col", struct_col),
+            ("int_col", int_col),
+        ])
+        .unwrap();
+
+        let schema = input_batch.schema();
+
+        let metadata = parquet_metadata(schema.clone(), input_batch);
+
+        // read the int_col statistics
+        let (_idx, field) = schema.column_with_name("int_col").unwrap();
+
+        let converter =
+            RowGroupStatisticsConverter::try_new(&schema, field.name()).unwrap();
+        let row_groups = metadata.row_groups();
+        let min = converter.min(row_groups).unwrap();
+        assert_eq!(
+            &min,
+            &expected_min,
+            "Min. Statistics\n\n{}\n\n",
+            DisplayStats(row_groups)
+        );
+
+        let max = converter.max(row_groups).unwrap();
+        assert_eq!(
+            &max,
+            &expected_max,
+            "Max. Statistics\n\n{}\n\n",
+            DisplayStats(row_groups)
+        );
     }
 
     const ROWS_PER_ROW_GROUP: usize = 3;
@@ -667,18 +715,6 @@ mod test {
             let reader = ArrowReaderBuilder::try_new(file).unwrap();
             let arrow_schema = reader.schema();
             let metadata = reader.metadata();
-
-            for rg in metadata.row_groups() {
-                println!(
-                    "Columns: {}",
-                    rg.columns()
-                        .iter()
-                        .map(|c| c.column_descr().name())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                );
-            }
-            println!("  row groups: {}", metadata.row_groups().len());
 
             for expected_column in self.expected_columns {
                 let ExpectedColumn {
