@@ -960,9 +960,9 @@ SELECT find_in_set('b', 'a,b,c,d')
 
 
 query I
-SELECT find_in_set('b', 'a,b,c,d,a')
+SELECT find_in_set('a', 'a,b,c,d,a')
 ----
-2
+1
 
 query I
 SELECT find_in_set('', 'a,b,c,d,a')
