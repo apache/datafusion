@@ -137,7 +137,7 @@ macro_rules! get_statistic {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum MinMax {
+enum Statistic {
     Min,
     Max,
 }
@@ -154,7 +154,7 @@ impl<'a> RowGroupStatisticsConverter<'a> {
         &self,
         row_group_meta_data: impl IntoIterator<Item = &'b RowGroupMetaData>,
     ) -> Result<ArrayRef> {
-        self.min_max_impl(MinMax::Min, row_group_meta_data)
+        self.min_max_impl(Statistic::Min, row_group_meta_data)
     }
 
     /// Returns the max value for the column into an array ref.
@@ -162,13 +162,13 @@ impl<'a> RowGroupStatisticsConverter<'a> {
         &self,
         row_group_meta_data: impl IntoIterator<Item = &'b RowGroupMetaData>,
     ) -> Result<ArrayRef> {
-        self.min_max_impl(MinMax::Max, row_group_meta_data)
+        self.min_max_impl(Statistic::Max, row_group_meta_data)
     }
 
     /// Extracts all min/max values for the column into an array ref.
     fn min_max_impl<'b>(
         &self,
-        mm: MinMax,
+        mm: Statistic,
         row_group_meta_data: impl IntoIterator<Item = &'b RowGroupMetaData>,
     ) -> Result<ArrayRef> {
         let mut row_group_meta_data = row_group_meta_data.into_iter().peekable();
@@ -201,7 +201,7 @@ impl<'a> RowGroupStatisticsConverter<'a> {
         // this is the value to use when the statistics are not set
         let null_value = ScalarValue::try_from(self.field.data_type())?;
         match mm {
-            MinMax::Min => {
+            Statistic::Min => {
                 let values = stats_iter.map(|column_statistics| {
                     column_statistics
                         .and_then(|column_statistics| {
@@ -216,7 +216,7 @@ impl<'a> RowGroupStatisticsConverter<'a> {
                 });
                 ScalarValue::iter_to_array(values)
             }
-            MinMax::Max => {
+            Statistic::Max => {
                 let values = stats_iter.map(|column_statistics| {
                     column_statistics
                         .and_then(|column_statistics| {
