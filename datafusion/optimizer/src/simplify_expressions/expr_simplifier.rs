@@ -40,8 +40,8 @@ use datafusion_common::{
     exec_err, internal_err, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::{
-    and, expr, lit, or, BinaryExpr, BuiltinScalarFunction, Case, ColumnarValue, Expr,
-    Like, Volatility,
+    and, lit, or, BinaryExpr, BuiltinScalarFunction, Case, ColumnarValue, Expr, Like,
+    ScalarFunctionDefinition, Volatility,
 };
 use datafusion_expr::{
     expr::{InList, InSubquery, ScalarFunction},
@@ -344,12 +344,15 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::GroupingSet(_)
             | Expr::Wildcard { .. }
             | Expr::Placeholder(_) => false,
-            Expr::ScalarFunction(ScalarFunction { fun, .. }) => {
-                Self::volatility_ok(fun.volatility())
-            }
-            Expr::ScalarUDF(expr::ScalarUDF { fun, .. }) => {
-                Self::volatility_ok(fun.signature().volatility)
-            }
+            Expr::ScalarFunction(ScalarFunction { func_def, .. }) => match func_def {
+                ScalarFunctionDefinition::BuiltIn { fun, .. } => {
+                    Self::volatility_ok(fun.volatility())
+                }
+                ScalarFunctionDefinition::UDF(fun) => {
+                    Self::volatility_ok(fun.signature().volatility)
+                }
+                ScalarFunctionDefinition::Name(_) => false,
+            },
             Expr::Literal(_)
             | Expr::BinaryExpr { .. }
             | Expr::Not(_)
@@ -1200,25 +1203,41 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
 
             // log
             Expr::ScalarFunction(ScalarFunction {
-                fun: BuiltinScalarFunction::Log,
+                func_def:
+                    ScalarFunctionDefinition::BuiltIn {
+                        fun: BuiltinScalarFunction::Log,
+                        ..
+                    },
                 args,
             }) => simpl_log(args, <&S>::clone(&info))?,
 
             // power
             Expr::ScalarFunction(ScalarFunction {
-                fun: BuiltinScalarFunction::Power,
+                func_def:
+                    ScalarFunctionDefinition::BuiltIn {
+                        fun: BuiltinScalarFunction::Power,
+                        ..
+                    },
                 args,
             }) => simpl_power(args, <&S>::clone(&info))?,
 
             // concat
             Expr::ScalarFunction(ScalarFunction {
-                fun: BuiltinScalarFunction::Concat,
+                func_def:
+                    ScalarFunctionDefinition::BuiltIn {
+                        fun: BuiltinScalarFunction::Concat,
+                        ..
+                    },
                 args,
             }) => simpl_concat(args)?,
 
             // concat_ws
             Expr::ScalarFunction(ScalarFunction {
-                fun: BuiltinScalarFunction::ConcatWithSeparator,
+                func_def:
+                    ScalarFunctionDefinition::BuiltIn {
+                        fun: BuiltinScalarFunction::ConcatWithSeparator,
+                        ..
+                    },
                 args,
             }) => match &args[..] {
                 [delimiter, vals @ ..] => simpl_concat_ws(delimiter, vals)?,
@@ -1550,7 +1569,7 @@ mod tests {
 
         // immutable UDF should get folded
         // udf_add(1+2, 30+40) --> 73
-        let expr = Expr::ScalarUDF(expr::ScalarUDF::new(
+        let expr = Expr::ScalarFunction(expr::ScalarFunction::new_udf(
             make_udf_add(Volatility::Immutable),
             args.clone(),
         ));
@@ -1559,15 +1578,21 @@ mod tests {
         // stable UDF should be entirely folded
         // udf_add(1+2, 30+40) --> 73
         let fun = make_udf_add(Volatility::Stable);
-        let expr = Expr::ScalarUDF(expr::ScalarUDF::new(Arc::clone(&fun), args.clone()));
+        let expr = Expr::ScalarFunction(expr::ScalarFunction::new_udf(
+            Arc::clone(&fun),
+            args.clone(),
+        ));
         test_evaluate(expr, lit(73));
 
         // volatile UDF should have args folded
         // udf_add(1+2, 30+40) --> udf_add(3, 70)
         let fun = make_udf_add(Volatility::Volatile);
-        let expr = Expr::ScalarUDF(expr::ScalarUDF::new(Arc::clone(&fun), args));
-        let expected_expr =
-            Expr::ScalarUDF(expr::ScalarUDF::new(Arc::clone(&fun), folded_args));
+        let expr =
+            Expr::ScalarFunction(expr::ScalarFunction::new_udf(Arc::clone(&fun), args));
+        let expected_expr = Expr::ScalarFunction(expr::ScalarFunction::new_udf(
+            Arc::clone(&fun),
+            folded_args,
+        ));
         test_evaluate(expr, expected_expr);
     }
 

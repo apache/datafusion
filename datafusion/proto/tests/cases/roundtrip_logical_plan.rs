@@ -39,7 +39,7 @@ use datafusion_common::{internal_err, not_impl_err, plan_err};
 use datafusion_common::{DFField, DFSchema, DFSchemaRef, DataFusionError, ScalarValue};
 use datafusion_expr::expr::{
     self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, Like, ScalarFunction,
-    ScalarUDF, Sort,
+    Sort,
 };
 use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
 use datafusion_expr::{
@@ -1402,7 +1402,10 @@ fn roundtrip_scalar_udf() {
         scalar_fn,
     );
 
-    let test_expr = Expr::ScalarUDF(ScalarUDF::new(Arc::new(udf.clone()), vec![lit("")]));
+    let test_expr = Expr::ScalarFunction(ScalarFunction::new_udf(
+        Arc::new(udf.clone()),
+        vec![lit("")],
+    ));
 
     let ctx = SessionContext::new();
     ctx.register_udf(udf);

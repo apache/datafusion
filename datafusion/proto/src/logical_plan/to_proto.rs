@@ -45,7 +45,7 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::{
     self, Alias, Between, BinaryExpr, Cast, GetFieldAccess, GetIndexedField, GroupingSet,
-    InList, Like, Placeholder, ScalarFunction, ScalarUDF, Sort,
+    InList, Like, Placeholder, ScalarFunction, ScalarFunctionDefinition, Sort,
 };
 use datafusion_expr::{
     logical_plan::PlanType, logical_plan::StringifiedPlan, AggregateFunction,
@@ -756,29 +756,39 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                         .to_string(),
                 ))
             }
-            Expr::ScalarFunction(ScalarFunction { fun, args }) => {
-                let fun: protobuf::ScalarFunction = fun.try_into()?;
-                let args: Vec<Self> = args
-                    .iter()
-                    .map(|e| e.try_into())
-                    .collect::<Result<Vec<Self>, Error>>()?;
-                Self {
-                    expr_type: Some(ExprType::ScalarFunction(
-                        protobuf::ScalarFunctionNode {
-                            fun: fun.into(),
-                            args,
+            Expr::ScalarFunction(ScalarFunction { func_def, args }) => match func_def {
+                ScalarFunctionDefinition::BuiltIn { fun, .. } => {
+                    let fun: protobuf::ScalarFunction = fun.try_into()?;
+                    let args: Vec<Self> = args
+                        .iter()
+                        .map(|e| e.try_into())
+                        .collect::<Result<Vec<Self>, Error>>()?;
+                    Self {
+                        expr_type: Some(ExprType::ScalarFunction(
+                            protobuf::ScalarFunctionNode {
+                                fun: fun.into(),
+                                args,
+                            },
+                        )),
+                    }
+                }
+                ScalarFunctionDefinition::UDF(fun) => Self {
+                    expr_type: Some(ExprType::ScalarUdfExpr(
+                        protobuf::ScalarUdfExprNode {
+                            fun_name: fun.name().to_string(),
+                            args: args
+                                .iter()
+                                .map(|expr| expr.try_into())
+                                .collect::<Result<Vec<_>, Error>>()?,
                         },
                     )),
+                },
+                ScalarFunctionDefinition::Name(_) => {
+                    return Err(Error::NotImplemented(
+                    "Proto serialization error: Trying to serialize a unresolved function"
+                        .to_string(),
+                ));
                 }
-            }
-            Expr::ScalarUDF(ScalarUDF { fun, args }) => Self {
-                expr_type: Some(ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode {
-                    fun_name: fun.name().to_string(),
-                    args: args
-                        .iter()
-                        .map(|expr| expr.try_into())
-                        .collect::<Result<Vec<_>, Error>>()?,
-                })),
             },
             Expr::AggregateUDF(expr::AggregateUDF {
                 fun,
@@ -1573,6 +1583,7 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::ArrowTypeof => Self::ArrowTypeof,
             BuiltinScalarFunction::OverLay => Self::OverLay,
             BuiltinScalarFunction::Levenshtein => Self::Levenshtein,
+            BuiltinScalarFunction::SubstrIndex => Self::SubstrIndex,
         };
 
         Ok(scalar_function)

@@ -24,8 +24,8 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr::{BinaryExpr, Placeholder};
-use datafusion_expr::BuiltinScalarFunction;
 use datafusion_expr::{lit, Expr, Operator};
+use datafusion_expr::{BuiltinScalarFunction, ScalarFunctionDefinition};
 use log::debug;
 use sqlparser::ast::{BinaryOperator, Expr as SQLExpr, Interval, Value};
 use sqlparser::parser::ParserError::ParserError;
@@ -143,8 +143,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Expr::Literal(_) => {
                     values.push(value);
                 }
-                Expr::ScalarFunction(ref scalar_function) => {
-                    if scalar_function.fun == BuiltinScalarFunction::MakeArray {
+                Expr::ScalarFunction(ScalarFunction {
+                    func_def: ScalarFunctionDefinition::BuiltIn { fun, .. },
+                    ..
+                }) => {
+                    if fun == BuiltinScalarFunction::MakeArray {
                         values.push(value);
                     } else {
                         return not_impl_err!(
