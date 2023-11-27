@@ -852,7 +852,7 @@ mod test {
                     expected_max,
                 } = expected_column;
 
-                let converter = RowGroupStatisticsConverter::try_new(&arrow_schema, name)
+                let converter = RowGroupStatisticsConverter::try_new(arrow_schema, name)
                     .expect("can't find field in schema");
 
                 let actual_min = converter.min(metadata.row_groups()).unwrap();
