@@ -291,6 +291,7 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
         return Some(lhs_type.clone());
     }
     comparison_binary_numeric_coercion(lhs_type, rhs_type)
+        .or_else(|| bool_coercion(lhs_type, rhs_type))
         .or_else(|| dictionary_coercion(lhs_type, rhs_type, true))
         .or_else(|| temporal_coercion(lhs_type, rhs_type))
         .or_else(|| string_coercion(lhs_type, rhs_type))
@@ -348,6 +349,23 @@ fn string_temporal_coercion(
         }
         (Timestamp(_, tz), Utf8) | (Utf8, Timestamp(_, tz)) => {
             Some(Timestamp(TimeUnit::Nanosecond, tz.clone()))
+        }
+        _ => None,
+    }
+}
+
+/// Coerce `Boolean` to other larger types, like Numeric as `1` or String as "1"
+fn bool_coercion(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+) -> Option<DataType> {
+    match (lhs_type, rhs_type) {
+        (DataType::Boolean, to_type) => {
+            if can_cast_types(&DataType::Boolean, to_type) {
+                Some(to_type.to_owned())
+            } else {
+                None
+            }
         }
         _ => None,
     }
@@ -852,6 +870,26 @@ mod tests {
 
     use arrow::datatypes::DataType;
     use datafusion_common::{assert_contains, Result};
+
+    #[test]
+    fn test_bool_coercion() {
+        assert_eq!(
+            bool_coercion(&DataType::Boolean, &DataType::Boolean),
+            Some(DataType::Boolean)
+        );
+        assert_eq!(
+            bool_coercion(&DataType::Boolean, &DataType::Int8),
+            Some(DataType::Int8)
+        );
+        assert_eq!(
+            bool_coercion(&DataType::Boolean, &DataType::Utf8),
+            Some(DataType::Utf8)
+        );
+        assert_eq!(
+            bool_coercion(&DataType::Boolean, &DataType::LargeUtf8),
+            Some(DataType::LargeUtf8)
+        );
+    }
 
     #[test]
     fn test_coercion_error() -> Result<()> {

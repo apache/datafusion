@@ -557,10 +557,16 @@ select column1[0:5], column2[0:3], column3[0:9] from arrays;
 ## make_array (aliases: `make_list`)
 
 # make_array scalar function #1
-query ???
-select make_array(1, 2, 3), make_array(1.0, 2.0, 3.0), make_array('h', 'e', 'l', 'l', 'o');
+query ??????
+select 
+  make_array(1, 2, 3),
+  make_array(1.0, 2.0, 3.0),
+  make_array('h', 'e', 'l', 'l', 'o'),
+  make_array(true, 1, 2, false),
+  make_array(true, 1, 2.3, false),
+  make_array(true, 1, 2.3, false, '4');
 ----
-[1, 2, 3] [1.0, 2.0, 3.0] [h, e, l, l, o]
+[1, 2, 3] [1.0, 2.0, 3.0] [h, e, l, l, o] [1, 1, 2, 0] [1.0, 1.0, 2.3, 0.0] [true, 1, 2.3, false, 4]
 
 # make_array scalar function #2
 query ???
