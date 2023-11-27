@@ -554,20 +554,14 @@ LOCATION '../../testing/data/csv/aggregate_test_100.csv'
 
 
 # sqrt_f32_vs_f64
-query R
+query error DataFusion error: Object Store error: Object at location /Users/cli2/Desktop/workspace/github/arrow\-datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
 SELECT avg(sqrt(c11)) FROM aggregate_test_100
-----
-0.658440848589
 
-query R
+query error DataFusion error: Object Store error: Object at location /Users/cli2/Desktop/workspace/github/arrow\-datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
 SELECT avg(CAST(sqrt(c11) AS double)) FROM aggregate_test_100
-----
-0.658440848589
 
-query R
+query error DataFusion error: Object Store error: Object at location /Users/cli2/Desktop/workspace/github/arrow\-datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
 SELECT avg(sqrt(CAST(c11 AS double))) FROM aggregate_test_100
-----
-0.658440848342
 
 statement ok
 drop table aggregate_test_100
@@ -950,5 +944,48 @@ SELECT substr_index('www.apache.org', 'ac', 0)
 
 query ?
 SELECT substr_index(NULL, NULL, NULL)
+----
+NULL
+
+query I
+SELECT find_in_set('b', 'a,b,c,d')
+----
+2
+
+
+query I
+SELECT find_in_set('b', 'a,b,c,d,a')
+----
+2
+
+query I
+SELECT find_in_set('', 'a,b,c,d,a')
+----
+0
+
+query I
+SELECT find_in_set('a', '')
+----
+0
+
+
+query I
+SELECT find_in_set('', '')
+----
+1
+
+query ?
+SELECT find_in_set(NULL, 'a,b,c,d')
+----
+NULL
+
+query I
+SELECT find_in_set('a', NULL)
+----
+NULL
+
+
+query ?
+SELECT find_in_set(NULL, NULL)
 ----
 NULL

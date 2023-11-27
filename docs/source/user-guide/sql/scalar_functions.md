@@ -638,6 +638,7 @@ nullif(expression1, expression2)
 - [overlay](#overlay)
 - [levenshtein](#levenshtein)
 - [substr_index](#substr_index)
+- [find_in_set](#find_in_set)
 
 ### `ascii`
 
@@ -1169,6 +1170,20 @@ substr_index(str, delim, count)
 - **str**: String expression to operate on.
 - **delim**: the string to find in str to split str.
 - **count**: The number of times to search for the delimiter. Can be both a positive or negative number.
+
+### `find_in_set`
+
+Returns a value in the range of 1 to N if the string str is in the string list strlist consisting of N substrings.
+For example, `find_in_set('b', 'a,b,c,d') = 2`
+
+```
+find_in_set(str, strlist)
+```
+
+#### Arguments
+
+- **str**: String expression to find in strlist.
+- **strlist**: A string list is a string composed of substrings separated by , characters.
 
 ## Binary String Functions
 

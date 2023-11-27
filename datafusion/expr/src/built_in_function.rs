@@ -304,6 +304,8 @@ pub enum BuiltinScalarFunction {
     Levenshtein,
     /// substr_index
     SubstrIndex,
+    /// find_in_set
+    FindInSet,
 }
 
 /// Maps the sql function name to `BuiltinScalarFunction`
@@ -473,6 +475,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::OverLay => Volatility::Immutable,
             BuiltinScalarFunction::Levenshtein => Volatility::Immutable,
             BuiltinScalarFunction::SubstrIndex => Volatility::Immutable,
+            BuiltinScalarFunction::FindInSet => Volatility::Immutable,
 
             // Stable builtin functions
             BuiltinScalarFunction::Now => Volatility::Stable,
@@ -778,6 +781,9 @@ impl BuiltinScalarFunction {
             }),
             BuiltinScalarFunction::SubstrIndex => {
                 utf8_to_str_type(&input_expr_types[0], "substr_index")
+            }
+            BuiltinScalarFunction::FindInSet => {
+                utf8_to_int_type(&input_expr_types[0], "find_in_set")
             }
             BuiltinScalarFunction::ToTimestamp
             | BuiltinScalarFunction::ToTimestampNanos => Ok(Timestamp(Nanosecond, None)),
@@ -1245,6 +1251,10 @@ impl BuiltinScalarFunction {
                 ],
                 self.volatility(),
             ),
+            BuiltinScalarFunction::FindInSet => Signature::one_of(
+                vec![Exact(vec![Utf8, Utf8]), Exact(vec![LargeUtf8, LargeUtf8])],
+                self.volatility(),
+            ),
 
             BuiltinScalarFunction::Replace | BuiltinScalarFunction::Translate => {
                 Signature::one_of(vec![Exact(vec![Utf8, Utf8, Utf8])], self.volatility())
@@ -1498,6 +1508,7 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
         BuiltinScalarFunction::Uuid => &["uuid"],
         BuiltinScalarFunction::Levenshtein => &["levenshtein"],
         BuiltinScalarFunction::SubstrIndex => &["substr_index", "substring_index"],
+        BuiltinScalarFunction::FindInSet => &["find_in_set"],
 
         // regex functions
         BuiltinScalarFunction::RegexpMatch => &["regexp_match"],
